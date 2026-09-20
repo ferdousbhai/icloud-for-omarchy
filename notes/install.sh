@@ -68,7 +68,13 @@ fi
 
 echo "Installing $REPO"
 pacman -Sy
-pacman -S --needed --noconfirm "$REPO"
+# omarchy-pkg-add is Omarchy's own wrapper around pacman -S; using it where it
+# exists keeps the install consistent with `omarchy pkg add`.
+if command -v omarchy-pkg-add >/dev/null; then
+  omarchy-pkg-add "$REPO"
+else
+  pacman -S --needed --noconfirm "$REPO"
+fi
 
 cat <<EOF
 
