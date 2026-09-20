@@ -7,4 +7,6 @@ mkdir -p build
 cd build
 qmake6 ../shots.pro > /dev/null
 make -j"$(nproc)" > /dev/null
-./shots "${1:-/tmp/notes-shot.png}"
+# The stub icloud-md answers the startup pull, so no real account is touched
+# and the status line reads "Pull done." instead of an error.
+PATH="$(cd ../../stubs && pwd):$PATH" ./shots "${1:-/tmp/notes-shot.png}"
