@@ -496,15 +496,17 @@ void NotesBackend::newNote(const QString &name)
     openNote(clean);
 }
 
-void NotesBackend::deleteCurrentNote()
+QString NotesBackend::deleteCurrentNote()
 {
     const QString path = noteAbsolutePath();
     if (path.isEmpty())
-        return;
-    QFile::moveToTrash(path); // the next push moves the note to Recently Deleted
+        return QStringLiteral("No note selected.");
+    if (!QFile::moveToTrash(path)) // the next push moves the note to Recently Deleted
+        return QStringLiteral("Could not move the note to the trash.");
     closeNote();
     rebuildNotes();
     rewatch();
+    return {};
 }
 
 QString NotesBackend::renameCurrentNote(const QString &title)
@@ -547,6 +549,38 @@ void NotesBackend::newFolder(const QString &name)
     QDir().mkpath(QDir(folderAbsolutePath(m_currentFolder)).filePath(clean));
     rebuildFolders();
     rewatch();
+}
+
+QString NotesBackend::renameCurrentFolder(const QString &name)
+{
+    const QString clean = sanitized(name);
+    if (m_currentFolder.isEmpty())
+        return QStringLiteral("All Notes cannot be renamed.");
+    if (clean.isEmpty())
+        return QStringLiteral("Name is empty.");
+    const QString parent = m_currentFolder.section(u'/', 0, -2);
+    const QString target = parent.isEmpty() ? clean : parent + u'/' + clean;
+    if (target == m_currentFolder)
+        return {};
+    if (QDir(folderAbsolutePath(target)).exists())
+        return QStringLiteral("A folder with that name already exists.");
+    if (!QDir().rename(folderAbsolutePath(m_currentFolder), folderAbsolutePath(target)))
+        return QStringLiteral("Could not rename the folder.");
+    m_currentFolder = target;
+    emit currentFolderChanged();
+    refresh();
+    return {};
+}
+
+QString NotesBackend::deleteCurrentFolder()
+{
+    if (m_currentFolder.isEmpty())
+        return QStringLiteral("All Notes cannot be deleted.");
+    if (!QFile::moveToTrash(folderAbsolutePath(m_currentFolder))) // its notes go to Recently Deleted on push
+        return QStringLiteral("Could not move the folder to the trash.");
+    setCurrentFolder({});
+    rebuildFolders();
+    return {};
 }
 
 QVariantList NotesBackend::searchVault(const QString &query)

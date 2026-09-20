@@ -424,10 +424,12 @@ ApplicationWindow {
         }
 
         SplitView {
+            id: panes
             Layout.fillWidth: true
             Layout.fillHeight: true
             orientation: Qt.Horizontal
             handle: Rectangle { implicitWidth: 1; color: root.colLine; opacity: 0.6 }
+            Component.onCompleted: { if (settings.panes) restoreState(settings.panes); }
 
             // Folders
             Rectangle {
@@ -490,7 +492,17 @@ ApplicationWindow {
                                     font.pixelSize: 11
                                 }
                             }
-                            TapHandler { onTapped: root.openFolder(modelData) }
+                            TapHandler { acceptedButtons: Qt.LeftButton; onTapped: root.openFolder(modelData) }
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                enabled: modelData.length > 0
+                                onTapped: { root.openFolder(modelData); folderMenu.popup(); }
+                            }
+                        }
+                        Menu {
+                            id: folderMenu
+                            MenuItem { text: "Rename folder…"; onTriggered: renameFolderDialog.open() }
+                            MenuItem { text: "Delete folder…"; onTriggered: deleteFolderDialog.open() }
                         }
                     }
                 }
@@ -800,8 +812,8 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             // Auto-fetch only: publishing stays an explicit, previewed act.
-            var open = [previewDialog, logDialog, historyDialog, saveWarnDialog,
-                        newNoteDialog, newFolderDialog, deleteDialog, onboardDialog];
+            var open = [previewDialog, logDialog, historyDialog, saveWarnDialog, newNoteDialog,
+                        newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, onboardDialog];
             if (backend.syncRunning || open.some(function (d) { return d.visible; }))
                 return;
             if (root.dirty) {
@@ -828,7 +840,14 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }
     Shortcut { sequence: "Ctrl+Return"; enabled: editor.activeFocus; onActivated: root.toggleTask() }
 
-    Settings { property alias autoPull: autoButton.checked }
+    Settings {
+        id: settings
+        property alias autoPull: autoButton.checked
+        property alias windowWidth: root.width
+        property alias windowHeight: root.height
+        property var panes
+    }
+    Component.onDestruction: settings.panes = panes.saveState()
     Shortcut { sequence: StandardKey.Find; onActivated: searchField.forceActiveFocus() }
 
     Connections {
@@ -879,6 +898,43 @@ ApplicationWindow {
         onAccepted: { if (value.length > 0) backend.newFolder(value); }
     }
 
+    PromptDialog {
+        id: renameFolderDialog
+        title: "Rename folder"
+        placeholder: "Folder name"
+        initial: root.folderLabel(backend.currentFolder)
+        hint: "Notes has no folder renames: the next Push creates the new folder and moves these notes into it. The old folder stays in Notes, empty, until you delete it there."
+        onAccepted: {
+            if (value.length === 0 || !root.flushEdits())
+                return;
+            var err = backend.renameCurrentFolder(value);
+            if (err.length > 0)
+                root.notice = err;
+        }
+    }
+
+    AppDialog {
+        id: deleteFolderDialog
+        title: "Delete folder?"
+        standardButtons: Dialog.Yes | Dialog.No
+        ColumnLayout {
+            Label {
+                Layout.preferredWidth: 340
+                wrapMode: Text.WordWrap
+                text: "Move \"" + root.folderLabel(backend.currentFolder) + "\" and its "
+                      + (backend.folderNoteCounts[backend.currentFolder] || 0) + " note(s) to the trash? "
+                      + "The next Push moves the notes to Recently Deleted in iCloud; the empty folder stays in Notes until you delete it there."
+            }
+        }
+        onAccepted: {
+            var err = backend.deleteCurrentFolder();
+            if (err.length > 0)
+                root.notice = err;
+            else
+                root.loadEditor();
+        }
+    }
+
     AppDialog {
         id: saveWarnDialog
         title: "Save anyway?"
@@ -905,8 +961,11 @@ ApplicationWindow {
             }
         }
         onAccepted: {
-            backend.deleteCurrentNote();
-            root.loadEditor(); // unsaved edits go with the note
+            var err = backend.deleteCurrentNote();
+            if (err.length > 0)
+                root.notice = err;
+            else
+                root.loadEditor(); // unsaved edits go with the note
         }
     }
 

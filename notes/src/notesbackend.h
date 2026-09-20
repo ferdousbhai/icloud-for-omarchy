@@ -86,9 +86,14 @@ public:
     Q_INVOKABLE void saveCurrentNote(const QString &body);
     Q_INVOKABLE QString saveWarning(const QString &body);
     Q_INVOKABLE void newNote(const QString &name);
-    Q_INVOKABLE void deleteCurrentNote();
+    Q_INVOKABLE QString deleteCurrentNote();
     Q_INVOKABLE QString renameCurrentNote(const QString &title);
     Q_INVOKABLE void newFolder(const QString &name);
+    // Folders have no id upstream, so these do what a mv/rm on disk does:
+    // a rename becomes a new Notes folder plus note moves, a delete sends
+    // the notes to Recently Deleted; the old folder stays in Notes, empty.
+    Q_INVOKABLE QString renameCurrentFolder(const QString &name);
+    Q_INVOKABLE QString deleteCurrentFolder();
     Q_INVOKABLE QVariantList searchVault(const QString &query);
     Q_INVOKABLE QString toggleCheckbox(const QString &text, int line);
     Q_INVOKABLE QString exportPdf();

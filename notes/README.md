@@ -51,7 +51,8 @@ as its first line, just like in Notes.
 
 - **Browse**: folders on the left, notes in the middle (newest first,
   with title, preview line, and date). The search box above the list
-  searches every note; picking a result jumps to it.
+  searches every note; picking a result jumps to it. Right-click a folder
+  to rename or delete it. Window and pane sizes are remembered.
 - **Edit**: edits save on their own once you pause typing, and when you
   switch notes; `Ctrl+S` forces a save when a guardrail has flagged the
   edit. `Ctrl+N` starts a note. Click the title to rename it. Headings,
@@ -93,8 +94,10 @@ preview-only: notes with attachments can't be edited back to iCloud.
 
 - Notes with images, audio, or file attachments are read-only upstream;
   you can't add attachments from here either.
-- Folders can be created here but not renamed or deleted over there —
-  do that in Apple Notes and it syncs down normally.
+- Folders carry no id in iCloud, so a folder rename here becomes a new
+  folder plus note moves on push, and a folder delete moves its notes to
+  Recently Deleted; the old folder stays in Notes, empty, until you delete
+  it there. Both are in the folder's right-click menu.
 - Table edits mostly round-trip, but reordering rows/columns is
   refused — the push preview will tell you.
 - Sync is on-demand (plus optional auto-fetch), not instant like the

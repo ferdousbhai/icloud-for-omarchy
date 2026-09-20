@@ -38,6 +38,25 @@ bool hasFlag(const NotesBackend &b, const QString &note, const char *flag)
     return b.noteStates().value(note).toStringList().contains(QString::fromLatin1(flag));
 }
 
+// Trash entries the test created (freedesktop layout) so runs leave nothing behind.
+void emptyTestTrash()
+{
+    const QDir info(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+                    + QStringLiteral("/Trash/info"));
+    for (const QFileInfo &entry : info.entryInfoList({ QStringLiteral("*.trashinfo") }, QDir::Files)) {
+        QFile f(entry.absoluteFilePath());
+        if (!f.open(QIODevice::ReadOnly))
+            continue;
+        const QString body = QString::fromUtf8(f.readAll());
+        if (!body.contains(rootPath()))
+            continue;
+        f.close();
+        QDir(info.absolutePath() + QStringLiteral("/../files/") + entry.completeBaseName()).removeRecursively();
+        QFile::remove(info.absolutePath() + QStringLiteral("/../files/") + entry.completeBaseName());
+        QFile::remove(entry.absoluteFilePath());
+    }
+}
+
 // Spin until the running sync finishes (or a timeout gives up).
 void waitForSync(const NotesBackend &b)
 {
@@ -57,10 +76,14 @@ int main(int argc, char *argv[])
     // GUI application: PDF export lays out text and needs the font database.
     // bin/test forces the offscreen platform so this stays headless.
     QGuiApplication app(argc, argv);
-    QStandardPaths::setTestModeEnabled(true); // settings and caches, not documents
     // The vault under test lives in a temporary directory that is deleted
-    // with it; the backend reads the path from ICLOUD_NOTES_VAULT.
-    QTemporaryDir scratch;
+    // with it; the backend reads the path from ICLOUD_NOTES_VAULT. It sits
+    // under the cache dir rather than /tmp so it is on the home filesystem,
+    // where moving to the trash works. (Qt's test mode is not used: it
+    // redirects neither DocumentsLocation nor, usably, the trash.)
+    QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
+    QTemporaryDir scratch(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+                          + QStringLiteral("/icloud-notes-test-XXXXXX"));
     if (!scratch.isValid())
         return EXIT_FAILURE;
     qputenv("ICLOUD_NOTES_VAULT", (scratch.path() + QStringLiteral("/vault")).toUtf8());
@@ -135,8 +158,15 @@ int main(int argc, char *argv[])
     QFile::remove(rootPath() + QStringLiteral("/A copy.md"));
     b.refresh();
 
-    // Scans are cached per file: a rewrite of the same size is still seen.
+    // Scans are cached per file by mtime and size: a later rewrite of the
+    // same size is still seen. (Bump the mtime explicitly: on a fast disk
+    // this write can land in the same millisecond as the previous one.)
     writeFile(QStringLiteral("A.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nchangeZ\n"));
+    {
+        QFile f(rootPath() + QStringLiteral("/A.md"));
+        if (f.open(QIODevice::ReadWrite))
+            f.setFileTime(QDateTime::currentDateTime().addSecs(2), QFileDevice::FileModificationTime);
+    }
     b.refresh();
     check(b.noteDetails().value(QStringLiteral("A.md")).toMap().value(QStringLiteral("snippet")).toString()
               == QStringLiteral("changeZ"),
@@ -182,6 +212,19 @@ int main(int argc, char *argv[])
         check(b.searchVault(QStringLiteral("zzz-no-match")).isEmpty(), "backend search empty");
         check(b.searchVault(QStringLiteral("x")).isEmpty(), "backend search needs 2 chars");
     }
+
+    // Folders: rename moves the directory (and the selection with it),
+    // delete trashes it and falls back to All Notes.
+    b.setCurrentFolder(QStringLiteral("Sub"));
+    check(b.renameCurrentFolder(QStringLiteral("Moved")).isEmpty(), "backend folder rename ok");
+    check(b.currentFolder() == QStringLiteral("Moved") && QFile::exists(rootPath() + QStringLiteral("/Moved/H.md")),
+          "backend folder rename moves notes");
+    check(!b.renameCurrentFolder(QStringLiteral("")).isEmpty(), "backend folder rename refuses empty");
+    check(b.deleteCurrentFolder().isEmpty(), "backend folder delete ok");
+    check(b.currentFolder().isEmpty() && !QDir(rootPath() + QStringLiteral("/Moved")).exists(),
+          "backend folder delete");
+    emptyTestTrash();
+    b.setCurrentFolder(QString());
 
     // PDF export writes next to the note and never overwrites.
     b.openNote(QStringLiteral("Second.md"));
