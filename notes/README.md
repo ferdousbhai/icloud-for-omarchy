@@ -42,10 +42,10 @@ To build and run from source instead:
 ## First run
 
 On first launch the **Link your Apple Notes** dialog opens — press
-**Clone my notes** and pick how titles are stored (first line of the
-file, or file name — this can't be changed later). A real Apple
-sign-in window opens; your password and 2FA stay on Apple's own
-pages. All your notes download into `~/Documents/icloud-notes`.
+**Clone my notes**. A real Apple sign-in window opens; your password
+and 2FA stay on Apple's own pages. All your notes download into
+`~/Documents/icloud-notes`, one Markdown file per note with the title
+as its first line, just like in Notes.
 
 ## Everyday use
 

@@ -207,7 +207,7 @@ int main(int argc, char *argv[])
     check(b.syncMessage() == QStringLiteral("Pull done."), "seam pull done");
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
 
-    b.runClone(QStringLiteral("in-body")); // the stub rejects clone
+    b.runClone(); // the stub rejects clone
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Clone failed — see log."), "seam failure reported");
 

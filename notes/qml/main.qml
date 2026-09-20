@@ -765,27 +765,17 @@ ApplicationWindow {
                 enabled: !backend.syncRunning
                 onClicked: {
                     onboardDialog.close();
-                    backend.runClone(filenameShape.checked ? "filename" : "in-body");
+                    backend.runClone();
                 }
             }
             Button { text: "Cancel"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
         }
-        ColumnLayout {
-            Label {
-                Layout.preferredWidth: 380
-                wrapMode: Text.WordWrap
-                text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown. "
-                      + "A real Apple sign-in window opens (password and 2FA are handled by Apple's own pages). "
-                      + "Apple Notes must not use Advanced Data Protection — icloud-md cannot decrypt it."
-            }
-            Label {
-                Layout.preferredWidth: 380
-                wrapMode: Text.WordWrap
-                font.bold: true
-                text: "How should note titles be stored? (chosen once, cannot change later)"
-            }
-            RadioButton { checked: true; text: "Title as first line (plain Markdown shape)" }
-            RadioButton { id: filenameShape; text: "Title as file name (Obsidian shape, body only)" }
+        Label {
+            width: 380
+            wrapMode: Text.WordWrap
+            text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
+                  + "A real Apple sign-in window opens (password and 2FA are handled by Apple's own pages). "
+                  + "Apple Notes must not use Advanced Data Protection — icloud-md cannot decrypt it."
         }
     }
 

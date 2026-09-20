@@ -78,7 +78,7 @@ public:
     Q_INVOKABLE QVariantList searchVault(const QString &query);
     Q_INVOKABLE QString toggleCheckbox(const QString &text, int line);
     Q_INVOKABLE QString exportPdf();
-    Q_INVOKABLE void runClone(const QString &titleMode);
+    Q_INVOKABLE void runClone();
     Q_INVOKABLE void runPull();
     Q_INVOKABLE void runPush();
     Q_INVOKABLE void refreshPushPreview();

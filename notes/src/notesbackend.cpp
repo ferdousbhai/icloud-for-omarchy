@@ -511,14 +511,13 @@ QString NotesBackend::exportPdf()
     return {};
 }
 
-void NotesBackend::runClone(const QString &titleMode)
+void NotesBackend::runClone()
 {
     // Clone targets a fresh directory; the root doubles as that directory.
-    // The title shape is chosen once, here, and can never change after.
-    QStringList args{ QStringLiteral("clone"), rootPath() };
-    if (titleMode == u"filename")
-        args << QStringLiteral("--filename-as-title");
-    startSync(Mode::Plain, args, QStringLiteral("Clone"));
+    // Titles stay the first line of each note, as in Notes.app and as
+    // icloud-md defaults to; a vault cloned with --filename-as-title from
+    // the CLI is still read correctly (see vaultTitleMode).
+    startSync(Mode::Plain, { QStringLiteral("clone"), rootPath() }, QStringLiteral("Clone"));
 }
 
 void NotesBackend::runPull()
