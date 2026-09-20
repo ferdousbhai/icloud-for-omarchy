@@ -16,13 +16,23 @@ both ways with iCloud.
 
 ## Install
 
-On Omarchy/Arch, build the package from `pkgbuild/`:
+On Omarchy (or any Arch Linux), one command trusts the package-signing
+key, adds the signed `[icloud-notes]` repository, and installs the app:
 
 ```bash
-cd pkgbuild && makepkg -si
+curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash
 ```
 
-Or build and run directly:
+Updates then arrive with `omarchy update`. The script is
+[`install.sh`](install.sh) in this repo; read it first if you like. It
+also installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh
+pacman` keeps the repository.
+
+To uninstall: `omarchy pkg drop icloud-notes`, then remove
+`/etc/pacman.d/icloud-notes.conf`, its `Include` line in
+`/etc/pacman.conf`, and `~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-notes`.
+
+To build and run from source instead:
 
 ```bash
 ./bin/build
@@ -96,3 +106,18 @@ away local edits on one note and go back to the last synced copy:
 cd ~/Documents/icloud-notes
 icloud-md restore "<note file>"
 ```
+
+## Releasing
+
+Tag a version and push it:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The release workflow builds the package in an Arch container from
+`pkgbuild/PKGBUILD`, signs it and the repository database with the
+`PACKAGING_GPG_KEY` secret, and publishes everything as the GitHub release
+for that tag, which is what `releases/latest/download` in `install.sh`
+resolves to. The workflow refuses to build if the secret's fingerprint is
+not the one pinned in `install.sh`.

@@ -1,28 +1,44 @@
-# Maintainer: ferdousbhai
+# Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
+#
+# Builds from this checkout. The release workflow runs it on a tagged commit
+# and publishes the result as a signed pacman repository on GitHub Releases;
+# a plain `makepkg` in this directory does the same build locally.
+
 pkgname=icloud-notes
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Apple Notes on Omarchy, synced with iCloud via icloud-md"
-arch=('x86_64')
-url="https://github.com/ferdousbhai/icloud-notes"
+pkgdesc='Apple Notes on Omarchy, synced with iCloud via icloud-md'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ferdousbhai/icloud-notes'
 license=('MIT')
-depends=('qt6-base' 'qt6-declarative' 'hicolor-icon-theme')
-optdepends=('icloud-md: iCloud sync backend (npm install -g icloud-md)'
-            'nodejs: required by icloud-md (20+)')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/heads/main.tar.gz")
-sha256sums=('SKIP')
+options=('!debug')
+depends=('hicolor-icon-theme' 'qt6-base' 'qt6-declarative')
+makedepends=('gcc' 'git' 'make')
+optdepends=('nodejs: runs icloud-md, the iCloud sync backend (npm install -g icloud-md)')
+
+# The version is the git tag: v0.1.0 builds 0.1.0, and a commit past it
+# builds 0.1.0.r<count>.<sha> so `pacman -Q` says where a build came from.
+pkgver() {
+  git -C "$startdir/.." describe --tags --long 2>/dev/null |
+    sed 's/^v//; s/-\([0-9]*\)-g\([0-9a-f]*\)$/.r\1.\2/; s/\.r0\.[0-9a-f]*$//' |
+    grep . || printf '0.0.0.r%s\n' "$(git -C "$startdir/.." rev-list --count HEAD)"
+}
+
+prepare() {
+  # Only committed files: a release build never picks up local leftovers.
+  mkdir -p "$srcdir/$pkgname"
+  git -C "$startdir/.." archive HEAD | tar -x -C "$srcdir/$pkgname"
+}
 
 build() {
-  cd "$pkgname-main"
-  qmake6 icloud-notes.pro
-  make -j"$(nproc)"
+  cd "$srcdir/$pkgname"
+  ./bin/build
 }
 
 package() {
-  cd "$pkgname-main"
-  install -Dm755 icloud-notes "$pkgdir/usr/bin/icloud-notes"
+  cd "$srcdir/$pkgname"
+  install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
   install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
-  install -Dm644 icons/icloud-notes.svg \
-    "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
+  install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
