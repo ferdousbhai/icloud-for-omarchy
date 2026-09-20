@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Test double for the icloud-md CLI: canned --json answers, no Apple
+# account, no network. Used by backend_test to exercise the exact
+# argv/stdout/parse path the app uses in production.
+if [ "$1" = "--json" ] && [ "$2" = "status" ]; then
+  cat <<'EOF'
+{"entries":[{"kind":"update","file":"A.md","resolution":"ready"},{"kind":"update","file":"B.md","resolution":"refused","reason":"B.md: has attachments"},{"kind":"createFolder","file":"New","resolution":"ready","folderTitle":"New"}],"unchanged":2,"notices":[{"level":"warn","message":"careful"}]}
+EOF
+elif [ "$1" = "--json" ] && [ "$2" = "history" ]; then
+  cat <<'EOF'
+{"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}
+EOF
+elif [ "$1" = "diff" ]; then
+  printf -- '--- remote\n+++ local\n- old\n+ new\n'
+elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
+  echo "stub $1 ok"
+else
+  echo "stub: unknown args: $*" >&2
+  exit 1
+fi

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Notes (iCloud)
+GenericName=Notes
+Comment=Apple Notes on Omarchy, synced with iCloud via icloud-md
+Exec=icloud-notes
+Icon=icloud-notes
+Terminal=false
+Categories=Office;TextEditor;
+Keywords=notes;icloud;markdown;
+StartupWMClass=icloud-notes

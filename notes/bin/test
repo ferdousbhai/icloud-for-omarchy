@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Build and run the maintained tests (console asserts, no framework).
+set -euo pipefail
+cd "$(dirname "$0")/../tests"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
+for t in guardrails_test backend_test; do
+  mkdir -p "build-$t"
+  (cd "build-$t" && qmake6 "../$t.pro" && make -j"$(nproc)" && "./$t")
+done

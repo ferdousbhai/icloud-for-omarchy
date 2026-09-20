@@ -1,0 +1,28 @@
+# Maintainer: ferdousbhai
+pkgname=icloud-notes
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Apple Notes on Omarchy, synced with iCloud via icloud-md"
+arch=('x86_64')
+url="https://github.com/ferdousbhai/icloud-notes"
+license=('MIT')
+depends=('qt6-base' 'qt6-declarative' 'hicolor-icon-theme')
+optdepends=('icloud-md: iCloud sync backend (npm install -g icloud-md)'
+            'nodejs: required by icloud-md (20+)')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/heads/main.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-main"
+  qmake6 icloud-notes.pro
+  make -j"$(nproc)"
+}
+
+package() {
+  cd "$pkgname-main"
+  install -Dm755 icloud-notes "$pkgdir/usr/bin/icloud-notes"
+  install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
+  install -Dm644 icons/icloud-notes.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
