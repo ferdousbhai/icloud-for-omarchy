@@ -5,10 +5,51 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: root
     visible: true
-    width: 1024
-    height: 680
+    width: 1100
+    height: 700
     title: backend.currentNote.length > 0 ? noteLabel(backend.currentNote) + " — Notes" : "Notes"
 
+    // ---- Theme: the active Omarchy palette, or the system palette off Omarchy.
+    SystemPalette { id: sys }
+    readonly property var theme: backend.theme
+    function tone(key, fallback) { return theme[key] ? theme[key] : fallback; }
+    readonly property color colBg: tone("background", sys.window)
+    readonly property color colPanel: tone("dark_background", Qt.darker(sys.window, 1.08))
+    readonly property color colSidebar: tone("darker_background", Qt.darker(sys.window, 1.16))
+    readonly property color colRaised: tone("lighter_background", sys.base)
+    readonly property color colText: tone("foreground", sys.text)
+    readonly property color colTextDim: tone("light_foreground", sys.text)
+    readonly property color colTextMuted: tone("dark_foreground", sys.mid)
+    readonly property color colLine: tone("muted", sys.mid)
+    readonly property color colSelection: tone("selection", sys.highlight)
+    readonly property color colAccent: tone("accent", sys.highlight)
+    readonly property color colRed: tone("red", "#e06c75")
+    readonly property color colYellow: tone("yellow", "#e5c07b")
+    readonly property color colGreen: tone("green", "#98c379")
+    readonly property string iconFont: backend.iconFont.length > 0 ? backend.iconFont : Qt.application.font.family
+    function pt(n) { return Math.round(n * backend.uiScale); }
+
+    // Built-in controls (fields, dialogs, menus) follow the same palette.
+    palette {
+        window: root.colBg
+        windowText: root.colText
+        base: root.colRaised
+        alternateBase: root.colPanel
+        text: root.colText
+        button: root.colRaised
+        buttonText: root.colText
+        highlight: root.colAccent
+        highlightedText: root.colBg
+        mid: root.colLine
+        dark: root.colLine
+        light: root.colRaised
+        placeholderText: root.colTextMuted
+        toolTipBase: root.colRaised
+        toolTipText: root.colText
+    }
+    color: colBg
+
+    // ---- State
     // What the editor was last loaded from or saved as; edits diverge from it.
     property string savedText: ""
     property bool dirty: editor.text !== savedText
@@ -27,9 +68,66 @@ ApplicationWindow {
         return m;
     }
 
+    // ---- Building blocks
+    component Glyph: Text {
+        font.family: root.iconFont
+        font.pixelSize: 15
+        color: root.colText
+        verticalAlignment: Text.AlignVCenter
+        horizontalAlignment: Text.AlignHCenter
+    }
+    component IconButton: AbstractButton {
+        id: iconButton
+        property string glyph
+        property string tip
+        implicitWidth: 34
+        implicitHeight: 28
+        hoverEnabled: true
+        opacity: enabled ? 1 : 0.3
+        background: Rectangle {
+            radius: 6
+            color: iconButton.down || iconButton.checked ? root.colSelection
+                 : iconButton.hovered ? root.colRaised : "transparent"
+        }
+        contentItem: Glyph {
+            text: iconButton.glyph
+            color: iconButton.checked ? root.colAccent : root.colText
+        }
+        ToolTip.visible: hovered && tip.length > 0
+        ToolTip.text: tip
+        ToolTip.delay: 500
+    }
+    component Separator: Rectangle {
+        implicitWidth: 1
+        implicitHeight: 18
+        color: root.colLine
+        opacity: 0.7
+    }
+    component Pill: Rectangle {
+        property string label
+        property color tint: root.colTextMuted
+        implicitHeight: 16
+        implicitWidth: pillText.implicitWidth + 12
+        radius: 8
+        color: Qt.rgba(tint.r, tint.g, tint.b, 0.2)
+        Text {
+            id: pillText
+            anchors.centerIn: parent
+            text: parent.label
+            color: parent.tint
+            font.pixelSize: 10
+            font.bold: true
+        }
+    }
     component AppDialog: Dialog {
         anchors.centerIn: parent
         modal: true
+        background: Rectangle {
+            color: root.colPanel
+            radius: 10
+            border.color: root.colLine
+        }
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.45) }
     }
     component PromptDialog: AppDialog {
         id: prompt
@@ -48,48 +146,34 @@ ApplicationWindow {
                 id: hintLabel
                 Layout.preferredWidth: 300
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.colTextMuted
                 visible: text.length > 0
             }
         }
         onOpened: { field.text = initial; field.forceActiveFocus(); }
     }
-    component Divider: Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 1
-        color: "gray"
-        opacity: 0.25
-    }
 
+    // ---- Helpers
     function noteLabel(n) { return n.replace(/\.md$/i, ""); }
-    function folderLabel(f) { return f.length === 0 ? "All Notes" : f; }
+    function folderLabel(f) { return f.length === 0 ? "All Notes" : f.split("/").pop(); }
     function vaultRel(name) {
         return backend.currentFolder.length === 0 ? name : backend.currentFolder + "/" + name;
     }
     function detail(name) { return backend.noteDetails[name] || {}; }
     function displayTitle(name) { return detail(name).title || noteLabel(name); }
+    function shortDate(ms) { return new Date(ms).toLocaleDateString(Qt.locale(), Locale.ShortFormat); }
+    // Guardrail badges: [label, tint] pairs.
     function badges(name) {
-        var labels = { "conflict": "conflict", "new": "new", "missing-id": "no id",
-                       "foreign-id": "foreign id", "tables": "tables" };
-        var out = (backend.noteStates[name] || []).map(function (flag) { return labels[flag] || flag; });
+        var labels = { "conflict": ["conflict", root.colRed], "new": ["new", root.colGreen],
+                       "missing-id": ["no id", root.colYellow], "foreign-id": ["foreign id", root.colYellow],
+                       "tables": ["tables", root.colTextMuted] };
+        var out = (backend.noteStates[name] || []).map(function (flag) { return labels[flag] || [flag, root.colTextMuted]; });
         var st = statusByFile[vaultRel(name)];
         if (st === "refused")
-            out.push("push refused");
+            out.push(["push refused", root.colRed]);
         else if (st === "conflict")
-            out.push("remote changed");
+            out.push(["remote changed", root.colYellow]);
         return out;
-    }
-    function displaySub(name) {
-        var d = detail(name), parts = [], b = badges(name);
-        if ((d.snippet || "").length > 0)
-            parts.push(d.snippet);
-        if ((d.modifiedMs || 0) > 0)
-            parts.push(new Date(d.modifiedMs).toLocaleDateString(Qt.locale(), Locale.ShortFormat));
-        if (b.length > 0)
-            parts.push("(" + b.join(", ") + ")");
-        return parts.join(" · ");
     }
 
     function loadEditor() {
@@ -101,7 +185,7 @@ ApplicationWindow {
         savedText = editor.text;
         notice = "";
     }
-    // Explicit save: risky edits go through the "Save anyway?" dialog.
+    // Explicit save (Ctrl+S): risky edits go through the "Save anyway?" dialog.
     function save() {
         if (backend.currentNote.length === 0)
             return;
@@ -119,7 +203,7 @@ ApplicationWindow {
         if (!dirty)
             return true;
         if (backend.saveWarning(editor.text).length > 0) {
-            notice = "Kept your edits in the editor — resolve the warning (press Save) before moving on.";
+            notice = "Kept your edits in the editor — resolve the warning (Ctrl+S) before moving on.";
             return false;
         }
         doSave();
@@ -162,51 +246,53 @@ ApplicationWindow {
         editor.forceActiveFocus();
     }
 
-    header: ToolBar {
+    // ---- Toolbar
+    header: Rectangle {
+        height: 44
+        color: root.colPanel
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: 6
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 2
 
-            Button { text: "New note"; enabled: !backend.syncRunning; onClicked: newNoteDialog.open() }
-            Button {
-                text: "Save"
-                enabled: root.dirty && backend.currentNote.length > 0 && !backend.syncRunning
-                highlighted: root.dirty
-                onClicked: root.save()
-            }
-            Button {
-                text: "Delete"
+            IconButton { glyph: "\uf07b"; tip: "New folder"; enabled: !backend.syncRunning; onClicked: newFolderDialog.open() }
+            IconButton { glyph: "\uf044"; tip: "New note (Ctrl+N)"; enabled: !backend.syncRunning; onClicked: newNoteDialog.open() }
+            Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
+            IconButton {
+                glyph: "\uf1f8"; tip: "Delete note"
                 enabled: backend.currentNote.length > 0 && !backend.syncRunning
                 onClicked: deleteDialog.open()
             }
-            Button {
-                text: "Rename"
+            IconButton {
+                glyph: "\uf040"; tip: "Rename note"
                 enabled: backend.currentNote.length > 0 && !backend.syncRunning
                 onClicked: renameDialog.open()
             }
-            Button { text: "New folder"; enabled: !backend.syncRunning; onClicked: newFolderDialog.open() }
-            ToolSeparator {}
-            Button {
-                text: "Pull"
+            Item { Layout.fillWidth: true }
+            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0; onClicked: root.toggleTask() }
+            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: backend.currentNote.length > 0; onClicked: root.wrapSelection("**", "**") }
+            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: backend.currentNote.length > 0; onClicked: root.wrapSelection("*", "*") }
+            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0; onClicked: root.insertLink() }
+            Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
+            IconButton {
+                glyph: "\uf0ed"; tip: "Pull from iCloud"
                 enabled: backend.cloned && !backend.syncRunning
                 onClicked: backend.runPull()
             }
-            Button {
-                text: "Push…"
+            IconButton {
+                glyph: "\uf0ee"; tip: "Push to iCloud…"
                 enabled: backend.cloned && !backend.syncRunning
                 // Preview first: push only runs after explicit confirmation.
                 onClicked: { if (root.flushEdits()) backend.refreshPushPreview(); }
             }
-            Button {
+            IconButton {
                 id: autoButton
-                text: "Auto"
+                glyph: "\uf021"; tip: "Auto-pull every 5 minutes"
                 checkable: true
                 enabled: backend.cloned
             }
-            Item { Layout.fillWidth: true }
-            Button { text: "•••"; onClicked: moreMenu.open() }
+            IconButton { glyph: "\uf141"; tip: "More"; onClicked: moreMenu.open() }
             Menu {
                 id: moreMenu
                 MenuItem {
@@ -235,61 +321,83 @@ ApplicationWindow {
                 MenuItem { text: "Sync log"; onTriggered: logDialog.open() }
             }
         }
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.colLine; opacity: 0.6 }
     }
 
-    footer: ToolBar {
+    // ---- Status line
+    footer: Rectangle {
+        height: 26
+        color: root.colPanel
+        Rectangle { width: parent.width; height: 1; color: root.colLine; opacity: 0.6 }
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            BusyIndicator { running: backend.syncRunning; implicitWidth: 20; implicitHeight: 20 }
-            Label {
-                text: backend.syncMessage
-                elide: Text.ElideRight
-                Layout.fillWidth: true
+            anchors.leftMargin: 14
+            anchors.rightMargin: 14
+            spacing: 8
+            Glyph {
+                text: "\uf021"
+                font.pixelSize: 11
+                color: root.colTextMuted
+                visible: backend.syncRunning
+                RotationAnimation on rotation { from: 0; to: 360; duration: 1200; loops: Animation.Infinite; running: backend.syncRunning }
             }
             Label {
-                text: root.dirty ? "● unsaved" : "saved"
-                opacity: 0.7
+                text: backend.syncMessage
+                color: root.colTextMuted
+                font.pixelSize: 11
+                elide: Text.ElideRight
+                Layout.fillWidth: true
             }
             Label {
                 visible: root.notice.length > 0
                 text: root.notice
+                color: root.colAccent
+                font.pixelSize: 11
                 elide: Text.ElideRight
-                color: palette.highlight
-                Layout.maximumWidth: 420
+                Layout.maximumWidth: 480
+            }
+            Label {
+                visible: root.dirty
+                text: "● unsaved"
+                color: root.colYellow
+                font.pixelSize: 11
             }
         }
     }
 
+    // ---- Panes
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        Label {
-            visible: !backend.icloudMdAvailable
-            text: "icloud-md was not found on PATH. Install it (npm install -g icloud-md, needs Node 20+) and restart to enable sync."
-            wrapMode: Text.WordWrap
-            color: palette.highlight
+        Rectangle {
+            visible: !backend.icloudMdAvailable || !backend.cloned
             Layout.fillWidth: true
-            Layout.margins: 8
-        }
-        RowLayout {
-            visible: backend.icloudMdAvailable && !backend.cloned
-            Layout.fillWidth: true
-            Layout.margins: 8
-            spacing: 10
-            Label {
-                Layout.fillWidth: true
-                text: "This folder is not linked to iCloud yet. Clone to download your Apple Notes (Advanced Data Protection must be off)."
-                wrapMode: Text.WordWrap
-                color: palette.highlight
-            }
-            Button {
-                text: "Clone…"
-                highlighted: true
-                enabled: !backend.syncRunning
-                onClicked: onboardDialog.open()
+            Layout.margins: 10
+            implicitHeight: bannerRow.implicitHeight + 20
+            radius: 8
+            color: root.colRaised
+            RowLayout {
+                id: bannerRow
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 12
+                Glyph { text: backend.icloudMdAvailable ? "\uf0c2" : "\uf071"; color: backend.icloudMdAvailable ? root.colAccent : root.colYellow }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: root.colTextDim
+                    text: backend.icloudMdAvailable
+                          ? "This folder is not linked to iCloud yet. Clone to download your Apple Notes."
+                          : "icloud-md was not found on PATH. Install it (npm install -g icloud-md, needs Node 20+) and restart to enable sync."
+                }
+                Button {
+                    visible: backend.icloudMdAvailable
+                    text: "Clone…"
+                    highlighted: true
+                    enabled: !backend.syncRunning
+                    onClicked: onboardDialog.open()
+                }
             }
         }
 
@@ -297,224 +405,352 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             orientation: Qt.Horizontal
+            handle: Rectangle { implicitWidth: 1; color: root.colLine; opacity: 0.6 }
 
-            ColumnLayout {
-                SplitView.preferredWidth: 200
-                SplitView.minimumWidth: 140
-                spacing: 0
-                Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 10
-                    Layout.topMargin: 8
-                    Layout.bottomMargin: 4
-                    text: "FOLDERS"
-                    font.pointSize: 9
-                    font.bold: true
-                    opacity: 0.55
-                }
-                ListView {
-                    id: folderView
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    model: backend.folders
-                    clip: true
-                    delegate: ItemDelegate {
-                        width: folderView.width
-                        highlighted: modelData === backend.currentFolder
-                        onClicked: root.openFolder(modelData)
-                        Divider {}
-                        contentItem: RowLayout {
-                            spacing: 8
-                            Label { text: "📁" }
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                text: root.folderLabel(modelData)
+            // Folders
+            Rectangle {
+                SplitView.preferredWidth: 210
+                SplitView.minimumWidth: 150
+                color: root.colSidebar
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
+                    Label {
+                        Layout.leftMargin: 18
+                        Layout.topMargin: 14
+                        Layout.bottomMargin: 6
+                        text: "iCloud"
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                        font.bold: true
+                        font.capitalization: Font.AllUppercase
+                        font.letterSpacing: 0.5
+                    }
+                    ListView {
+                        id: folderView
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        model: backend.folders
+                        clip: true
+                        spacing: 1
+                        delegate: Item {
+                            id: folderRow
+                            width: folderView.width
+                            height: 30
+                            property bool selected: modelData === backend.currentFolder
+                            property int depth: modelData.length === 0 ? 0 : modelData.split("/").length - 1
+                            HoverHandler { id: folderHover }
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                radius: 6
+                                color: folderRow.selected ? root.colSelection
+                                     : folderHover.hovered ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.5)
+                                     : "transparent"
                             }
-                            Label {
-                                opacity: 0.6
-                                font.pointSize: 9
-                                text: backend.folderNoteCounts[modelData] || ""
-                            }
-                        }
-                    }
-                    ScrollBar.vertical: ScrollBar {}
-                }
-            }
-
-            ColumnLayout {
-                SplitView.preferredWidth: 240
-                SplitView.minimumWidth: 160
-                spacing: 4
-
-                Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 10
-                    elide: Text.ElideRight
-                    font.bold: true
-                    font.pointSize: Math.round(13 * backend.uiScale)
-                    text: {
-                        var n = backend.notes.length;
-                        return root.folderLabel(backend.currentFolder) + " — " + n + (n === 1 ? " note" : " notes");
-                    }
-                }
-                TextField {
-                    id: searchField
-                    Layout.fillWidth: true
-                    placeholderText: "Search all notes"
-                    onTextChanged: {
-                        if (root.searching)
-                            root.searchResults = backend.searchVault(text);
-                    }
-                }
-
-                ListView {
-                    id: noteView
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    model: root.searching ? root.searchResults : backend.notes
-                    clip: true
-                    delegate: ItemDelegate {
-                        width: noteView.width
-                        property bool isResult: typeof modelData !== "string"
-                        property string folder: isResult ? modelData.folder : backend.currentFolder
-                        property string fileName: isResult ? modelData.file : modelData
-                        highlighted: fileName === backend.currentNote && folder === backend.currentFolder
-                        onClicked: { if (!highlighted) root.openNote(folder, fileName); }
-                        Divider {}
-                        contentItem: ColumnLayout {
-                            spacing: 0
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                font.bold: true
-                                text: isResult ? modelData.title : root.displayTitle(fileName)
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                opacity: 0.6
-                                font.pointSize: 9
-                                visible: text.length > 0
-                                text: isResult
-                                      ? [modelData.snippet, modelData.folder].filter(Boolean).join(" · ")
-                                      : root.displaySub(fileName)
-                            }
-                        }
-                    }
-                    ScrollBar.vertical: ScrollBar {}
-                }
-            }
-
-            ColumnLayout {
-                SplitView.fillWidth: true
-                SplitView.minimumWidth: 300
-                spacing: 0
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 8
-                    Layout.rightMargin: 8
-                    Layout.topMargin: 4
-                    Layout.bottomMargin: 2
-                    spacing: 4
-                    visible: backend.currentNote.length > 0
-                    Button { Layout.preferredWidth: 56; text: "B"; font.bold: true; onClicked: root.wrapSelection("**", "**") }
-                    Button { Layout.preferredWidth: 56; text: "I"; font.italic: true; onClicked: root.wrapSelection("*", "*") }
-                    Button { Layout.preferredWidth: 72; text: "Link"; onClicked: root.insertLink() }
-                    Button { Layout.preferredWidth: 56; text: "☑"; onClicked: root.toggleTask() }
-                    Item { Layout.fillWidth: true }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 20
-                    Layout.rightMargin: 20
-                    Layout.topMargin: 6
-                    visible: backend.currentNote.length > 0
-                    elide: Text.ElideRight
-                    font.bold: true
-                    font.pointSize: Math.round(20 * backend.uiScale)
-                    text: root.displayTitle(backend.currentNote)
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 20
-                    Layout.rightMargin: 20
-                    visible: backend.currentNote.length > 0
-                    horizontalAlignment: Text.AlignHCenter
-                    opacity: 0.6
-                    font.pointSize: Math.round(11 * backend.uiScale)
-                    text: {
-                        var ms = root.detail(backend.currentNote).modifiedMs || 0;
-                        if (ms <= 0)
-                            return "";
-                        var d = new Date(ms);
-                        return d.toLocaleDateString(Qt.locale(), Locale.LongFormat)
-                            + " at " + d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: 64
-                    visible: backend.noteAttachments.length > 0
-                    color: "transparent"
-                    border.color: palette.mid
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 4
-                        spacing: 8
-                        Label {
-                            text: "Attachments (preview only — read-only in iCloud):"
-                            opacity: 0.7
-                            font.pointSize: 9
-                        }
-                        ListView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            orientation: ListView.Horizontal
-                            model: backend.noteAttachments
-                            clip: true
-                            delegate: ColumnLayout {
-                                spacing: 0
-                                Image {
-                                    Layout.preferredWidth: 44
-                                    Layout.preferredHeight: 36
-                                    fillMode: Image.PreserveAspectFit
-                                    source: modelData.url
-                                    visible: modelData.image
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 18 + folderRow.depth * 14
+                                anchors.rightMargin: 18
+                                spacing: 8
+                                Glyph { text: modelData.length === 0 ? "\uf07c" : "\uf07b"; font.pixelSize: 13; color: root.colAccent }
+                                Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    text: root.folderLabel(modelData)
+                                    color: root.colText
+                                    font.pixelSize: root.pt(13)
                                 }
                                 Label {
-                                    Layout.maximumWidth: 100
-                                    elide: Text.ElideMiddle
-                                    font.pointSize: 8
-                                    opacity: modelData.image ? 0.7 : 1
-                                    text: modelData.name
+                                    text: backend.folderNoteCounts[modelData] || ""
+                                    color: root.colTextMuted
+                                    font.pixelSize: 11
+                                }
+                            }
+                            TapHandler { onTapped: root.openFolder(modelData) }
+                        }
+                    }
+                }
+            }
+
+            // Notes
+            Rectangle {
+                SplitView.preferredWidth: 290
+                SplitView.minimumWidth: 200
+                color: root.colPanel
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        Layout.topMargin: 12
+                        elide: Text.ElideRight
+                        text: root.folderLabel(backend.currentFolder)
+                        color: root.colText
+                        font.pixelSize: root.pt(17)
+                        font.bold: true
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.margins: 12
+                        Layout.topMargin: 8
+                        implicitHeight: 30
+                        radius: 7
+                        color: root.colRaised
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 6
+                            spacing: 6
+                            Glyph { text: "\uf002"; font.pixelSize: 12; color: root.colTextMuted }
+                            TextField {
+                                id: searchField
+                                Layout.fillWidth: true
+                                placeholderText: "Search"
+                                background: null
+                                padding: 0
+                                color: root.colText
+                                font.pixelSize: root.pt(12)
+                                onTextChanged: {
+                                    if (root.searching)
+                                        root.searchResults = backend.searchVault(text);
                                 }
                             }
                         }
                     }
-                }
-
-                ScrollView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    TextArea {
-                        id: editor
-                        wrapMode: TextArea.Wrap
-                        selectByMouse: true
-                        font.pointSize: Math.round(13 * backend.uiScale)
-                        leftPadding: 20
-                        rightPadding: 20
-                        topPadding: 8
-                        placeholderText: "Select a note, or create a new one."
-                        // Keep the caret visible while typing long notes.
-                        onCursorRectangleChanged: editor.ensureVisible(cursorRectangle)
+                    Label {
+                        Layout.leftMargin: 20
+                        Layout.bottomMargin: 4
+                        text: {
+                            if (root.searching)
+                                return root.searchResults.length + " result" + (root.searchResults.length === 1 ? "" : "s");
+                            var n = backend.notes.length;
+                            return n + " note" + (n === 1 ? "" : "s");
+                        }
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                    }
+                    ListView {
+                        id: noteView
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        model: root.searching ? root.searchResults : backend.notes
+                        clip: true
+                        delegate: Item {
+                            id: noteRow
+                            width: noteView.width
+                            height: noteColumn.implicitHeight + 18
+                            property bool isResult: typeof modelData !== "string"
+                            property string folder: isResult ? modelData.folder : backend.currentFolder
+                            property string fileName: isResult ? modelData.file : modelData
+                            property bool selected: fileName === backend.currentNote && folder === backend.currentFolder
+                            property var pills: isResult ? [] : root.badges(fileName)
+                            HoverHandler { id: noteHover }
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                radius: 8
+                                color: noteRow.selected ? root.colSelection
+                                     : noteHover.hovered ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.5)
+                                     : "transparent"
+                            }
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: 20
+                                anchors.rightMargin: 20
+                                height: 1
+                                color: root.colLine
+                                opacity: noteRow.selected ? 0 : 0.5
+                            }
+                            ColumnLayout {
+                                id: noteColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.leftMargin: 20
+                                anchors.rightMargin: 20
+                                spacing: 3
+                                Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    text: noteRow.isResult ? modelData.title : root.displayTitle(noteRow.fileName)
+                                    color: root.colText
+                                    font.pixelSize: root.pt(13)
+                                    font.bold: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Label {
+                                        visible: text.length > 0
+                                        text: noteRow.isResult ? (modelData.folder || "All Notes")
+                                                               : ((root.detail(noteRow.fileName).modifiedMs || 0) > 0
+                                                                  ? root.shortDate(root.detail(noteRow.fileName).modifiedMs) : "")
+                                        color: root.colTextDim
+                                        font.pixelSize: root.pt(11)
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        elide: Text.ElideRight
+                                        text: noteRow.isResult ? (modelData.snippet || "") : (root.detail(noteRow.fileName).snippet || "")
+                                        color: root.colTextMuted
+                                        font.pixelSize: root.pt(11)
+                                    }
+                                }
+                                Flow {
+                                    Layout.fillWidth: true
+                                    visible: noteRow.pills.length > 0
+                                    spacing: 4
+                                    Repeater {
+                                        model: noteRow.pills
+                                        Pill { label: modelData[0]; tint: modelData[1] }
+                                    }
+                                }
+                            }
+                            TapHandler { onTapped: { if (!noteRow.selected) root.openNote(noteRow.folder, noteRow.fileName); } }
+                        }
                     }
                 }
             }
+
+            // Editor
+            Rectangle {
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 320
+                color: root.colBg
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    visible: backend.currentNote.length === 0
+                    spacing: 10
+                    Glyph { Layout.alignment: Qt.AlignHCenter; text: "\uf24a"; font.pixelSize: 40; color: root.colLine }
+                    Label {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: "Select a note, or create a new one."
+                        color: root.colTextMuted
+                        font.pixelSize: root.pt(13)
+                    }
+                }
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    visible: backend.currentNote.length > 0
+                    spacing: 0
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 32
+                        Layout.rightMargin: 32
+                        Layout.topMargin: 24
+                        elide: Text.ElideRight
+                        text: root.displayTitle(backend.currentNote)
+                        color: root.colText
+                        font.pixelSize: root.pt(24)
+                        font.bold: true
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        horizontalAlignment: Text.AlignHCenter
+                        color: root.colTextMuted
+                        font.pixelSize: root.pt(11)
+                        text: {
+                            var ms = root.detail(backend.currentNote).modifiedMs || 0;
+                            if (ms <= 0)
+                                return "";
+                            var d = new Date(ms);
+                            return d.toLocaleDateString(Qt.locale(), Locale.LongFormat)
+                                + " at " + d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 32
+                        Layout.rightMargin: 32
+                        Layout.topMargin: 14
+                        implicitHeight: 70
+                        visible: backend.noteAttachments.length > 0
+                        radius: 8
+                        color: root.colRaised
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 10
+                            Glyph { text: "\uf0c6"; color: root.colTextMuted }
+                            ListView {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                orientation: ListView.Horizontal
+                                model: backend.noteAttachments
+                                spacing: 10
+                                clip: true
+                                delegate: ColumnLayout {
+                                    spacing: 2
+                                    Image {
+                                        Layout.preferredWidth: 46
+                                        Layout.preferredHeight: 36
+                                        Layout.alignment: Qt.AlignHCenter
+                                        fillMode: Image.PreserveAspectFit
+                                        source: modelData.url
+                                        visible: modelData.image
+                                    }
+                                    Glyph { Layout.alignment: Qt.AlignHCenter; text: "\uf016"; visible: !modelData.image; font.pixelSize: 22; color: root.colTextDim }
+                                    Label {
+                                        Layout.maximumWidth: 90
+                                        elide: Text.ElideMiddle
+                                        text: modelData.name
+                                        color: root.colTextMuted
+                                        font.pixelSize: 10
+                                    }
+                                }
+                            }
+                            Label { text: "read-only in iCloud"; color: root.colTextMuted; font.pixelSize: 10 }
+                        }
+                    }
+
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.topMargin: 8
+                        TextArea {
+                            id: editor
+                            wrapMode: TextArea.Wrap
+                            selectByMouse: true
+                            background: null
+                            color: root.colText
+                            selectionColor: root.colAccent
+                            selectedTextColor: root.colBg
+                            font.pixelSize: root.pt(14)
+                            leftPadding: 32
+                            rightPadding: 32
+                            topPadding: 4
+                            bottomPadding: 32
+                            placeholderText: "Start writing…"
+                            // Keep the caret visible while typing long notes.
+                            onCursorRectangleChanged: editor.ensureVisible(cursorRectangle)
+                            onTextChanged: autosave.restart()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Notes has no Save button: edits land on disk once typing pauses. Edits
+    // a guardrail refuses stay in the editor and are flagged in the footer.
+    Timer {
+        id: autosave
+        interval: 1500
+        onTriggered: {
+            if (root.dirty && backend.currentNote.length > 0 && backend.saveWarning(editor.text).length === 0)
+                root.doSave();
         }
     }
 
@@ -551,6 +787,7 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }
     Shortcut { sequence: "Ctrl+Return"; onActivated: root.toggleTask() }
+    Shortcut { sequence: StandardKey.Find; onActivated: searchField.forceActiveFocus() }
 
     Connections {
         target: backend
@@ -559,7 +796,7 @@ ApplicationWindow {
                 root.loadEditor();
         }
         function onCurrentNoteChangedOnDisk() {
-            // If dirty, the editor keeps the user's text; Save/Refresh reconciles.
+            // If dirty, the editor keeps the user's text; Ctrl+S/Refresh reconciles.
             if (!root.dirty)
                 backend.refresh();
         }
@@ -580,6 +817,7 @@ ApplicationWindow {
         }
     }
 
+    // ---- Dialogs
     PromptDialog {
         id: newNoteDialog
         title: "New note"
@@ -606,7 +844,7 @@ ApplicationWindow {
         initial: root.noteLabel(backend.currentNote)
         hint: backend.vaultTitleMode === "filename"
               ? "This vault titles notes by file name: renaming the file retitles the note in iCloud."
-              : "This vault keeps the title in the note's first line: only that line changes."
+              : "The title is the note's first line: only that line changes."
         onAccepted: {
             if (!root.flushEdits())
                 return;
@@ -669,7 +907,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.colTextMuted
                 text: backend.statusUnchanged > 0
                       ? backend.statusUnchanged + " note(s) already match iCloud."
                       : "Every tracked note has a pending change."
@@ -678,7 +916,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 visible: backend.statusNotices.length > 0
-                color: palette.highlight
+                color: root.colYellow
                 text: backend.statusNotices.join("\n")
             }
             ScrollView {
@@ -687,22 +925,30 @@ ApplicationWindow {
                 ListView {
                     model: backend.statusEntries
                     clip: true
+                    spacing: 6
                     delegate: ColumnLayout {
                         width: ListView.view.width
                         spacing: 0
-                        Label {
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            font.bold: modelData.resolution !== "ready"
-                            text: (modelData.kind === "createFolder" ? "new folder" : modelData.kind)
-                                  + " · " + modelData.resolution + " · " + modelData.file
+                        RowLayout {
+                            spacing: 8
+                            Pill {
+                                label: modelData.kind === "createFolder" ? "new folder" : modelData.kind
+                                tint: root.colAccent
+                            }
+                            Pill {
+                                label: modelData.resolution
+                                tint: modelData.resolution === "ready" ? root.colGreen
+                                    : modelData.resolution === "refused" ? root.colRed : root.colYellow
+                            }
+                            Label { Layout.fillWidth: true; elide: Text.ElideRight; text: modelData.file; color: root.colText }
                         }
                         Label {
                             Layout.fillWidth: true
+                            Layout.leftMargin: 2
                             wrapMode: Text.WordWrap
                             visible: text.length > 0
-                            color: modelData.reason ? "red" : palette.text
-                            opacity: modelData.reason ? 1 : 0.7
+                            color: modelData.reason ? root.colRed : root.colTextMuted
+                            font.pixelSize: 11
                             text: modelData.reason || modelData.remark || ""
                         }
                     }
@@ -723,7 +969,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.colTextMuted
                 text: "Snapshots from past pulls and pushes, newest first. Restoring is read-only here — use `icloud-md revert` deliberately."
             }
             SplitView {

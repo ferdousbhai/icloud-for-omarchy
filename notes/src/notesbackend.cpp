@@ -5,6 +5,8 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QGuiApplication>
 #include <QPrinter>
 #include <QRegularExpression>
 #include <QStandardPaths>
@@ -100,12 +102,41 @@ QVariantList attachmentsFor(const QString &notePath, const QString &text)
     return found;
 }
 
+// Omarchy resolves the active theme's palette into this file on every
+// theme change: simple `key = "#rrggbb"` lines, plus mode = "dark"|"light".
+QString themeColorsPath()
+{
+    return QDir::homePath() + QStringLiteral("/.local/state/omarchy/current/theme/colors.toml");
+}
+
+// Toolbar glyphs come from a Nerd Font; Omarchy ships several. Prefer the
+// application's own font when it is one, so icons and text match.
+QString findIconFont()
+{
+    const QString appFont = QGuiApplication::font().family();
+    if (appFont.contains(QStringLiteral("Nerd Font")))
+        return appFont;
+    // "Nerd Font Mono" squeezes glyphs to one cell and "Propo" is the
+    // proportional cut; the plain family draws icons at their full width.
+    for (const QString &family : QFontDatabase::families()) {
+        if (family.endsWith(QStringLiteral("Nerd Font")))
+            return family;
+    }
+    return {};
+}
+
 } // namespace
 
 NotesBackend::NotesBackend(QObject *parent)
-    : QObject(parent), m_uiScale(readUiScale())
+    : QObject(parent), m_uiScale(readUiScale()), m_iconFont(findIconFont())
 {
     QDir().mkpath(rootPath());
+
+    // A theme change rewrites colors.toml (or the directory holding it);
+    // re-read and re-arm the watch, since a replaced file drops out of it.
+    loadTheme();
+    connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, &NotesBackend::loadTheme);
+    connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, this, &NotesBackend::loadTheme);
 
     // External changes (an icloud-md pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
@@ -137,6 +168,29 @@ NotesBackend::NotesBackend(QObject *parent)
     setSyncMessage(!icloudMdAvailable() ? QStringLiteral("icloud-md not found on PATH — install it to sync.")
                    : cloned()           ? QStringLiteral("Ready.")
                                         : QStringLiteral("Not linked to iCloud yet — press Clone."));
+}
+
+void NotesBackend::loadTheme()
+{
+    QVariantMap theme;
+    for (const QString &line : readText(themeColorsPath()).split(u'\n')) {
+        const qsizetype eq = line.indexOf(u'=');
+        if (eq < 0 || line.trimmed().startsWith(u'#'))
+            continue;
+        QString value = line.mid(eq + 1).trimmed();
+        if (value.size() >= 2 && value.front() == u'"' && value.back() == u'"')
+            value = value.mid(1, value.size() - 2);
+        theme.insert(line.left(eq).trimmed(), value);
+    }
+    if (theme != m_theme) {
+        m_theme = theme;
+        emit themeChanged();
+    }
+    const QString dir = QFileInfo(themeColorsPath()).absolutePath();
+    if (QDir(dir).exists() && !m_themeWatcher.directories().contains(dir))
+        m_themeWatcher.addPath(dir);
+    if (QFile::exists(themeColorsPath()) && !m_themeWatcher.files().contains(themeColorsPath()))
+        m_themeWatcher.addPath(themeColorsPath());
 }
 
 QString NotesBackend::rootPath()

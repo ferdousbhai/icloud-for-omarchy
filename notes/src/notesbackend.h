@@ -35,6 +35,8 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString diffText READ diffText NOTIFY historyChanged)
     Q_PROPERTY(QString historyError READ historyError NOTIFY historyChanged)
     Q_PROPERTY(double uiScale READ uiScale CONSTANT)
+    Q_PROPERTY(QVariantMap theme READ theme NOTIFY themeChanged)
+    Q_PROPERTY(QString iconFont READ iconFont CONSTANT)
 
 public:
     explicit NotesBackend(QObject *parent = nullptr);
@@ -66,6 +68,12 @@ public:
     QString diffText() const { return m_diffText; }
     QString historyError() const { return m_historyError; }
     double uiScale() const { return m_uiScale; }
+    // The active Omarchy theme's resolved palette (accent, background,
+    // foreground, muted, ...), empty off Omarchy so QML falls back to the
+    // system palette. Follows theme changes live.
+    QVariantMap theme() const { return m_theme; }
+    // A Nerd Font family for toolbar glyphs, empty when none is installed.
+    QString iconFont() const { return m_iconFont; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void openNote(const QString &name);
@@ -100,6 +108,7 @@ signals:
     void pushPreviewReady(bool ok);
     void historyChanged();
     void historyReady(bool ok);
+    void themeChanged();
 
 private:
     enum class Mode { Plain, Preview, History, Diff };
@@ -119,6 +128,7 @@ private:
     void startSync(Mode mode, const QStringList &args, const QString &label);
     void finishSync(int exitCode);
     void setPushPreview(const QVariantMap &parsed, const QString &error);
+    void loadTheme();
     void appendLog(const QString &text);
     void setSyncMessage(const QString &text);
 
@@ -145,7 +155,10 @@ private:
     Mode m_mode = Mode::Plain;
     QByteArray m_captured;
     const double m_uiScale;
+    QVariantMap m_theme;
+    QString m_iconFont;
     QFileSystemWatcher m_watcher;
+    QFileSystemWatcher m_themeWatcher;
     QProcess m_syncProcess;
 };
 
