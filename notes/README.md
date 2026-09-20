@@ -52,10 +52,13 @@ as its first line, just like in Notes.
 - **Browse**: folders on the left, notes in the middle (newest first,
   with title, preview line, and date). The search box above the list
   searches every note; picking a result jumps to it.
-- **Edit**: `Ctrl+S` saves, `Ctrl+N` starts a note, switching notes
-  autosaves. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`), a
-  checklist toggle (`Ctrl+Enter`), rename, and PDF export (saved next
-  to the note) are in the toolbar.
+- **Edit**: edits save on their own once you pause typing, and when you
+  switch notes; `Ctrl+S` forces a save when a guardrail has flagged the
+  edit. `Ctrl+N` starts a note. Click the title to rename it. Headings,
+  emphasis, links and checklists are styled as you type, and stay plain
+  Markdown on disk. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`),
+  a checklist toggle (`Ctrl+Enter`), and PDF export (saved next to the
+  note) are in the toolbar. The window follows the active Omarchy theme.
 - **History** shows past versions of the current note with diffs.
   Restoring an old version is a deliberate terminal step
   (`icloud-md revert`), never a click.

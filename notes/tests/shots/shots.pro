@@ -5,6 +5,7 @@ TARGET = shots
 TEMPLATE = app
 
 SOURCES += shots.cpp \
-    ../../src/notesbackend.cpp
-HEADERS += ../../src/notesbackend.h
+    ../../src/notesbackend.cpp \
+    ../../src/markdownhighlighter.cpp
+HEADERS += ../../src/notesbackend.h ../../src/markdownhighlighter.h
 INCLUDEPATH += ../../src

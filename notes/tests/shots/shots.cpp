@@ -49,7 +49,8 @@ int main(int argc, char *argv[])
                   QStringLiteral(R"({"titleMode":"in-body","notes":{"a":{"file":"Notes/Groceries.md"},"b":{"file":"Notes/Trip ideas.md"},"c":{"file":"Recipes/Pancakes.md"}}})"),
                   9);
         writeFile(root, QStringLiteral("Notes/Groceries.md"),
-                  QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, sourdough\n- [ ] oat milk\n- [x] coffee\n"),
+                  QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"
+                                 "## Weekend\n- [ ] oat milk\n- [x] coffee\n- *maybe* `pancake mix`\n\n> don't forget the bags\n"),
                   0);
         writeFile(root, QStringLiteral("Notes/Trip ideas.md"),
                   QStringLiteral("---\napple-note-id: b\n---\n# Trip ideas\nKyoto in spring for the cherry blossoms.\n| day | plan |\n| 1 | arrive |\n"),

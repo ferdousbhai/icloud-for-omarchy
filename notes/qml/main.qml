@@ -220,6 +220,18 @@ ApplicationWindow {
         if (folder !== backend.currentFolder && flushEdits())
             backend.currentFolder = folder;
     }
+    function commitTitle(title) {
+        title = title.trim();
+        if (title.length === 0 || title === titleField.current || !flushEdits()) {
+            titleField.text = titleField.current;
+            return;
+        }
+        var err = backend.renameCurrentNote(title);
+        if (err.length > 0) {
+            notice = err;
+            titleField.text = titleField.current;
+        }
+    }
 
     function toggleTask() {
         var line = editor.text.slice(0, editor.cursorPosition).split("\n").length - 1;
@@ -267,7 +279,7 @@ ApplicationWindow {
             IconButton {
                 glyph: "\uf040"; tip: "Rename note"
                 enabled: backend.currentNote.length > 0 && !backend.syncRunning
-                onClicked: renameDialog.open()
+                onClicked: { titleField.forceActiveFocus(); titleField.selectAll(); }
             }
             Item { Layout.fillWidth: true }
             IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0; onClicked: root.toggleTask() }
@@ -643,16 +655,28 @@ ApplicationWindow {
                     visible: backend.currentNote.length > 0
                     spacing: 0
 
-                    Label {
+                    // The title is edited in place, like the first line in Notes;
+                    // committing it retitles the note (heading line or file name).
+                    TextInput {
+                        id: titleField
                         Layout.fillWidth: true
                         Layout.leftMargin: 32
                         Layout.rightMargin: 32
                         Layout.topMargin: 24
-                        elide: Text.ElideRight
-                        text: root.displayTitle(backend.currentNote)
+                        property string current: root.displayTitle(backend.currentNote)
+                        onCurrentChanged: text = current
+                        text: current
                         color: root.colText
+                        selectionColor: root.colAccent
+                        selectedTextColor: root.colBg
                         font.pixelSize: root.pt(24)
                         font.bold: true
+                        selectByMouse: true
+                        clip: true
+                        onEditingFinished: root.commitTitle(text)
+                        Keys.onReturnPressed: editor.forceActiveFocus()
+                        Keys.onEnterPressed: editor.forceActiveFocus()
+                        Keys.onEscapePressed: { text = current; editor.forceActiveFocus(); }
                     }
                     Label {
                         Layout.fillWidth: true
@@ -736,6 +760,7 @@ ApplicationWindow {
                             // Keep the caret visible while typing long notes.
                             onCursorRectangleChanged: editor.ensureVisible(cursorRectangle)
                             onTextChanged: autosave.restart()
+                            Component.onCompleted: backend.attachEditor(editor.textDocument)
                         }
                     }
                 }
@@ -760,7 +785,7 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             // Auto-fetch only: publishing stays an explicit, previewed act.
-            var open = [previewDialog, logDialog, historyDialog, saveWarnDialog, renameDialog,
+            var open = [previewDialog, logDialog, historyDialog, saveWarnDialog,
                         newNoteDialog, newFolderDialog, deleteDialog, onboardDialog];
             if (backend.syncRunning || open.some(function (d) { return d.visible; }))
                 return;
@@ -835,23 +860,6 @@ ApplicationWindow {
         title: "New folder"
         placeholder: "Folder name"
         onAccepted: { if (value.length > 0) backend.newFolder(value); }
-    }
-
-    PromptDialog {
-        id: renameDialog
-        title: "Rename note"
-        placeholder: "New title"
-        initial: root.noteLabel(backend.currentNote)
-        hint: backend.vaultTitleMode === "filename"
-              ? "This vault titles notes by file name: renaming the file retitles the note in iCloud."
-              : "The title is the note's first line: only that line changes."
-        onAccepted: {
-            if (!root.flushEdits())
-                return;
-            var err = backend.renameCurrentNote(value);
-            if (err.length > 0)
-                root.notice = err;
-        }
     }
 
     AppDialog {

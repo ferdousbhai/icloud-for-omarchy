@@ -4,6 +4,9 @@
 #include <QFileSystemWatcher>
 #include <QObject>
 #include <QProcess>
+#include <QQuickTextDocument>
+
+#include "markdownhighlighter.h"
 #include <QStringList>
 #include <QVariant>
 
@@ -53,8 +56,10 @@ public:
     QVariantMap noteDetails() const { return m_noteDetails; }
     QString currentNote() const { return m_currentNote; }
     QString noteContent() const { return m_noteContent; }
-    // The editable body: the file with its frontmatter envelope held back
-    // (Apple Notes never shows sync metadata; it is reattached on save).
+    // The editable body: the file with its frontmatter envelope and, in
+    // in-body vaults, its heading line held back (Notes never shows sync
+    // metadata, and the title is edited in its own field). Both are
+    // reattached on save.
     QString noteBody() const;
     QVariantList noteAttachments() const { return m_noteAttachments; }
     QString syncMessage() const { return m_syncMessage; }
@@ -93,6 +98,8 @@ public:
     Q_INVOKABLE void runHistory();
     Q_INVOKABLE void runDiff(const QString &ref);
     Q_INVOKABLE void clearLog();
+    // Styles the editor's Markdown in the theme's colours; formatting only.
+    Q_INVOKABLE void attachEditor(QQuickTextDocument *document);
 
 signals:
     void foldersChanged();
@@ -129,6 +136,8 @@ private:
     void finishSync(int exitCode);
     void setPushPreview(const QVariantMap &parsed, const QString &error);
     void loadTheme();
+    QString assembleNote(const QString &body) const;
+    MarkdownHighlighter::Colors highlighterColors() const;
     void appendLog(const QString &text);
     void setSyncMessage(const QString &text);
 
@@ -156,6 +165,7 @@ private:
     QByteArray m_captured;
     const double m_uiScale;
     QVariantMap m_theme;
+    MarkdownHighlighter *m_highlighter = nullptr;
     QString m_iconFont;
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_themeWatcher;

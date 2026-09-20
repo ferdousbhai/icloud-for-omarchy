@@ -5,10 +5,12 @@ TARGET = icloud-notes
 TEMPLATE = app
 
 HEADERS += \
-    src/notesbackend.h
+    src/notesbackend.h \
+    src/markdownhighlighter.h
 
 SOURCES += \
     src/main.cpp \
-    src/notesbackend.cpp
+    src/notesbackend.cpp \
+    src/markdownhighlighter.cpp
 
 RESOURCES += qml/resources.qrc

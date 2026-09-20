@@ -114,19 +114,21 @@ int main(int argc, char *argv[])
 
     b.openNote(QStringLiteral("A.md"));
     check(b.noteAttachments().isEmpty(), "backend attachments follow the note");
-    check(b.saveWarning(QStringLiteral("# Alpha\nedited body\n")).isEmpty(), "backend clean save silent");
+    check(b.saveWarning(QStringLiteral("edited body\n")).isEmpty(), "backend clean save silent");
     // The envelope is hidden from the editor and reattached on save, so the
     // id cannot be edited away; files on disk keep it byte-for-byte.
-    check(b.noteBody() == QStringLiteral("# Alpha\nbody\n"), "backend body hides envelope");
-    b.saveCurrentNote(QStringLiteral("# Alpha\nchanged\n"));
+    check(b.noteBody() == QStringLiteral("body\n"), "backend body hides envelope and heading");
+    b.saveCurrentNote(QStringLiteral("changed\n"));
     check(readFile(QStringLiteral("A.md")) == QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nchanged\n"),
-          "backend save preserves envelope");
-    check(b.saveWarning(QStringLiteral("# A\n<<<<<<< x\n")).contains(QStringLiteral("conflict")),
+          "backend save preserves envelope and heading");
+    check(b.saveWarning(QStringLiteral("<<<<<<< x\n")).contains(QStringLiteral("conflict")),
           "backend markers warn");
-    // Copying A's id into C (which has no envelope) must warn about the duplicate.
-    b.openNote(QStringLiteral("C.md"));
-    check(b.saveWarning(QStringLiteral("---\napple-note-id: id-a\n---\n# Fresh\n")).contains(QStringLiteral("A.md")),
-          "backend duplicate id warns");
+    // A stray copy of A on disk shares its id: saving A warns about the twin.
+    writeFile(QStringLiteral("A copy.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nbody\n"));
+    b.refresh();
+    check(b.saveWarning(QStringLiteral("edited\n")).contains(QStringLiteral("A copy.md")), "backend duplicate id warns");
+    QFile::remove(rootPath() + QStringLiteral("/A copy.md"));
+    b.refresh();
 
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));

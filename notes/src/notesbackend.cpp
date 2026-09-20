@@ -1,4 +1,5 @@
 #include "notesbackend.h"
+#include "markdownhighlighter.h"
 #include "syncmodel.h"
 
 #include <QDir>
@@ -244,7 +245,37 @@ QString NotesBackend::vaultTitleMode() const
 
 QString NotesBackend::noteBody() const
 {
-    return SyncModel::splitEnvelope(m_noteContent).body;
+    const QString body = SyncModel::splitEnvelope(m_noteContent).body;
+    return vaultTitleMode() == u"filename" ? body : SyncModel::splitTitle(body).rest;
+}
+
+// The file as it is written for an editor body: stored envelope and heading
+// line first, untouched, so neither can be edited away.
+QString NotesBackend::assembleNote(const QString &body) const
+{
+    const SyncModel::EnvelopeSplit split = SyncModel::splitEnvelope(m_noteContent);
+    const QString titleLine =
+        vaultTitleMode() == u"filename" ? QString() : SyncModel::splitTitle(split.body).titleLine;
+    return split.envelope + titleLine + body;
+}
+
+MarkdownHighlighter::Colors NotesBackend::highlighterColors() const
+{
+    auto color = [this](const char *key, const QColor &fallback) {
+        const QString value = m_theme.value(QLatin1StringView(key)).toString();
+        return QColor::isValidColorName(value) ? QColor::fromString(value) : fallback;
+    };
+    return { color("accent", QColor(0x7a, 0xa2, 0xf7)), color("dark_foreground", QColor(0x80, 0x80, 0x80)),
+             color("light_foreground", QColor(0xb0, 0xb0, 0xb0)), color("lighter_background", QColor(0x30, 0x30, 0x30)) };
+}
+
+void NotesBackend::attachEditor(QQuickTextDocument *document)
+{
+    if (!document || m_highlighter)
+        return;
+    m_highlighter = new MarkdownHighlighter(document->textDocument(), highlighterColors());
+    connect(this, &NotesBackend::themeChanged, m_highlighter,
+            [this] { m_highlighter->setColors(highlighterColors()); });
 }
 
 void NotesBackend::rebuildFolders()
@@ -403,10 +434,8 @@ void NotesBackend::openNote(const QString &name)
 
 void NotesBackend::saveCurrentNote(const QString &body)
 {
-    // The editor holds the body only; the stored envelope is reattached
-    // untouched, so sync metadata can never be edited away.
     const QString path = noteAbsolutePath();
-    const QString text = SyncModel::splitEnvelope(m_noteContent).envelope + body;
+    const QString text = assembleNote(body);
     if (path.isEmpty() || text == m_noteContent || !writeText(path, text))
         return;
     loadCurrentNote();
@@ -416,7 +445,7 @@ void NotesBackend::saveCurrentNote(const QString &body)
 QString NotesBackend::saveWarning(const QString &body)
 {
     // Checks run against the full file as it would be written.
-    const QString text = SyncModel::splitEnvelope(m_noteContent).envelope + body;
+    const QString text = assembleNote(body);
     QStringList warnings;
     if (SyncModel::hasConflictMarkers(text) && !SyncModel::hasConflictMarkers(m_noteContent))
         warnings << QStringLiteral("Unresolved conflict markers present — push will refuse this note "

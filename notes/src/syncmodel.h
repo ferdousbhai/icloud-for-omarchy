@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -184,6 +185,23 @@ inline QVariantMap parseHistoryJson(const QByteArray &bytes)
     return arrayItems(QJsonDocument::fromJson(bytes), QStringLiteral("epochs"), QStringLiteral("history"));
 }
 
+// In-body vaults keep the title as the first line of the body. When that
+// line is a heading, the editor shows only what follows it and the heading
+// is edited through the title field; a bare first line stays in the editor.
+struct TitleSplit {
+    QString titleLine; // heading line with its newline, or empty
+    QString rest;
+};
+inline TitleSplit splitTitle(const QString &body)
+{
+    if (!body.startsWith(u'#'))
+        return { {}, body };
+    const qsizetype nl = body.indexOf(u'\n');
+    if (nl < 0)
+        return { body + u'\n', {} };
+    return { body.left(nl + 1), body.mid(nl + 1) };
+}
+
 // Length of a list marker ("- ", "* ", "+ ", "12. ", "3) ") at the start
 // of `s`, or 0 when the line is not a list item.
 inline qsizetype listMarkerLength(QStringView s)
@@ -206,15 +224,20 @@ inline qsizetype checkboxLength(QStringView s)
     return box && (s.size() == 3 || s[3].isSpace()) ? 3 : 0;
 }
 
-// The prose of a line: heading/quote marks, list markers and checkboxes
-// stripped, for titles and snippets.
+// The prose of a line for titles and snippets: heading/quote marks, list
+// markers and checkboxes stripped, and inline markup (emphasis, code,
+// links, images) reduced to its text.
 inline QString stripMarkdownLead(const QString &line)
 {
+    static const QRegularExpression link(QStringLiteral(R"(!?\[([^\]]*)\]\([^)]*\))"));
+    static const QRegularExpression marks(QStringLiteral(R"((\*\*|__|~~|[*_`]))"));
     QString s = line.trimmed();
     while (!s.isEmpty() && (s.startsWith(u'#') || s.startsWith(u'>')))
         s = s.mid(1).trimmed();
     s = s.mid(listMarkerLength(s)).trimmed();
-    return s.mid(checkboxLength(s)).trimmed();
+    s = s.mid(checkboxLength(s)).trimmed();
+    s.replace(link, QStringLiteral("\\1"));
+    return s.remove(marks).trimmed();
 }
 
 struct NotePreview {

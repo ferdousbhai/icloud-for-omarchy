@@ -110,6 +110,14 @@ int main()
               == QStringLiteral("---\napple-note-id: x\n---\n# New\n"),
           "retitle empty body gains heading");
 
+    // splitTitle
+    check(SyncModel::splitTitle(QStringLiteral("# T\nbody\n")).titleLine == QStringLiteral("# T\n")
+              && SyncModel::splitTitle(QStringLiteral("# T\nbody\n")).rest == QStringLiteral("body\n"),
+          "title split heading");
+    check(SyncModel::splitTitle(QStringLiteral("# T")).titleLine == QStringLiteral("# T\n"), "title split lone heading");
+    check(SyncModel::splitTitle(QStringLiteral("Bare\nbody\n")).titleLine.isEmpty(), "title split bare line stays");
+    check(SyncModel::splitTitle(QString()).rest.isEmpty(), "title split empty");
+
     // previewNote
     {
         const SyncModel::NotePreview p =
@@ -137,6 +145,13 @@ int main()
             SyncModel::previewNote(QString(), QStringLiteral("File"), QStringLiteral("in-body"));
         check(p.title == QStringLiteral("File") && p.snippet.isEmpty(), "preview empty falls back");
     }
+
+    // stripMarkdownLead
+    check(SyncModel::stripMarkdownLead(QStringLiteral("- [ ] **milk** from [the shop](http://x) and `eggs`"))
+              == QStringLiteral("milk from the shop and eggs"),
+          "strip inline markup");
+    check(SyncModel::stripMarkdownLead(QStringLiteral("## Title *here*")) == QStringLiteral("Title here"),
+          "strip heading and emphasis");
 
     // toggleCheckbox
     check(SyncModel::toggleCheckbox(QStringLiteral("a\n- [ ] milk\nb"), 1) == QStringLiteral("a\n- [x] milk\nb"),
