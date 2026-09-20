@@ -620,10 +620,12 @@ ApplicationWindow {
         id: saveWarnDialog
         title: "Save anyway?"
         standardButtons: Dialog.Yes | Dialog.No
-        Label {
-            id: saveWarnText
-            width: 340
-            wrapMode: Text.WordWrap
+        ColumnLayout {
+            Label {
+                id: saveWarnText
+                Layout.preferredWidth: 340
+                wrapMode: Text.WordWrap
+            }
         }
         onAccepted: root.doSave()
     }
@@ -632,10 +634,12 @@ ApplicationWindow {
         id: deleteDialog
         title: "Delete note?"
         standardButtons: Dialog.Yes | Dialog.No
-        Label {
-            width: 280
-            wrapMode: Text.WordWrap
-            text: "Move \"" + root.noteLabel(backend.currentNote) + "\" to the trash? The next Push moves it to Recently Deleted in iCloud."
+        ColumnLayout {
+            Label {
+                Layout.preferredWidth: 300
+                wrapMode: Text.WordWrap
+                text: "Move \"" + root.noteLabel(backend.currentNote) + "\" to the trash? The next Push moves it to Recently Deleted in iCloud."
+            }
         }
         onAccepted: {
             backend.deleteCurrentNote();
@@ -770,12 +774,14 @@ ApplicationWindow {
             }
             Button { text: "Cancel"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
         }
-        Label {
-            width: 380
-            wrapMode: Text.WordWrap
-            text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
-                  + "A real Apple sign-in window opens (password and 2FA are handled by Apple's own pages). "
-                  + "Apple Notes must not use Advanced Data Protection — icloud-md cannot decrypt it."
+        ColumnLayout {
+            Label {
+                Layout.preferredWidth: 380
+                wrapMode: Text.WordWrap
+                text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
+                      + "A real Apple sign-in window opens (password and 2FA are handled by Apple's own pages). "
+                      + "Apple Notes must not use Advanced Data Protection — icloud-md cannot decrypt it."
+            }
         }
     }
 
