@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Cut a release from this machine: tag, build the Arch package, sign it with
+# the local package-signing key, and publish a one-package pacman repository
+# as the tag's GitHub release. Users who ran install.sh get it through
+# `omarchy update`.
+#
+# Usage: bin/release <version>          e.g. bin/release 0.2.0
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+version="${1:-}"
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Usage: bin/release <major.minor.patch>" >&2; exit 1; }
+tag="v$version"
+
+[[ -z $(git status --porcelain) ]] || { echo "Commit or stash your changes first." >&2; exit 1; }
+[[ $(git branch --show-current) == main ]] || { echo "Release from main." >&2; exit 1; }
+! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "$tag already exists." >&2; exit 1; }
+
+# install.sh pins the fingerprint users trust; the key that signs must be it.
+fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
+gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
+  || { echo "The secret key $fingerprint pinned in install.sh is not in this keyring." >&2; exit 1; }
+export GPGKEY=$fingerprint
+
+sed -i "s/^pkgver=.*/pkgver=$version/" pkgbuild/PKGBUILD
+if [[ -n $(git status --porcelain) ]]; then
+  git commit -q -m "Release $tag" pkgbuild/PKGBUILD
+fi
+git tag -a "$tag" -m "icloud-notes $tag"
+
+rm -rf dist
+mkdir dist
+(cd pkgbuild && PKGDEST="$PWD/../dist" makepkg --force --syncdeps --sign)
+
+(
+  cd dist
+  repo-add --sign --verify icloud-notes.db.tar.gz ./*.pkg.tar.zst
+  # repo-add leaves the names pacman asks for (icloud-notes.db, .files and
+  # their .sig) as symlinks, which a GitHub release cannot hold: copy them.
+  for name in db files; do
+    rm -f "icloud-notes.$name" "icloud-notes.$name.sig"
+    cp "icloud-notes.$name.tar.gz" "icloud-notes.$name"
+    cp "icloud-notes.$name.tar.gz.sig" "icloud-notes.$name.sig"
+  done
+  gpg --batch --armor --export "$fingerprint" >icloud-notes-signing-key.asc
+)
+
+git push -q origin main "$tag"
+gh release create "$tag" dist/* --title "icloud-notes $tag" --generate-notes --latest
+echo "Published $tag: https://github.com/ferdousbhai/icloud-notes/releases/tag/$tag"

@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO=icloud-notes
 RELEASES=https://github.com/ferdousbhai/icloud-notes/releases/latest/download
-SIGNING_KEY_FINGERPRINT=REPLACE_WITH_THE_SIGNING_KEY_FINGERPRINT
+SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
 CONF=/etc/pacman.d/$REPO.conf
 INCLUDE="Include = $CONF"
 

@@ -109,15 +109,15 @@ icloud-md restore "<note file>"
 
 ## Releasing
 
-Tag a version and push it:
+Releases are cut from a checkout with the package-signing key in its
+keyring, no CI involved:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+bin/release 0.2.0
 ```
 
-The release workflow builds the package in an Arch container from
-`pkgbuild/PKGBUILD`, signs it and the repository database with the
-`PACKAGING_GPG_KEY` secret, and publishes everything as the GitHub release
-for that tag, which is what `releases/latest/download` in `install.sh`
-resolves to. The workflow refuses to build if the secret's fingerprint is
-not the one pinned in `install.sh`.
+That tags `v0.2.0`, builds the package with `makepkg` from
+`pkgbuild/PKGBUILD`, signs it and the repository database with the key
+whose fingerprint `install.sh` pins, and publishes everything as the
+GitHub release for the tag, which is what `releases/latest/download` in
+`install.sh` resolves to.
