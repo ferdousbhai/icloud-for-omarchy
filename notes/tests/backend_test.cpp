@@ -130,11 +130,21 @@ int main(int argc, char *argv[])
     QFile::remove(rootPath() + QStringLiteral("/A copy.md"));
     b.refresh();
 
+    // Scans are cached per file: a rewrite of the same size is still seen.
+    writeFile(QStringLiteral("A.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nchangeZ\n"));
+    b.refresh();
+    check(b.noteDetails().value(QStringLiteral("A.md")).toMap().value(QStringLiteral("snippet")).toString()
+              == QStringLiteral("changeZ"),
+          "backend scan cache follows rewrites");
+
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));
     check(b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty(), "backend rename ok");
     check(b.noteContent().startsWith(QStringLiteral("---\napple-note-id: id-a\n---\n# Renamed\n")),
           "backend rename retitles line");
+    check(b.noteDetails().value(QStringLiteral("A.md")).toMap().value(QStringLiteral("title")).toString()
+              == QStringLiteral("Renamed"),
+          "backend rename updates list title");
     check(!hasFlag(b, QStringLiteral("A.md"), "missing-id"), "backend rename keeps id");
 
     // Filename mode renames the file instead.

@@ -38,7 +38,13 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
         QTextCharFormat headingFormat;
         headingFormat.setFontWeight(QFont::Bold);
         const int level = int(m.captured(1).size());
-        headingFormat.setFontPointSize(document()->defaultFont().pointSizeF() * (level == 1 ? 1.35 : level == 2 ? 1.2 : 1.08));
+        const double scale = level == 1 ? 1.35 : level == 2 ? 1.2 : 1.08;
+        // The editor sets its font in pixels; scale whichever unit it uses.
+        const QFont base = document()->defaultFont();
+        if (base.pixelSize() > 0)
+            headingFormat.setProperty(QTextFormat::FontPixelSize, int(base.pixelSize() * scale));
+        else
+            headingFormat.setFontPointSize(base.pointSizeF() * scale);
         setFormat(0, int(text.size()), headingFormat);
         setFormat(0, int(m.capturedLength(0)), mutedFormat);
     } else if ((m = rule.match(text)).hasMatch()) {

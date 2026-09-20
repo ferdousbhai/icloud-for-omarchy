@@ -37,6 +37,8 @@ int main(int argc, char *argv[])
     }
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
+    app.setOrganizationName(QStringLiteral("icloud-notes"));
+    app.setApplicationName(QStringLiteral("icloud-notes-shots")); // its own settings, not the user's
     QStandardPaths::setTestModeEnabled(true);
 
     const QString root =

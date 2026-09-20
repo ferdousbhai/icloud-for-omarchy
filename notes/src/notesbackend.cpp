@@ -146,7 +146,8 @@ NotesBackend::NotesBackend(QObject *parent)
         rebuildNotes();
     });
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
-        if (!m_currentNote.isEmpty() && path == noteAbsolutePath())
+        // Our own saves come back through here too; only a real difference counts.
+        if (!m_currentNote.isEmpty() && path == noteAbsolutePath() && readText(path) != m_noteContent)
             emit currentNoteChangedOnDisk();
     });
 
@@ -346,30 +347,39 @@ void NotesBackend::classifyNotes()
     const QSet<QString> tracked = SyncModel::trackedFiles(state);
     const QString mode = SyncModel::readTitleMode(state);
     const QDir dir(folderAbsolutePath(m_currentFolder));
+    QHash<QString, NoteScan> scans;
     QVariantMap states;
     QVariantMap details;
     for (const QString &name : m_notes) {
         const QString path = dir.filePath(name);
-        const QString text = readText(path, kScanLimit + 1);
-        const bool huge = text.size() > kScanLimit;
-        const SyncModel::NotePreview preview = SyncModel::previewNote(text, name.chopped(3), mode);
-        details.insert(name, QVariantMap{ { QStringLiteral("title"), preview.title },
-                                          { QStringLiteral("snippet"), preview.snippet },
-                                          { QStringLiteral("modifiedMs"),
-                                            QFileInfo(path).lastModified().toMSecsSinceEpoch() } });
+        const QFileInfo info(path);
+        NoteScan scan = m_scans.value(path);
+        if (scan.modifiedMs != info.lastModified().toMSecsSinceEpoch() || scan.size != info.size()
+            || scan.mode != mode) {
+            const QString text = readText(path, kScanLimit + 1);
+            const bool huge = text.size() > kScanLimit;
+            const SyncModel::NotePreview preview = SyncModel::previewNote(text, name.chopped(3), mode);
+            scan = { info.lastModified().toMSecsSinceEpoch(), info.size(), mode, preview.title, preview.snippet,
+                     SyncModel::extractNoteId(text), !huge && SyncModel::hasConflictMarkers(text),
+                     !huge && SyncModel::hasTable(text) };
+        }
+        scans.insert(path, scan);
+        details.insert(name, QVariantMap{ { QStringLiteral("title"), scan.title },
+                                          { QStringLiteral("snippet"), scan.snippet },
+                                          { QStringLiteral("modifiedMs"), scan.modifiedMs } });
         QStringList flags;
-        if (!huge && SyncModel::hasConflictMarkers(text))
+        if (scan.conflict)
             flags << QStringLiteral("conflict");
-        if (!huge && SyncModel::hasTable(text))
+        if (scan.table)
             flags << QStringLiteral("tables");
-        const bool hasId = !SyncModel::extractNoteId(text).isEmpty();
         if (!tracked.contains(vaultRelative(name)))
-            flags << (hasId ? QStringLiteral("foreign-id") : QStringLiteral("new"));
-        else if (!hasId)
+            flags << (scan.id.isEmpty() ? QStringLiteral("new") : QStringLiteral("foreign-id"));
+        else if (scan.id.isEmpty())
             flags << QStringLiteral("missing-id");
         if (!flags.isEmpty())
             states.insert(name, flags);
     }
+    m_scans = scans;
     m_noteStates = states;
     m_noteDetails = details;
 }
@@ -453,14 +463,12 @@ QString NotesBackend::saveWarning(const QString &body)
     const QString id = SyncModel::extractNoteId(text);
     const QDir dir(folderAbsolutePath(m_currentFolder));
     for (const QString &name : m_notes) {
-        if (id.isEmpty() || name == m_currentNote)
+        if (id.isEmpty() || name == m_currentNote || m_scans.value(dir.filePath(name)).id != id)
             continue;
-        if (SyncModel::extractNoteId(readText(dir.filePath(name), 8192)) == id) {
-            warnings << QStringLiteral("Another note in this folder (%1) carries the same apple-note-id. "
-                                       "Pushing two files with one id is ambiguous — keep only one.")
-                            .arg(name);
-            break;
-        }
+        warnings << QStringLiteral("Another note in this folder (%1) carries the same apple-note-id. "
+                                   "Pushing two files with one id is ambiguous — keep only one.")
+                        .arg(name);
+        break;
     }
     return warnings.join(QStringLiteral("\n\n"));
 }
@@ -582,8 +590,10 @@ QString NotesBackend::exportPdf()
     const QString name = QFileInfo(pdf).fileName();
     if (QFile::exists(pdf))
         return QStringLiteral("Already exists (not overwritten): %1").arg(name);
+    // Rendered like the editor shows it: the title as a heading, then the body.
+    const QString title = m_noteDetails.value(m_currentNote).toMap().value(QStringLiteral("title")).toString();
     QTextDocument doc;
-    doc.setPlainText(noteBody());
+    doc.setMarkdown(u"# " + title + u"\n\n" + noteBody());
     QPrinter printer;
     printer.setOutputFormat(QPrinter::PdfFormat);
     printer.setOutputFileName(pdf);

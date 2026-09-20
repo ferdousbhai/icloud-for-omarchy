@@ -2,6 +2,7 @@
 #define NOTESBACKEND_H
 
 #include <QFileSystemWatcher>
+#include <QHash>
 #include <QObject>
 #include <QProcess>
 #include <QQuickTextDocument>
@@ -140,6 +141,20 @@ private:
     MarkdownHighlighter::Colors highlighterColors() const;
     void appendLog(const QString &text);
     void setSyncMessage(const QString &text);
+
+    // What one read of a note yields, kept until the file's mtime or size
+    // moves, so a save in a folder of hundreds of notes re-reads one file.
+    struct NoteScan {
+        qint64 modifiedMs = 0;
+        qint64 size = 0;
+        QString mode;
+        QString title;
+        QString snippet;
+        QString id;
+        bool conflict = false;
+        bool table = false;
+    };
+    QHash<QString, NoteScan> m_scans; // keyed by absolute path, current folder only
 
     QStringList m_folders;
     QVariantMap m_folderNoteCounts;

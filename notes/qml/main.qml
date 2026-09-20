@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtCore
 
 ApplicationWindow {
     id: root
@@ -234,10 +235,13 @@ ApplicationWindow {
     }
 
     function toggleTask() {
-        var line = editor.text.slice(0, editor.cursorPosition).split("\n").length - 1;
-        var updated = backend.toggleCheckbox(editor.text, line);
-        if (updated !== editor.text)
-            editor.text = updated;
+        var before = editor.text, pos = editor.cursorPosition;
+        var line = before.slice(0, pos).split("\n").length - 1;
+        var updated = backend.toggleCheckbox(before, line);
+        if (updated === before)
+            return;
+        editor.text = updated;
+        editor.cursorPosition = Math.min(pos + updated.length - before.length, updated.length);
     }
     function wrapSelection(before, after) {
         var s = editor.selectionStart, sel = editor.selectedText;
@@ -304,9 +308,14 @@ ApplicationWindow {
                 checkable: true
                 enabled: backend.cloned
             }
-            IconButton { glyph: "\uf141"; tip: "More"; onClicked: moreMenu.open() }
-            Menu {
-                id: moreMenu
+            IconButton {
+                id: moreButton
+                glyph: "\uf141"; tip: "More"
+                onClicked: moreMenu.open()
+                Menu {
+                    id: moreMenu
+                    y: moreButton.height + 4
+                    x: moreButton.width - width
                 MenuItem {
                     text: "Status preview"
                     enabled: backend.cloned && !backend.syncRunning
@@ -331,6 +340,7 @@ ApplicationWindow {
                 MenuSeparator {}
                 MenuItem { text: "Refresh"; onTriggered: backend.refresh() }
                 MenuItem { text: "Sync log"; onTriggered: logDialog.open() }
+                }
             }
         }
         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.colLine; opacity: 0.6 }
@@ -530,6 +540,7 @@ ApplicationWindow {
                                     if (root.searching)
                                         root.searchResults = backend.searchVault(text);
                                 }
+                                Keys.onEscapePressed: { text = ""; editor.forceActiveFocus(); }
                             }
                         }
                     }
@@ -774,6 +785,10 @@ ApplicationWindow {
         id: autosave
         interval: 1500
         onTriggered: {
+            if (backend.syncRunning) { // never write under a running pull; try again after
+                restart();
+                return;
+            }
             if (root.dirty && backend.currentNote.length > 0 && backend.saveWarning(editor.text).length === 0)
                 root.doSave();
         }
@@ -811,7 +826,9 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+B"; onActivated: root.wrapSelection("**", "**") }
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }
-    Shortcut { sequence: "Ctrl+Return"; onActivated: root.toggleTask() }
+    Shortcut { sequence: "Ctrl+Return"; enabled: editor.activeFocus; onActivated: root.toggleTask() }
+
+    Settings { property alias autoPull: autoButton.checked }
     Shortcut { sequence: StandardKey.Find; onActivated: searchField.forceActiveFocus() }
 
     Connections {
