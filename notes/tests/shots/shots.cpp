@@ -1,5 +1,5 @@
 // Offscreen screenshot tool for styling iterations (not a test): seeds a
-// demo vault in the test-mode home, shows the real main.qml, grabs the
+// demo vault in a temporary directory, shows the real main.qml, grabs the
 // window to a PNG and quits. Usage: shots out.png [path/to/main.qml]
 // NOTES_SHOT=bare seeds an empty, unlinked vault instead.
 #include "../src/notesbackend.h"
@@ -12,6 +12,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
 
@@ -39,11 +40,14 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("icloud-notes"));
     app.setApplicationName(QStringLiteral("icloud-notes-shots")); // its own settings, not the user's
-    QStandardPaths::setTestModeEnabled(true);
+    QStandardPaths::setTestModeEnabled(true); // settings and caches, not documents
 
-    const QString root =
-        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/icloud-notes");
-    QDir(root).removeRecursively();
+    // A throwaway vault; the backend reads the path from ICLOUD_NOTES_VAULT.
+    QTemporaryDir scratch;
+    if (!scratch.isValid())
+        return 1;
+    const QString root = scratch.path() + QStringLiteral("/vault");
+    qputenv("ICLOUD_NOTES_VAULT", root.toUtf8());
     if (qgetenv("NOTES_SHOT") == "bare") {
         QDir().mkpath(root); // empty, unlinked vault: banner + Clone CTA
     } else {
@@ -83,7 +87,6 @@ int main(int argc, char *argv[])
     QTimer::singleShot(1500, [&] {
         const QString out = QString::fromLocal8Bit(argv[1]);
         QTextStream(stdout) << (window->grabWindow().save(out) ? "saved " + out : QStringLiteral("grab failed")) << "\n";
-        QDir(root).removeRecursively();
         QCoreApplication::quit();
     });
     return app.exec();

@@ -1,6 +1,6 @@
 // Backend tests: note classification, save warnings, mode-aware rename and
-// the icloud-md CLI seam — against an isolated test-mode HOME, never the
-// real vault. Run with bin/test.
+// the icloud-md CLI seam — against a scratch vault under a temporary
+// directory, never the real one. Run with bin/test.
 #include "../src/notesbackend.h"
 #include "check.h"
 
@@ -9,13 +9,13 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 
 namespace {
 QString rootPath()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-        + QStringLiteral("/icloud-notes");
+    return qEnvironmentVariable("ICLOUD_NOTES_VAULT");
 }
 
 void writeFile(const QString &rel, const QString &content)
@@ -57,8 +57,13 @@ int main(int argc, char *argv[])
     // GUI application: PDF export lays out text and needs the font database.
     // bin/test forces the offscreen platform so this stays headless.
     QGuiApplication app(argc, argv);
-    QStandardPaths::setTestModeEnabled(true);
-    QDir(rootPath()).removeRecursively();
+    QStandardPaths::setTestModeEnabled(true); // settings and caches, not documents
+    // The vault under test lives in a temporary directory that is deleted
+    // with it; the backend reads the path from ICLOUD_NOTES_VAULT.
+    QTemporaryDir scratch;
+    if (!scratch.isValid())
+        return EXIT_FAILURE;
+    qputenv("ICLOUD_NOTES_VAULT", (scratch.path() + QStringLiteral("/vault")).toUtf8());
 
     writeFile(QStringLiteral(".icloud-md/state.json"),
               QStringLiteral(R"({"titleMode":"in-body","notes":{)"
@@ -223,6 +228,5 @@ int main(int argc, char *argv[])
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Clone failed — see log."), "seam failure reported");
 
-    QDir(rootPath()).removeRecursively();
     return report();
 }

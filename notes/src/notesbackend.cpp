@@ -195,8 +195,14 @@ void NotesBackend::loadTheme()
         m_themeWatcher.addPath(themeColorsPath());
 }
 
+// The vault. ICLOUD_NOTES_VAULT overrides it, which is how the tests and the
+// screenshot tool work on a scratch directory: Qt's test mode leaves
+// DocumentsLocation alone, so without this they would hit the real notes.
 QString NotesBackend::rootPath()
 {
+    const QString override = qEnvironmentVariable("ICLOUD_NOTES_VAULT");
+    if (!override.isEmpty())
+        return override;
     return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
         + QStringLiteral("/icloud-notes");
 }
