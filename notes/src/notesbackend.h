@@ -21,6 +21,9 @@ class NotesBackend : public QObject
     Q_PROPERTY(bool cloned READ cloned NOTIFY foldersChanged)
     Q_PROPERTY(bool icloudMdAvailable READ icloudMdAvailable NOTIFY foldersChanged)
     Q_PROPERTY(QString vaultTitleMode READ vaultTitleMode NOTIFY foldersChanged)
+    // An Apple ID already signed in to icloud-md on this machine, or empty.
+    // With one, a missing vault is cloned without a sign-in window.
+    Q_PROPERTY(QString savedAccount READ savedAccount NOTIFY foldersChanged)
     Q_PROPERTY(QString currentFolder READ currentFolder WRITE setCurrentFolder NOTIFY currentFolderChanged)
     Q_PROPERTY(QStringList notes READ notes NOTIFY notesChanged)
     Q_PROPERTY(QVariantMap noteStates READ noteStates NOTIFY notesChanged)
@@ -50,6 +53,7 @@ public:
     bool cloned() const { return !stateDir().isEmpty(); }
     bool icloudMdAvailable() const;
     QString vaultTitleMode() const;
+    QString savedAccount() const;
     QString currentFolder() const { return m_currentFolder; }
     void setCurrentFolder(const QString &folder);
     QStringList notes() const { return m_notes; }
@@ -97,7 +101,10 @@ public:
     Q_INVOKABLE QVariantList searchVault(const QString &query);
     Q_INVOKABLE QString toggleCheckbox(const QString &text, int line);
     Q_INVOKABLE QString exportPdf();
-    Q_INVOKABLE void runClone();
+    // Clone the account's notes into the vault. With an account that is
+    // already signed in here, no browser opens; without one, Apple's sign-in
+    // window does, once per device.
+    Q_INVOKABLE void runClone(const QString &account = QString());
     Q_INVOKABLE void runPull();
     Q_INVOKABLE void runPush();
     Q_INVOKABLE void refreshPushPreview();
@@ -114,6 +121,9 @@ signals:
     void currentNoteChanged();
     void noteContentChanged();
     void currentNoteChangedOnDisk();
+    // Files in the vault changed outside a sync (a save, another editor, a
+    // note removed in a file manager): what automatic push acts on.
+    void vaultChanged();
     void syncMessageChanged();
     void syncLogChanged();
     void syncRunningChanged();
@@ -121,6 +131,7 @@ signals:
     void pushPreviewReady(bool ok);
     void historyChanged();
     void historyReady(bool ok);
+    void cloneFinished(bool ok);
     void themeChanged();
 
 private:

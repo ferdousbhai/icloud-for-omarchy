@@ -304,8 +304,9 @@ ApplicationWindow {
             }
             IconButton {
                 id: autoButton
-                glyph: "\uf021"; tip: "Auto-pull every 5 minutes"
+                glyph: "\uf021"; tip: "Sync automatically: pull every 5 minutes, push once edits settle"
                 checkable: true
+                checked: true // like Notes, sync on its own; the setting remembers a change
                 enabled: backend.cloned
             }
             IconButton {
@@ -806,31 +807,53 @@ ApplicationWindow {
         }
     }
 
+    function dialogOpen() {
+        return [previewDialog, logDialog, historyDialog, saveWarnDialog, newNoteDialog,
+                newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, onboardDialog]
+            .some(function (d) { return d.visible; });
+    }
+
+    // Like Notes, changes reach iCloud on their own. icloud-md keeps this
+    // safe: it merges, refuses a note it cannot push safely (the badges say
+    // which; Push… shows why), and deletions only move notes to Recently
+    // Deleted. Pushes wait until edits settle so a burst of typing is one push.
+    Timer {
+        id: autoPush
+        interval: 20 * 1000
+        onTriggered: {
+            if (!autoButton.checked || !backend.cloned)
+                return;
+            if (backend.syncRunning || root.dirty || root.dialogOpen()) {
+                restart();
+                return;
+            }
+            backend.runPush();
+        }
+    }
     Timer {
         interval: 5 * 60 * 1000
         running: autoButton.checked && backend.cloned
         repeat: true
         onTriggered: {
-            // Auto-fetch only: publishing stays an explicit, previewed act.
-            var open = [previewDialog, logDialog, historyDialog, saveWarnDialog, newNoteDialog,
-                        newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, onboardDialog];
-            if (backend.syncRunning || open.some(function (d) { return d.visible; }))
+            if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running)
                 return;
-            if (root.dirty) {
-                root.notice = "Auto-pull skipped: unsaved changes.";
-                return;
-            }
             backend.runPull();
         }
     }
 
     Component.onCompleted: {
-        // Fetch remote changes on startup, like Notes does on launch.
-        // First run shows the Clone dialog up front so it cannot be missed.
-        if (!backend.cloned)
+        // Fetch remote changes on startup, like Notes does on launch. Without
+        // a vault, an account already signed in on this machine is cloned
+        // quietly; only a device that has never signed in sees the dialog.
+        if (backend.cloned) {
+            if (backend.icloudMdAvailable)
+                backend.runPull();
+        } else if (backend.icloudMdAvailable && backend.savedAccount.length > 0) {
+            root.notice = "Downloading your notes as " + backend.savedAccount + "…";
+            backend.runClone(backend.savedAccount);
+        } else {
             onboardDialog.open();
-        else if (backend.icloudMdAvailable)
-            backend.runPull();
+        }
     }
 
     Shortcut { sequence: StandardKey.Save; onActivated: root.save() }
@@ -875,6 +898,16 @@ ApplicationWindow {
                 previewDialog.open();
             else
                 root.notice = backend.statusError;
+        }
+        function onVaultChanged() {
+            if (autoButton.checked)
+                autoPush.restart();
+        }
+        function onCloneFinished(ok) {
+            root.notice = "";
+            // A saved sign-in that no longer works falls back to signing in.
+            if (!ok && !backend.cloned)
+                onboardDialog.open();
         }
     }
 
@@ -1109,7 +1142,7 @@ ApplicationWindow {
                 Layout.preferredWidth: 380
                 wrapMode: Text.WordWrap
                 text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
-                      + "A real Apple sign-in window opens (password and 2FA are handled by Apple's own pages). "
+                      + "A real Apple sign-in window opens once (password and 2FA are handled by Apple's own pages); after that this device stays signed in. "
                       + "Apple Notes must not use Advanced Data Protection — icloud-md cannot decrypt it."
             }
         }

@@ -43,10 +43,13 @@ To build and run from source instead:
 ## First run
 
 On first launch the **Link your Apple Notes** dialog opens — press
-**Clone my notes**. A real Apple sign-in window opens; your password
-and 2FA stay on Apple's own pages. All your notes download into
-`~/Documents/icloud-notes`, one Markdown file per note with the title
-as its first line, just like in Notes.
+**Clone my notes**. A real Apple sign-in window opens once; your password
+and 2FA stay on Apple's own pages, and the device stays signed in
+afterwards. All your notes download into `~/Documents/icloud-notes`,
+one Markdown file per note with the title as its first line, just like
+in Notes. If the vault is ever missing while the device is still signed
+in (a reinstall, say), the app downloads it again on its own, without
+asking.
 
 ## Everyday use
 
@@ -67,20 +70,24 @@ as its first line, just like in Notes.
 
 ## Syncing
 
-- **Pull** fetches changes from iCloud (also on startup, and every 5
-  minutes while **Auto** is on). Edits made on both sides merge
-  automatically when they don't overlap.
-- **Push…** always shows a preview first — what will be created,
-  updated, moved, or deleted, plus anything that will be refused and
-  why. Nothing uploads without your confirmation.
-- **Status** shows the same preview on demand; **Sync log** holds the
-  full details.
-- Small badges in the note list warn you early: brand-new notes,
-  unresolved conflicts, notes the push would refuse, and notes changed
-  on another device. Saving also warns before writing anything risky,
-  and flagged edits are never discarded when you switch notes.
-- Deleting a note moves it to Recently Deleted in iCloud (recoverable
-  for ~30 days). New folders upload as real Notes folders.
+Sync is automatic, like Notes, while **Auto** is on (it is, unless you
+turn it off):
+
+- Changes from iCloud are pulled on launch and every 5 minutes. Edits
+  made on both sides merge automatically when they don't overlap.
+- Your edits are pushed about 20 seconds after you stop making them, so a
+  burst of typing becomes one push. Nothing waits for a click.
+- What keeps this safe is icloud-md itself: a note it cannot push safely
+  (attachments, a reordered table, an unresolved conflict) is refused,
+  not mangled, and a deleted note moves to Recently Deleted in iCloud
+  (recoverable for ~30 days). Small badges in the note list warn you:
+  brand-new notes, unresolved conflicts, notes the push refused, and notes
+  changed on another device.
+- **Push…** shows a preview on demand — what would be created, updated,
+  moved, or deleted, plus anything refused and why — and pushes on
+  confirmation. **Pull** fetches now. **Sync log** holds the details.
+- With **Auto** off, nothing moves until you press Pull or Push….
+- New folders upload as real Notes folders.
 
 ## Your files
 
@@ -101,8 +108,8 @@ preview-only: notes with attachments can't be edited back to iCloud.
   it there. Both are in the folder's right-click menu.
 - Table edits mostly round-trip, but reordering rows/columns is
   refused — the push preview will tell you.
-- Sync is on-demand (plus optional auto-fetch), not instant like the
-  Mac app.
+- Sync runs every 5 minutes and shortly after edits, not instantly like
+  the Mac app.
 
 ## If something looks wrong
 

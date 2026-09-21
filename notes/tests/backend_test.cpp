@@ -267,9 +267,12 @@ int main(int argc, char *argv[])
     check(b.syncMessage() == QStringLiteral("Pull done."), "seam pull done");
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
 
-    b.runClone(); // the stub rejects clone
+    b.runClone(QStringLiteral("someone@example.com")); // the stub rejects clone
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Clone failed — see log."), "seam failure reported");
+    check(b.syncLog().contains(QStringLiteral("clone ") + rootPath()
+                               + QStringLiteral(" --account someone@example.com --non-interactive")),
+          "seam clone reuses the saved account without a browser");
 
     return report();
 }

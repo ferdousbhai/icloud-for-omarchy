@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QGuiApplication>
 #include <QPrinter>
 #include <QRegularExpression>
@@ -144,11 +146,15 @@ NotesBackend::NotesBackend(QObject *parent)
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
         rebuildFolders();
         rebuildNotes();
+        if (!m_syncRunning) // a pull's own writes are not local changes
+            emit vaultChanged();
     });
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
         // Our own saves come back through here too; only a real difference counts.
         if (!m_currentNote.isEmpty() && path == noteAbsolutePath() && readText(path) != m_noteContent)
             emit currentNoteChangedOnDisk();
+        if (!m_syncRunning)
+            emit vaultChanged();
     });
 
     m_syncProcess.setProgram(QStringLiteral("icloud-md"));
@@ -248,6 +254,20 @@ bool NotesBackend::icloudMdAvailable() const
 QString NotesBackend::vaultTitleMode() const
 {
     return SyncModel::readTitleMode(stateJson());
+}
+
+// icloud-md keeps one directory per signed-in account under its config dir,
+// each with a meta.json naming the Apple ID.
+QString NotesBackend::savedAccount() const
+{
+    const QDir accounts(QDir::homePath() + QStringLiteral("/.config/icloud-md/accounts"));
+    for (const QString &dir : accounts.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+        const QJsonDocument meta = QJsonDocument::fromJson(readText(accounts.filePath(dir) + QStringLiteral("/meta.json")).toUtf8());
+        const QString appleId = meta.object().value(QStringLiteral("appleId")).toString();
+        if (!appleId.isEmpty())
+            return appleId;
+    }
+    return {};
 }
 
 QString NotesBackend::noteBody() const
@@ -456,6 +476,7 @@ void NotesBackend::saveCurrentNote(const QString &body)
         return;
     loadCurrentNote();
     rebuildNotes(); // a save bumps mtime, which reorders the list
+    emit vaultChanged();
 }
 
 QString NotesBackend::saveWarning(const QString &body)
@@ -644,13 +665,16 @@ QString NotesBackend::exportPdf()
     return {};
 }
 
-void NotesBackend::runClone()
+void NotesBackend::runClone(const QString &account)
 {
     // Clone targets a fresh directory; the root doubles as that directory.
     // Titles stay the first line of each note, as in Notes.app and as
     // icloud-md defaults to; a vault cloned with --filename-as-title from
     // the CLI is still read correctly (see vaultTitleMode).
-    startSync(Mode::Plain, { QStringLiteral("clone"), rootPath() }, QStringLiteral("Clone"));
+    QStringList args{ QStringLiteral("clone"), rootPath() };
+    if (!account.isEmpty())
+        args << QStringLiteral("--account") << account << QStringLiteral("--non-interactive");
+    startSync(Mode::Plain, args, QStringLiteral("Clone"));
 }
 
 void NotesBackend::runPull()
@@ -726,6 +750,8 @@ void NotesBackend::finishSync(int exitCode)
     case Mode::Plain:
         setPushPreview({}, {}); // a pull or push makes the last preview stale
         refresh(); // a pull or clone changes files behind our back
+        if (m_syncLabel == u"Clone")
+            emit cloneFinished(ok);
         break;
     case Mode::Preview:
         setPushPreview(parsed, error);
