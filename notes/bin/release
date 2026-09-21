@@ -46,6 +46,9 @@ mkdir dist
     cp "icloud-notes.$name.tar.gz.sig" "icloud-notes.$name.sig"
   done
   gpg --batch --armor --export "$fingerprint" >icloud-notes-signing-key.asc
+  # The installer ships with the release it was verified against;
+  # ferdousbhai.com/icloud-notes/install.sh redirects to this asset.
+  cp ../install.sh install.sh
 )
 
 git push -q origin main "$tag"

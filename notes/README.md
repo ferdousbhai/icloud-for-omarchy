@@ -24,9 +24,10 @@ curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash
 ```
 
 Updates then arrive with `omarchy update`. The script is
-[`install.sh`](install.sh) in this repo; read it first if you like. It
-also installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh
-pacman` keeps the repository.
+[`install.sh`](install.sh) in this repo, and the copy the one-liner runs
+is the one attached to the latest release, verified with it; read it
+first if you like. It also installs an Omarchy `pre-refresh-pacman` hook
+so `omarchy refresh pacman` keeps the repository.
 
 To uninstall: `omarchy pkg drop icloud-notes`, then remove
 `/etc/pacman.d/icloud-notes.conf`, its `Include` line in
@@ -126,7 +127,8 @@ That runs the tests, tags `v0.2.0`, builds the package with `makepkg` from
 `pkgbuild/PKGBUILD`, signs it and the repository database with the key
 whose fingerprint `install.sh` pins, and publishes everything as the
 GitHub release for the tag, which is what `releases/latest/download` in
-`install.sh` resolves to. A release counts as shipped only once
+`install.sh` resolves to; `install.sh` itself is attached too, and the
+one-liner runs that copy. A release counts as shipped only once
 `bin/verify-release` has run the public one-liner in a clean Arch
 container and found that version installed; otherwise `bin/release`
 deletes the release and the tag.
