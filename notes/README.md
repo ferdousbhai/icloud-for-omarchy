@@ -122,8 +122,37 @@ keyring, no CI involved:
 bin/release 0.2.0
 ```
 
-That tags `v0.2.0`, builds the package with `makepkg` from
+That runs the tests, tags `v0.2.0`, builds the package with `makepkg` from
 `pkgbuild/PKGBUILD`, signs it and the repository database with the key
 whose fingerprint `install.sh` pins, and publishes everything as the
 GitHub release for the tag, which is what `releases/latest/download` in
-`install.sh` resolves to.
+`install.sh` resolves to. A release counts as shipped only once
+`bin/verify-release` has run the public one-liner in a clean Arch
+container and found that version installed; otherwise `bin/release`
+deletes the release and the tag.
+
+The `add_signed_repo` function in `install.sh` is shared verbatim with the
+Ghost installer (summonghost.com/install), and both repositories pin its
+hash in their tests: change it in both places, and both hashes, together.
+
+### The signing key
+
+One key signs both projects' packages; its fingerprint is pinned in both
+installers and it lives only in the releasing machine's keyring, protected
+by a passphrase. Losing it would break the trust chain on every machine
+that installed from these repositories, so keep an encrypted backup
+somewhere off this machine:
+
+```bash
+gpg --armor --export-secret-keys 35C47A06567940B6796B4D0F9B3C7BDF85268B31 \
+  | gpg --symmetric --armor --output package-signing-key.backup.asc
+```
+
+Restoring is `gpg --decrypt package-signing-key.backup.asc | gpg --import`.
+
+To rotate the key: generate the new one, publish one release from each
+project signed with the old key that also ships the new public key as
+`<name>-signing-key.asc`, update the pinned fingerprint in both
+installers and the tests, then sign the next releases with the new key.
+Machines that installed earlier pick up the new key by re-running the
+one-liner, which is idempotent.

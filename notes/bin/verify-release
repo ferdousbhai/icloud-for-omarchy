@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Prove a published release installs the way users get it: a clean Arch
+# container runs the public one-liner and must end up with this version.
+# bin/release runs it after publishing and rolls the release back if it fails.
+#
+# Usage: bin/verify-release <version>
+set -euo pipefail
+
+version="${1:?Usage: bin/verify-release <version>}"
+command -v docker >/dev/null || { echo "docker is required to verify a release." >&2; exit 1; }
+
+# GitHub's "latest" redirect can lag a new release by a little; try for a while.
+for attempt in 1 2 3 4 5 6; do
+  installed="$(docker run --rm archlinux:base-devel bash -euo pipefail -c '
+    pacman-key --init >/dev/null 2>&1 || true
+    pacman -Sy --noconfirm --needed curl gnupg >/dev/null 2>&1
+    curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | bash >/dev/null 2>&1
+    pacman -Q icloud-notes' 2>/dev/null || true)"
+  if [[ $installed == "icloud-notes $version-"* ]]; then
+    echo "Verified: the public one-liner installs $installed"
+    exit 0
+  fi
+  echo "Attempt $attempt: got '${installed:-nothing}', wanted icloud-notes $version; retrying in 20s" >&2
+  sleep 20
+done
+echo "The public one-liner does not install $version." >&2
+exit 1

@@ -22,6 +22,9 @@ gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
   || { echo "The secret key $fingerprint pinned in install.sh is not in this keyring." >&2; exit 1; }
 export GPGKEY=$fingerprint
 
+# No CI: the tests run here, before anything is tagged.
+./bin/test >/dev/null 2>&1 || { ./bin/test 2>&1 | grep -E '^(FAIL|RESULT)' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
+
 sed -i "s/^pkgver=.*/pkgver=$version/" pkgbuild/PKGBUILD
 if [[ -n $(git status --porcelain) ]]; then
   git commit -q -m "Release $tag" pkgbuild/PKGBUILD
@@ -48,3 +51,12 @@ mkdir dist
 git push -q origin main "$tag"
 gh release create "$tag" dist/* --title "icloud-notes $tag" --generate-notes --latest
 echo "Published $tag: https://github.com/ferdousbhai/icloud-notes/releases/tag/$tag"
+
+# A release is shipped only once the public one-liner installs it. If it
+# does not, take the release down so "latest" never points at a dud.
+if ! ./bin/verify-release "$version"; then
+  echo "Rolling back $tag." >&2
+  gh release delete "$tag" --yes --cleanup-tag
+  git tag -d "$tag" >/dev/null 2>&1 || true
+  exit 1
+fi
