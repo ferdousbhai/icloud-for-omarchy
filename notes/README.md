@@ -151,8 +151,10 @@ container and found that version installed; otherwise `bin/release`
 deletes the release and the tag.
 
 The `add_signed_repo` function in `install.sh` is shared verbatim with the
-Ghost installer (summonghost.com/install), and both repositories pin its
-hash in their tests: change it in both places, and both hashes, together.
+Ghost installer (`install.sh` in ferdousbhai/ghost, published as a release
+asset and served from ferdousbhai.com/ghost/install.sh), and both
+repositories pin its hash in their tests: change it in both places, and both
+hashes, together.
 
 ### The signing key
 

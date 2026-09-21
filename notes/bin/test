@@ -9,13 +9,13 @@ for t in guardrails_test backend_test; do
 done
 
 # The installer's add_signed_repo function is shared verbatim with the Ghost
-# installer (summonghost.com/install); both repositories pin its hash so a
-# change to one copy fails a test until the twin is updated too.
+# installer (ferdousbhai/ghost's own install.sh); both repositories pin its
+# hash so a change to one copy fails a test until the twin is updated too.
 bash -n ../install.sh
 actual="$(sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' ../install.sh | sed '1d;$d' | sha256sum | cut -d' ' -f1)"
 expected="$(cat add_signed_repo.sha256)"
 if [[ "$actual" != "$expected" ]]; then
-  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twin in summon-ghost together" >&2
+  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twin in ferdousbhai/ghost (packaging/release/add_signed_repo.sha256) together" >&2
   exit 1
 fi
 echo "ok add_signed_repo matches its pinned hash"
