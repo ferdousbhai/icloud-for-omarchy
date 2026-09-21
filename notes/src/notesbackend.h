@@ -34,6 +34,9 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString syncMessage READ syncMessage NOTIFY syncMessageChanged)
     Q_PROPERTY(QString syncLog READ syncLog NOTIFY syncLogChanged)
     Q_PROPERTY(bool syncRunning READ syncRunning NOTIFY syncRunningChanged)
+    // Apple ended the saved session and icloud-md could not revive it on its
+    // own; syncing pauses until runReauthenticate succeeds.
+    Q_PROPERTY(bool authExpired READ authExpired NOTIFY authExpiredChanged)
     Q_PROPERTY(QVariantList statusEntries READ statusEntries NOTIFY pushPreviewChanged)
     Q_PROPERTY(int statusUnchanged READ statusUnchanged NOTIFY pushPreviewChanged)
     Q_PROPERTY(QStringList statusNotices READ statusNotices NOTIFY pushPreviewChanged)
@@ -70,6 +73,7 @@ public:
     QString syncMessage() const { return m_syncMessage; }
     QString syncLog() const { return m_syncLog; }
     bool syncRunning() const { return m_syncRunning; }
+    bool authExpired() const { return m_authExpired; }
     QVariantList statusEntries() const { return m_statusEntries; }
     int statusUnchanged() const { return m_statusUnchanged; }
     QStringList statusNotices() const { return m_statusNotices; }
@@ -107,6 +111,13 @@ public:
     Q_INVOKABLE void runClone(const QString &account = QString());
     Q_INVOKABLE void runPull();
     Q_INVOKABLE void runPush();
+    // Push whatever changed locally, then pull: the periodic sync, and what
+    // launch does, so edits made while the app was closed or by another
+    // program in any folder reach iCloud without a click.
+    Q_INVOKABLE void runSync();
+    // Opens Apple's sign-in window for the bound account (2FA is usually
+    // skipped for a returning browser profile) and syncs once it succeeds.
+    Q_INVOKABLE void runReauthenticate();
     Q_INVOKABLE void refreshPushPreview();
     Q_INVOKABLE void runHistory();
     Q_INVOKABLE void runDiff(const QString &ref);
@@ -127,6 +138,7 @@ signals:
     void syncMessageChanged();
     void syncLogChanged();
     void syncRunningChanged();
+    void authExpiredChanged();
     void pushPreviewChanged();
     void pushPreviewReady(bool ok);
     void historyChanged();
@@ -193,6 +205,8 @@ private:
     QString m_syncLabel;
     bool m_syncRunning = false;
     Mode m_mode = Mode::Plain;
+    bool m_pullAfterPush = false;
+    bool m_authExpired = false;
     QByteArray m_captured;
     const double m_uiScale;
     QVariantMap m_theme;

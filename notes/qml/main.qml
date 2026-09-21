@@ -424,6 +424,34 @@ ApplicationWindow {
             }
         }
 
+        Rectangle {
+            visible: backend.authExpired
+            Layout.fillWidth: true
+            Layout.margins: 10
+            implicitHeight: authRow.implicitHeight + 20
+            radius: 8
+            color: root.colRaised
+            RowLayout {
+                id: authRow
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 12
+                Glyph { text: "\uf071"; color: root.colYellow }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: root.colTextDim
+                    text: "Your iCloud sign-in expired, so syncing is paused. Signing in again opens Apple's window once; a returning browser usually skips 2FA."
+                }
+                Button {
+                    text: "Sign in"
+                    highlighted: true
+                    enabled: !backend.syncRunning
+                    onClicked: backend.runReauthenticate()
+                }
+            }
+        }
+
         SplitView {
             id: panes
             Layout.fillWidth: true
@@ -821,7 +849,7 @@ ApplicationWindow {
         id: autoPush
         interval: 20 * 1000
         onTriggered: {
-            if (!autoButton.checked || !backend.cloned)
+            if (!autoButton.checked || !backend.cloned || backend.authExpired)
                 return;
             if (backend.syncRunning || root.dirty || root.dialogOpen()) {
                 restart();
@@ -835,19 +863,19 @@ ApplicationWindow {
         running: autoButton.checked && backend.cloned
         repeat: true
         onTriggered: {
-            if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running)
+            if (backend.syncRunning || backend.authExpired || root.dialogOpen() || root.dirty || autoPush.running)
                 return;
-            backend.runPull();
+            backend.runSync(); // both directions: a change from any program in any folder
         }
     }
 
     Component.onCompleted: {
-        // Fetch remote changes on startup, like Notes does on launch. Without
+        // Sync on startup, like Notes does on launch. Without
         // a vault, an account already signed in on this machine is cloned
         // quietly; only a device that has never signed in sees the dialog.
         if (backend.cloned) {
             if (backend.icloudMdAvailable)
-                backend.runPull();
+                backend.runSync(); // edits made while the app was closed go up first
         } else if (backend.icloudMdAvailable && backend.savedAccount.length > 0) {
             root.notice = "Downloading your notes as " + backend.savedAccount + "…";
             backend.runClone(backend.savedAccount);

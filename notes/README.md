@@ -73,10 +73,13 @@ asking.
 Sync is automatic, like Notes, while **Auto** is on (it is, unless you
 turn it off):
 
-- Changes from iCloud are pulled on launch and every 5 minutes. Edits
-  made on both sides merge automatically when they don't overlap.
-- Your edits are pushed about 20 seconds after you stop making them, so a
-  burst of typing becomes one push. Nothing waits for a click.
+- On launch and every 5 minutes the app pushes whatever changed locally
+  (including edits made by other programs, or while it was closed) and
+  then pulls what changed in iCloud. Edits made on both sides merge
+  automatically when they don't overlap.
+- Edits made in the app are pushed sooner, about 20 seconds after you
+  stop making them, so a burst of typing becomes one push. Nothing waits
+  for a click.
 - What keeps this safe is icloud-md itself: a note it cannot push safely
   (attachments, a reordered table, an unresolved conflict) is refused,
   not mangled, and a deleted note moves to Recently Deleted in iCloud
@@ -87,6 +90,10 @@ turn it off):
   moved, or deleted, plus anything refused and why — and pushes on
   confirmation. **Pull** fetches now. **Sync log** holds the details.
 - With **Auto** off, nothing moves until you press Pull or Push….
+- Apple ends a web session now and then. When icloud-md cannot revive
+  it on its own, a banner offers **Sign in**: Apple's window opens once
+  and usually skips 2FA for a returning browser; syncing resumes on its
+  own afterwards.
 - New folders upload as real Notes folders.
 
 ## Your files

@@ -265,7 +265,25 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Pull done."), "seam pull done");
+    b.runSync(); // push, then pull
+    waitForSync(b);
+    if (b.syncRunning())
+        waitForSync(b);
+    check(b.syncLog().contains(QStringLiteral("$ icloud-md push\n")) && b.syncMessage() == QStringLiteral("Pull done."),
+          "seam sync pushes then pulls");
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
+
+    // An expired session pauses syncing until a sign-in succeeds, which then syncs.
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
+    b.runPull();
+    waitForSync(b);
+    check(b.authExpired(), "seam expired session detected");
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED");
+    b.runReauthenticate();
+    waitForSync(b); // sign-in
+    while (b.syncRunning())
+        waitForSync(b); // the push and pull it triggers
+    check(!b.authExpired() && b.syncMessage() == QStringLiteral("Pull done."), "seam sign-in resumes syncing");
 
     b.runClone(QStringLiteral("someone@example.com")); // the stub rejects clone
     waitForSync(b);

@@ -687,6 +687,19 @@ void NotesBackend::runPush()
     startSync(Mode::Plain, { QStringLiteral("push") }, QStringLiteral("Push"));
 }
 
+void NotesBackend::runSync()
+{
+    if (m_syncRunning)
+        return;
+    m_pullAfterPush = true;
+    runPush();
+}
+
+void NotesBackend::runReauthenticate()
+{
+    startSync(Mode::Plain, { QStringLiteral("reauthenticate"), rootPath() }, QStringLiteral("Sign-in"));
+}
+
 void NotesBackend::refreshPushPreview()
 {
     startSync(Mode::Preview, { QStringLiteral("--json"), QStringLiteral("status") },
@@ -746,12 +759,33 @@ void NotesBackend::finishSync(int exitCode)
     const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
                              : QStringLiteral("%1 failed (exit %2) — see log.").arg(m_syncLabel).arg(exitCode);
 
+    // icloud-md names an expired session in its output; until a sign-in
+    // succeeds, every further sync would fail the same way.
+    const bool sessionExpired = !ok && QString::fromUtf8(m_captured).contains(QStringLiteral("Session expired"));
+    const bool signedIn = ok && m_syncLabel == u"Sign-in";
+    if (m_authExpired != (sessionExpired || (m_authExpired && !signedIn))) {
+        m_authExpired = !m_authExpired;
+        emit authExpiredChanged();
+    }
+
     switch (m_mode) {
     case Mode::Plain:
         setPushPreview({}, {}); // a pull or push makes the last preview stale
         refresh(); // a pull or clone changes files behind our back
         if (m_syncLabel == u"Clone")
             emit cloneFinished(ok);
+        if (signedIn) {
+            setSyncMessage(QStringLiteral("Signed in."));
+            runSync(); // what was waiting on the session
+            return;
+        }
+        if (m_pullAfterPush) {
+            m_pullAfterPush = false;
+            setSyncMessage(m_syncLabel + (ok ? QStringLiteral(" done.") : QStringLiteral(" failed — see log.")));
+            if (!m_authExpired)
+                runPull(); // the second half of runSync, whatever the push did
+            return;
+        }
         break;
     case Mode::Preview:
         setPushPreview(parsed, error);
