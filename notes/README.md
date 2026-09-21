@@ -100,6 +100,9 @@ preview-only: notes with attachments can't be edited back to iCloud.
 
 ## Limitations
 
+- Packages are built for x86_64 only. The app itself would build on
+  Apple Silicon Omarchy; the release script just doesn't cross-build yet.
+
 - Notes with images, audio, or file attachments are read-only upstream;
   you can't add attachments from here either.
 - Folders carry no id in iCloud, so a folder rename here becomes a new
