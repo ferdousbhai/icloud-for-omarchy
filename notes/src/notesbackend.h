@@ -10,6 +10,7 @@
 #include "markdownhighlighter.h"
 #include <QStringList>
 #include <QVariant>
+#include <QDateTime>
 
 // The vault on disk plus the icloud-md CLI, exposed to QML. One sync
 // process runs at a time; its Mode says how the output is consumed.
@@ -37,6 +38,9 @@ class NotesBackend : public QObject
     // Apple ended the saved session and icloud-md could not revive it on its
     // own; syncing pauses until runReauthenticate succeeds.
     Q_PROPERTY(bool authExpired READ authExpired NOTIFY authExpiredChanged)
+    // Whole days until a "Keep me signed in" sign-in lapses, or -1 when
+    // there is none (a phone QR sign-in, say, lasts only hours).
+    Q_PROPERTY(int signInDaysLeft READ signInDaysLeft NOTIFY signInChanged)
     Q_PROPERTY(QVariantList statusEntries READ statusEntries NOTIFY pushPreviewChanged)
     Q_PROPERTY(int statusUnchanged READ statusUnchanged NOTIFY pushPreviewChanged)
     Q_PROPERTY(QStringList statusNotices READ statusNotices NOTIFY pushPreviewChanged)
@@ -74,6 +78,7 @@ public:
     QString syncLog() const { return m_syncLog; }
     bool syncRunning() const { return m_syncRunning; }
     bool authExpired() const { return m_authExpired; }
+    int signInDaysLeft() const;
     QVariantList statusEntries() const { return m_statusEntries; }
     int statusUnchanged() const { return m_statusUnchanged; }
     QStringList statusNotices() const { return m_statusNotices; }
@@ -139,6 +144,7 @@ signals:
     void syncLogChanged();
     void syncRunningChanged();
     void authExpiredChanged();
+    void signInChanged();
     void pushPreviewChanged();
     void pushPreviewReady(bool ok);
     void historyChanged();
@@ -171,6 +177,7 @@ private:
     void setSyncMessage(const QString &text);
     QString authFlagPath() const;
     void setAuthExpired(bool expired);
+    void refreshSignIn();
 
     // What one read of a note yields, kept until the file's mtime or size
     // moves, so a save in a folder of hundreds of notes re-reads one file.
@@ -209,6 +216,7 @@ private:
     Mode m_mode = Mode::Plain;
     bool m_pullAfterPush = false;
     bool m_authExpired = false;
+    QDateTime m_signInExpiry;
     QByteArray m_captured;
     const double m_uiScale;
     QVariantMap m_theme;

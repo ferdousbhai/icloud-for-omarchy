@@ -44,8 +44,10 @@ To build and run from source instead:
 
 On first launch the **Link your Apple Notes** dialog opens — press
 **Clone my notes**. A real Apple sign-in window opens once; your password
-and 2FA stay on Apple's own pages, and the device stays signed in
-afterwards. All your notes download into `~/Documents/icloud-notes`,
+and 2FA stay on Apple's own pages. To stay signed in, use your Apple ID
+and password rather than the iPhone QR code, tick **Keep me signed in**,
+and click **Trust** when asked: that sign-in lasts about 30 days, while a
+QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/icloud-notes`,
 one Markdown file per note with the title as its first line, just like
 in Notes. If the vault is ever missing while the device is still signed
 in (a reinstall, say), the app downloads it again on its own, without
@@ -93,8 +95,9 @@ turn it off):
 - With **Auto** off, nothing moves until you press Pull or Push….
 - Apple ends a web session now and then. When icloud-md cannot revive
   it on its own, a banner offers **Sign in**: Apple's window opens once
-  and usually skips 2FA for a returning browser; syncing resumes on its
-  own afterwards.
+  and skips 2FA for a browser you trusted; syncing resumes on its own
+  afterwards. The same banner appears a few days before a sign-in lapses,
+  and after a sign-in too short to last.
 - New folders upload as real Notes folders.
 
 ## Your files

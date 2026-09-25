@@ -1,5 +1,6 @@
 #include "notesbackend.h"
 #include "markdownhighlighter.h"
+#include "signin.h"
 #include "syncmodel.h"
 
 #include <QDir>
@@ -189,6 +190,7 @@ NotesBackend::NotesBackend(QObject *parent)
         setAuthExpired(!signedInSince);
     }
 
+    refreshSignIn();
     refresh();
     setSyncMessage(!icloudMdAvailable() ? QStringLiteral("icloud-md not found on PATH. Install it to sync.")
                    : m_authExpired      ? QStringLiteral("Sync paused. Sign in to iCloud to resume.")
@@ -716,6 +718,8 @@ void NotesBackend::runSync()
 void NotesBackend::runReauthenticate()
 {
     startSync(Mode::Plain, { QStringLiteral("reauthenticate"), rootPath() }, QStringLiteral("Sign-in"));
+    if (m_syncRunning)
+        setSyncMessage(QStringLiteral("Finish signing in in Apple's window, and keep it open until it closes on its own."));
 }
 
 void NotesBackend::refreshPushPreview()
@@ -793,6 +797,7 @@ void NotesBackend::finishSync(int exitCode)
         refresh(); // a pull or clone changes files behind our back
         if (m_syncLabel == u"Clone")
             emit cloneFinished(ok);
+        refreshSignIn();
         if (signedIn) {
             setSyncMessage(QStringLiteral("Signed in."));
             runSync(); // what was waiting on the session
@@ -854,6 +859,24 @@ void NotesBackend::clearLog()
 {
     m_syncLog.clear();
     emit syncLogChanged();
+}
+
+void NotesBackend::refreshSignIn()
+{
+    // Re-read after every sync too: Apple may push the expiry out as the
+    // session is used, and the day count moves on in an app left open.
+    const int daysBefore = signInDaysLeft();
+    m_signInExpiry = SignIn::latestTokenExpiry(QDir::homePath() + QStringLiteral("/.config/icloud-md/accounts"));
+    if (signInDaysLeft() != daysBefore)
+        emit signInChanged();
+}
+
+int NotesBackend::signInDaysLeft() const
+{
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    if (!m_signInExpiry.isValid() || m_signInExpiry <= now)
+        return -1;
+    return int(now.secsTo(m_signInExpiry) / 86400);
 }
 
 // Hidden, so neither this app nor icloud-md lists it as a note or folder.

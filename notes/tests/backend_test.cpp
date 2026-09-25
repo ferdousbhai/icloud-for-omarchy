@@ -2,6 +2,7 @@
 // the icloud-md CLI seam — against a scratch vault under a temporary
 // directory, never the real one. Run with bin/test.
 #include "../src/notesbackend.h"
+#include "../src/signin.h"
 #include "check.h"
 
 #include <QDir>
@@ -310,6 +311,38 @@ int main(int argc, char *argv[])
     check(b.syncLog().contains(QStringLiteral("clone ") + rootPath()
                                + QStringLiteral(" --account someone@example.com --non-interactive")),
           "seam clone reuses the saved account without a browser");
+
+    // Sign-in lifetime, read from a Chromium cookie database like the one
+    // icloud-md's browser profile keeps: only a persistent token counts.
+    {
+        const QString profile = scratch.path() + QStringLiteral("/accounts/1/browser-profile/Default");
+        QDir().mkpath(profile);
+        const QDateTime expires = QDateTime::currentDateTimeUtc().addDays(30);
+        const qint64 chromium = QDateTime(QDate(1601, 1, 1), QTime(0, 0), QTimeZone::UTC).msecsTo(expires) * 1000;
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("fixture"));
+            db.setDatabaseName(profile + QStringLiteral("/Cookies"));
+            db.open();
+            QSqlQuery q(db);
+            q.exec(QStringLiteral("CREATE TABLE cookies (host_key TEXT, name TEXT, expires_utc INTEGER, is_persistent INTEGER)"));
+            q.exec(QStringLiteral("INSERT INTO cookies VALUES ('.icloud.com', 'X-APPLE-WEBAUTH-USER', %1, 1)").arg(chromium));
+            q.exec(QStringLiteral("INSERT INTO cookies VALUES ('.icloud.com', 'X-APPLE-WEBAUTH-TOKEN', 0, 0)"));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("fixture"));
+        const QString accounts = scratch.path() + QStringLiteral("/accounts");
+        check(!SignIn::latestTokenExpiry(accounts).isValid(), "sign-in session-only token does not last");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("fixture"));
+            db.setDatabaseName(profile + QStringLiteral("/Cookies"));
+            db.open();
+            QSqlQuery(db).exec(QStringLiteral("INSERT INTO cookies VALUES ('.icloud.com', 'X-APPLE-WEBAUTH-TOKEN', %1, 1)").arg(chromium));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("fixture"));
+        check(qAbs(SignIn::latestTokenExpiry(accounts).secsTo(expires)) < 2, "sign-in persistent token expiry read");
+        check(!SignIn::latestTokenExpiry(scratch.path() + QStringLiteral("/nowhere")).isValid(), "sign-in no profile");
+    }
 
     return report();
 }

@@ -435,8 +435,14 @@ ApplicationWindow {
             }
         }
 
+        // One banner for the sign-in: expired, too short to last (a phone QR
+        // sign-in never offers "Keep me signed in"), or lapsing within days.
         Rectangle {
-            visible: backend.authExpired
+            id: signInBanner
+            readonly property int daysLeft: backend.signInDaysLeft
+            readonly property bool shortSignIn: backend.cloned && backend.icloudMdAvailable && daysLeft < 0
+            readonly property string howTo: "In Apple's window, use your Apple ID and password (not the iPhone QR code), tick Keep me signed in, and click Trust."
+            visible: backend.authExpired || shortSignIn || (daysLeft >= 0 && daysLeft <= 5)
             Layout.fillWidth: true
             Layout.margins: 10
             implicitHeight: authRow.implicitHeight + 20
@@ -452,7 +458,12 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
-                    text: "Your iCloud sign-in expired, so syncing is paused. Your edits are safe on this computer and go up once you sign in again. Apple's window opens once, and a returning browser usually skips 2FA."
+                    text: backend.authExpired
+                          ? "Your iCloud sign-in expired, so syncing is paused. Your edits are safe on this computer and go up once you sign in. " + signInBanner.howTo
+                          : signInBanner.shortSignIn
+                          ? "This iCloud sign-in only lasts a few hours unused. To stay signed in, sign in again. " + signInBanner.howTo
+                          : "Your iCloud sign-in ends " + (signInBanner.daysLeft === 0 ? "today" : signInBanner.daysLeft === 1 ? "tomorrow" : "in " + signInBanner.daysLeft + " days")
+                            + ". Sign in again now to keep syncing without a pause."
                 }
                 PrimaryButton {
                     text: "Sign in"
