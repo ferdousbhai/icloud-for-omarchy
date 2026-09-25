@@ -98,6 +98,15 @@ ApplicationWindow {
         ToolTip.text: tip
         ToolTip.delay: 500
     }
+    // Basic draws a highlighted Button in palette.dark (our divider colour),
+    // which reads as disabled; the one action a banner or dialog offers
+    // wears the accent instead, and fades only when it really is disabled.
+    component PrimaryButton: Button {
+        highlighted: true
+        opacity: enabled ? 1 : 0.4
+        palette.dark: root.colAccent
+        palette.brightText: root.colBg
+    }
     component Separator: Rectangle {
         implicitWidth: 1
         implicitHeight: 18
@@ -178,8 +187,11 @@ ApplicationWindow {
     }
 
     function loadEditor() {
-        savedText = backend.noteBody;
+        // Compare against what the editor holds, not the file: TextArea turns
+        // Apple's no-break spaces and U+2028 line separators into plain ones,
+        // and treating that as an edit rewrote (and pushed) notes just opened.
         editor.text = backend.noteBody;
+        savedText = editor.text;
     }
     function doSave() {
         backend.saveCurrentNote(editor.text);
@@ -414,10 +426,9 @@ ApplicationWindow {
                           ? "This folder is not linked to iCloud yet. Clone to download your Apple Notes."
                           : "icloud-md was not found on PATH. Install it (npm install -g icloud-md, needs Node 20+) and restart to enable sync."
                 }
-                Button {
+                PrimaryButton {
                     visible: backend.icloudMdAvailable
                     text: "Clone…"
-                    highlighted: true
                     enabled: !backend.syncRunning
                     onClicked: onboardDialog.open()
                 }
@@ -441,11 +452,10 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
-                    text: "Your iCloud sign-in expired, so syncing is paused. Signing in again opens Apple's window once; a returning browser usually skips 2FA."
+                    text: "Your iCloud sign-in expired, so syncing is paused. Your edits are safe on this computer and go up once you sign in again — Apple's window opens once, and a returning browser usually skips 2FA."
                 }
-                Button {
+                PrimaryButton {
                     text: "Sign in"
-                    highlighted: true
                     enabled: !backend.syncRunning
                     onClicked: backend.runReauthenticate()
                 }
@@ -1036,9 +1046,8 @@ ApplicationWindow {
         width: Math.min(root.width - 80, 620)
         height: Math.min(root.height - 80, 460)
         footer: DialogButtonBox {
-            Button {
+            PrimaryButton {
                 text: "Push now"
-                highlighted: true
                 enabled: !backend.syncRunning
                 onClicked: {
                     previewDialog.close();
@@ -1154,9 +1163,8 @@ ApplicationWindow {
         id: onboardDialog
         title: "Link your Apple Notes"
         footer: DialogButtonBox {
-            Button {
+            PrimaryButton {
                 text: "Clone my notes"
-                highlighted: true
                 enabled: !backend.syncRunning
                 onClicked: {
                     onboardDialog.close();

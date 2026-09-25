@@ -166,6 +166,22 @@ int main()
           "checkbox non-list noop");
     check(SyncModel::toggleCheckbox(QStringLiteral("a"), 5) == QStringLiteral("a"), "checkbox range noop");
 
+    // restoreEditorChars
+    const QString apple = QStringLiteral("Bank\u00a0Name\u2028IBAN\u2028\nBIC here");
+    check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nIBAN\n\nBIC here")) == apple,
+          "editor chars untouched text restored");
+    check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nIBAN\n\nBIC code here"))
+              == QStringLiteral("Bank\u00a0Name\u2028IBAN\u2028\nBIC code here"),
+          "editor chars kept around an insertion");
+    check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nBIC here"))
+              == QStringLiteral("Bank\u00a0Name\u2028BIC here"),
+          "editor chars kept around a deletion");
+    check(SyncModel::restoreEditorChars(QStringLiteral("a\u00a0a"), QStringLiteral("a a a"))
+              == QStringLiteral("a\u00a0a a"),
+          "editor chars repeated text");
+    check(SyncModel::restoreEditorChars(QString(), QStringLiteral("new")) == QStringLiteral("new"),
+          "editor chars empty original");
+
     // hasTable
     check(SyncModel::hasTable(QStringLiteral("| a | b |\n| c | d |\n")), "table two rows");
     check(!SyncModel::hasTable(QStringLiteral("text\n| a |\nmore\n| b |\n")), "table broken rows ignored");

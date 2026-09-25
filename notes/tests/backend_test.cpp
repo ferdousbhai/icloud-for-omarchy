@@ -149,6 +149,13 @@ int main(int argc, char *argv[])
     b.saveCurrentNote(QStringLiteral("changed\n"));
     check(readFile(QStringLiteral("A.md")) == QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nchanged\n"),
           "backend save preserves envelope and heading");
+    // Apple's no-break spaces and soft line breaks survive an edit elsewhere.
+    b.saveCurrentNote(QStringLiteral("IBAN\u00a0123\u2028BIC\n"));
+    b.saveCurrentNote(QStringLiteral("IBAN 123\nBIC code\n")); // as the editor hands it back
+    check(readFile(QStringLiteral("A.md"))
+              == QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nIBAN\u00a0123\u2028BIC code\n"),
+          "backend save keeps Apple's special spaces and breaks");
+    b.saveCurrentNote(QStringLiteral("changed\n"));
     check(b.saveWarning(QStringLiteral("<<<<<<< x\n")).contains(QStringLiteral("conflict")),
           "backend markers warn");
     // A stray copy of A on disk shares its id: saving A warns about the twin.
@@ -278,6 +285,12 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(b.authExpired(), "seam expired session detected");
+    check(b.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
+          "seam expired session named once, not as a generic failure");
+    b.runSync(); // a push that hits the expired session skips its pull
+    waitForSync(b);
+    check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
+          "seam expired push does not report a failure or pull");
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
     b.runReauthenticate();
     waitForSync(b); // sign-in

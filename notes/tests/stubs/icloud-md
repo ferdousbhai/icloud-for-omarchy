@@ -14,7 +14,9 @@ elif [ "$1" = "diff" ]; then
   printf -- '--- remote\n+++ local\n- old\n+ new\n'
 elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   if [ -n "${ICLOUD_MD_STUB_EXPIRED:-}" ]; then
+    echo "Session expired; attempting silent re-authentication via the persistent browser profile..."
     echo "Session expired, and silent (headless) re-authentication failed - this profile likely needs a human for this sign-in." >&2
+    echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
     exit 1
   fi
   echo "stub $1 ok"

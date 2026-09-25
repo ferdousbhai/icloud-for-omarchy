@@ -163,6 +163,10 @@ NotesBackend::NotesBackend(QObject *parent)
         const QByteArray out = m_syncProcess.readAllStandardOutput();
         m_captured += out;
         appendLog(QString::fromUtf8(out));
+        // icloud-md spends up to 90 s quietly trying to renew an expired
+        // session before it gives up; say so instead of a bare "Push…".
+        if (out.contains("attempting silent re-authentication"))
+            setSyncMessage(QStringLiteral("iCloud sign-in expired — trying to renew it in the background (up to 90 s)…"));
     });
     connect(&m_syncProcess, &QProcess::finished, this, [this](int exitCode) { finishSync(exitCode); });
     connect(&m_syncProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
@@ -471,7 +475,7 @@ void NotesBackend::openNote(const QString &name)
 void NotesBackend::saveCurrentNote(const QString &body)
 {
     const QString path = noteAbsolutePath();
-    const QString text = assembleNote(body);
+    const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
     if (path.isEmpty() || text == m_noteContent || !writeText(path, text))
         return;
     loadCurrentNote();
@@ -759,9 +763,10 @@ void NotesBackend::finishSync(int exitCode)
     const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
                              : QStringLiteral("%1 failed (exit %2) — see log.").arg(m_syncLabel).arg(exitCode);
 
-    // icloud-md names an expired session in its output; until a sign-in
-    // succeeds, every further sync would fail the same way.
-    const bool sessionExpired = !ok && QString::fromUtf8(m_captured).contains(QStringLiteral("Session expired"));
+    // Every icloud-md failure that only a sign-in fixes (expired session,
+    // failed silent renewal, missing session file) hints at reauthenticate;
+    // until a sign-in succeeds, every further sync would fail the same way.
+    const bool sessionExpired = !ok && m_captured.contains("icloud-md reauthenticate");
     const bool signedIn = ok && m_syncLabel == u"Sign-in";
     if (m_authExpired != (sessionExpired || (m_authExpired && !signedIn))) {
         m_authExpired = !m_authExpired;
@@ -781,10 +786,11 @@ void NotesBackend::finishSync(int exitCode)
         }
         if (m_pullAfterPush) {
             m_pullAfterPush = false;
-            setSyncMessage(m_syncLabel + (ok ? QStringLiteral(" done.") : QStringLiteral(" failed — see log.")));
-            if (!m_authExpired)
+            if (!m_authExpired) {
+                setSyncMessage(m_syncLabel + (ok ? QStringLiteral(" done.") : QStringLiteral(" failed — see log.")));
                 runPull(); // the second half of runSync, whatever the push did
-            return;
+                return;
+            }
         }
         break;
     case Mode::Preview:
@@ -805,7 +811,9 @@ void NotesBackend::finishSync(int exitCode)
         emit historyReady(error.isEmpty());
         break;
     }
-    setSyncMessage(m_syncLabel + (error.isEmpty() ? QStringLiteral(" done.") : QStringLiteral(" failed — see log.")));
+    // The sign-in banner already says what went wrong and how to fix it.
+    setSyncMessage(sessionExpired ? QStringLiteral("Sync paused — sign in to iCloud to resume.")
+                   : m_syncLabel + (error.isEmpty() ? QStringLiteral(" done.") : QStringLiteral(" failed — see log.")));
 }
 
 void NotesBackend::setPushPreview(const QVariantMap &parsed, const QString &error)

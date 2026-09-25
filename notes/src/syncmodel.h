@@ -202,6 +202,32 @@ inline TitleSplit splitTitle(const QString &body)
     return { body.left(nl + 1), body.mid(nl + 1) };
 }
 
+// A plain-text editor gives back Apple's no-break spaces as spaces and its
+// line and paragraph separators (U+2028/U+2029) as newlines. Writing that
+// back would reformat the note in Notes (soft breaks become paragraphs), so
+// the text around the edited stretch is taken from the original instead:
+// the mapping is one character for one, so positions line up.
+inline QChar editorChar(QChar c)
+{
+    if (c == QChar::Nbsp)
+        return u' ';
+    if (c == QChar::LineSeparator || c == QChar::ParagraphSeparator)
+        return u'\n';
+    return c;
+}
+inline QString restoreEditorChars(const QString &original, const QString &edited)
+{
+    const qsizetype limit = qMin(original.size(), edited.size());
+    qsizetype prefix = 0;
+    while (prefix < limit && editorChar(original[prefix]) == edited[prefix])
+        ++prefix;
+    qsizetype suffix = 0;
+    while (suffix < limit - prefix
+           && editorChar(original[original.size() - 1 - suffix]) == edited[edited.size() - 1 - suffix])
+        ++suffix;
+    return original.left(prefix) + edited.mid(prefix, edited.size() - prefix - suffix) + original.right(suffix);
+}
+
 // Length of a list marker ("- ", "* ", "+ ", "12. ", "3) ") at the start
 // of `s`, or 0 when the line is not a list item.
 inline qsizetype listMarkerLength(QStringView s)
