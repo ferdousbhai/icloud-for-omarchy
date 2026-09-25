@@ -285,15 +285,15 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(b.authExpired(), "seam expired session detected");
-    check(b.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
+    check(b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired session named once, not as a generic failure");
     b.runSync(); // a push that hits the expired session skips its pull
     waitForSync(b);
-    check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
+    check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired push does not report a failure or pull");
     {
         NotesBackend relaunched; // the next launch remembers, instead of retrying for 90 s
-        check(relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
+        check(relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
               "seam expiry survives a relaunch");
     }
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
@@ -306,7 +306,7 @@ int main(int argc, char *argv[])
 
     b.runClone(QStringLiteral("someone@example.com")); // the stub rejects clone
     waitForSync(b);
-    check(b.syncMessage() == QStringLiteral("Clone failed — see log."), "seam failure reported");
+    check(b.syncMessage() == QStringLiteral("Clone failed. See log."), "seam failure reported");
     check(b.syncLog().contains(QStringLiteral("clone ") + rootPath()
                                + QStringLiteral(" --account someone@example.com --non-interactive")),
           "seam clone reuses the saved account without a browser");

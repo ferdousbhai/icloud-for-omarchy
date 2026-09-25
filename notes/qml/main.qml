@@ -8,7 +8,7 @@ ApplicationWindow {
     visible: true
     width: 1100
     height: 700
-    title: backend.currentNote.length > 0 ? noteLabel(backend.currentNote) + " — Notes" : "Notes"
+    title: backend.currentNote.length > 0 ? noteLabel(backend.currentNote) + " - Notes" : "Notes"
 
     // ---- Theme: the active Omarchy palette, or the system palette off Omarchy.
     SystemPalette { id: sys }
@@ -216,7 +216,7 @@ ApplicationWindow {
         if (!dirty)
             return true;
         if (backend.saveWarning(editor.text).length > 0) {
-            notice = "Kept your edits in the editor — resolve the warning (Ctrl+S) before moving on.";
+            notice = "Kept your edits in the editor. Resolve the warning (Ctrl+S) before moving on.";
             return false;
         }
         doSave();
@@ -452,7 +452,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
-                    text: "Your iCloud sign-in expired, so syncing is paused. Your edits are safe on this computer and go up once you sign in again — Apple's window opens once, and a returning browser usually skips 2FA."
+                    text: "Your iCloud sign-in expired, so syncing is paused. Your edits are safe on this computer and go up once you sign in again. Apple's window opens once, and a returning browser usually skips 2FA."
                 }
                 PrimaryButton {
                     text: "Sign in"
@@ -1128,7 +1128,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.colTextMuted
-                text: "Snapshots from past pulls and pushes, newest first. Restoring is read-only here — use `icloud-md revert` deliberately."
+                text: "Snapshots from past pulls and pushes, newest first. Restoring is read-only here; use `icloud-md revert` deliberately."
             }
             SplitView {
                 Layout.fillWidth: true
@@ -1183,7 +1183,7 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
                 text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
                       + "A real Apple sign-in window opens once (password and 2FA are handled by Apple's own pages); after that this device stays signed in. "
-                      + "Apple Notes must not use Advanced Data Protection — icloud-md cannot decrypt it."
+                      + "Apple Notes must not use Advanced Data Protection, because icloud-md cannot decrypt it."
             }
         }
     }
