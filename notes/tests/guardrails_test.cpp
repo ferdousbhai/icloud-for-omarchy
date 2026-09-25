@@ -3,6 +3,8 @@
 #include "../src/syncmodel.h"
 #include "check.h"
 
+#include <QRandomGenerator>
+
 int main()
 {
     // extractNoteId
@@ -195,6 +197,48 @@ int main()
           "editor chars repeated text");
     check(SyncModel::restoreEditorChars(QString(), QStringLiteral("new")) == QStringLiteral("new"),
           "editor chars empty original");
+    // Two edits far apart, one save: the lines between keep their characters.
+    const QString letter = QStringLiteral("Dear team\nIBAN\u00a0123\u2028BIC\u00a0X\nSort\u00a0code\nThanks\n");
+    check(SyncModel::restoreEditorChars(letter, QStringLiteral("Dear all\nIBAN 123\nBIC X\nSort code\nThanks a lot\n"))
+              == QStringLiteral("Dear all\nIBAN\u00a0123\u2028BIC\u00a0X\nSort\u00a0code\nThanks a lot\n"),
+          "editor chars kept between two separate edits");
+    check(SyncModel::restoreEditorChars(letter, QStringLiteral("Dear team\nNew line\nIBAN 123\nBIC X\nSort code\nThanks\n"))
+              == QStringLiteral("Dear team\nNew line\nIBAN\u00a0123\u2028BIC\u00a0X\nSort\u00a0code\nThanks\n"),
+          "editor chars kept after an inserted line");
+    check(SyncModel::restoreEditorChars(letter, QStringLiteral("Dear team\nIBAN 123\nBIC Y\nSort code\nThanks\n"))
+              == QStringLiteral("Dear team\nIBAN\u00a0123\u2028BIC\u00a0Y\nSort\u00a0code\nThanks\n"),
+          "editor chars kept around an edit inside a soft-broken line");
+    check(SyncModel::restoreEditorChars(QStringLiteral("plain\n"), QStringLiteral("edited\n")) == QStringLiteral("edited\n"),
+          "editor chars plain note untouched");
+    // Whatever the edit, the saved text reads exactly as typed: only the
+    // editor's own conversions are ever undone.
+    {
+        QRandomGenerator rng(42);
+        const QString alphabet = QStringLiteral("ab \n\u00a0\u2028");
+        auto randomText = [&](int len) {
+            QString t;
+            for (int i = 0; i < len; ++i)
+                t += alphabet[rng.bounded(alphabet.size())];
+            return t;
+        };
+        bool faithful = true;
+        for (int round = 0; round < 3000 && faithful; ++round) {
+            const QString original = randomText(rng.bounded(40));
+            QString edited = original;
+            for (QChar &c : edited)
+                c = SyncModel::editorChar(c);
+            for (int e = rng.bounded(4); e > 0; --e) { // up to three separate edits
+                const int at = rng.bounded(int(edited.size()) + 1);
+                edited = edited.left(at) + randomText(rng.bounded(4)).replace(QChar::Nbsp, u' ').replace(QChar::LineSeparator, u'\n')
+                       + edited.mid(at + rng.bounded(4));
+            }
+            QString restored = SyncModel::restoreEditorChars(original, edited);
+            for (QChar &c : restored)
+                c = SyncModel::editorChar(c);
+            faithful = restored == edited;
+        }
+        check(faithful, "editor chars never change what was typed");
+    }
 
     // hasTable
     check(SyncModel::hasTable(QStringLiteral("| a | b |\n| c | d |\n")), "table two rows");

@@ -12,6 +12,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <algorithm>
+
 // Pure text/JSON logic behind safe sync. Nothing here touches disk or QML.
 namespace SyncModel {
 
@@ -243,7 +245,7 @@ inline TitleSplit splitTitle(const QString &body)
 // A plain-text editor gives back Apple's no-break spaces as spaces and its
 // line and paragraph separators (U+2028/U+2029) as newlines. Writing that
 // back would reformat the note in Notes (soft breaks become paragraphs), so
-// the text around the edited stretch is taken from the original instead:
+// every stretch the edit left alone is taken from the original instead:
 // the mapping is one character for one, so positions line up.
 inline QChar editorChar(QChar c)
 {
@@ -253,7 +255,9 @@ inline QChar editorChar(QChar c)
         return u'\n';
     return c;
 }
-inline QString restoreEditorChars(const QString &original, const QString &edited)
+
+// Within one changed stretch: the original around the edited run.
+inline QString restoreAroundEdit(QStringView original, QStringView edited)
 {
     const qsizetype limit = qMin(original.size(), edited.size());
     qsizetype prefix = 0;
@@ -263,7 +267,108 @@ inline QString restoreEditorChars(const QString &original, const QString &edited
     while (suffix < limit - prefix
            && editorChar(original[original.size() - 1 - suffix]) == edited[edited.size() - 1 - suffix])
         ++suffix;
-    return original.left(prefix) + edited.mid(prefix, edited.size() - prefix - suffix) + original.right(suffix);
+    return original.left(prefix).toString() + edited.mid(prefix, edited.size() - prefix - suffix)
+         + original.right(suffix);
+}
+
+// Lines split after each newline, the newline kept, so they rejoin exactly.
+inline QList<QStringView> splitKeepingNewlines(QStringView text)
+{
+    QList<QStringView> lines;
+    qsizetype start = 0;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        if (text[i] == u'\n') {
+            lines << text.mid(start, i + 1 - start);
+            start = i + 1;
+        }
+    }
+    if (start < text.size())
+        lines << text.mid(start);
+    return lines;
+}
+
+// Index pairs of the lines a and b share, in order (Myers' diff). Empty with
+// ok false when the two differ in more lines than is worth aligning.
+inline QList<std::pair<qsizetype, qsizetype>> matchLines(const QList<QStringView> &a, const QList<QStringView> &b,
+                                                         bool &ok)
+{
+    const qsizetype n = a.size(), m = b.size(), max = qMin<qsizetype>(n + m, 2000);
+    QList<qsizetype> v(2 * max + 2, 0);
+    QList<QList<qsizetype>> trace;
+    auto at = [&](QList<qsizetype> &vec, qsizetype k) -> qsizetype & { return vec[k + max]; };
+    ok = false;
+    for (qsizetype d = 0; d <= max && !ok; ++d) {
+        trace << v;
+        for (qsizetype k = -d; k <= d; k += 2) {
+            qsizetype x = (k == -d || (k != d && at(v, k - 1) < at(v, k + 1))) ? at(v, k + 1) : at(v, k - 1) + 1;
+            qsizetype y = x - k;
+            while (x < n && y < m && a[x] == b[y])
+                ++x, ++y;
+            at(v, k) = x;
+            if (x >= n && y >= m) {
+                ok = true;
+                break;
+            }
+        }
+    }
+    QList<std::pair<qsizetype, qsizetype>> pairs;
+    if (!ok)
+        return pairs;
+    qsizetype x = n, y = m;
+    for (qsizetype d = trace.size() - 1; d >= 0; --d) {
+        QList<qsizetype> &tv = trace[d];
+        const qsizetype k = x - y;
+        const qsizetype prevK = (k == -d || (k != d && at(tv, k - 1) < at(tv, k + 1))) ? k + 1 : k - 1;
+        const qsizetype prevX = at(tv, prevK), prevY = prevX - prevK;
+        while (x > prevX && y > prevY)
+            pairs.prepend({ --x, --y });
+        if (d > 0)
+            x = prevX, y = prevY;
+    }
+    return pairs;
+}
+
+inline QString restoreEditorChars(const QString &original, const QString &edited)
+{
+    const bool special = std::any_of(original.cbegin(), original.cend(), [](QChar c) { return editorChar(c) != c; });
+    if (!special)
+        return edited;
+    QString normalized = original;
+    for (QChar &c : normalized)
+        c = editorChar(c);
+
+    // Lines untouched by the edit keep the original's characters; each run
+    // of changed lines keeps them around its own edited stretch.
+    const QList<QStringView> origLines = splitKeepingNewlines(normalized);
+    const QList<QStringView> editLines = splitKeepingNewlines(edited);
+    bool ok = false;
+    const QList<std::pair<qsizetype, qsizetype>> pairs = matchLines(origLines, editLines, ok);
+    if (!ok)
+        return restoreAroundEdit(original, edited);
+
+    auto offsetOf = [&](qsizetype line) {
+        return line < origLines.size() ? origLines[line].data() - normalized.constData() : normalized.size();
+    };
+    auto editOffsetOf = [&](qsizetype line) {
+        return line < editLines.size() ? editLines[line].data() - edited.constData() : edited.size();
+    };
+    QString result;
+    result.reserve(edited.size());
+    qsizetype oi = 0, ei = 0;
+    auto flushHunk = [&](qsizetype oEnd, qsizetype eEnd) {
+        const qsizetype o0 = offsetOf(oi), o1 = offsetOf(oEnd), e0 = editOffsetOf(ei), e1 = editOffsetOf(eEnd);
+        result += restoreAroundEdit(QStringView(original).mid(o0, o1 - o0), QStringView(edited).mid(e0, e1 - e0));
+    };
+    for (const auto &[o, e] : pairs) {
+        if (o > oi || e > ei)
+            flushHunk(o, e);
+        result += QStringView(original).mid(offsetOf(o), origLines[o].size());
+        oi = o + 1;
+        ei = e + 1;
+    }
+    if (oi < origLines.size() || ei < editLines.size())
+        flushHunk(origLines.size(), editLines.size());
+    return result;
 }
 
 // Length of a list marker ("- ", "* ", "+ ", "12. ", "3) ") at the start
