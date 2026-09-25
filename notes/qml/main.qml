@@ -316,7 +316,7 @@ ApplicationWindow {
             }
             IconButton {
                 id: autoButton
-                glyph: "\uf021"; tip: "Sync automatically: pull every 5 minutes, push once edits settle"
+                glyph: "\uf021"; tip: "Sync automatically: pull when you switch to Notes, push once edits settle"
                 checkable: true
                 checked: true // like Notes, sync on its own; the setting remembers a change
                 enabled: backend.cloned
@@ -866,15 +866,19 @@ ApplicationWindow {
             backend.runPush();
         }
     }
-    Timer {
-        interval: 5 * 60 * 1000
-        running: autoButton.checked && backend.cloned
-        repeat: true
-        onTriggered: {
-            if (backend.syncRunning || backend.authExpired || root.dialogOpen() || root.dirty || autoPush.running)
-                return;
-            backend.runSync(); // both directions: a change from any program in any folder
-        }
+    // Changes from other devices come in when the window is looked at, not
+    // on a timer: nothing runs while Notes sits unused, and a phone edit is
+    // there the moment you switch back. At most once a minute, so flipping
+    // between windows does not sync on every flip.
+    property double lastFocusSync: 0
+    onActiveChanged: {
+        if (!active || !autoButton.checked || !backend.cloned || backend.authExpired)
+            return;
+        if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running
+                || Date.now() - lastFocusSync < 60 * 1000)
+            return;
+        lastFocusSync = Date.now();
+        backend.runSync(); // both directions: a change from any program in any folder
     }
 
     Component.onCompleted: {
@@ -882,8 +886,10 @@ ApplicationWindow {
         // a vault, an account already signed in on this machine is cloned
         // quietly; only a device that has never signed in sees the dialog.
         if (backend.cloned) {
-            if (backend.icloudMdAvailable && !backend.authExpired)
+            if (backend.icloudMdAvailable && !backend.authExpired) {
+                root.lastFocusSync = Date.now(); // the window's first activation is this sync
                 backend.runSync(); // edits made while the app was closed go up first
+            }
         } else if (backend.icloudMdAvailable && backend.savedAccount.length > 0) {
             root.notice = "Downloading your notes as " + backend.savedAccount + "…";
             backend.runClone(backend.savedAccount);

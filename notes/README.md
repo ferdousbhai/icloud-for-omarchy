@@ -73,7 +73,8 @@ asking.
 Sync is automatic, like Notes, while **Auto** is on (it is, unless you
 turn it off):
 
-- On launch and every 5 minutes the app pushes whatever changed locally
+- On launch, and whenever you switch to the window (at most once a
+  minute), the app pushes whatever changed locally
   (including edits made by other programs, or while it was closed) and
   then pulls what changed in iCloud. Edits made on both sides merge
   automatically when they don't overlap.
@@ -118,8 +119,9 @@ preview-only: notes with attachments can't be edited back to iCloud.
   it there. Both are in the folder's right-click menu.
 - Table edits mostly round-trip, but reordering rows/columns is
   refused — the push preview will tell you.
-- Sync runs every 5 minutes and shortly after edits, not instantly like
-  the Mac app.
+- Changes from other devices arrive when you switch to the window (or
+  press Pull), not instantly like the Mac app; nothing syncs in the
+  background while you are elsewhere.
 
 ## If something looks wrong
 
