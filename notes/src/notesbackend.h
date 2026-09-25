@@ -169,6 +169,8 @@ private:
     MarkdownHighlighter::Colors highlighterColors() const;
     void appendLog(const QString &text);
     void setSyncMessage(const QString &text);
+    QString authFlagPath() const;
+    void setAuthExpired(bool expired);
 
     // What one read of a note yields, kept until the file's mtime or size
     // moves, so a save in a folder of hundreds of notes re-reads one file.

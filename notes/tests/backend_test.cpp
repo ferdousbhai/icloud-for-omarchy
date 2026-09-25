@@ -291,12 +291,18 @@ int main(int argc, char *argv[])
     waitForSync(b);
     check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
           "seam expired push does not report a failure or pull");
+    {
+        NotesBackend relaunched; // the next launch remembers, instead of retrying for 90 s
+        check(relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Sync paused — sign in to iCloud to resume."),
+              "seam expiry survives a relaunch");
+    }
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
     b.runReauthenticate();
     waitForSync(b); // sign-in
     while (b.syncRunning())
         waitForSync(b); // the push and pull it triggers
     check(!b.authExpired() && b.syncMessage() == QStringLiteral("Pull done."), "seam sign-in resumes syncing");
+    check(!NotesBackend().authExpired(), "seam sign-in clears the remembered expiry");
 
     b.runClone(QStringLiteral("someone@example.com")); // the stub rejects clone
     waitForSync(b);

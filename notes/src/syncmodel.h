@@ -1,6 +1,7 @@
 #ifndef SYNCMODEL_H
 #define SYNCMODEL_H
 
+#include <QCollator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -113,6 +114,43 @@ inline QString readTitleMode(const QByteArray &stateJson)
     const bool filename = doc.isObject()
         && doc.object().value(QStringLiteral("titleMode")).toString() == u"filename";
     return filename ? QStringLiteral("filename") : QStringLiteral("in-body");
+}
+
+// Directory of the account's default folder ("Notes", or whatever it was
+// renamed or localized to), which Apple Notes lists first. Empty when the
+// state file does not say.
+inline QString defaultFolderDir(const QByteArray &stateJson)
+{
+    return QJsonDocument::fromJson(stateJson).object()
+        .value(QStringLiteral("folders")).toObject()
+        .value(QStringLiteral("DefaultFolder-CloudKit")).toObject()
+        .value(QStringLiteral("dirName")).toString();
+}
+
+// Folder paths in Apple Notes order: iCloud keeps no folder positions, so
+// Notes lists the default folder first and the rest by name, "2" before
+// "10", each folder directly followed by its own subfolders.
+inline void sortFolders(QStringList &folders, const QString &defaultDir)
+{
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(folders.begin(), folders.end(), [&](const QString &a, const QString &b) {
+        const QStringList as = a.split(u'/', Qt::SkipEmptyParts);
+        const QStringList bs = b.split(u'/', Qt::SkipEmptyParts);
+        if (as.isEmpty() || bs.isEmpty())
+            return as.size() < bs.size(); // the vault root heads the list
+        const bool aDefault = as.first() == defaultDir, bDefault = bs.first() == defaultDir;
+        if (aDefault != bDefault)
+            return aDefault;
+        for (qsizetype i = 0; i < qMin(as.size(), bs.size()); ++i) {
+            if (const int c = collator.compare(as[i], bs[i]))
+                return c < 0;
+            if (const int c = as[i].compare(bs[i])) // "work" and "Work" stay in a stable order
+                return c < 0;
+        }
+        return as.size() < bs.size();
+    });
 }
 
 // Vault-relative paths of tracked notes from state.json's notes index

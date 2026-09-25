@@ -819,8 +819,6 @@ ApplicationWindow {
                             topPadding: 4
                             bottomPadding: 32
                             placeholderText: "Start writing…"
-                            // Keep the caret visible while typing long notes.
-                            onCursorRectangleChanged: editor.ensureVisible(cursorRectangle)
                             onTextChanged: autosave.restart()
                             Component.onCompleted: backend.attachEditor(editor.textDocument)
                         }
@@ -884,7 +882,7 @@ ApplicationWindow {
         // a vault, an account already signed in on this machine is cloned
         // quietly; only a device that has never signed in sees the dialog.
         if (backend.cloned) {
-            if (backend.icloudMdAvailable)
+            if (backend.icloudMdAvailable && !backend.authExpired)
                 backend.runSync(); // edits made while the app was closed go up first
         } else if (backend.icloudMdAvailable && backend.savedAccount.length > 0) {
             root.notice = "Downloading your notes as " + backend.savedAccount + "…";

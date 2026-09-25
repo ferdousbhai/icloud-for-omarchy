@@ -176,8 +176,22 @@ NotesBackend::NotesBackend(QObject *parent)
         finishSync(-1);
     });
 
+    // An expiry outlives the app: until someone signs in, every launch would
+    // otherwise spend its first 90 s on a renewal that already failed. A
+    // session file written since (a sign-in from the terminal) clears it.
+    const QFileInfo flag(authFlagPath());
+    if (flag.exists()) {
+        bool signedInSince = false;
+        QDirIterator sessions(QDir::homePath() + QStringLiteral("/.config/icloud-md/accounts"),
+                              { QStringLiteral("session*.json") }, QDir::Files, QDirIterator::Subdirectories);
+        while (sessions.hasNext())
+            signedInSince |= sessions.nextFileInfo().lastModified() > flag.lastModified();
+        setAuthExpired(!signedInSince);
+    }
+
     refresh();
     setSyncMessage(!icloudMdAvailable() ? QStringLiteral("icloud-md not found on PATH — install it to sync.")
+                   : m_authExpired      ? QStringLiteral("Sync paused — sign in to iCloud to resume.")
                    : cloned()           ? QStringLiteral("Ready.")
                                         : QStringLiteral("Not linked to iCloud yet — press Clone."));
 }
@@ -320,7 +334,7 @@ void NotesBackend::rebuildFolders()
         if (!isHidden(rel) && !rel.split(u'/').contains(QStringLiteral("attachments")))
             folders << rel;
     }
-    folders.sort(Qt::CaseInsensitive);
+    SyncModel::sortFolders(folders, SyncModel::defaultFolderDir(stateJson()));
 
     // Every note counts toward each folder above it, the root included.
     QVariantMap counts;
@@ -768,10 +782,10 @@ void NotesBackend::finishSync(int exitCode)
     // until a sign-in succeeds, every further sync would fail the same way.
     const bool sessionExpired = !ok && m_captured.contains("icloud-md reauthenticate");
     const bool signedIn = ok && m_syncLabel == u"Sign-in";
-    if (m_authExpired != (sessionExpired || (m_authExpired && !signedIn))) {
-        m_authExpired = !m_authExpired;
-        emit authExpiredChanged();
-    }
+    // A pull or clone always talks to iCloud, so one that worked proves the
+    // session; a push with nothing to send never checks it.
+    const bool sessionWorks = signedIn || (ok && (m_syncLabel == u"Pull" || m_syncLabel == u"Clone"));
+    setAuthExpired(sessionExpired || (m_authExpired && !sessionWorks));
 
     switch (m_mode) {
     case Mode::Plain:
@@ -840,6 +854,27 @@ void NotesBackend::clearLog()
 {
     m_syncLog.clear();
     emit syncLogChanged();
+}
+
+// Hidden, so neither this app nor icloud-md lists it as a note or folder.
+QString NotesBackend::authFlagPath() const
+{
+    return rootPath() + QStringLiteral("/.icloud-notes-signin-expired");
+}
+
+void NotesBackend::setAuthExpired(bool expired)
+{
+    if (m_authExpired == expired)
+        return;
+    m_authExpired = expired;
+    if (expired) {
+        QFile flag(authFlagPath());
+        if (flag.open(QIODevice::WriteOnly))
+            flag.write("Sync is paused until an iCloud sign-in succeeds.\n");
+    } else {
+        QFile::remove(authFlagPath());
+    }
+    emit authExpiredChanged();
 }
 
 void NotesBackend::setSyncMessage(const QString &text)

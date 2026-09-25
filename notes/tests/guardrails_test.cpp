@@ -166,6 +166,20 @@ int main()
           "checkbox non-list noop");
     check(SyncModel::toggleCheckbox(QStringLiteral("a"), 5) == QStringLiteral("a"), "checkbox range noop");
 
+    // defaultFolderDir / sortFolders
+    check(SyncModel::defaultFolderDir(R"({"folders":{"DefaultFolder-CloudKit":{"name":"Notizen","dirName":"Notizen"}}})")
+              == QStringLiteral("Notizen"),
+          "default folder read from state");
+    check(SyncModel::defaultFolderDir("{}").isEmpty(), "default folder absent");
+    QStringList folders{ QStringLiteral("Work"), QStringLiteral("bets"), QStringLiteral("Notes/Old"),
+                         QStringLiteral("Year 10"), QString(), QStringLiteral("Notes"), QStringLiteral("Work/A"),
+                         QStringLiteral("Year 2"), QStringLiteral("Work Stuff") };
+    SyncModel::sortFolders(folders, QStringLiteral("Notes"));
+    check(folders == QStringList{ QString(), QStringLiteral("Notes"), QStringLiteral("Notes/Old"), QStringLiteral("bets"),
+                                  QStringLiteral("Work"), QStringLiteral("Work/A"), QStringLiteral("Work Stuff"),
+                                  QStringLiteral("Year 2"), QStringLiteral("Year 10") },
+          "folders sort like Apple Notes");
+
     // restoreEditorChars
     const QString apple = QStringLiteral("Bank\u00a0Name\u2028IBAN\u2028\nBIC here");
     check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nIBAN\n\nBIC here")) == apple,
