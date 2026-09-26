@@ -2,6 +2,7 @@
 // demo vault in a temporary directory, shows the real main.qml, grabs the
 // window to a PNG and quits. Usage: shots out.png [path/to/main.qml]
 // NOTES_SHOT=bare seeds an empty, unlinked vault instead.
+// NOTES_SHOT=readonly shows the open note as one icloud-md will not push.
 #include "../src/notesbackend.h"
 
 #include <QDir>
@@ -52,7 +53,10 @@ int main(int argc, char *argv[])
         QDir().mkpath(root); // empty, unlinked vault: banner + Clone CTA
     } else {
         writeFile(root, QStringLiteral(".icloud-md/state.json"),
-                  QStringLiteral(R"({"titleMode":"in-body","notes":{"a":{"file":"Notes/Groceries.md"},"b":{"file":"Notes/Trip ideas.md"},"c":{"file":"Recipes/Pancakes.md"}}})"),
+                  QStringLiteral(R"({"titleMode":"in-body","notes":{"a":{"file":"Notes/Groceries.md"%1},"b":{"file":"Notes/Trip ideas.md"},"c":{"file":"Recipes/Pancakes.md"}}})")
+                      .arg(qgetenv("NOTES_SHOT") == "readonly"
+                               ? QStringLiteral(R"(,"unpublishableReason":"is so large that Apple keeps its text in a separate file, which can't be written back yet")")
+                               : QString()),
                   9);
         writeFile(root, QStringLiteral("Notes/Groceries.md"),
                   QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"

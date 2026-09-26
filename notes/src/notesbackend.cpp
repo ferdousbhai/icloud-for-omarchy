@@ -391,6 +391,7 @@ void NotesBackend::classifyNotes()
 {
     const QByteArray state = stateJson();
     const QSet<QString> tracked = SyncModel::trackedFiles(state);
+    const QHash<QString, QString> readOnly = SyncModel::readOnlyReasons(state);
     const QString mode = SyncModel::readTitleMode(state);
     const QDir dir(folderAbsolutePath(m_currentFolder));
     QHash<QString, NoteScan> scans;
@@ -422,6 +423,8 @@ void NotesBackend::classifyNotes()
             flags << (scan.id.isEmpty() ? QStringLiteral("new") : QStringLiteral("foreign-id"));
         else if (scan.id.isEmpty())
             flags << QStringLiteral("missing-id");
+        if (readOnly.contains(vaultRelative(name)))
+            flags << QStringLiteral("read-only");
         if (!flags.isEmpty())
             states.insert(name, flags);
     }
@@ -435,6 +438,8 @@ void NotesBackend::loadCurrentNote()
     const QString path = noteAbsolutePath();
     m_noteContent = path.isEmpty() ? QString() : readText(path);
     m_noteAttachments = path.isEmpty() ? QVariantList() : attachmentsFor(path, m_noteContent);
+    m_readOnlyReason = path.isEmpty() ? QString()
+                                      : SyncModel::readOnlyReasons(stateJson()).value(vaultRelative(m_currentNote));
     emit noteContentChanged();
 }
 
@@ -492,7 +497,7 @@ void NotesBackend::saveCurrentNote(const QString &body)
 {
     const QString path = noteAbsolutePath();
     const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
-    if (path.isEmpty() || text == m_noteContent || !writeText(path, text))
+    if (path.isEmpty() || !m_readOnlyReason.isEmpty() || text == m_noteContent || !writeText(path, text))
         return;
     loadCurrentNote();
     rebuildNotes(); // a save bumps mtime, which reorders the list
@@ -555,6 +560,8 @@ QString NotesBackend::renameCurrentNote(const QString &title)
     const QString clean = sanitized(title);
     if (m_currentNote.isEmpty())
         return QStringLiteral("No note selected.");
+    if (!m_readOnlyReason.isEmpty())
+        return QStringLiteral("This note is read-only here. Rename it in Apple Notes.");
     if (clean.isEmpty())
         return QStringLiteral("Title is empty.");
     if (vaultTitleMode() == u"filename") {

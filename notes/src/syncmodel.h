@@ -2,6 +2,7 @@
 #define SYNCMODEL_H
 
 #include <QCollator>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -169,6 +170,24 @@ inline QSet<QString> trackedFiles(const QByteArray &stateJson)
             files.insert(file);
     }
     return files;
+}
+
+// Tracked notes icloud-md reads but will never push, keyed by vault-relative
+// file, with its reason ("is so large that ...", phrased to follow "this
+// note"). A very large note, or formatting it cannot round-trip, lands here.
+inline QHash<QString, QString> readOnlyReasons(const QByteArray &stateJson)
+{
+    QHash<QString, QString> reasons;
+    const QJsonObject index = QJsonDocument::fromJson(stateJson).object()
+                                  .value(QStringLiteral("notes")).toObject();
+    for (const QJsonValue &note : index) {
+        const QJsonObject entry = note.toObject();
+        const QString file = entry.value(QStringLiteral("file")).toString();
+        const QString reason = entry.value(QStringLiteral("unpublishableReason")).toString();
+        if (!file.isEmpty() && !reason.isEmpty())
+            reasons.insert(file, reason);
+    }
+    return reasons;
 }
 
 // Retitle for in-body vaults: replace the first body line, keeping its

@@ -94,7 +94,7 @@ int main(int argc, char *argv[])
                              R"("id-a":{"file":"A.md"},)"
                              R"("id-b":{"file":"B.md"},)"
                              R"("id-e":{"file":"E.md"},)"
-                             R"("id-f":{"file":"F.md"},)"
+                             R"("id-f":{"file":"F.md","unpublishableReason":"is too large"},)"
                              R"("id-g":{"file":"G.md"}}})"));
     writeFile(QStringLiteral("A.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nbody\n"));
     writeFile(QStringLiteral("B.md"),
@@ -124,6 +124,19 @@ int main(int argc, char *argv[])
     check(hasFlag(b, QStringLiteral("D.md"), "foreign-id"), "backend foreign id flagged");
     check(hasFlag(b, QStringLiteral("E.md"), "missing-id"), "backend missing id flagged");
     check(hasFlag(b, QStringLiteral("F.md"), "tables"), "backend tables flagged");
+    check(hasFlag(b, QStringLiteral("F.md"), "read-only"), "backend read-only flagged");
+    check(!hasFlag(b, QStringLiteral("A.md"), "read-only"), "backend editable note not read-only");
+
+    // A note icloud-md will never push opens locked: saves and renames are
+    // refused, so edits cannot pile up locally where they would never sync.
+    b.openNote(QStringLiteral("F.md"));
+    check(b.readOnlyReason() == QStringLiteral("is too large"), "backend read-only reason");
+    {
+        const QString before = readFile(QStringLiteral("F.md"));
+        b.saveCurrentNote(QStringLiteral("edited\n"));
+        check(readFile(QStringLiteral("F.md")) == before, "backend read-only save refused");
+        check(!b.renameCurrentNote(QStringLiteral("Other")).isEmpty(), "backend read-only rename refused");
+    }
 
     // Attachments: only the files this note links to, decoded from the
     // URL-encoded links icloud-md writes; the folder-wide attachments/
@@ -143,6 +156,7 @@ int main(int argc, char *argv[])
 
     b.openNote(QStringLiteral("A.md"));
     check(b.noteAttachments().isEmpty(), "backend attachments follow the note");
+    check(b.readOnlyReason().isEmpty(), "backend read-only reason follows the note");
     check(b.saveWarning(QStringLiteral("edited body\n")).isEmpty(), "backend clean save silent");
     // The envelope is hidden from the editor and reattached on save, so the
     // id cannot be edited away; files on disk keep it byte-for-byte.

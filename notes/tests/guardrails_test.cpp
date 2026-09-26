@@ -53,6 +53,15 @@ int main()
     }
     check(SyncModel::trackedFiles(QByteArrayLiteral(R"({})")).isEmpty(), "tracked empty");
 
+    // readOnlyReasons
+    {
+        const QHash<QString, QString> r = SyncModel::readOnlyReasons(QByteArrayLiteral(
+            R"({"notes":{"u1":{"file":"Big.md","unpublishableReason":"is too large"},"u2":{"file":"A.md"}}})"));
+        check(r.size() == 1 && r.value(QStringLiteral("Big.md")) == QStringLiteral("is too large"),
+              "read-only reasons");
+    }
+    check(SyncModel::readOnlyReasons(QByteArrayLiteral("not json")).isEmpty(), "read-only garbage empty");
+
     // parseStatusJson
     {
         const QByteArray payload = QByteArrayLiteral(

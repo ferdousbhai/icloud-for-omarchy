@@ -32,6 +32,9 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString currentNote READ currentNote NOTIFY currentNoteChanged)
     Q_PROPERTY(QString noteBody READ noteBody NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteAttachments READ noteAttachments NOTIFY noteContentChanged)
+    // Why icloud-md will never push the current note, or empty when it is
+    // editable. A read-only note opens locked: edits could never sync.
+    Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY noteContentChanged)
     Q_PROPERTY(QString syncMessage READ syncMessage NOTIFY syncMessageChanged)
     Q_PROPERTY(QString syncLog READ syncLog NOTIFY syncLogChanged)
     Q_PROPERTY(bool syncRunning READ syncRunning NOTIFY syncRunningChanged)
@@ -74,6 +77,7 @@ public:
     // reattached on save.
     QString noteBody() const;
     QVariantList noteAttachments() const { return m_noteAttachments; }
+    QString readOnlyReason() const { return m_readOnlyReason; }
     QString syncMessage() const { return m_syncMessage; }
     QString syncLog() const { return m_syncLog; }
     bool syncRunning() const { return m_syncRunning; }
@@ -202,6 +206,7 @@ private:
     QString m_currentNote;
     QString m_noteContent;
     QVariantList m_noteAttachments;
+    QString m_readOnlyReason;
     QVariantList m_statusEntries;
     int m_statusUnchanged = 0;
     QStringList m_statusNotices;

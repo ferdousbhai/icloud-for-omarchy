@@ -116,6 +116,11 @@ preview-only: notes with attachments can't be edited back to iCloud.
 
 - Notes with images, audio, or file attachments are read-only upstream;
   you can't add attachments from here either.
+- A note icloud-md can read but not safely write back opens read-only,
+  with the reason under its title. A very large note is the usual case:
+  Apple keeps its text in a separate file, which only a patched
+  icloud-md can read so far (stock 0.6.2 skips such notes entirely).
+  Edit it in Apple Notes; the changes still sync here.
 - Folders carry no id in iCloud, so a folder rename here becomes a new
   folder plus note moves on push, and a folder delete moves its notes to
   Recently Deleted; the old folder stays in Notes, empty, until you delete

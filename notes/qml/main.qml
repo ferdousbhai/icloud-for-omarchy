@@ -55,6 +55,8 @@ ApplicationWindow {
     property string savedText: ""
     property bool dirty: editor.text !== savedText
     property string notice: ""
+    // icloud-md reads this note but will never push it, so it opens locked.
+    readonly property bool noteLocked: backend.readOnlyReason.length > 0
     property bool searching: searchField.text.trim().length >= 2
     property var searchResults: []
     property string historyEpoch: ""
@@ -176,7 +178,7 @@ ApplicationWindow {
     function badges(name) {
         var labels = { "conflict": ["conflict", root.colRed], "new": ["new", root.colGreen],
                        "missing-id": ["no id", root.colYellow], "foreign-id": ["foreign id", root.colYellow],
-                       "tables": ["tables", root.colTextMuted] };
+                       "tables": ["tables", root.colTextMuted], "read-only": ["read-only", root.colTextMuted] };
         var out = (backend.noteStates[name] || []).map(function (flag) { return labels[flag] || [flag, root.colTextMuted]; });
         var st = statusByFile[vaultRel(name)];
         if (st === "refused")
@@ -247,6 +249,8 @@ ApplicationWindow {
     }
 
     function toggleTask() {
+        if (root.noteLocked)
+            return;
         var before = editor.text, pos = editor.cursorPosition;
         var line = before.slice(0, pos).split("\n").length - 1;
         var updated = backend.toggleCheckbox(before, line);
@@ -257,7 +261,7 @@ ApplicationWindow {
     }
     function wrapSelection(before, after) {
         var s = editor.selectionStart, sel = editor.selectedText;
-        if (backend.currentNote.length === 0 || sel.length === 0)
+        if (backend.currentNote.length === 0 || root.noteLocked || sel.length === 0)
             return;
         editor.remove(s, editor.selectionEnd);
         editor.insert(s, before + sel + after);
@@ -265,7 +269,7 @@ ApplicationWindow {
         editor.forceActiveFocus();
     }
     function insertLink() {
-        if (backend.currentNote.length === 0)
+        if (backend.currentNote.length === 0 || root.noteLocked)
             return;
         var s = editor.selectionStart, sel = editor.selectedText || "text", proto = "https://";
         editor.remove(s, editor.selectionEnd);
@@ -294,14 +298,14 @@ ApplicationWindow {
             }
             IconButton {
                 glyph: "\uf040"; tip: "Rename note"
-                enabled: backend.currentNote.length > 0 && !backend.syncRunning
+                enabled: backend.currentNote.length > 0 && !root.noteLocked && !backend.syncRunning
                 onClicked: { titleField.forceActiveFocus(); titleField.selectAll(); }
             }
             Item { Layout.fillWidth: true }
-            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0; onClicked: root.toggleTask() }
-            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: backend.currentNote.length > 0; onClicked: root.wrapSelection("**", "**") }
-            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: backend.currentNote.length > 0; onClicked: root.wrapSelection("*", "*") }
-            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0; onClicked: root.insertLink() }
+            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.toggleTask() }
+            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.wrapSelection("**", "**") }
+            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.wrapSelection("*", "*") }
+            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.insertLink() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton {
                 glyph: "\uf0ed"; tip: "Pull from iCloud"
@@ -746,6 +750,7 @@ ApplicationWindow {
                         font.bold: true
                         selectByMouse: true
                         clip: true
+                        readOnly: root.noteLocked
                         onEditingFinished: root.commitTitle(text)
                         Keys.onReturnPressed: editor.forceActiveFocus()
                         Keys.onEnterPressed: editor.forceActiveFocus()
@@ -765,6 +770,20 @@ ApplicationWindow {
                             return d.toLocaleDateString(Qt.locale(), Locale.LongFormat)
                                 + " at " + d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
                         }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 32
+                        Layout.rightMargin: 32
+                        Layout.topMargin: 10
+                        visible: root.noteLocked
+                        wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                        color: root.colYellow
+                        font.pixelSize: root.pt(11)
+                        text: "Read-only here: this note " + backend.readOnlyReason
+                            + ". Edit it in Apple Notes, and the changes still sync here."
                     }
 
                     Rectangle {
@@ -820,6 +839,7 @@ ApplicationWindow {
                             id: editor
                             wrapMode: TextArea.Wrap
                             selectByMouse: true
+                            readOnly: root.noteLocked
                             background: null
                             color: root.colText
                             selectionColor: root.colAccent
