@@ -71,10 +71,9 @@ public:
     QVariantMap noteDetails() const { return m_noteDetails; }
     QString currentNote() const { return m_currentNote; }
     QString noteContent() const { return m_noteContent; }
-    // The editable body: the file with its frontmatter envelope and, in
-    // in-body vaults, its heading line held back (Notes never shows sync
-    // metadata, and the title is edited in its own field). Both are
-    // reattached on save.
+    // The editable body: the file with its frontmatter envelope held back
+    // (Notes never shows sync metadata) and reattached on save. In in-body
+    // vaults the title is simply the body's first line, as in Typora.
     QString noteBody() const;
     QVariantList noteAttachments() const { return m_noteAttachments; }
     QString readOnlyReason() const { return m_readOnlyReason; }
@@ -133,6 +132,9 @@ public:
     Q_INVOKABLE void clearLog();
     // Styles the editor's Markdown in the theme's colours; formatting only.
     Q_INVOKABLE void attachEditor(QQuickTextDocument *document);
+    // Where the editor cursor is (-1 when it has no focus): Markdown marks
+    // show on that line only.
+    Q_INVOKABLE void setEditorCursor(int position);
 
 signals:
     void foldersChanged();

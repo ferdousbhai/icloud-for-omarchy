@@ -54,6 +54,7 @@ ApplicationWindow {
     // What the editor was last loaded from or saved as; edits diverge from it.
     property string savedText: ""
     property bool dirty: editor.text !== savedText
+    property bool filenameTitles: backend.vaultTitleMode === "filename"
     property string notice: ""
     // icloud-md reads this note but will never push it, so it opens locked.
     readonly property bool noteLocked: backend.readOnlyReason.length > 0
@@ -248,6 +249,20 @@ ApplicationWindow {
         }
     }
 
+    // Rename: select the title text, in its field or on the first line.
+    function selectTitle() {
+        if (filenameTitles) {
+            titleField.forceActiveFocus();
+            titleField.selectAll();
+            return;
+        }
+        var line = editor.text.split("\n")[0];
+        var marks = line.match(/^#{1,6}\s+/);
+        editor.forceActiveFocus();
+        editor.select(marks ? marks[0].length : 0, line.length);
+    }
+    function trackCursor() { backend.setEditorCursor(editor.activeFocus ? editor.cursorPosition : -1); }
+
     function toggleTask() {
         if (root.noteLocked)
             return;
@@ -299,7 +314,7 @@ ApplicationWindow {
             IconButton {
                 glyph: "\uf040"; tip: "Rename note"
                 enabled: backend.currentNote.length > 0 && !root.noteLocked && !backend.syncRunning
-                onClicked: { titleField.forceActiveFocus(); titleField.selectAll(); }
+                onClicked: root.selectTitle()
             }
             Item { Layout.fillWidth: true }
             IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.toggleTask() }
@@ -732,14 +747,32 @@ ApplicationWindow {
                     visible: backend.currentNote.length > 0
                     spacing: 0
 
-                    // The title is edited in place, like the first line in Notes;
-                    // committing it retitles the note (heading line or file name).
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 16
+                        horizontalAlignment: Text.AlignHCenter
+                        color: root.colTextMuted
+                        font.pixelSize: root.pt(11)
+                        text: {
+                            var ms = root.detail(backend.currentNote).modifiedMs || 0;
+                            if (ms <= 0)
+                                return "";
+                            var d = new Date(ms);
+                            return d.toLocaleDateString(Qt.locale(), Locale.LongFormat)
+                                + " at " + d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
+                        }
+                    }
+
+                    // In-body vaults keep the title as the note's first line, edited
+                    // in the editor like Typora. Filename vaults title by file name,
+                    // edited here; committing it renames the file.
                     TextInput {
                         id: titleField
                         Layout.fillWidth: true
                         Layout.leftMargin: 32
                         Layout.rightMargin: 32
-                        Layout.topMargin: 24
+                        Layout.topMargin: 12
+                        visible: root.filenameTitles
                         property string current: root.displayTitle(backend.currentNote)
                         onCurrentChanged: text = current
                         text: current
@@ -756,22 +789,6 @@ ApplicationWindow {
                         Keys.onEnterPressed: editor.forceActiveFocus()
                         Keys.onEscapePressed: { text = current; editor.forceActiveFocus(); }
                     }
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 4
-                        horizontalAlignment: Text.AlignHCenter
-                        color: root.colTextMuted
-                        font.pixelSize: root.pt(11)
-                        text: {
-                            var ms = root.detail(backend.currentNote).modifiedMs || 0;
-                            if (ms <= 0)
-                                return "";
-                            var d = new Date(ms);
-                            return d.toLocaleDateString(Qt.locale(), Locale.LongFormat)
-                                + " at " + d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
-                        }
-                    }
-
                     Label {
                         Layout.fillWidth: true
                         Layout.leftMargin: 32
@@ -851,6 +868,8 @@ ApplicationWindow {
                             bottomPadding: 32
                             placeholderText: "Start writing…"
                             onTextChanged: autosave.restart()
+                            onCursorPositionChanged: root.trackCursor()
+                            onActiveFocusChanged: root.trackCursor()
                             Component.onCompleted: backend.attachEditor(editor.textDocument)
                         }
                     }

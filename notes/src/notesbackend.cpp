@@ -292,18 +292,14 @@ QString NotesBackend::savedAccount() const
 
 QString NotesBackend::noteBody() const
 {
-    const QString body = SyncModel::splitEnvelope(m_noteContent).body;
-    return vaultTitleMode() == u"filename" ? body : SyncModel::splitTitle(body).rest;
+    return SyncModel::splitEnvelope(m_noteContent).body;
 }
 
-// The file as it is written for an editor body: stored envelope and heading
-// line first, untouched, so neither can be edited away.
+// The file as it is written for an editor body: the stored envelope first,
+// untouched, so the id cannot be edited away.
 QString NotesBackend::assembleNote(const QString &body) const
 {
-    const SyncModel::EnvelopeSplit split = SyncModel::splitEnvelope(m_noteContent);
-    const QString titleLine =
-        vaultTitleMode() == u"filename" ? QString() : SyncModel::splitTitle(split.body).titleLine;
-    return split.envelope + titleLine + body;
+    return SyncModel::splitEnvelope(m_noteContent).envelope + body;
 }
 
 MarkdownHighlighter::Colors NotesBackend::highlighterColors() const
@@ -323,6 +319,12 @@ void NotesBackend::attachEditor(QQuickTextDocument *document)
     m_highlighter = new MarkdownHighlighter(document->textDocument(), highlighterColors());
     connect(this, &NotesBackend::themeChanged, m_highlighter,
             [this] { m_highlighter->setColors(highlighterColors()); });
+}
+
+void NotesBackend::setEditorCursor(int position)
+{
+    if (m_highlighter)
+        m_highlighter->setActivePosition(position);
 }
 
 void NotesBackend::rebuildFolders()
@@ -678,10 +680,11 @@ QString NotesBackend::exportPdf()
     const QString name = QFileInfo(pdf).fileName();
     if (QFile::exists(pdf))
         return QStringLiteral("Already exists (not overwritten): %1").arg(name);
-    // Rendered like the editor shows it: the title as a heading, then the body.
+    // In-body notes open with their title line; filename notes gain the
+    // title as a heading, the way the editor shows it above the body.
     const QString title = m_noteDetails.value(m_currentNote).toMap().value(QStringLiteral("title")).toString();
     QTextDocument doc;
-    doc.setMarkdown(u"# " + title + u"\n\n" + noteBody());
+    doc.setMarkdown(vaultTitleMode() == u"filename" ? u"# " + title + u"\n\n" + noteBody() : noteBody());
     QPrinter printer;
     printer.setOutputFormat(QPrinter::PdfFormat);
     printer.setOutputFileName(pdf);

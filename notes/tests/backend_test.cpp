@@ -160,17 +160,17 @@ int main(int argc, char *argv[])
     check(b.saveWarning(QStringLiteral("edited body\n")).isEmpty(), "backend clean save silent");
     // The envelope is hidden from the editor and reattached on save, so the
     // id cannot be edited away; files on disk keep it byte-for-byte.
-    check(b.noteBody() == QStringLiteral("body\n"), "backend body hides envelope and heading");
-    b.saveCurrentNote(QStringLiteral("changed\n"));
+    check(b.noteBody() == QStringLiteral("# Alpha\nbody\n"), "backend body hides envelope, keeps title line");
+    b.saveCurrentNote(QStringLiteral("# Alpha\nchanged\n"));
     check(readFile(QStringLiteral("A.md")) == QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nchanged\n"),
-          "backend save preserves envelope and heading");
+          "backend save preserves envelope");
     // Apple's no-break spaces and soft line breaks survive an edit elsewhere.
-    b.saveCurrentNote(QStringLiteral("IBAN\u00a0123\u2028BIC\n"));
-    b.saveCurrentNote(QStringLiteral("IBAN 123\nBIC code\n")); // as the editor hands it back
+    b.saveCurrentNote(QStringLiteral("# Alpha\nIBAN\u00a0123\u2028BIC\n"));
+    b.saveCurrentNote(QStringLiteral("# Alpha\nIBAN 123\nBIC code\n")); // as the editor hands it back
     check(readFile(QStringLiteral("A.md"))
               == QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nIBAN\u00a0123\u2028BIC code\n"),
           "backend save keeps Apple's special spaces and breaks");
-    b.saveCurrentNote(QStringLiteral("changed\n"));
+    b.saveCurrentNote(QStringLiteral("# Alpha\nchanged\n"));
     check(b.saveWarning(QStringLiteral("<<<<<<< x\n")).contains(QStringLiteral("conflict")),
           "backend markers warn");
     // A stray copy of A on disk shares its id: saving A warns about the twin.

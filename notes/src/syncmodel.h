@@ -244,23 +244,6 @@ inline QVariantMap parseHistoryJson(const QByteArray &bytes)
     return arrayItems(QJsonDocument::fromJson(bytes), QStringLiteral("epochs"), QStringLiteral("history"));
 }
 
-// In-body vaults keep the title as the first line of the body. When that
-// line is a heading, the editor shows only what follows it and the heading
-// is edited through the title field; a bare first line stays in the editor.
-struct TitleSplit {
-    QString titleLine; // heading line with its newline, or empty
-    QString rest;
-};
-inline TitleSplit splitTitle(const QString &body)
-{
-    if (!body.startsWith(u'#'))
-        return { {}, body };
-    const qsizetype nl = body.indexOf(u'\n');
-    if (nl < 0)
-        return { body + u'\n', {} };
-    return { body.left(nl + 1), body.mid(nl + 1) };
-}
-
 // A plain-text editor gives back Apple's no-break spaces as spaces and its
 // line and paragraph separators (U+2028/U+2029) as newlines. Writing that
 // back would reformat the note in Notes (soft breaks become paragraphs), so

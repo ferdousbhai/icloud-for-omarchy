@@ -61,9 +61,10 @@ asking.
   to rename or delete it. Window and pane sizes are remembered.
 - **Edit**: edits save on their own once you pause typing, and when you
   switch notes; `Ctrl+S` forces a save when a guardrail has flagged the
-  edit. `Ctrl+N` starts a note. Click the title to rename it. Headings,
-  emphasis, links and checklists are styled as you type, and stay plain
-  Markdown on disk. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`),
+  edit. `Ctrl+N` starts a note. The first line is the title: edit it
+  to rename the note. As in Typora, headings, emphasis, links and
+  checklists are styled as you type, their Markdown marks show only on
+  the line you are editing, and the file stays plain Markdown on disk. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`),
   a checklist toggle (`Ctrl+Enter`), and PDF export (saved next to the
   note) are in the toolbar. The window follows the active Omarchy theme.
 - **History** shows past versions of the current note with diffs.

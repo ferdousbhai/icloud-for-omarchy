@@ -121,14 +121,6 @@ int main()
               == QStringLiteral("---\napple-note-id: x\n---\n# New\n"),
           "retitle empty body gains heading");
 
-    // splitTitle
-    check(SyncModel::splitTitle(QStringLiteral("# T\nbody\n")).titleLine == QStringLiteral("# T\n")
-              && SyncModel::splitTitle(QStringLiteral("# T\nbody\n")).rest == QStringLiteral("body\n"),
-          "title split heading");
-    check(SyncModel::splitTitle(QStringLiteral("# T")).titleLine == QStringLiteral("# T\n"), "title split lone heading");
-    check(SyncModel::splitTitle(QStringLiteral("Bare\nbody\n")).titleLine.isEmpty(), "title split bare line stays");
-    check(SyncModel::splitTitle(QString()).rest.isEmpty(), "title split empty");
-
     // previewNote
     {
         const SyncModel::NotePreview p =
