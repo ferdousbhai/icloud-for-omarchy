@@ -7,6 +7,12 @@ license = "MIT"
 repository = "https://github.com/ferdousbhai/icloud-session"
 publish = false
 
+[features]
+default = ["signin"]
+# The GTK4 + WebKitGTK 6 sign-in window. Off: everything else builds and
+# tests without webkitgtk-6.0 installed.
+signin = ["dep:webkit6"]
+
 [[bin]]
 name = "icloud-sessiond"
 path = "src/main.rs"
@@ -14,6 +20,11 @@ path = "src/main.rs"
 [[bin]]
 name = "icloud-session"
 path = "src/bin/cli.rs"
+
+[[bin]]
+name = "icloud-session-signin"
+path = "src/bin/signin.rs"
+required-features = ["signin"]
 
 [dependencies]
 icloud-session = { path = ".." }
@@ -27,6 +38,7 @@ ureq = "2"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+webkit6 = { version = "0.6", features = ["v2_42", "gtk_v4_18"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
