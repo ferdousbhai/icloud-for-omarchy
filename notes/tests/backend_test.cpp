@@ -3,14 +3,19 @@
 // directory, never the real one. Run with bin/test.
 #include "../src/notesbackend.h"
 #include "check.h"
+#include "fake_session.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QGuiApplication>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
+#include <functional>
 
 namespace {
 QString rootPath()
@@ -70,17 +75,35 @@ void waitForSync(const NotesBackend &b)
         loop.exec();
 }
 
-// Spin until the backend's `icloud-session status` reads are done.
-void waitForStatus(const NotesBackend &b)
+// Spin the event loop until cond holds (or a timeout gives up): D-Bus
+// replies and signals arrive through it.
+bool waitUntil(const std::function<bool()> &cond, int timeoutMs = 5000)
 {
-    QEventLoop loop;
-    QObject::connect(&b, &NotesBackend::sessionStatusRead, &loop, [&] {
-        if (!b.sessionStatusPending())
-            loop.quit();
-    });
-    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
-    if (b.sessionStatusPending())
-        loop.exec();
+    QElapsedTimer timer;
+    timer.start();
+    while (!cond() && timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(5);
+    }
+    return cond();
+}
+
+// Spin until every read of icloud-session's properties has answered.
+void waitForSignIn(const NotesBackend &b)
+{
+    waitUntil([&] { return !b.signInPending(); });
+}
+
+// Spin until the backend has run whatever syncs it chained.
+void waitForIdle(const NotesBackend &b)
+{
+    waitUntil([&] { return !b.syncRunning(); }, 15000);
+    QCoreApplication::processEvents();
+}
+
+QVariant seconds(qint64 fromNow)
+{
+    return QVariant::fromValue<qulonglong>(qulonglong(QDateTime::currentSecsSinceEpoch() + fromNow));
 }
 } // namespace
 
@@ -89,6 +112,12 @@ int main(int argc, char *argv[])
     // GUI application: PDF export lays out text and needs the font database.
     // bin/test forces the offscreen platform so this stays headless.
     QGuiApplication app(argc, argv);
+    // The fake icloud-session claims the real daemon's bus name: only ever
+    // on the private session bus bin/test starts, never the desktop's.
+    if (qEnvironmentVariable("ICLOUD_NOTES_PRIVATE_BUS") != QStringLiteral("1")) {
+        QTextStream(stderr) << "backend_test: run it through bin/test (a private D-Bus session bus)\n";
+        return EXIT_FAILURE;
+    }
     // The vault under test lives in a temporary directory that is deleted
     // with it; the backend reads the path from ICLOUD_NOTES_VAULT. It sits
     // under the cache dir rather than /tmp so it is on the home filesystem,
@@ -266,42 +295,39 @@ int main(int argc, char *argv[])
     check(QFile::exists(rootPath() + QStringLiteral("/Second.pdf")), "backend pdf on disk");
     check(!b.exportPdf().isEmpty(), "backend pdf no overwrite");
 
+    // No icloud-session on the bus: the sign-in is simply unknown, with no
+    // crash, no countdown, no banner and no pause. (bin/test's private bus
+    // has no service files, so nothing is D-Bus activated either.)
+    waitForSignIn(b);
+    check(!b.signInKnown() && b.signInDaysLeft() == -2 && !b.authExpired(),
+          "session absent leaves the sign-in unknown");
+
+    // The fake daemon, signed in with "Keep me signed in": 20 days left. It
+    // appears after Notes started, which Notes notices on its own.
+    QDBusConnection fakeBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, QStringLiteral("fake-session"));
+    check(fakeBus.isConnected(), "session private bus connected");
+    FakeSession fake(fakeBus);
+    fake.signedIn = true;
+    fake.appleId = QStringLiteral("someone@example.com");
+    fake.dsid = QStringLiteral("1006081438");
+    fake.expiresAt = seconds(20 * 86400 + 3600).toULongLong();
+    check(fake.claimName(), "session fake owns the bus name");
+    check(waitUntil([&] { return b.signedIn(); }), "session appearing later is read");
+    check(b.appleId() == QStringLiteral("someone@example.com") && b.signInDaysLeft() == 20 && !b.authExpired(),
+          "session signed in: days left and no banner");
+    fake.set({ { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(0) } });
+    check(waitUntil([&] { return b.signInDaysLeft() == -1; }), "session without a lasting sign-in");
+    fake.set({ { QStringLiteral("ExpiresAt"), seconds(20 * 86400 + 3600) } });
+    check(waitUntil([&] { return b.signInDaysLeft() == 20; }), "session expiry follows PropertiesChanged");
+
     // CLI seam with the stub icloud-md: same argv, stdout, and parsing
     // the app uses against the real tool. No Apple account involved.
     const QString stubs =
         QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../stubs")).canonicalPath();
     check(QFile::exists(stubs + QStringLiteral("/icloud-md")), "stub present");
-    check(QFile::exists(stubs + QStringLiteral("/icloud-session")), "session stub present");
     const QByteArray systemPath = qgetenv("PATH");
-    {
-        // Without icloud-session the sign-in is simply unknown: no crash,
-        // no countdown, no expiry invented.
-        qputenv("PATH", (scratch.path() + QStringLiteral("/empty-bin")).toUtf8());
-        NotesBackend missing;
-        waitForStatus(missing);
-        check(!missing.sessionStatusPending() && missing.signInDaysLeft() == -2 && !missing.authExpired(),
-              "session tool missing leaves the sign-in unknown");
-    }
     qputenv("PATH", (stubs + QLatin1Char(':') + QString::fromLocal8Bit(systemPath)).toUtf8());
     check(b.icloudMdAvailable(), "stub on PATH");
-
-    b.refreshSessionStatus();
-    waitForStatus(b);
-    check(b.signInDaysLeft() == 20, "session expiry read from icloud-session status");
-    qputenv("ICLOUD_SESSION_STUB_STATUS", "icloud-session: not json");
-    b.refreshSessionStatus();
-    waitForStatus(b);
-    check(b.signInDaysLeft() == -2 && !b.authExpired(), "session unreadable status is unknown, not expired");
-    qputenv("ICLOUD_SESSION_STUB_STATUS",
-            R"({"signed_in":true,"apple_id":"someone@example.com","dsid":"1","expires_at":null,"validated_at":null})");
-    b.refreshSessionStatus();
-    waitForStatus(b);
-    check(b.signInDaysLeft() == -1 && !b.authExpired(), "session without a lasting sign-in");
-    qunsetenv("ICLOUD_SESSION_STUB_STATUS");
-    b.refreshSessionStatus();
-    b.refreshSessionStatus(); // a second request while one runs is queued, not dropped
-    waitForStatus(b);
-    check(b.signInDaysLeft() == 20, "session status re-read");
 
     b.refreshPushPreview();
     waitForSync(b);
@@ -336,81 +362,134 @@ int main(int argc, char *argv[])
           "seam sync pushes then pulls");
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
 
-    // An expired session pauses syncing until a sign-in succeeds, which then syncs.
+    // icloud-md refused the session: icloud-session is told, and syncing
+    // pauses (no further push or pull) until it reports a sign-in.
     qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
     b.runPull();
     waitForSync(b);
     check(b.authExpired(), "seam expired session detected");
-    waitForStatus(b); // the session looks as it did before: the expiry stands
-    check(b.authExpired(), "seam expiry stands while the session is unchanged");
+    check(waitUntil([&] { return fake.reportCalls == 1; }), "seam expired session reported to icloud-session");
     check(b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired session named once, not as a generic failure");
     b.runSync(); // a push that hits the expired session skips its pull
     waitForSync(b);
     check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired push does not report a failure or pull");
+    check(!b.syncLog().contains(QStringLiteral("reauthenticate\n")), "seam never runs icloud-md reauthenticate");
+    // The daemon confirms with Apple and signs out.
+    fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("AppleId"), QString() },
+               { QStringLiteral("Dsid"), QString() }, { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(0) } });
+    check(waitUntil([&] { return !b.signedIn(); }) && b.authExpired() && b.signInDaysLeft() == -2,
+          "seam signed out stays paused");
     {
-        NotesBackend relaunched; // the next launch remembers, instead of retrying for 90 s
-        check(relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
-              "seam expiry survives a relaunch");
-        waitForStatus(relaunched);
-        check(relaunched.authExpired(), "seam expiry survives an unchanged session status");
-    }
-    {
-        // A sign-in from the terminal or another app shows up as a new
-        // expiry in icloud-session; the next launch resumes syncing.
-        qputenv("ICLOUD_SESSION_STUB_STATUS",
-                R"({"signed_in":true,"apple_id":"someone@example.com","dsid":"1","expires_at":"2099-01-01T00:00:00Z","validated_at":"2026-09-01T00:00:00Z"})");
-        NotesBackend relaunched;
-        waitForStatus(relaunched);
-        check(!relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Signed in."),
-              "seam sign-in elsewhere clears the remembered expiry");
-        qunsetenv("ICLOUD_SESSION_STUB_STATUS");
-    }
-    {
-        // A flag from an older version records no status: it stays until the
-        // session validates after it was written.
-        writeFile(QStringLiteral(".icloud-notes-signin-expired"), QStringLiteral("Sync is paused until an iCloud sign-in succeeds.\n"));
-        {
-            NotesBackend relaunched;
-            waitForStatus(relaunched);
-            check(relaunched.authExpired(), "seam old flag stands on an earlier validation");
-        }
-        qputenv("ICLOUD_SESSION_STUB_STATUS",
-                R"({"signed_in":true,"apple_id":"someone@example.com","dsid":"1","expires_at":"2099-01-01T00:00:00Z","validated_at":"2099-01-01T00:00:00Z"})");
-        NotesBackend relaunched;
-        waitForStatus(relaunched);
-        check(!relaunched.authExpired(), "seam old flag clears on a later validation");
-        qunsetenv("ICLOUD_SESSION_STUB_STATUS");
+        NotesBackend relaunched; // the daemon remembers: the next launch starts paused
+        waitForSignIn(relaunched);
+        check(relaunched.signInKnown() && relaunched.authExpired()
+                  && relaunched.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
+              "seam signed out holds across a relaunch");
     }
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
-    b.runReauthenticate();
-    waitForSync(b); // sign-in
-    while (b.syncRunning())
-        waitForSync(b); // the push and pull it triggers
-    check(!b.authExpired() && b.syncMessage() == QStringLiteral("Pull done."), "seam sign-in resumes syncing");
-    check(!NotesBackend().authExpired(), "seam sign-in clears the remembered expiry");
-    waitForStatus(b);
 
-    // Apple ended the session for another app sharing it: syncing pauses
-    // without first spending 90 s on a renewal, and resumes once signed in.
-    qputenv("ICLOUD_SESSION_STUB_STATUS",
-            R"({"signed_in":false,"apple_id":"someone@example.com","dsid":"1","expires_at":null,"validated_at":null})");
-    b.refreshSessionStatus();
-    waitForStatus(b);
-    check(b.authExpired() && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
+    // The banner's Sign in asks icloud-session and returns at once; the
+    // sign-in arrives as property changes, and syncing resumes with a sync.
+    b.clearLog();
+    b.signIn();
+    check(waitUntil([&] { return fake.signInCalls == 1; }), "sign in button calls SignIn");
+    check(!b.syncRunning() && b.authExpired(), "sign in waits for SignedIn");
+    fake.set({ { QStringLiteral("SigningIn"), true } });
+    check(waitUntil([&] { return b.signingIn(); }), "sign in window open is shown");
+    fake.set({ { QStringLiteral("SignedIn"), true }, { QStringLiteral("AppleId"), QStringLiteral("someone@example.com") },
+               { QStringLiteral("Dsid"), QStringLiteral("1006081438") },
+               { QStringLiteral("ExpiresAt"), seconds(30 * 86400 + 3600) }, { QStringLiteral("SigningIn"), false } });
+    check(waitUntil([&] { return !b.authExpired(); }), "seam sign-in clears the pause");
+    waitUntil([&] { return b.syncMessage() == QStringLiteral("Pull done."); }, 15000);
+    check(b.syncLog().contains(QStringLiteral("$ icloud-md push\n")) && b.syncMessage() == QStringLiteral("Pull done."),
+          "seam sign-in resumes syncing");
+    check(b.signInDaysLeft() == 30, "seam new sign-in's days left");
+
+    // Signed out from elsewhere (another app, or Apple ended the session):
+    // syncing pauses at once, without running icloud-md into the refusal.
+    b.clearLog();
+    fake.set({ { QStringLiteral("SignedIn"), false } });
+    check(waitUntil([&] { return b.authExpired(); }) && !b.syncRunning()
+              && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "session signed out elsewhere pauses syncing");
-    qunsetenv("ICLOUD_SESSION_STUB_STATUS");
-    b.refreshSessionStatus();
-    waitForStatus(b);
-    check(!b.authExpired() && b.syncMessage() == QStringLiteral("Signed in."), "session signed in again resumes");
+    check(b.syncLog().isEmpty(), "session signed out runs no sync");
+    fake.set({ { QStringLiteral("SignedIn"), true } });
+    check(waitUntil([&] { return !b.authExpired(); }), "session signed in again resumes");
+    waitForIdle(b);
+    check(b.syncLog().contains(QStringLiteral("$ icloud-md pull\n")), "session signed in again syncs");
 
-    b.runClone(QStringLiteral("someone@example.com")); // the stub rejects clone
-    waitForSync(b);
-    check(b.syncMessage() == QStringLiteral("Clone failed. See log."), "seam failure reported");
-    check(b.syncLog().contains(QStringLiteral("clone ") + rootPath()
-                               + QStringLiteral(" --account someone@example.com --non-interactive")),
-          "seam clone reuses the saved account without a browser");
+    // A re-read with nothing new neither pauses nor syncs.
+    b.clearLog();
+    b.refreshSignIn();
+    waitForSignIn(b);
+    check(!b.authExpired() && b.signedIn() && b.syncLog().isEmpty(), "session re-read is quiet");
+
+    // First run: no vault yet. Signed in, the clone uses the daemon's
+    // account by dsid and opens no window of any kind.
+    const QString fresh = scratch.path() + QStringLiteral("/fresh");
+    QDir().mkpath(fresh);
+    qputenv("ICLOUD_NOTES_VAULT", fresh.toUtf8());
+    const QString cloneArgs = QStringLiteral("$ icloud-md clone --account 1006081438 --non-interactive ") + fresh;
+    {
+        NotesBackend first;
+        waitForSignIn(first);
+        check(!first.cloned() && first.signedIn(), "clone signed in, no vault");
+        const int signIns = fake.signInCalls;
+        first.runClone();
+        waitForIdle(first); // the stub rejects clone
+        check(first.syncLog().contains(cloneArgs), "clone uses --account <dsid>");
+        check(fake.signInCalls == signIns, "clone signed in opens no sign-in");
+    }
+    // Signed out: sign in through icloud-session first, then clone.
+    fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("Dsid"), QString() } });
+    {
+        NotesBackend first;
+        waitForSignIn(first);
+        check(!first.authExpired(), "clone signed out, no vault: nothing to pause");
+        bool finished = false;
+        QObject::connect(&first, &NotesBackend::cloneFinished, [&] { finished = true; });
+        first.runClone();
+        check(waitUntil([&] { return fake.signInCalls == 1 + 1; }) && !first.syncRunning(),
+              "clone signs in first");
+        fake.set({ { QStringLiteral("SigningIn"), true } });
+        waitUntil([&] { return first.signingIn(); });
+        fake.set({ { QStringLiteral("SignedIn"), true }, { QStringLiteral("Dsid"), QStringLiteral("1006081438") },
+                   { QStringLiteral("SigningIn"), false } });
+        check(waitUntil([&] { return finished; }, 15000) && first.syncLog().contains(cloneArgs),
+              "clone follows the sign-in with --account <dsid>");
+
+        // A sign-in window closed without signing in ends the clone.
+        fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("Dsid"), QString() } });
+        waitUntil([&] { return !first.signedIn(); });
+        finished = false;
+        first.clearLog();
+        first.runClone();
+        waitUntil([&] { return fake.signInCalls == 3; });
+        fake.set({ { QStringLiteral("SigningIn"), true } });
+        waitUntil([&] { return first.signingIn(); });
+        fake.set({ { QStringLiteral("SigningIn"), false } });
+        check(waitUntil([&] { return finished; }) && !first.syncLog().contains(QStringLiteral("clone")),
+              "clone cancelled with the sign-in window");
+    }
+
+    // The daemon gone: unknown again, and Sign in says why instead of crashing.
+    check(fake.releaseName(), "session fake releases the bus name");
+    {
+        NotesBackend absent;
+        waitForSignIn(absent);
+        check(!absent.signInKnown() && absent.signInDaysLeft() == -2 && !absent.authExpired(),
+              "session absent at launch is unknown");
+        absent.signIn();
+        check(waitUntil([&] { return absent.syncMessage().contains(QStringLiteral("not available")); }),
+              "session absent: Sign in says so");
+        bool finished = false;
+        QObject::connect(&absent, &NotesBackend::cloneFinished, [&](bool ok) { finished = !ok; });
+        absent.runClone();
+        check(waitUntil([&] { return finished; }) && !absent.syncLog().contains(QStringLiteral("clone")),
+              "session absent: clone refused, not run blind");
+    }
 
     return report();
 }

@@ -9,4 +9,7 @@ qmake6 ../shots.pro > /dev/null
 make -j"$(nproc)" > /dev/null
 # The stub icloud-md answers the startup pull, so no real account is touched
 # and the status line reads "Pull done." instead of an error.
-PATH="$(cd ../../stubs && pwd):$PATH" ./shots "${1:-/tmp/notes-shot.png}"
+# A private session bus keeps the real icloud-session out of it too: the
+# sign-in reads as unknown, so no banner.
+PATH="$(cd ../../stubs && pwd):$PATH" dbus-run-session --config-file="$(cd ../.. && pwd)/session-bus.conf" -- \
+  ./shots "${1:-/tmp/notes-shot.png}"

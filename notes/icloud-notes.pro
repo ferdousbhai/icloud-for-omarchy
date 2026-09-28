@@ -1,4 +1,4 @@
-QT += core gui qml quick quickcontrols2 printsupport
+QT += core gui qml quick quickcontrols2 printsupport dbus
 
 CONFIG += c++17 release
 TARGET = icloud-notes

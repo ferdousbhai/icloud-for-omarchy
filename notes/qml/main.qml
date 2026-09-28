@@ -485,9 +485,9 @@ ApplicationWindow {
                             + ". Sign in again now to keep syncing without a pause."
                 }
                 PrimaryButton {
-                    text: "Sign in"
-                    enabled: !backend.syncRunning
-                    onClicked: backend.runReauthenticate()
+                    text: backend.signingIn ? "Signing in…" : "Sign in"
+                    enabled: !backend.signingIn
+                    onClicked: backend.signIn()
                 }
             }
         }
@@ -923,7 +923,7 @@ ApplicationWindow {
     property double lastFocusSync: 0
     onActiveChanged: {
         if (active)
-            backend.refreshSessionStatus(); // another app may have signed in, or been signed out
+            backend.refreshSignIn(); // the day count moves on; also keeps icloud-session validating
         if (!active || !autoButton.checked || !backend.cloned || backend.authExpired)
             return;
         if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running
@@ -933,22 +933,29 @@ ApplicationWindow {
         backend.runSync(); // both directions: a change from any program in any folder
     }
 
-    Component.onCompleted: {
-        // Sync on startup, like Notes does on launch. Without
-        // a vault, an account already signed in on this machine is cloned
-        // quietly; only a device that has never signed in sees the dialog.
+    // Sync on startup, like Notes does on launch, once icloud-session has
+    // said whether anyone is signed in (without it, sync anyway: the
+    // sign-in is unknown, not missing). Without a vault, an account already
+    // signed in on this machine is cloned quietly; only a device with no
+    // sign-in sees the dialog.
+    property bool started: false
+    function start() {
+        if (started || backend.signInPending)
+            return;
+        started = true;
         if (backend.cloned) {
             if (backend.icloudMdAvailable && !backend.authExpired) {
                 root.lastFocusSync = Date.now(); // the window's first activation is this sync
                 backend.runSync(); // edits made while the app was closed go up first
             }
-        } else if (backend.icloudMdAvailable && backend.savedAccount.length > 0) {
-            root.notice = "Downloading your notes as " + backend.savedAccount + "…";
-            backend.runClone(backend.savedAccount);
+        } else if (backend.icloudMdAvailable && backend.signedIn) {
+            root.notice = "Downloading your notes as " + backend.appleId + "…";
+            backend.runClone();
         } else {
             onboardDialog.open();
         }
     }
+    Component.onCompleted: start()
 
     Shortcut { sequence: StandardKey.Save; onActivated: root.save() }
     Shortcut { sequence: "Ctrl+N"; onActivated: newNoteDialog.open() }
@@ -999,9 +1006,12 @@ ApplicationWindow {
         }
         function onCloneFinished(ok) {
             root.notice = "";
-            // A saved sign-in that no longer works falls back to signing in.
+            // A sign-in that no longer works, or was cancelled, asks again.
             if (!ok && !backend.cloned)
                 onboardDialog.open();
+        }
+        function onSignInChanged() {
+            root.start();
         }
     }
 
@@ -1234,7 +1244,8 @@ ApplicationWindow {
                 Layout.preferredWidth: 380
                 wrapMode: Text.WordWrap
                 text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
-                      + "A real Apple sign-in window opens once (password and 2FA are handled by Apple's own pages); after that this device stays signed in. "
+                      + (backend.signedIn ? "It uses the iCloud account signed in on this computer, " + backend.appleId + ". "
+                                          : "Apple's own sign-in window opens first (password and 2FA stay on Apple's pages); the sign-in is shared with the other iCloud apps. ")
                       + "Apple Notes must not use Advanced Data Protection, because icloud-md cannot decrypt it."
             }
         }
