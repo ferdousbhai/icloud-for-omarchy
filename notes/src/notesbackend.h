@@ -31,6 +31,7 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString currentNote READ currentNote NOTIFY currentNoteChanged)
     Q_PROPERTY(QString noteBody READ noteBody NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteAttachments READ noteAttachments NOTIFY noteContentChanged)
+    Q_PROPERTY(QVariantList noteConflicts READ noteConflicts NOTIFY noteContentChanged)
     // Why icloud-md will never push the current note, or empty when it is
     // editable. A read-only note opens locked: edits could never sync.
     Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY noteContentChanged)
@@ -87,6 +88,9 @@ public:
     // vaults the title is simply the body's first line, as in Typora.
     QString noteBody() const;
     QVariantList noteAttachments() const { return m_noteAttachments; }
+    // The open note's conflict blocks, for choosing between versions:
+    // {local, remote: [{text, changed}], before, after: [context lines]}.
+    QVariantList noteConflicts() const;
     QString readOnlyReason() const { return m_readOnlyReason; }
     QString syncMessage() const { return m_syncMessage; }
     QString syncLog() const { return m_syncLog; }
@@ -120,6 +124,8 @@ public:
     Q_INVOKABLE void newNote(const QString &name);
     Q_INVOKABLE QString deleteCurrentNote();
     Q_INVOKABLE QString renameCurrentNote(const QString &title);
+    // Keep one side of each conflict block ("local", "remote" or "both").
+    Q_INVOKABLE QString resolveConflicts(const QStringList &choices);
     Q_INVOKABLE void newFolder(const QString &name);
     // Folders have no id upstream, so these do what a mv/rm on disk does:
     // a rename becomes a new Notes folder plus note moves, a delete sends

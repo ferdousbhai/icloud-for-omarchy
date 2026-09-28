@@ -58,6 +58,13 @@ ApplicationWindow {
     property string notice: ""
     // icloud-md reads this note but will never push it, so it opens locked.
     readonly property bool noteLocked: backend.readOnlyReason.length > 0
+    // A note both sides edited opens on its conflict blocks, one version
+    // picked per block, instead of on the raw markers ("Edit as text").
+    readonly property var conflicts: backend.noteConflicts
+    property var conflictChoices: []
+    property bool conflictAsText: false
+    readonly property bool resolving: conflicts.length > 0 && !conflictAsText && !noteLocked
+    onConflictsChanged: conflictChoices = conflicts.map(function () { return ""; })
     property bool searching: searchField.text.trim().length >= 2
     property var searchResults: []
     property string historyEpoch: ""
@@ -132,6 +139,85 @@ ApplicationWindow {
             font.bold: true
         }
     }
+    // One side of a conflict block: its lines, the ones the other side
+    // lacks tinted, the whole card a click target.
+    component VersionCard: AbstractButton {
+        id: card
+        property string label
+        property string glyph
+        property var lines: []
+        property bool selected: false
+        readonly property int changedCount: lines.filter(function (l) { return l.changed; }).length
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        Layout.preferredWidth: 100
+        hoverEnabled: true
+        padding: 12
+        background: Rectangle {
+            radius: 10
+            color: card.selected ? Qt.rgba(root.colAccent.r, root.colAccent.g, root.colAccent.b, 0.08)
+                 : card.hovered ? root.colRaised : root.colPanel
+            border.width: card.selected ? 2 : 1
+            border.color: card.selected ? root.colAccent : root.colLine
+        }
+        contentItem: ColumnLayout {
+            spacing: 8
+            RowLayout {
+                spacing: 8
+                Glyph { text: card.selected ? "" : ""; color: card.selected ? root.colAccent : root.colTextMuted }
+                Glyph { text: card.glyph; color: root.colTextDim; font.pixelSize: 13 }
+                Label { text: card.label; font.bold: true; color: root.colText; font.pixelSize: root.pt(13) }
+                Item { Layout.fillWidth: true }
+                Label {
+                    text: card.changedCount === 0 ? "" : card.changedCount === 1 ? "1 line differs"
+                        : card.changedCount + " lines differ"
+                    color: root.colTextMuted
+                    font.pixelSize: root.pt(11)
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: card.lines.length === 0
+                wrapMode: Text.Wrap
+                text: "Empty. This version removed these lines."
+                color: root.colTextMuted
+                font.italic: true
+                font.pixelSize: root.pt(12)
+            }
+            Repeater {
+                model: card.lines
+                delegate: Rectangle {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    implicitHeight: lineText.implicitHeight + 4
+                    radius: 3
+                    color: modelData.changed ? Qt.rgba(root.colAccent.r, root.colAccent.g, root.colAccent.b, 0.14) : "transparent"
+                    Rectangle {
+                        visible: parent.modelData.changed
+                        width: 2
+                        height: parent.height
+                        radius: 1
+                        color: root.colAccent
+                    }
+                    Text {
+                        id: lineText
+                        x: 8
+                        y: 2
+                        width: parent.width - 12
+                        // Rendered as Markdown so it reads like the note; blank
+                        // lines keep their height.
+                        text: parent.modelData.text.trim().length > 0 ? parent.modelData.text : " "
+                        textFormat: parent.modelData.text.trim().length > 0 ? Text.MarkdownText : Text.PlainText
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        color: parent.modelData.changed ? root.colText : root.colTextDim
+                        linkColor: root.colAccent
+                        font.pixelSize: root.pt(13)
+                    }
+                }
+            }
+            Item { Layout.fillHeight: true }
+        }
+    }
     component AppDialog: Dialog {
         anchors.centerIn: parent
         modal: true
@@ -193,7 +279,13 @@ ApplicationWindow {
         // Compare against what the editor holds, not the file: TextArea turns
         // Apple's no-break spaces and U+2028 line separators into plain ones,
         // and treating that as an edit rewrote (and pushed) notes just opened.
-        editor.text = backend.noteBody;
+        // A reload of the open note (a pull) keeps the cursor where it was.
+        var body = backend.noteBody;
+        if (editor.text !== body) {
+            var pos = editor.cursorPosition;
+            editor.text = body;
+            editor.cursorPosition = Math.min(pos, editor.length);
+        }
         savedText = editor.text;
     }
     function doSave() {
@@ -231,6 +323,22 @@ ApplicationWindow {
         notice = "";
         backend.currentFolder = folder;
         backend.openNote(name);
+        pullIfStale();
+    }
+    // Edit the latest copy: opening a note, focusing the editor or typing
+    // into an untouched note pulls first when the last pull is over a
+    // minute old. The editor waits (read-only) until the pull is in, so an
+    // edit never starts on a copy iCloud has already moved past. Nothing
+    // runs on a timer.
+    property bool freshening: false
+    function pullIfStale() {
+        if (!autoButton.checked || !backend.cloned || backend.authExpired || backend.syncRunning
+                || dirty || dialogOpen() || Date.now() - lastFocusSync < 60 * 1000)
+            return false;
+        lastFocusSync = Date.now();
+        freshening = true;
+        backend.runSync(); // pending edits go up first, then the pull
+        return true;
     }
     function openFolder(folder) {
         if (folder !== backend.currentFolder && flushEdits())
@@ -247,6 +355,19 @@ ApplicationWindow {
             notice = err;
             titleField.text = titleField.current;
         }
+    }
+
+    function chooseConflict(index, side) {
+        var picked = conflictChoices.slice();
+        picked[index] = side;
+        conflictChoices = picked;
+    }
+    function chooseAllConflicts(side) { conflictChoices = conflicts.map(function () { return side; }); }
+    function applyConflictChoices() {
+        var err = backend.resolveConflicts(conflictChoices);
+        notice = err;
+        if (err.length === 0)
+            loadEditor();
     }
 
     // Rename: select the title text, in its field or on the first line.
@@ -317,10 +438,10 @@ ApplicationWindow {
                 onClicked: root.selectTitle()
             }
             Item { Layout.fillWidth: true }
-            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.toggleTask() }
-            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.wrapSelection("**", "**") }
-            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.wrapSelection("*", "*") }
-            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0 && !root.noteLocked; onClicked: root.insertLink() }
+            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.toggleTask() }
+            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.wrapSelection("**", "**") }
+            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.wrapSelection("*", "*") }
+            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.insertLink() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton {
                 glyph: "\uf0ed"; tip: "Pull from iCloud"
@@ -754,6 +875,8 @@ ApplicationWindow {
                         color: root.colTextMuted
                         font.pixelSize: root.pt(11)
                         text: {
+                            if (root.freshening)
+                                return "Getting the latest from iCloud…";
                             var ms = root.detail(backend.currentNote).modifiedMs || 0;
                             if (ms <= 0)
                                 return "";
@@ -849,14 +972,173 @@ ApplicationWindow {
                     }
 
                     ScrollView {
+                        id: conflictView
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.topMargin: 14
+                        visible: root.resolving
+                        contentWidth: availableWidth
+                        ColumnLayout {
+                            width: conflictView.availableWidth
+                            spacing: 20
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 32
+                                Layout.rightMargin: 32
+                                implicitHeight: conflictBannerRow.implicitHeight + 24
+                                radius: 10
+                                color: Qt.rgba(root.colYellow.r, root.colYellow.g, root.colYellow.b, 0.12)
+                                RowLayout {
+                                    id: conflictBannerRow
+                                    anchors.fill: parent
+                                    anchors.margins: 12
+                                    spacing: 12
+                                    Glyph { Layout.alignment: Qt.AlignTop; text: "\uf071"; color: root.colYellow; font.pixelSize: 18 }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 2
+                                        Label {
+                                            text: "This note changed in two places"
+                                            font.bold: true
+                                            color: root.colText
+                                            font.pixelSize: root.pt(13)
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            wrapMode: Text.Wrap
+                                            color: root.colTextDim
+                                            font.pixelSize: root.pt(12)
+                                            text: "It was edited on this computer and in iCloud before the two could sync. "
+                                                + (root.conflicts.length === 1 ? "Pick the version to keep."
+                                                   : "Pick the version to keep for each of the " + root.conflicts.length + " changes.")
+                                        }
+                                    }
+                                }
+                            }
+
+                            Repeater {
+                                model: root.conflicts
+                                delegate: ColumnLayout {
+                                    id: hunk
+                                    required property var modelData
+                                    required property int index
+                                    readonly property string choice: root.conflictChoices[index] || ""
+                                    Layout.fillWidth: true
+                                    Layout.leftMargin: 32
+                                    Layout.rightMargin: 32
+                                    spacing: 8
+                                    Label {
+                                        visible: root.conflicts.length > 1
+                                        text: "Change " + (hunk.index + 1) + " of " + root.conflicts.length
+                                        color: root.colTextMuted
+                                        font.pixelSize: root.pt(11)
+                                        font.bold: true
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: hunk.modelData.before.length > 0
+                                        text: hunk.modelData.before.join("\n")
+                                        elide: Text.ElideRight
+                                        color: root.colTextMuted
+                                        font.pixelSize: root.pt(12)
+                                    }
+                                    GridLayout {
+                                        Layout.fillWidth: true
+                                        columns: width >= 560 ? 2 : 1
+                                        columnSpacing: 12
+                                        rowSpacing: 12
+                                        VersionCard {
+                                            label: "This computer"
+                                            glyph: "\uf109"
+                                            lines: hunk.modelData.local
+                                            selected: hunk.choice === "local"
+                                            onClicked: root.chooseConflict(hunk.index, "local")
+                                        }
+                                        VersionCard {
+                                            label: "iCloud"
+                                            glyph: "\uf0c2"
+                                            lines: hunk.modelData.remote
+                                            selected: hunk.choice === "remote"
+                                            onClicked: root.chooseConflict(hunk.index, "remote")
+                                        }
+                                    }
+                                    AbstractButton {
+                                        id: bothButton
+                                        hoverEnabled: true
+                                        padding: 4
+                                        contentItem: RowLayout {
+                                            spacing: 8
+                                            Glyph {
+                                                text: hunk.choice === "both" ? "\uf058" : "\uf10c"
+                                                color: hunk.choice === "both" ? root.colAccent : root.colTextMuted
+                                            }
+                                            Label {
+                                                text: "Keep both, this computer's version first"
+                                                color: bothButton.hovered || hunk.choice === "both" ? root.colText : root.colTextDim
+                                                font.pixelSize: root.pt(12)
+                                            }
+                                        }
+                                        onClicked: root.chooseConflict(hunk.index, "both")
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: hunk.modelData.after.length > 0
+                                        text: hunk.modelData.after.join("\n")
+                                        elide: Text.ElideRight
+                                        color: root.colTextMuted
+                                        font.pixelSize: root.pt(12)
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 32
+                                Layout.rightMargin: 32
+                                Layout.bottomMargin: 32
+                                spacing: 8
+                                Button { text: "Edit as text"; flat: true; onClicked: root.conflictAsText = true }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    visible: root.conflicts.length > 1
+                                    text: "All from this computer"
+                                    onClicked: root.chooseAllConflicts("local")
+                                }
+                                Button {
+                                    visible: root.conflicts.length > 1
+                                    text: "All from iCloud"
+                                    onClicked: root.chooseAllConflicts("remote")
+                                }
+                                PrimaryButton {
+                                    text: "Keep selected"
+                                    enabled: !backend.syncRunning
+                                        && root.conflictChoices.every(function (c) { return c.length > 0; })
+                                    onClicked: root.applyConflictChoices()
+                                }
+                            }
+                        }
+                    }
+
+                    ScrollView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.topMargin: 8
+                        visible: !root.resolving
                         TextArea {
                             id: editor
+                            Keys.onPressed: function (event) {
+                                // The first edit after a while waits for the pull; the
+                                // key that triggered it is dropped rather than typed
+                                // into a copy about to change.
+                                var edits = event.text.length > 0 || event.key === Qt.Key_Backspace
+                                    || event.key === Qt.Key_Delete;
+                                if (edits && !root.dirty && root.pullIfStale())
+                                    event.accepted = true;
+                            }
                             wrapMode: TextArea.Wrap
                             selectByMouse: true
-                            readOnly: root.noteLocked
+                            readOnly: root.noteLocked || root.freshening
                             background: null
                             color: root.colText
                             selectionColor: root.colAccent
@@ -869,7 +1151,11 @@ ApplicationWindow {
                             placeholderText: "Start writing…"
                             onTextChanged: autosave.restart()
                             onCursorPositionChanged: root.trackCursor()
-                            onActiveFocusChanged: root.trackCursor()
+                            onActiveFocusChanged: {
+                                root.trackCursor();
+                                if (activeFocus)
+                                    root.pullIfStale();
+                            }
                             Component.onCompleted: backend.attachEditor(editor.textDocument)
                         }
                     }
@@ -979,6 +1265,11 @@ ApplicationWindow {
         function onNoteContentChanged() {
             if (!root.dirty)
                 root.loadEditor();
+        }
+        function onCurrentNoteChanged() { root.conflictAsText = false; }
+        function onSyncRunningChanged() {
+            if (!backend.syncRunning)
+                root.freshening = false;
         }
         function onCurrentNoteChangedOnDisk() {
             // If dirty, the editor keeps the user's text; Ctrl+S/Refresh reconciles.

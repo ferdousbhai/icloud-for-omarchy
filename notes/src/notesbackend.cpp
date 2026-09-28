@@ -589,6 +589,57 @@ QString NotesBackend::renameCurrentNote(const QString &title)
     return {};
 }
 
+QVariantList NotesBackend::noteConflicts() const
+{
+    const QList<SyncModel::ConflictHunk> hunks = SyncModel::parseConflicts(m_noteContent);
+    const QStringList lines = m_noteContent.split(u'\n');
+    const qsizetype bodyStart = SyncModel::splitEnvelope(m_noteContent).envelope.count(u'\n');
+    auto side = [](const QStringList &mine, const QStringList &other) {
+        const QList<bool> changed = SyncModel::linesMissingFrom(mine, other);
+        QVariantList out;
+        for (qsizetype i = 0; i < mine.size(); ++i)
+            out << QVariantMap{ { QStringLiteral("text"), mine.at(i) }, { QStringLiteral("changed"), changed.at(i) } };
+        return out;
+    };
+    // Up to two lines of the untouched text around a block, blank edges dropped.
+    auto context = [&lines](qsizetype from, qsizetype to, bool fromEnd) {
+        QStringList out = lines.mid(from, qMax<qsizetype>(0, to - from));
+        while (!out.isEmpty() && out.first().trimmed().isEmpty())
+            out.removeFirst();
+        while (!out.isEmpty() && out.last().trimmed().isEmpty())
+            out.removeLast();
+        return fromEnd ? out.mid(qMax<qsizetype>(0, out.size() - 2)) : out.mid(0, 2);
+    };
+    QVariantList result;
+    for (qsizetype h = 0; h < hunks.size(); ++h) {
+        const SyncModel::ConflictHunk &hunk = hunks.at(h);
+        const qsizetype prevEnd = h > 0 ? hunks.at(h - 1).last + 1 : bodyStart;
+        const qsizetype nextStart = h + 1 < hunks.size() ? hunks.at(h + 1).first : lines.size();
+        result << QVariantMap{ { QStringLiteral("local"), side(hunk.local, hunk.remote) },
+                               { QStringLiteral("remote"), side(hunk.remote, hunk.local) },
+                               { QStringLiteral("before"), context(prevEnd, hunk.first, true) },
+                               { QStringLiteral("after"), context(hunk.last + 1, nextStart, false) } };
+    }
+    return result;
+}
+
+QString NotesBackend::resolveConflicts(const QStringList &choices)
+{
+    if (m_currentNote.isEmpty())
+        return QStringLiteral("No note selected.");
+    if (!m_readOnlyReason.isEmpty())
+        return QStringLiteral("This note is read-only here. Resolve it in Apple Notes.");
+    const QString resolved = SyncModel::resolveConflicts(m_noteContent, choices);
+    if (resolved == m_noteContent)
+        return QStringLiteral("Choose a version for every change first.");
+    if (!writeText(noteAbsolutePath(), resolved))
+        return QStringLiteral("Could not write the note.");
+    loadCurrentNote();
+    rebuildNotes();
+    emit vaultChanged();
+    return {};
+}
+
 void NotesBackend::newFolder(const QString &name)
 {
     const QString clean = sanitized(name);

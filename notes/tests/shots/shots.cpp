@@ -3,6 +3,7 @@
 // window to a PNG and quits. Usage: shots out.png [path/to/main.qml]
 // NOTES_SHOT=bare seeds an empty, unlinked vault instead.
 // NOTES_SHOT=readonly shows the open note as one icloud-md will not push.
+// NOTES_SHOT=conflict opens it on a merge conflict, for the version picker.
 #include "../src/notesbackend.h"
 
 #include <QDir>
@@ -59,8 +60,13 @@ int main(int argc, char *argv[])
                                : QString()),
                   9);
         writeFile(root, QStringLiteral("Notes/Groceries.md"),
-                  QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"
-                                 "## Weekend\n- [ ] oat milk\n- [x] coffee\n- *maybe* `pancake mix`\n\n> don't forget the bags\n"),
+                  qgetenv("NOTES_SHOT") == "conflict"
+                      ? QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"
+                                       "## Weekend\n<<<<<<< local\n- [ ] oat milk\n- [x] coffee\n- [ ] blueberries\n||||||| base\n"
+                                       "- [ ] oat milk\n- [ ] coffee\n=======\n- [ ] oat milk\n- [ ] coffee, the *dark* roast\n"
+                                       "- [ ] maple syrup\n>>>>>>> remote\n\n> don't forget the bags\n")
+                      : QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"
+                                       "## Weekend\n- [ ] oat milk\n- [x] coffee\n- *maybe* `pancake mix`\n\n> don't forget the bags\n"),
                   0);
         writeFile(root, QStringLiteral("Notes/Trip ideas.md"),
                   QStringLiteral("---\napple-note-id: b\n---\n# Trip ideas\nKyoto in spring for the cherry blossoms.\n| day | plan |\n| 1 | arrive |\n"),

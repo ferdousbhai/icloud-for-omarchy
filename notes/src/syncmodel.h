@@ -95,6 +95,114 @@ inline bool hasConflictMarkers(const QString &text)
     return false;
 }
 
+// One block of conflict markers: the lines it spans (marker lines
+// included) and its three sides. "local" is this computer's edit,
+// "remote" the one from iCloud, "base" what both started from.
+struct ConflictHunk {
+    qsizetype first = 0;
+    qsizetype last = 0;
+    QStringList local;
+    QStringList base;
+    QStringList remote;
+};
+
+// The conflict blocks of a text, in order, over its '\n'-split lines.
+// Markers out of order or left open mean the text is not a clean merge
+// result, so none are returned and it stays editable only as text.
+inline QList<ConflictHunk> parseConflicts(const QString &text)
+{
+    enum Part { Outside, Local, Base, Remote };
+    const QStringList lines = text.split(u'\n');
+    QList<ConflictHunk> hunks;
+    ConflictHunk hunk;
+    Part part = Outside;
+    for (qsizetype i = 0; i < lines.size(); ++i) {
+        const QString &line = lines.at(i);
+        const QStringView s = QStringView(line).trimmed();
+        if (s.startsWith(u"<<<<<<<")) {
+            if (part != Outside)
+                return {};
+            hunk = ConflictHunk{ i, i, {}, {}, {} };
+            part = Local;
+        } else if (s.startsWith(u"|||||||")) {
+            if (part != Local)
+                return {};
+            part = Base;
+        } else if (s == u"=======") {
+            if (part != Local && part != Base)
+                return {};
+            part = Remote;
+        } else if (s.startsWith(u">>>>>>>")) {
+            if (part != Remote)
+                return {};
+            hunk.last = i;
+            hunks << hunk;
+            part = Outside;
+        } else if (part == Local) {
+            hunk.local << line;
+        } else if (part == Base) {
+            hunk.base << line;
+        } else if (part == Remote) {
+            hunk.remote << line;
+        }
+    }
+    return part == Outside ? hunks : QList<ConflictHunk>();
+}
+
+// The text with each conflict block replaced by the side chosen for it:
+// "local", "remote" or "both" (this computer's lines, then iCloud's).
+// Anything but one valid choice per block leaves the text unchanged.
+inline QString resolveConflicts(const QString &text, const QStringList &choices)
+{
+    const QList<ConflictHunk> hunks = parseConflicts(text);
+    if (hunks.isEmpty() || hunks.size() != choices.size())
+        return text;
+    const QStringList lines = text.split(u'\n');
+    QStringList out;
+    qsizetype next = 0;
+    for (qsizetype h = 0; h < hunks.size(); ++h) {
+        const ConflictHunk &hunk = hunks.at(h);
+        const QString &choice = choices.at(h);
+        if (choice != u"local" && choice != u"remote" && choice != u"both")
+            return text;
+        out << lines.mid(next, hunk.first - next);
+        if (choice != u"remote")
+            out << hunk.local;
+        if (choice != u"local")
+            out << hunk.remote;
+        next = hunk.last + 1;
+    }
+    out << lines.mid(next);
+    return out.join(u'\n');
+}
+
+// For each line of a, whether b lacks it (a line diff by longest common
+// subsequence). Past a size cap every line counts as changed.
+inline QList<bool> linesMissingFrom(const QStringList &a, const QStringList &b)
+{
+    const qsizetype n = a.size(), m = b.size();
+    QList<bool> missing(n, true);
+    if (n * m > 4'000'000)
+        return missing;
+    QList<int> lcs((n + 1) * (m + 1), 0);
+    auto at = [&](qsizetype i, qsizetype j) -> int & { return lcs[i * (m + 1) + j]; };
+    for (qsizetype i = n - 1; i >= 0; --i)
+        for (qsizetype j = m - 1; j >= 0; --j)
+            at(i, j) = a.at(i) == b.at(j) ? at(i + 1, j + 1) + 1 : std::max(at(i + 1, j), at(i, j + 1));
+    for (qsizetype i = 0, j = 0; i < n && j < m;) {
+        if (a.at(i) == b.at(j)) {
+            missing[i] = false;
+            ++i;
+            ++j;
+        } else if (at(i + 1, j) >= at(i, j + 1)) {
+            ++i;
+        } else {
+            ++j;
+        }
+    }
+    return missing;
+}
+
 // Two or more consecutive lines carrying '|' read as a markdown table.
 // Single-pipe prose lines do not count.
 inline bool hasTable(const QString &text)

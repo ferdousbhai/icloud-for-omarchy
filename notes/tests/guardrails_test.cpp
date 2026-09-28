@@ -107,6 +107,36 @@ int main()
     }
     check(SyncModel::splitEnvelope(QStringLiteral("---\nunclosed\n")).envelope.isEmpty(), "unterminated is body");
 
+    // parseConflicts / resolveConflicts / linesMissingFrom
+    {
+        const QString text = QStringLiteral("# T\nkeep\n<<<<<<< local\nmine\n||||||| base\nold\n=======\ntheirs\nshared\n>>>>>>> remote\ntail\n"
+                                            "<<<<<<< local\n=======\nadded\n>>>>>>> remote\n");
+        const QList<SyncModel::ConflictHunk> hunks = SyncModel::parseConflicts(text);
+        check(hunks.size() == 2, "conflicts two hunks");
+        check(hunks.value(0).local == QStringList{ QStringLiteral("mine") }
+                  && hunks.value(0).base == QStringList{ QStringLiteral("old") }
+                  && hunks.value(0).remote == QStringList{ QStringLiteral("theirs"), QStringLiteral("shared") },
+              "conflicts sides");
+        check(hunks.value(1).local.isEmpty() && hunks.value(1).remote == QStringList{ QStringLiteral("added") },
+              "conflicts empty side, no base");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("local"), QStringLiteral("remote") })
+                  == QStringLiteral("# T\nkeep\nmine\ntail\nadded\n"),
+              "resolve per hunk");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("both"), QStringLiteral("local") })
+                  == QStringLiteral("# T\nkeep\nmine\ntheirs\nshared\ntail\n"),
+              "resolve both keeps mine first");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("local") }) == text, "resolve needs every choice");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("x"), QStringLiteral("local") }) == text,
+              "resolve rejects unknown choice");
+        check(SyncModel::parseConflicts(QStringLiteral("<<<<<<< local\nx\n")).isEmpty(), "conflicts unclosed");
+        check(SyncModel::parseConflicts(QStringLiteral("=======\n")).isEmpty(), "conflicts stray separator");
+        check(SyncModel::parseConflicts(QStringLiteral("# plain\n")).isEmpty(), "conflicts none");
+        check(SyncModel::linesMissingFrom({ QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c") },
+                                          { QStringLiteral("a"), QStringLiteral("c"), QStringLiteral("d") })
+                  == QList<bool>{ false, true, false },
+              "line diff marks the missing line");
+    }
+
     // retitleInBody
     check(SyncModel::retitleInBody(QStringLiteral("# Old\nbody\n"), QStringLiteral("New"))
               == QStringLiteral("# New\nbody\n"),

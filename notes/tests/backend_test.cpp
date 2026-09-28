@@ -235,6 +235,29 @@ int main(int argc, char *argv[])
               == QStringLiteral("changeZ"),
           "backend scan cache follows rewrites");
 
+    // A merge conflict opens as versions to pick from; picking one writes
+    // the note without markers and clears its badge.
+    writeFile(QStringLiteral("C.md"), QStringLiteral("# C\n<<<<<<< local\nsame\nmine\n||||||| base\nsame\n=======\nsame\ntheirs\n>>>>>>> remote\nend\n"));
+    b.refresh();
+    b.openNote(QStringLiteral("C.md"));
+    {
+        const QVariantList conflicts = b.noteConflicts();
+        const QVariantList local = conflicts.value(0).toMap().value(QStringLiteral("local")).toList();
+        check(conflicts.size() == 1 && local.size() == 2
+                  && !local.at(0).toMap().value(QStringLiteral("changed")).toBool()
+                  && local.at(1).toMap().value(QStringLiteral("changed")).toBool(),
+              "backend conflict versions with changed lines");
+        check(conflicts.value(0).toMap().value(QStringLiteral("before")).toStringList() == QStringList{ QStringLiteral("# C") }
+                  && conflicts.value(0).toMap().value(QStringLiteral("after")).toStringList() == QStringList{ QStringLiteral("end") },
+              "backend conflict context");
+    }
+    check(!b.resolveConflicts({}).isEmpty(), "backend resolve needs a choice");
+    check(b.resolveConflicts({ QStringLiteral("remote") }).isEmpty(), "backend resolve ok");
+    check(readFile(QStringLiteral("C.md")) == QStringLiteral("# C\nsame\ntheirs\nend\n"), "backend resolve writes the pick");
+    check(b.noteConflicts().isEmpty() && !hasFlag(b, QStringLiteral("C.md"), "conflict"), "backend resolve clears the conflict");
+    QFile::remove(rootPath() + QStringLiteral("/C.md"));
+    b.refresh();
+
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));
     check(b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty(), "backend rename ok");

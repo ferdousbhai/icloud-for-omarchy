@@ -100,8 +100,16 @@ turn it off):
 - On launch, and whenever you switch to the window (at most once a
   minute), the app pushes whatever changed locally
   (including edits made by other programs, or while it was closed) and
-  then pulls what changed in iCloud. Edits made on both sides merge
-  automatically when they don't overlap.
+  then pulls what changed in iCloud. Opening a note, clicking into it, or
+  starting to type in it does the same when the last pull is over a
+  minute old, and the note waits the few seconds until it is in, so you
+  edit the latest copy. Edits made on both sides merge automatically
+  when they don't overlap.
+- When they do overlap, the note opens on the two versions side by
+  side, this computer's and iCloud's, with the lines that differ
+  highlighted. Pick one for each change (or keep both) and the note
+  syncs like any other edit; **Edit as text** shows the raw merge
+  markers instead.
 - Edits made in the app are pushed sooner, about 20 seconds after you
   stop making them, so a burst of typing becomes one push. Nothing waits
   for a click.
@@ -151,8 +159,9 @@ preview-only: notes with attachments can't be edited back to iCloud.
   it there. Both are in the folder's right-click menu.
 - Table edits mostly round-trip, but reordering rows/columns is
   refused — the push preview will tell you.
-- Changes from other devices arrive when you switch to the window (or
-  press Pull), not instantly like the Mac app; nothing syncs in the
+- Changes from other devices arrive when you switch to the window, open
+  a note, or start editing one (or press Pull), not instantly like the
+  Mac app; nothing syncs in the
   background while you are elsewhere.
 
 ## If something looks wrong
