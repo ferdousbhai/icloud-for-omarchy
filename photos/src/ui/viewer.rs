@@ -156,7 +156,14 @@ impl Viewer {
         self.sharp.set(false);
         self.picture.set_paintable(app.textures.borrow().get(&id).as_ref());
         match display_file(&row) {
-            Some(path) => self.load(app, &id, &path),
+            Some(path) => {
+                if row.medium_path.as_ref() == Some(&path) {
+                    // Keeps it off the eviction end of the medium cache.
+                    let p = path.clone();
+                    std::thread::spawn(move || icloud_photos::thumbs::touch(&p));
+                }
+                self.load(app, &id, &path)
+            }
             None => {
                 self.spinner.set_visible(true);
                 if let Some(d) = app.downloader.borrow().as_ref() {

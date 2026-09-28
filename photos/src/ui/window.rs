@@ -37,31 +37,52 @@ pub enum Msg {
     SignInFailed(Error),
 }
 
-/// Recently decoded thumbnails, bounded.
+/// Recently decoded thumbnails, bounded by their decoded size.
 #[derive(Default)]
 pub struct Textures {
     map: HashMap<String, gdk::Texture>,
     order: VecDeque<String>,
+    bytes: usize,
     loading: HashSet<String>,
 }
 
 impl Textures {
-    const CAP: usize = 4000;
+    /// Decoded RGBA, so a few hundred thumbnails, not thousands.
+    const CAP_BYTES: usize = 256 << 20;
 
     pub fn get(&self, id: &str) -> Option<gdk::Texture> {
         self.map.get(id).cloned()
     }
 
+    fn size(t: &gdk::Texture) -> usize {
+        t.width().max(0) as usize * t.height().max(0) as usize * 4
+    }
+
     fn insert(&mut self, id: String, t: gdk::Texture) {
-        if self.map.insert(id.clone(), t).is_none() {
-            self.order.push_back(id);
+        self.bytes += Self::size(&t);
+        match self.map.insert(id.clone(), t) {
+            Some(old) => self.bytes -= Self::size(&old),
+            None => self.order.push_back(id),
         }
-        while self.order.len() > Self::CAP {
-            if let Some(old) = self.order.pop_front() {
-                self.map.remove(&old);
+        while self.bytes > Self::CAP_BYTES && self.order.len() > 1 {
+            if let Some(old) = self.order.pop_front()
+                && let Some(t) = self.map.remove(&old)
+            {
+                self.bytes -= Self::size(&t);
             }
         }
     }
+}
+
+/// What a reload shows, read off the main loop.
+struct Snapshot {
+    albums: Vec<icloud_photos::catalog::AlbumRow>,
+    total: i64,
+    album: Option<String>,
+    assets: Vec<icloud_photos::catalog::Row>,
+    rows: Vec<super::grid::RowItem>,
+    columns: usize,
+    first_sync: bool,
 }
 
 /// How often a focused window re-syncs, and the background cadence.
@@ -95,6 +116,8 @@ pub struct App {
     pub want_open: RefCell<HashSet<String>>,
     pub want_toast: RefCell<HashSet<String>>,
     pub reloading: Cell<bool>,
+    /// Bumped per reload; only the newest reload's snapshot is shown.
+    pub reload_gen: Cell<u64>,
     /// The sign-in window is open (or was just asked for).
     pub signing_in: Cell<bool>,
     pub upload: RefCell<Option<super::upload::UploadUi>>,
@@ -192,6 +215,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         want_open: RefCell::new(HashSet::new()),
         want_toast: RefCell::new(HashSet::new()),
         reloading: Cell::new(false),
+        reload_gen: Cell::new(0),
         signing_in: Cell::new(false),
         upload: RefCell::new(None),
     });
@@ -444,15 +468,19 @@ impl App {
             return;
         }
         self.set_busy(true, "Syncing…");
-        let (tx, path) = (self.tx.clone(), self.dirs.catalog());
+        let (tx, dirs) = (self.tx.clone(), self.dirs.clone());
         std::thread::spawn(move || {
             let result = (|| {
-                let mut cat = Catalog::open(&path)?;
+                let mut cat = Catalog::open(&dirs.catalog())?;
                 let ck = CloudKit::connect(&*t)?;
                 let ptx = tx.clone();
-                sync::sync(&ck, &mut cat, &move |p| {
+                let report = sync::sync(&ck, &mut cat, &move |p| {
                     let _ = ptx.send_blocking(Msg::SyncProgress(p));
-                })
+                })?;
+                if let Err(e) = thumbs::prune_cache(&cat, &dirs, thumbs::MEDIUM_CACHE_CAP) {
+                    eprintln!("icloud-photos: pruning the cache: {e}");
+                }
+                Ok(report)
             })();
             let _ = tx.send_blocking(Msg::SyncDone(result));
         });
@@ -492,29 +520,53 @@ impl App {
     }
 
     /// Re-read albums and the current grid from the catalog.
-    pub fn reload(&self) {
-        let albums = self.cat.albums().unwrap_or_default();
-        let current = self.album.borrow().clone();
-        if current.as_ref().is_some_and(|c| !albums.iter().any(|a| &a.id == c)) {
-            *self.album.borrow_mut() = None;
-            self.grid_page.set_title("All Photos");
-        }
-        self.reloading.set(true);
-        self.albums.set(self.cat.count().unwrap_or(0), &albums, self.album.borrow().as_deref());
-        self.reloading.set(false);
-        self.show_assets();
+    pub fn reload(self: &Rc<Self>) {
+        self.load_snapshot(true);
     }
 
-    fn show_assets(&self) {
-        let assets = self.cat.assets(self.album.borrow().as_deref()).unwrap_or_default();
-        let syncing_first_time = assets.is_empty() && self.cat.meta(icloud_photos::catalog::SYNC_TOKEN_KEY).ok().flatten().is_none();
-        self.grid.empty.set_title(if syncing_first_time { "Getting your photos" } else { "No photos here" });
-        self.grid.empty.set_description(Some(if syncing_first_time {
+    fn show_assets(self: &Rc<Self>) {
+        self.load_snapshot(false);
+    }
+
+    /// Query the catalog (and chunk the grid rows) on a worker thread with
+    /// its own connection, then apply the result on the main loop. Falls back
+    /// to the main-loop connection when the catalog is not on disk.
+    fn load_snapshot(self: &Rc<Self>, albums: bool) {
+        let generation = self.reload_gen.get() + 1;
+        self.reload_gen.set(generation);
+        let (path, album, columns) = (self.dirs.catalog(), self.album.borrow().clone(), self.grid.columns());
+        let a = self.clone();
+        glib::spawn_future_local(async move {
+            let snap = gio::spawn_blocking(move || Catalog::open(&path).ok().map(|cat| snapshot(&cat, album, albums, columns)))
+                .await
+                .ok()
+                .flatten();
+            if a.reload_gen.get() != generation {
+                return;
+            }
+            let snap = snap.unwrap_or_else(|| snapshot(&a.cat, a.album.borrow().clone(), albums, columns));
+            a.apply_snapshot(snap, albums);
+        });
+    }
+
+    fn apply_snapshot(&self, snap: Snapshot, albums: bool) {
+        if albums {
+            if snap.album.is_none() && self.album.borrow().is_some() {
+                *self.album.borrow_mut() = None;
+                self.grid_page.set_title("All Photos");
+            }
+            self.reloading.set(true);
+            self.albums.set(snap.total, &snap.albums, snap.album.as_deref());
+            self.reloading.set(false);
+        }
+        let first = snap.first_sync;
+        self.grid.empty.set_title(if first { "Getting your photos" } else { "No photos here" });
+        self.grid.empty.set_description(Some(if first {
             "The first sync lists your whole library; thumbnails follow as you scroll."
         } else {
             "Photos you add in iCloud, or upload from here, appear in this view."
         }));
-        self.grid.set_assets(assets);
+        self.grid.set_rows(snap.assets, snap.rows, snap.columns);
     }
 
     fn bind_tile(self: &Rc<Self>, id: &str, thumb: Option<&PathBuf>, picture: &gtk::Picture) {
@@ -552,6 +604,14 @@ impl App {
     }
 
     fn on_download(self: &Rc<Self>, e: thumbs::Event) {
+        if let Some(err) = &e.live_error {
+            // The photo is saved; the next download fetches only the video.
+            if err.is_sign_in() || self.want_open.borrow().contains(&e.id) || self.want_toast.borrow().contains(&e.id) {
+                self.fail("The Live Photo's video did not download", err);
+            } else {
+                eprintln!("icloud-photos: Live Photo video {}: {err}", e.id);
+            }
+        }
         match (e.job, e.result) {
             (Job::Thumb, Ok(path)) => self.load_texture(&e.id, &path),
             (Job::Medium, Ok(path)) => self.viewer.on_medium(self, &e.id, &path),
@@ -673,4 +733,17 @@ impl App {
             }
         }
     }
+}
+
+/// Albums (when `with_albums`), the total, and the grid rows for `album`,
+/// which falls back to All Photos when that album is gone.
+fn snapshot(cat: &Catalog, mut album: Option<String>, with_albums: bool, columns: usize) -> Snapshot {
+    let albums = if with_albums { cat.albums().unwrap_or_default() } else { Vec::new() };
+    if with_albums && album.as_ref().is_some_and(|c| !albums.iter().any(|a| &a.id == c)) {
+        album = None;
+    }
+    let assets = cat.assets(album.as_deref()).unwrap_or_default();
+    let first_sync = assets.is_empty() && cat.meta(icloud_photos::catalog::SYNC_TOKEN_KEY).ok().flatten().is_none();
+    let rows = super::grid::rows_of(&assets, columns);
+    Snapshot { albums, total: if with_albums { cat.count().unwrap_or(0) } else { 0 }, album, assets, rows, columns, first_sync }
 }

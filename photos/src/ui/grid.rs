@@ -222,16 +222,30 @@ impl Grid {
         });
     }
 
-    /// Show these assets (newest first), keeping the scroll position.
-    pub fn set_assets(&self, assets: Vec<Row>) {
-        *self.assets.borrow_mut() = assets;
-        self.regrid();
+    pub fn columns(&self) -> usize {
+        self.columns.get()
     }
 
+    /// Show these assets (newest first), already chunked into `rows` of
+    /// `columns` (off the main loop), keeping the scroll position.
+    pub fn set_rows(&self, assets: Vec<Row>, rows: Vec<RowItem>, columns: usize) {
+        *self.assets.borrow_mut() = assets;
+        if columns == self.columns.get() {
+            self.show_rows(rows);
+        } else {
+            self.regrid();
+        }
+    }
+
+    /// Re-chunk for a new column count.
     pub fn regrid(&self) {
+        let rows = rows_of(&self.assets.borrow(), self.columns.get());
+        self.show_rows(rows);
+    }
+
+    fn show_rows(&self, rows: Vec<RowItem>) {
         let adj = self.scrolled.vadjustment();
         let fraction = if adj.upper() > adj.page_size() { adj.value() / (adj.upper() - adj.page_size()) } else { 0.0 };
-        let rows = rows_of(&self.assets.borrow(), self.columns.get());
         let objects: Vec<glib::BoxedAnyObject> = rows.into_iter().map(glib::BoxedAnyObject::new).collect();
         self.store.splice(0, self.store.n_items(), &objects);
         self.root.set_visible_child_name(if objects.is_empty() { "empty" } else { "grid" });
