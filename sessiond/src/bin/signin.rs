@@ -30,11 +30,13 @@ use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
 
 const HOME: &str = "https://www.icloud.com/";
-const SETUP_PREFIXES: [&str; 2] = [
-    "https://setup.icloud.com/setup/ws/1/accountLogin",
-    "https://setup.icloud.com/setup/ws/1/validate",
-];
+const VALIDATE: &str = "https://setup.icloud.com/setup/ws/1/validate";
+/// icloud-md's defaults, which icloud-sessiond also falls back to.
+const CLIENT_BUILD_NUMBER: &str = "2624Build27";
+const CLIENT_MASTERING_NUMBER: &str = "2624Build27";
 const TOKEN: &str = "X-APPLE-WEBAUTH-TOKEN";
+/// How often the jar is checked for a sign-in.
+const POLL: Duration = Duration::from_secs(2);
 const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
 
 /// Ticks "Keep me signed in" in Apple's sign-in frame, so the session is
@@ -67,13 +69,6 @@ fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
         .join("webkit")
 }
 
-fn is_setup_call(uri: &str) -> bool {
-    SETUP_PREFIXES.iter().any(|p| {
-        uri.strip_prefix(p)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('?'))
-    })
-}
-
 /// A completed sign-in: account info present and no 2FA still pending
 /// (icloud-md's `isFullySignedInBody`).
 fn is_fully_signed_in(body: &Value) -> bool {
@@ -81,16 +76,30 @@ fn is_fully_signed_in(body: &Value) -> bool {
     body.get("dsInfo").is_some_and(Value::is_object) && !challenge(body) && !challenge(&body["dsInfo"])
 }
 
-fn client_params(uri: &str) -> Value {
-    let mut params = json!({"clientId": null, "clientBuildNumber": null, "clientMasteringNumber": null});
-    if let Ok(uri) = url::Url::parse(uri) {
-        for (k, v) in uri.query_pairs() {
-            if params.get(k.as_ref()).is_some() && !v.is_empty() {
-                params[k.as_ref()] = Value::String(v.into_owned());
-            }
-        }
-    }
-    params
+/// The client params this window identifies as, to Apple and then to the daemon.
+fn client_params(client_id: &str) -> Value {
+    json!({
+        "clientId": client_id,
+        "clientBuildNumber": CLIENT_BUILD_NUMBER,
+        "clientMasteringNumber": CLIENT_MASTERING_NUMBER,
+    })
+}
+
+/// A /validate call made from the page itself, so it carries the browser's
+/// own cookies (and rotates the token in the jar, as the page's heartbeat
+/// does). Answers `{"status": n, "body": "..."}` as a JSON string.
+fn validate_js(client_id: &str) -> String {
+    let mut url = url::Url::parse(VALIDATE).expect("VALIDATE is a URL");
+    url.query_pairs_mut()
+        .append_pair("clientBuildNumber", CLIENT_BUILD_NUMBER)
+        .append_pair("clientMasteringNumber", CLIENT_MASTERING_NUMBER)
+        .append_pair("clientId", client_id);
+    let url = Value::String(url.into());
+    format!(
+        r#"const r = await fetch({url}, {{method: "POST", credentials: "include",
+  headers: {{"Content-Type": "text/plain;charset=UTF-8"}}, body: ""}});
+return JSON.stringify({{status: r.status, body: r.ok ? await r.text() : ""}});"#
+    )
 }
 
 /// Domains the window loads pages and frames from: Apple's sign-in
@@ -145,12 +154,18 @@ struct Capture {
     exit: Cell<u8>,
     main_loop: glib::MainLoop,
     cookies: webkit6::CookieManager,
+    client_id: String,
+    /// A check is running.
+    checking: Cell<bool>,
+    /// The token value /validate last refused: not tried again until the
+    /// jar holds a different one (a fresh sign-in or a rotation).
+    refused: RefCell<Option<String>>,
 }
 
 impl Capture {
-    /// Waits a moment for the setup response's own Set-Cookies to land in
-    /// the jar, then prints the jar and the params and quits.
-    fn finish(self: &Rc<Self>, setup_uri: String) {
+    /// Waits a moment for the validate response's own Set-Cookies to land
+    /// in the jar, then prints the jar and the params and quits.
+    fn finish(self: &Rc<Self>) {
         if self.done.replace(true) {
             return;
         }
@@ -161,7 +176,7 @@ impl Capture {
             me.cookies.all_cookies(None::<&gio::Cancellable>, move |result| {
                 match result {
                     Ok(cookies) => {
-                        let mut out = client_params(&setup_uri);
+                        let mut out = client_params(&me2.client_id);
                         out["cookies"] = Value::Array(cookies_json(cookies));
                         println!("{out}");
                         me2.exit.set(0);
@@ -173,17 +188,64 @@ impl Capture {
         });
     }
 
-    /// Fallback when the setup response body cannot be read: a 2xx setup
-    /// call plus the token cookie in the jar.
-    fn finish_if_token(self: &Rc<Self>, setup_uri: String) {
+    /// Once the jar holds a session token, asks Apple (from the page, with
+    /// the page's cookies) whether it is a complete sign-in: account info
+    /// and no 2FA still pending. The page's own calls to Apple can't be
+    /// observed from here, so this does not depend on them; it also covers
+    /// a profile that is already signed in.
+    fn check(self: &Rc<Self>, view: &webkit6::WebView) {
+        if self.done.get() || self.checking.replace(true) {
+            return;
+        }
         let me = self.clone();
+        let view = view.clone();
         self.cookies.all_cookies(None::<&gio::Cancellable>, move |result| {
-            let has_token = result
-                .map(|cookies| cookies.into_iter().any(|mut c| c.name().is_some_and(|n| n == TOKEN)))
-                .unwrap_or(false);
-            if has_token {
-                me.finish(setup_uri);
+            let token = result.ok().and_then(|cookies| {
+                cookies.into_iter().find_map(|mut c| {
+                    let is_token =
+                        c.name().is_some_and(|n| n == TOKEN) && c.domain().is_some_and(|d| is_icloud_domain(&d));
+                    is_token.then(|| c.value().map(|v| v.to_string()).unwrap_or_default())
+                })
+            });
+            let Some(token) = token.filter(|t| !t.is_empty()) else {
+                me.checking.set(false);
+                return;
+            };
+            if me.refused.borrow().as_deref() == Some(token.as_str()) {
+                me.checking.set(false);
+                return;
             }
+            let me2 = me.clone();
+            view.call_async_javascript_function(
+                &validate_js(&me.client_id),
+                None,
+                None,
+                None,
+                None::<&gio::Cancellable>,
+                move |result| {
+                    let answer: Value = match result {
+                        Ok(v) => serde_json::from_str(&v.to_str()).unwrap_or(Value::Null),
+                        Err(e) => {
+                            eprintln!("icloud-session-signin: checking the sign-in: {e}");
+                            Value::Null
+                        }
+                    };
+                    let status = answer["status"].as_u64().unwrap_or(0);
+                    let body: Value = answer["body"]
+                        .as_str()
+                        .and_then(|b| serde_json::from_str(b).ok())
+                        .unwrap_or(Value::Null);
+                    if (200..300).contains(&status) && is_fully_signed_in(&body) {
+                        me2.finish();
+                    } else {
+                        if status != 0 {
+                            eprintln!("icloud-session-signin: not signed in yet (validate answered {status})");
+                        }
+                        *me2.refused.borrow_mut() = Some(token);
+                    }
+                    me2.checking.set(false);
+                },
+            );
         });
     }
 }
@@ -255,39 +317,18 @@ fn main() -> ExitCode {
         exit: Cell::new(1),
         main_loop: glib::MainLoop::new(None, false),
         cookies,
+        client_id: uuid::Uuid::new_v4().to_string(),
+        checking: Cell::new(false),
+        refused: RefCell::new(None),
     });
 
-    // The page's own setup calls: remember the params, check the answer.
-    let last_setup_uri = Rc::new(RefCell::new(None::<String>));
+    // Signed in yet? Checked on a timer and after each page load.
     {
         let capture = capture.clone();
-        let last_setup_uri = last_setup_uri.clone();
-        view.connect_resource_load_started(move |_, resource, request| {
-            let Some(uri) = request.uri().map(|u| u.to_string()) else {
-                return;
-            };
-            if !is_setup_call(&uri) {
-                return;
-            }
-            *last_setup_uri.borrow_mut() = Some(uri.clone());
-            let capture = capture.clone();
-            resource.connect_finished(move |resource| {
-                let status = resource.response().map_or(0, |r| r.status_code());
-                if !(200..300).contains(&status) {
-                    return;
-                }
-                let capture = capture.clone();
-                let uri = uri.clone();
-                resource.data(None::<&gio::Cancellable>, move |data| match data {
-                    Ok(bytes) => {
-                        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-                        if is_fully_signed_in(&body) {
-                            capture.finish(uri);
-                        }
-                    }
-                    Err(_) => capture.finish_if_token(uri),
-                });
-            });
+        let view = view.clone();
+        glib::timeout_add_local(POLL, move || {
+            capture.check(&view);
+            glib::ControlFlow::Continue
         });
     }
     // Keep the window on Apple: a link elsewhere the user clicked opens in
@@ -327,11 +368,15 @@ fn main() -> ExitCode {
     view.connect_web_process_terminated(|_, reason| {
         eprintln!("icloud-session-signin: the web process ended ({reason:?})");
     });
-    view.connect_load_changed(|view, event| {
-        if event == webkit6::LoadEvent::Finished {
-            eprintln!("icloud-session-signin: loaded {}", view.uri().unwrap_or_default());
-        }
-    });
+    {
+        let capture = capture.clone();
+        view.connect_load_changed(move |view, event| {
+            if event == webkit6::LoadEvent::Finished {
+                eprintln!("icloud-session-signin: loaded {}", view.uri().unwrap_or_default());
+                capture.check(view);
+            }
+        });
+    }
     view.connect_load_failed(|_, _, uri, error| {
         eprintln!("icloud-session-signin: loading {uri} failed: {error}");
         false
@@ -365,14 +410,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn setup_calls() {
-        assert!(is_setup_call("https://setup.icloud.com/setup/ws/1/validate?clientId=x"));
-        assert!(is_setup_call("https://setup.icloud.com/setup/ws/1/accountLogin"));
-        assert!(!is_setup_call("https://setup.icloud.com/setup/ws/1/validateX"));
-        assert!(!is_setup_call("https://setup.icloud.com/setup/ws/1/logout"));
-    }
-
-    #[test]
     fn only_apple_stays_in_the_window() {
         assert!(stays_in_window("https://www.icloud.com/"));
         assert!(stays_in_window("https://idmsa.apple.com/appleauth/auth/signin"));
@@ -398,14 +435,10 @@ mod tests {
     }
 
     #[test]
-    fn params_from_the_setup_query() {
-        let p = client_params(
-            "https://setup.icloud.com/setup/ws/1/validate?clientBuildNumber=2530B&clientMasteringNumber=2530M&clientId=abc&requestId=r",
-        );
-        assert_eq!(
-            p,
-            json!({"clientId": "abc", "clientBuildNumber": "2530B", "clientMasteringNumber": "2530M"})
-        );
-        assert_eq!(client_params("https://setup.icloud.com/x")["clientId"], Value::Null);
+    fn validate_call_carries_the_params() {
+        let js = validate_js("abc");
+        assert!(js.contains(r#""https://setup.icloud.com/setup/ws/1/validate?clientBuildNumber=2624Build27&clientMasteringNumber=2624Build27&clientId=abc""#));
+        assert!(js.contains(r#"credentials: "include""#));
+        assert_eq!(client_params("abc")["clientId"], "abc");
     }
 }
