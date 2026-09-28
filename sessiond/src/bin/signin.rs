@@ -188,6 +188,9 @@ impl Capture {
     }
 }
 
+/// The window's Wayland app_id and desktop entry name.
+const APP_ID: &str = "io.github.ferdousbhai.ICloudSession";
+
 fn main() -> ExitCode {
     if let Some(arg) = std::env::args().nth(1) {
         return if arg == "-V" || arg == "--version" {
@@ -198,6 +201,10 @@ fn main() -> ExitCode {
             ExitCode::from(64)
         };
     }
+    // No GtkApplication here, so the Wayland app_id is the program name: make
+    // it ours, matching the desktop entry, not "GTK Application".
+    glib::set_prgname(Some(APP_ID));
+    glib::set_application_name("Sign in to iCloud");
     if let Err(e) = gtk::init() {
         eprintln!("icloud-session-signin: cannot open a window: {e}");
         return ExitCode::FAILURE;

@@ -17,6 +17,9 @@ for bin in icloud-sessiond icloud-session icloud-session-signin; do
 done
 install -d "$services_dir"
 sed "s|^Exec=.*|Exec=$bin_dir/icloud-sessiond|" "data/$service" >"$services_dir/$service"
+# The sign-in window's desktop entry: its name and icon in bars and docks.
+install -Dm644 data/io.github.ferdousbhai.ICloudSession.desktop \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/applications/io.github.ferdousbhai.ICloudSession.desktop"
 
 # dbus-broker only notices new service files on a reload.
 dbus-send --session --type=method_call --dest=org.freedesktop.DBus \

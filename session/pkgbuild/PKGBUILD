@@ -59,6 +59,8 @@ package() {
   # first call and it exits when idle.
   install -Dm644 data/io.github.ferdousbhai.ICloudSession.service \
     "$pkgdir/usr/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service"
+  install -Dm644 data/io.github.ferdousbhai.ICloudSession.desktop \
+    "$pkgdir/usr/share/applications/io.github.ferdousbhai.ICloudSession.desktop"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

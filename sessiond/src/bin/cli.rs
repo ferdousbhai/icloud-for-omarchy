@@ -62,6 +62,7 @@ fn sign_in() -> Result<Status, Error> {
     if !before.signing_in {
         icloud_session::sign_in()?;
     }
+    eprintln!("icloud-session: finish signing in in the \"Sign in to iCloud\" window (it may be on another workspace)");
     let mut opened = before.signing_in;
     if let Some(current) = watch.current()
         && current.signing_in
