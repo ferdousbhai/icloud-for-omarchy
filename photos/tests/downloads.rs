@@ -198,8 +198,8 @@ impl Transport for Slow<'_> {
     fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
         self.0.post_json(url, body)
     }
-    fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value> {
-        self.0.post_bytes(url, content_type, body)
+    fn post_file(&self, url: &str, content_type: &str, path: &std::path::Path) -> Result<Value> {
+        self.0.post_file(url, content_type, path)
     }
     fn download(&self, url: &str, dest: &std::path::Path) -> Result<u64> {
         std::thread::sleep(std::time::Duration::from_millis(150));

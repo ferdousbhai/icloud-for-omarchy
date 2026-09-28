@@ -44,8 +44,8 @@ impl Transport for SessionTransport {
         Ok(self.session.post_json(url, body)?.json()?)
     }
 
-    fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value> {
-        Ok(self.session.post_bytes(url, content_type, body)?.json()?)
+    fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Value> {
+        Ok(self.session.post_file(url, content_type, path)?.json()?)
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {

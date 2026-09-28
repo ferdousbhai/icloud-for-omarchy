@@ -97,8 +97,8 @@ impl<'t> Uploader<'t> {
     /// Upload one file. `client_id` is the per-file UUID the reservation is
     /// keyed by (random in the app, fixed in tests).
     pub fn upload(&self, path: &Path, client_id: &str, progress: &dyn Fn(Step)) -> Result<Uploaded> {
-        let bytes = std::fs::read(path)?;
-        let size = bytes.len() as u64;
+        // Streamed from disk by post_file: a multi-GB video is never in memory.
+        let size = std::fs::metadata(path)?.len();
         let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "photo".into());
         let modified_ms = std::fs::metadata(path)
             .and_then(|m| m.modified())
@@ -120,7 +120,7 @@ impl<'t> Uploader<'t> {
         // The bare body to the bare URL, as pyicloud does: icloud-session
         // sends neither the cookie jar nor its client params to hosts outside
         // the iCloud service list, so the signed upload URL gets neither.
-        let receipt = self.t.post_bytes(&target, "application/octet-stream", bytes)?;
+        let receipt = self.t.post_file(&target, "application/octet-stream", path)?;
         let single = receipt.get("singleFile").cloned().ok_or_else(|| Error::Other("upload host returned no receipt".into()))?;
 
         progress(Step::Registering);

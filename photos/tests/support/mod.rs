@@ -92,8 +92,8 @@ impl Transport for FixtureTransport {
         self.call(url, body.clone(), None)
     }
 
-    fn post_bytes(&self, url: &str, _content_type: &str, body: Vec<u8>) -> Result<Value> {
-        self.call(url, Value::Null, Some(body))
+    fn post_file(&self, url: &str, _content_type: &str, path: &Path) -> Result<Value> {
+        self.call(url, Value::Null, Some(std::fs::read(path)?))
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {

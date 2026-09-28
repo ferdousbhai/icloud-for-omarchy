@@ -51,8 +51,8 @@ pub trait Transport: Send + Sync {
     fn service_url(&self, key: &str) -> Result<String>;
     /// POST a JSON body, parse a JSON response.
     fn post_json(&self, url: &str, body: &Value) -> Result<Value>;
-    /// POST raw bytes, parse a JSON response.
-    fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value>;
+    /// POST a file as the body, streamed from disk, parse a JSON response.
+    fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Value>;
     /// Stream `url` to `dest` (temp file + rename). Returns bytes written.
     fn download(&self, url: &str, dest: &Path) -> Result<u64>;
     /// True for the mock transport: plain `http://` loopback upload targets
@@ -117,8 +117,16 @@ impl Transport for MockTransport {
         Self::json(Self::map(self.agent.post(url).set("Content-Type", "application/json").send_string(&body.to_string()))?)
     }
 
-    fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value> {
-        Self::json(Self::map(self.agent.post(url).set("Content-Type", content_type).send_bytes(&body))?)
+    fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Value> {
+        let file = std::fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        Self::json(Self::map(
+            self.agent
+                .post(url)
+                .set("Content-Type", content_type)
+                .set("Content-Length", &len.to_string())
+                .send(file),
+        )?)
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {

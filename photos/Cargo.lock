@@ -818,6 +818,7 @@ dependencies = [
 name = "icloud-session"
 version = "0.2.0"
 dependencies = [
+ "futures-lite",
  "serde",
  "serde_json",
  "thiserror",
