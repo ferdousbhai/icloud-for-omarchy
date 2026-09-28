@@ -3,6 +3,7 @@
 // directory, never the real one. Run with bin/test.
 #include "../src/backgroundsync.h"
 #include "../src/notesbackend.h"
+#include "../src/singleinstance.h"
 #include "../src/vaultlock.h"
 #include "check.h"
 #include "fake_session.h"
@@ -613,19 +614,21 @@ int main(int argc, char *argv[])
     {
         NotesBackend app; // the open app holds the lock for its lifetime
         check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md"))
-                  && bgOut.contains(QStringLiteral("Notes is open")),
-              "background: the open app blocks it");
+                  && bgOut.contains(QStringLiteral("Notes is open"))
+                  && bgOut.contains(QStringLiteral("(Notes (pid %1))").arg(QCoreApplication::applicationPid())),
+              "background: the open app blocks it, and is named");
     }
     check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("$ icloud-md pull")),
           "background: runs again once the app is closed");
     {
         // The app opening during a background sync waits for it, then syncs.
         VaultLock background(NotesBackend::lockPath());
-        background.tryLock();
+        background.tryLock(QStringLiteral("a background sync (icloud-notes --sync, pid 1)"));
         NotesBackend app;
         app.runSync();
-        check(app.syncRunning() && app.syncMessage() == QStringLiteral("Waiting for a background sync to finish…"),
-              "background: the app's sync waits for the lock");
+        check(app.syncRunning()
+                  && app.syncMessage() == QStringLiteral("Waiting for a background sync (icloud-notes --sync, pid 1) to finish…"),
+              "background: the app's sync waits for the lock, naming its holder");
         waitUntil([] { return false; }, 700);
         check(app.syncRunning() && !app.syncLog().contains(QStringLiteral("stub push ok")),
               "background: nothing runs while it waits");
@@ -635,6 +638,42 @@ int main(int argc, char *argv[])
               "background: the app syncs once the lock is free");
         check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md")),
               "background: the app keeps the lock it waited for");
+    }
+    {
+        // A lock that cannot even be opened never means running icloud-md
+        // without it (it used to sync anyway).
+        const QByteArray runtime = qgetenv("XDG_RUNTIME_DIR");
+        const QString notADir = scratch.path() + QStringLiteral("/not-a-dir");
+        QFile(notADir).open(QIODevice::WriteOnly); // a file where the lock's directory should be
+        qputenv("XDG_RUNTIME_DIR", notADir.toUtf8());
+        NotesBackend app;
+        app.runSync();
+        waitForIdle(app);
+        check(!app.syncRunning() && !app.syncLog().contains(QStringLiteral("stub push ok"))
+                  && !app.syncLog().contains(QStringLiteral("stub pull ok"))
+                  && app.syncLog().contains(QStringLiteral("not running icloud-md without it")),
+              "background: no lock, no icloud-md");
+        qputenv("XDG_RUNTIME_DIR", runtime);
+    }
+    {
+        // One window per vault: a second launch asks the first to show
+        // itself (passing its activation token on) and does not start.
+        const QString base = NotesBackend::lockPath().chopped(5);
+        SingleInstance first(base);
+        check(first.claim(), "instance: the first launch runs");
+        QString token = QStringLiteral("unset");
+        QObject::connect(&first, &SingleInstance::activationRequested, &first, [&](const QString &t) { token = t; });
+        qputenv("XDG_ACTIVATION_TOKEN", "tok-1");
+        SingleInstance second(base);
+        check(!second.claim(), "instance: a second launch does not run");
+        qunsetenv("XDG_ACTIVATION_TOKEN");
+        check(waitUntil([&] { return token != QStringLiteral("unset"); }) && token == QStringLiteral("tok-1"),
+              "instance: the second launch shows the first");
+    }
+    {
+        // The first gone, the next launch runs (its stale socket replaced).
+        SingleInstance again(NotesBackend::lockPath().chopped(5));
+        check(again.claim(), "instance: runs again once the first exits");
     }
     // A refused session fails the run, after telling icloud-session.
     fake.reportCalls = 0;

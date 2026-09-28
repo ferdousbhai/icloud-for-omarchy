@@ -37,10 +37,6 @@ constexpr int kReportTimeoutMs = 60000;
 
 const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to resume.");
 
-// How long the app waits for a background sync to let go of the vault
-// before syncing anyway. The timer's unit stops a run after 3 minutes.
-constexpr qint64 kLockWaitMs = 4 * 60 * 1000;
-
 // A note larger than this is not a note anymore; the guardrail scans
 // stop here so a stray huge file cannot stall the list.
 constexpr qsizetype kScanLimit = 2 * 1024 * 1024;
@@ -166,22 +162,21 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
 
         // The vault's lock, held until the app exits so a background sync
         // never runs icloud-md beside it. While one holds it, the window
-        // opens anyway and its syncs wait (see startSync).
-        connect(&m_lockRetry, &QTimer::timeout, this, &NotesBackend::retryLock);
-        m_lockRetry.setInterval(500);
-        switch (m_lock.tryLock()) {
+        // opens anyway and its syncs wait for it (see startProcess).
+        switch (lockVault()) {
         case VaultLock::Locked:
             break;
         case VaultLock::Busy:
-            appendLog(QStringLiteral("A background sync is running; syncing here waits for it."));
-            m_lockWait.start();
+            appendLog(QStringLiteral("%1 has the notes; syncing here waits for it.").arg(lockHolder()));
             m_lockRetry.start();
             break;
         case VaultLock::Failed:
-            appendLog(QStringLiteral("Could not open the sync lock %1; syncing without it.").arg(m_lock.path()));
+            appendLog(QStringLiteral("Could not open the sync lock %1; nothing syncs until it opens.").arg(m_lock.path()));
             break;
         }
     }
+    connect(&m_lockRetry, &QTimer::timeout, this, &NotesBackend::retryLock);
+    m_lockRetry.setInterval(500);
 
     // External changes (an icloud-md pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
@@ -289,20 +284,67 @@ QString NotesBackend::lockPath()
     return dir + u'/' + name + u'-' + QString::fromLatin1(hash) + QStringLiteral(".lock");
 }
 
-// A background sync let go of the vault (or waiting has gone on too long):
-// show what it pulled, then run the sync that waited for it.
+VaultLock::Result NotesBackend::lockVault()
+{
+    const QString owner = m_role == Role::App ? QStringLiteral("Notes (pid %1)")
+                                              : QStringLiteral("a background sync (icloud-notes --sync, pid %1)");
+    return m_lock.tryLock(owner.arg(QCoreApplication::applicationPid()));
+}
+
+QString NotesBackend::lockHolder() const
+{
+    const QString holder = m_lock.holder();
+    return holder.isEmpty() ? QStringLiteral("another sync") : holder;
+}
+
+// icloud-md has no lock of its own: it only ever runs with the vault's
+// held. Someone else holding it (a background sync) means waiting for as
+// long as that takes; a lock that cannot be opened at all means no sync.
+void NotesBackend::startProcess()
+{
+    switch (lockVault()) {
+    case VaultLock::Locked:
+        m_syncProcess.start();
+        return;
+    case VaultLock::Busy:
+        setSyncMessage(QStringLiteral("Waiting for %1 to finish…").arg(lockHolder()));
+        if (!m_lockRetry.isActive())
+            m_lockRetry.start();
+        return;
+    case VaultLock::Failed:
+        appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-md without it.")
+                      .arg(m_lock.path()));
+        finishSync(-1);
+        return;
+    }
+}
+
+// Whoever held the vault let go: show what it pulled, then run the sync
+// that waited for it.
 void NotesBackend::retryLock()
 {
-    const bool gaveUp = m_lock.tryLock() != VaultLock::Locked && m_lockWait.elapsed() > kLockWaitMs;
-    if (!m_lock.held() && !gaveUp)
+    switch (lockVault()) {
+    case VaultLock::Busy:
+        if (m_syncRunning) // the holder may have changed
+            setSyncMessage(QStringLiteral("Waiting for %1 to finish…").arg(lockHolder()));
         return;
+    case VaultLock::Failed:
+        m_lockRetry.stop();
+        if (m_syncRunning) {
+            appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-md without it.")
+                          .arg(m_lock.path()));
+            finishSync(-1);
+        }
+        return;
+    case VaultLock::Locked:
+        break;
+    }
     m_lockRetry.stop();
-    if (gaveUp)
-        appendLog(QStringLiteral("The background sync is still running after %1 minutes; syncing anyway.")
-                      .arg(kLockWaitMs / 60000));
     refresh();
-    if (m_syncRunning)
+    if (m_syncRunning) {
+        setSyncMessage(m_syncLabel + QStringLiteral("…"));
         m_syncProcess.start();
+    }
 }
 
 QString NotesBackend::folderAbsolutePath(const QString &folder) const
@@ -937,11 +979,7 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     }
     m_syncProcess.setWorkingDirectory(rootPath());
     m_syncProcess.setArguments(args);
-    if (m_lockRetry.isActive()) { // a background sync has the vault; retryLock starts this
-        setSyncMessage(QStringLiteral("Waiting for a background sync to finish…"));
-        return;
-    }
-    m_syncProcess.start();
+    startProcess();
 }
 
 void NotesBackend::finishSync(int exitCode)

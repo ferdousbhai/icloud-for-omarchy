@@ -1,7 +1,6 @@
 #ifndef NOTESBACKEND_H
 #define NOTESBACKEND_H
 
-#include <QElapsedTimer>
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QObject>
@@ -73,8 +72,9 @@ class NotesBackend : public QObject
 public:
     // App: the window's backend, which holds the vault's lock for its whole
     // lifetime (waiting, syncs deferred, while a background sync has it).
-    // Background: `icloud-notes --sync`, whose caller holds the lock; no
-    // theme, fonts or desktop settings are read.
+    // Background: `icloud-notes --sync`, which takes the lock with
+    // lockVault() before syncing; no theme, fonts or desktop settings are
+    // read. Either way icloud-md never runs without the lock held.
     enum class Role { App, Background };
     explicit NotesBackend(QObject *parent = nullptr, Role role = Role::App);
     ~NotesBackend() override;
@@ -87,6 +87,11 @@ public:
     static QString rootPath();
     // The lock the app and background syncs share for the vault.
     static QString lockPath();
+    // Take the vault's lock now (the app does at start, and retries).
+    VaultLock::Result lockVault();
+    // Who holds the vault's lock, as it described itself ("another sync"
+    // when it did not).
+    QString lockHolder() const;
     // No sync running or waiting to run, and no icloud-session call or
     // read unanswered: what a background sync waits for before exiting.
     bool idle() const { return !m_syncRunning && m_sessionCalls == 0 && m_signInReads == 0; }
@@ -243,6 +248,7 @@ private:
     void applySignIn(const QVariantMap &properties);
     void continueClone();
     void resumeSync();
+    void startProcess();
     void retryLock();
 
 private slots:
@@ -309,10 +315,9 @@ private:
     int m_sessionCalls = 0; // icloud-session method calls awaiting an answer
     const Role m_role;
     VaultLock m_lock;
-    // Runs while a background sync holds the lock: syncs asked for meanwhile
-    // start once it is free (or once waiting has gone on too long).
+    // Runs while someone else holds the lock: a sync asked for meanwhile
+    // starts once it is free, never before.
     QTimer m_lockRetry;
-    QElapsedTimer m_lockWait;
     QByteArray m_captured;
     const double m_uiScale;
     QVariantMap m_theme;

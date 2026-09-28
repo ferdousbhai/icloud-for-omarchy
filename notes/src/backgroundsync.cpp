@@ -51,20 +51,20 @@ int runBackgroundSync(QTextStream &out)
         out << "No notes cloned at " << vault << "; nothing to sync.\n";
         return 0;
     }
-    VaultLock lock(NotesBackend::lockPath());
-    switch (lock.tryLock()) {
+    // The backend's own lock: it checks it again before each icloud-md run.
+    NotesBackend backend(nullptr, NotesBackend::Role::Background);
+    switch (backend.lockVault()) {
     case VaultLock::Locked:
         break;
     case VaultLock::Busy:
-        out << "Notes is open (it syncs on its own) or another sync is running; skipped.\n";
+        out << "Notes is open (it syncs on its own) or another sync is running (" << backend.lockHolder()
+            << "); skipped.\n";
         return 0;
     case VaultLock::Failed:
-        out << "Could not open the sync lock " << lock.path() << "; not syncing.\n";
+        out << "Could not open the sync lock " << NotesBackend::lockPath() << "; not syncing.\n";
         return 1;
     }
     findIcloudMd();
-
-    NotesBackend backend(nullptr, NotesBackend::Role::Background);
     waitFor([&] { return !backend.signInPending(); });
     if (!backend.signInKnown()) {
         out << "icloud-session is not available, so the sign-in is unknown; skipped.\n";

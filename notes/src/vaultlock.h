@@ -13,8 +13,9 @@
 // icloud-md has no lock of its own, so the app and `icloud-notes --sync`
 // take this one before running it: the app for its whole lifetime, the
 // background sync for its run. The file is never removed (removing a
-// flock file races with the next locker); it is empty and lives in the
-// runtime directory. Close-on-exec, so icloud-md never inherits it.
+// flock file races with the next locker); it holds only the holder's own
+// description, for whoever waits, and lives in the runtime directory.
+// Close-on-exec, so icloud-md never inherits it.
 class VaultLock
 {
 public:
@@ -26,8 +27,9 @@ public:
     VaultLock &operator=(const VaultLock &) = delete;
 
     // Never blocks: Busy while someone else holds it, Failed when the file
-    // cannot be opened at all.
-    Result tryLock()
+    // cannot be opened at all. The holder describes itself as owner
+    // ("Notes (pid 12)"), which holder() reads back to whoever waits.
+    Result tryLock(const QString &owner = {})
     {
         if (m_fd >= 0)
             return Locked;
@@ -40,18 +42,30 @@ public:
             return busy ? Busy : Failed;
         }
         m_fd = fd;
+        const QByteArray text = owner.toUtf8();
+        if (::ftruncate(fd, 0) == 0 && !text.isEmpty()) {
+            [[maybe_unused]] const ssize_t written = ::pwrite(fd, text.constData(), size_t(text.size()), 0);
+        }
         return Locked;
     }
 
     void release()
     {
-        if (m_fd >= 0)
+        if (m_fd >= 0) {
+            [[maybe_unused]] const int cleared = ::ftruncate(m_fd, 0);
             ::close(m_fd);
+        }
         m_fd = -1;
     }
 
     bool held() const { return m_fd >= 0; }
     QString path() const { return m_path; }
+    // Who holds the lock, as it described itself; empty when nobody said.
+    QString holder() const
+    {
+        QFile file(m_path);
+        return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.read(256)).trimmed() : QString();
+    }
 
 private:
     QString m_path;
