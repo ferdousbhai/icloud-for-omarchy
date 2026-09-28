@@ -62,8 +62,8 @@ check() {
 package() {
   cd "$srcdir/$pkgname"
   install -Dm755 target/release/icloud-photos "$pkgdir/usr/bin/icloud-photos"
-  install -Dm644 data/icloud-photos.desktop "$pkgdir/usr/share/applications/icloud-photos.desktop"
-  install -Dm644 data/icloud-photos.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-photos.svg"
+  install -Dm644 data/com.ferdousbhai.IcloudPhotos.desktop "$pkgdir/usr/share/applications/com.ferdousbhai.IcloudPhotos.desktop"
+  install -Dm644 data/com.ferdousbhai.IcloudPhotos.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.ferdousbhai.IcloudPhotos.svg"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

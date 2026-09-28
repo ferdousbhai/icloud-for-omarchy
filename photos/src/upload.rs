@@ -7,7 +7,8 @@
 //! single-POST `uploadimagews` endpoint that the icloudpd fork used has
 //! answered HTTP 410 Gone since 2026-08-25, so it is not implemented.
 //!
-//! Four requests over two hosts, all through the session's cookie jar:
+//! Four requests over two hosts, all through the session (which attaches
+//! the cookie jar only on the iCloud service hosts, not the upload URL):
 //!
 //! 1. `POST {photosupload}/photosupload/createUploadUrl`
 //!    `{"zoneName":"PrimarySync","assets":{<client uuid>: <bytes>}}`
@@ -116,10 +117,9 @@ impl<'t> Uploader<'t> {
         self.check_target(&target)?;
 
         progress(Step::Sending { bytes: size });
-        // pyicloud posts the bare body to the bare URL, with no cookies (its
-        // jar holds only .icloud.com ones). icloud-session 0.2 still appends
-        // its client params here and attaches the cookie header; that is to
-        // change in the crate, not worked around here.
+        // The bare body to the bare URL, as pyicloud does: icloud-session
+        // sends neither the cookie jar nor its client params to hosts outside
+        // the iCloud service list, so the signed upload URL gets neither.
         let receipt = self.t.post_bytes(&target, "application/octet-stream", bytes)?;
         let single = receipt.get("singleFile").cloned().ok_or_else(|| Error::Other("upload host returned no receipt".into()))?;
 

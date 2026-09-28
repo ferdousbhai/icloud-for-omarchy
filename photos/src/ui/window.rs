@@ -112,7 +112,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     };
 
     let window = adw::ApplicationWindow::builder().application(application).title("iCloud Photos").default_width(1100).default_height(760).build();
-    window.set_icon_name(Some("icloud-photos"));
+    window.set_icon_name(Some("com.ferdousbhai.IcloudPhotos"));
 
     // Sidebar: albums, sync status at the bottom.
     let albums = Albums::new();
@@ -268,7 +268,7 @@ impl App {
             Box::new(move || {
                 adw::AboutDialog::builder()
                     .application_name("iCloud Photos")
-                    .application_icon("icloud-photos")
+                    .application_icon("com.ferdousbhai.IcloudPhotos")
                     .developer_name("Ferdous Bhai")
                     .version(env!("CARGO_PKG_VERSION"))
                     .website("https://github.com/ferdousbhai/icloud-photos")
