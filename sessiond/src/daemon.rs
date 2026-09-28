@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
+use std::hash::{BuildHasher, RandomState};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -16,9 +17,10 @@ use serde::Deserialize;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
-use crate::apple::{self, ValidateError};
+use crate::apple::{self, LoginError, ValidateError};
 use crate::cookies::{self, Cookie};
 use crate::files::{self, Account, FindMyJar, MirrorSession, MirrorWrite, Paths};
+use crate::secrets::{self, Password, SecretStore};
 
 /// Heartbeat keeps running while a client called within this window
 /// (the browser's own heartbeat is 14 minutes).
@@ -85,6 +87,10 @@ pub enum ServiceError {
     SignInRequired(String),
     /// No Find My session: the apps offer `AuthorizeFindMy()`.
     FindMyAuthRequired(String),
+    /// `SetPassword()`: Apple refused the password.
+    PasswordRejected(String),
+    /// `SetPassword()`/`ForgetPassword()`: Apple unreachable, keyring failed.
+    Failed(String),
 }
 
 fn sign_in_required() -> ServiceError {
@@ -104,6 +110,7 @@ struct Props {
     expires_at: u64,
     signing_in: bool,
     find_my_authorized: bool,
+    find_my_password_stored: bool,
 }
 
 /// How the last `/validate` of an account ended.
@@ -113,6 +120,35 @@ struct Attempt {
     /// Apple answered 2xx (a 421/401 forgets the account instead).
     ok: bool,
     generation: u64,
+}
+
+/// Why automatic Find My sign-in is holding off.
+#[derive(Debug, Clone, Copy)]
+enum LoginBlock {
+    /// Apple refused this password (by fingerprint), or Find My refused
+    /// the session it just made: wait until the stored password changes.
+    Password(u64),
+    /// Apple could not be reached: not before then.
+    Until(Instant),
+}
+
+/// How the last Find My one-factor sign-in ended.
+#[derive(Debug, Clone, Copy)]
+struct LoginAttempt {
+    finished: Instant,
+    ok: bool,
+}
+
+/// `FindMySession()`'s reply: cookie header, client params.
+type FindMyReply = (String, HashMap<String, String>);
+
+/// What asked for an automatic Find My sign-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginWhy {
+    /// A client got 450 with the Find My jar.
+    Reported,
+    /// `FindMySession()` found no jar.
+    NoJar,
 }
 
 struct State {
@@ -134,6 +170,13 @@ struct State {
     last_activity: Instant,
     /// Unique bus names that called us, pruned when they leave the bus.
     clients: HashSet<String>,
+    /// A password for the account's Apple ID is in the keyring, as of the
+    /// last look (start, sign-in, `SetPassword`, `ForgetPassword`, a login).
+    password_stored: bool,
+    find_my_block: Option<LoginBlock>,
+    find_my_last_login: Option<LoginAttempt>,
+    /// The last Find My sign-in that worked, and its password's fingerprint.
+    find_my_last_ok: Option<(Instant, u64)>,
 }
 
 impl State {
@@ -146,6 +189,7 @@ impl State {
             expires_at: account.map_or(0, |a| cookies::token_expiry(&a.cookies)),
             signing_in: self.signing_in,
             find_my_authorized: account.is_some_and(|a| a.find_my_ready(now_unix())),
+            find_my_password_stored: account.is_some() && self.password_stored,
         }
     }
 }
@@ -171,6 +215,12 @@ pub struct Daemon {
     heartbeat_busy: AtomicBool,
     /// The open sign-in window, with the `signin_seq` that opened it.
     signin_child: Mutex<Option<(u64, Child)>>,
+    /// The keyring holding the Apple ID password (opt-in).
+    secrets: Box<dyn SecretStore>,
+    /// One Find My one-factor sign-in at a time; a waiter shares its answer.
+    find_my_login_lock: Mutex<()>,
+    /// Keys the in-memory password fingerprints (never stored or logged).
+    fingerprint_key: RandomState,
 }
 
 /// How fresh the session must be before `ensure_fresh` skips `/validate`.
@@ -207,6 +257,10 @@ impl Daemon {
             last_call: Instant::now(),
             last_activity: Instant::now(),
             clients: HashSet::new(),
+            password_stored: false,
+            find_my_block: None,
+            find_my_last_login: None,
+            find_my_last_ok: None,
         };
         let props = state.props();
         Arc::new(Daemon {
@@ -220,6 +274,9 @@ impl Daemon {
             mirror_watch: Mutex::new(None),
             heartbeat_busy: AtomicBool::new(false),
             signin_child: Mutex::new(None),
+            secrets: secrets::from_env(),
+            find_my_login_lock: Mutex::new(()),
+            fingerprint_key: RandomState::new(),
         })
     }
 
@@ -265,6 +322,8 @@ impl Daemon {
         thread::spawn(move || {
             let _ = me.ensure_fresh(Fresh::Since(me.started_at));
         });
+        let me = self.clone();
+        thread::spawn(move || me.refresh_password_stored());
 
         self.tick_until_idle();
         Ok(())
@@ -308,6 +367,9 @@ impl Daemon {
         }
         if all || published.find_my_authorized != now.find_my_authorized {
             changed.insert("FindMyAuthorized", now.find_my_authorized.into());
+        }
+        if all || published.find_my_password_stored != now.find_my_password_stored {
+            changed.insert("FindMyPasswordStored", now.find_my_password_stored.into());
         }
         if let Some(conn) = self.conn() {
             let body = (INTERFACE, changed, Vec::<&str>::new());
@@ -523,12 +585,20 @@ impl Daemon {
     }
 
     /// `FindMySession()`: the Find My jar's cookie header and client params.
-    fn find_my_session(&self) -> Result<(String, HashMap<String, String>), ServiceError> {
-        let st = lock(&self.state);
-        let a = st.account.as_ref().ok_or_else(sign_in_required)?;
-        let f = a.find_my.as_ref().ok_or_else(find_my_auth_required)?;
-        let params = f.client_params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        Ok((cookies::header(&f.cookies, now_unix()), params))
+    /// With no jar, and a password stored, signs in to Find My first.
+    fn find_my_session(&self) -> Result<FindMyReply, ServiceError> {
+        let held = |st: &State| -> Result<Option<FindMyReply>, ServiceError> {
+            let a = st.account.as_ref().ok_or_else(sign_in_required)?;
+            Ok(a.find_my.as_ref().map(|f| {
+                let params = f.client_params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                (cookies::header(&f.cookies, now_unix()), params)
+            }))
+        };
+        if let Some(jar) = held(&lock(&self.state))? {
+            return Ok(jar);
+        }
+        self.auto_find_my_login(LoginWhy::NoJar);
+        held(&lock(&self.state))?.ok_or_else(find_my_auth_required)
     }
 
     /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
@@ -544,15 +614,243 @@ impl Daemon {
     }
 
     /// A client got HTTP 450 from Find My: its session is spent. Forgets
-    /// the Find My jar and announces it.
-    fn report_find_my_auth_required(&self) {
+    /// the Find My jar, then signs in to Find My again if a password is
+    /// stored. Returns whether a new jar is held (the client retries once).
+    fn report_find_my_auth_required(&self) -> bool {
+        self.auto_find_my_login(LoginWhy::Reported)
+    }
+
+    // ------------------------------------------------ Find My password
+
+    /// An in-memory fingerprint of a password, to recognise one Apple
+    /// refused without keeping it.
+    fn fingerprint(&self, apple_id: &str, password: &str) -> u64 {
+        self.fingerprint_key.hash_one((apple_id, password))
+    }
+
+    /// Looks in the keyring for the account's password and announces
+    /// `FindMyPasswordStored`.
+    fn refresh_password_stored(&self) {
+        let Some((apple_id, generation)) = ({
+            let st = lock(&self.state);
+            st.account.as_ref().map(|a| (a.apple_id.clone(), st.generation))
+        }) else {
+            return;
+        };
+        let stored = match self.secrets.contains(&apple_id) {
+            Ok(stored) => stored,
+            Err(e) => {
+                eprintln!("icloud-sessiond: looking for the stored password: {e}");
+                false
+            }
+        };
         let mut st = lock(&self.state);
-        if st.account.as_mut().and_then(|a| a.find_my.take()).is_some() {
-            eprintln!("icloud-sessiond: Find My asked for the password again");
-            self.save_account(&st);
+        if st.generation == generation {
+            st.password_stored = stored;
         }
         drop(st);
         self.publish();
+    }
+
+    /// The client params for a Find My sign-in: the account's build
+    /// numbers, a clientId of its own.
+    fn login_params(a: &Account) -> BTreeMap<String, String> {
+        let mut params = BTreeMap::new();
+        for k in [files::CLIENT_BUILD_NUMBER, files::CLIENT_MASTERING_NUMBER] {
+            params.insert(k.to_string(), a.param(k).to_string());
+        }
+        params.insert(
+            files::CLIENT_ID.to_string(),
+            uuid::Uuid::new_v4().to_string().to_uppercase(),
+        );
+        params
+    }
+
+    /// Runs the one-factor sign-in with a fresh jar and, if it worked for
+    /// the account it was made for, keeps that jar as the Find My jar. The
+    /// main jar is neither sent nor touched. Records the attempt and what
+    /// it means for the next one. Call under `find_my_login_lock`.
+    fn find_my_login(
+        &self,
+        generation: u64,
+        apple_id: &str,
+        dsid: &str,
+        params: BTreeMap<String, String>,
+        password: &str,
+    ) -> Result<(), LoginError> {
+        let fingerprint = self.fingerprint(apple_id, password);
+        let result = apple::find_my_login(&self.agent, &self.cfg.setup_url, apple_id, password, &params, Some(dsid))
+            .and_then(|login| match login.dsid {
+                Some(other) if other != dsid => Err(LoginError::Failed(format!(
+                    "Find My signed in as another account (dsid {other}, signed in as {dsid}); not kept"
+                ))),
+                _ => Ok(login.cookies),
+            });
+        let mut st = lock(&self.state);
+        let finished = Instant::now();
+        st.find_my_last_login = Some(LoginAttempt {
+            finished,
+            ok: result.is_ok(),
+        });
+        match &result {
+            Ok(_) => {
+                st.find_my_block = None;
+                st.find_my_last_ok = Some((finished, fingerprint));
+            }
+            Err(LoginError::Rejected) => st.find_my_block = Some(LoginBlock::Password(fingerprint)),
+            Err(LoginError::Failed(_)) => st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry)),
+        }
+        let jar = result?;
+        let same = st.generation == generation;
+        let Some(account) = st.account.as_mut().filter(|_| same) else {
+            return Err(LoginError::Failed("signed out meanwhile".into()));
+        };
+        account.find_my = Some(FindMyJar {
+            cookies: jar,
+            client_params: params,
+            captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+        });
+        self.save_account(&st);
+        Ok(())
+    }
+
+    /// Signs in to Find My with the stored password, unless there is none,
+    /// Apple refused it, or Apple was unreachable a moment ago. `Reported`
+    /// forgets the jar a client got 450 with first; `NoJar` does nothing
+    /// if a jar is held by now. Concurrent callers share one attempt.
+    /// Returns whether a Find My jar is held afterwards.
+    fn auto_find_my_login(&self, why: LoginWhy) -> bool {
+        let arrived = Instant::now();
+        let _one = lock(&self.find_my_login_lock);
+        let (apple_id, dsid, params, generation) = {
+            let mut st = lock(&self.state);
+            // Waited behind a sign-in that finished meanwhile: its answer
+            // is ours too (a 450 about the jar it replaced forgets nothing).
+            if let Some(at) = st.find_my_last_login.filter(|at| at.finished >= arrived) {
+                return at.ok && st.account.as_ref().is_some_and(|a| a.find_my.is_some());
+            }
+            let recent_ok = st
+                .find_my_last_ok
+                .filter(|(at, _)| at.elapsed() < self.cfg.validate_retry);
+            let Some(a) = st.account.as_mut() else {
+                return false;
+            };
+            match why {
+                LoginWhy::NoJar if a.find_my.is_some() => return true,
+                LoginWhy::NoJar => {}
+                LoginWhy::Reported => {
+                    if a.find_my.take().is_some() {
+                        eprintln!("icloud-sessiond: Find My asked for the password again");
+                        self.save_account(&st);
+                    }
+                    // Find My refused the session the stored password just
+                    // made: signing in again would only do the same.
+                    if let Some((_, fingerprint)) = recent_ok {
+                        eprintln!(
+                            "icloud-sessiond: Find My refused the session the stored password made; \
+                             not signing in again until the password changes"
+                        );
+                        st.find_my_block = Some(LoginBlock::Password(fingerprint));
+                    }
+                }
+            }
+            let a = st.account.as_ref().expect("checked above");
+            let found = (a.apple_id.clone(), a.dsid.clone(), Daemon::login_params(a), st.generation);
+            let waiting = matches!(st.find_my_block, Some(LoginBlock::Until(t)) if Instant::now() < t);
+            if !st.password_stored || waiting {
+                drop(st);
+                self.publish();
+                return false;
+            }
+            found
+        };
+        self.publish();
+        let password: Password = match self.secrets.get(&apple_id) {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let mut st = lock(&self.state);
+                if st.generation == generation {
+                    st.password_stored = false;
+                }
+                drop(st);
+                self.publish();
+                return false;
+            }
+            Err(e) => {
+                eprintln!("icloud-sessiond: reading the stored password: {e}");
+                return false;
+            }
+        };
+        let fingerprint = self.fingerprint(&apple_id, &password);
+        if matches!(lock(&self.state).find_my_block, Some(LoginBlock::Password(f)) if f == fingerprint) {
+            return false;
+        }
+        let result = self.find_my_login(generation, &apple_id, &dsid, params, &password);
+        drop(password);
+        match result {
+            Ok(()) => eprintln!("icloud-sessiond: signed in to Find My with the stored password"),
+            Err(LoginError::Rejected) => eprintln!(
+                "icloud-sessiond: Apple refused the stored password for Find My; \
+                 not trying it again until it changes (icloud-session set-password)"
+            ),
+            Err(LoginError::Failed(m)) => eprintln!("icloud-sessiond: Find My sign-in: {m}"),
+        }
+        self.publish();
+        lock(&self.state).account.as_ref().is_some_and(|a| a.find_my.is_some())
+    }
+
+    /// `SetPassword()`: signs in to Find My with `password` once, and only
+    /// if Apple accepts it, keeps the jar and stores the password in the
+    /// keyring for the signed-in Apple ID.
+    fn set_password(&self, password: Password) -> Result<(), ServiceError> {
+        if password.is_empty() {
+            return Err(ServiceError::Failed("the password is empty".into()));
+        }
+        let _one = lock(&self.find_my_login_lock);
+        let (apple_id, dsid, params, generation) = {
+            let st = lock(&self.state);
+            let a = st.account.as_ref().ok_or_else(sign_in_required)?;
+            (a.apple_id.clone(), a.dsid.clone(), Daemon::login_params(a), st.generation)
+        };
+        let result = self.find_my_login(generation, &apple_id, &dsid, params, &password);
+        self.publish();
+        match result {
+            Ok(()) => {}
+            Err(LoginError::Rejected) => {
+                return Err(ServiceError::PasswordRejected(format!(
+                    "Apple refused the password for {apple_id}; nothing stored"
+                )));
+            }
+            Err(LoginError::Failed(m)) => {
+                return Err(ServiceError::Failed(format!("{m}; nothing stored")));
+            }
+        }
+        self.secrets.set(&apple_id, &password).map_err(|e| {
+            ServiceError::Failed(format!(
+                "Apple accepted the password and Find My is authorized, but storing it failed: {e}"
+            ))
+        })?;
+        eprintln!("icloud-sessiond: stored the Find My password for {apple_id} in the keyring");
+        let mut st = lock(&self.state);
+        if st.generation == generation {
+            st.password_stored = true;
+        }
+        drop(st);
+        self.publish();
+        Ok(())
+    }
+
+    /// `ForgetPassword()`: removes every icloud-session keyring item.
+    fn forget_password(&self) -> Result<(), ServiceError> {
+        let _one = lock(&self.find_my_login_lock);
+        let n = self.secrets.forget_all().map_err(ServiceError::Failed)?;
+        eprintln!("icloud-sessiond: removed {n} stored password(s) from the keyring");
+        let mut st = lock(&self.state);
+        st.password_stored = false;
+        st.find_my_block = None;
+        drop(st);
+        self.publish();
+        Ok(())
     }
 
     /// Opens the sign-in window (`find`: on Find My, to authorize it)
@@ -570,7 +868,8 @@ impl Daemon {
         self.publish();
         let me = self.clone();
         thread::spawn(move || {
-            if let Err(e) = me.run_sign_in(seq, find) {
+            let result = me.run_sign_in(seq, find);
+            if let Err(e) = &result {
                 let what = if find { "Find My authorization" } else { "sign-in" };
                 eprintln!("icloud-sessiond: {what}: {e}");
             }
@@ -583,6 +882,9 @@ impl Daemon {
             drop(st);
             me.rewatch();
             me.publish();
+            if result.is_ok() && !find {
+                me.refresh_password_stored();
+            }
         });
     }
 
@@ -1136,11 +1438,34 @@ impl Service {
         blocking::unblock(move || d.merge_find_my_cookies(&set_cookies)).await
     }
 
-    /// A client got HTTP 450 from Find My: forgets the Find My session.
-    #[zbus(name = "ReportFindMyAuthRequired")]
-    async fn report_find_my_auth_required(&self) {
+    /// A client got HTTP 450 from Find My: forgets the Find My session and,
+    /// with a password stored, signs in to Find My again. True = a new
+    /// Find My session is held (retry once).
+    #[zbus(name = "ReportFindMyAuthRequired", out_args("reauthorized"))]
+    async fn report_find_my_auth_required(&self) -> bool {
         let d = self.0.clone();
         blocking::unblock(move || d.report_find_my_auth_required()).await
+    }
+
+    #[zbus(property, name = "FindMyPasswordStored")]
+    fn find_my_password_stored(&self) -> bool {
+        self.props().find_my_password_stored
+    }
+
+    /// Verifies the Apple ID password with a Find My sign-in, then stores
+    /// it in the keyring for automatic Find My re-authorization.
+    #[zbus(name = "SetPassword")]
+    async fn set_password(&self, password: String) -> Result<(), ServiceError> {
+        let d = self.0.clone();
+        let password = Password::new(password);
+        blocking::unblock(move || d.set_password(password)).await
+    }
+
+    /// Removes the stored password(s) from the keyring.
+    #[zbus(name = "ForgetPassword")]
+    async fn forget_password(&self) -> Result<(), ServiceError> {
+        let d = self.0.clone();
+        blocking::unblock(move || d.forget_password()).await
     }
 
     /// Forgets the account and the sign-in window's WebKit profile.

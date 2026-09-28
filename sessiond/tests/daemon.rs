@@ -276,6 +276,8 @@ impl Env {
             .env("ICLOUD_SESSIOND_IDLE_SECS", opts.idle_secs.to_string())
             .env("ICLOUD_SESSIOND_VALIDATE_SECS", opts.validate_secs.to_string())
             .env("ICLOUD_SESSIOND_RETRY_SECS", opts.retry_secs.to_string())
+            // Never the real Secret Service: a file in the temp dir.
+            .env("ICLOUD_SESSION_TEST_SECRET_FILE", root.join("secrets.json"))
             .stdout(Stdio::piped())
             .spawn()
             .expect("dbus-daemon runs");
@@ -324,6 +326,58 @@ impl Env {
             .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
             .output()
             .unwrap()
+    }
+
+    /// The CLI with `stdin` piped in (not a terminal) and `env` set.
+    fn cli_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> std::process::Output {
+        use std::io::Write;
+        let mut child = Command::new(CLI)
+            .args(args)
+            .env_clear()
+            .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
+            .envs(env.iter().copied())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn secrets_path(&self) -> PathBuf {
+        self.root().join("secrets.json")
+    }
+
+    /// The test keyring's items.
+    fn secrets(&self) -> Value {
+        fs::read(self.secrets_path())
+            .ok()
+            .map_or(json!([]), |b| serde_json::from_slice(&b).unwrap())
+    }
+
+    /// Puts a password in the test keyring, as `set-password` would.
+    fn store_password(&self, password: &str) {
+        let items = json!([{
+            "label": "iCloud (icloud-session): someone@example.com",
+            "attributes": {"application": "icloud-session", "apple-id": "someone@example.com"},
+            "secret": password,
+        }]);
+        fs::write(self.secrets_path(), items.to_string()).unwrap();
+    }
+
+    /// Gives the seeded account a Find My jar Find My no longer accepts.
+    fn seed_stale_find_my(&self) {
+        let mut account = self.account().unwrap();
+        account["find_my"] = json!({
+            "cookies": [
+                {"name": "X-APPLE-WEBAUTH-TOKEN", "value": "onefactor-stale", "domain": ".icloud.com", "path": "/", "expires": null},
+                {"name": "X-APPLE-WEBAUTH-FMIP", "value": "stale", "domain": ".icloud.com", "path": "/", "expires": null},
+            ],
+            "client_params": {"clientBuildNumber": "2624Build27", "clientId": "stale-client-id", "clientMasteringNumber": "2624Build27M"},
+            "captured_at": "2026-09-01T00:00:00.000Z",
+        });
+        fs::write(self.account_path(), account.to_string()).unwrap();
     }
 
     /// SIGKILLs the running daemon and waits until it has left the bus.
@@ -590,6 +644,7 @@ fn sign_in_with_a_fake_window_stores_the_account() {
             expires_at: None,
             signing_in: false,
             find_my_authorized: false,
+            find_my_password_stored: false,
         }
     );
     match session(&conn) {
@@ -1009,7 +1064,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         status,
-        json!({"signed_in": false, "apple_id": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false})
+        json!({"signed_in": false, "apple_id": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false})
     );
 
     let out = env.cli(&["validate"]);
@@ -1563,9 +1618,12 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     let init = format!("{}{INIT_CLIENT}", ws.url("findme").unwrap());
     let data = format!("{}/data", ws.url("ckdatabasews").unwrap());
 
-    // No Find My session yet: nothing is sent.
+    // No Find My session yet and no password stored: nothing is sent,
+    // no sign-in is tried; the manual path is the only one.
+    assert!(!prop::<bool>(&conn, "FindMyPasswordStored"));
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), 0);
+    assert_eq!(server.count(ACCOUNT_LOGIN), 0);
     let validates = server.count(VALIDATE);
     let before = env.account().unwrap();
     let mirror_before = env.mirror();
@@ -1635,6 +1693,7 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), sent + 1, "nothing sent without a jar");
     assert!(prop::<bool>(&conn, "SignedIn"));
+    assert_eq!(server.count(ACCOUNT_LOGIN), 0);
 
     // The CLI authorizes again; signing out forgets it.
     *accepted.lock().unwrap() = "fmip2".into();
@@ -1742,4 +1801,529 @@ fn sign_out_during_authorize_find_my_drops_its_result() {
     assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
     assert!(env.account().is_none());
     assert_eq!(server.count(VALIDATE), 1, "only the start-up validate");
+}
+
+// ------------------------------------------- Find My with a stored password
+
+const ACCOUNT_LOGIN: &str = "/setup/ws/1/accountLogin";
+const PASSWORD: &str = "correct horse";
+
+/// Apple for the stored-password tests. `accountLogin` wants `good` (a
+/// JSON body, appName find, the account's Apple ID, no cookies) and sets a
+/// fresh one-factor jar whose FMIP is `auto<n>`; `login_status` forces an
+/// answer. Find My answers the FMIP value in `accepted`, else 450.
+struct Apple {
+    accepted: Mutex<String>,
+    good: Mutex<String>,
+    login_status: Mutex<Option<u16>>,
+    login_delay_ms: u64,
+}
+
+fn apple_server(apple: Arc<Apple>) -> Server {
+    Server::start(move |s, n, base| {
+        let cookie = s.header("Cookie").unwrap_or_default().to_string();
+        match s.path() {
+            VALIDATE if cookie.contains("=onefactor") => signed_out(),
+            VALIDATE => validate_ok(n, base),
+            ACCOUNT_LOGIN => {
+                thread::sleep(Duration::from_millis(apple.login_delay_ms));
+                if let Some(status) = *apple.login_status.lock().unwrap() {
+                    return Reply::json(status, json!({}));
+                }
+                let body: Value = serde_json::from_slice(&s.body).unwrap_or_default();
+                let ok = s.method == "POST"
+                    && cookie.is_empty()
+                    && body["appName"] == "find"
+                    && body["apple_id"] == "someone@example.com"
+                    && body["password"] == *apple.good.lock().unwrap();
+                if !ok {
+                    return Reply::json(401, json!({"success": false}));
+                }
+                Reply::json(
+                    200,
+                    json!({"dsInfo": {"dsid": DSID, "appleId": "someone@example.com"}, "hsaChallengeRequired": true}),
+                )
+                .cookie("X-APPLE-WEBAUTH-TOKEN=onefactor-auto; Domain=.icloud.com; Path=/; Secure; HttpOnly")
+                .cookie(&format!("X-APPLE-WEBAUTH-FMIP=auto{n}; Domain=.icloud.com; Path=/; Secure; HttpOnly"))
+                .cookie("X-APPLE-WEBAUTH-USER=\"v=1:s=1:d=12345\"; Domain=.icloud.com; Path=/; Secure")
+            }
+            INIT_CLIENT => {
+                let want = format!("X-APPLE-WEBAUTH-FMIP={}", apple.accepted.lock().unwrap());
+                if cookie.split("; ").any(|c| c == want) {
+                    return Reply::json(200, json!({"content": []}));
+                }
+                Reply {
+                    status: 450,
+                    body: String::new(),
+                    set_cookies: vec![],
+                }
+            }
+            _ => Reply::json(404, json!({})),
+        }
+    })
+}
+
+fn apple(accepted: &str, login_delay_ms: u64) -> Arc<Apple> {
+    Arc::new(Apple {
+        accepted: Mutex::new(accepted.into()),
+        good: Mutex::new(PASSWORD.into()),
+        login_status: Mutex::new(None),
+        login_delay_ms,
+    })
+}
+
+/// An env whose account holds a stale Find My jar and, if given, a
+/// stored password; the daemon is up and has looked in the keyring.
+fn stored_password_env(server: &Server, password: Option<&str>) -> (Env, Connection) {
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        retry_secs: 0.5,
+        ..Default::default()
+    });
+    env.seed_stale_find_my();
+    if let Some(p) = password {
+        env.store_password(p);
+    }
+    let conn = env.conn();
+    let stored = password.is_some();
+    wait_until("the keyring look", Duration::from_secs(5), || {
+        prop::<bool>(&conn, "FindMyPasswordStored") == stored
+    });
+    (env, conn)
+}
+
+fn find_my_cookie(jar: &Value) -> Option<String> {
+    cookie_named(jar, "X-APPLE-WEBAUTH-FMIP").map(|c| c["value"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn a_450_signs_in_with_the_stored_password_and_retries_once() {
+    let apple = apple("auto1", 300);
+    let server = apple_server(apple.clone());
+    let (env, conn) = stored_password_env(&server, Some(PASSWORD));
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let before = env.account().unwrap();
+    let mirror_before = env.mirror();
+    let validates = server.count(VALIDATE);
+
+    // Two requests at once, both with the stale jar: one sign-in serves both.
+    let requests: Vec<_> = (0..2)
+        .map(|_| {
+            let (s, init) = (s.clone(), init.clone());
+            thread::spawn(move || s.post_json(&init, &json!({})))
+        })
+        .collect();
+    for r in requests {
+        r.join().unwrap().unwrap();
+    }
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1, "one sign-in for both");
+    let inits = server.requests(INIT_CLIENT);
+    assert_eq!(inits.len(), 4, "each request sent twice: stale, then retried once");
+    assert!(inits.iter().filter(|r| r.header("Cookie").unwrap().contains("FMIP=stale")).count() == 2);
+    assert!(inits.iter().filter(|r| r.header("Cookie").unwrap().contains("FMIP=auto1")).count() == 2);
+
+    // The sign-in: a fresh jar (no cookies sent), JSON body, client params
+    // with a clientId of its own, as the web client sends them.
+    let login = &server.requests(ACCOUNT_LOGIN)[0];
+    assert_eq!(login.method, "POST");
+    assert!(login.header("Cookie").is_none(), "the main jar is never sent");
+    let body: Value = serde_json::from_slice(&login.body).unwrap();
+    assert_eq!(
+        body,
+        json!({"appName": "find", "apple_id": "someone@example.com", "password": PASSWORD})
+    );
+    let q = login.query();
+    assert_eq!(q["clientBuildNumber"], "2624Build27");
+    assert_eq!(q["clientMasteringNumber"], "2624Build27M");
+    assert_eq!(q["dsid"], DSID);
+    assert!(q["clientId"] != "auth-client-id" && q["clientId"] != "stale-client-id");
+    assert_eq!(login.header("Origin"), Some("https://www.icloud.com"));
+    assert_eq!(login.header("Referer"), Some("https://www.icloud.com/"));
+
+    // Kept as the Find My jar only; the main jar, the mirror and the
+    // validate count are untouched.
+    let account = env.account().unwrap();
+    for key in ["cookies", "client_params", "dsid", "validated_at", "captured_at"] {
+        assert_eq!(account[key], before[key], "{key}");
+    }
+    assert_eq!(env.mirror(), mirror_before);
+    assert_eq!(server.count(VALIDATE), validates);
+    assert_eq!(find_my_cookie(&account["find_my"]["cookies"]).as_deref(), Some("auto1"));
+    assert_eq!(account["find_my"]["client_params"]["clientId"], q["clientId"].as_str());
+    assert!(prop::<bool>(&conn, "FindMyAuthorized"));
+    // Nothing of the password on disk but the (test) keyring.
+    assert!(!account.to_string().contains(PASSWORD));
+}
+
+#[test]
+fn with_no_find_my_jar_the_stored_password_signs_in_first() {
+    let apple = apple("auto1", 0);
+    let server = apple_server(apple.clone());
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    env.store_password(PASSWORD);
+    let conn = env.conn();
+    wait_until("the keyring look", Duration::from_secs(5), || {
+        prop::<bool>(&conn, "FindMyPasswordStored")
+    });
+    assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    s.post_json(&init, &json!({})).unwrap();
+    assert_eq!(server.count(INIT_CLIENT), 1, "sent once, with the new jar");
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1);
+    assert!(prop::<bool>(&conn, "FindMyAuthorized"));
+}
+
+#[test]
+fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
+    let apple = apple("auto1", 0);
+    let server = apple_server(apple.clone());
+    let (env, conn) = stored_password_env(&server, Some("wrong"));
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert_eq!(server.count(INIT_CLIENT), 1, "not retried");
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1);
+    assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
+    assert!(env.account().unwrap().get("find_my").is_none());
+    // Refused once: not tried again with the same password, whoever asks.
+    for _ in 0..3 {
+        assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    }
+    assert!(!call::<bool>(&conn, "ReportFindMyAuthRequired").unwrap());
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1);
+    assert_eq!(server.count(INIT_CLIENT), 1);
+    assert!(prop::<bool>(&conn, "FindMyPasswordStored"));
+
+    // set-password with the wrong one: refused, nothing stored.
+    let out = env.cli_with(&["set-password"], "also wrong\n", &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("refused"));
+    assert_eq!(env.secrets()[0]["secret"], "wrong");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("also wrong"));
+
+    // set-password with the right one (stdin, not a terminal): verified
+    // with a sign-in, stored, and Find My authorized by it.
+    let out = env.cli_with(&["set-password"], &format!("{PASSWORD}\n"), &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["find_my_password_stored"], true);
+    assert_eq!(printed["find_my_authorized"], true);
+    let secrets = env.secrets();
+    assert_eq!(secrets.as_array().unwrap().len(), 1);
+    assert_eq!(secrets[0]["secret"], PASSWORD);
+    assert_eq!(secrets[0]["label"], "iCloud (icloud-session): someone@example.com");
+    assert_eq!(
+        secrets[0]["attributes"],
+        json!({"application": "icloud-session", "apple-id": "someone@example.com"})
+    );
+    let logins = server.requests(ACCOUNT_LOGIN);
+    let last: Value = serde_json::from_slice(&logins.last().unwrap().body).unwrap();
+    assert_eq!(last["password"], PASSWORD, "one trailing newline dropped");
+    *apple.accepted.lock().unwrap() = format!("auto{}", logins.len());
+    s.post_json(&init, &json!({})).unwrap();
+}
+
+#[test]
+fn a_session_find_my_refuses_at_once_is_not_signed_in_again() {
+    // The password works, but Find My answers 450 to the new session too:
+    // one sign-in, one retry, then the manual path and no more sign-ins.
+    let apple = apple("never", 0);
+    let server = apple_server(apple.clone());
+    let (_env, conn) = stored_password_env(&server, Some(PASSWORD));
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert_eq!(server.count(INIT_CLIENT), 2);
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1);
+    for _ in 0..3 {
+        assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    }
+    assert_eq!(server.count(INIT_CLIENT), 2);
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1);
+    assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
+}
+
+#[test]
+fn an_unreachable_find_my_sign_in_backs_off() {
+    let apple = apple("auto2", 0);
+    *apple.login_status.lock().unwrap() = Some(503);
+    let server = apple_server(apple.clone());
+    let (_env, conn) = stored_password_env(&server, Some(PASSWORD));
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert_eq!(server.count(ACCOUNT_LOGIN), 1, "backing off");
+    *apple.login_status.lock().unwrap() = None;
+    thread::sleep(Duration::from_millis(600));
+    s.post_json(&init, &json!({})).unwrap();
+    assert_eq!(server.count(ACCOUNT_LOGIN), 2);
+}
+
+#[test]
+fn sign_out_keeps_the_stored_password_and_forget_password_removes_it() {
+    let apple = apple("auto1", 0);
+    let server = apple_server(apple.clone());
+    let (env, conn) = stored_password_env(&server, Some(PASSWORD));
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(!prop::<bool>(&conn, "FindMyPasswordStored"), "false while signed out");
+    assert_eq!(env.secrets()[0]["secret"], PASSWORD, "the user's, kept");
+    // Signed out: set-password has no account to check it against.
+    let out = env.cli_with(&["set-password"], PASSWORD, &[]);
+    assert_eq!(out.status.code(), Some(2));
+
+    let out = env.cli(&["forget-password"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(env.secrets(), json!([]));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["find_my_password_stored"], false);
+    assert_eq!(server.count(ACCOUNT_LOGIN), 0);
+}
+
+#[test]
+fn forget_password_while_signed_in_stops_automatic_sign_in() {
+    let apple = apple("auto1", 0);
+    let server = apple_server(apple.clone());
+    let (env, conn) = stored_password_env(&server, Some(PASSWORD));
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let out = env.cli(&["forget-password"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!watch.next().unwrap().find_my_password_stored);
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert_eq!(server.count(ACCOUNT_LOGIN), 0);
+}
+
+// ------------------------------------------ set-password from a manager
+
+/// Fake `bw` and `op` in a directory of their own: each logs its arguments
+/// (item names and session keys, never a password) and answers per
+/// `$FAKE_FOUND` (the item holding the password), `$FAKE_AMBIGUOUS` (an
+/// item that matches twice), `$FAKE_BW_STATUS` (bw status: locked by
+/// default), `$FAKE_UNLOCK_FAIL`, and `$FAKE_OP_SIGNED_OUT` / `$FAKE_LOCKED`
+/// (op whoami fails / op stays signed out). bw answers `get` only with
+/// `BW_SESSION=KEY123` in its env; op only with `--session TOK` after
+/// `op signin`.
+fn fake_managers(dir: &Path) -> String {
+    let log = dir.join("log");
+    write_script(
+        dir,
+        "bw",
+        &format!(
+            r#"echo "bw $*" >> '{log}'
+case "$1" in
+  status) printf '{{"status":"%s"}}' "${{FAKE_BW_STATUS:-locked}}"; exit 0 ;;
+  unlock|login) [ "$2" = --raw ] || exit 64
+    [ -n "$FAKE_UNLOCK_FAIL" ] && {{ echo "Invalid master password." >&2; exit 1; }}
+    printf KEY123; exit 0 ;;
+  lock) echo "Your vault is locked."; exit 0 ;;
+esac
+[ "$1" = --nointeraction ] && [ "$2" = get ] && [ "$3" = password ] || exit 64
+[ "$BW_SESSION" = KEY123 ] || {{ echo "Vault is locked." >&2; exit 1; }}
+[ "$4" = "$FAKE_AMBIGUOUS" ] && {{ printf 'More than one result was found. Try getting a specific object by `id` instead. The following objects were found:\nid-1\nid-2\n' >&2; exit 1; }}
+[ "$4" = "$FAKE_FOUND" ] && {{ printf '%s' "$FAKE_PASSWORD"; exit 0; }}
+echo "Not found." >&2; exit 1"#,
+            log = log.display()
+        ),
+    );
+    write_script(
+        dir,
+        "op",
+        &format!(
+            r#"echo "op $*" >> '{log}'
+case "$1" in
+  whoami) [ -n "$FAKE_OP_SIGNED_OUT" ] && exit 1; exit 0 ;;
+  signin) [ -n "$FAKE_LOCKED" ] && {{ echo "[ERROR] sign in failed" >&2; exit 1; }}; echo TOK; exit 0 ;;
+  signout) exit 0 ;;
+esac
+if [ -n "$FAKE_OP_SIGNED_OUT" ]; then
+  for a in "$@"; do last2="$last1"; last1="$a"; done
+  [ "$last2" = --session ] && [ "$last1" = TOK ] || {{ echo "[ERROR] account is not signed in" >&2; exit 1; }}
+fi
+if [ "$1" = read ]; then
+  [ "$2" = "$FAKE_FOUND" ] && {{ echo "$FAKE_PASSWORD"; exit 0; }}
+  echo "[ERROR] could not read secret: not found" >&2; exit 1
+fi
+[ "$1" = item ] && [ "$2" = get ] && [ "$4" = --fields ] && [ "$5" = label=password ] && [ "$6" = --reveal ] || exit 64
+[ "$3" = "$FAKE_AMBIGUOUS" ] && {{ printf '[ERROR] More than one item matches "%s". Try again and specify the item by its ID:\n\t* for the item "%s" in vault Private: aaa\n\t* for the item "%s" in vault Work: bbb\n' "$3" "$3" "$3" >&2; exit 1; }}
+[ "$3" = "$FAKE_FOUND" ] && {{ echo "$FAKE_PASSWORD"; exit 0; }}
+echo "[ERROR] \"$3\" isn't an item. Specify the item with its UUID, name, or domain." >&2; exit 1"#,
+            log = log.display()
+        ),
+    );
+    format!("{}:/usr/bin:/bin", dir.display())
+}
+
+fn log_lines(dir: &Path) -> Vec<String> {
+    fs::read_to_string(dir.join("log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn set_password_from_bitwarden_and_1password() {
+    let apple = apple("auto1", 0);
+    let server = apple_server(apple.clone());
+    let (env, _conn) = stored_password_env(&server, None);
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_managers(dir.path());
+    let run = |args: &[&str], vars: &[(&str, &str)]| {
+        let _ = fs::remove_file(dir.path().join("log"));
+        let mut all = vec![("PATH", path.as_str()), ("FAKE_PASSWORD", PASSWORD)];
+        all.extend_from_slice(vars);
+        let out = env.cli_with(args, "", &all);
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(!stderr.contains(PASSWORD), "{stderr}");
+        (out.status.code(), stderr, log_lines(dir.path()))
+    };
+    let stored = || env.secrets().as_array().unwrap().len();
+
+    // Locked (no BW_SESSION): unlocked on the terminal, the key passed to
+    // the lookups in their env, locked again after. Default items in order:
+    // the Apple ID, "Apple ID", "Apple", "iCloud".
+    let get = |item: &str| format!("bw --nointeraction get password {item}");
+    let (code, err, log) = run(&["set-password", "--from-bitwarden"], &[("FAKE_FOUND", "Apple")]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(
+        log,
+        [
+            "bw status".to_string(),
+            "bw unlock --raw".into(),
+            get("someone@example.com"),
+            get("Apple ID"),
+            get("Apple"),
+            "bw lock".into(),
+        ]
+    );
+    assert!(err.contains("Not found."), "bw's stderr passes through: {err}");
+    assert!(!err.contains("KEY123"), "{err}");
+    assert_eq!(env.secrets()[0]["secret"], PASSWORD);
+    let (code, err, _) = run(&["forget-password"], &[]);
+    assert_eq!(code, Some(0), "{err}");
+
+    // Signed out of Bitwarden: bw login instead.
+    let (code, err, log) = run(
+        &["set-password", "--from-bitwarden"],
+        &[("FAKE_FOUND", "someone@example.com"), ("FAKE_BW_STATUS", "unauthenticated")],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(
+        log,
+        ["bw status".to_string(), "bw login --raw".into(), get("someone@example.com"), "bw lock".into()]
+    );
+    run(&["forget-password"], &[]);
+
+    // BW_SESSION exported: used as it is, not locked after. An explicit ITEM.
+    let (code, err, log) = run(
+        &["set-password", "--from-bitwarden", "Work Apple"],
+        &[("FAKE_FOUND", "Work Apple"), ("BW_SESSION", "KEY123")],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(log, [get("Work Apple")]);
+    run(&["forget-password"], &[]);
+
+    let logins = server.count(ACCOUNT_LOGIN);
+    // The unlock fails: said how to fix it, locked anyway.
+    let (code, err, log) = run(&["set-password", "--from-bitwarden"], &[("FAKE_UNLOCK_FAIL", "1")]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("bw login") && err.contains("pacman -S bitwarden-cli"), "{err}");
+    assert_eq!(log, ["bw status", "bw unlock --raw", "bw lock"]);
+    // A BW_SESSION that does not unlock it.
+    let (code, err, log) = run(&["set-password", "--from-bitwarden"], &[("BW_SESSION", "stale")]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("locked") && err.contains("bw unlock --raw"), "{err}");
+    assert_eq!(log.len(), 1, "stops at a locked vault");
+    let (code, err, log) = run(&["set-password", "--from-bitwarden"], &[]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("no Bitwarden item"), "{err}");
+    assert_eq!(log.len(), 7);
+    let (code, err, log) = run(
+        &["set-password", "--from-bitwarden"],
+        &[("FAKE_AMBIGUOUS", "Apple ID"), ("FAKE_FOUND", "Apple")],
+    );
+    assert_eq!(code, Some(1));
+    assert!(err.contains("more than one") && err.contains("id-1"), "{err}");
+    assert_eq!(log.len(), 5, "stops at an ambiguous item, then locks");
+    assert_eq!(log[4], "bw lock");
+    assert_eq!(server.count(ACCOUNT_LOGIN), logins, "nothing to check");
+    assert_eq!(stored(), 0);
+
+    // 1Password: item names, op:// references, the same fallbacks.
+    let (code, err, log) = run(&["set-password", "--from-1password"], &[("FAKE_FOUND", "iCloud")]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(log.len(), 5, "whoami, then four items");
+    assert_eq!(log[4], "op item get iCloud --fields label=password --reveal");
+    assert_eq!(env.secrets()[0]["secret"], PASSWORD, "op's trailing newline dropped");
+    run(&["forget-password"], &[]);
+    let reference = "op://Private/Apple/password";
+    let (code, err, log) = run(&["set-password", "--from-1password", reference], &[("FAKE_FOUND", reference)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(log, ["op whoami".to_string(), format!("op read {reference}")]);
+    run(&["forget-password"], &[]);
+    // Not signed in: op signin on the terminal, its session passed on, and
+    // signed out after.
+    let (code, err, log) = run(
+        &["set-password", "--from-1password"],
+        &[("FAKE_OP_SIGNED_OUT", "1"), ("FAKE_FOUND", "Apple ID")],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(
+        log,
+        [
+            "op whoami",
+            "op signin --raw",
+            "op item get someone@example.com --fields label=password --reveal --session TOK",
+            "op item get Apple ID --fields label=password --reveal --session TOK",
+            "op signout --session TOK",
+        ]
+    );
+    run(&["forget-password"], &[]);
+    let (code, err, _) = run(
+        &["set-password", "--from-1password"],
+        &[("FAKE_OP_SIGNED_OUT", "1"), ("FAKE_LOCKED", "1")],
+    );
+    assert_eq!(code, Some(1));
+    assert!(
+        err.contains("omarchy-install-service-1password") && err.contains("Integrate with 1Password CLI"),
+        "{err}"
+    );
+    let (code, err, log) = run(&["set-password", "--from-1password"], &[("FAKE_AMBIGUOUS", "someone@example.com")]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("more than one") && err.contains("vault Work"), "{err}");
+    assert_eq!(log.len(), 2);
+    let (code, err, _) = run(&["set-password", "--from-1password", "Nope"], &[]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("no 1Password item") && err.contains("\"Nope\""), "{err}");
+
+    // A wrong password from a manager is refused like a typed one.
+    *apple.good.lock().unwrap() = "something else".into();
+    let (code, err, _) = run(&["set-password", "--from-bitwarden"], &[("FAKE_FOUND", "Apple")]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("refused"), "{err}");
+    assert_eq!(stored(), 0);
+
+    // Not installed.
+    let empty = tempfile::tempdir().unwrap();
+    for (flag, hint) in [
+        ("--from-bitwarden", "pacman -S bitwarden-cli"),
+        ("--from-1password", "omarchy-install-service-1password"),
+    ] {
+        let out = env.cli_with(
+            &["set-password", flag],
+            "",
+            &[("PATH", &empty.path().display().to_string())],
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("not installed") && stderr.contains(hint), "{stderr}");
+    }
 }

@@ -5,6 +5,7 @@ mod apple;
 mod cookies;
 mod daemon;
 mod files;
+mod secrets;
 
 use std::process::ExitCode;
 

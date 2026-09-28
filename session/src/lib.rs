@@ -8,8 +8,10 @@
 //! (`MergeCookies`), and reports a 421/401 (`ReportSignInRequired`) so the
 //! daemon can confirm before it signs every app out. Find My wants its own
 //! session: the password entered again on icloud.com/find, a one-factor
-//! sign-in the daemon keeps apart ([`authorize_find_my`]). Requests to the
-//! `findme` host carry that jar; without one, or on its 450, they return
+//! sign-in the daemon keeps apart ([`authorize_find_my`]), or makes itself
+//! from a password the user stored in the keyring (`icloud-session
+//! set-password`). Requests to the `findme` host carry that jar; without
+//! one, or on a 450 the daemon cannot answer with a new one, they return
 //! [`Error::FindMyAuthRequired`].
 //!
 //! ```no_run
@@ -173,6 +175,10 @@ pub struct Status {
     /// Find My was authorized with [`authorize_find_my`] and has not asked
     /// for the password again since. False when the daemon predates it.
     pub find_my_authorized: bool,
+    /// The Apple ID password is stored in the keyring, so the daemon
+    /// re-authorizes Find My by itself (`icloud-session set-password`).
+    /// False when signed out, or when the daemon predates it.
+    pub find_my_password_stored: bool,
 }
 
 fn mock_url() -> Option<String> {
@@ -195,6 +201,7 @@ fn mock_status() -> Status {
         expires_at: Some(unix_now() + 30 * 24 * 3600),
         signing_in: false,
         find_my_authorized: true,
+        find_my_password_stored: false,
     }
 }
 
@@ -216,7 +223,6 @@ trait Daemon {
     fn session(&self) -> zbus::Result<SessionReply>;
     fn merge_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
     fn report_sign_in_required(&self) -> zbus::Result<bool>;
-    fn report_find_my_auth_required(&self) -> zbus::Result<()>;
     #[zbus(name = "FindMySession")]
     fn find_my_session(&self) -> zbus::Result<(String, HashMap<String, String>)>;
     fn merge_find_my_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
@@ -263,6 +269,7 @@ fn status_from(all: &HashMap<String, OwnedValue>) -> Status {
             .filter(|&t| t > 0),
         signing_in: bool_of("SigningIn"),
         find_my_authorized: bool_of("FindMyAuthorized"),
+        find_my_password_stored: bool_of("FindMyPasswordStored"),
     }
 }
 
@@ -435,6 +442,7 @@ fn apply_property(status: &mut Status, name: &str, value: &OwnedValue) {
         "ExpiresAt" => status.expires_at = parsed.expires_at,
         "SigningIn" => status.signing_in = parsed.signing_in,
         "FindMyAuthorized" => status.find_my_authorized = parsed.find_my_authorized,
+        "FindMyPasswordStored" => status.find_my_password_stored = parsed.find_my_password_stored,
         _ => {}
     }
 }
@@ -633,7 +641,8 @@ impl Session {
     /// fresh jar. Requests to the `findme` host carry the Find My jar from
     /// `FindMySession()` instead (`FindMyAuthRequired` when there is none),
     /// its `Set-Cookie`s go to `MergeFindMyCookies`, and its 450 (or
-    /// 421/401) → `ReportFindMyAuthRequired` and `FindMyAuthRequired`.
+    /// 421/401) → `ReportFindMyAuthRequired`: one retry if the daemon signed
+    /// in to Find My again with the stored password, else `FindMyAuthRequired`.
     /// Other non-2xx → `Http`.
     pub fn get(&self, url: &str) -> Result<Response> {
         self.request(Request {
@@ -740,7 +749,10 @@ impl Session {
             Sent::Unauthorized { .. } if !self.report_sign_in_required()? => Err(Error::SignInRequired),
             Sent::Unauthorized { .. } => match self.send_once(request)? {
                 Sent::Ok(response) => Ok(*response),
-                Sent::FindMyAuth { .. } => self.report_find_my_auth_required(),
+                Sent::FindMyAuth { .. } => {
+                    self.report_find_my_auth_required();
+                    Err(Error::FindMyAuthRequired)
+                }
                 Sent::Unauthorized { status, body } => {
                     if self.report_sign_in_required()? {
                         Err(Error::Http { status, body })
@@ -752,31 +764,53 @@ impl Session {
         }
     }
 
-    /// After a 450 sent with the Find My jar `cookie`: if the daemon's Find
-    /// My jar changed since (authorized again meanwhile), retry once with
-    /// it; otherwise, or if that also answers 450, report it and return
-    /// `FindMyAuthRequired`. Never more than one retry, so a 450 cannot loop.
+    /// After a 450 sent with the Find My jar `cookie`: retry once if the
+    /// daemon's Find My jar changed since (authorized again meanwhile), or
+    /// if reporting the 450 made the daemon sign in to Find My again with
+    /// the stored password. Otherwise, or if the retry also answers 450
+    /// (reported too), `FindMyAuthRequired`. Never more than one retry, so
+    /// a 450 cannot loop.
     fn find_my_auth_required(&self, request: &Request<'_>, cookie: &str) -> Result<ureq::Response> {
-        if let Some(conn) = &self.inner.conn {
-            // No Find My jar any more: nothing to report.
-            let (now, _) = proxy(conn)?.find_my_session()?;
-            if now != cookie {
-                match self.send_once(request)? {
-                    Sent::Ok(response) => return Ok(*response),
-                    Sent::Unauthorized { status, body } => return Err(Error::Http { status, body }),
-                    Sent::FindMyAuth { .. } => {}
-                }
+        let Some(conn) = &self.inner.conn else {
+            return Err(Error::FindMyAuthRequired);
+        };
+        let changed = match proxy(conn)?.find_my_session() {
+            Ok((now, _)) => now != cookie,
+            // None held (another client's report is re-authorizing): report.
+            Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == ERROR_FIND_MY_AUTH_REQUIRED => false,
+            Err(e) => return Err(e.into()),
+        };
+        if !changed && !self.report_find_my_auth_required() {
+            return Err(Error::FindMyAuthRequired);
+        }
+        match self.send_once(request)? {
+            Sent::Ok(response) => Ok(*response),
+            Sent::Unauthorized { status, body } => Err(Error::Http { status, body }),
+            Sent::FindMyAuth { .. } => {
+                self.report_find_my_auth_required();
+                Err(Error::FindMyAuthRequired)
             }
         }
-        self.report_find_my_auth_required()
     }
 
-    /// `ReportFindMyAuthRequired()`, then `Err(FindMyAuthRequired)`.
-    fn report_find_my_auth_required<T>(&self) -> Result<T> {
-        if let Some(conn) = &self.inner.conn {
-            proxy(conn)?.report_find_my_auth_required()?;
-        }
-        Err(Error::FindMyAuthRequired)
+    /// `ReportFindMyAuthRequired()`: true when the daemon holds a new Find
+    /// My jar (it signed in again with the stored password). False from a
+    /// daemon that answers nothing (it predates the answer), in mock mode,
+    /// or when the report fails.
+    fn report_find_my_auth_required(&self) -> bool {
+        let Some(conn) = &self.inner.conn else {
+            return false;
+        };
+        conn.call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "ReportFindMyAuthRequired",
+            &(),
+        )
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<bool>().ok())
+        .unwrap_or(false)
     }
 
     /// `ReportSignInRequired()`: true when the daemon still has a session.

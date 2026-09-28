@@ -38,6 +38,10 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 webkit6 = { version = "0.6", features = ["v2_42", "gtk_v4_18"], optional = true }
+oo7 = { version = "0.5", default-features = false, features = ["async-std", "native_crypto"] }
+rpassword = "7"
+zeroize = "1"
+futures-lite = "2"
 
 [dev-dependencies]
 tempfile = "3"
