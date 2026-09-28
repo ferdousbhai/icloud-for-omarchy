@@ -48,15 +48,24 @@ impl Window {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let w = weak.clone();
-            let list = DeviceList::new(move |id| {
-                if let Some(this) = w.upgrade() {
-                    this.select(id);
-                }
-            });
+            let w2 = weak.clone();
+            let list = DeviceList::new(
+                move |id| {
+                    if let Some(this) = w.upgrade() {
+                        this.select(id);
+                    }
+                },
+                move |id| {
+                    if let Some(this) = w2.upgrade() {
+                        this.activate(id);
+                    }
+                },
+            );
             let w = weak.clone();
             let map = DeviceMap::new(move |id| {
                 if let Some(this) = w.upgrade() {
                     this.select(id);
+                    this.hide_sidebar_if_overlaid();
                 }
             });
             let (w1, w2) = (weak.clone(), weak.clone());
@@ -279,7 +288,8 @@ impl Window {
         self.update_actions();
     }
 
-    /// Selects a device (from the list or a marker): highlight, center, trail.
+    /// Selects a device (from the list, by mouse or keyboard, or a marker):
+    /// highlight, center, trail.
     fn select(self: &Rc<Self>, id: &str) {
         *self.selected.borrow_mut() = Some(id.to_string());
         self.list.select(id);
@@ -293,11 +303,27 @@ impl Window {
             Some(fix) => self.map.center_on(&fix),
             None => self.toast(&format!("No location for {}", d.name)),
         }
+        self.load_trail(&d);
+        self.update_actions();
+    }
+
+    /// A list row was clicked or had Enter pressed: it is already selected
+    /// (row selection comes first), so re-center on it and, when the sidebar
+    /// covers the map, get it out of the way.
+    fn activate(&self, id: &str) {
+        if self.selected.borrow().as_deref() != Some(id) {
+            return;
+        }
+        if let Some(fix) = self.selected_device().and_then(|d| d.location) {
+            self.map.center_on(&fix);
+        }
+        self.hide_sidebar_if_overlaid();
+    }
+
+    fn hide_sidebar_if_overlaid(&self) {
         if self.split.is_collapsed() {
             self.split.set_show_sidebar(false);
         }
-        self.load_trail(&d);
-        self.update_actions();
     }
 
     fn load_trail(self: &Rc<Self>, device: &Device) {

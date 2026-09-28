@@ -19,7 +19,12 @@ pub struct DeviceList {
 }
 
 impl DeviceList {
-    pub fn new(on_select: impl Fn(&str) + 'static) -> Rc<Self> {
+    /// `on_select` runs whenever the user moves the selection (click or
+    /// keyboard); `on_activate` when they click a row or press Enter on it.
+    pub fn new(
+        on_select: impl Fn(&str) + 'static,
+        on_activate: impl Fn(&str) + 'static,
+    ) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["navigation-sidebar"])
@@ -42,19 +47,35 @@ impl DeviceList {
             ids: RefCell::default(),
             rebuilding: Cell::new(false),
         });
+        // The selection drives the window's selected device, so moving the
+        // highlight with the arrow keys selects that device too.
+        let weak = Rc::downgrade(&this);
+        this.list.connect_row_selected(move |_, row| {
+            let Some(this) = weak.upgrade() else { return };
+            if let Some(id) = row.and_then(|r| this.id_at(r)) {
+                on_select(&id);
+            }
+        });
         let weak = Rc::downgrade(&this);
         this.list.connect_row_activated(move |_, row| {
             let Some(this) = weak.upgrade() else { return };
-            if this.rebuilding.get() {
-                return;
-            }
-            let id = this.ids.borrow().get(row.index() as usize).cloned();
-            if let Some(id) = id {
-                on_select(&id);
+            if let Some(id) = this.id_at(row) {
+                on_activate(&id);
             }
         });
         this.list.set_activate_on_single_click(true);
         this
+    }
+
+    /// The device id of a row, or `None` while the rows are rebuilt.
+    fn id_at(&self, row: &gtk::ListBoxRow) -> Option<String> {
+        if self.rebuilding.get() {
+            return None;
+        }
+        self.ids
+            .borrow()
+            .get(usize::try_from(row.index()).ok()?)
+            .cloned()
     }
 
     /// Shows an empty-state message (e.g. "Sign in required").
