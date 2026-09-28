@@ -415,12 +415,23 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Pull done."), "seam pull done");
-    b.runSync(); // push, then pull
-    waitForSync(b);
-    if (b.syncRunning())
+    {
+        // The chain ends once, after the pull: what unlocks an editor that
+        // waited for it (syncRunning also flips off between the halves).
+        QStringList ended;
+        QString lastRun;
+        const auto c1 = QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label) { lastRun = label; });
+        const auto c2 = QObject::connect(&b, &NotesBackend::syncChainFinished, &b, [&] { ended << lastRun; });
+        b.runSync(); // push, then pull
         waitForSync(b);
-    check(b.syncLog().contains(QStringLiteral("$ icloud-md push\n")) && b.syncMessage() == QStringLiteral("Pull done."),
-          "seam sync pushes then pulls");
+        if (b.syncRunning())
+            waitForSync(b);
+        check(b.syncLog().contains(QStringLiteral("$ icloud-md push\n")) && b.syncMessage() == QStringLiteral("Pull done."),
+              "seam sync pushes then pulls");
+        check(ended == QStringList{ QStringLiteral("Pull") }, "seam sync chain ends once, after the pull");
+        QObject::disconnect(c1);
+        QObject::disconnect(c2);
+    }
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
 
     // icloud-md refused a copy of the session that icloud-session says still
@@ -511,8 +522,12 @@ int main(int argc, char *argv[])
     check(waitUntil([&] { return fake.reportCalls == 1; }), "seam expired session reported to icloud-session");
     check(b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired session named once, not as a generic failure");
+    int chainEnds = 0;
+    const auto chainEnd = QObject::connect(&b, &NotesBackend::syncChainFinished, &b, [&] { ++chainEnds; });
     b.runSync(); // a push that hits the expired session skips its pull
     waitForSync(b);
+    QObject::disconnect(chainEnd);
+    check(chainEnds == 1, "seam expired push ends the chain");
     check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired push does not report a failure or pull");
     check(!b.syncLog().contains(QStringLiteral("reauthenticate\n")), "seam never runs icloud-md reauthenticate");

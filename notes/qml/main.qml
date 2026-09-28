@@ -1294,10 +1294,9 @@ ApplicationWindow {
             }
         }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
-        function onSyncRunningChanged() {
-            if (!backend.syncRunning)
-                root.freshening = false;
-        }
+        // Not on syncRunningChanged: that turns false between runSync's
+        // push and its pull, which would unlock the editor too early.
+        function onSyncChainFinished() { root.freshening = false; }
         function onCurrentNoteChangedOnDisk() {
             // Unsaved edits are kept apart from the change (onNoteContentChanged),
             // after any running sync is done writing.

@@ -209,6 +209,10 @@ signals:
     void cloneFinished(bool ok);
     // One icloud-md run ended ("Push", "Pull", "Clone", ...).
     void syncFinished(const QString &label, bool ok);
+    // The last run of a chain ended and nothing follows it: after the pull
+    // of runSync (or its push, when that found the sign-in gone), unlike
+    // syncRunningChanged, which also flips between the two halves.
+    void syncChainFinished();
     void themeChanged();
 
 private:

@@ -1018,6 +1018,8 @@ void NotesBackend::finishSync(int exitCode)
         runSync(); // a sign-in arrived while this ran
     }
     continueClone(); // a clone asked for while something else ran
+    if (!m_syncRunning)
+        emit syncChainFinished();
 }
 
 void NotesBackend::setPushPreview(const QVariantMap &parsed, const QString &error)
