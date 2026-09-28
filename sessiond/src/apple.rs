@@ -37,9 +37,10 @@ pub enum ValidateError {
 
 pub fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(60))
-        .timeout_write(Duration::from_secs(60))
+        // Well inside a D-Bus caller's own timeout (QtDBus waits 25 s), so a
+        // `Session()` while Apple is unreachable still answers in time.
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
         .user_agent(concat!("icloud-sessiond/", env!("CARGO_PKG_VERSION")))
         .build()
 }

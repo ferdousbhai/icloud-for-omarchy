@@ -180,6 +180,7 @@ struct Opts<'a> {
     signin: Option<&'a str>,
     idle_secs: f64,
     validate_secs: f64,
+    retry_secs: f64,
     seed: bool,
 }
 
@@ -190,6 +191,7 @@ impl Default for Opts<'_> {
             signin: None,
             idle_secs: 60.0,
             validate_secs: 600.0,
+            retry_secs: 60.0,
             seed: true,
         }
     }
@@ -264,6 +266,7 @@ impl Env {
             .env("ICLOUD_SESSION_SIGNIN_BIN", signin)
             .env("ICLOUD_SESSIOND_IDLE_SECS", opts.idle_secs.to_string())
             .env("ICLOUD_SESSIOND_VALIDATE_SECS", opts.validate_secs.to_string())
+            .env("ICLOUD_SESSIOND_RETRY_SECS", opts.retry_secs.to_string())
             .stdout(Stdio::piped())
             .spawn()
             .expect("dbus-daemon runs");
@@ -1021,4 +1024,139 @@ fn an_unreadable_account_file_is_set_aside() {
         fs::read_to_string(env.account_path().with_extension("json.bad")).unwrap(),
         "{\"dsid\": truncated"
     );
+}
+
+#[test]
+fn offline_session_hands_out_the_cached_session_and_backs_off() {
+    let server = Server::start(|s, _, _| match s.path() {
+        VALIDATE => {
+            thread::sleep(Duration::from_millis(400));
+            Reply::json(503, json!({}))
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        retry_secs: 2.0,
+        ..Default::default()
+    });
+    // Callers that queue behind a failing /validate share its answer and
+    // get the session as it is, instead of trying Apple one after another.
+    let started = Instant::now();
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let conn = env.conn();
+            thread::spawn(move || session(&conn).unwrap())
+        })
+        .collect();
+    for caller in callers {
+        let (cookie, _, _) = caller.join().unwrap();
+        assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("original"));
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(server.count(VALIDATE), 1);
+
+    // Within the retry window, Session() does not call Apple at all.
+    let conn = env.conn();
+    session(&conn).unwrap();
+    assert_eq!(server.count(VALIDATE), 1);
+    assert!(prop::<bool>(&conn, "SignedIn"));
+
+    // After it, one caller tries again.
+    thread::sleep(Duration::from_millis(2100));
+    session(&conn).unwrap();
+    assert_eq!(server.count(VALIDATE), 2);
+}
+
+#[test]
+fn a_slow_heartbeat_does_not_hold_up_the_idle_exit() {
+    let server = Server::start(|s, _, _| match s.path() {
+        VALIDATE => {
+            thread::sleep(Duration::from_secs(8));
+            Reply::json(503, json!({}))
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        idle_secs: 1.0,
+        validate_secs: 1.0,
+        ..Default::default()
+    });
+    let observer = env.conn();
+    let client = env.conn();
+    assert!(icloud_session::status_on(&client).unwrap().signed_in);
+    thread::sleep(Duration::from_millis(1500));
+    drop(client);
+    wait_until("idle exit", Duration::from_secs(4), || !env.daemon_running(&observer));
+}
+
+#[test]
+fn reports_that_arrive_together_share_one_validate() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => {
+            thread::sleep(Duration::from_millis(400));
+            validate_ok(n, base)
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    session(&env.conn()).unwrap();
+    assert_eq!(server.count(VALIDATE), 1);
+    let reporters: Vec<_> = (0..3)
+        .map(|_| {
+            let conn = env.conn();
+            thread::spawn(move || call::<bool>(&conn, "ReportSignInRequired").unwrap())
+        })
+        .collect();
+    for reporter in reporters {
+        assert!(reporter.join().unwrap());
+    }
+    assert_eq!(server.count(VALIDATE), 2);
+    // A later report asks Apple again.
+    assert!(call::<bool>(&env.conn(), "ReportSignInRequired").unwrap());
+    assert_eq!(server.count(VALIDATE), 3);
+}
+
+#[test]
+fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
+    // The start-up /validate of the stored jar is slow and ends in 421; the
+    // sign-in that finishes meanwhile must survive it.
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE if s.header("Cookie").unwrap_or_default().contains("=original") => {
+            thread::sleep(Duration::from_millis(1500));
+            signed_out()
+        }
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com"}]});
+    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    icloud_session::sign_in_on(&conn).unwrap();
+    while watch.next().unwrap().signing_in {}
+    wait_until("the old jar's validate", Duration::from_secs(5), || {
+        server
+            .requests(VALIDATE)
+            .iter()
+            .any(|r| r.header("Cookie").unwrap_or_default().contains("=original"))
+    });
+    thread::sleep(Duration::from_millis(1800));
+    assert!(prop::<bool>(&conn, "SignedIn"), "the 421 was about the old jar");
+    let account = env.account().expect("the new account stays");
+    assert!(!account.to_string().contains("\"original\""));
 }

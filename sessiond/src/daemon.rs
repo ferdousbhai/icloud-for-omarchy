@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -31,6 +32,9 @@ pub struct Config {
     pub idle: Duration,
     /// Revalidate when the last `/validate` is older than this (10 minutes).
     pub validate_max_age: Duration,
+    /// After a `/validate` that got no answer, hand out the session as it is
+    /// for this long before trying Apple again (1 minute).
+    pub validate_retry: Duration,
 }
 
 fn env_secs(name: &str, default: u64) -> Duration {
@@ -49,6 +53,7 @@ impl Config {
             signin_bin: signin_bin(),
             idle: env_secs("ICLOUD_SESSIOND_IDLE_SECS", 5 * 60),
             validate_max_age: env_secs("ICLOUD_SESSIOND_VALIDATE_SECS", 10 * 60),
+            validate_retry: env_secs("ICLOUD_SESSIOND_RETRY_SECS", 60),
         }
     }
 }
@@ -93,8 +98,21 @@ struct Props {
     signing_in: bool,
 }
 
+/// How the last `/validate` of an account ended.
+#[derive(Debug, Clone, Copy)]
+struct Attempt {
+    finished: Instant,
+    /// Apple answered 2xx (a 421/401 forgets the account instead).
+    ok: bool,
+    generation: u64,
+}
+
 struct State {
     account: Option<Account>,
+    /// Bumped whenever `account` is replaced or forgotten, so a `/validate`
+    /// of an earlier account never touches the current one.
+    generation: u64,
+    last_attempt: Option<Attempt>,
     signing_in: bool,
     /// The cookie header now in icloud-md's session file, as far as we know
     /// (written by us or adopted from it). Tells our own writes apart.
@@ -136,14 +154,20 @@ pub struct Daemon {
     published: Mutex<Props>,
     conn: OnceLock<Connection>,
     mirror_watch: Mutex<Option<MirrorWatch>>,
+    /// A heartbeat `/validate` is running (on its own thread, so a slow
+    /// Apple never holds up the idle exit).
+    heartbeat_busy: AtomicBool,
 }
 
 /// How fresh the session must be before `ensure_fresh` skips `/validate`.
+/// Either way, a `/validate` that finished while the caller waited for the
+/// one in flight answers for it.
 #[derive(Debug, Clone, Copy)]
 enum Fresh {
-    /// Always call Apple.
-    Force,
-    /// Validated at or after this unix time.
+    /// A client got 421/401: ask Apple, whatever the last answer was.
+    Confirm,
+    /// Validated at or after this unix time. After a failed attempt, the
+    /// session is handed out as it is until `validate_retry` has passed.
     Since(u64),
 }
 
@@ -161,6 +185,8 @@ impl Daemon {
         let account = Account::load_or_set_aside(&cfg.paths.account);
         let state = State {
             account,
+            generation: 0,
+            last_attempt: None,
             signing_in: false,
             mirror_cookie: None,
             last_call: Instant::now(),
@@ -177,6 +203,7 @@ impl Daemon {
             published: Mutex::new(props),
             conn: OnceLock::new(),
             mirror_watch: Mutex::new(None),
+            heartbeat_busy: AtomicBool::new(false),
         })
     }
 
@@ -290,6 +317,7 @@ impl Daemon {
     /// Forgets the account (confirmed 421/401 or `SignOut`).
     fn forget(&self, st: &mut State) {
         st.account = None;
+        st.generation += 1;
         st.mirror_cookie = None;
         if let Err(e) = files::remove(&self.cfg.paths.account) {
             eprintln!("icloud-sessiond: removing {}: {e}", self.cfg.paths.account.display());
@@ -301,22 +329,54 @@ impl Daemon {
     /// Calls `/validate` unless the session is already fresh enough, then
     /// merges rotated cookies and new webservices. A 421/401 signs out.
     fn ensure_fresh(&self, fresh: Fresh) -> Result<(), Refresh> {
+        let arrived = Instant::now();
         let _one = lock(&self.validate_lock);
-        let (cookie, params, dsid) = {
-            let st = lock(&self.state);
+        let (cookie, params, dsid, generation) = {
+            let mut st = lock(&self.state);
+            let generation = st.generation;
             let Some(a) = &st.account else {
                 return Err(Refresh::SignedOut);
             };
-            if let Fresh::Since(t) = fresh
-                && a.validated_at >= t
-            {
+            let last = st.last_attempt.filter(|at| at.generation == generation);
+            // Waited behind an attempt that finished meanwhile: its answer
+            // is ours too, rather than another serial round trip to Apple.
+            if let Some(at) = last.filter(|at| at.finished >= arrived) {
+                if !at.ok {
+                    return Err(Refresh::Failed);
+                }
+                if matches!(fresh, Fresh::Confirm) {
+                    st.mirror_cookie = None;
+                    self.store(&mut st);
+                }
                 return Ok(());
             }
-            (a.cookie_header(now_unix()), a.client_params.clone(), a.dsid.clone())
+            if let Fresh::Since(t) = fresh {
+                if a.validated_at >= t {
+                    return Ok(());
+                }
+                if last.is_some_and(|at| !at.ok && at.finished.elapsed() < self.cfg.validate_retry) {
+                    return Err(Refresh::Failed);
+                }
+            }
+            (
+                a.cookie_header(now_unix()),
+                a.client_params.clone(),
+                a.dsid.clone(),
+                generation,
+            )
         };
         let result = apple::validate(&self.agent, &self.cfg.setup_url, &cookie, &params, Some(&dsid));
         let mut st = lock(&self.state);
-        let same = st.account.as_ref().is_some_and(|a| a.dsid == dsid);
+        // Signed out or signed in again meanwhile: this answer is about a
+        // jar we no longer hold.
+        let same = st.generation == generation && st.account.is_some();
+        if same {
+            st.last_attempt = Some(Attempt {
+                finished: Instant::now(),
+                ok: result.is_ok(),
+                generation,
+            });
+        }
         let outcome = match result {
             Ok(v) => {
                 if let Some(a) = st.account.as_mut().filter(|_| same) {
@@ -324,7 +384,7 @@ impl Daemon {
                     a.webservices = v.webservices;
                     a.apple_id = v.apple_id;
                     a.validated_at = now_unix();
-                    if matches!(fresh, Fresh::Force) {
+                    if matches!(fresh, Fresh::Confirm) {
                         // A client (icloud-md) may hold a stale jar: rewrite
                         // the mirror so it can retry with the fresh one.
                         st.mirror_cookie = None;
@@ -353,9 +413,14 @@ impl Daemon {
 
     // ----------------------------------------------------------- methods
 
-    fn session(&self) -> Result<SessionReply, ServiceError> {
+    /// Validated within `validate_max_age`.
+    fn fresh_enough(&self) -> Fresh {
         let max_age = self.cfg.validate_max_age.as_secs_f64().ceil() as u64;
-        match self.ensure_fresh(Fresh::Since(now_unix().saturating_sub(max_age))) {
+        Fresh::Since(now_unix().saturating_sub(max_age))
+    }
+
+    fn session(&self) -> Result<SessionReply, ServiceError> {
+        match self.ensure_fresh(self.fresh_enough()) {
             Err(Refresh::SignedOut) => return Err(sign_in_required()),
             // Apple unreachable: hand out what we have; the app's own
             // request will fail the same way and say so.
@@ -380,9 +445,11 @@ impl Daemon {
 
     /// Confirms with Apple before signing every app out. A 2xx keeps the
     /// session (and rewrites the mirror); an unreachable Apple changes
-    /// nothing. Returns whether the account is still signed in.
+    /// nothing. A `/validate` that finishes after the report arrived counts
+    /// as the confirmation, so a burst of reports costs one round trip.
+    /// Returns whether the account is still signed in.
     fn report_sign_in_required(&self) -> bool {
-        match self.ensure_fresh(Fresh::Force) {
+        match self.ensure_fresh(Fresh::Confirm) {
             Ok(()) | Err(Refresh::Failed) => lock(&self.state).account.is_some(),
             Err(Refresh::SignedOut) => false,
         }
@@ -457,6 +524,7 @@ impl Daemon {
         };
         let mut st = lock(&self.state);
         st.account = Some(account);
+        st.generation += 1;
         st.mirror_cookie = None;
         self.store(&mut st);
         Ok(())
@@ -609,7 +677,7 @@ impl Daemon {
         std::process::exit(0);
     }
 
-    fn tick_until_idle(&self) {
+    fn tick_until_idle(self: &Arc<Daemon>) {
         let tick = (self.cfg.idle.min(self.cfg.validate_max_age) / 4)
             .clamp(Duration::from_millis(50), Duration::from_secs(30));
         let dbus = self.conn().and_then(|c| zbus::blocking::fdo::DBusProxy::new(c).ok());
@@ -638,9 +706,12 @@ impl Daemon {
                 }
                 st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
             };
-            if heartbeat {
-                let max_age = self.cfg.validate_max_age.as_secs_f64().ceil() as u64;
-                let _ = self.ensure_fresh(Fresh::Since(now_unix().saturating_sub(max_age)));
+            if heartbeat && !self.heartbeat_busy.swap(true, Ordering::SeqCst) {
+                let me = self.clone();
+                thread::spawn(move || {
+                    let _ = me.ensure_fresh(me.fresh_enough());
+                    me.heartbeat_busy.store(false, Ordering::SeqCst);
+                });
             }
         }
     }
