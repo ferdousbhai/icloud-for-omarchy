@@ -901,6 +901,8 @@ void NotesBackend::finishSync(int exitCode)
     // A pull or clone always talks to iCloud, so one that worked proves the
     // session; a push with nothing to send never checks it.
     const bool sessionWorks = ok && (m_syncLabel == u"Pull" || m_syncLabel == u"Clone");
+    if (ok)
+        m_retriedAfterReport = false;
     setAuthExpired(sessionExpired || (m_authExpired && !sessionWorks));
 
     switch (m_mode) {
@@ -979,8 +981,11 @@ QDBusMessage NotesBackend::sessionCall(const QString &method) const
     return QDBusMessage::createMethodCall(kSessionService, kSessionPath, kSessionService, method);
 }
 
-// Fire and forget: SignIn() and ReportSignInRequired() both answer through
-// property changes. A failure (no daemon) is logged, and SignIn's named.
+// SignIn() answers through property changes. ReportSignInRequired() answers
+// whether the session still works: icloud-session checked it with Apple and
+// refreshed icloud-md's copy, so icloud-md's refusal came from a stale copy
+// and one retry should go through. A failure (no daemon) is logged, and
+// SignIn's named.
 void NotesBackend::callSession(const QString &method)
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
@@ -991,8 +996,15 @@ void NotesBackend::callSession(const QString &method)
     auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(sessionCall(method), kSessionTimeoutMs), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, method](QDBusPendingCallWatcher *call) {
         call->deleteLater();
-        if (!call->isError())
+        if (!call->isError()) {
+            const QDBusPendingReply<bool> reply = *call;
+            if (method == u"ReportSignInRequired" && reply.argumentAt<0>() && !m_retriedAfterReport && !m_syncRunning) {
+                m_retriedAfterReport = true;
+                setAuthExpired(false);
+                runSync();
+            }
             return;
+        }
         appendLog(QStringLiteral("icloud-session %1 failed: %2").arg(method, call->error().message()));
         if (method == u"SignIn") {
             setSyncMessage(QStringLiteral("Could not open the iCloud sign-in: icloud-session is not available."));

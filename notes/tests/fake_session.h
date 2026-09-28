@@ -51,10 +51,15 @@ public:
     bool signingIn = false;
     int signInCalls = 0;
     int reportCalls = 0;
+    bool stillSignedIn = false; // what ReportSignInRequired answers
 
 public slots:
     void SignIn() { ++signInCalls; }
-    void ReportSignInRequired() { ++reportCalls; }
+    bool ReportSignInRequired()
+    {
+        ++reportCalls;
+        return stillSignedIn;
+    }
 
 private:
     QDBusConnection m_bus;

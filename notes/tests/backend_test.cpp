@@ -402,6 +402,28 @@ int main(int argc, char *argv[])
           "seam sync pushes then pulls");
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
 
+    // icloud-md refused a copy of the session that icloud-session says still
+    // works (and has refreshed): one retry goes through.
+    fake.stillSignedIn = true;
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
+    b.runPull();
+    waitForSync(b);
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED"); // the refreshed copy works
+    check(waitUntil([&] { return fake.reportCalls == 1 && !b.syncRunning() && !b.authExpired()
+                                 && b.syncMessage() == QStringLiteral("Pull done."); }),
+          "seam refused copy of a working session retries once");
+    // If the retry is refused too, syncing pauses instead of retrying again.
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
+    b.runPull();
+    waitForSync(b);
+    check(waitUntil([&] { return fake.reportCalls == 3 && !b.syncRunning(); }) && b.authExpired(),
+          "seam a second refusal pauses");
+    fake.stillSignedIn = false;
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED");
+    fake.set({ { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(fake.expiresAt + 60) } }); // signed in again
+    check(waitUntil([&] { return !b.authExpired() && !b.syncRunning(); }), "seam a new sign-in resumes after the pause");
+    fake.reportCalls = 0;
+
     // icloud-md refused the session: icloud-session is told, and syncing
     // pauses (no further push or pull) until it reports a sign-in.
     qputenv("ICLOUD_MD_STUB_EXPIRED", "1");

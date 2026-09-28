@@ -278,6 +278,9 @@ private:
     bool m_signingIn = false;
     // runClone is waiting on a sign-in; m_cloneSignInAsked once SignIn() went out.
     bool m_cloneWanted = false;
+    // Set while a sync retried after icloud-session vouched for the session,
+    // so a second refusal pauses instead of retrying again.
+    bool m_retriedAfterReport = false;
     bool m_cloneSignInAsked = false;
     QDBusServiceWatcher *m_sessionWatcher = nullptr;
     QByteArray m_captured;
