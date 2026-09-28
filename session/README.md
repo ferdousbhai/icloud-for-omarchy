@@ -209,22 +209,39 @@ package, or the dev install below).
 
 ## Install
 
-Package (`[ferdousbhai]` pacman repo, or `cd pkgbuild && makepkg -si`):
-installs the three binaries and the D-Bus activation file. Nothing to
-enable; the bus starts the daemon on first use.
-
-Without the package, for development:
+The iCloud apps' installers add the signed `[icloud-session]` pacman
+repository (served from this repository's GitHub releases) and pull the
+package in as a dependency. On its own:
 
 ```bash
-cargo install --path sessiond
-mkdir -p ~/.local/share/dbus-1/services
-sed "s|/usr/bin|$HOME/.cargo/bin|" data/io.github.ferdousbhai.ICloudSession.service \
-  > ~/.local/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service
+curl -fsSL https://ferdousbhai.com/icloud-session/install.sh | sudo bash
 ```
+
+or build the package from this checkout: `cd pkgbuild && makepkg -si`.
+Either installs the three binaries and the D-Bus activation file. Nothing
+to enable; the bus starts the daemon on first use. Updates arrive through
+`omarchy update`.
+
+For development, without the package:
+
+```bash
+bin/dev-install     # release build into ~/.local/bin, D-Bus file into ~/.local/share/dbus-1/services
+bin/dev-uninstall   # removes both; an installed package takes over again
+```
+
+`bin/dev-install` writes
+`~/.local/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service`
+with `Exec=~/.local/bin/icloud-sessiond` (expanded). The user services
+directory is searched before `/usr/share`, so the dev build wins over an
+installed package until `bin/dev-uninstall`. Both reload the bus's
+configuration; a daemon already running keeps its old binary until it
+idles out (or `pkill -x icloud-sessiond`). Neither touches the signed-in
+session.
 
 ## Development
 
 ```bash
+bin/test                                 # workspace tests + the installer's shared-function hash
 cargo test                               # whole workspace, sign-in window included
 cargo clippy --all-targets -- -D warnings
 cargo test --no-default-features         # without webkitgtk-6.0 installed
@@ -242,6 +259,19 @@ closed, without params), sign-out, the icloud-md mirror and adoption of
 icloud-md's writes (live and on start), the client library against the
 daemon (requests, rotation, retry, sign-out), the CLI, idle exit, a second
 daemon refusing to start, and mock mode without D-Bus.
+
+## Releasing
+
+`bin/release <major.minor.patch>` runs `bin/test` and a `cargo publish
+--dry-run`, sets the version in both crates, `pkgbuild/PKGBUILD` and the
+dependency snippet above, commits and tags, builds the package with
+`makepkg --sign`, makes a signed one-package repository with `repo-add
+--sign`, and publishes it with the signing key and `install.sh` as the
+tag's GitHub release. `bin/verify-release` then installs it in a clean Arch
+container through the public one-liner and rolls the release back if that
+fails. Only after that does it `cargo publish` the client crate. It needs
+the package-signing key pinned in `install.sh`, `gh`, docker, and a
+crates.io token.
 
 ## License
 
