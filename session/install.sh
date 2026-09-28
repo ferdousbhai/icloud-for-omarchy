@@ -74,14 +74,14 @@ echo "Adding the [$REPO] repository"
 add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
 echo "Installing $REPO"
-# omarchy-pkg-add is Omarchy's own wrapper around pacman -S; using it where it
-# exists keeps the install consistent with `omarchy pkg add`.
-if command -v omarchy-pkg-add >/dev/null; then
-  omarchy-pkg-add "$REPO"
-elif (( EUID == 0 )); then
-  pacman -S --needed --noconfirm "$REPO"
+# Upgrade and install in one transaction. add_signed_repo has just synced
+# every repository's database, and installing from those without upgrading
+# is Arch's unsupported partial upgrade: a new dependency can need newer
+# libraries than the ones installed. (omarchy-pkg-add only runs pacman -S.)
+if (( EUID == 0 )); then
+  pacman -Syu --needed --noconfirm "$REPO"
 else
-  sudo pacman -S --needed --noconfirm "$REPO"
+  sudo pacman -Syu --needed --noconfirm "$REPO"
 fi
 
 cat <<EOF
