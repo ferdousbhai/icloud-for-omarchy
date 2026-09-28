@@ -35,6 +35,7 @@ cargo publish --dry-run --locked -p "$app" >/dev/null 2>&1 \
 
 # The client crate (root) and the daemon (sessiond/) share one version, and
 # the README's dependency snippet pins it.
+start=$(git rev-parse HEAD)
 sed -i "s/^pkgver=.*/pkgver=$version/" pkgbuild/PKGBUILD
 sed -i "0,/^version = .*/s//version = \"$version\"/" Cargo.toml sessiond/Cargo.toml
 sed -i "s/^$app = \"=[0-9.]*\"$/$app = \"=$version\"/" README.md
@@ -64,18 +65,23 @@ mkdir dist
   cp ../install.sh install.sh
 )
 
-git push -q origin main "$tag"
+# Only the tag goes out now (it carries the "Release" commit); main moves
+# once the release is verified, so a rollback leaves origin/main untouched.
+git push -q origin "$tag"
 gh release create "$tag" dist/* --title "$app $tag" --generate-notes --latest
 echo "Published $tag: https://github.com/ferdousbhai/$app/releases/tag/$tag"
 
 # A release is shipped only once the public one-liner installs it. If it
-# does not, take the release down so "latest" never points at a dud.
+# does not, take the release down so "latest" never points at a dud, and
+# drop the version bump here too.
 if ! ./bin/verify-release "$version"; then
   echo "Rolling back $tag." >&2
   gh release delete "$tag" --yes --cleanup-tag
   git tag -d "$tag" >/dev/null 2>&1 || true
+  git reset -q --hard "$start"
   exit 1
 fi
+git push -q origin main
 
 # crates.io cannot take a version back, so the crate goes out only after the
 # package is verified. If this fails, the release stands; rerun it by hand.
