@@ -30,6 +30,9 @@ use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
 
 const HOME: &str = "https://www.icloud.com/";
+/// Find My's page: where Apple asks for the password again before Find My
+/// answers (HTTP 450 until then), as icloud.com does for Find Devices.
+const FIND: &str = "https://www.icloud.com/find";
 const VALIDATE: &str = "https://setup.icloud.com/setup/ws/1/validate";
 /// icloud-md's defaults, which icloud-sessiond also falls back to.
 const CLIENT_BUILD_NUMBER: &str = "2624Build27";
@@ -37,6 +40,8 @@ const CLIENT_MASTERING_NUMBER: &str = "2624Build27";
 const TOKEN: &str = "X-APPLE-WEBAUTH-TOKEN";
 /// How often the jar is checked for a sign-in.
 const POLL: Duration = Duration::from_secs(2);
+/// How often Find My is asked while waiting for its password (`--find`).
+const FIND_POLL: Duration = Duration::from_secs(5);
 const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
 
 /// Ticks "Keep me signed in" in Apple's sign-in frame, so the session is
@@ -102,6 +107,39 @@ return JSON.stringify({{status: r.status, body: r.ok ? await r.text() : ""}});"#
     )
 }
 
+/// Like [`validate_js`], then Find My's own first call (initClient) with the
+/// same cookies: 450 until the password has been entered for Find My.
+/// Answers the validate body only once Find My answers 2xx.
+fn find_js(client_id: &str) -> String {
+    let query = format!(
+        "clientBuildNumber={CLIENT_BUILD_NUMBER}&clientMasteringNumber={CLIENT_MASTERING_NUMBER}&clientId={client_id}"
+    );
+    let query = Value::String(query);
+    let validate = Value::String(VALIDATE.to_owned());
+    format!(
+        r#"const q = {query};
+const post = (url, body) => fetch(url, {{method: "POST", credentials: "include",
+  headers: {{"Content-Type": "text/plain;charset=UTF-8"}}, body}});
+// Validate once per page (each /validate rotates the session token; many in
+// a row alongside another copy of the session get it ended), then only ask
+// Find My, which rotates nothing.
+let text = globalThis.__icloudSessionAccount;
+if (!text) {{
+  const v = await post({validate} + "?" + q, "");
+  if (!v.ok) return JSON.stringify({{status: v.status, body: ""}});
+  text = await v.text();
+  globalThis.__icloudSessionAccount = text;
+}}
+const account = JSON.parse(text);
+const findme = account.webservices && account.webservices.findme && account.webservices.findme.url;
+if (!findme || !account.dsInfo) return JSON.stringify({{status: 0, body: ""}});
+const f = await post(findme + "/fmipservice/client/web/initClient?" + q + "&dsid=" + account.dsInfo.dsid,
+  JSON.stringify({{clientContext: {{appName: "iCloud Find (Web)", appVersion: "2.0", apiVersion: "3.0",
+    deviceListVersion: 1, fmly: true, timezone: "UTC", inactiveTime: 0}}}}));
+return JSON.stringify({{status: f.status, body: f.ok ? text : ""}});"#
+    )
+}
+
 /// Domains the window loads pages and frames from: Apple's sign-in
 /// (idmsa.apple.com, inside www.icloud.com) and what it embeds.
 const APPLE_DOMAINS: [&str; 4] = ["apple.com", "icloud.com", "cdn-apple.com", "apple-cloudkit.com"];
@@ -160,6 +198,12 @@ struct Capture {
     /// The token value /validate last refused: not tried again until the
     /// jar holds a different one (a fresh sign-in or a rotation).
     refused: RefCell<Option<String>>,
+    /// Authorizing Find My (`--find`) rather than signing in: done when
+    /// Find My answers, re-checked on every poll since entering the
+    /// password need not change the token.
+    find: bool,
+    /// When Find My was last asked.
+    last_find: Cell<Option<std::time::Instant>>,
 }
 
 impl Capture {
@@ -194,7 +238,13 @@ impl Capture {
     /// observed from here, so this does not depend on them; it also covers
     /// a profile that is already signed in.
     fn check(self: &Rc<Self>, view: &webkit6::WebView) {
-        if self.done.get() || self.checking.replace(true) {
+        if self.done.get() {
+            return;
+        }
+        if self.find && self.last_find.get().is_some_and(|t| t.elapsed() < FIND_POLL) {
+            return;
+        }
+        if self.checking.replace(true) {
             return;
         }
         let me = self.clone();
@@ -211,13 +261,20 @@ impl Capture {
                 me.checking.set(false);
                 return;
             };
-            if me.refused.borrow().as_deref() == Some(token.as_str()) {
+            if !me.find && me.refused.borrow().as_deref() == Some(token.as_str()) {
                 me.checking.set(false);
                 return;
             }
+            if me.find {
+                me.last_find.set(Some(std::time::Instant::now()));
+            }
             let me2 = me.clone();
             view.call_async_javascript_function(
-                &validate_js(&me.client_id),
+                &if me.find {
+                    find_js(&me.client_id)
+                } else {
+                    validate_js(&me.client_id)
+                },
                 None,
                 None,
                 None,
@@ -239,7 +296,8 @@ impl Capture {
                         me2.finish();
                     } else {
                         if status != 0 {
-                            eprintln!("icloud-session-signin: not signed in yet (validate answered {status})");
+                            let what = if me2.find { "Find My" } else { "/validate" };
+                            eprintln!("icloud-session-signin: not signed in yet ({what} answered {status})");
                         }
                         *me2.refused.borrow_mut() = Some(token);
                     }
@@ -254,14 +312,19 @@ impl Capture {
 const APP_ID: &str = "io.github.ferdousbhai.ICloudSession";
 
 fn main() -> ExitCode {
+    let mut find = false;
     if let Some(arg) = std::env::args().nth(1) {
-        return if arg == "-V" || arg == "--version" {
-            println!("icloud-session-signin {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
+        if arg == "--find" {
+            find = true;
         } else {
-            eprintln!("usage: icloud-session-signin   (prints the captured session as JSON)");
-            ExitCode::from(64)
-        };
+            return if arg == "-V" || arg == "--version" {
+                println!("icloud-session-signin {}", env!("CARGO_PKG_VERSION"));
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("usage: icloud-session-signin [--find]   (prints the captured session as JSON)");
+                ExitCode::from(64)
+            };
+        }
     }
     // No GtkApplication here, so the Wayland app_id is the program name: make
     // it ours, matching the desktop entry, not "GTK Application".
@@ -320,6 +383,8 @@ fn main() -> ExitCode {
         client_id: uuid::Uuid::new_v4().to_string(),
         checking: Cell::new(false),
         refused: RefCell::new(None),
+        find,
+        last_find: Cell::new(None),
     });
 
     // Signed in yet? Checked on a timer and after each page load.
@@ -398,7 +463,7 @@ fn main() -> ExitCode {
             glib::Propagation::Proceed
         });
     }
-    view.load_uri(HOME);
+    view.load_uri(if find { FIND } else { HOME });
     window.present();
     capture.main_loop.run();
     window.destroy();
@@ -440,5 +505,75 @@ mod tests {
         assert!(js.contains(r#""https://setup.icloud.com/setup/ws/1/validate?clientBuildNumber=2624Build27&clientMasteringNumber=2624Build27&clientId=abc""#));
         assert!(js.contains(r#"credentials: "include""#));
         assert_eq!(client_params("abc")["clientId"], "abc");
+    }
+
+    #[test]
+    fn find_call_validates_once_then_asks_find_my() {
+        let js = find_js("abc");
+        assert!(js.contains(r#""clientBuildNumber=2624Build27&clientMasteringNumber=2624Build27&clientId=abc""#));
+        assert!(js.contains(r#""https://setup.icloud.com/setup/ws/1/validate""#));
+        assert!(js.contains("/fmipservice/client/web/initClient?"));
+        assert!(js.contains(r#"credentials: "include""#));
+        assert!(js.contains("globalThis.__icloudSessionAccount"));
+        // A client id cannot break out of its string.
+        let js = find_js(r#"a"; alert(1); ""#);
+        assert!(js.contains(
+            r#""clientBuildNumber=2624Build27&clientMasteringNumber=2624Build27&clientId=a\"; alert(1); \"""#
+        ));
+    }
+
+    /// Runs `find_js` three times in node against a fake `fetch`, if node
+    /// is installed: one /validate in all, Find My asked every time, and
+    /// the validate body handed back only once Find My answers 2xx.
+    #[test]
+    fn find_call_behaves_in_a_js_engine() {
+        if std::process::Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found: skipping");
+            return;
+        }
+        let body = find_js("abc");
+        let script = format!(
+            r#"const calls = [];
+let findStatus = 450;
+globalThis.fetch = async (url, opts) => {{
+  calls.push(url);
+  if (url.startsWith("https://setup.icloud.com/")) {{
+    return {{ok: true, status: 200, text: async () => JSON.stringify({{dsInfo: {{dsid: "42"}},
+      webservices: {{findme: {{url: "https://p1-fmipweb.icloud.com:443"}}}}}})}};
+  }}
+  return {{ok: findStatus < 300, status: findStatus, text: async () => ""}};
+}};
+const run = async () => {{ {body} }};
+(async () => {{
+  const a = JSON.parse(await run());
+  const b = JSON.parse(await run());
+  findStatus = 200;
+  const c = JSON.parse(await run());
+  console.log(JSON.stringify({{a, b, c, calls}}));
+}})();"#
+        );
+        let out = std::process::Command::new("node")
+            .args(["-e", &script])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["a"], json!({"status": 450, "body": ""}));
+        assert_eq!(v["b"], json!({"status": 450, "body": ""}));
+        assert_eq!(v["c"]["status"], 200);
+        assert_eq!(
+            serde_json::from_str::<Value>(v["c"]["body"].as_str().unwrap()).unwrap()["dsInfo"]["dsid"],
+            "42"
+        );
+        let calls: Vec<&str> = v["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(calls.iter().filter(|c| c.contains("/validate")).count(), 1, "{calls:?}");
+        assert_eq!(calls.iter().filter(|c| c.contains("/initClient")).count(), 3);
+        assert!(calls[1].starts_with("https://p1-fmipweb.icloud.com:443/fmipservice/client/web/initClient?"));
+        assert!(calls[1].ends_with("&dsid=42"));
     }
 }
