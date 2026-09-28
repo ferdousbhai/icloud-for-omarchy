@@ -18,7 +18,7 @@ use zbus::zvariant::Value;
 
 use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
-use crate::files::{self, Account, Paths};
+use crate::files::{self, Account, MirrorSession, MirrorWrite, Paths};
 
 /// Heartbeat keeps running while a client called within this window
 /// (the browser's own heartbeat is 14 minutes).
@@ -308,18 +308,45 @@ impl Daemon {
     /// icloud-md mirror. Errors are logged: the session in memory is still
     /// right, and the next change retries.
     fn store(&self, st: &mut State) {
-        let Some(account) = &st.account else { return };
+        let State {
+            account: Some(account),
+            mirror_cookie,
+            ..
+        } = st
+        else {
+            return;
+        };
+        // A rotation icloud-md writes while we write ours is adopted first,
+        // then the merged jar is written; a few rounds at most.
+        for _ in 0..3 {
+            let now = now_unix();
+            if mirror_cookie.as_deref() == Some(account.cookie_header(now).as_str()) {
+                break;
+            }
+            match files::write_mirror(&self.cfg.paths, account, now) {
+                Ok(MirrorWrite::Written(cookie)) => {
+                    *mirror_cookie = Some(cookie);
+                    break;
+                }
+                Ok(MirrorWrite::Changed) => {
+                    if let Some(m) = files::read_mirror(&self.cfg.paths, &account.dsid) {
+                        *mirror_cookie = Some(m.cookie.clone());
+                        if adopt(account, m) {
+                            eprintln!("icloud-sessiond: adopted the session icloud-md rotated");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("icloud-sessiond: writing the icloud-md mirror: {e}");
+                    break;
+                }
+            }
+        }
         if let Err(e) = account.save(&self.cfg.paths.account) {
             eprintln!("icloud-sessiond: saving {}: {e}", self.cfg.paths.account.display());
         }
-        let now = now_unix();
-        if st.mirror_cookie.as_deref() == Some(account.cookie_header(now).as_str()) {
-            return;
-        }
-        match files::write_mirror(&self.cfg.paths, account, now) {
-            Ok(cookie) => st.mirror_cookie = Some(cookie),
-            Err(e) => eprintln!("icloud-sessiond: writing the icloud-md mirror: {e}"),
-        }
+        let dsid = account.dsid.clone();
+        self.watch_mirror(Some(&dsid));
     }
 
     /// Forgets the account (confirmed 421/401 or `SignOut`).
@@ -628,16 +655,35 @@ impl Daemon {
                     }
                 };
                 let mut hit = None;
+                let mut lost = false;
                 for event in events {
-                    if event.name != Some(OsStr::new("session.local.json")) {
+                    let mut watch = lock(&me.mirror_watch);
+                    let Some(w) = watch.as_mut() else { continue };
+                    let Some(dsid) = w
+                        .current
+                        .as_ref()
+                        .filter(|(wd, _)| *wd == event.wd)
+                        .map(|(_, d)| d.clone())
+                    else {
                         continue;
-                    }
-                    let watch = lock(&me.mirror_watch);
-                    if let Some((wd, dsid)) = watch.as_ref().and_then(|w| w.current.as_ref())
-                        && *wd == event.wd
+                    };
+                    if event
+                        .mask
+                        .intersects(inotify::EventMask::IGNORED | inotify::EventMask::DELETE_SELF)
                     {
-                        hit = Some(dsid.clone());
+                        // The directory is gone and the watch with it. The next
+                        // store writes the mirror again and re-watches; the
+                        // tick re-watches if the directory comes back first.
+                        eprintln!("icloud-sessiond: the icloud-md mirror directory went away");
+                        w.current = None;
+                        lost = true;
+                        hit = None;
+                    } else if event.name == Some(OsStr::new("session.local.json")) {
+                        hit = Some(dsid);
                     }
+                }
+                if lost {
+                    lock(&me.state).mirror_cookie = None;
                 }
                 if let Some(dsid) = hit {
                     me.adopt_mirror(&dsid);
@@ -649,21 +695,45 @@ impl Daemon {
     /// Points the inotify watch at the current account's mirror directory.
     fn rewatch(&self) {
         let dsid = lock(&self.state).account.as_ref().map(|a| a.dsid.clone());
+        self.watch_mirror(dsid.as_deref());
+    }
+
+    /// Points the inotify watch at `dsid`'s mirror directory, if it exists
+    /// (or at nothing). Takes only the watch lock, so `store` may call it
+    /// while it holds the state.
+    fn watch_mirror(&self, dsid: Option<&str>) {
         let mut guard = lock(&self.mirror_watch);
         let Some(w) = guard.as_mut() else { return };
-        if w.current.as_ref().map(|(_, d)| d) == dsid.as_ref() {
+        if w.current.as_ref().map(|(_, d)| d.as_str()) == dsid {
             return;
         }
         if let Some((wd, _)) = w.current.take() {
             let _ = w.watches.remove(wd);
         }
         let Some(dsid) = dsid else { return };
-        let dir = self.cfg.paths.mirror_dir(&dsid);
-        let mask = inotify::WatchMask::CLOSE_WRITE | inotify::WatchMask::MOVED_TO;
-        match files::create_private_dir(&dir).and_then(|()| w.watches.add(&dir, mask)) {
-            Ok(wd) => w.current = Some((wd, dsid)),
+        let dir = self.cfg.paths.mirror_dir(dsid);
+        if !dir.is_dir() {
+            return;
+        }
+        let mask = inotify::WatchMask::CLOSE_WRITE | inotify::WatchMask::MOVED_TO | inotify::WatchMask::DELETE_SELF;
+        match w.watches.add(&dir, mask) {
+            Ok(wd) => w.current = Some((wd, dsid.to_string())),
             Err(e) => eprintln!("icloud-sessiond: watching {}: {e}", dir.display()),
         }
+    }
+
+    /// After the mirror directory went away: once it is back (icloud-md
+    /// made it again), watch it and adopt what it holds.
+    fn recover_mirror_watch(&self) {
+        let Some(dsid) = lock(&self.state).account.as_ref().map(|a| a.dsid.clone()) else {
+            return;
+        };
+        let lost = lock(&self.mirror_watch).as_ref().is_some_and(|w| w.current.is_none());
+        if !lost || !self.cfg.paths.mirror_dir(&dsid).is_dir() {
+            return;
+        }
+        self.watch_mirror(Some(&dsid));
+        self.adopt_mirror(&dsid);
     }
 
     /// Adopts a cookie jar icloud-md wrote to the mirror (its own
@@ -679,14 +749,9 @@ impl Daemon {
         let Some(a) = st.account.as_mut().filter(|a| a.dsid == dsid) else {
             return;
         };
-        let mut changed = cookies::adopt_header(&mut a.cookies, &m.cookie);
-        for (k, v) in m.params {
-            if a.client_params.get(&k) != Some(&v) {
-                a.client_params.insert(k, v);
-                changed = true;
-            }
-        }
-        st.mirror_cookie = Some(m.cookie);
+        let cookie = m.cookie.clone();
+        let changed = adopt(a, m);
+        st.mirror_cookie = Some(cookie);
         if changed {
             eprintln!("icloud-sessiond: adopted the session icloud-md rotated");
             if let Some(a) = &st.account
@@ -759,6 +824,7 @@ impl Daemon {
                 }
                 st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
             };
+            self.recover_mirror_watch();
             if heartbeat && !self.heartbeat_busy.swap(true, Ordering::SeqCst) {
                 let me = self.clone();
                 thread::spawn(move || {
@@ -768,6 +834,19 @@ impl Daemon {
             }
         }
     }
+}
+
+/// Takes icloud-md's jar and client params into the account. Returns
+/// whether anything changed.
+fn adopt(a: &mut Account, m: MirrorSession) -> bool {
+    let mut changed = cookies::adopt_header(&mut a.cookies, &m.cookie);
+    for (k, v) in m.params {
+        if a.client_params.get(&k) != Some(&v) {
+            a.client_params.insert(k, v);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// What `icloud-session-signin` prints.

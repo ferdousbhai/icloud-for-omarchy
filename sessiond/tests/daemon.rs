@@ -1210,3 +1210,60 @@ fn sign_out_closes_an_open_sign_in_window() {
     assert!(env.account().is_none());
     assert_eq!(server.count(VALIDATE), 1, "only the start-up validate");
 }
+
+#[test]
+fn the_mirror_is_watched_again_after_its_directory_goes_away() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        idle_secs: 2.0,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    let session_file = env.mirror_dir().join("session.local.json");
+    let rotate = |token: &str| {
+        let mut mirror = env.mirror().unwrap();
+        let cookie = mirror["cookie"].as_str().unwrap();
+        let old = cookie_of(cookie, "X-APPLE-WEBAUTH-TOKEN").unwrap();
+        mirror["cookie"] = Value::String(cookie.replace(&format!("TOKEN={old}"), &format!("TOKEN={token}")));
+        fs::write(&session_file, serde_json::to_string_pretty(&mirror).unwrap() + "\n").unwrap();
+    };
+    let adopted = |token: &str| {
+        let (cookie, _, _) = session(&conn).unwrap();
+        cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref() == Some(token)
+    };
+
+    // Deleted, then our next store writes the mirror again and re-watches.
+    let saved = env.mirror().unwrap();
+    fs::remove_dir_all(env.mirror_dir()).unwrap();
+    thread::sleep(Duration::from_millis(200));
+    conn.call_method(
+        Some(BUS_NAME),
+        OBJECT_PATH,
+        Some(INTERFACE),
+        "MergeCookies",
+        &(vec!["OTHER=1; Path=/"],),
+    )
+    .unwrap();
+    wait_until("the mirror to be rewritten", Duration::from_secs(2), || {
+        env.mirror().is_some()
+    });
+    rotate("afterstore");
+    wait_until("the rotation to be adopted", Duration::from_secs(5), || {
+        adopted("afterstore")
+    });
+
+    // Deleted, then icloud-md makes it again before we store anything.
+    fs::remove_dir_all(env.mirror_dir()).unwrap();
+    thread::sleep(Duration::from_millis(200));
+    fs::create_dir_all(env.mirror_dir()).unwrap();
+    fs::write(&session_file, saved.to_string()).unwrap();
+    rotate("afterrecreate");
+    wait_until("the rotation to be adopted", Duration::from_secs(5), || {
+        adopted("afterrecreate")
+    });
+}
