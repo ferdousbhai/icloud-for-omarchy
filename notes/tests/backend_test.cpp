@@ -475,6 +475,36 @@ int main(int argc, char *argv[])
     }
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
 
+    // A save (Ctrl+S, leaving the note) while a pull runs writes nothing
+    // under it; the edits land once it is done, merged with its changes.
+    writeFile(QStringLiteral("Q.md"), QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none\n\ntwo\n"));
+    b.refresh();
+    b.openNote(QStringLiteral("Q.md"));
+    qputenv("ICLOUD_MD_STUB_SLEEP", "1");
+    {
+        QString written;
+        QObject::connect(&b, &NotesBackend::queuedSaveWritten, &b, [&](const QString &body) { written = body; },
+                         Qt::SingleShotConnection);
+        b.runPull();
+        check(!b.saveCurrentNote(QStringLiteral("# Q\none, mine\n\ntwo\n"))
+                  && readFile(QStringLiteral("Q.md")) == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none\n\ntwo\n"),
+              "seam save under a running pull waits");
+        writeFile(QStringLiteral("Q.md"), QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none\n\ntwo from iCloud\n"));
+        waitForIdle(b);
+        check(readFile(QStringLiteral("Q.md")) == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine\n\ntwo from iCloud\n")
+                  && written == QStringLiteral("# Q\none, mine\n\ntwo\n"),
+              "seam waiting save merged in once the pull is done");
+    }
+    b.runPull(); // a pull that leaves the note alone: saved as asked
+    b.saveCurrentNote(QStringLiteral("# Q\none, mine again\n\ntwo from iCloud\n"));
+    waitForIdle(b);
+    check(readFile(QStringLiteral("Q.md"))
+              == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine again\n\ntwo from iCloud\n"),
+          "seam waiting save written once the pull is done");
+    qunsetenv("ICLOUD_MD_STUB_SLEEP");
+    QFile::remove(rootPath() + QStringLiteral("/Q.md"));
+    b.refresh();
+
     // icloud-md refused a copy of the session that icloud-session says still
     // works (and has refreshed): one retry goes through.
     fake.stillSignedIn = true;

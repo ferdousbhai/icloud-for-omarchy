@@ -293,8 +293,10 @@ ApplicationWindow {
     function doSave() {
         var text = editor.text;
         if (!backend.saveCurrentNote(text)) {
+            // Under a running sync the backend writes them once it is done.
             if (dirty)
-                notice = "Could not save the note. Your edits are still in the editor.";
+                notice = backend.syncRunning ? "Saving once the sync is done. Your edits are still in the editor."
+                                             : "Could not save the note. Your edits are still in the editor.";
             return false;
         }
         savedText = text;
@@ -1295,6 +1297,14 @@ ApplicationWindow {
                 root.loadEditor();
                 root.notice = root.keptNotice.length > 0 ? root.keptNotice
                     : backend.noteConflicts.length === 0 ? "Merged your edits with a change from another device." : "";
+            }
+        }
+        // What a save under a sync asked for is on disk now, merged with
+        // whatever the sync changed: show that, unless typing went on.
+        function onQueuedSaveWritten(body) {
+            if (editor.text === body) {
+                root.loadEditor();
+                root.notice = "";
             }
         }
         function onEditsKeptAsNote(message) {

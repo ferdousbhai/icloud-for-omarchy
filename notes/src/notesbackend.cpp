@@ -22,6 +22,7 @@
 #include <QTextStream>
 #include <QUrl>
 #include <algorithm>
+#include <utility>
 
 namespace {
 
@@ -698,6 +699,12 @@ bool NotesBackend::saveCurrentNote(const QString &body)
     const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
     if (!m_readOnlyReason.isEmpty() || text == m_noteContent)
         return true;
+    // Never under a running sync: a pull may be rewriting this very file.
+    // Written once it is done and its changes are loaded (writeQueuedSave).
+    if (m_syncRunning) {
+        m_queuedSave = { m_noteContent, body, true };
+        return false;
+    }
     // A pull (or another program) rewrote the note since it was loaded:
     // writing now would silently drop that change. The reload that follows
     // hands the edits to keepEditsAsConflict instead.
@@ -707,6 +714,7 @@ bool NotesBackend::saveCurrentNote(const QString &body)
     }
     if (!writeText(path, text))
         return false;
+    m_queuedSave = {};
     loadCurrentNote();
     rebuildNotes(); // a save bumps mtime, which reorders the list
     emit vaultChanged();
@@ -715,6 +723,8 @@ bool NotesBackend::saveCurrentNote(const QString &body)
 
 bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
 {
+    if (m_merging)
+        return false;
     // Its file went away: a pull may have written the new one only after
     // removing the old, so look for its id once more before giving up on it.
     if (m_currentNote.isEmpty() && m_lostNote.valid
@@ -733,7 +743,12 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
     const QString merged = SyncModel::conflictBody(split.body, base, mine);
     if (!writeText(path, split.envelope + merged))
         return false;
+    m_queuedSave = {}; // these edits are in
+    // The reload reaches the window, whose own unsaved text is what was
+    // just merged: never merge it into the result a second time.
+    const bool wasMerging = std::exchange(m_merging, true);
     loadCurrentNote();
+    m_merging = wasMerging;
     rebuildNotes();
     if (!SyncModel::hasConflictMarkers(merged))
         emit vaultChanged(); // a clean merge syncs as any edit
@@ -1159,8 +1174,27 @@ void NotesBackend::finishSync(int exitCode)
         runSync(); // a sign-in arrived while this ran
     }
     continueClone(); // a clone asked for while something else ran
-    if (!m_syncRunning)
+    if (!m_syncRunning) {
+        writeQueuedSave();
         emit syncChainFinished();
+    }
+}
+
+// A save refused while the sync ran, now that it is done and its changes
+// are loaded: a note the sync left alone is saved as asked; one it changed
+// gets the edits merged in, as any change on disk under edits does. (The
+// window may already have merged them on the refresh, which clears this.)
+void NotesBackend::writeQueuedSave()
+{
+    const QueuedSave queued = std::exchange(m_queuedSave, {});
+    if (!queued.valid || m_currentNote.isEmpty()) // a note gone keeps its edits through keepEditsAsConflict
+        return;
+    const QString base = SyncModel::editorForm(SyncModel::splitEnvelope(queued.base).body);
+    bool written = m_noteContent != queued.base && keepEditsAsConflict(base, queued.body);
+    if (!written)
+        written = saveCurrentNote(queued.body);
+    if (written)
+        emit queuedSaveWritten(queued.body);
 }
 
 void NotesBackend::setPushPreview(const QVariantMap &parsed, const QString &error)

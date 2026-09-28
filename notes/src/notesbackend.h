@@ -142,7 +142,9 @@ public:
     Q_INVOKABLE void openNote(const QString &name);
     // False when nothing was written because the note changed on disk
     // since it was loaded, or is gone (no note open), or the write failed:
-    // the edits stay unsaved.
+    // the edits stay unsaved. Also false while a sync runs, which may be
+    // rewriting the note: the edits are written once it is done (merged
+    // with whatever it changed), and queuedSaveWritten says so.
     Q_INVOKABLE bool saveCurrentNote(const QString &body);
     // The note changed on disk under unsaved editor text: rather than let
     // a save overwrite that change, merge the two (base is what the editor
@@ -220,6 +222,8 @@ signals:
     // The open note was deleted elsewhere under unsaved edits, which were
     // written to a new note instead; message says where.
     void editsKeptAsNote(const QString &message);
+    // A save refused while a sync ran was written after it (body as given).
+    void queuedSaveWritten(const QString &body);
     // One icloud-md run ended ("Push", "Pull", "Clone", ...).
     void syncFinished(const QString &label, bool ok);
     // The last run of a chain ended and nothing follows it: after the pull
@@ -245,6 +249,7 @@ private:
     bool followNote(const QString &id);
     void loseCurrentNote();
     bool keepEditsAsNewNote(const QString &mine);
+    void writeQueuedSave();
     void rewatch();
     void startSync(Mode mode, const QStringList &args, const QString &label);
     void finishSync(int exitCode);
@@ -299,6 +304,14 @@ private:
         bool valid = false;
     } m_lostNote;
     bool m_following = false;
+    bool m_merging = false; // keepEditsAsConflict is reloading its merge
+    // A save asked for while a sync ran: the editor body, and the note it
+    // was edited from.
+    struct QueuedSave {
+        QString base;
+        QString body;
+        bool valid = false;
+    } m_queuedSave;
     QVariantList m_noteAttachments;
     QString m_readOnlyReason;
     QVariantList m_statusEntries;
