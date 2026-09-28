@@ -367,6 +367,22 @@ int main(int argc, char *argv[])
               "seam sign-in elsewhere clears the remembered expiry");
         qunsetenv("ICLOUD_SESSION_STUB_STATUS");
     }
+    {
+        // A flag from an older version records no status: it stays until the
+        // session validates after it was written.
+        writeFile(QStringLiteral(".icloud-notes-signin-expired"), QStringLiteral("Sync is paused until an iCloud sign-in succeeds.\n"));
+        {
+            NotesBackend relaunched;
+            waitForStatus(relaunched);
+            check(relaunched.authExpired(), "seam old flag stands on an earlier validation");
+        }
+        qputenv("ICLOUD_SESSION_STUB_STATUS",
+                R"({"signed_in":true,"apple_id":"someone@example.com","dsid":"1","expires_at":"2099-01-01T00:00:00Z","validated_at":"2099-01-01T00:00:00Z"})");
+        NotesBackend relaunched;
+        waitForStatus(relaunched);
+        check(!relaunched.authExpired(), "seam old flag clears on a later validation");
+        qunsetenv("ICLOUD_SESSION_STUB_STATUS");
+    }
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
     b.runReauthenticate();
     waitForSync(b); // sign-in

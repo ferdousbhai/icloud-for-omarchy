@@ -938,11 +938,14 @@ void NotesBackend::applySessionStatus(const QByteArray &output)
                 setSyncMessage(QStringLiteral("Sync paused. Sign in to iCloud to resume."));
         }
     } else if (known && m_authExpired) {
-        // Signed in, and the session moved on since the expiry was recorded:
-        // a sign-in from the terminal or another app. A flag that recorded no
-        // status (from an older version, or with the tool missing) stays.
+        // Signed in, and the session moved on since the expiry was recorded
+        // (a sign-in from the terminal or another app), or it validated after
+        // the flag was written. The second also covers a flag that recorded
+        // no status (from an older version, or with the tool missing).
         const QJsonObject recorded = QJsonDocument::fromJson(readText(authFlagPath()).toUtf8()).object();
-        if (recorded.value(QLatin1StringView("signed_in")).isBool() && !sameSession(recorded, status)) {
+        const QDateTime validated = QDateTime::fromString(status.value(QLatin1StringView("validated_at")).toString(), Qt::ISODate);
+        const bool movedOn = recorded.value(QLatin1StringView("signed_in")).isBool() && !sameSession(recorded, status);
+        if (movedOn || (validated.isValid() && validated > QFileInfo(authFlagPath()).lastModified())) {
             setAuthExpired(false);
             if (!m_syncRunning)
                 setSyncMessage(QStringLiteral("Signed in."));
