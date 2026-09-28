@@ -57,8 +57,8 @@ check() {
 package() {
   cd "$srcdir/$pkgname"
   install -Dm755 target/release/icloud-findmy "$pkgdir/usr/bin/icloud-findmy"
-  install -Dm644 data/icloud-findmy.desktop "$pkgdir/usr/share/applications/icloud-findmy.desktop"
-  install -Dm644 data/icloud-findmy.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-findmy.svg"
+  install -Dm644 data/com.ferdousbhai.IcloudFindMy.desktop "$pkgdir/usr/share/applications/com.ferdousbhai.IcloudFindMy.desktop"
+  install -Dm644 data/com.ferdousbhai.IcloudFindMy.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.ferdousbhai.IcloudFindMy.svg"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

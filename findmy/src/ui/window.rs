@@ -671,7 +671,7 @@ fn build(
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Find My")
-        .icon_name("icloud-findmy")
+        .icon_name(super::APP_ID)
         .default_width(1100)
         .default_height(720)
         .width_request(360)
