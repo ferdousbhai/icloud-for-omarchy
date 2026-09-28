@@ -258,6 +258,23 @@ int main(int argc, char *argv[])
     QFile::remove(rootPath() + QStringLiteral("/C.md"));
     b.refresh();
 
+    // A note rewritten on disk after it was loaded is never saved over:
+    // the save is refused, and the unsaved edits become a conflict with it.
+    writeFile(QStringLiteral("D.md"), QStringLiteral("---\napple-note-id: id-d\n---\n# D\none\ntwo\n"));
+    b.refresh();
+    b.openNote(QStringLiteral("D.md"));
+    writeFile(QStringLiteral("D.md"), QStringLiteral("---\napple-note-id: id-d\n---\n# D\none\nfrom iCloud\n"));
+    check(!b.saveCurrentNote(QStringLiteral("# D\none\nmine\n")), "backend stale save refused");
+    check(readFile(QStringLiteral("D.md")).contains(QStringLiteral("from iCloud")), "backend stale save wrote nothing");
+    check(!b.keepEditsAsConflict(QStringLiteral("# D\none\ntwo\n"), QStringLiteral("# D\none\nfrom iCloud\n")),
+          "backend no conflict when the disk holds the edits");
+    check(b.keepEditsAsConflict(QStringLiteral("# D\none\ntwo\n"), QStringLiteral("# D\none\nmine\n")), "backend edits kept as conflict");
+    check(readFile(QStringLiteral("D.md")).startsWith(QStringLiteral("---\napple-note-id: id-d\n---\n# D\none\n<<<<<<< local\nmine\n"))
+              && b.noteConflicts().size() == 1,
+          "backend kept conflict keeps the envelope and opens as versions");
+    QFile::remove(rootPath() + QStringLiteral("/D.md"));
+    b.refresh();
+
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));
     check(b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty(), "backend rename ok");

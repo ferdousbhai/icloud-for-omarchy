@@ -119,7 +119,15 @@ public:
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void openNote(const QString &name);
-    Q_INVOKABLE void saveCurrentNote(const QString &body);
+    // False when nothing was written because the note changed on disk
+    // since it was loaded (or the write failed): the edits stay unsaved.
+    Q_INVOKABLE bool saveCurrentNote(const QString &body);
+    // The note changed on disk under unsaved editor text: rather than let
+    // a save overwrite that change, write the two as a conflict to pick
+    // from. base is what the editor loaded, mine what it holds now. True
+    // when a conflict was written; false when there is nothing to keep
+    // apart (the disk holds base or mine).
+    Q_INVOKABLE bool keepEditsAsConflict(const QString &base, const QString &mine);
     Q_INVOKABLE QString saveWarning(const QString &body);
     Q_INVOKABLE void newNote(const QString &name);
     Q_INVOKABLE QString deleteCurrentNote();

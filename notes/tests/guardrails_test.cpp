@@ -137,6 +137,23 @@ int main()
               "line diff marks the missing line");
     }
 
+    // conflictBody: unsaved edits against a note that changed on disk
+    {
+        const QString base = QStringLiteral("# T\na\nb\nc\n");
+        const QString mine = QStringLiteral("# T\na\nmine\nc\n");
+        const QString theirs = QStringLiteral("# T\na\ntheirs\u00a0x\u2028y\nc\n");
+        const QString body = SyncModel::conflictBody(theirs, base, mine);
+        check(body == QStringLiteral("# T\na\n<<<<<<< local\nmine\n||||||| base\nb\n=======\ntheirs\u00a0x\u2028y\n>>>>>>> remote\nc\n"),
+              "conflict body wraps only the parted lines, theirs byte-exact");
+        check(SyncModel::resolveConflicts(body, { QStringLiteral("remote") }) == theirs, "conflict body resolves back to theirs");
+        check(SyncModel::resolveConflicts(body, { QStringLiteral("local") }) == mine, "conflict body resolves back to mine");
+        const QString appended = SyncModel::conflictBody(QStringLiteral("x\nnew"), QStringLiteral("x"), QStringLiteral("x\nmine"));
+        check(SyncModel::parseConflicts(appended).size() == 1, "conflict body at the end parses");
+        check(SyncModel::previewNote(QStringLiteral("<<<<<<< local\n# Mine\n=======\n# Theirs\n>>>>>>> remote\n"),
+                                     QStringLiteral("f"), QStringLiteral("in-body")).title == QStringLiteral("Mine"),
+              "preview skips conflict markers");
+    }
+
     // retitleInBody
     check(SyncModel::retitleInBody(QStringLiteral("# Old\nbody\n"), QStringLiteral("New"))
               == QStringLiteral("# New\nbody\n"),

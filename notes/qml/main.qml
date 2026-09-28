@@ -288,10 +288,18 @@ ApplicationWindow {
         }
         savedText = editor.text;
     }
+    // False when the edits could not be written: they stay in the editor,
+    // or, when the note changed on disk meanwhile, in a conflict to pick from.
     function doSave() {
-        backend.saveCurrentNote(editor.text);
-        savedText = editor.text;
+        var text = editor.text;
+        if (!backend.saveCurrentNote(text)) {
+            if (dirty)
+                notice = "Could not save the note. Your edits are still in the editor.";
+            return false;
+        }
+        savedText = text;
         notice = "";
+        return true;
     }
     // Explicit save (Ctrl+S): risky edits go through the "Save anyway?" dialog.
     function save() {
@@ -314,8 +322,7 @@ ApplicationWindow {
             notice = "Kept your edits in the editor. Resolve the warning (Ctrl+S) before moving on.";
             return false;
         }
-        doSave();
-        return true;
+        return doSave();
     }
     function openNote(folder, name) {
         if (!flushEdits())
@@ -331,6 +338,7 @@ ApplicationWindow {
     // edit never starts on a copy iCloud has already moved past. Nothing
     // runs on a timer.
     property bool freshening: false
+    property bool keepingEdits: false
     function pullIfStale() {
         if (!autoButton.checked || !backend.cloned || backend.authExpired || backend.syncRunning
                 || dirty || dialogOpen() || Date.now() - lastFocusSync < 60 * 1000)
@@ -1263,8 +1271,25 @@ ApplicationWindow {
     Connections {
         target: backend
         function onNoteContentChanged() {
-            if (!root.dirty)
+            if (root.keepingEdits)
+                return;
+            if (!root.dirty) {
                 root.loadEditor();
+                return;
+            }
+            // The note changed under unsaved edits (a pull, another program).
+            // Saving would overwrite that change, so the two become a
+            // conflict to pick from; the edits live on in its local side.
+            // Never under a running sync: the refresh after it comes back here.
+            if (backend.syncRunning)
+                return;
+            root.keepingEdits = true;
+            var kept = backend.keepEditsAsConflict(root.savedText, editor.text);
+            root.keepingEdits = false;
+            if (kept) {
+                root.loadEditor();
+                root.notice = "";
+            }
         }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
         function onSyncRunningChanged() {
@@ -1272,8 +1297,9 @@ ApplicationWindow {
                 root.freshening = false;
         }
         function onCurrentNoteChangedOnDisk() {
-            // If dirty, the editor keeps the user's text; Ctrl+S/Refresh reconciles.
-            if (!root.dirty)
+            // Unsaved edits are kept apart from the change (onNoteContentChanged),
+            // after any running sync is done writing.
+            if (!root.dirty || !backend.syncRunning)
                 backend.refresh();
         }
         function onHistoryReady(ok) {

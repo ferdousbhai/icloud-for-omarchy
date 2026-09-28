@@ -110,6 +110,9 @@ turn it off):
   highlighted. Pick one for each change (or keep both) and the note
   syncs like any other edit; **Edit as text** shows the raw merge
   markers instead.
+- If a note changes underneath edits you haven't saved yet (a pull, or
+  another program writing the file), the app never saves over that
+  change: your edits and the new copy open side by side the same way.
 - Edits made in the app are pushed sooner, about 20 seconds after you
   stop making them, so a burst of typing becomes one push. Nothing waits
   for a click.

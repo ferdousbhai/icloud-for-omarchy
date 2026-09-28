@@ -493,15 +493,42 @@ void NotesBackend::openNote(const QString &name)
     rewatch();
 }
 
-void NotesBackend::saveCurrentNote(const QString &body)
+bool NotesBackend::saveCurrentNote(const QString &body)
 {
     const QString path = noteAbsolutePath();
     const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
-    if (path.isEmpty() || !m_readOnlyReason.isEmpty() || text == m_noteContent || !writeText(path, text))
-        return;
+    if (path.isEmpty() || !m_readOnlyReason.isEmpty() || text == m_noteContent)
+        return true;
+    // A pull (or another program) rewrote the note since it was loaded:
+    // writing now would silently drop that change. The reload that follows
+    // hands the edits to keepEditsAsConflict instead.
+    if (QFile::exists(path) && readText(path) != m_noteContent) {
+        emit currentNoteChangedOnDisk();
+        return false;
+    }
+    if (!writeText(path, text))
+        return false;
     loadCurrentNote();
     rebuildNotes(); // a save bumps mtime, which reorders the list
     emit vaultChanged();
+    return true;
+}
+
+bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
+{
+    const QString path = noteAbsolutePath();
+    if (path.isEmpty() || !m_readOnlyReason.isEmpty() || !QFile::exists(path))
+        return false;
+    const QString disk = readText(path);
+    const SyncModel::EnvelopeSplit split = SyncModel::splitEnvelope(disk);
+    const QString theirs = SyncModel::editorForm(split.body);
+    if (theirs == base || theirs == mine)
+        return false;
+    if (!writeText(path, split.envelope + SyncModel::conflictBody(split.body, base, mine)))
+        return false;
+    loadCurrentNote();
+    rebuildNotes();
+    return true;
 }
 
 QString NotesBackend::saveWarning(const QString &body)

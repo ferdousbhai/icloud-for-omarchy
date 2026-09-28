@@ -84,14 +84,16 @@ inline QString extractNoteId(const QString &text)
 
 // What mergeNoteVersions writes on overlapping edits (diff3 shape). Text
 // carrying these must never be uploaded; both push and pull gate on it.
+inline bool isConflictMarker(QStringView line)
+{
+    const QStringView s = line.trimmed();
+    return s.startsWith(u"<<<<<<<") || s.startsWith(u"|||||||") || s.startsWith(u">>>>>>>") || s == u"=======";
+}
 inline bool hasConflictMarkers(const QString &text)
 {
-    for (const QStringView line : QStringView(text).split(u'\n')) {
-        const QStringView s = line.trimmed();
-        if (s.startsWith(u"<<<<<<<") || s.startsWith(u"|||||||") || s.startsWith(u">>>>>>>")
-            || s == u"=======")
+    for (const QStringView line : QStringView(text).split(u'\n'))
+        if (isConflictMarker(line))
             return true;
-    }
     return false;
 }
 
@@ -174,6 +176,55 @@ inline QString resolveConflicts(const QString &text, const QStringList &choices)
     }
     out << lines.mid(next);
     return out.join(u'\n');
+}
+
+// The text as a plain-text editor holds it (see editorChar below).
+inline QChar editorChar(QChar c);
+inline QString editorForm(QString text)
+{
+    for (QChar &c : text)
+        c = editorChar(c);
+    return text;
+}
+
+// Unsaved editor text (mine) whose note changed on disk (theirs) since
+// the editor loaded it (base; mine and base in editor form): one conflict
+// block around the lines where mine and theirs part ways, in the shape
+// parseConflicts reads, so it can be picked from instead of overwritten.
+// Theirs keeps its own characters: editorForm maps one character to one,
+// so offsets found in its editor form hold in the original.
+inline QString conflictBody(const QString &theirs, const QString &base, const QString &mine)
+{
+    const QString theirsE = editorForm(theirs);
+    const QStringList t = theirsE.split(u'\n'), m = mine.split(u'\n'), b = base.split(u'\n');
+    const qsizetype most = qMin(t.size(), m.size());
+    qsizetype head = 0;
+    while (head < most && t.at(head) == m.at(head))
+        ++head;
+    qsizetype tail = 0;
+    while (tail < most - head && t.at(t.size() - 1 - tail) == m.at(m.size() - 1 - tail))
+        ++tail;
+    // Where line i starts in a text split into lines, capped at its end.
+    auto offset = [](const QStringList &lines, qsizetype i, qsizetype size) {
+        qsizetype at = 0;
+        for (qsizetype k = 0; k < i; ++k)
+            at += lines.at(k).size() + 1;
+        return qMin(at, size);
+    };
+    auto middle = [&](const QString &text, const QStringList &lines) {
+        const qsizetype from = offset(lines, head, text.size());
+        QString mid = text.mid(from, offset(lines, lines.size() - tail, text.size()) - from);
+        if (!mid.isEmpty() && !mid.endsWith(u'\n'))
+            mid += u'\n';
+        return mid;
+    };
+    // The base section only when base shares the lines kept around the block.
+    const bool baseFits = b.size() >= head + tail && b.mid(0, head) == t.mid(0, head)
+        && b.mid(b.size() - tail) == t.mid(t.size() - tail);
+    const qsizetype tailAt = offset(t, t.size() - tail, theirs.size());
+    return theirs.left(offset(t, head, theirs.size())) + u"<<<<<<< local\n" + middle(mine, m)
+         + (baseFits ? u"||||||| base\n" + middle(base, b) : QString()) + u"=======\n" + middle(theirs, t)
+         + u">>>>>>> remote\n" + theirs.mid(tailAt);
 }
 
 // For each line of a, whether b lacks it (a line diff by longest common
@@ -533,7 +584,8 @@ inline NotePreview previewNote(const QString &text, const QString &fallbackTitle
     QStringList lines = splitEnvelope(text).body.split(u'\n');
     auto nextProse = [&lines]() {
         while (!lines.isEmpty()) {
-            const QString s = stripMarkdownLead(lines.takeFirst());
+            const QString line = lines.takeFirst();
+            const QString s = isConflictMarker(line) ? QString() : stripMarkdownLead(line);
             if (!s.isEmpty())
                 return s;
         }
