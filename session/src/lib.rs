@@ -121,6 +121,10 @@ pub struct Config {
     pub mock_url: Option<String>,
     /// The icloud-md executable `reauthenticate` runs.
     pub icloud_md_bin: PathBuf,
+    /// Cloned icloud-md folders `reauthenticate` may run in, checked in order
+    /// for one bound to the session's account: `ICLOUD_NOTES_VAULT`, then
+    /// iCloud Notes' default vault.
+    pub notes_vaults: Vec<PathBuf>,
 }
 
 impl Config {
@@ -152,6 +156,10 @@ impl Config {
                 .unwrap_or_else(|| SETUP_URL.to_string()),
             mock_url,
             icloud_md_bin: env("ICLOUD_MD_BIN").unwrap_or_else(|| PathBuf::from("icloud-md")),
+            notes_vaults: env("ICLOUD_NOTES_VAULT")
+                .into_iter()
+                .chain([documents_dir(&home).join("icloud-notes")])
+                .collect(),
         }
     }
 
@@ -163,6 +171,7 @@ impl Config {
             setup_url: SETUP_URL.to_string(),
             mock_url: None,
             icloud_md_bin: PathBuf::from("icloud-md"),
+            notes_vaults: Vec::new(),
         }
     }
 
@@ -580,9 +589,10 @@ impl Session {
 
     /// Runs `icloud-md reauthenticate` interactively and waits for it.
     ///
-    /// icloud-md resolves the account from the cloned Notes folder it is run
-    /// in (it walks up from the current directory); see
-    /// [`Session::reauthenticate_in`] to name that folder.
+    /// icloud-md only signs in again for a cloned Notes folder. This runs it
+    /// in the first of [`Config::notes_vaults`] bound to the session's
+    /// account, else in the current directory; see
+    /// [`Session::reauthenticate_in`] to name the folder.
     pub fn reauthenticate() -> Result<()> {
         reauthenticate_with(&Config::from_env(), None)
     }
@@ -608,6 +618,14 @@ pub fn reauthenticate_with(config: &Config, dir: Option<&Path>) -> Result<()> {
     if config.mock_url.is_some() {
         return Ok(());
     }
+    let found;
+    let dir = match dir {
+        Some(dir) => Some(dir),
+        None => {
+            found = notes_vault_for(config);
+            found.as_deref()
+        }
+    };
     let mut command = Command::new(&config.icloud_md_bin);
     command.arg("reauthenticate");
     if let Some(dir) = dir {
@@ -729,4 +747,56 @@ pub fn status_with(config: &Config) -> Status {
         expires_at: expires.map(format_time),
         validated_at: cache.validated_at().map(format_time),
     }
+}
+
+/// The first of `config.notes_vaults` that icloud-md cloned for the current
+/// session's account (`.icloud-md/state.json` names it), or for any account
+/// when there is no session to compare with.
+fn notes_vault_for(config: &Config) -> Option<PathBuf> {
+    let dsid = Session::load_with(config.clone()).ok().map(|s| s.dsid().to_string());
+    config
+        .notes_vaults
+        .iter()
+        .find(|vault| {
+            let Ok(raw) = std::fs::read(vault.join(".icloud-md/state.json")) else {
+                return false;
+            };
+            let Ok(state) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+                return false;
+            };
+            let bound = state.pointer("/account/dsid").and_then(serde_json::Value::as_str);
+            match (&dsid, bound) {
+                (Some(dsid), Some(bound)) => dsid == bound,
+                (None, Some(_)) => true,
+                _ => false,
+            }
+        })
+        .cloned()
+}
+
+/// `XDG_DOCUMENTS_DIR` from the environment or `~/.config/user-dirs.dirs`,
+/// else `~/Documents` (where Qt's DocumentsLocation, and so iCloud Notes, looks).
+fn documents_dir(home: &Path) -> PathBuf {
+    let expand = |value: &str| {
+        let value = value.trim().trim_matches('"');
+        match value.strip_prefix("$HOME") {
+            Some(rest) => home.join(rest.trim_start_matches('/')),
+            None => PathBuf::from(value),
+        }
+    };
+    if let Some(dir) = std::env::var("XDG_DOCUMENTS_DIR").ok().filter(|v| !v.is_empty()) {
+        return expand(&dir);
+    }
+    let user_dirs = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("user-dirs.dirs");
+    std::fs::read_to_string(user_dirs)
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.trim().strip_prefix("XDG_DOCUMENTS_DIR=").map(expand))
+        })
+        .unwrap_or_else(|| home.join("Documents"))
 }

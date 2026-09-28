@@ -786,6 +786,8 @@ fn reauthenticate_runs_icloud_md_and_maps_failure() {
             .env("ICLOUD_MD_CONFIG_DIR", &fx.config_dir)
             .env("ICLOUD_SESSION_CACHE_DIR", &fx.cache_dir)
             .env("ICLOUD_MD_BIN", bin)
+            .env("ICLOUD_NOTES_VAULT", fx.config_dir.join("no-vault"))
+            .env("XDG_DOCUMENTS_DIR", fx.config_dir.join("no-documents"))
             .env_remove("ICLOUD_SESSION_MOCK")
             .output()
             .unwrap()
@@ -804,4 +806,45 @@ fn reauthenticate_runs_icloud_md_and_maps_failure() {
         Some(1)
     );
     assert_eq!(run(&ok, &["bogus"]).status.code(), Some(64));
+}
+
+#[test]
+fn reauthenticate_runs_in_the_notes_vault_bound_to_the_account() {
+    let fx = Fixture::new("http://127.0.0.1:9");
+    let dirs = tempfile::tempdir().unwrap();
+    let vault = |name: &str, dsid: &str| {
+        let path = dirs.path().join(name);
+        fs::create_dir_all(path.join(".icloud-md")).unwrap();
+        fs::write(
+            path.join(".icloud-md/state.json"),
+            format!(r#"{{"account":{{"appleId":"someone@example.com","dsid":"{dsid}"}}}}"#),
+        )
+        .unwrap();
+        path
+    };
+    let other = vault("other", "999");
+    let ours = vault("ours", DSID);
+    let args_file = dirs.path().join("args");
+    let bin = dirs.path().join("icloud-md");
+    fs::write(&bin, format!("#!/bin/sh\necho \"$@\" > {}\n", args_file.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let config = Config {
+        icloud_md_bin: bin,
+        notes_vaults: vec![dirs.path().join("missing"), other, ours.clone()],
+        ..fx.config()
+    };
+    icloud_session::reauthenticate_with(&config, None).unwrap();
+    assert_eq!(
+        fs::read_to_string(&args_file).unwrap().trim(),
+        format!("reauthenticate {}", ours.display())
+    );
+
+    let none = Config {
+        notes_vaults: vec![dirs.path().join("missing")],
+        ..config
+    };
+    icloud_session::reauthenticate_with(&none, None).unwrap();
+    assert_eq!(fs::read_to_string(&args_file).unwrap().trim(), "reauthenticate");
 }

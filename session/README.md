@@ -82,9 +82,12 @@ $ icloud-session reauthenticate ~/Documents/icloud-notes
 - `validate` prints the cached `/validate` result, calling Apple only when the
   cache is older than 10 minutes.
 - `reauthenticate [directory]` runs `icloud-md reauthenticate [directory]`
-  interactively. icloud-md finds the account from a folder cloned with
-  `icloud-md clone` (it walks up from the directory, or from the current
-  directory when none is given), then prints `status`.
+  interactively, then prints `status`. icloud-md only signs in again for a
+  folder cloned with `icloud-md clone`. With no directory, icloud-session
+  uses the first of `$ICLOUD_NOTES_VAULT` and iCloud Notes' vault
+  (`$XDG_DOCUMENTS_DIR/icloud-notes`) whose `.icloud-md/state.json` is bound
+  to the session's account, else the current directory. So apps without a
+  vault of their own (Photos, Find My) sign in again through Notes' vault.
 
 Exit codes: 0 ok, 1 error, 2 sign-in required, 64 usage.
 
