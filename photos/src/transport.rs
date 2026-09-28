@@ -3,9 +3,9 @@
 //! `cloudkit`, `sync`, `upload` and `thumbs` talk only to [`Transport`], so
 //! tests drive them with recorded fixtures and the dev fake server, while the
 //! app uses `session::SessionTransport`, a thin wrapper over the
-//! `icloud-session` crate (cookie jar, `/validate`, rotation merge and 421
-//! mapping all live there). `src/session.rs` is the only file that names
-//! that crate.
+//! `icloud-session` crate, the D-Bus client of `icloud-sessiond` (which owns
+//! the cookie jar, `/validate`, rotation merge and the 421 confirmation).
+//! `src/session.rs` is the only file that names that crate.
 
 use std::path::Path;
 use std::time::Duration;
@@ -55,8 +55,6 @@ pub trait Transport: Send + Sync {
     fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value>;
     /// Stream `url` to `dest` (temp file + rename). Returns bytes written.
     fn download(&self, url: &str, dest: &Path) -> Result<u64>;
-    /// Run the interactive sign-in, blocking until it finishes.
-    fn reauthenticate(&self) -> Result<()>;
     /// True for the mock transport: plain `http://` loopback upload targets
     /// are allowed only there.
     fn is_mock(&self) -> bool {
@@ -102,6 +100,12 @@ impl MockTransport {
     pub fn active() -> bool {
         std::env::var("ICLOUD_SESSION_MOCK").is_ok_and(|v| v == "1")
     }
+
+    /// The mock sign-in: tells the fake server the "user" signed in again.
+    pub fn reauthenticate(&self) -> Result<()> {
+        Self::map(self.agent.post(&format!("{}/mock/reauthenticate", self.base)).send_string(""))?;
+        Ok(())
+    }
 }
 
 impl Transport for MockTransport {
@@ -120,12 +124,6 @@ impl Transport for MockTransport {
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {
         let resp = Self::map(self.agent.get(url).call())?;
         write_atomically(dest, &mut resp.into_reader())
-    }
-
-    fn reauthenticate(&self) -> Result<()> {
-        // Tell the fake server the "user" signed in again.
-        Self::map(self.agent.post(&format!("{}/mock/reauthenticate", self.base)).send_string(""))?;
-        Ok(())
     }
 
     fn is_mock(&self) -> bool {
@@ -157,23 +155,38 @@ pub fn from_env() -> Result<std::sync::Arc<dyn Transport>> {
     if MockTransport::active() {
         return Ok(std::sync::Arc::new(MockTransport::from_env()));
     }
-    #[cfg(feature = "session")]
-    return Ok(std::sync::Arc::new(crate::session::SessionTransport::load()?));
-    #[cfg(not(feature = "session"))]
-    Err(Error::Other(NO_SESSION.into()))
+    Ok(std::sync::Arc::new(crate::session::SessionTransport::connect()?))
 }
 
-#[cfg(not(feature = "session"))]
-const NO_SESSION: &str = "built without the icloud-session feature; only ICLOUD_SESSION_MOCK=1 works";
+/// The sign-in banner's inputs: icloud-sessiond's `SignedIn` and `SigningIn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignInState {
+    pub signed_in: bool,
+    /// The sign-in window is open.
+    pub signing_in: bool,
+}
 
-/// Interactive sign-in when there is no transport yet (the session could not
-/// even load). Blocks until it finishes; call it off the main loop.
-pub fn sign_in() -> Result<()> {
+/// Opens the interactive sign-in and returns at once; the outcome arrives
+/// through [`watch_sign_in`]. In mock mode the fake server is told and
+/// `notify` hears "signed in" straight away. Call it off the main loop.
+pub fn start_sign_in(notify: &dyn Fn(SignInState)) -> Result<()> {
     if MockTransport::active() {
-        return MockTransport::from_env().reauthenticate();
+        MockTransport::from_env().reauthenticate()?;
+        notify(SignInState { signed_in: true, signing_in: false });
+        return Ok(());
     }
-    #[cfg(feature = "session")]
-    return crate::session::sign_in();
-    #[cfg(not(feature = "session"))]
-    Err(Error::Other(NO_SESSION.into()))
+    crate::session::start_sign_in()
+}
+
+/// Reports the sign-in state on a long-lived background thread: once on
+/// connecting to icloud-sessiond, then after every change. Nothing in mock
+/// mode, where [`start_sign_in`] reports for itself.
+pub fn watch_sign_in(notify: Box<dyn Fn(SignInState) + Send>) {
+    if MockTransport::active() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("sign-in watch".into())
+        .spawn(move || crate::session::watch_sign_in(&*notify))
+        .expect("spawn the sign-in watch thread");
 }

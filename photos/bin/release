@@ -25,7 +25,7 @@ gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
 export GPGKEY=$fingerprint
 
 # No CI: the tests run here, before anything is tagged.
-./bin/test --require-session >/dev/null 2>&1 || { ./bin/test --require-session 2>&1 | grep -E 'FAIL|panicked|^error' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
+./bin/test >/dev/null 2>&1 || { ./bin/test 2>&1 | grep -E 'FAIL|panicked|^error' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
 
 sed -i "s/^pkgver=.*/pkgver=$version/" pkgbuild/PKGBUILD
 sed -i "0,/^version = .*/s//version = \"$version\"/" Cargo.toml

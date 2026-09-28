@@ -107,10 +107,6 @@ impl Transport for FixtureTransport {
         Ok(bytes.len() as u64)
     }
 
-    fn reauthenticate(&self) -> Result<()> {
-        Ok(())
-    }
-
     fn is_mock(&self) -> bool {
         self.mock
     }

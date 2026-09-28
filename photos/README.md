@@ -25,8 +25,9 @@ curl -fsSL https://ferdousbhai.com/icloud-photos/install.sh | sudo bash
 Updates arrive with `omarchy update`. The script is [`install.sh`](install.sh)
 in this repo; the one-liner runs the copy attached to the latest release.
 
-To build and run from source instead (needs gtk4, libadwaita, Rust, and the
-`icloud-session` checkout next to this one, at `../icloud-session`):
+To build and run from source instead (needs gtk4, libadwaita, Rust, the
+`icloud-session` checkout next to this one, at `../icloud-session`, and its
+daemon installed, as that repository's README describes):
 
 ```bash
 ./bin/build
@@ -57,8 +58,9 @@ To build and run from source instead (needs gtk4, libadwaita, Rust, and the
   minutes, every 10 minutes, and on `Ctrl+R`.
 - **Preferences** (`Ctrl+,`): the folder for originals, and whether originals
   download on demand (default) or all of them in the background.
-- When Apple ends the web session, a banner offers **Sign In**; syncing
-  resumes on its own afterwards.
+- When you are signed out (here or from any other iCloud app), a banner
+  offers **Sign In**, which opens Apple's sign-in page in a window of its
+  own; syncing resumes on its own once you are signed in.
 
 ## Your files
 
@@ -133,11 +135,6 @@ Layout:
 - `src/transport.rs` the HTTP seam every module above goes through, and the mock
 - `src/session.rs` the only file that uses the `icloud-session` crate
 - `src/ui/` the GTK 4 / libadwaita app
-
-The `session` cargo feature (on by default) links `../icloud-session`; with
-`--no-default-features` the app builds without it and only mock mode works,
-which keeps development going while that crate changes. `bin/test` falls
-back to that automatically; `bin/release` does not.
 
 `bin/test` runs clippy, the test suite (fixtures in `tests/fixtures/`, plus
 an end-to-end run against the fake server), and the installer hash check.

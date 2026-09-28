@@ -17,7 +17,7 @@ use icloud_photos::cloudkit::{CloudKit, Modified};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
 use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority};
-use icloud_photos::transport::{self, Error, Result, Transport};
+use icloud_photos::transport::{self, Error, Result, SignInState, Transport};
 
 use super::albums::Albums;
 use super::grid::Grid;
@@ -31,7 +31,10 @@ pub enum Msg {
     Download(thumbs::Event),
     Deleted(String, Result<Modified>),
     Upload(UploadMsg),
-    ReauthDone(Result<()>),
+    /// icloud-sessiond's sign-in state changed (or was first read).
+    SignIn(SignInState),
+    /// The sign-in window could not be opened.
+    SignInFailed(Error),
 }
 
 /// Recently decoded thumbnails, bounded.
@@ -92,7 +95,8 @@ pub struct App {
     pub want_open: RefCell<HashSet<String>>,
     pub want_toast: RefCell<HashSet<String>>,
     pub reloading: Cell<bool>,
-    pub reauthing: Cell<bool>,
+    /// The sign-in window is open (or was just asked for).
+    pub signing_in: Cell<bool>,
     pub upload: RefCell<Option<super::upload::UploadUi>>,
 }
 
@@ -188,7 +192,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         want_open: RefCell::new(HashSet::new()),
         want_toast: RefCell::new(HashSet::new()),
         reloading: Cell::new(false),
-        reauthing: Cell::new(false),
+        signing_in: Cell::new(false),
         upload: RefCell::new(None),
     });
 
@@ -221,7 +225,7 @@ impl App {
         });
 
         let a = self.clone();
-        self.banner.connect_button_clicked(move |_| a.reauthenticate());
+        self.banner.connect_button_clicked(move |_| a.sign_in());
 
         let a = self.clone();
         self.window.connect_is_active_notify(move |w| {
@@ -269,7 +273,7 @@ impl App {
                     .version(env!("CARGO_PKG_VERSION"))
                     .website("https://github.com/ferdousbhai/icloud-photos")
                     .license_type(gtk::License::MitX11)
-                    .comments("Browse, download, upload and delete your iCloud photos, over the icloud-md sign-in.")
+                    .comments("Browse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.")
                     .build()
                     .present(Some(&a.window));
             }),
@@ -298,6 +302,7 @@ impl App {
         self.update_status();
         self.window.present();
         self.load_transport();
+        self.watch_sign_in();
         #[cfg(debug_assertions)]
         self.dev_screenshot();
     }
@@ -383,7 +388,8 @@ impl App {
             Msg::Download(e) => self.on_download(e),
             Msg::Deleted(id, result) => self.on_deleted(&id, result),
             Msg::Upload(m) => super::upload::on_msg(self, m),
-            Msg::ReauthDone(result) => self.on_reauth_done(result),
+            Msg::SignIn(s) => self.on_sign_in_state(s),
+            Msg::SignInFailed(e) => self.on_sign_in_failed(&e),
         }
     }
 

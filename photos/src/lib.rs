@@ -3,7 +3,6 @@
 pub mod catalog;
 pub mod cloudkit;
 pub mod config;
-#[cfg(feature = "session")]
 pub mod session;
 pub mod sync;
 pub mod thumbs;
