@@ -1,7 +1,7 @@
 //! A fake Find My server for running the app without an Apple account.
 //!
-//!     cargo run --example fake_findme            # listens on 127.0.0.1:8787
-//!     ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8787 cargo run
+//!     cargo run --example fake_findme      # listens on 127.0.0.1:8765
+//!     ICLOUD_SESSION_MOCK=1 cargo run       # icloud-session's default mock URL
 //!
 //! Serves tests/fixtures/*.json on the Find My endpoints, stamps positions
 //! with the current time, and walks the iPhone a little on every
@@ -33,7 +33,9 @@ fn now_ms() -> i64 {
 /// the first device `step` × ~80 m north-east.
 fn live(mut v: Value, step: u64) -> Value {
     let now = now_ms();
-    let base = v["serverContext"]["serverTimestamp"].as_i64().unwrap_or(now);
+    let base = v["serverContext"]["serverTimestamp"]
+        .as_i64()
+        .unwrap_or(now);
     if let Some(devices) = v["content"].as_array_mut() {
         for (i, d) in devices.iter_mut().enumerate() {
             let loc = &mut d["location"];
@@ -64,10 +66,11 @@ fn route(base: &str, path: &str) -> (u16, Value) {
                 "webservices": {"findme": {"url": base, "status": "active"}},
             }),
         ),
-        "/fmipservice/client/web/initClient" => {
-            REFRESHES.store(0, Ordering::SeqCst);
-            (200, live(fixture("initClient"), 0))
-        }
+        // A restarted app picks up where the walk left off.
+        "/fmipservice/client/web/initClient" => match REFRESHES.load(Ordering::SeqCst) {
+            0 => (200, live(fixture("initClient"), 0)),
+            n => (200, live(fixture("refreshClient"), n)),
+        },
         "/fmipservice/client/web/refreshClient" => {
             let n = REFRESHES.fetch_add(1, Ordering::SeqCst) + 1;
             (200, live(fixture("refreshClient"), n))
@@ -135,7 +138,9 @@ pub fn serve(listener: TcpListener) -> std::io::Result<()> {
 
 #[allow(dead_code)] // tests/fake_server.rs includes this file for `serve`.
 fn main() -> std::io::Result<()> {
-    let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8787".into());
+    let addr = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "127.0.0.1:8765".into());
     let listener = TcpListener::bind(&addr)?;
     let base = format!("http://{}", listener.local_addr()?);
     eprintln!("Fake Find My on {base}");

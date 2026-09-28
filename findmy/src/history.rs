@@ -82,7 +82,12 @@ impl History {
 
     /// Stores `fix` if the device moved since the last stored point.
     /// Returns whether a row was written.
-    pub fn record(&self, device_id: &str, fix: &Fix, battery: Option<f64>) -> rusqlite::Result<bool> {
+    pub fn record(
+        &self,
+        device_id: &str,
+        fix: &Fix,
+        battery: Option<f64>,
+    ) -> rusqlite::Result<bool> {
         let ts = fix.ts_ms / 1000;
         if let Some(last) = self.last(device_id)? {
             if ts <= last.ts {
@@ -120,7 +125,8 @@ impl History {
             "SELECT ts, lat, lon, accuracy, battery FROM history
              WHERE device_id = ?1 AND ts >= ?2 ORDER BY ts, rowid",
         )?;
-        stmt.query_map(params![device_id, since], row_to_point)?.collect()
+        stmt.query_map(params![device_id, since], row_to_point)?
+            .collect()
     }
 }
 

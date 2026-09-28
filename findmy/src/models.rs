@@ -141,7 +141,10 @@ impl Device {
         });
         let model_name = raw.device_display_name.unwrap_or_default();
         Some(Device {
-            name: raw.name.filter(|n| !n.is_empty()).unwrap_or_else(|| model_name.clone()),
+            name: raw
+                .name
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| model_name.clone()),
             class: DeviceClass::parse(raw.device_class.as_deref().unwrap_or("")),
             model_name,
             battery,
@@ -164,13 +167,27 @@ impl Device {
         }
         if let Some(b) = self.battery {
             let pct = (b * 100.0).round() as i64;
-            parts.push(if self.charging { format!("{pct}% charging") } else { format!("{pct}%") });
+            parts.push(if self.charging {
+                format!("{pct}% charging")
+            } else {
+                format!("{pct}%")
+            });
         }
         match &self.location {
             Some(fix) if fix.ts_ms > 0 => parts.push(last_seen(now_ms, fix.ts_ms)),
             _ => parts.push("No location".into()),
         }
         parts.join(" · ")
+    }
+}
+
+/// An Adwaita `battery-level-N[-charging]-symbolic` icon for a 0..=1 level.
+pub fn battery_icon_name(level: f64, charging: bool) -> String {
+    let tens = ((level.clamp(0.0, 1.0) * 10.0).round() as u32) * 10;
+    match (tens, charging) {
+        (100, true) => "battery-level-100-charged-symbolic".into(),
+        (n, true) => format!("battery-level-{n}-charging-symbolic"),
+        (n, false) => format!("battery-level-{n}-symbolic"),
     }
 }
 
@@ -197,6 +214,20 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battery_icons() {
+        assert_eq!(battery_icon_name(0.82, false), "battery-level-80-symbolic");
+        assert_eq!(
+            battery_icon_name(0.04, true),
+            "battery-level-0-charging-symbolic"
+        );
+        assert_eq!(
+            battery_icon_name(1.0, true),
+            "battery-level-100-charged-symbolic"
+        );
+        assert_eq!(battery_icon_name(1.7, false), "battery-level-100-symbolic");
+    }
 
     #[test]
     fn last_seen_buckets() {

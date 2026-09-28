@@ -75,16 +75,9 @@ impl Transport for SessionTransport {
                 self.session = None;
             }
         })?;
-        if let Some(url) = ws.url("findme") {
-            return Ok(url.trim_end_matches('/').to_string());
-        }
-        // Mock mode: the fake server serves every service from one base URL.
-        if std::env::var("ICLOUD_SESSION_MOCK").as_deref() == Ok("1")
-            && let Ok(url) = std::env::var("ICLOUD_SESSION_MOCK_URL")
-        {
-            return Ok(url.trim_end_matches('/').to_string());
-        }
-        Err(Error::NoService)
+        ws.url("findme")
+            .map(|url| url.trim_end_matches('/').to_string())
+            .ok_or(Error::NoService)
     }
 
     fn post_json(&mut self, url: &str, body: &Value) -> Result<Value> {
@@ -157,7 +150,10 @@ pub fn parse_response(resp: &Value) -> Result<Snapshot> {
         Some(Value::Array(items)) => items.iter().filter_map(Device::from_json).collect(),
         Some(_) => return Err(Error::Parse("content is not a list".into())),
     };
-    Ok(Snapshot { server_ctx, devices })
+    Ok(Snapshot {
+        server_ctx,
+        devices,
+    })
 }
 
 pub fn play_sound_body(device_id: &str, subject: &str) -> Value {
@@ -191,7 +187,12 @@ pub struct FindMe<T: Transport> {
 
 impl<T: Transport> FindMe<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport, root: None, server_ctx: None, with_family: false }
+        Self {
+            transport,
+            root: None,
+            server_ctx: None,
+            with_family: false,
+        }
     }
 
     /// Include Family Sharing members' devices.
@@ -234,7 +235,11 @@ impl<T: Transport> FindMe<T> {
     }
 
     fn refresh_inner(&mut self) -> Result<Vec<Device>> {
-        let endpoint = if self.server_ctx.is_some() { "refreshClient" } else { "initClient" };
+        let endpoint = if self.server_ctx.is_some() {
+            "refreshClient"
+        } else {
+            "initClient"
+        };
         let url = self.url(endpoint)?;
         let body = refresh_body(self.server_ctx.as_ref(), true, self.with_family);
         let resp = self.transport.post_json(&url, &body)?;
@@ -259,7 +264,9 @@ impl<T: Transport> FindMe<T> {
     /// button to call `phone`.
     pub fn lost_mode(&mut self, device: &Device, phone: &str, message: &str) -> Result<()> {
         if !device.can_lost_mode {
-            return Err(Error::Unsupported("This device does not support Lost Mode."));
+            return Err(Error::Unsupported(
+                "This device does not support Lost Mode.",
+            ));
         }
         let url = self.url("lostDevice")?;
         self.transport
