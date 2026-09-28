@@ -18,7 +18,7 @@ use zbus::zvariant::Value;
 
 use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
-use crate::files::{self, Account, MirrorSession, MirrorWrite, Paths};
+use crate::files::{self, Account, FindMyJar, MirrorSession, MirrorWrite, Paths};
 
 /// Heartbeat keeps running while a client called within this window
 /// (the browser's own heartbeat is 14 minutes).
@@ -83,10 +83,16 @@ pub enum ServiceError {
     ZBus(zbus::Error),
     /// Signed out: the apps show a sign-in banner.
     SignInRequired(String),
+    /// No Find My session: the apps offer `AuthorizeFindMy()`.
+    FindMyAuthRequired(String),
 }
 
 fn sign_in_required() -> ServiceError {
     ServiceError::SignInRequired("sign in to iCloud required".into())
+}
+
+fn find_my_auth_required() -> ServiceError {
+    ServiceError::FindMyAuthRequired("Find My needs the Apple ID password".into())
 }
 
 /// The D-Bus properties, as last announced.
@@ -506,17 +512,44 @@ impl Daemon {
         }
     }
 
-    /// A client got HTTP 450 from Find My: the jar's Find My authorization
-    /// is spent. Drops it (flag and cookie), rewrites the mirror, announces.
+    /// Saves `account.json` as it is, without touching the mirror (the
+    /// Find My jar is not icloud-md's business).
+    fn save_account(&self, st: &State) {
+        if let Some(a) = &st.account
+            && let Err(e) = a.save(&self.cfg.paths.account)
+        {
+            eprintln!("icloud-sessiond: saving {}: {e}", self.cfg.paths.account.display());
+        }
+    }
+
+    /// `FindMySession()`: the Find My jar's cookie header and client params.
+    fn find_my_session(&self) -> Result<(String, HashMap<String, String>), ServiceError> {
+        let st = lock(&self.state);
+        let a = st.account.as_ref().ok_or_else(sign_in_required)?;
+        let f = a.find_my.as_ref().ok_or_else(find_my_auth_required)?;
+        let params = f.client_params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        Ok((cookies::header(&f.cookies, now_unix()), params))
+    }
+
+    /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
+    fn merge_find_my_cookies(&self, set_cookies: &[String]) {
+        let mut st = lock(&self.state);
+        if let Some(f) = st.account.as_mut().and_then(|a| a.find_my.as_mut())
+            && cookies::merge_set_cookies(&mut f.cookies, set_cookies, now_unix())
+        {
+            self.save_account(&st);
+        }
+        drop(st);
+        self.publish();
+    }
+
+    /// A client got HTTP 450 from Find My: its session is spent. Forgets
+    /// the Find My jar and announces it.
     fn report_find_my_auth_required(&self) {
         let mut st = lock(&self.state);
-        if let Some(a) = st.account.as_mut() {
-            let dropped = cookies::remove(&mut a.cookies, cookies::FIND_MY);
-            let was = std::mem::replace(&mut a.find_my_authorized, false);
-            if dropped || was {
-                eprintln!("icloud-sessiond: Find My asked for the password again");
-                self.store(&mut st);
-            }
+        if st.account.as_mut().and_then(|a| a.find_my.take()).is_some() {
+            eprintln!("icloud-sessiond: Find My asked for the password again");
+            self.save_account(&st);
         }
         drop(st);
         self.publish();
@@ -554,9 +587,8 @@ impl Daemon {
     }
 
     /// Runs the sign-in window, validates what it captured, stores it.
-    /// With `find` the window authorizes Find My (`--find`): what it
-    /// captures is a complete fresh session, so it replaces the stored jar
-    /// the same way, now marked as authorized for Find My.
+    /// With `find` the window authorizes Find My (`--find`), and what it
+    /// captures is kept as the Find My jar instead (see [`FindMyJar`]).
     fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), String> {
         let bin = &self.cfg.signin_bin;
         let cancelled = || "cancelled by SignOut".to_string();
@@ -601,11 +633,15 @@ impl Daemon {
         }
         let capture: Capture =
             serde_json::from_slice(&out).map_err(|e| format!("reading the sign-in window's output: {e}"))?;
+        let window_dsid = capture.dsid.clone();
         let (mut jar, params) = capture.into_parts();
         if jar.is_empty() {
             return Err("the sign-in window captured no icloud.com cookies".into());
         }
         let now = now_unix();
+        if find {
+            return self.store_find_my(seq, jar, params, window_dsid);
+        }
         let v = apple::validate(
             &self.agent,
             &self.cfg.setup_url,
@@ -626,30 +662,64 @@ impl Daemon {
             webservices: v.webservices,
             validated_at: now,
             captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
-            find_my_authorized: find,
+            find_my: None,
         };
-        if find && !cookies::find_my_cookie(&account.cookies, now) {
-            eprintln!(
-                "icloud-sessiond: the Find My window captured no {} cookie",
-                cookies::FIND_MY
-            );
-        }
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
             return Err(cancelled());
         }
-        // Authorizing Find My as another Apple ID (or while signed out) is
-        // a new sign-in; for the same one, the fresh jar replaces the old.
-        if find
-            && let Some(old) = st.account.as_ref()
-            && old.dsid != account.dsid
-        {
-            eprintln!("icloud-sessiond: Find My was authorized for another Apple ID; switching to it");
+        let mut account = account;
+        // Signing in again as the same Apple ID keeps its Find My session,
+        // which Apple judges on its own.
+        if let Some(old) = st.account.as_mut().filter(|old| old.dsid == account.dsid) {
+            account.find_my = old.find_my.take();
         }
         st.account = Some(account);
         st.generation += 1;
         st.mirror_cookie = None;
         self.store(&mut st);
+        Ok(())
+    }
+
+    /// Keeps what the Find My window captured as the account's Find My jar:
+    /// not validated (Apple's `/validate` refuses a one-factor session),
+    /// and the main jar, its generation and the mirror are left alone. A
+    /// dsid the window reported (or the jar's X-APPLE-WEBAUTH-USER names)
+    /// must be the account's.
+    fn store_find_my(
+        &self,
+        seq: u64,
+        jar: Vec<Cookie>,
+        params: BTreeMap<String, String>,
+        window_dsid: Option<String>,
+    ) -> Result<(), String> {
+        if !cookies::find_my_cookie(&jar, now_unix()) {
+            return Err(format!("the Find My window captured no {} cookie", cookies::FIND_MY));
+        }
+        let dsid = window_dsid
+            .filter(|d| !d.is_empty())
+            .or_else(|| cookies::user_dsid(&jar));
+        let mut st = lock(&self.state);
+        if st.signin_seq != seq {
+            return Err("cancelled by SignOut".into());
+        }
+        let Some(account) = st.account.as_mut() else {
+            return Err("signed out meanwhile; sign in first".into());
+        };
+        if let Some(dsid) = dsid
+            && dsid != account.dsid
+        {
+            return Err(format!(
+                "Find My was authorized as another Apple ID (dsid {dsid}, signed in as {}); not kept",
+                account.dsid
+            ));
+        }
+        account.find_my = Some(FindMyJar {
+            cookies: jar,
+            client_params: params,
+            captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+        });
+        self.save_account(&st);
         Ok(())
     }
 
@@ -907,6 +977,9 @@ fn adopt(a: &mut Account, m: MirrorSession) -> bool {
 #[derive(Debug, Deserialize)]
 struct Capture {
     cookies: Vec<CapturedCookie>,
+    /// The account the window saw (`--find` only).
+    #[serde(default)]
+    dsid: Option<String>,
     #[serde(rename = "clientId")]
     client_id: Option<String>,
     #[serde(rename = "clientBuildNumber")]
@@ -1041,14 +1114,29 @@ impl Service {
 
     /// Opens the sign-in window on Find My, where Apple asks for the
     /// password before Find My answers, unless a window is open; returns at
-    /// once. The captured jar replaces the stored one.
+    /// once. The captured jar becomes the Find My session.
     #[zbus(name = "AuthorizeFindMy")]
     async fn authorize_find_my(&self) {
         let d = self.0.clone();
         blocking::unblock(move || d.sign_in(true)).await
     }
 
-    /// A client got HTTP 450 from Find My: drops the Find My authorization.
+    /// `(cookie_header, client_params)` of the Find My session, for the
+    /// `findme` host only; error `FindMyAuthRequired` when there is none.
+    #[zbus(name = "FindMySession", out_args("cookie_header", "client_params"))]
+    async fn find_my_session(&self) -> Result<(String, HashMap<String, String>), ServiceError> {
+        let d = self.0.clone();
+        blocking::unblock(move || d.find_my_session()).await
+    }
+
+    /// Raw `Set-Cookie` header values a client received from Find My.
+    #[zbus(name = "MergeFindMyCookies")]
+    async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) {
+        let d = self.0.clone();
+        blocking::unblock(move || d.merge_find_my_cookies(&set_cookies)).await
+    }
+
+    /// A client got HTTP 450 from Find My: forgets the Find My session.
     #[zbus(name = "ReportFindMyAuthRequired")]
     async fn report_find_my_auth_required(&self) {
         let d = self.0.clone();

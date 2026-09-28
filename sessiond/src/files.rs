@@ -101,11 +101,23 @@ pub struct Account {
     /// RFC 3339 time of the sign-in, the mirror's `capturedAt`.
     #[serde(default)]
     pub captured_at: String,
-    /// Find My was authorized (`AuthorizeFindMy()`) for this jar and no
-    /// client has reported a Find My 450 since. `FindMyAuthorized` is this
-    /// while the jar still holds the Find My cookie.
+    /// Find My's own session from `AuthorizeFindMy()`, until a client
+    /// reports a Find My 450. Apple's password prompt on icloud.com/find is
+    /// a one-factor sign-in: good for Find My, refused by `/validate`, so
+    /// it is kept apart from the main jar, never validated or mirrored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub find_my: Option<FindMyJar>,
+}
+
+/// The cookies (session-only ones included) and client params the Find My
+/// window captured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindMyJar {
+    pub cookies: Vec<Cookie>,
     #[serde(default)]
-    pub find_my_authorized: bool,
+    pub client_params: BTreeMap<String, String>,
+    #[serde(default)]
+    pub captured_at: String,
 }
 
 impl Account {
@@ -117,9 +129,11 @@ impl Account {
         cookies::header(&self.cookies, now)
     }
 
-    /// Authorized for Find My and still holding its cookie.
+    /// Holds a Find My jar with its authorization cookie.
     pub fn find_my_ready(&self, now: u64) -> bool {
-        self.find_my_authorized && cookies::find_my_cookie(&self.cookies, now)
+        self.find_my
+            .as_ref()
+            .is_some_and(|f| cookies::find_my_cookie(&f.cookies, now))
     }
 
     pub fn load(path: &Path) -> io::Result<Option<Account>> {
@@ -344,7 +358,7 @@ mod tests {
             webservices: BTreeMap::new(),
             validated_at: 1,
             captured_at: "2026-09-28T00:00:00.000Z".into(),
-            find_my_authorized: false,
+            find_my: None,
         }
     }
 

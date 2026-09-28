@@ -75,11 +75,15 @@ pub fn find_my_cookie(cookies: &[Cookie], now: u64) -> bool {
         .any(|c| c.name == FIND_MY && c.expires.is_none_or(|e| e > now))
 }
 
-/// Removes the cookie named `name`. Returns whether there was one.
-pub fn remove(cookies: &mut Vec<Cookie>, name: &str) -> bool {
-    let before = cookies.len();
-    cookies.retain(|c| c.name != name);
-    cookies.len() != before
+/// The dsid in X-APPLE-WEBAUTH-USER (`"v=1:s=0:d=12345"`), if any.
+pub fn user_dsid(cookies: &[Cookie]) -> Option<String> {
+    let user = cookies.iter().find(|c| c.name == "X-APPLE-WEBAUTH-USER")?;
+    user.value
+        .trim_matches('"')
+        .split(':')
+        .find_map(|part| part.strip_prefix("d="))
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
 }
 
 /// Parses a `Name1=Value1; Name2=Value2` header into ordered pairs. A name
@@ -391,9 +395,9 @@ mod tests {
         assert!(find_my_cookie(&j, NOW));
         j[1].expires = Some(NOW);
         assert!(!find_my_cookie(&j, NOW));
-        assert!(remove(&mut j, FIND_MY));
-        assert!(!remove(&mut j, FIND_MY));
-        assert_eq!(header(&j, NOW), "A=1");
+        assert_eq!(user_dsid(&j), None);
+        j.push(Cookie::new("X-APPLE-WEBAUTH-USER", "\"v=1:s=0:d=12345\""));
+        assert_eq!(user_dsid(&j).as_deref(), Some("12345"));
     }
 
     #[test]

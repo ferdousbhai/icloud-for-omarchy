@@ -204,6 +204,9 @@ struct Capture {
     find: bool,
     /// When Find My was last asked.
     last_find: Cell<Option<std::time::Instant>>,
+    /// The dsid the page's /validate named (`--find`), printed with the jar
+    /// so the daemon can check it without validating the jar itself.
+    dsid: RefCell<Option<String>>,
 }
 
 impl Capture {
@@ -222,6 +225,9 @@ impl Capture {
                     Ok(cookies) => {
                         let mut out = client_params(&me2.client_id);
                         out["cookies"] = Value::Array(cookies_json(cookies));
+                        if let Some(dsid) = me2.dsid.borrow().as_ref() {
+                            out["dsid"] = Value::String(dsid.clone());
+                        }
                         println!("{out}");
                         me2.exit.set(0);
                     }
@@ -293,6 +299,13 @@ impl Capture {
                         .and_then(|b| serde_json::from_str(b).ok())
                         .unwrap_or(Value::Null);
                     if (200..300).contains(&status) && is_fully_signed_in(&body) {
+                        if me2.find {
+                            *me2.dsid.borrow_mut() = match &body["dsInfo"]["dsid"] {
+                                Value::String(d) => Some(d.clone()),
+                                Value::Number(d) => Some(d.to_string()),
+                                _ => None,
+                            };
+                        }
                         me2.finish();
                     } else {
                         if status != 0 {
@@ -385,6 +398,7 @@ fn main() -> ExitCode {
         refused: RefCell::new(None),
         find,
         last_find: Cell::new(None),
+        dsid: RefCell::new(None),
     });
 
     // Signed in yet? Checked on a timer and after each page load.

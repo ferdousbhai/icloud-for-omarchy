@@ -6,10 +6,11 @@
 //! cookie header, client parameters and webservices over D-Bus, sends
 //! requests straight to Apple with them, hands rotated cookies back
 //! (`MergeCookies`), and reports a 421/401 (`ReportSignInRequired`) so the
-//! daemon can confirm before it signs every app out. Find My answers 450
-//! until the password has been entered for it again: that is
-//! [`Error::FindMyAuthRequired`], reported to the daemon
-//! (`ReportFindMyAuthRequired`) and fixed with [`authorize_find_my`].
+//! daemon can confirm before it signs every app out. Find My wants its own
+//! session: the password entered again on icloud.com/find, a one-factor
+//! sign-in the daemon keeps apart ([`authorize_find_my`]). Requests to the
+//! `findme` host carry that jar; without one, or on its 450, they return
+//! [`Error::FindMyAuthRequired`].
 //!
 //! ```no_run
 //! # fn main() -> icloud_session::Result<()> {
@@ -47,6 +48,9 @@ pub const OBJECT_PATH: &str = "/io/github/ferdousbhai/ICloudSession";
 pub const INTERFACE: &str = "io.github.ferdousbhai.ICloudSession";
 /// D-Bus error name the daemon returns from `Session()` when signed out.
 pub const ERROR_SIGN_IN_REQUIRED: &str = "io.github.ferdousbhai.ICloudSession.Error.SignInRequired";
+/// D-Bus error name the daemon returns from `FindMySession()` when Find My
+/// has not been authorized.
+pub const ERROR_FIND_MY_AUTH_REQUIRED: &str = "io.github.ferdousbhai.ICloudSession.Error.FindMyAuthRequired";
 
 /// `Session()`'s reply: cookie header, client params, webservices.
 pub type SessionReply = (String, HashMap<String, String>, HashMap<String, String>);
@@ -92,9 +96,9 @@ pub enum Error {
     /// someone else since): connect again.
     #[error("sign in to iCloud required")]
     SignInRequired,
-    /// Apple answered HTTP 450: Find My wants the Apple ID password entered
-    /// again before it answers this session. Apps show a banner that calls
-    /// [`authorize_find_my`] (not [`sign_in`]).
+    /// Find My has no session of its own yet, or answered HTTP 450: it
+    /// wants the Apple ID password entered again. Apps show a banner that
+    /// calls [`authorize_find_my`] (not [`sign_in`]).
     #[error("Find My needs the Apple ID password")]
     FindMyAuthRequired,
     /// Any other non-2xx answer, including a 421/401 that persists after a
@@ -116,6 +120,9 @@ impl From<zbus::Error> for Error {
     fn from(e: zbus::Error) -> Error {
         match &e {
             zbus::Error::MethodError(name, _, _) if name.as_str() == ERROR_SIGN_IN_REQUIRED => Error::SignInRequired,
+            zbus::Error::MethodError(name, _, _) if name.as_str() == ERROR_FIND_MY_AUTH_REQUIRED => {
+                Error::FindMyAuthRequired
+            }
             zbus::Error::MethodError(name, Some(msg), _) => Error::Service(format!("{}: {msg}", name.as_str())),
             _ => Error::Service(e.to_string()),
         }
@@ -210,6 +217,9 @@ trait Daemon {
     fn merge_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
     fn report_sign_in_required(&self) -> zbus::Result<bool>;
     fn report_find_my_auth_required(&self) -> zbus::Result<()>;
+    #[zbus(name = "FindMySession")]
+    fn find_my_session(&self) -> zbus::Result<(String, HashMap<String, String>)>;
+    fn merge_find_my_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
     fn sign_in(&self) -> zbus::Result<()>;
     fn authorize_find_my(&self) -> zbus::Result<()>;
     fn sign_out(&self) -> zbus::Result<()>;
@@ -274,7 +284,8 @@ pub fn sign_in_on(conn: &Connection) -> Result<()> {
 /// for the Apple ID password before Find My answers (no-op if a window is
 /// already open). Returns at once; `signing_in` is true while the window is
 /// open, and `find_my_authorized` turns true once it is done ([`watch`]).
-/// The fresh session it captures replaces the stored one for every app.
+/// What it captures is kept as a separate Find My session, used for the
+/// `findme` host only; the main session is untouched.
 pub fn authorize_find_my() -> Result<()> {
     if mock_url().is_some() {
         return Ok(());
@@ -619,7 +630,11 @@ impl Session {
     /// clientId, dsid) appended unless the URL has them. `Set-Cookie`s go
     /// back to the daemon. 421/401 → the daemon confirms with Apple:
     /// signed out → `SignInRequired`; still signed in → one retry with the
-    /// fresh jar. 450 → `FindMyAuthRequired`. Other non-2xx → `Http`.
+    /// fresh jar. Requests to the `findme` host carry the Find My jar from
+    /// `FindMySession()` instead (`FindMyAuthRequired` when there is none),
+    /// its `Set-Cookie`s go to `MergeFindMyCookies`, and its 450 (or
+    /// 421/401) → `ReportFindMyAuthRequired` and `FindMyAuthRequired`.
+    /// Other non-2xx → `Http`.
     pub fn get(&self, url: &str) -> Result<Response> {
         self.request(Request {
             method: "GET",
@@ -737,19 +752,20 @@ impl Session {
         }
     }
 
-    /// After a 450 sent with `cookie`: if the daemon's jar changed since
-    /// (Find My was authorized meanwhile, and this process still held the
-    /// old one), retry once with the new jar; otherwise, or if that also
-    /// answers 450, report it and return `FindMyAuthRequired`. Never more
-    /// than one retry, so a 450 cannot loop.
+    /// After a 450 sent with the Find My jar `cookie`: if the daemon's Find
+    /// My jar changed since (authorized again meanwhile), retry once with
+    /// it; otherwise, or if that also answers 450, report it and return
+    /// `FindMyAuthRequired`. Never more than one retry, so a 450 cannot loop.
     fn find_my_auth_required(&self, request: &Request<'_>, cookie: &str) -> Result<ureq::Response> {
-        self.forget_snapshot();
-        if self.inner.conn.is_some() && self.snapshot()?.cookie != cookie {
-            match self.send_once(request)? {
-                Sent::Ok(response) => return Ok(*response),
-                Sent::Unauthorized { .. } if !self.report_sign_in_required()? => return Err(Error::SignInRequired),
-                Sent::Unauthorized { status, body } => return Err(Error::Http { status, body }),
-                Sent::FindMyAuth { .. } => {}
+        if let Some(conn) = &self.inner.conn {
+            // No Find My jar any more: nothing to report.
+            let (now, _) = proxy(conn)?.find_my_session()?;
+            if now != cookie {
+                match self.send_once(request)? {
+                    Sent::Ok(response) => return Ok(*response),
+                    Sent::Unauthorized { status, body } => return Err(Error::Http { status, body }),
+                    Sent::FindMyAuth { .. } => {}
+                }
             }
         }
         self.report_find_my_auth_required()
@@ -757,7 +773,6 @@ impl Session {
 
     /// `ReportFindMyAuthRequired()`, then `Err(FindMyAuthRequired)`.
     fn report_find_my_auth_required<T>(&self) -> Result<T> {
-        self.forget_snapshot();
         if let Some(conn) = &self.inner.conn {
             proxy(conn)?.report_find_my_auth_required()?;
         }
@@ -781,7 +796,17 @@ impl Session {
         // downloads and upload URLs). Judged on the URL as given, so mock
         // mode behaves as the real hosts would.
         let icloud = is_session_host(request.url, &snap.webservices);
-        let url = self.prepare(request, &snap, icloud)?;
+        // Find My has its own jar (a one-factor sign-in the main session
+        // cannot stand in for): the `findme` host gets it instead.
+        let find_my = match &self.inner.conn {
+            Some(conn) if is_find_my_host(request.url, &snap.webservices) => Some(proxy(conn)?.find_my_session()?),
+            _ => None,
+        };
+        let (cookie, params) = match &find_my {
+            Some((cookie, params)) => (cookie, params),
+            None => (&snap.cookie, &snap.params),
+        };
+        let url = self.prepare(request, params, icloud)?;
         let mut req = self
             .inner
             .agent
@@ -789,8 +814,8 @@ impl Session {
             .set("Origin", ORIGIN)
             .set("Referer", REFERER)
             .set("Accept", request.accept);
-        if icloud && !snap.cookie.is_empty() {
-            req = req.set("Cookie", &snap.cookie);
+        if icloud && !cookie.is_empty() {
+            req = req.set("Cookie", cookie);
         }
         if let Some(content_type) = request.content_type {
             req = req.set("Content-Type", content_type);
@@ -811,10 +836,19 @@ impl Session {
                     && !set_cookies.is_empty()
                     && let Some(conn) = &self.inner.conn
                 {
-                    proxy(conn)?.merge_cookies(&set_cookies)?;
-                    self.forget_snapshot();
+                    if find_my.is_some() {
+                        proxy(conn)?.merge_find_my_cookies(&set_cookies)?;
+                    } else {
+                        proxy(conn)?.merge_cookies(&set_cookies)?;
+                        self.forget_snapshot();
+                    }
                 }
                 Ok(Sent::Ok(Box::new(response)))
+            }
+            // Find My wants the password again (pyicloud's
+            // FIND_MY_REAUTH_REQUIRED, empty body), or ended its session.
+            Err(ureq::Error::Status(450 | 401 | 421, _)) if find_my.is_some() => {
+                Ok(Sent::FindMyAuth { cookie: cookie.clone() })
             }
             // Only the session's own hosts judge the session; a content
             // host's 401 (an expired signed URL) is a plain HTTP error.
@@ -822,9 +856,8 @@ impl Session {
                 status,
                 body: read_body_lossy(response),
             }),
-            // Find My wants the password again (pyicloud's
-            // FIND_MY_REAUTH_REQUIRED); the body is empty.
-            Err(ureq::Error::Status(450, _)) if icloud => Ok(Sent::FindMyAuth { cookie: snap.cookie }),
+            // Mock mode, where Find My shares the (empty) main jar.
+            Err(ureq::Error::Status(450, _)) if icloud => Ok(Sent::FindMyAuth { cookie: cookie.clone() }),
             Err(ureq::Error::Status(status, response)) => Err(Error::Http {
                 status,
                 body: read_body_lossy(response),
@@ -835,7 +868,7 @@ impl Session {
 
     /// The final URL: client params added on icloud.com hosts, and in mock
     /// mode rewritten to the mock base keeping path and query.
-    fn prepare(&self, request: &Request<'_>, snap: &Snapshot, icloud: bool) -> Result<String> {
+    fn prepare(&self, request: &Request<'_>, params: &HashMap<String, String>, icloud: bool) -> Result<String> {
         let bad_url = |e: url::ParseError| Error::Network(format!("bad URL {}: {e}", request.url));
         let mut url = url::Url::parse(request.url).map_err(bad_url)?;
         if let Some(base) = self.mock_url()
@@ -850,7 +883,7 @@ impl Session {
         }
         if request.client_params && icloud {
             let present: Vec<String> = url.query_pairs().map(|(k, _)| k.into_owned()).collect();
-            let param = |k: &str| snap.params.get(k).map(String::as_str).unwrap_or_default();
+            let param = |k: &str| params.get(k).map(String::as_str).unwrap_or_default();
             let wanted = [
                 ("clientBuildNumber", param("clientBuildNumber")),
                 ("clientMasteringNumber", param("clientMasteringNumber")),
@@ -872,11 +905,6 @@ impl Session {
 /// Whether `url`'s host domain-matches `.icloud.com` or is one of the
 /// service hosts in `webservices`.
 fn is_session_host(url: &str, webservices: &HashMap<String, String>) -> bool {
-    let origin = |u: &str| {
-        url::Url::parse(u)
-            .ok()
-            .and_then(|u| Some((u.host_str()?.to_ascii_lowercase(), u.port_or_known_default())))
-    };
     let Some((host, port)) = origin(url) else {
         return false;
     };
@@ -885,6 +913,21 @@ fn is_session_host(url: &str, webservices: &HashMap<String, String>) -> bool {
         || webservices
             .values()
             .any(|service| origin(service) == Some((host.clone(), port)))
+}
+
+/// Whether `url` is on the `findme` web service's host.
+fn is_find_my_host(url: &str, webservices: &HashMap<String, String>) -> bool {
+    webservices
+        .get("findme")
+        .and_then(|f| origin(f))
+        .is_some_and(|f| origin(url) == Some(f))
+}
+
+/// Lower-cased host and port of a URL.
+fn origin(url: &str) -> Option<(String, Option<u16>)> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| Some((u.host_str()?.to_ascii_lowercase(), u.port_or_known_default())))
 }
 
 fn mock_webservices(base: &str) -> HashMap<String, String> {
