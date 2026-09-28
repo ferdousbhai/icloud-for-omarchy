@@ -18,6 +18,10 @@ use crate::models::Device;
 pub enum Error {
     #[error("sign in to iCloud required")]
     SignInRequired,
+    /// Find My answered HTTP 450: it wants the Apple ID password entered
+    /// again (`icloud_session::authorize_find_my`), not a new sign-in.
+    #[error("Find My needs your Apple password")]
+    FindMyAuthRequired,
     #[error("Find My is not enabled for this Apple ID")]
     NoService,
     #[error("iCloud answered HTTP {0}")]
@@ -36,6 +40,7 @@ impl From<icloud_session::Error> for Error {
     fn from(e: icloud_session::Error) -> Self {
         match e {
             icloud_session::Error::SignInRequired => Error::SignInRequired,
+            icloud_session::Error::FindMyAuthRequired => Error::FindMyAuthRequired,
             icloud_session::Error::Http { status, .. } => Error::Http(status),
             other => Error::Session(other.to_string()),
         }
@@ -237,19 +242,23 @@ impl<T: Transport> FindMe<T> {
     /// `refreshClient`. With `locate` the refresh asks every device to report
     /// its position (which wakes them), so pass it only when the user asked;
     /// periodic refreshes pass `false` and get what Apple last heard, as
-    /// pyicloud's monitor does. On `SignInRequired` the context is dropped so
-    /// the next call starts over with `initClient`.
+    /// pyicloud's monitor does. On `SignInRequired` or `FindMyAuthRequired`
+    /// the context is dropped so the next call starts over with `initClient`.
     ///
-    /// HTTP 450 or 500 means the Find My server session lapsed (pyicloud
-    /// re-initialises on both): start over with `initClient` once before
-    /// giving up.
+    /// HTTP 500 means the Find My server session lapsed: start over with
+    /// `initClient` once before giving up. HTTP 450 is not retried: it is
+    /// `FindMyAuthRequired` (the password must be entered again), and
+    /// another `initClient` would only answer 450 again.
     pub fn refresh(&mut self, locate: bool) -> Result<Vec<Device>> {
         let mut result = self.refresh_inner(locate);
-        if matches!(result, Err(Error::Http(450 | 500))) {
+        if matches!(result, Err(Error::Http(500))) {
             self.reset();
             result = self.refresh_inner(locate);
         }
-        if matches!(result, Err(Error::SignInRequired)) {
+        if matches!(
+            result,
+            Err(Error::SignInRequired | Error::FindMyAuthRequired)
+        ) {
             self.reset();
         }
         result

@@ -1,6 +1,6 @@
 //! The main window: device list beside the map, a header with refresh and
-//! the device actions popover, and the sign-in banner. Refreshes every
-//! [`REFRESH_SECS`] while the window is on screen.
+//! the device actions popover, and the sign-in (and Find My password)
+//! banner. Refreshes every [`REFRESH_SECS`] while the window is on screen.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -90,8 +90,9 @@ pub struct Window {
     refresh_queued: Cell<Option<bool>>,
     /// Play Sound or Lost Mode is in flight.
     acting: Cell<bool>,
-    /// Bumped on every sign-in: a `SignInRequired` from a request started
-    /// before the latest sign-in is stale and ignored.
+    /// Bumped on every sign-in and Find My authorization: a
+    /// `SignInRequired` or `FindMyAuthRequired` from a request started
+    /// before the latest one is stale and ignored.
     sign_in_gen: Cell<u64>,
     /// Devices this app turned Lost Mode on for, until a refresh reports it.
     lost_sent: RefCell<HashSet<String>>,
@@ -160,8 +161,9 @@ impl Window {
         self.toasts.add_toast(adw::Toast::new(msg));
     }
 
-    /// The account just signed in (maybe a different one): start the Find
-    /// My session over and load the devices, after any refresh in flight.
+    /// The account just signed in (maybe a different one), or Find My was
+    /// just authorized with a fresh session: start the Find My session over
+    /// and locate the devices, after any refresh in flight.
     fn signed_in(self: &Rc<Self>) {
         self.sign_in_gen.set(self.sign_in_gen.get() + 1);
         self.client.reset_pending.store(true, Ordering::SeqCst);
@@ -304,6 +306,17 @@ impl Window {
                             this.list.set_placeholder(
                                 "Sign in required",
                                 Some("Sign in to iCloud with the button above."),
+                            );
+                        }
+                    }
+                    Ok(Err(findme::Error::FindMyAuthRequired))
+                        if !this.sign_in_is_current(sign_in_gen) => {}
+                    Ok(Err(findme::Error::FindMyAuthRequired)) => {
+                        this.banner.show_find_my();
+                        if this.devices.borrow().is_empty() {
+                            this.list.set_placeholder(
+                                "Find My needs your Apple password",
+                                Some("Enter it with the button above."),
                             );
                         }
                     }
@@ -515,6 +528,12 @@ impl Window {
                         this.toast("Signed in again: try once more");
                     }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
+                    Ok(Err(findme::Error::FindMyAuthRequired))
+                        if !this.sign_in_is_current(sign_in_gen) =>
+                    {
+                        this.toast("Find My was authorized again: try once more");
+                    }
+                    Ok(Err(findme::Error::FindMyAuthRequired)) => this.banner.show_find_my(),
                     Ok(Err(e)) => this.toast(&e.to_string()),
                     Err(e) => this.toast(&e),
                 }
@@ -593,6 +612,12 @@ impl Window {
                         this.toast("Signed in again: try once more");
                     }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
+                    Ok(Err(findme::Error::FindMyAuthRequired))
+                        if !this.sign_in_is_current(sign_in_gen) =>
+                    {
+                        this.toast("Find My was authorized again: try once more");
+                    }
+                    Ok(Err(findme::Error::FindMyAuthRequired)) => this.banner.show_find_my(),
                     Ok(Err(e)) => this.toast(&e.to_string()),
                     Err(e) => this.toast(&e),
                 }

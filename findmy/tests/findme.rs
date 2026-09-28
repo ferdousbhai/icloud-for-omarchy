@@ -196,22 +196,72 @@ fn sign_in_required_resets_to_init_client() {
     assert_eq!(urls, ["initClient", "refreshClient", "initClient"]);
 }
 
+fn endpoints(log: &Log) -> Vec<String> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .map(|(u, _)| u.rsplit('/').next().unwrap().to_string())
+        .collect()
+}
+
 #[test]
-fn http_450_reinitialises_once() {
+fn http_500_reinitialises_once() {
     let (mut fm, log) = client(vec![
         Ok(fixture("initClient")),
-        Err(Error::Http(450)),
+        Err(Error::Http(500)),
         Ok(fixture("refreshClient")),
     ]);
     fm.refresh(true).unwrap();
     assert_eq!(fm.refresh(true).unwrap().len(), 4);
-    let urls: Vec<_> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(u, _)| u.rsplit('/').next().unwrap().to_string())
-        .collect();
-    assert_eq!(urls, ["initClient", "refreshClient", "initClient"]);
+    assert_eq!(
+        endpoints(&log),
+        ["initClient", "refreshClient", "initClient"]
+    );
+}
+
+/// A 450 is Find My asking for the password again: surfaced at once, with
+/// no retry from initClient (which would only answer 450 again), and the
+/// next refresh after authorizing starts over with initClient.
+#[test]
+fn find_my_auth_required_surfaces_without_retrying() {
+    let (mut fm, log) = client(vec![
+        Err(Error::FindMyAuthRequired),
+        Ok(fixture("initClient")),
+        Err(Error::FindMyAuthRequired),
+        Ok(fixture("initClient")),
+    ]);
+    assert!(matches!(fm.refresh(true), Err(Error::FindMyAuthRequired)));
+    assert_eq!(endpoints(&log), ["initClient"]);
+    fm.refresh(true).unwrap();
+    assert!(matches!(fm.refresh(false), Err(Error::FindMyAuthRequired)));
+    assert_eq!(
+        endpoints(&log),
+        ["initClient", "initClient", "refreshClient"]
+    );
+    fm.refresh(true).unwrap();
+    assert_eq!(
+        endpoints(&log),
+        ["initClient", "initClient", "refreshClient", "initClient"]
+    );
+}
+
+#[test]
+fn session_errors_map_to_find_my_errors() {
+    assert!(matches!(
+        Error::from(icloud_session::Error::FindMyAuthRequired),
+        Error::FindMyAuthRequired
+    ));
+    assert!(matches!(
+        Error::from(icloud_session::Error::SignInRequired),
+        Error::SignInRequired
+    ));
+    assert!(matches!(
+        Error::from(icloud_session::Error::Http {
+            status: 450,
+            body: String::new()
+        }),
+        Error::Http(450)
+    ));
 }
 
 #[test]

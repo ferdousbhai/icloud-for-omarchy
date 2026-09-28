@@ -59,6 +59,12 @@ three for `icloud-session` if nothing else uses it).
   banner offers **Sign In**, which opens Apple's sign-in page (the
   icloud-session sign-in window). The banner follows the sign-in as it
   happens, in this app or any other, and the list loads once it is done.
+- Apple's Find My also asks for your Apple password again from time to
+  time, even while you are signed in (as icloud.com does on its Find
+  Devices page). The banner then says **Find My needs your Apple
+  password**; **Enter Password** opens Apple's Find My page in the
+  sign-in window, the banner reads "Finish in the Apple window…" while
+  it is open, and the devices are located again once Find My answers.
 
 ### History
 
@@ -119,7 +125,9 @@ with the returned `serverContext` and `shouldLocate`, plus `playSound`
 and `lostDevice`. Every request goes through the `icloud-session` client,
 which gets the cookies from `icloud-sessiond` (the D-Bus service that owns
 the Apple account), hands rotated cookies back to it, and reports
-`SignInRequired` when Apple ends the session. The sign-in banner watches
+`SignInRequired` when Apple ends the session, or `FindMyAuthRequired`
+when Find My answers HTTP 450 (it wants the password again; not retried,
+since another `initClient` would only answer 450 too). The banner watches
 the service's status on its own thread. Network and database calls run
 on worker threads, never on the GTK main loop.
 
