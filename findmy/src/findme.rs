@@ -50,9 +50,11 @@ pub trait Transport: Send {
     fn post_json(&mut self, url: &str, body: &Value) -> Result<Value>;
 }
 
-/// [`Transport`] over the shared `icloud-session` crate. Loads the session
-/// lazily, so a missing sign-in surfaces as `SignInRequired` on first use and
-/// a later sign-in is picked up without restarting the app.
+/// [`Transport`] over the shared `icloud-session` crate. Connects to
+/// `icloud-sessiond` lazily, so a missing sign-in surfaces as
+/// `SignInRequired` on first use, and drops the connection on
+/// `SignInRequired` or a daemon failure so the next call reconnects and a
+/// later sign-in is picked up without restarting the app.
 #[derive(Default)]
 pub struct SessionTransport {
     session: Option<icloud_session::Session>,
@@ -61,9 +63,9 @@ pub struct SessionTransport {
 impl SessionTransport {
     fn session(&mut self) -> Result<&icloud_session::Session> {
         if self.session.is_none() {
-            self.session = Some(icloud_session::Session::load()?);
+            self.session = Some(icloud_session::Session::connect()?);
         }
-        Ok(self.session.as_ref().expect("just loaded"))
+        Ok(self.session.as_ref().expect("just connected"))
     }
 }
 
@@ -71,7 +73,10 @@ impl Transport for SessionTransport {
     fn service_root(&mut self) -> Result<String> {
         let result = self.session()?.webservices();
         let ws = result.inspect_err(|e| {
-            if matches!(e, icloud_session::Error::SignInRequired) {
+            if matches!(
+                e,
+                icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)
+            ) {
                 self.session = None;
             }
         })?;
@@ -83,7 +88,10 @@ impl Transport for SessionTransport {
     fn post_json(&mut self, url: &str, body: &Value) -> Result<Value> {
         let result = self.session()?.post_json(url, body);
         let resp = result.inspect_err(|e| {
-            if matches!(e, icloud_session::Error::SignInRequired) {
+            if matches!(
+                e,
+                icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)
+            ) {
                 self.session = None;
             }
         })?;
