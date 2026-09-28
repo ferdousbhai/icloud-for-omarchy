@@ -13,4 +13,8 @@ class QTextStream;
 // written to `out`. Needs a Q(Core|Gui)Application.
 int runBackgroundSync(QTextStream &out);
 
+// Adds the places npm, mise, bun, nvm and volta install icloud-md to PATH
+// when it is not on it already (a systemd unit gets a bare PATH).
+void findIcloudMd();
+
 #endif

@@ -9,6 +9,8 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
+#include <QVersionNumber>
+#include <algorithm>
 #include <functional>
 
 namespace {
@@ -28,21 +30,33 @@ void waitFor(const std::function<bool()> &cond)
         loop.exec();
 }
 
+} // namespace
+
 // A systemd user unit may not see the PATH a login shell sets up, where
-// `npm install -g` (into ~/.local, say) or mise put icloud-md and node.
+// `npm install -g` (into ~/.local, say), mise, nvm or volta put icloud-md
+// and node.
 void findIcloudMd()
 {
     if (!QStandardPaths::findExecutable(QStringLiteral("icloud-md")).isEmpty())
         return;
     const QString home = QDir::homePath();
+    QStringList dirs;
+    for (const char *dir : { "/.local/bin", "/.local/share/mise/shims", "/.npm-global/bin", "/.bun/bin", "/.volta/bin" })
+        dirs << home + QLatin1StringView(dir);
+    // nvm keeps a bin directory per Node version: the newest first.
+    const QDir nvm(home + QStringLiteral("/.nvm/versions/node"));
+    QStringList versions = nvm.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    auto version = [](const QString &name) { return QVersionNumber::fromString(QStringView(name).mid(1)); };
+    std::sort(versions.begin(), versions.end(),
+              [&](const QString &a, const QString &b) { return version(a) > version(b); });
+    for (const QString &name : std::as_const(versions))
+        dirs << nvm.filePath(name + QStringLiteral("/bin"));
     QStringList path = qEnvironmentVariable("PATH").split(u':', Qt::SkipEmptyParts);
-    for (const char *dir : { "/.local/bin", "/.local/share/mise/shims", "/.npm-global/bin", "/.bun/bin" })
-        if (!path.contains(home + QLatin1StringView(dir)))
-            path << home + QLatin1StringView(dir);
+    for (const QString &dir : std::as_const(dirs))
+        if (!path.contains(dir))
+            path << dir;
     qputenv("PATH", path.join(u':').toLocal8Bit());
 }
-
-} // namespace
 
 int runBackgroundSync(QTextStream &out)
 {

@@ -745,6 +745,35 @@ int main(int argc, char *argv[])
         SingleInstance again(NotesBackend::lockPath().chopped(5));
         check(again.claim(), "instance: runs again once the first exits");
     }
+    {
+        // A systemd unit's bare PATH: icloud-md installed through nvm (the
+        // newest Node first) or volta is still found.
+        const QByteArray home = qgetenv("HOME"), path = qgetenv("PATH");
+        const QString fakeHome = scratch.path() + QStringLiteral("/home");
+        auto tool = [&](const QString &dir) {
+            QDir().mkpath(fakeHome + dir);
+            QFile f(fakeHome + dir + QStringLiteral("/icloud-md"));
+            f.open(QIODevice::WriteOnly);
+            f.write("#!/bin/sh\n");
+            f.setPermissions(QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+        };
+        tool(QStringLiteral("/.nvm/versions/node/v9.11.2/bin"));
+        tool(QStringLiteral("/.nvm/versions/node/v22.3.0/bin"));
+        qputenv("HOME", fakeHome.toUtf8());
+        qputenv("PATH", "/nonexistent");
+        findIcloudMd();
+        check(QStandardPaths::findExecutable(QStringLiteral("icloud-md"))
+                  == fakeHome + QStringLiteral("/.nvm/versions/node/v22.3.0/bin/icloud-md"),
+              "background: icloud-md found under nvm, newest Node first");
+        QDir(fakeHome + QStringLiteral("/.nvm")).removeRecursively();
+        tool(QStringLiteral("/.volta/bin"));
+        qputenv("PATH", "/nonexistent");
+        findIcloudMd();
+        check(QStandardPaths::findExecutable(QStringLiteral("icloud-md")) == fakeHome + QStringLiteral("/.volta/bin/icloud-md"),
+              "background: icloud-md found under volta");
+        qputenv("HOME", home);
+        qputenv("PATH", path);
+    }
     // A refused session fails the run, after telling icloud-session.
     fake.reportCalls = 0;
     qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
