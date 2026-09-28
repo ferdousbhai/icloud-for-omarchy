@@ -2,7 +2,6 @@
 // the icloud-md CLI seam — against a scratch vault under a temporary
 // directory, never the real one. Run with bin/test.
 #include "../src/notesbackend.h"
-#include "../src/signin.h"
 #include "check.h"
 
 #include <QDir>
@@ -68,6 +67,19 @@ void waitForSync(const NotesBackend &b)
     });
     QTimer::singleShot(15000, &loop, &QEventLoop::quit);
     if (b.syncRunning())
+        loop.exec();
+}
+
+// Spin until the backend's `icloud-session status` reads are done.
+void waitForStatus(const NotesBackend &b)
+{
+    QEventLoop loop;
+    QObject::connect(&b, &NotesBackend::sessionStatusRead, &loop, [&] {
+        if (!b.sessionStatusPending())
+            loop.quit();
+    });
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+    if (b.sessionStatusPending())
         loop.exec();
 }
 } // namespace
@@ -259,8 +271,37 @@ int main(int argc, char *argv[])
     const QString stubs =
         QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../stubs")).canonicalPath();
     check(QFile::exists(stubs + QStringLiteral("/icloud-md")), "stub present");
-    qputenv("PATH", (stubs + QLatin1Char(':') + QString::fromLocal8Bit(qgetenv("PATH"))).toUtf8());
+    check(QFile::exists(stubs + QStringLiteral("/icloud-session")), "session stub present");
+    const QByteArray systemPath = qgetenv("PATH");
+    {
+        // Without icloud-session the sign-in is simply unknown: no crash,
+        // no countdown, no expiry invented.
+        qputenv("PATH", (scratch.path() + QStringLiteral("/empty-bin")).toUtf8());
+        NotesBackend missing;
+        waitForStatus(missing);
+        check(!missing.sessionStatusPending() && missing.signInDaysLeft() == -2 && !missing.authExpired(),
+              "session tool missing leaves the sign-in unknown");
+    }
+    qputenv("PATH", (stubs + QLatin1Char(':') + QString::fromLocal8Bit(systemPath)).toUtf8());
     check(b.icloudMdAvailable(), "stub on PATH");
+
+    b.refreshSessionStatus();
+    waitForStatus(b);
+    check(b.signInDaysLeft() == 20, "session expiry read from icloud-session status");
+    qputenv("ICLOUD_SESSION_STUB_STATUS", "icloud-session: not json");
+    b.refreshSessionStatus();
+    waitForStatus(b);
+    check(b.signInDaysLeft() == -2 && !b.authExpired(), "session unreadable status is unknown, not expired");
+    qputenv("ICLOUD_SESSION_STUB_STATUS",
+            R"({"signed_in":true,"apple_id":"someone@example.com","dsid":"1","expires_at":null,"validated_at":null})");
+    b.refreshSessionStatus();
+    waitForStatus(b);
+    check(b.signInDaysLeft() == -1 && !b.authExpired(), "session without a lasting sign-in");
+    qunsetenv("ICLOUD_SESSION_STUB_STATUS");
+    b.refreshSessionStatus();
+    b.refreshSessionStatus(); // a second request while one runs is queued, not dropped
+    waitForStatus(b);
+    check(b.signInDaysLeft() == 20, "session status re-read");
 
     b.refreshPushPreview();
     waitForSync(b);
@@ -300,6 +341,8 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(b.authExpired(), "seam expired session detected");
+    waitForStatus(b); // the session looks as it did before: the expiry stands
+    check(b.authExpired(), "seam expiry stands while the session is unchanged");
     check(b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired session named once, not as a generic failure");
     b.runSync(); // a push that hits the expired session skips its pull
@@ -310,6 +353,19 @@ int main(int argc, char *argv[])
         NotesBackend relaunched; // the next launch remembers, instead of retrying for 90 s
         check(relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
               "seam expiry survives a relaunch");
+        waitForStatus(relaunched);
+        check(relaunched.authExpired(), "seam expiry survives an unchanged session status");
+    }
+    {
+        // A sign-in from the terminal or another app shows up as a new
+        // expiry in icloud-session; the next launch resumes syncing.
+        qputenv("ICLOUD_SESSION_STUB_STATUS",
+                R"({"signed_in":true,"apple_id":"someone@example.com","dsid":"1","expires_at":"2099-01-01T00:00:00Z","validated_at":"2026-09-01T00:00:00Z"})");
+        NotesBackend relaunched;
+        waitForStatus(relaunched);
+        check(!relaunched.authExpired() && relaunched.syncMessage() == QStringLiteral("Signed in."),
+              "seam sign-in elsewhere clears the remembered expiry");
+        qunsetenv("ICLOUD_SESSION_STUB_STATUS");
     }
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
     b.runReauthenticate();
@@ -318,6 +374,20 @@ int main(int argc, char *argv[])
         waitForSync(b); // the push and pull it triggers
     check(!b.authExpired() && b.syncMessage() == QStringLiteral("Pull done."), "seam sign-in resumes syncing");
     check(!NotesBackend().authExpired(), "seam sign-in clears the remembered expiry");
+    waitForStatus(b);
+
+    // Apple ended the session for another app sharing it: syncing pauses
+    // without first spending 90 s on a renewal, and resumes once signed in.
+    qputenv("ICLOUD_SESSION_STUB_STATUS",
+            R"({"signed_in":false,"apple_id":"someone@example.com","dsid":"1","expires_at":null,"validated_at":null})");
+    b.refreshSessionStatus();
+    waitForStatus(b);
+    check(b.authExpired() && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
+          "session signed out elsewhere pauses syncing");
+    qunsetenv("ICLOUD_SESSION_STUB_STATUS");
+    b.refreshSessionStatus();
+    waitForStatus(b);
+    check(!b.authExpired() && b.syncMessage() == QStringLiteral("Signed in."), "session signed in again resumes");
 
     b.runClone(QStringLiteral("someone@example.com")); // the stub rejects clone
     waitForSync(b);
@@ -325,38 +395,6 @@ int main(int argc, char *argv[])
     check(b.syncLog().contains(QStringLiteral("clone ") + rootPath()
                                + QStringLiteral(" --account someone@example.com --non-interactive")),
           "seam clone reuses the saved account without a browser");
-
-    // Sign-in lifetime, read from a Chromium cookie database like the one
-    // icloud-md's browser profile keeps: only a persistent token counts.
-    {
-        const QString profile = scratch.path() + QStringLiteral("/accounts/1/browser-profile/Default");
-        QDir().mkpath(profile);
-        const QDateTime expires = QDateTime::currentDateTimeUtc().addDays(30);
-        const qint64 chromium = QDateTime(QDate(1601, 1, 1), QTime(0, 0), QTimeZone::UTC).msecsTo(expires) * 1000;
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("fixture"));
-            db.setDatabaseName(profile + QStringLiteral("/Cookies"));
-            db.open();
-            QSqlQuery q(db);
-            q.exec(QStringLiteral("CREATE TABLE cookies (host_key TEXT, name TEXT, expires_utc INTEGER, is_persistent INTEGER)"));
-            q.exec(QStringLiteral("INSERT INTO cookies VALUES ('.icloud.com', 'X-APPLE-WEBAUTH-USER', %1, 1)").arg(chromium));
-            q.exec(QStringLiteral("INSERT INTO cookies VALUES ('.icloud.com', 'X-APPLE-WEBAUTH-TOKEN', 0, 0)"));
-            db.close();
-        }
-        QSqlDatabase::removeDatabase(QStringLiteral("fixture"));
-        const QString accounts = scratch.path() + QStringLiteral("/accounts");
-        check(!SignIn::latestTokenExpiry(accounts).isValid(), "sign-in session-only token does not last");
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("fixture"));
-            db.setDatabaseName(profile + QStringLiteral("/Cookies"));
-            db.open();
-            QSqlQuery(db).exec(QStringLiteral("INSERT INTO cookies VALUES ('.icloud.com', 'X-APPLE-WEBAUTH-TOKEN', %1, 1)").arg(chromium));
-            db.close();
-        }
-        QSqlDatabase::removeDatabase(QStringLiteral("fixture"));
-        check(qAbs(SignIn::latestTokenExpiry(accounts).secsTo(expires)) < 2, "sign-in persistent token expiry read");
-        check(!SignIn::latestTokenExpiry(scratch.path() + QStringLiteral("/nowhere")).isValid(), "sign-in no profile");
-    }
 
     return report();
 }

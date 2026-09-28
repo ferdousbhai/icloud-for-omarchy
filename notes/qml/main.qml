@@ -459,7 +459,7 @@ ApplicationWindow {
         Rectangle {
             id: signInBanner
             readonly property int daysLeft: backend.signInDaysLeft
-            readonly property bool shortSignIn: backend.cloned && backend.icloudMdAvailable && daysLeft < 0
+            readonly property bool shortSignIn: backend.cloned && backend.icloudMdAvailable && daysLeft === -1 // -2: unknown
             readonly property string howTo: "In Apple's window, use your Apple ID and password (not the iPhone QR code), tick Keep me signed in, and click Trust."
             visible: backend.authExpired || shortSignIn || (daysLeft >= 0 && daysLeft <= 5)
             Layout.fillWidth: true
@@ -922,6 +922,8 @@ ApplicationWindow {
     // between windows does not sync on every flip.
     property double lastFocusSync: 0
     onActiveChanged: {
+        if (active)
+            backend.refreshSessionStatus(); // another app may have signed in, or been signed out
         if (!active || !autoButton.checked || !backend.cloned || backend.authExpired)
             return;
         if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running

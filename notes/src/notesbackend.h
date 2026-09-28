@@ -3,6 +3,7 @@
 
 #include <QFileSystemWatcher>
 #include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QProcess>
 #include <QQuickTextDocument>
@@ -41,8 +42,9 @@ class NotesBackend : public QObject
     // Apple ended the saved session and icloud-md could not revive it on its
     // own; syncing pauses until runReauthenticate succeeds.
     Q_PROPERTY(bool authExpired READ authExpired NOTIFY authExpiredChanged)
-    // Whole days until a "Keep me signed in" sign-in lapses, or -1 when
-    // there is none (a phone QR sign-in, say, lasts only hours).
+    // Whole days until a "Keep me signed in" sign-in lapses, -1 when there
+    // is none (a phone QR sign-in, say, lasts only hours), or -2 while
+    // unknown (icloud-session missing, not answered yet, or unreadable).
     Q_PROPERTY(int signInDaysLeft READ signInDaysLeft NOTIFY signInChanged)
     Q_PROPERTY(QVariantList statusEntries READ statusEntries NOTIFY pushPreviewChanged)
     Q_PROPERTY(int statusUnchanged READ statusUnchanged NOTIFY pushPreviewChanged)
@@ -57,6 +59,7 @@ class NotesBackend : public QObject
 
 public:
     explicit NotesBackend(QObject *parent = nullptr);
+    ~NotesBackend() override;
 
     QStringList folders() const { return m_folders; }
     QVariantMap folderNoteCounts() const { return m_folderNoteCounts; }
@@ -82,6 +85,8 @@ public:
     bool syncRunning() const { return m_syncRunning; }
     bool authExpired() const { return m_authExpired; }
     int signInDaysLeft() const;
+    // An `icloud-session status` read is running or queued.
+    bool sessionStatusPending() const;
     QVariantList statusEntries() const { return m_statusEntries; }
     int statusUnchanged() const { return m_statusUnchanged; }
     QStringList statusNotices() const { return m_statusNotices; }
@@ -135,6 +140,10 @@ public:
     // Where the editor cursor is (-1 when it has no focus): Markdown marks
     // show on that line only.
     Q_INVOKABLE void setEditorCursor(int position);
+    // Re-reads the shared iCloud session (`icloud-session status`, offline
+    // and quick) in the background: sign-in expiry, and whether Apple ended
+    // the session or another app signed in again since.
+    Q_INVOKABLE void refreshSessionStatus();
 
 signals:
     void foldersChanged();
@@ -151,6 +160,8 @@ signals:
     void syncRunningChanged();
     void authExpiredChanged();
     void signInChanged();
+    // One `icloud-session status` read finished, answered or not.
+    void sessionStatusRead();
     void pushPreviewChanged();
     void pushPreviewReady(bool ok);
     void historyChanged();
@@ -183,7 +194,7 @@ private:
     void setSyncMessage(const QString &text);
     QString authFlagPath() const;
     void setAuthExpired(bool expired);
-    void refreshSignIn();
+    void applySessionStatus(const QByteArray &output);
 
     // What one read of a note yields, kept until the file's mtime or size
     // moves, so a save in a folder of hundreds of notes re-reads one file.
@@ -223,7 +234,10 @@ private:
     Mode m_mode = Mode::Plain;
     bool m_pullAfterPush = false;
     bool m_authExpired = false;
+    // The last answer of `icloud-session status`, empty while unknown.
+    QJsonObject m_sessionStatus;
     QDateTime m_signInExpiry;
+    bool m_statusAgain = false;
     QByteArray m_captured;
     const double m_uiScale;
     QVariantMap m_theme;
@@ -232,6 +246,7 @@ private:
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_themeWatcher;
     QProcess m_syncProcess;
+    QProcess m_statusProcess;
 };
 
 #endif

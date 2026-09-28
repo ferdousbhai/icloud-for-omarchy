@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Test double for the icloud-session CLI: offline status answers, no Apple
+# account. ICLOUD_SESSION_STUB_STATUS replaces the status output verbatim
+# (so tests can feed a signed-out or unreadable answer); the default is a
+# "Keep me signed in" session with 20 days left.
+if [ "$1" = "status" ]; then
+  if [ -n "${ICLOUD_SESSION_STUB_STATUS+x}" ]; then
+    printf '%s\n' "$ICLOUD_SESSION_STUB_STATUS"
+  else
+    printf '{"signed_in":true,"apple_id":"someone@example.com","dsid":"1006081438","expires_at":"%s","validated_at":"2026-09-01T00:00:00Z"}\n' \
+      "$(date -u -d '+20 days +1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+elif [ "$1" = "reauthenticate" ]; then
+  exec icloud-md reauthenticate
+else
+  echo "stub: unknown args: $*" >&2
+  exit 1
+fi

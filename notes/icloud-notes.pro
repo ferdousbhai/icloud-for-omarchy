@@ -1,4 +1,4 @@
-QT += core gui qml quick quickcontrols2 printsupport sql
+QT += core gui qml quick quickcontrols2 printsupport
 
 CONFIG += c++17 release
 TARGET = icloud-notes
@@ -6,8 +6,7 @@ TEMPLATE = app
 
 HEADERS += \
     src/notesbackend.h \
-    src/markdownhighlighter.h \
-    src/signin.h
+    src/markdownhighlighter.h
 
 SOURCES += \
     src/main.cpp \

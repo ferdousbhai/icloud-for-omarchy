@@ -1,6 +1,5 @@
 #include "notesbackend.h"
 #include "markdownhighlighter.h"
-#include "signin.h"
 #include "syncmodel.h"
 
 #include <QDir>
@@ -177,20 +176,26 @@ NotesBackend::NotesBackend(QObject *parent)
         finishSync(-1);
     });
 
-    // An expiry outlives the app: until someone signs in, every launch would
-    // otherwise spend its first 90 s on a renewal that already failed. A
-    // session file written since (a sign-in from the terminal) clears it.
-    const QFileInfo flag(authFlagPath());
-    if (flag.exists()) {
-        bool signedInSince = false;
-        QDirIterator sessions(QDir::homePath() + QStringLiteral("/.config/icloud-md/accounts"),
-                              { QStringLiteral("session*.json") }, QDir::Files, QDirIterator::Subdirectories);
-        while (sessions.hasNext())
-            signedInSince |= sessions.nextFileInfo().lastModified() > flag.lastModified();
-        setAuthExpired(!signedInSince);
-    }
+    // icloud-session answers from local files only, so this is quick; it
+    // still runs in the background so a slow disk never blocks the window.
+    m_statusProcess.setProgram(QStringLiteral("icloud-session"));
+    m_statusProcess.setArguments({ QStringLiteral("status") });
+    m_statusProcess.setProcessChannelMode(QProcess::SeparateChannels);
+    connect(&m_statusProcess, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus status) {
+        const QByteArray out = m_statusProcess.readAllStandardOutput();
+        applySessionStatus(exitCode == 0 && status == QProcess::NormalExit ? out : QByteArray());
+    });
+    connect(&m_statusProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) // not installed: finished() never follows
+            applySessionStatus({});
+    });
 
-    refreshSignIn();
+    // An expiry outlives the app: until someone signs in, every launch would
+    // otherwise spend its first 90 s on a renewal that already failed. The
+    // remembered flag holds until icloud-session shows a sign-in since.
+    // Set directly: rewriting the flag here would lose what it recorded.
+    m_authExpired = QFile::exists(authFlagPath());
+    refreshSessionStatus();
     refresh();
     setSyncMessage(!icloudMdAvailable() ? QStringLiteral("icloud-md not found on PATH. Install it to sync.")
                    : m_authExpired      ? QStringLiteral("Sync paused. Sign in to iCloud to resume.")
@@ -807,7 +812,7 @@ void NotesBackend::finishSync(int exitCode)
         refresh(); // a pull or clone changes files behind our back
         if (m_syncLabel == u"Clone")
             emit cloneFinished(ok);
-        refreshSignIn();
+        refreshSessionStatus();
         if (signedIn) {
             setSyncMessage(QStringLiteral("Signed in."));
             runSync(); // what was waiting on the session
@@ -871,18 +876,92 @@ void NotesBackend::clearLog()
     emit syncLogChanged();
 }
 
-void NotesBackend::refreshSignIn()
+NotesBackend::~NotesBackend()
+{
+    m_statusProcess.disconnect(this);
+    if (m_statusProcess.state() != QProcess::NotRunning) {
+        m_statusProcess.kill();
+        m_statusProcess.waitForFinished(1000);
+    }
+}
+
+void NotesBackend::refreshSessionStatus()
 {
     // Re-read after every sync too: Apple may push the expiry out as the
     // session is used, and the day count moves on in an app left open.
+    if (m_statusProcess.state() != QProcess::NotRunning) {
+        m_statusAgain = true; // the running read may predate what prompted this one
+        return;
+    }
+    m_statusProcess.start();
+}
+
+bool NotesBackend::sessionStatusPending() const
+{
+    return m_statusAgain || m_statusProcess.state() != QProcess::NotRunning;
+}
+
+namespace {
+
+// The parts of a status that change when someone signs in or the session
+// is validated; the expiry flag keeps the ones seen when it was raised.
+bool sameSession(const QJsonObject &a, const QJsonObject &b)
+{
+    for (const QLatin1StringView key : { QLatin1StringView("signed_in"), QLatin1StringView("expires_at"),
+                                         QLatin1StringView("validated_at") }) {
+        if (a.value(key) != b.value(key))
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+// `icloud-session status` prints one JSON object. Empty or unreadable
+// output (the tool missing, say) leaves the sign-in unknown: no expiry
+// countdown, and only this app's own record of an expired session counts.
+void NotesBackend::applySessionStatus(const QByteArray &output)
+{
     const int daysBefore = signInDaysLeft();
-    m_signInExpiry = SignIn::latestTokenExpiry(QDir::homePath() + QStringLiteral("/.config/icloud-md/accounts"));
+    const QJsonObject status = QJsonDocument::fromJson(output).object();
+    const bool known = status.value(QLatin1StringView("signed_in")).isBool();
+    m_sessionStatus = known ? status : QJsonObject();
+    m_signInExpiry = known ? QDateTime::fromString(status.value(QLatin1StringView("expires_at")).toString(), Qt::ISODate)
+                           : QDateTime();
+
+    if (known && !status.value(QLatin1StringView("signed_in")).toBool()) {
+        // Apple ended the session (seen by any app sharing it), or there is
+        // none: a sync would only fail the same way, after up to 90 s.
+        if (cloned() && !m_authExpired) {
+            setAuthExpired(true);
+            if (!m_syncRunning)
+                setSyncMessage(QStringLiteral("Sync paused. Sign in to iCloud to resume."));
+        }
+    } else if (known && m_authExpired) {
+        // Signed in, and the session moved on since the expiry was recorded:
+        // a sign-in from the terminal or another app. A flag that recorded no
+        // status (from an older version, or with the tool missing) stays.
+        const QJsonObject recorded = QJsonDocument::fromJson(readText(authFlagPath()).toUtf8()).object();
+        if (recorded.value(QLatin1StringView("signed_in")).isBool() && !sameSession(recorded, status)) {
+            setAuthExpired(false);
+            if (!m_syncRunning)
+                setSyncMessage(QStringLiteral("Signed in."));
+        }
+    }
+
     if (signInDaysLeft() != daysBefore)
         emit signInChanged();
+    if (m_statusAgain) {
+        m_statusAgain = false;
+        m_statusProcess.start();
+    }
+    emit sessionStatusRead();
 }
 
 int NotesBackend::signInDaysLeft() const
 {
+    if (m_sessionStatus.isEmpty())
+        return -2;
     const QDateTime now = QDateTime::currentDateTimeUtc();
     if (!m_signInExpiry.isValid() || m_signInExpiry <= now)
         return -1;
@@ -901,9 +980,11 @@ void NotesBackend::setAuthExpired(bool expired)
         return;
     m_authExpired = expired;
     if (expired) {
+        // What icloud-session reported at the time, so a later sign-in
+        // elsewhere shows up as a change (see applySessionStatus).
         QFile flag(authFlagPath());
         if (flag.open(QIODevice::WriteOnly))
-            flag.write("Sync is paused until an iCloud sign-in succeeds.\n");
+            flag.write(QJsonDocument(m_sessionStatus).toJson(QJsonDocument::Compact) + '\n');
     } else {
         QFile::remove(authFlagPath());
     }
