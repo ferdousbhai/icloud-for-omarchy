@@ -150,14 +150,11 @@ syncs itself, and the two never run icloud-md at once), when nobody is
 signed in to icloud-session, or before the notes are cloned. A sign-in
 Apple refused is reported to icloud-session just as the app does.
 
-The installer turns it on. To turn it on yourself (after building from
-source, or on a machine that installed an earlier version):
-
-```bash
-systemctl --user enable --now icloud-notes-sync.timer
-```
-
-To turn it off: `systemctl --user disable --now icloud-notes-sync.timer`.
+The package turns it on for every user (from the next login; the installer
+also starts it at once). To turn it off for yourself:
+`systemctl --user mask --now icloud-notes-sync.timer` (`unmask` undoes it).
+Built from source without the package: `systemctl --user enable --now
+icloud-notes-sync.timer`.
 What it did is in `journalctl --user -u icloud-notes-sync`.
 
 ## Your files

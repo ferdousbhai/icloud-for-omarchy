@@ -44,4 +44,8 @@ package() {
   # Background sync while the app is closed; install.sh enables the timer.
   install -Dm644 data/icloud-notes-sync.service "$pkgdir/usr/lib/systemd/user/icloud-notes-sync.service"
   install -Dm644 data/icloud-notes-sync.timer "$pkgdir/usr/lib/systemd/user/icloud-notes-sync.timer"
+  # Enabled for every user by the package itself, so an update through pacman
+  # turns it on too; it does nothing for a user with no cloned notes.
+  install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
+  ln -s ../icloud-notes-sync.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-notes-sync.timer"
 }
