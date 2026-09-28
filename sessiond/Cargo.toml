@@ -29,7 +29,6 @@ required-features = ["signin"]
 [dependencies]
 icloud-session = { path = ".." }
 blocking = "1"
-httpdate = "1"
 humantime = "2"
 inotify = { version = "0.11", default-features = false }
 serde = { version = "1", features = ["derive"] }

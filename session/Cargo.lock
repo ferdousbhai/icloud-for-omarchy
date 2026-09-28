@@ -781,7 +781,6 @@ name = "icloud-sessiond"
 version = "0.2.0"
 dependencies = [
  "blocking",
- "httpdate",
  "humantime",
  "icloud-session",
  "inotify",

@@ -117,9 +117,7 @@ pub fn parse_set_cookie(header: &str, now: u64) -> Option<SetCookie> {
             "domain" if !value.is_empty() => cookie.domain = Some(value.to_string()),
             "path" if !value.is_empty() => cookie.path = Some(value.to_string()),
             "expires" => {
-                cookie.expires = httpdate::parse_http_date(value)
-                    .ok()
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()));
+                cookie.expires = parse_cookie_date(value);
             }
             "max-age" => {
                 if let Ok(secs) = value.parse::<i64>() {
@@ -133,6 +131,79 @@ pub fn parse_set_cookie(header: &str, now: u64) -> Option<SetCookie> {
         cookie.expires = max_age;
     }
     Some(cookie)
+}
+
+/// A cookie `Expires` date as unix seconds, parsed leniently as RFC 6265
+/// §5.1.1 says to: servers send more than the strict HTTP-date forms (Apple
+/// sends `Wed, 28-Oct-2026 11:47:33 GMT`), and a date that fails to parse
+/// would turn a 30-day cookie into a session one.
+fn parse_cookie_date(value: &str) -> Option<u64> {
+    let is_delimiter = |c: char| {
+        let c = c as u32;
+        c == 0x09
+            || (0x20..=0x2F).contains(&c)
+            || (0x3B..=0x40).contains(&c)
+            || (0x5B..=0x60).contains(&c)
+            || (0x7B..=0x7E).contains(&c)
+    };
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    let leading_digits = |t: &str, min: usize, max: usize| -> Option<u64> {
+        let n = t.chars().take_while(char::is_ascii_digit).count();
+        (min..=max).contains(&n).then(|| t[..n].parse().ok()).flatten()
+    };
+    let (mut time, mut day, mut month, mut year) = (None, None, None, None);
+    for token in value.split(is_delimiter).filter(|t| !t.is_empty()) {
+        if time.is_none() {
+            let mut parts = token.splitn(3, ':');
+            if let (Some(h), Some(m), Some(s)) = (parts.next(), parts.next(), parts.next())
+                && let (Some(h), Some(m), Some(s)) = (
+                    leading_digits(h, 1, 2),
+                    leading_digits(m, 1, 2),
+                    leading_digits(s, 1, 2),
+                )
+            {
+                time = Some((h, m, s));
+                continue;
+            }
+        }
+        if day.is_none()
+            && let Some(d) = leading_digits(token, 1, 2)
+        {
+            day = Some(d);
+            continue;
+        }
+        if month.is_none() && token.len() >= 3 {
+            let prefix = token[..3].to_ascii_lowercase();
+            if let Some(i) = MONTHS.iter().position(|m| *m == prefix) {
+                month = Some(i as u64 + 1);
+                continue;
+            }
+        }
+        if year.is_none()
+            && let Some(y) = leading_digits(token, 2, 4)
+        {
+            year = Some(match y {
+                70..=99 => y + 1900,
+                0..=69 => y + 2000,
+                _ => y,
+            });
+        }
+    }
+    let ((h, m, s), day, month, year) = (time?, day?, month?, year?);
+    if !(1..=31).contains(&day) || year < 1601 || h > 23 || m > 59 || s > 59 {
+        return None;
+    }
+    // Days from 1970-01-01 to the date (Howard Hinnant's days_from_civil).
+    let (y, mo) = (year as i64 - i64::from(month <= 2), month as i64);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (mo + if mo > 2 { -3 } else { 9 }) + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + (h * 3600 + m * 60 + s) as i64;
+    u64::try_from(secs).ok()
 }
 
 /// Applies `Set-Cookie` headers to the jar by name: existing cookies update
@@ -219,6 +290,26 @@ mod tests {
         assert!(changed);
         assert_eq!(header(&j, NOW), "A=1; X-APPLE-WEBAUTH-TOKEN=new; B=2; C=3");
         assert_eq!(token_expiry(&j), NOW + 2_592_000);
+    }
+
+    #[test]
+    fn cookie_dates_parse_leniently() {
+        // 2026-10-28T11:47:33Z
+        let want = Some(1_793_188_053);
+        assert_eq!(parse_cookie_date("Wed, 28-Oct-2026 11:47:33 GMT"), want);
+        assert_eq!(parse_cookie_date("Wed, 28 Oct 2026 11:47:33 GMT"), want);
+        assert_eq!(parse_cookie_date("Wednesday, 28-Oct-26 11:47:33 GMT"), want);
+        assert_eq!(parse_cookie_date("Wed Oct 28 11:47:33 2026"), want);
+        assert_eq!(parse_cookie_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(parse_cookie_date("Sat, 29 Feb 2020 12:00:00 GMT"), Some(1_582_977_600));
+        assert_eq!(parse_cookie_date("not a date"), None);
+        assert_eq!(parse_cookie_date("Wed, 28-Oct-2026 GMT"), None);
+        let set = parse_set_cookie(
+            "X-APPLE-WEBAUTH-TOKEN=v; Domain=.icloud.com; Path=/; Expires=Wed, 28-Oct-2026 11:47:33 GMT; Secure",
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(set.expires, want);
     }
 
     #[test]
