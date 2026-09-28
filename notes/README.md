@@ -13,6 +13,11 @@ both ways with iCloud.
   System Settings). Without this, nothing outside Apple's own apps can
   read your notes.
 - The sync tool: `npm install -g icloud-md` (needs Node.js 20+).
+- `icloud-session`, which reads the iCloud sign-in that icloud-md saves
+  and that Notes shares with the other iCloud apps. The package depends
+  on it and it comes from the same signed repository; when building from
+  source, put it on `PATH` yourself. Without it Notes still syncs, but
+  cannot warn before a sign-in lapses.
 
 ## Install
 
@@ -98,7 +103,10 @@ turn it off):
   it on its own, a banner offers **Sign in**: Apple's window opens once
   and skips 2FA for a browser you trusted; syncing resumes on its own
   afterwards. The same banner appears a few days before a sign-in lapses,
-  and after a sign-in too short to last.
+  and after a sign-in too short to last. Notes asks `icloud-session status`
+  about the sign-in on launch, after every sync, and when you switch to
+  the window, so a sign-in or sign-out in another iCloud app (or in a
+  terminal) shows up here too.
 - New folders upload as real Notes folders.
 
 ## Your files
