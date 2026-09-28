@@ -68,8 +68,9 @@ fn incremental_sync_applies_changes_and_advances_the_token() {
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-NEW"));
 
     // ASSET-005 arrived with its master; ASSET-006 needed a lookup;
-    // ASSET-002 moved to Recently Deleted; ASSET-003 was tombstoned.
-    assert_eq!(ids(&cat, None), vec!["ASSET-006", "ASSET-005", "ASSET-004", "ASSET-001"]);
+    // ASSET-002 moved to Recently Deleted; ASSET-003 was tombstoned;
+    // ASSET-004 was hidden.
+    assert_eq!(ids(&cat, None), vec!["ASSET-006", "ASSET-005", "ASSET-001"]);
     assert_eq!(cat.asset("ASSET-006").unwrap().unwrap().filename, "IMG_0006.JPG");
     let gone = cat.asset("ASSET-002").unwrap().unwrap();
     assert!(gone.deleted);
@@ -78,6 +79,31 @@ fn incremental_sync_applies_changes_and_advances_the_token() {
     let family = cat.albums().unwrap().into_iter().find(|a| a.id == "A-FAMILY").unwrap();
     assert_eq!(family.name, "Family & friends");
     assert_eq!(ids(&cat, Some("A-FAMILY")), vec!["ASSET-005", "ASSET-001"]);
+    assert!(ids(&cat, Some("A-ITALY")).is_empty(), "the hidden ASSET-004 leaves its album too");
+}
+
+#[test]
+fn changes_request_is_hidden_and_hidden_assets_leave_the_library() {
+    use icloud_photos::catalog::PathKind;
+    let t = FixtureTransport::new(with_changes);
+    let ck = CloudKit::connect(&t).unwrap();
+    let mut cat = Catalog::open_in_memory().unwrap();
+    sync(&ck, &mut cat, &|_| {}).unwrap();
+    let dir = support::temp_dir("hidden");
+    let local = dir.join("IMG_0001.HEIC");
+    std::fs::write(&local, b"heic").unwrap();
+    cat.set_path("ASSET-004", PathKind::Original, Some(&local)).unwrap();
+    let before = t.calls().len();
+
+    sync(&ck, &mut cat, &|_| {}).unwrap();
+    let changes: Vec<_> = t.calls()[before..].iter().filter(|c| c.op == "changes/zone").cloned().collect();
+    let keys = changes[0].body.pointer("/zones/0/desiredKeys").and_then(Value::as_array).unwrap();
+    assert!(keys.iter().any(|k| k == "isHidden"), "changes/zone must ask for isHidden");
+    let hidden = cat.asset("ASSET-004").unwrap().unwrap();
+    assert!(hidden.deleted, "hidden assets are out of All Photos");
+    assert!(!ids(&cat, None).contains(&"ASSET-004".to_string()));
+    assert_eq!(hidden.local_path.as_deref(), Some(local.as_path()));
+    assert!(local.exists(), "hiding never deletes the downloaded file");
 }
 
 #[test]

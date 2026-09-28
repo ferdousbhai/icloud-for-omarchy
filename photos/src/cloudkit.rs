@@ -28,7 +28,7 @@ const ALBUM_TYPE_FOLDER: i64 = 3;
 
 /// Fields we read. CloudKit returns only these when `desiredKeys` is set.
 pub const DESIRED_KEYS: &[&str] = &[
-    "recordName", "recordType", "recordChangeTag", "masterRef", "isDeleted", "isExpunged",
+    "recordName", "recordType", "recordChangeTag", "masterRef", "isDeleted", "isExpunged", "isHidden",
     "assetDate", "addedDate", "filenameEnc", "itemType",
     "resOriginalRes", "resOriginalFileType", "resOriginalWidth", "resOriginalHeight",
     "resJPEGThumbRes", "resJPEGThumbFileType", "resJPEGThumbWidth", "resJPEGThumbHeight",
@@ -104,6 +104,12 @@ impl Record {
     pub fn is_deleted(&self) -> bool {
         self.deleted || self.int("isDeleted") == Some(1) || self.int("isExpunged") == Some(1)
     }
+
+    /// In the Hidden album. `changes/zone` reports these like any other
+    /// asset (only the listing index leaves them out).
+    pub fn is_hidden(&self) -> bool {
+        self.int("isHidden") == Some(1)
+    }
 }
 
 /// A signed download URL for one rendition. URLs expire; see `lookup_masters`.
@@ -153,7 +159,10 @@ impl MasterInfo {
     pub fn from_record(m: &Record) -> MasterInfo {
         let original = m.resource("resOriginal");
         let item_type = m.str("itemType").or(original.as_ref().and_then(|r| r.file_type.as_deref())).unwrap_or("");
-        let is_video = item_type.contains("movie") || item_type.contains("mpeg-4") || m.fields.contains_key("resVidSmallRes");
+        // A Live Photo's master carries the resVid* renditions of its video
+        // half too, so only the UTI decides; a paired video means a photo.
+        let live = m.resource("resOriginalVidCompl");
+        let is_video = live.is_none() && is_video_uti(item_type);
         let filename = m.decoded("filenameEnc").unwrap_or_else(|| format!("{}{}", sanitize(&m.name), extension_for(item_type)));
         MasterInfo {
             master_id: m.name.clone(),
@@ -164,7 +173,7 @@ impl MasterInfo {
             kind: if is_video { Kind::Video } else { Kind::Photo },
             thumb: m.resource("resJPEGThumb"),
             medium: m.resource("resJPEGMed"),
-            live: m.resource("resOriginalVidCompl"),
+            live,
             original,
         }
     }
@@ -206,7 +215,9 @@ impl AssetPart {
             master_id: a.reference("masterRef")?.to_owned(),
             change_tag: a.change_tag.clone(),
             created: ms.div_euclid(1000),
-            deleted: a.is_deleted(),
+            // Hidden assets leave All Photos and albums exactly like deleted
+            // ones (downloaded files stay); unhiding brings them back.
+            deleted: a.is_deleted() || a.is_hidden(),
         })
     }
 
@@ -574,6 +585,17 @@ pub fn int_filter(field: &str, value: i64) -> Value {
 /// Record names can contain `/` and `+` (master ids are base64-ish).
 pub fn sanitize(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+}
+
+/// Movie UTIs (`itemType` / `resOriginalFileType`); images, HEIC and JPEG
+/// included, are photos.
+pub fn is_video_uti(uti: &str) -> bool {
+    matches!(
+        uti,
+        "com.apple.quicktime-movie" | "public.mpeg-4" | "public.movie" | "public.video" | "public.avi" | "public.3gpp"
+            | "public.3gpp2" | "com.apple.m4v-video" | "public.mpeg" | "public.mpeg-2-video"
+    ) || uti.ends_with("-movie")
+        || uti.ends_with("-video")
 }
 
 /// File extension for a UTI, for naming Live Photo halves and nameless files.

@@ -118,6 +118,34 @@
         "resOriginalVidComplFileType": {
           "value": "com.apple.quicktime-movie",
           "type": "STRING"
+        },
+        "resVidSmallRes": {
+          "value": {
+            "fileChecksum": "AS",
+            "size": 123456,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AT",
+            "downloadURL": "https://cvws.icloud-content.com/B/resVidSmall/AX/m001+aaa/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resVidSmallFileType": {
+          "value": "com.apple.quicktime-movie",
+          "type": "STRING"
+        },
+        "resVidMedRes": {
+          "value": {
+            "fileChecksum": "AS",
+            "size": 234567,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AT",
+            "downloadURL": "https://cvws.icloud-content.com/B/resVidMed/AX/m001+aaa/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resVidMedFileType": {
+          "value": "com.apple.quicktime-movie",
+          "type": "STRING"
         }
       },
       "pluginFields": {},

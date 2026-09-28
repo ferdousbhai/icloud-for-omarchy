@@ -187,3 +187,58 @@ fn sign_in_required_propagates() {
     let ck = CloudKit::connect(&t).unwrap();
     assert!(ck.albums().unwrap_err().is_sign_in());
 }
+
+fn master(fields: Value) -> Record {
+    Record::parse(&json!({ "recordName": "AX/m", "recordType": "CPLMaster", "fields": fields })).unwrap()
+}
+
+fn res(url: &str) -> Value {
+    json!({ "value": { "downloadURL": url, "size": 1 }, "type": "ASSETID" })
+}
+
+#[test]
+fn kind_comes_from_the_uti_not_from_video_renditions() {
+    use icloud_photos::cloudkit::MasterInfo;
+    let s = |v: &str| json!({ "value": v, "type": "STRING" });
+    // A Live Photo master carries resVid* for its video half: still a photo.
+    let live = MasterInfo::from_record(&master(json!({
+        "resOriginalRes": res("https://x/o"), "resOriginalFileType": s("public.heic"),
+        "resOriginalVidComplRes": res("https://x/l"), "resOriginalVidComplFileType": s("com.apple.quicktime-movie"),
+        "resVidSmallRes": res("https://x/vs"), "resVidSmallFileType": s("com.apple.quicktime-movie"),
+        "resVidMedRes": res("https://x/vm"), "resVidMedFileType": s("com.apple.quicktime-movie"),
+    })));
+    assert_eq!(live.kind, Kind::Photo);
+    assert!(live.live.is_some());
+    // Even with no UTI at all, a paired video means a Live Photo.
+    let bare_live = MasterInfo::from_record(&master(json!({
+        "resOriginalVidComplRes": res("https://x/l"), "resVidSmallRes": res("https://x/vs"),
+    })));
+    assert_eq!(bare_live.kind, Kind::Photo);
+    for (uti, kind) in [
+        ("public.jpeg", Kind::Photo),
+        ("public.heic", Kind::Photo),
+        ("public.png", Kind::Photo),
+        ("public.mpeg-4", Kind::Video),
+        ("com.apple.quicktime-movie", Kind::Video),
+    ] {
+        let m = MasterInfo::from_record(&master(json!({
+            "itemType": s(uti), "resOriginalRes": res("https://x/o"), "resVidSmallRes": res("https://x/vs"),
+        })));
+        assert_eq!(m.kind, kind, "{uti}");
+    }
+    // resOriginalFileType decides when itemType is missing.
+    let mp4 = MasterInfo::from_record(&master(json!({ "resOriginalRes": res("https://x/o"), "resOriginalFileType": s("public.mpeg-4") })));
+    assert_eq!(mp4.kind, Kind::Video);
+}
+
+#[test]
+fn hidden_assets_count_as_removed() {
+    let rec = Record::parse(&json!({
+        "recordName": "A1", "recordType": "CPLAsset",
+        "fields": { "masterRef": { "value": { "recordName": "M1" } }, "isHidden": { "value": 1 } },
+    }))
+    .unwrap();
+    assert!(rec.is_hidden());
+    assert!(icloud_photos::cloudkit::AssetPart::from_record(&rec).unwrap().deleted);
+    assert!(icloud_photos::cloudkit::DESIRED_KEYS.contains(&"isHidden"));
+}

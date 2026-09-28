@@ -119,6 +119,44 @@
             "ownerRecordName": "_owner",
             "zoneType": "REGULAR_CUSTOM_ZONE"
           }
+        },
+        {
+          "recordName": "ASSET-004",
+          "recordType": "CPLAsset",
+          "fields": {
+            "assetDate": {
+              "value": 1757003600000,
+              "type": "TIMESTAMP"
+            },
+            "masterRef": {
+              "value": {
+                "recordName": "AX/m004+ddd",
+                "action": "DELETE_SELF",
+                "zoneID": {
+                  "zoneName": "PrimarySync",
+                  "ownerRecordName": "_owner",
+                  "zoneType": "REGULAR_CUSTOM_ZONE"
+                }
+              },
+              "type": "REFERENCE"
+            },
+            "isDeleted": {
+              "value": 0,
+              "type": "INT64"
+            },
+            "isHidden": {
+              "value": 1,
+              "type": "INT64"
+            }
+          },
+          "pluginFields": {},
+          "recordChangeTag": "t004-hidden",
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
         }
       ]
     }
