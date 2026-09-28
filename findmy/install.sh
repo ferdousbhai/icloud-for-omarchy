@@ -8,8 +8,8 @@
 # key (checked against the fingerprint pinned below), adds the repositories
 # for the app and for icloud-session (which it depends on), installs an
 # Omarchy hook per repository that restores it after `omarchy refresh pacman`
-# rewrites /etc/pacman.conf, installs the app, and installs icloud-md (the
-# Apple sign-in) with npm when it is missing.
+# rewrites /etc/pacman.conf, and installs the app. The Apple sign-in comes
+# with the icloud-session package.
 set -euo pipefail
 
 REPO=icloud-findmy
@@ -88,21 +88,10 @@ else
   sudo pacman -S --needed --noconfirm "$REPO"
 fi
 
-# icloud-md does the Apple sign-in every iCloud app shares. It is an npm
-# package; install it for the desktop user if npm is there and it is not.
-if ! command -v icloud-md >/dev/null; then
-  if command -v npm >/dev/null; then
-    echo "Installing icloud-md (the Apple sign-in)"
-    if (( EUID == 0 )); then npm install -g icloud-md; else sudo npm install -g icloud-md; fi
-  else
-    echo "Install Node.js 20+ and then run: npm install -g icloud-md" >&2
-  fi
-fi
-
 cat <<EOT
 
 Done. Launch "Find My (iCloud)" from the app launcher (Super + Space).
-If you have not signed in to iCloud through icloud-md (or Notes), the app
-shows a Sign In button that opens Apple's sign-in page.
+If no iCloud app on this computer has signed in yet, the app shows a
+Sign In button that opens Apple's sign-in page.
 Updates arrive with the rest of the system through: omarchy update
 EOT

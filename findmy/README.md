@@ -4,9 +4,10 @@ Find My for Omarchy: see where your Apple devices are on a map, play a
 sound on one, or turn on Lost Mode. The app also keeps a local history of
 where each device has been, so the map can draw its trail.
 
-It uses the same iCloud sign-in as Notes (icloud-notes), through the
-[`icloud-session`](https://github.com/ferdousbhai/icloud-session) crate:
-if you signed in once for Notes, Find My opens with no prompt.
+The iCloud sign-in comes from the
+[`icloud-session`](https://github.com/ferdousbhai/icloud-session) package,
+which every iCloud app on the machine shares: after the first sign-in from
+any of them (Notes, Find My, Photos), Find My opens with no prompt.
 
 ## Requirements
 
@@ -14,8 +15,6 @@ if you signed in once for Notes, Find My opens with no prompt.
   default) and **Access iCloud Data on the Web turned on**, the same as
   Notes. On iPhone/iPad: Settings → your name → iCloud.
 - **Find My** turned on for the devices you want to see.
-- The sign-in tool: `npm install -g icloud-md` (needs Node.js 20+). The
-  installer does this for you when npm is present.
 
 AirTags and other Find My network items are not shown: Apple's web
 service lists only devices signed in to your Apple ID.
@@ -53,8 +52,10 @@ three for `icloud-session` if nothing else uses it).
   locked device.
 - The list refreshes every minute while the window is on screen (not
   while it is minimised or on another workspace), and on **Ctrl+R**.
-- If the iCloud sign-in has expired, a banner offers **Sign In**, which
-  opens Apple's sign-in page through icloud-md and then carries on.
+- When no one is signed in to iCloud, or the sign-in has expired, a
+  banner offers **Sign In**, which opens Apple's sign-in page (the
+  icloud-session sign-in window). The banner follows the sign-in as it
+  happens, in this app or any other, and the list loads once it is done.
 
 ### History
 
@@ -98,11 +99,11 @@ keeps the fake history out of your real one.)
 ./bin/test
 ```
 
-runs the Rust tests and the installer check. The core (`findme.rs`,
-`history.rs`, `models.rs`) has no GTK dependency;
+runs the full Rust test suite and the installer check. The core
+(`findme.rs`, `history.rs`, `models.rs`) has no GTK dependency, so
 `cargo test --no-default-features` tests it on a machine without the GTK
-stack, and `bin/test` falls back to that when libshumate is missing.
-`--features gtk` builds the widgets that need only GTK and libadwaita.
+stack; `--features gtk` builds the widgets that need only GTK and
+libadwaita.
 
 ## How it works
 
@@ -110,10 +111,12 @@ stack, and `bin/test` falls back to that when libshumate is missing.
 does (endpoints and payloads as in pyicloud's
 `FindMyiPhoneServiceManager`): `initClient` once, then `refreshClient`
 with the returned `serverContext` and `shouldLocate`, plus `playSound`
-and `lostDevice`. Every request goes through `icloud-session`, which
-attaches the cookies, rotates them safely alongside the other iCloud
-apps, and reports `SignInRequired` when Apple ends the session. Network
-and database calls run on worker threads, never on the GTK main loop.
+and `lostDevice`. Every request goes through the `icloud-session` client,
+which gets the cookies from `icloud-sessiond` (the D-Bus service that owns
+the Apple account), hands rotated cookies back to it, and reports
+`SignInRequired` when Apple ends the session. The sign-in banner watches
+the service's status on its own thread. Network and database calls run
+on worker threads, never on the GTK main loop.
 
 ## Releasing
 
