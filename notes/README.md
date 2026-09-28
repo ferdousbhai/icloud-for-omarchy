@@ -153,9 +153,24 @@ Apple refused is reported to icloud-session just as the app does.
 The package turns it on for every user (from the next login; the installer
 also starts it at once). To turn it off for yourself:
 `systemctl --user mask --now icloud-notes-sync.timer` (`unmask` undoes it).
-Built from source without the package: `systemctl --user enable --now
-icloud-notes-sync.timer`.
 What it did is in `journalctl --user -u icloud-notes-sync`.
+
+Built from source without the package, the units are not installed. From
+the checkout, after `./bin/build`, install them for your user with the
+service pointed at the binary you built:
+
+```bash
+mkdir -p ~/.config/systemd/user
+sed "s|^ExecStart=.*|ExecStart=$PWD/build/icloud-notes --sync|" data/icloud-notes-sync.service \
+  > ~/.config/systemd/user/icloud-notes-sync.service
+cp data/icloud-notes-sync.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now icloud-notes-sync.timer
+```
+
+The service finds icloud-md in the usual places (`~/.local/bin`, mise,
+npm's `~/.npm-global`, bun, nvm and volta) even though systemd gives it
+a bare `PATH`.
 
 ## Your files
 
