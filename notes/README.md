@@ -48,7 +48,8 @@ is the one attached to the latest release, verified with it; read it
 first if you like. It also installs an Omarchy `pre-refresh-pacman` hook
 so `omarchy refresh pacman` keeps the repository.
 
-To uninstall: `omarchy pkg drop icloud-notes`, then remove
+To uninstall: `systemctl --user disable --now icloud-notes-sync.timer`
+and `omarchy pkg drop icloud-notes`, then remove
 `/etc/pacman.d/icloud-notes.conf`, its `Include` line in
 `/etc/pacman.conf`, and `~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-notes`.
 
@@ -112,7 +113,9 @@ turn it off):
   markers instead.
 - If a note changes underneath edits you haven't saved yet (a pull, or
   another program writing the file), the app never saves over that
-  change: your edits and the new copy open side by side the same way.
+  change. Your edits merge with it line by line: edits to different
+  lines land in the note on their own, and only lines both sides changed
+  open side by side the same way.
 - Edits made in the app are pushed sooner, about 20 seconds after you
   stop making them, so a burst of typing becomes one push. Nothing waits
   for a click.
@@ -134,6 +137,28 @@ turn it off):
   in another iCloud app (or with `icloud-session sign-in` in a terminal)
   shows up here at once.
 - New folders upload as real Notes folders.
+
+## Background sync
+
+While Notes is closed, a systemd user timer runs `icloud-notes --sync`
+every 15 minutes (and two minutes after boot, and after a missed run
+while the computer slept): the same push-then-pull the app does, with no
+window. Edits made elsewhere reach this computer, and edits made here by
+other programs reach iCloud, so a note is less likely to be hours stale
+when you next edit it. It does nothing while the app is open (the app
+syncs itself, and the two never run icloud-md at once), when nobody is
+signed in to icloud-session, or before the notes are cloned. A sign-in
+Apple refused is reported to icloud-session just as the app does.
+
+The installer turns it on. To turn it on yourself (after building from
+source, or on a machine that installed an earlier version):
+
+```bash
+systemctl --user enable --now icloud-notes-sync.timer
+```
+
+To turn it off: `systemctl --user disable --now icloud-notes-sync.timer`.
+What it did is in `journalctl --user -u icloud-notes-sync`.
 
 ## Your files
 
@@ -164,8 +189,8 @@ preview-only: notes with attachments can't be edited back to iCloud.
   refused — the push preview will tell you.
 - Changes from other devices arrive when you switch to the window, open
   a note, or start editing one (or press Pull), not instantly like the
-  Mac app; nothing syncs in the
-  background while you are elsewhere.
+  Mac app. While the app is closed, [background sync](#background-sync)
+  catches up every 15 minutes.
 
 ## If something looks wrong
 

@@ -82,6 +82,27 @@ else
   sudo pacman -S --needed --noconfirm "$REPO"
 fi
 
+# Background sync: a systemd user timer syncs every 15 minutes while Notes
+# is closed. It belongs to the desktop user's systemd, not root's.
+enable_background_sync() {
+  local user uid
+  local enable_cmd='systemctl --user enable --now icloud-notes-sync.timer'
+  user="${SUDO_USER:-${USER:-$(id -un)}}"
+  uid="$(id -u "$user" 2>/dev/null)" || return 0
+  if (( uid == 0 )) || [[ ! -S /run/user/$uid/bus ]]; then
+    echo "To sync while Notes is closed, run as your user: $enable_cmd"
+    return 0
+  fi
+  local ctl=(env "XDG_RUNTIME_DIR=/run/user/$uid" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" systemctl --user)
+  (( EUID == 0 )) && ctl=(runuser -u "$user" -- "${ctl[@]}")
+  if "${ctl[@]}" daemon-reload && "${ctl[@]}" enable --now icloud-notes-sync.timer; then
+    echo "Background sync is on (every 15 minutes while Notes is closed)."
+  else
+    echo "Could not turn on background sync. Run as your user: $enable_cmd" >&2
+  fi
+}
+enable_background_sync
+
 cat <<EOF
 
 Done. Launch "Notes (iCloud)" from the app launcher (Super + Space).
