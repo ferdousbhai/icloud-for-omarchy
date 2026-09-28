@@ -1,18 +1,31 @@
 //! Location history in SQLite at `~/.local/share/icloud-findmy/history.db`.
 //!
 //! One row per refresh per device, and only when the device moved: more than
-//! [`MOVE_THRESHOLD_M`] from the last stored point, and more than the smaller
+//! [`MOVE_THRESHOLD_M`] from the last stored point, and more than the larger
 //! of the two accuracy radii (so a stationary phone whose fix wobbles between
-//! Wi-Fi and GPS does not draw a scribble).
+//! Wi-Fi and GPS does not draw a scribble). Rows older than
+//! [`RETENTION_SECS`] are deleted on open and after every batch of inserts.
+//!
+//! Location history is private: the directory is kept `0700` and the
+//! database (with its `-wal` and `-shm` files) `0600`, and both are fixed on
+//! every open.
 
+use std::fs::{DirBuilder, OpenOptions, Permissions};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::models::{Device, Fix};
+use crate::models::{self, Device, Fix};
 
 /// Minimum movement in metres before a new point is stored.
 pub const MOVE_THRESHOLD_M: f64 = 25.0;
+
+/// How long positions are kept: 30 days.
+pub const RETENTION_SECS: i64 = 30 * 24 * 3600;
+
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -41,11 +54,32 @@ impl History {
         Self::open(&path)
     }
 
+    /// Opens (creating if needed) the database at `path`, tightening the
+    /// permissions of its directory and files and pruning old rows.
     pub fn open(path: &Path) -> rusqlite::Result<History> {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        let io = |e: std::io::Error| {
+            rusqlite::Error::InvalidPath(PathBuf::from(format!("{}: {e}", path.display())))
+        };
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            DirBuilder::new()
+                .recursive(true)
+                .mode(DIR_MODE)
+                .create(dir)
+                .map_err(io)?;
+            std::fs::set_permissions(dir, Permissions::from_mode(DIR_MODE)).map_err(io)?;
         }
-        Self::init(Connection::open(path)?)
+        // Create the file 0600 before SQLite does; SQLite gives the -wal and
+        // -shm files the database file's mode.
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(FILE_MODE)
+            .open(path)
+            .map_err(io)?;
+        restrict_files(path).map_err(io)?;
+        let history = Self::init(Connection::open(path)?)?;
+        restrict_files(path).map_err(io)?;
+        Ok(history)
     }
 
     pub fn open_in_memory() -> rusqlite::Result<History> {
@@ -65,7 +99,18 @@ impl History {
              );
              CREATE INDEX IF NOT EXISTS history_device_ts ON history(device_id, ts);",
         )?;
-        Ok(History { conn })
+        let history = History { conn };
+        history.prune(models::now_ms() / 1000)?;
+        Ok(history)
+    }
+
+    /// Deletes rows older than [`RETENTION_SECS`] before `now` (Unix
+    /// seconds). Returns rows deleted.
+    pub fn prune(&self, now: i64) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            "DELETE FROM history WHERE ts < ?1",
+            params![now - RETENTION_SECS],
+        )
     }
 
     /// The newest stored point for a device.
@@ -94,7 +139,7 @@ impl History {
                 return Ok(false);
             }
             let moved = distance_m(last.lat, last.lon, fix.lat, fix.lon);
-            if moved <= MOVE_THRESHOLD_M.max(last.accuracy.min(fix.accuracy)) {
+            if moved <= MOVE_THRESHOLD_M.max(last.accuracy.max(fix.accuracy)) {
                 return Ok(false);
             }
         }
@@ -106,8 +151,9 @@ impl History {
         Ok(true)
     }
 
-    /// Records every device with a current (not old) fix. Returns rows written.
-    pub fn record_devices(&self, devices: &[Device]) -> rusqlite::Result<usize> {
+    /// Records every device with a current (not old) fix, then prunes rows
+    /// past the retention as of `now` (Unix seconds). Returns rows written.
+    pub fn record_devices(&self, devices: &[Device], now: i64) -> rusqlite::Result<usize> {
         let mut written = 0;
         for d in devices {
             if let Some(fix) = d.location.as_ref().filter(|f| !f.is_old && f.ts_ms > 0)
@@ -116,6 +162,7 @@ impl History {
                 written += 1;
             }
         }
+        self.prune(now)?;
         Ok(written)
     }
 
@@ -128,6 +175,20 @@ impl History {
         stmt.query_map(params![device_id, since], row_to_point)?
             .collect()
     }
+}
+
+/// Sets the database and its `-wal` / `-shm` files (where present) to 0600.
+fn restrict_files(path: &Path) -> std::io::Result<()> {
+    std::fs::set_permissions(path, Permissions::from_mode(FILE_MODE))?;
+    for suffix in ["-wal", "-shm"] {
+        let mut side = path.as_os_str().to_owned();
+        side.push(suffix);
+        match std::fs::set_permissions(&side, Permissions::from_mode(FILE_MODE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn row_to_point(r: &rusqlite::Row) -> rusqlite::Result<Point> {

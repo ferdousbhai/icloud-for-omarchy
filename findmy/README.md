@@ -63,9 +63,11 @@ Positions are kept only on this computer, in
 `~/.local/share/icloud-findmy/history.db` (SQLite, table `history`:
 `device_id, ts, lat, lon, accuracy, battery`). A row is written on a
 refresh only when the device moved more than 25 m, and more than the
-accuracy radius of its fixes, since the last stored point, so a phone
-sitting on a desk does not fill the file. Delete the file to clear the
-history.
+larger accuracy radius of its fixes, since the last stored point, so a
+phone sitting on a desk does not fill the file. Positions older than 30
+days are deleted when the app opens the file and after every refresh.
+The directory is readable only by you (`0700`, the database files
+`0600`). Delete the file to clear the history.
 
 ## Building from source
 

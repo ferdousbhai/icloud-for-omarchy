@@ -197,7 +197,7 @@ impl Window {
                     *history = History::open_default().ok();
                 }
                 if let Some(h) = history.as_ref()
-                    && let Err(e) = h.record_devices(&devices)
+                    && let Err(e) = h.record_devices(&devices, models::now_ms() / 1000)
                 {
                     eprintln!("icloud-findmy: could not save history: {e}");
                 }

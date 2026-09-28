@@ -223,12 +223,14 @@ fn refreshes_feed_history_only_when_moved() {
     let history = History::open_in_memory().unwrap();
 
     let first = fm.refresh().unwrap();
+    // "Now" is the fixture's time, so retention keeps its fixes.
+    let now = first[0].location.unwrap().ts_ms / 1000;
     // phone + mac; the watch's fix is old and the AirPods have none.
-    assert_eq!(history.record_devices(&first).unwrap(), 2);
+    assert_eq!(history.record_devices(&first, now).unwrap(), 2);
 
     let second = fm.refresh().unwrap();
     // The phone walked ~400 m; the Mac wobbled 10 m inside its 65 m accuracy.
-    assert_eq!(history.record_devices(&second).unwrap(), 1);
+    assert_eq!(history.record_devices(&second, now).unwrap(), 1);
 
     let phone = &second[0];
     let trail = history.trail(&phone.id, 0).unwrap();
