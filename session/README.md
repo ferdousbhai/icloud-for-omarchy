@@ -37,11 +37,15 @@ no truncated-read retries and no status polling.
   older than 10 minutes and a client called within the last 15 (the
   browser's own heartbeat is 14). `Session()` also revalidates first when
   the last validate is older than 10 minutes. Rotated cookies merge by name.
+  If Apple cannot be reached (10 s to connect, 20 s in all), callers get
+  the session as it is, and `/validate` is not tried again for a minute;
+  callers that queued behind a failed attempt share its answer.
 - **Expiry** is the captured X-APPLE-WEBAUTH-TOKEN cookie's own expiry,
   updated when Apple rotates it.
 - **Signing out.** 421/401 on `/validate` signs out. A client's 421/401
   on a data endpoint only triggers `ReportSignInRequired()`, which runs a
   `/validate` to confirm first, so one stray 401 does not sign every app out.
+  Reports that arrive while a `/validate` is running share its answer.
 - **icloud-md mirror.** After every sign-in and rotation the daemon writes
   `~/.config/icloud-md/accounts/<dsid>/{session.local.json,meta.json}`
   atomically, so `icloud-md clone --account <dsid>` syncs Notes with no
@@ -79,18 +83,19 @@ for status in icloud_session::watch()? { /* on its own thread: one Status per ch
 |---|---|
 | `Session::connect()` | Reads the daemon's properties (D-Bus activates it) and fetches `Session()`. `SignInRequired` when signed out. |
 | `s.webservices()` | The `webservices` map (`ckdatabasews`, `findme`, ...) from the daemon's last `/validate`. |
-| `s.get(url)`, `post_json(url, &value)`, `post_bytes(url, content_type, bytes)` | Straight to Apple with the cookie header from `Session()`, `Origin`/`Referer: https://www.icloud.com`, and `clientBuildNumber`, `clientMasteringNumber`, `clientId`, `dsid` appended to the query (a parameter already in the URL is left alone). |
-| `s.download(url, dest)` | Streams to a temp file beside `dest`, renamed on success. Cookies attached, no client params. |
-| `s.apple_id()`, `s.dsid()` | The account the session belongs to. |
+| `s.get(url)`, `post_json(url, &value)`, `post_bytes(url, content_type, bytes)`, `post_file(url, content_type, &path)` | Straight to Apple with the cookie header from `Session()`, `Origin`/`Referer: https://www.icloud.com`, and `clientBuildNumber`, `clientMasteringNumber`, `clientId`, `dsid` appended to the query (a parameter already in the URL is left alone). `post_file` streams the file with its `Content-Length` instead of reading it into memory. |
+| `s.download(url, dest)` | Streams to a temp file beside `dest` (parent directories created), renamed on success. Cookies attached, no client params. |
+| `s.apple_id()`, `s.dsid()` | The account the session belongs to. If the daemon later holds another account, the session's calls return `SignInRequired`; connect again. |
 | `sign_in()`, `sign_out()` | `SignIn()` / `SignOut()`; both return at once. |
 | `status()` | `Status { signed_in, apple_id, dsid, expires_at, signing_in }`, one `GetAll`. `expires_at` is unix seconds or `None`. |
-| `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`. |
+| `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`, and after the daemon dies or restarts (re-read from the new instance). |
 | `Session::connect_on(&conn)`, `status_on`, `watch_on`, `sign_in_on`, `sign_out_on` | The same on a given `zbus::blocking::Connection` (tests, tools). |
 | `Session::mock(base_url)` | What mock mode gives `Session::connect()`. |
 
 Every `Set-Cookie` Apple sends a request goes back to the daemon through
 `MergeCookies`, and the in-process `Session()` cache is dropped so the next
-request uses the merged jar. On 421/401 the client calls
+request uses the merged jar. On 421/401 from icloud.com or a service host
+(a content host's 401 is a plain `Http` error) the client calls
 `ReportSignInRequired()`: if the daemon is still signed in it retries the
 request once with the fresh jar (a 421/401 again is `Http`), otherwise it
 returns `SignInRequired`.
@@ -124,7 +129,8 @@ object `/io/github/ferdousbhai/ICloudSession`.
 Property changes are announced with the standard
 `org.freedesktop.DBus.Properties.PropertiesChanged` signal, one signal per
 state change carrying every property that changed, so Qt (QtDBus) and GTK
-apps watch one signal for their sign-in banner.
+apps watch one signal for their sign-in banner. A newly started daemon
+announces every property once.
 
 ```console
 $ busctl --user introspect io.github.ferdousbhai.ICloudSession /io/github/ferdousbhai/ICloudSession
@@ -150,7 +156,7 @@ Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed), 64 usa
 
 | path | written by | contents |
 |---|---|---|
-| `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at` |
+| `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
 | `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache |
 | `~/.config/icloud-md/accounts/<dsid>/session.local.json` (0600) | daemon, icloud-md | `cookie`, `clientId`, `clientBuildNumber`, `clientMasteringNumber`, `capturedAt` (fields icloud-md adds are kept) |
@@ -182,7 +188,7 @@ and `watch` never yields.
 | `ICLOUD_SESSION_SIGNIN_BIN` | daemon | `icloud-session-signin` beside `icloud-sessiond`, else on `PATH` |
 | `ICLOUD_SESSION_SIGNIN_UA` | sign-in window | WebKitGTK's own user agent; `safari` for a macOS Safari one, anything else verbatim |
 | `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
-| `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS` | daemon (tests) | 300, 600 |
+| `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS`, `ICLOUD_SESSIOND_RETRY_SECS` | daemon (tests) | 300, 600, 60 |
 
 ## The sign-in spike
 
