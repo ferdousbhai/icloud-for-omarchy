@@ -93,6 +93,28 @@ fn client_params(uri: &str) -> Value {
     params
 }
 
+/// Domains the window loads pages and frames from: Apple's sign-in
+/// (idmsa.apple.com, inside www.icloud.com) and what it embeds.
+const APPLE_DOMAINS: [&str; 4] = ["apple.com", "icloud.com", "cdn-apple.com", "apple-cloudkit.com"];
+
+/// Whether a navigation (of the page or any frame) stays in the window:
+/// https on an Apple domain, or a local `about:`/`data:`/`blob:` document.
+fn stays_in_window(uri: &str) -> bool {
+    let Ok(url) = url::Url::parse(uri) else {
+        return false;
+    };
+    match url.scheme() {
+        "about" | "data" | "blob" => true,
+        "https" => url.host_str().is_some_and(|host| {
+            let host = host.to_ascii_lowercase();
+            APPLE_DOMAINS
+                .iter()
+                .any(|d| host == *d || host.strip_suffix(d).is_some_and(|rest| rest.ends_with('.')))
+        }),
+        _ => false,
+    }
+}
+
 fn is_icloud_domain(domain: &str) -> bool {
     let host = domain.trim_start_matches('.');
     host == "icloud.com" || host.ends_with(".icloud.com")
@@ -196,6 +218,10 @@ fn main() -> ExitCode {
         data_dir.join("cookies.sqlite").to_str().unwrap_or_default(),
         webkit6::CookiePersistentStorage::Sqlite,
     );
+    // Apple's sign-in form is an idmsa.apple.com frame inside
+    // www.icloud.com, so its cookies are third-party ones, which WebKitGTK 6
+    // refuses by default. The window only ever loads Apple (see below).
+    cookies.set_accept_policy(webkit6::CookieAcceptPolicy::Always);
 
     let content = webkit6::UserContentManager::new();
     content.add_script(&webkit6::UserScript::new(
@@ -257,6 +283,40 @@ fn main() -> ExitCode {
             });
         });
     }
+    // Keep the window on Apple: a link elsewhere the user clicked opens in
+    // their browser, anything else off Apple is not loaded.
+    view.connect_decide_policy(|_, decision, kind| {
+        if !matches!(
+            kind,
+            webkit6::PolicyDecisionType::NavigationAction | webkit6::PolicyDecisionType::NewWindowAction
+        ) {
+            return false;
+        }
+        let Some(action) = decision
+            .downcast_ref::<webkit6::NavigationPolicyDecision>()
+            .and_then(|d| d.navigation_action())
+        else {
+            return false;
+        };
+        let uri = action
+            .request()
+            .and_then(|r| r.uri())
+            .map(|u| u.to_string())
+            .unwrap_or_default();
+        if stays_in_window(&uri) {
+            return false;
+        }
+        if action.is_user_gesture() && (uri.starts_with("https://") || uri.starts_with("http://")) {
+            eprintln!("icloud-session-signin: opening {uri} in the browser");
+            if let Err(e) = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>) {
+                eprintln!("icloud-session-signin: opening {uri}: {e}");
+            }
+        } else {
+            eprintln!("icloud-session-signin: not loading {uri} (not Apple)");
+        }
+        decision.ignore();
+        true
+    });
     view.connect_web_process_terminated(|_, reason| {
         eprintln!("icloud-session-signin: the web process ended ({reason:?})");
     });
@@ -303,6 +363,21 @@ mod tests {
         assert!(is_setup_call("https://setup.icloud.com/setup/ws/1/accountLogin"));
         assert!(!is_setup_call("https://setup.icloud.com/setup/ws/1/validateX"));
         assert!(!is_setup_call("https://setup.icloud.com/setup/ws/1/logout"));
+    }
+
+    #[test]
+    fn only_apple_stays_in_the_window() {
+        assert!(stays_in_window("https://www.icloud.com/"));
+        assert!(stays_in_window("https://idmsa.apple.com/appleauth/auth/signin"));
+        assert!(stays_in_window("https://icloud.com"));
+        assert!(stays_in_window("https://www.cdn-apple.com/x.js"));
+        assert!(stays_in_window("about:blank"));
+        assert!(!stays_in_window("http://www.icloud.com/"));
+        assert!(!stays_in_window("https://evilicloud.com/"));
+        assert!(!stays_in_window("https://icloud.com.evil.example/"));
+        assert!(!stays_in_window("https://example.com/?u=https://www.icloud.com/"));
+        assert!(!stays_in_window("file:///etc/passwd"));
+        assert!(!stays_in_window("not a url"));
     }
 
     #[test]
