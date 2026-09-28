@@ -155,14 +155,25 @@ pub fn write_atomically(dest: &Path, reader: &mut dyn std::io::Read) -> Result<u
 /// The transport the app uses: mock when `ICLOUD_SESSION_MOCK=1`, else the session.
 pub fn from_env() -> Result<std::sync::Arc<dyn Transport>> {
     if MockTransport::active() {
-        Ok(std::sync::Arc::new(MockTransport::from_env()))
-    } else {
-        Ok(std::sync::Arc::new(crate::session::SessionTransport::load()?))
+        return Ok(std::sync::Arc::new(MockTransport::from_env()));
     }
+    #[cfg(feature = "session")]
+    return Ok(std::sync::Arc::new(crate::session::SessionTransport::load()?));
+    #[cfg(not(feature = "session"))]
+    Err(Error::Other(NO_SESSION.into()))
 }
+
+#[cfg(not(feature = "session"))]
+const NO_SESSION: &str = "built without the icloud-session feature; only ICLOUD_SESSION_MOCK=1 works";
 
 /// Interactive sign-in when there is no transport yet (the session could not
 /// even load). Blocks until it finishes; call it off the main loop.
 pub fn sign_in() -> Result<()> {
-    if MockTransport::active() { MockTransport::from_env().reauthenticate() } else { crate::session::sign_in() }
+    if MockTransport::active() {
+        return MockTransport::from_env().reauthenticate();
+    }
+    #[cfg(feature = "session")]
+    return crate::session::sign_in();
+    #[cfg(not(feature = "session"))]
+    Err(Error::Other(NO_SESSION.into()))
 }

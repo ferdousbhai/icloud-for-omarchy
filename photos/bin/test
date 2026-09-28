@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Run the maintained tests: clippy, the Rust suite (fixtures, the fake
+# CloudKit server end to end), then the installer's shared add_signed_repo
+# hash check.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# The session feature links ../icloud-session. While that checkout does not
+# build, test everything else (the mock transport) without it, unless
+# --require-session (bin/release) says a real build is required.
+features=()
+if ! cargo check --locked --quiet 2>/dev/null; then
+  if [[ ${1:-} == --require-session ]]; then
+    cargo check --locked
+    exit 1
+  fi
+  echo "The session feature does not build (see ../icloud-session): testing without it" >&2
+  features=(--no-default-features)
+fi
+cargo clippy --locked --all-targets "${features[@]}" -- -D warnings
+cargo test --locked "${features[@]}"
+
+# The installer's add_signed_repo function is shared verbatim with the other
+# installers (ferdousbhai/icloud-notes, ferdousbhai/icloud-findmy,
+# ferdousbhai/ghost); every repository pins its hash so a change to one copy
+# fails a test until the twins match.
+bash -n install.sh
+actual="$(sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' install.sh | sed '1d;$d' | sha256sum | cut -d' ' -f1)"
+expected="$(cat tests/add_signed_repo.sha256)"
+if [[ "$actual" != "$expected" ]]; then
+  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twins in ferdousbhai/icloud-notes, ferdousbhai/icloud-findmy and ferdousbhai/ghost together" >&2
+  exit 1
+fi
+echo "ok add_signed_repo matches its pinned hash"

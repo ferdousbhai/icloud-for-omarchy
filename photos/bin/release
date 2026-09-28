@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Cut a release from this machine: tag, build the Arch package, sign it with
+# the local package-signing key, and publish a one-package pacman repository
+# as the tag's GitHub release. Users who ran install.sh get it through
+# `omarchy update`.
+#
+# Usage: bin/release <version>          e.g. bin/release 0.2.0
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+app=icloud-photos
+
+version="${1:-}"
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Usage: bin/release <major.minor.patch>" >&2; exit 1; }
+tag="v$version"
+
+[[ -z $(git status --porcelain) ]] || { echo "Commit or stash your changes first." >&2; exit 1; }
+[[ $(git branch --show-current) == main ]] || { echo "Release from main." >&2; exit 1; }
+! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "$tag already exists." >&2; exit 1; }
+
+# install.sh pins the fingerprint users trust; the key that signs must be it.
+fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
+gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
+  || { echo "The secret key $fingerprint pinned in install.sh is not in this keyring." >&2; exit 1; }
+export GPGKEY=$fingerprint
+
+# No CI: the tests run here, before anything is tagged.
+./bin/test --require-session >/dev/null 2>&1 || { ./bin/test --require-session 2>&1 | grep -E 'FAIL|panicked|^error' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
+
+sed -i "s/^pkgver=.*/pkgver=$version/" pkgbuild/PKGBUILD
+sed -i "0,/^version = .*/s//version = \"$version\"/" Cargo.toml
+cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace
+if [[ -n $(git status --porcelain) ]]; then
+  git commit -q -m "Release $tag" pkgbuild/PKGBUILD Cargo.toml Cargo.lock
+fi
+git tag -a "$tag" -m "$app $tag"
+
+rm -rf dist
+mkdir dist
+(cd pkgbuild && PKGDEST="$PWD/../dist" makepkg --force --syncdeps --sign)
+
+(
+  cd dist
+  repo-add --sign --verify "$app.db.tar.gz" ./*.pkg.tar.zst
+  # repo-add leaves the names pacman asks for (icloud-photos.db, .files and
+  # their .sig) as symlinks, which a GitHub release cannot hold: copy them.
+  for name in db files; do
+    rm -f "$app.$name" "$app.$name.sig"
+    cp "$app.$name.tar.gz" "$app.$name"
+    cp "$app.$name.tar.gz.sig" "$app.$name.sig"
+  done
+  gpg --batch --armor --export "$fingerprint" >"$app-signing-key.asc"
+  # The installer ships with the release it was verified against;
+  # ferdousbhai.com/icloud-photos/install.sh redirects to this asset.
+  cp ../install.sh install.sh
+)
+
+git push -q origin main "$tag"
+gh release create "$tag" dist/* --title "$app $tag" --generate-notes --latest
+echo "Published $tag: https://github.com/ferdousbhai/$app/releases/tag/$tag"
+
+# A release is shipped only once the public one-liner installs it. If it
+# does not, take the release down so "latest" never points at a dud.
+if ! ./bin/verify-release "$version"; then
+  echo "Rolling back $tag." >&2
+  gh release delete "$tag" --yes --cleanup-tag
+  git tag -d "$tag" >/dev/null 2>&1 || true
+  exit 1
+fi

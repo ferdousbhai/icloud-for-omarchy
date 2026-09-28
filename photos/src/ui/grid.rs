@@ -297,3 +297,47 @@ fn tile_parts(button: &gtk::Button) -> (gtk::Picture, gtk::Image) {
     let badge = picture.next_sibling().and_downcast::<gtk::Image>().expect("tile badge");
     (picture, badge)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: &str, created: i64) -> Row {
+        Row {
+            id: id.into(),
+            master_id: format!("m-{id}"),
+            filename: format!("{id}.JPG"),
+            created,
+            size: 0,
+            w: 0,
+            h: 0,
+            kind: Kind::Photo,
+            is_live: false,
+            local_path: None,
+            live_path: None,
+            thumb_path: None,
+            medium_path: None,
+            deleted: false,
+            change_tag: None,
+            orig_url: None,
+            orig_type: None,
+            thumb_url: None,
+            medium_url: None,
+            live_url: None,
+            live_type: None,
+        }
+    }
+
+    #[test]
+    fn rows_chunk_by_columns_and_never_cross_a_month() {
+        // Mid-month noon UTC, so no time zone moves these across a month.
+        let sep = 1_789_905_600; // 2026-09-20
+        let aug = sep - 31 * 86_400; // 2026-08-20
+        let assets: Vec<Row> = (0..5).map(|i| row(&format!("s{i}"), sep - i)).chain((0..2).map(|i| row(&format!("a{i}"), aug - i))).collect();
+        let rows = rows_of(&assets, 3);
+        let shape: Vec<(usize, &str)> = rows.iter().map(|r| (r.tiles.len(), r.label.as_str())).collect();
+        assert_eq!(shape, vec![(3, "September 2026"), (2, "September 2026"), (2, "August 2026")]);
+        assert!(rows[0].month > rows[2].month);
+        assert_eq!(rows[1].tiles[0].id, "s3");
+    }
+}
