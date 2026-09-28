@@ -1,0 +1,81 @@
+{
+  "records": [
+    {
+      "recordName": "AX/m002+bbb",
+      "recordType": "CPLMaster",
+      "fields": {
+        "filenameEnc": {
+          "value": "SU1HXzAwMDIuSlBH",
+          "type": "ENCRYPTED_BYTES"
+        },
+        "itemType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        },
+        "resOriginalRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 2100000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B2/orig/AX/m002+bbb/${f}?o=1"
+          },
+          "type": "ASSETID"
+        },
+        "resOriginalFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        },
+        "resOriginalWidth": {
+          "value": 3000,
+          "type": "INT64"
+        },
+        "resOriginalHeight": {
+          "value": 2000,
+          "type": "INT64"
+        },
+        "resJPEGThumbRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 18000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B2/thumb/AX/m002+bbb/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resJPEGThumbFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        },
+        "resJPEGMedRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 250000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B2/med/AX/m002+bbb/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resJPEGMedFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "mbbb",
+      "created": {
+        "timestamp": 1700000000000,
+        "userRecordName": "_owner",
+        "deviceID": "2"
+      },
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    }
+  ]
+}

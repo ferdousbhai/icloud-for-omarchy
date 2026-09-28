@@ -1,0 +1,121 @@
+{
+  "records": [
+    {
+      "recordName": "----Root-Folder----",
+      "recordType": "CPLAlbum",
+      "fields": {
+        "albumType": {
+          "value": 3,
+          "type": "INT64"
+        },
+        "position": {
+          "value": 0,
+          "type": "INT64"
+        },
+        "isDeleted": {
+          "value": 0,
+          "type": "INT64"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "a1",
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    },
+    {
+      "recordName": "A-TRIPS-FOLDER",
+      "recordType": "CPLAlbum",
+      "fields": {
+        "albumType": {
+          "value": 3,
+          "type": "INT64"
+        },
+        "position": {
+          "value": 1,
+          "type": "INT64"
+        },
+        "isDeleted": {
+          "value": 0,
+          "type": "INT64"
+        },
+        "albumNameEnc": {
+          "value": "VHJpcHM=",
+          "type": "ENCRYPTED_BYTES"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "a1",
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    },
+    {
+      "recordName": "A-FAMILY",
+      "recordType": "CPLAlbum",
+      "fields": {
+        "albumType": {
+          "value": 0,
+          "type": "INT64"
+        },
+        "position": {
+          "value": 2,
+          "type": "INT64"
+        },
+        "isDeleted": {
+          "value": 0,
+          "type": "INT64"
+        },
+        "albumNameEnc": {
+          "value": "RmFtaWx5",
+          "type": "ENCRYPTED_BYTES"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "a1",
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    },
+    {
+      "recordName": "A-OLD",
+      "recordType": "CPLAlbum",
+      "fields": {
+        "albumType": {
+          "value": 0,
+          "type": "INT64"
+        },
+        "position": {
+          "value": 3,
+          "type": "INT64"
+        },
+        "isDeleted": {
+          "value": 1,
+          "type": "INT64"
+        },
+        "albumNameEnc": {
+          "value": "T2xkIHN0dWZm",
+          "type": "ENCRYPTED_BYTES"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "a1",
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    }
+  ],
+  "syncToken": "HwoECJGaGRgAIhYI"
+}

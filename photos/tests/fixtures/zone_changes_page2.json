@@ -1,0 +1,126 @@
+{
+  "zones": [
+    {
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      },
+      "syncToken": "TOKEN-NEW",
+      "moreComing": false,
+      "records": [
+        {
+          "recordName": "ASSET-003",
+          "deleted": true,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        },
+        {
+          "recordName": "A-FAMILY",
+          "recordType": "CPLAlbum",
+          "fields": {
+            "albumType": {
+              "value": 0,
+              "type": "INT64"
+            },
+            "position": {
+              "value": 2,
+              "type": "INT64"
+            },
+            "isDeleted": {
+              "value": 0,
+              "type": "INT64"
+            },
+            "albumNameEnc": {
+              "value": "RmFtaWx5ICYgZnJpZW5kcw==",
+              "type": "ENCRYPTED_BYTES"
+            }
+          },
+          "pluginFields": {},
+          "recordChangeTag": "a1",
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        },
+        {
+          "recordName": "ASSET-005-IN-A-FAMILY",
+          "recordType": "CPLContainerRelation",
+          "fields": {
+            "containerId": {
+              "value": "A-FAMILY",
+              "type": "STRING"
+            },
+            "itemId": {
+              "value": "ASSET-005",
+              "type": "STRING"
+            },
+            "position": {
+              "value": 1024,
+              "type": "INT64"
+            },
+            "isKeyAsset": {
+              "value": 0,
+              "type": "INT64"
+            }
+          },
+          "recordChangeTag": "r1",
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        },
+        {
+          "recordName": "ASSET-006",
+          "recordType": "CPLAsset",
+          "fields": {
+            "assetDate": {
+              "value": 1760259200000,
+              "type": "TIMESTAMP"
+            },
+            "addedDate": {
+              "value": 1760259260000,
+              "type": "TIMESTAMP"
+            },
+            "masterRef": {
+              "value": {
+                "recordName": "AX/m006+fff",
+                "action": "DELETE_SELF",
+                "zoneID": {
+                  "zoneName": "PrimarySync",
+                  "ownerRecordName": "_owner",
+                  "zoneType": "REGULAR_CUSTOM_ZONE"
+                }
+              },
+              "type": "REFERENCE"
+            },
+            "isDeleted": {
+              "value": 0,
+              "type": "INT64"
+            }
+          },
+          "pluginFields": {},
+          "recordChangeTag": "t006",
+          "created": {
+            "timestamp": 1760259200000,
+            "userRecordName": "_owner",
+            "deviceID": "2"
+          },
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        }
+      ]
+    }
+  ]
+}

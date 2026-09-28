@@ -1,0 +1,178 @@
+{
+  "zones": [
+    {
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      },
+      "syncToken": "TOKEN-MID",
+      "moreComing": true,
+      "records": [
+        {
+          "recordName": "ASSET-005",
+          "recordType": "CPLAsset",
+          "fields": {
+            "assetDate": {
+              "value": 1760172800000,
+              "type": "TIMESTAMP"
+            },
+            "addedDate": {
+              "value": 1760172860000,
+              "type": "TIMESTAMP"
+            },
+            "masterRef": {
+              "value": {
+                "recordName": "AX/m005+eee",
+                "action": "DELETE_SELF",
+                "zoneID": {
+                  "zoneName": "PrimarySync",
+                  "ownerRecordName": "_owner",
+                  "zoneType": "REGULAR_CUSTOM_ZONE"
+                }
+              },
+              "type": "REFERENCE"
+            },
+            "isDeleted": {
+              "value": 0,
+              "type": "INT64"
+            }
+          },
+          "pluginFields": {},
+          "recordChangeTag": "t005",
+          "created": {
+            "timestamp": 1760172800000,
+            "userRecordName": "_owner",
+            "deviceID": "2"
+          },
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        },
+        {
+          "recordName": "AX/m005+eee",
+          "recordType": "CPLMaster",
+          "fields": {
+            "filenameEnc": {
+              "value": "SU1HXzAwMDUuUE5H",
+              "type": "ENCRYPTED_BYTES"
+            },
+            "itemType": {
+              "value": "public.png",
+              "type": "STRING"
+            },
+            "resOriginalRes": {
+              "value": {
+                "fileChecksum": "AQ",
+                "size": 800000,
+                "wrappingKey": "wk==",
+                "referenceChecksum": "AR",
+                "downloadURL": "https://cvws.icloud-content.com/B/orig/AX/m005+eee/${f}?o=1"
+              },
+              "type": "ASSETID"
+            },
+            "resOriginalFileType": {
+              "value": "public.png",
+              "type": "STRING"
+            },
+            "resOriginalWidth": {
+              "value": 1170,
+              "type": "INT64"
+            },
+            "resOriginalHeight": {
+              "value": 2532,
+              "type": "INT64"
+            },
+            "resJPEGThumbRes": {
+              "value": {
+                "fileChecksum": "AQ",
+                "size": 18000,
+                "wrappingKey": "wk==",
+                "referenceChecksum": "AR",
+                "downloadURL": "https://cvws.icloud-content.com/B/thumb/AX/m005+eee/${f}"
+              },
+              "type": "ASSETID"
+            },
+            "resJPEGThumbFileType": {
+              "value": "public.jpeg",
+              "type": "STRING"
+            },
+            "resJPEGMedRes": {
+              "value": {
+                "fileChecksum": "AQ",
+                "size": 250000,
+                "wrappingKey": "wk==",
+                "referenceChecksum": "AR",
+                "downloadURL": "https://cvws.icloud-content.com/B/med/AX/m005+eee/${f}"
+              },
+              "type": "ASSETID"
+            },
+            "resJPEGMedFileType": {
+              "value": "public.jpeg",
+              "type": "STRING"
+            }
+          },
+          "pluginFields": {},
+          "recordChangeTag": "meee",
+          "created": {
+            "timestamp": 1700000000000,
+            "userRecordName": "_owner",
+            "deviceID": "2"
+          },
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        },
+        {
+          "recordName": "ASSET-002",
+          "recordType": "CPLAsset",
+          "fields": {
+            "assetDate": {
+              "value": 1760000000000,
+              "type": "TIMESTAMP"
+            },
+            "addedDate": {
+              "value": 1760000060000,
+              "type": "TIMESTAMP"
+            },
+            "masterRef": {
+              "value": {
+                "recordName": "AX/m002+bbb",
+                "action": "DELETE_SELF",
+                "zoneID": {
+                  "zoneName": "PrimarySync",
+                  "ownerRecordName": "_owner",
+                  "zoneType": "REGULAR_CUSTOM_ZONE"
+                }
+              },
+              "type": "REFERENCE"
+            },
+            "isDeleted": {
+              "value": 1,
+              "type": "INT64"
+            }
+          },
+          "pluginFields": {},
+          "recordChangeTag": "t002-deleted",
+          "created": {
+            "timestamp": 1760000000000,
+            "userRecordName": "_owner",
+            "deviceID": "2"
+          },
+          "deleted": false,
+          "zoneID": {
+            "zoneName": "PrimarySync",
+            "ownerRecordName": "_owner",
+            "zoneType": "REGULAR_CUSTOM_ZONE"
+          }
+        }
+      ]
+    }
+  ]
+}

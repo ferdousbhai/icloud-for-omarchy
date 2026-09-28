@@ -1,0 +1,27 @@
+{
+  "records": [
+    {
+      "recordName": "_5c82ba39-fa99-4f36-ad2a-1a87028f8fa4",
+      "recordType": "CheckIndexingState",
+      "fields": {
+        "progress": {
+          "value": 100,
+          "type": "INT64"
+        },
+        "state": {
+          "value": "FINISHED",
+          "type": "STRING"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "0",
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    }
+  ],
+  "syncToken": "HwoECJGaGRgAIhYI"
+}
