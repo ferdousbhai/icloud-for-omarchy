@@ -523,7 +523,12 @@ int main(int argc, char *argv[])
           "seam a second refusal pauses");
     fake.stillSignedIn = false;
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
-    fake.set({ { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(fake.expiresAt + 60) } }); // signed in again
+    // A token rotation moves ExpiresAt; that is not a sign-in.
+    fake.set({ { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(fake.expiresAt + 60) } });
+    waitUntil([] { return false; }, 300); // let the change arrive
+    check(b.authExpired() && fake.reportCalls == 3, "seam a token rotation does not resume or retry");
+    fake.set({ { QStringLiteral("SigningIn"), true } }); // signed in again through the window
+    fake.set({ { QStringLiteral("SigningIn"), false } });
     check(waitUntil([&] { return !b.authExpired() && !b.syncRunning(); }), "seam a new sign-in resumes after the pause");
     waitForIdle(b);
     fake.reportCalls = 0;

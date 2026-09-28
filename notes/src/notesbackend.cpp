@@ -1336,7 +1336,7 @@ void NotesBackend::applySignIn(const QVariantMap &properties)
 {
     const bool wasSignedIn = m_signInKnown && m_signedIn;
     const bool wasSigningIn = m_signingIn;
-    const quint64 expiresBefore = m_expiresAt;
+    const QString dsidBefore = m_dsid;
     m_signInKnown = true;
     if (properties.contains(QStringLiteral("SignedIn")))
         m_signedIn = properties.value(QStringLiteral("SignedIn")).toBool();
@@ -1350,7 +1350,9 @@ void NotesBackend::applySignIn(const QVariantMap &properties)
         m_signingIn = properties.value(QStringLiteral("SigningIn")).toBool();
 
     if (m_signedIn) {
-        const bool signedInAnew = !wasSignedIn || m_expiresAt != expiresBefore || (wasSigningIn && !m_signingIn);
+        // A sign-in, not a validate: ExpiresAt moves with every token
+        // rotation, so it says nothing about whether anyone signed in.
+        const bool signedInAnew = !wasSignedIn || m_dsid != dsidBefore || (wasSigningIn && !m_signingIn);
         if (signedInAnew)
             m_retriedAfterReport = false;
         if (m_authExpired && signedInAnew) {
