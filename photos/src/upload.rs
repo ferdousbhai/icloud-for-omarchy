@@ -116,8 +116,10 @@ impl<'t> Uploader<'t> {
         self.check_target(&target)?;
 
         progress(Step::Sending { bytes: size });
-        // pyicloud sends the bare body; the session may also append its client
-        // params to this URL, which the content host has not been seen to mind.
+        // pyicloud posts the bare body to the bare URL, with no cookies (its
+        // jar holds only .icloud.com ones). icloud-session 0.2 still appends
+        // its client params here and attaches the cookie header; that is to
+        // change in the crate, not worked around here.
         let receipt = self.t.post_bytes(&target, "application/octet-stream", bytes)?;
         let single = receipt.get("singleFile").cloned().ok_or_else(|| Error::Other("upload host returned no receipt".into()))?;
 

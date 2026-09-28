@@ -114,7 +114,7 @@ impl Transport for MockTransport {
     }
 
     fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        Self::json(Self::map(self.agent.post(url).set("Content-Type", "text/plain").send_string(&body.to_string()))?)
+        Self::json(Self::map(self.agent.post(url).set("Content-Type", "application/json").send_string(&body.to_string()))?)
     }
 
     fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value> {
