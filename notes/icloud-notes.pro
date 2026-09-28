@@ -5,11 +5,14 @@ TARGET = icloud-notes
 TEMPLATE = app
 
 HEADERS += \
+    src/backgroundsync.h \
     src/notesbackend.h \
+    src/vaultlock.h \
     src/markdownhighlighter.h
 
 SOURCES += \
     src/main.cpp \
+    src/backgroundsync.cpp \
     src/notesbackend.cpp \
     src/markdownhighlighter.cpp
 

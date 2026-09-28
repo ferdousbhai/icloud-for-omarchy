@@ -18,6 +18,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTextDocument>
+#include <QCryptographicHash>
 #include <QTextStream>
 #include <QUrl>
 #include <algorithm>
@@ -33,6 +34,10 @@ const QString kPropertiesInterface = QStringLiteral("org.freedesktop.DBus.Proper
 constexpr int kSessionTimeoutMs = 10000;
 
 const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to resume.");
+
+// How long the app waits for a background sync to let go of the vault
+// before syncing anyway. The timer's unit stops a run after 3 minutes.
+constexpr qint64 kLockWaitMs = 4 * 60 * 1000;
 
 // A note larger than this is not a note anymore; the guardrail scans
 // stop here so a stray huge file cannot stall the list.
@@ -144,16 +149,37 @@ QString findIconFont()
 
 } // namespace
 
-NotesBackend::NotesBackend(QObject *parent)
-    : QObject(parent), m_uiScale(readUiScale()), m_iconFont(findIconFont())
+NotesBackend::NotesBackend(QObject *parent, Role role)
+    : QObject(parent), m_role(role), m_lock(lockPath()), m_uiScale(role == Role::App ? readUiScale() : 1.0),
+      m_iconFont(role == Role::App ? findIconFont() : QString())
 {
-    QDir().mkpath(rootPath());
+    if (m_role == Role::App) {
+        QDir().mkpath(rootPath());
 
-    // A theme change rewrites colors.toml (or the directory holding it);
-    // re-read and re-arm the watch, since a replaced file drops out of it.
-    loadTheme();
-    connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, &NotesBackend::loadTheme);
-    connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, this, &NotesBackend::loadTheme);
+        // A theme change rewrites colors.toml (or the directory holding it);
+        // re-read and re-arm the watch, since a replaced file drops out of it.
+        loadTheme();
+        connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, &NotesBackend::loadTheme);
+        connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, this, &NotesBackend::loadTheme);
+
+        // The vault's lock, held until the app exits so a background sync
+        // never runs icloud-md beside it. While one holds it, the window
+        // opens anyway and its syncs wait (see startSync).
+        connect(&m_lockRetry, &QTimer::timeout, this, &NotesBackend::retryLock);
+        m_lockRetry.setInterval(500);
+        switch (m_lock.tryLock()) {
+        case VaultLock::Locked:
+            break;
+        case VaultLock::Busy:
+            appendLog(QStringLiteral("A background sync is running; syncing here waits for it."));
+            m_lockWait.start();
+            m_lockRetry.start();
+            break;
+        case VaultLock::Failed:
+            appendLog(QStringLiteral("Could not open the sync lock %1; syncing without it.").arg(m_lock.path()));
+            break;
+        }
+    }
 
     // External changes (an icloud-md pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
@@ -245,6 +271,38 @@ QString NotesBackend::rootPath()
         + QStringLiteral("/icloud-notes");
 }
 
+// In the runtime directory, or beside the vault without one: never inside
+// it, since icloud-md clones only into an empty directory. A vault named
+// by ICLOUD_NOTES_VAULT gets a lock of its own, so tests never share the
+// real vault's.
+QString NotesBackend::lockPath()
+{
+    const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    const QString dir = runtime.isEmpty() ? QFileInfo(rootPath()).absolutePath() : runtime;
+    const QString name = runtime.isEmpty() ? QStringLiteral(".icloud-notes") : QStringLiteral("icloud-notes");
+    if (qEnvironmentVariableIsEmpty("ICLOUD_NOTES_VAULT"))
+        return dir + u'/' + name + QStringLiteral(".lock");
+    const QByteArray hash = QCryptographicHash::hash(QFileInfo(rootPath()).absoluteFilePath().toUtf8(),
+                                                     QCryptographicHash::Sha1).toHex().left(12);
+    return dir + u'/' + name + u'-' + QString::fromLatin1(hash) + QStringLiteral(".lock");
+}
+
+// A background sync let go of the vault (or waiting has gone on too long):
+// show what it pulled, then run the sync that waited for it.
+void NotesBackend::retryLock()
+{
+    const bool gaveUp = m_lock.tryLock() != VaultLock::Locked && m_lockWait.elapsed() > kLockWaitMs;
+    if (!m_lock.held() && !gaveUp)
+        return;
+    m_lockRetry.stop();
+    if (gaveUp)
+        appendLog(QStringLiteral("The background sync is still running after %1 minutes; syncing anyway.")
+                      .arg(kLockWaitMs / 60000));
+    refresh();
+    if (m_syncRunning)
+        m_syncProcess.start();
+}
+
 QString NotesBackend::folderAbsolutePath(const QString &folder) const
 {
     return QDir(rootPath()).filePath(folder);
@@ -262,7 +320,7 @@ QString NotesBackend::vaultRelative(const QString &name) const
 }
 
 // icloud-md's state directory: the current name, or the one it used to use.
-QString NotesBackend::stateDir() const
+QString NotesBackend::stateDir()
 {
     for (const char *name : { ".icloud-md", ".icloud-notes-sync" }) {
         const QString dir = rootPath() + u'/' + QLatin1StringView(name);
@@ -877,6 +935,10 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     }
     m_syncProcess.setWorkingDirectory(rootPath());
     m_syncProcess.setArguments(args);
+    if (m_lockRetry.isActive()) { // a background sync has the vault; retryLock starts this
+        setSyncMessage(QStringLiteral("Waiting for a background sync to finish…"));
+        return;
+    }
     m_syncProcess.start();
 }
 
@@ -909,6 +971,7 @@ void NotesBackend::finishSync(int exitCode)
     if (ok)
         m_retriedAfterReport = false;
     setAuthExpired(sessionExpired || (m_authExpired && !sessionWorks));
+    emit syncFinished(m_syncLabel, ok);
 
     switch (m_mode) {
     case Mode::Plain:
@@ -998,9 +1061,11 @@ void NotesBackend::callSession(const QString &method)
         appendLog(QStringLiteral("icloud-session: no D-Bus session bus"));
         return;
     }
+    ++m_sessionCalls;
     auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(sessionCall(method), kSessionTimeoutMs), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, method](QDBusPendingCallWatcher *call) {
         call->deleteLater();
+        --m_sessionCalls;
         if (!call->isError()) {
             const QDBusPendingReply<bool> reply = *call;
             if (method == u"ReportSignInRequired" && reply.argumentAt<0>() && !m_retriedAfterReport && !m_syncRunning) {

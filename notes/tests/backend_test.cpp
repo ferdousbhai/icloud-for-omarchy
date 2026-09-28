@@ -1,7 +1,9 @@
 // Backend tests: note classification, save warnings, mode-aware rename and
 // the icloud-md CLI seam — against a scratch vault under a temporary
 // directory, never the real one. Run with bin/test.
+#include "../src/backgroundsync.h"
 #include "../src/notesbackend.h"
+#include "../src/vaultlock.h"
 #include "check.h"
 #include "fake_session.h"
 
@@ -129,6 +131,9 @@ int main(int argc, char *argv[])
     if (!scratch.isValid())
         return EXIT_FAILURE;
     qputenv("ICLOUD_NOTES_VAULT", (scratch.path() + QStringLiteral("/vault")).toUtf8());
+    // The sync locks go to the runtime directory: the scratch one, so the
+    // tests never meet the real app's (or leave lock files behind).
+    qputenv("XDG_RUNTIME_DIR", scratch.path().toUtf8());
 
     writeFile(QStringLiteral(".icloud-md/state.json"),
               QStringLiteral(R"({"titleMode":"in-body","notes":{)"
@@ -504,6 +509,77 @@ int main(int argc, char *argv[])
     waitForSignIn(b);
     check(!b.authExpired() && b.signedIn() && b.syncLog().isEmpty(), "session re-read is quiet");
 
+    // Background sync (`icloud-notes --sync`), on a vault of its own so its
+    // lock is not the one b holds.
+    const QString vaultPath = rootPath();
+    const QString bgVault = scratch.path() + QStringLiteral("/background");
+    qputenv("ICLOUD_NOTES_VAULT", bgVault.toUtf8());
+    auto backgroundSync = [](QString &output) {
+        output.clear();
+        QTextStream out(&output);
+        return runBackgroundSync(out);
+    };
+    QString bgOut;
+    check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md")),
+          "background: no vault, nothing to do");
+    writeFile(QStringLiteral(".icloud-md/state.json"), QStringLiteral(R"({"titleMode":"in-body","notes":{}})"));
+    check(NotesBackend::lockPath() != QString::fromUtf8(qgetenv("XDG_RUNTIME_DIR")) + QStringLiteral("/icloud-notes.lock"),
+          "background: a vault named by ICLOUD_NOTES_VAULT has a lock of its own");
+    {
+        const int code = backgroundSync(bgOut);
+        const qsizetype push = bgOut.indexOf(QStringLiteral("$ icloud-md push\n")),
+                        pull = bgOut.indexOf(QStringLiteral("$ icloud-md pull\n"));
+        check(code == 0 && push >= 0 && pull > push && bgOut.contains(QStringLiteral("stub pull ok")),
+              "background: pushes then pulls, exit 0");
+    }
+    {
+        VaultLock held(NotesBackend::lockPath());
+        check(held.tryLock() == VaultLock::Locked, "background: lock taken by another holder");
+        check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md")),
+              "background: skipped while the lock is held");
+    }
+    {
+        NotesBackend app; // the open app holds the lock for its lifetime
+        check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md"))
+                  && bgOut.contains(QStringLiteral("Notes is open")),
+              "background: the open app blocks it");
+    }
+    check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("$ icloud-md pull")),
+          "background: runs again once the app is closed");
+    {
+        // The app opening during a background sync waits for it, then syncs.
+        VaultLock background(NotesBackend::lockPath());
+        background.tryLock();
+        NotesBackend app;
+        app.runSync();
+        check(app.syncRunning() && app.syncMessage() == QStringLiteral("Waiting for a background sync to finish…"),
+              "background: the app's sync waits for the lock");
+        waitUntil([] { return false; }, 700);
+        check(app.syncRunning() && !app.syncLog().contains(QStringLiteral("stub push ok")),
+              "background: nothing runs while it waits");
+        background.release();
+        check(waitUntil([&] { return !app.syncRunning() && app.syncMessage() == QStringLiteral("Pull done."); }, 15000)
+                  && app.syncLog().contains(QStringLiteral("stub push ok")),
+              "background: the app syncs once the lock is free");
+        check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md")),
+              "background: the app keeps the lock it waited for");
+    }
+    // A refused session fails the run, after telling icloud-session.
+    fake.reportCalls = 0;
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
+    check(backgroundSync(bgOut) != 0 && fake.reportCalls == 1 && !bgOut.contains(QStringLiteral("$ icloud-md pull")),
+          "background: refused session reported, exit non-zero");
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED");
+    // Signed out: nothing runs.
+    fake.set({ { QStringLiteral("SignedIn"), false } });
+    check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md"))
+              && bgOut.contains(QStringLiteral("Not signed in")),
+          "background: skipped when signed out");
+    fake.set({ { QStringLiteral("SignedIn"), true } });
+    qputenv("ICLOUD_NOTES_VAULT", vaultPath.toUtf8());
+    waitUntil([&] { return !b.authExpired(); });
+    waitForIdle(b);
+
     // First run: no vault yet. Signed in, the clone uses the daemon's
     // account by dsid and opens no window of any kind.
     const QString fresh = scratch.path() + QStringLiteral("/fresh");
@@ -568,6 +644,10 @@ int main(int argc, char *argv[])
         check(waitUntil([&] { return finished; }) && !absent.syncLog().contains(QStringLiteral("clone")),
               "session absent: clone refused, not run blind");
     }
+    qputenv("ICLOUD_NOTES_VAULT", bgVault.toUtf8());
+    check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-md"))
+              && bgOut.contains(QStringLiteral("unknown")),
+          "background: skipped when icloud-session is unknown");
 
     return report();
 }

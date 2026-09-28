@@ -1,13 +1,16 @@
 #ifndef NOTESBACKEND_H
 #define NOTESBACKEND_H
 
+#include <QElapsedTimer>
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QObject>
 #include <QProcess>
 #include <QQuickTextDocument>
+#include <QTimer>
 
 #include "markdownhighlighter.h"
+#include "vaultlock.h"
 #include <QStringList>
 #include <QVariant>
 
@@ -68,12 +71,25 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString iconFont READ iconFont CONSTANT)
 
 public:
-    explicit NotesBackend(QObject *parent = nullptr);
+    // App: the window's backend, which holds the vault's lock for its whole
+    // lifetime (waiting, syncs deferred, while a background sync has it).
+    // Background: `icloud-notes --sync`, whose caller holds the lock; no
+    // theme, fonts or desktop settings are read.
+    enum class Role { App, Background };
+    explicit NotesBackend(QObject *parent = nullptr, Role role = Role::App);
     ~NotesBackend() override;
 
     QStringList folders() const { return m_folders; }
     QVariantMap folderNoteCounts() const { return m_folderNoteCounts; }
-    bool cloned() const { return !stateDir().isEmpty(); }
+    bool cloned() const { return vaultCloned(); }
+    static bool vaultCloned() { return !stateDir().isEmpty(); }
+    // The vault on disk (ICLOUD_NOTES_VAULT, or ~/Documents/icloud-notes).
+    static QString rootPath();
+    // The lock the app and background syncs share for the vault.
+    static QString lockPath();
+    // No sync running or waiting to run, and no icloud-session call or
+    // read unanswered: what a background sync waits for before exiting.
+    bool idle() const { return !m_syncRunning && m_sessionCalls == 0 && m_signInReads == 0; }
     bool icloudMdAvailable() const;
     QString vaultTitleMode() const;
     QString currentFolder() const { return m_currentFolder; }
@@ -191,16 +207,17 @@ signals:
     void historyChanged();
     void historyReady(bool ok);
     void cloneFinished(bool ok);
+    // One icloud-md run ended ("Push", "Pull", "Clone", ...).
+    void syncFinished(const QString &label, bool ok);
     void themeChanged();
 
 private:
     enum class Mode { Plain, Preview, History, Diff };
 
-    static QString rootPath();
     QString folderAbsolutePath(const QString &folder) const;
     QString noteAbsolutePath() const;
     QString vaultRelative(const QString &name) const;
-    QString stateDir() const;
+    static QString stateDir();
     QByteArray stateJson() const;
     void rebuildFolders();
     void rebuildNotes();
@@ -222,6 +239,7 @@ private:
     void applySignIn(const QVariantMap &properties);
     void continueClone();
     void resumeSync();
+    void retryLock();
 
 private slots:
     void sessionPropertiesChanged(const QString &interface, const QVariantMap &changed,
@@ -284,6 +302,13 @@ private:
     bool m_retriedAfterReport = false;
     bool m_cloneSignInAsked = false;
     QDBusServiceWatcher *m_sessionWatcher = nullptr;
+    int m_sessionCalls = 0; // icloud-session method calls awaiting an answer
+    const Role m_role;
+    VaultLock m_lock;
+    // Runs while a background sync holds the lock: syncs asked for meanwhile
+    // start once it is free (or once waiting has gone on too long).
+    QTimer m_lockRetry;
+    QElapsedTimer m_lockWait;
     QByteArray m_captured;
     const double m_uiScale;
     QVariantMap m_theme;

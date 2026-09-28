@@ -5,7 +5,8 @@ TARGET = backend_test
 TEMPLATE = app
 
 SOURCES += backend_test.cpp \
+    ../src/backgroundsync.cpp \
     ../src/notesbackend.cpp \
     ../src/markdownhighlighter.cpp
-HEADERS += ../src/notesbackend.h ../src/markdownhighlighter.h fake_session.h
+HEADERS += ../src/backgroundsync.h ../src/vaultlock.h ../src/notesbackend.h ../src/markdownhighlighter.h fake_session.h
 INCLUDEPATH += ../src
