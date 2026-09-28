@@ -4,14 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The core (findme, history, models) tests need no GTK; the full build
-# needs libshumate, so fall back to the core when it is not installed.
-if pkg-config --exists shumate-1.0; then
-  cargo test --locked
-else
-  echo "libshumate not found: testing the core only (--no-default-features)" >&2
-  cargo test --locked --no-default-features
-fi
+cargo test --locked
 
 # The installer's add_signed_repo function is shared verbatim with the other
 # installers (ferdousbhai/icloud-notes, ferdousbhai/ghost); every repository
