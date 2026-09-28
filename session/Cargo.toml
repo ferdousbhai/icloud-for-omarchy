@@ -1,0 +1,19 @@
+[package]
+name = "icloud-session"
+version = "0.1.0"
+edition = "2024"
+description = "Shared iCloud web session for apps that sign in through icloud-md"
+license = "MIT"
+repository = "https://github.com/ferdousbhai/icloud-session"
+
+[lib]
+name = "icloud_session"
+
+[[bin]]
+name = "icloud-session"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
