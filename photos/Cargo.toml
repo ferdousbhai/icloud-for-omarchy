@@ -27,6 +27,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
+# renameat2(RENAME_NOREPLACE): originals never replace a file on disk.
+libc = "0.2"
 # Only for ICLOUD_SESSION_MOCK=1: plain HTTP to a local fake server, no TLS.
 ureq = { version = "2", default-features = false }
 

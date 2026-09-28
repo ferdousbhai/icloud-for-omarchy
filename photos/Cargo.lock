@@ -804,6 +804,7 @@ dependencies = [
  "icloud-session",
  "jpeg-encoder",
  "libadwaita",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

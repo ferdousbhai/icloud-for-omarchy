@@ -4,7 +4,9 @@ use icloud_photos::catalog::Catalog;
 use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
-use icloud_photos::thumbs::{Job, Targets, fetch, live_dest, original_dest, year_month};
+use icloud_photos::catalog::PathKind;
+use icloud_photos::thumbs::{Job, Targets, fetch, fetch_detailed, live_ext, original_dest, prune_cache, rename_noreplace, year_month};
+use icloud_photos::transport::{Result, Transport};
 use serde_json::Value;
 use support::{FixtureTransport, fixture, library, temp_dir};
 
@@ -116,7 +118,184 @@ fn dates_and_live_names() {
     assert_eq!(year_month(1_757_000_000), (2025, 9));
     assert_eq!(year_month(951_782_400), (2000, 2), "leap day 2000-02-29");
     assert_eq!(year_month(-1), (1969, 12));
-    let p = std::path::Path::new("/x/IMG_1.HEIC");
-    assert_eq!(live_dest(p, Some("com.apple.quicktime-movie")), std::path::Path::new("/x/IMG_1.MOV"));
-    assert_eq!(live_dest(p, None), std::path::Path::new("/x/IMG_1.MOV"));
+    assert_eq!(live_ext(Some("com.apple.quicktime-movie")), ".MOV");
+    assert_eq!(live_ext(Some("public.mpeg-4")), ".MP4");
+    assert_eq!(live_ext(None), ".MOV");
+}
+
+fn serve_originals(t: &FixtureTransport, cat: &Catalog) {
+    t.serve(&url(cat, "ASSET-001", |r| r.orig_url.clone()), b"one");
+    t.serve(&url(cat, "ASSET-001", |r| r.live_url.clone()), b"mov");
+    t.serve(&url(cat, "ASSET-004", |r| r.orig_url.clone()), b"four");
+}
+
+#[test]
+fn a_fresh_install_gets_its_directories() {
+    let root = temp_dir("fresh");
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, &root);
+    // Like icloud-session, the fixture transport creates no directories.
+    t.serve("https://x/probe", b"x");
+    let err = t.download("https://x/probe", &root.join("missing/probe.jpg")).unwrap_err();
+    assert!(matches!(err, icloud_photos::transport::Error::Io(ref e) if e.kind() == std::io::ErrorKind::NotFound), "{err}");
+
+    t.serve(&url(&cat, "ASSET-001", |r| r.thumb_url.clone()), b"thumb");
+    t.serve(&url(&cat, "ASSET-001", |r| r.medium_url.clone()), b"medium");
+    serve_originals(&t, &cat);
+    assert!(!root.join("cache").exists() && !targets.library.exists());
+    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).unwrap(), root.join("cache/thumbs/ASSET-001.jpg"));
+    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Medium).unwrap(), root.join("cache/medium/ASSET-001.jpg"));
+    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap(), targets.library.join("2025/09/IMG_0001.HEIC"));
+    let leftovers: Vec<_> = std::fs::read_dir(targets.library.join("2025/09")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(leftovers.len(), 2, "photo and video, no temp files: {leftovers:?}");
+}
+
+#[test]
+fn files_already_on_disk_are_never_overwritten() {
+    let root = temp_dir("disk");
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, &root);
+    serve_originals(&t, &cat);
+    // A lost catalog, or the user's own files: neither is in the catalog.
+    let month = targets.library.join("2025/09");
+    std::fs::create_dir_all(&month).unwrap();
+    std::fs::write(month.join("IMG_0001.HEIC"), b"mine").unwrap();
+    std::fs::write(month.join("IMG_0001 (2).MOV"), b"my video").unwrap();
+
+    let photo = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    // (2) is out: its video name is taken. The pair moves to (3) together.
+    assert_eq!(photo, month.join("IMG_0001 (3).HEIC"));
+    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().live_path, Some(month.join("IMG_0001 (3).MOV")));
+    assert_eq!(std::fs::read(month.join("IMG_0001.HEIC")).unwrap(), b"mine");
+    assert_eq!(std::fs::read(month.join("IMG_0001 (2).MOV")).unwrap(), b"my video");
+    // The next same-named asset still avoids every one of them.
+    assert_eq!(fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap(), month.join("IMG_0001 (2).HEIC"));
+}
+
+#[test]
+fn a_live_video_never_lands_on_another_assets_file() {
+    let root = temp_dir("live-collide");
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, &root);
+    serve_originals(&t, &cat);
+    let month = targets.library.join("2025/09");
+    // Another asset already owns IMG_0001.MOV (say, a video of that name).
+    cat.set_path("ASSET-003", PathKind::Original, Some(&month.join("IMG_0001.MOV"))).unwrap();
+    fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap();
+    let photo = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    let row = cat.asset("ASSET-001").unwrap().unwrap();
+    assert_eq!(photo, month.join("IMG_0001 (2).HEIC"));
+    assert_eq!(row.live_path, Some(month.join("IMG_0001 (2).MOV")), "the video shares the photo's unique stem");
+}
+
+/// Holds every download long enough for concurrent jobs to overlap.
+struct Slow<'a>(&'a FixtureTransport);
+
+impl Transport for Slow<'_> {
+    fn service_url(&self, key: &str) -> Result<String> {
+        self.0.service_url(key)
+    }
+    fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
+        self.0.post_json(url, body)
+    }
+    fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value> {
+        self.0.post_bytes(url, content_type, body)
+    }
+    fn download(&self, url: &str, dest: &std::path::Path) -> Result<u64> {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        self.0.download(url, dest)
+    }
+}
+
+#[test]
+fn concurrent_downloads_of_the_same_name_get_different_files() {
+    let root = temp_dir("concurrent");
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, &root);
+    serve_originals(&t, &cat);
+    let slow = Slow(&t);
+    let (a, b) = std::thread::scope(|s| {
+        let job = |id: &'static str| {
+            let (slow, targets) = (&slow, &targets);
+            s.spawn(move || {
+                let cat = Catalog::open(&targets.dirs.catalog()).unwrap();
+                fetch(slow, &cat, targets, id, Job::Original).unwrap()
+            })
+        };
+        let (a, b) = (job("ASSET-001"), job("ASSET-004"));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert_ne!(a, b);
+    assert_eq!(std::fs::read(&a).unwrap(), b"one");
+    assert_eq!(std::fs::read(&b).unwrap(), b"four");
+}
+
+#[test]
+fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
+    let root = temp_dir("live-retry");
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, &root);
+    let (orig, live) = (url(&cat, "ASSET-001", |r| r.orig_url.clone()), url(&cat, "ASSET-001", |r| r.live_url.clone()));
+    t.serve(&orig, b"heic");
+
+    let first = fetch_detailed(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    assert!(first.live_error.is_some(), "the video 404s");
+    let row = cat.asset("ASSET-001").unwrap().unwrap();
+    assert_eq!(row.local_path, Some(first.path.clone()), "the photo is recorded anyway");
+    assert_eq!(row.live_path, None);
+
+    t.serve(&live, b"mov");
+    let n = t.downloads.lock().unwrap().len();
+    let second = fetch_detailed(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    assert!(second.live_error.is_none());
+    assert_eq!(second.path, first.path);
+    assert_eq!(t.downloads.lock().unwrap()[n..], [live], "only the video is fetched again");
+    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().live_path, Some(first.path.with_extension("MOV")));
+}
+
+#[test]
+fn rename_noreplace_refuses_to_replace() {
+    let dir = temp_dir("noreplace");
+    let (a, b) = (dir.join("a"), dir.join("b"));
+    std::fs::write(&a, b"new").unwrap();
+    std::fs::write(&b, b"old").unwrap();
+    assert_eq!(rename_noreplace(&a, &b).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read(&b).unwrap(), b"old");
+    std::fs::remove_file(&b).unwrap();
+    rename_noreplace(&a, &b).unwrap();
+    assert_eq!(std::fs::read(&b).unwrap(), b"new");
+    assert!(!a.exists());
+}
+
+#[test]
+fn prune_drops_removed_assets_and_the_oldest_mediums() {
+    let root = temp_dir("prune");
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, &root);
+    for id in ["ASSET-001", "ASSET-002", "ASSET-004"] {
+        t.serve(&url(&cat, id, |r| r.thumb_url.clone()), b"thumb");
+        t.serve(&url(&cat, id, |r| r.medium_url.clone()), &[0u8; 100]);
+        fetch(&t, &cat, &targets, id, Job::Thumb).unwrap();
+        fetch(&t, &cat, &targets, id, Job::Medium).unwrap();
+    }
+    let medium = |id: &str| root.join(format!("cache/medium/{id}.jpg"));
+    let age = |id: &str, secs: u64| {
+        let f = std::fs::File::options().write(true).open(medium(id)).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs)).unwrap();
+    };
+    age("ASSET-002", 300);
+    age("ASSET-004", 100);
+    cat.mark_deleted("ASSET-001", None).unwrap();
+
+    // ASSET-001 left the library; then 200 bytes of medium JPEGs over a
+    // 150-byte cap lose the oldest.
+    let removed = prune_cache(&cat, &targets.dirs, 150).unwrap();
+    assert_eq!(removed, 3);
+    let gone = cat.asset("ASSET-001").unwrap().unwrap();
+    assert_eq!((gone.thumb_path, gone.medium_path), (None, None));
+    assert!(!root.join("cache/thumbs/ASSET-001.jpg").exists() && !medium("ASSET-001").exists());
+    assert!(!medium("ASSET-002").exists());
+    assert_eq!(cat.asset("ASSET-002").unwrap().unwrap().medium_path, None);
+    assert!(root.join("cache/thumbs/ASSET-002.jpg").exists(), "thumbs of live assets stay");
+    assert!(medium("ASSET-004").exists());
 }

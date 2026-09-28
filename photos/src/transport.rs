@@ -131,11 +131,10 @@ impl Transport for MockTransport {
     }
 }
 
-/// Write a stream to `dest` through a sibling temp file, renamed on success.
+/// Write a stream to `dest` through a sibling temp file, renamed on success
+/// (replacing `dest`). Like icloud-session's download, it creates no
+/// directories: a missing parent is an error, so the mock hides nothing.
 pub fn write_atomically(dest: &Path, reader: &mut dyn std::io::Read) -> Result<u64> {
-    if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
     let tmp = dest.with_extension(format!("part-{}", std::process::id()));
     let result = (|| {
         let mut file = std::fs::File::create(&tmp)?;

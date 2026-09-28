@@ -102,9 +102,9 @@ impl Transport for FixtureTransport {
             return Err(Error::Http { status: 403, body: "expired".into() });
         }
         let bytes = self.files.lock().unwrap().get(url).cloned().ok_or(Error::Http { status: 404, body: url.into() })?;
-        std::fs::create_dir_all(dest.parent().unwrap())?;
-        std::fs::write(dest, &bytes)?;
-        Ok(bytes.len() as u64)
+        // Exactly what icloud-session does: a temp file next to `dest`, then
+        // a rename over it; no directory is created.
+        icloud_photos::transport::write_atomically(dest, &mut bytes.as_slice())
     }
 
     fn is_mock(&self) -> bool {

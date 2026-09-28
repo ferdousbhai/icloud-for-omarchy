@@ -346,6 +346,26 @@ impl Catalog {
         Ok(())
     }
 
+    /// Cached thumb/medium files of assets no longer in the library:
+    /// (asset id, thumb, medium).
+    pub fn cached_renditions_of_removed(&self) -> Result<Vec<CachedRenditions>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, thumb_path, medium_path FROM assets
+             WHERE deleted = 1 AND (thumb_path IS NOT NULL OR medium_path IS NOT NULL)",
+        )?;
+        let rows = st.query_map([], |r| {
+            let path = |i: usize| r.get::<_, Option<String>>(i).map(|p| p.map(PathBuf::from));
+            Ok((r.get(0)?, path(1)?, path(2)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A medium JPEG was evicted from the cache.
+    pub fn forget_medium(&self, path: &Path) -> Result<()> {
+        self.conn.execute("UPDATE assets SET medium_path = NULL WHERE medium_path = ?1", [path.to_string_lossy()])?;
+        Ok(())
+    }
+
     /// Is `path` already the original of an asset other than `id`?
     pub fn path_taken(&self, path: &Path, id: &str) -> Result<bool> {
         let p = path.to_string_lossy();
@@ -356,6 +376,8 @@ impl Catalog {
             .is_some())
     }
 }
+
+pub type CachedRenditions = (String, Option<PathBuf>, Option<PathBuf>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathKind {
