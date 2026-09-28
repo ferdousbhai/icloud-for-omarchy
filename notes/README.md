@@ -13,11 +13,25 @@ both ways with iCloud.
   System Settings). Without this, nothing outside Apple's own apps can
   read your notes.
 - The sync tool: `npm install -g icloud-md` (needs Node.js 20+).
-- `icloud-session`, which reads the iCloud sign-in that icloud-md saves
-  and that Notes shares with the other iCloud apps. The package depends
-  on it and it comes from the same signed repository; when building from
-  source, put it on `PATH` yourself. Without it Notes still syncs, but
-  cannot warn before a sign-in lapses.
+- `icloud-session`, which owns the iCloud sign-in for Notes and the other
+  iCloud apps. It is a small D-Bus service
+  (`io.github.ferdousbhai.ICloudSession`, started on demand) with Apple's
+  own sign-in window; it keeps the account signed in and hands icloud-md
+  the session it syncs with. The package depends on it and it comes from
+  the same signed repository; when building from source, install it too.
+  Without it Notes cannot sign in, and shows no sign-in warnings.
+
+## Sign-in
+
+Notes never signs in by itself, and never runs icloud-md's own sign-in.
+icloud-session holds the one Apple account on this computer; Notes reads
+from it over D-Bus whether you are signed in, as whom, and when the
+sign-in lapses, and follows its changes as they happen. **Sign in** asks
+icloud-session to open its window; a sign-in there (or in any other
+iCloud app) resumes syncing here. When icloud-md reports that Apple
+refused the session, Notes tells icloud-session, which checks with Apple
+before signing every app out. A sign-in made before icloud-session took
+over the account is not carried over: sign in once more.
 
 ## Install
 
@@ -48,15 +62,17 @@ To build and run from source instead:
 ## First run
 
 On first launch the **Link your Apple Notes** dialog opens — press
-**Clone my notes**. A real Apple sign-in window opens once; your password
-and 2FA stay on Apple's own pages. To stay signed in, use your Apple ID
+**Clone my notes**. If this computer is not signed in to iCloud yet,
+icloud-session's window opens Apple's real sign-in; your password and
+2FA stay on Apple's own pages. To stay signed in, use your Apple ID
 and password rather than the iPhone QR code, tick **Keep me signed in**,
 and click **Trust** when asked: that sign-in lasts about 30 days, while a
 QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/icloud-notes`,
 one Markdown file per note with the title as its first line, just like
-in Notes. If the vault is ever missing while the device is still signed
-in (a reinstall, say), the app downloads it again on its own, without
-asking.
+in Notes (icloud-md clones icloud-session's account, `icloud-md clone
+--account <dsid>`). If the vault is ever missing while the computer is
+signed in (a reinstall, say), the app downloads it again on its own,
+without asking.
 
 ## Everyday use
 
@@ -99,14 +115,13 @@ turn it off):
   moved, or deleted, plus anything refused and why — and pushes on
   confirmation. **Pull** fetches now. **Sync log** holds the details.
 - With **Auto** off, nothing moves until you press Pull or Push….
-- Apple ends a web session now and then. When icloud-md cannot revive
-  it on its own, a banner offers **Sign in**: Apple's window opens once
-  and skips 2FA for a browser you trusted; syncing resumes on its own
-  afterwards. The same banner appears a few days before a sign-in lapses,
-  and after a sign-in too short to last. Notes asks `icloud-session status`
-  about the sign-in on launch, after every sync, and when you switch to
-  the window, so a sign-in or sign-out in another iCloud app (or in a
-  terminal) shows up here too.
+- Apple ends a web session now and then. Syncing then pauses and a
+  banner offers **Sign in**: icloud-session opens Apple's window, which
+  skips 2FA for a browser you trusted; syncing resumes on its own once
+  you are signed in. The same banner appears a few days before a sign-in
+  lapses, and after a sign-in too short to last. A sign-in or sign-out
+  in another iCloud app (or with `icloud-session sign-in` in a terminal)
+  shows up here at once.
 - New folders upload as real Notes folders.
 
 ## Your files
