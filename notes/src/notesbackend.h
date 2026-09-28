@@ -141,7 +141,8 @@ public:
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void openNote(const QString &name);
     // False when nothing was written because the note changed on disk
-    // since it was loaded (or the write failed): the edits stay unsaved.
+    // since it was loaded, or is gone (no note open), or the write failed:
+    // the edits stay unsaved.
     Q_INVOKABLE bool saveCurrentNote(const QString &body);
     // The note changed on disk under unsaved editor text: rather than let
     // a save overwrite that change, merge the two (base is what the editor
@@ -149,6 +150,10 @@ public:
     // the note directly; lines both sides changed become conflict blocks
     // to pick from (noteConflicts). True when the merge was written; false
     // when there is nothing to merge (the disk holds base or mine).
+    // A note that went away under the edits (a pull deleted, moved or
+    // renamed it) is followed by its apple-note-id and merged there; one
+    // deleted outright gets the edits as a new note, "<title> (unsaved
+    // edits)", opened in its place (editsKeptAsNote says so).
     Q_INVOKABLE bool keepEditsAsConflict(const QString &base, const QString &mine);
     Q_INVOKABLE QString saveWarning(const QString &body);
     Q_INVOKABLE void newNote(const QString &name);
@@ -212,6 +217,9 @@ signals:
     void historyChanged();
     void historyReady(bool ok);
     void cloneFinished(bool ok);
+    // The open note was deleted elsewhere under unsaved edits, which were
+    // written to a new note instead; message says where.
+    void editsKeptAsNote(const QString &message);
     // One icloud-md run ended ("Push", "Pull", "Clone", ...).
     void syncFinished(const QString &label, bool ok);
     // The last run of a chain ended and nothing follows it: after the pull
@@ -233,6 +241,10 @@ private:
     void classifyNotes();
     void loadCurrentNote();
     void closeNote();
+    QString findNoteById(const QString &id) const;
+    bool followNote(const QString &id);
+    void loseCurrentNote();
+    bool keepEditsAsNewNote(const QString &mine);
     void rewatch();
     void startSync(Mode mode, const QStringList &args, const QString &label);
     void finishSync(int exitCode);
@@ -279,6 +291,14 @@ private:
     QVariantMap m_noteDetails;
     QString m_currentNote;
     QString m_noteContent;
+    // The open note as it was when its file went away (see loseCurrentNote).
+    struct LostNote {
+        QString folder;
+        QString title;
+        QString content;
+        bool valid = false;
+    } m_lostNote;
+    bool m_following = false;
     QVariantList m_noteAttachments;
     QString m_readOnlyReason;
     QVariantList m_statusEntries;

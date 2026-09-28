@@ -339,6 +339,7 @@ ApplicationWindow {
     // runs on a timer.
     property bool freshening: false
     property bool keepingEdits: false
+    property string keptNotice: ""
     function pullIfStale() {
         if (!autoButton.checked || !backend.cloned || backend.authExpired || backend.syncRunning
                 || dirty || dialogOpen() || Date.now() - lastFocusSync < 60 * 1000)
@@ -1284,14 +1285,20 @@ ApplicationWindow {
             // Never under a running sync: the refresh after it comes back here.
             if (backend.syncRunning)
                 return;
+            // A note moved elsewhere is followed there; one deleted keeps
+            // the edits as a new note (editsKeptAsNote).
             root.keepingEdits = true;
+            root.keptNotice = "";
             var kept = backend.keepEditsAsConflict(root.savedText, editor.text);
             root.keepingEdits = false;
             if (kept) {
                 root.loadEditor();
-                root.notice = backend.noteConflicts.length === 0
-                    ? "Merged your edits with a change from another device." : "";
+                root.notice = root.keptNotice.length > 0 ? root.keptNotice
+                    : backend.noteConflicts.length === 0 ? "Merged your edits with a change from another device." : "";
             }
+        }
+        function onEditsKeptAsNote(message) {
+            root.keptNotice = message;
         }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
         // Not on syncRunningChanged: that turns false between runSync's

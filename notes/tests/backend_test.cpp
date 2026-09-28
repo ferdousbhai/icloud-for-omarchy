@@ -297,6 +297,46 @@ int main(int argc, char *argv[])
     QFile::remove(rootPath() + QStringLiteral("/D.md"));
     b.refresh();
 
+    // A pull moves (and retitles) the note open with unsaved edits: it is
+    // followed to its new file by its id, and the edits merge there.
+    writeFile(QStringLiteral("Moving.md"), QStringLiteral("---\napple-note-id: id-move\n---\n# Moving\none\n\ntwo\n"));
+    b.refresh();
+    b.openNote(QStringLiteral("Moving.md"));
+    QFile::remove(rootPath() + QStringLiteral("/Moving.md"));
+    writeFile(QStringLiteral("Elsewhere/Moved.md"), QStringLiteral("---\napple-note-id: id-move\n---\n# Moved\none\n\ntwo\n"));
+    b.refresh();
+    check(b.currentFolder() == QStringLiteral("Elsewhere") && b.currentNote() == QStringLiteral("Moved.md"),
+          "backend note moved by a pull is followed by its id");
+    check(b.keepEditsAsConflict(QStringLiteral("# Moving\none\n\ntwo\n"), QStringLiteral("# Moving\none\n\ntwo, mine\n"))
+              && readFile(QStringLiteral("Elsewhere/Moved.md"))
+                     == QStringLiteral("---\napple-note-id: id-move\n---\n# Moved\none\n\ntwo, mine\n"),
+          "backend edits merge into the moved note");
+    QDir(rootPath() + QStringLiteral("/Elsewhere")).removeRecursively();
+    b.setCurrentFolder(QString());
+    b.refresh();
+
+    // A pull deletes it: nothing to save to (the save says so instead of
+    // dropping the edits), and they are kept as a new note.
+    writeFile(QStringLiteral("Doomed.md"), QStringLiteral("---\napple-note-id: id-doomed\n---\n# Doomed\nkeep\u00a0me\n"));
+    b.refresh();
+    b.openNote(QStringLiteral("Doomed.md"));
+    QFile::remove(rootPath() + QStringLiteral("/Doomed.md"));
+    b.refresh();
+    check(b.currentNote().isEmpty(), "backend deleted note closes");
+    check(!b.saveCurrentNote(QStringLiteral("# Doomed\nkeep me, edited\n")), "backend save with no note is refused");
+    {
+        QString told;
+        QObject::connect(&b, &NotesBackend::editsKeptAsNote, &b, [&](const QString &m) { told = m; },
+                         Qt::SingleShotConnection);
+        check(b.keepEditsAsConflict(QStringLiteral("# Doomed\nkeep me\n"), QStringLiteral("# Doomed\nkeep me, edited\n"))
+                  && b.currentNote() == QStringLiteral("Doomed (unsaved edits).md")
+                  && readFile(QStringLiteral("Doomed (unsaved edits).md")) == QStringLiteral("# Doomed\nkeep\u00a0me, edited\n")
+                  && told.contains(QStringLiteral("Doomed (unsaved edits)")),
+              "backend edits to a deleted note kept as a new note, and said so");
+    }
+    QFile::remove(rootPath() + QStringLiteral("/Doomed (unsaved edits).md"));
+    b.refresh();
+
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));
     check(b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty(), "backend rename ok");

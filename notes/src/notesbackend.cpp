@@ -458,8 +458,14 @@ void NotesBackend::rebuildFolders()
 
     m_folders = folders;
     m_folderNoteCounts = counts;
-    if (!m_folders.contains(m_currentFolder))
-        setCurrentFolder({});
+    if (!m_folders.contains(m_currentFolder)) {
+        // The open note went with its folder: follow it, or remember it.
+        if (m_currentNote.isEmpty() || !followNote(SyncModel::extractNoteId(m_noteContent))) {
+            if (!m_currentNote.isEmpty())
+                loseCurrentNote();
+            setCurrentFolder({});
+        }
+    }
     emit foldersChanged(); // also refreshes cloned/vaultTitleMode after a clone
 }
 
@@ -473,13 +479,18 @@ void NotesBackend::rebuildNotes()
     QStringList found;
     for (const QFileInfo &info : entries)
         found << info.fileName();
+    // The open note's file is gone (a pull moved, renamed or deleted it):
+    // follow it by its id, which rebuilds the list where it went.
+    if (!m_currentNote.isEmpty() && !found.contains(m_currentNote)
+        && followNote(SyncModel::extractNoteId(m_noteContent)))
+        return;
 
     const QStringList oldNotes = m_notes;
     const QVariantMap oldStates = m_noteStates;
     const QVariantMap oldDetails = m_noteDetails;
     m_notes = found;
     if (!m_currentNote.isEmpty() && !m_notes.contains(m_currentNote))
-        closeNote();
+        loseCurrentNote();
     classifyNotes();
     // Only a real change re-renders the list (and drops its scroll position).
     if (m_notes != oldNotes || m_noteStates != oldStates || m_noteDetails != oldDetails)
@@ -552,6 +563,89 @@ void NotesBackend::closeNote()
     loadCurrentNote();
 }
 
+// Where the note with this apple-note-id lives now, vault-relative, or
+// empty. Only when the open note's file went away, so a full scan is fine.
+QString NotesBackend::findNoteById(const QString &id) const
+{
+    if (id.isEmpty())
+        return {};
+    const QDir root(rootPath());
+    QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString rel = root.relativeFilePath(it.next());
+        if (isHidden(rel) || rel.split(u'/').contains(QStringLiteral("attachments")))
+            continue;
+        if (SyncModel::extractNoteId(readText(it.filePath(), 64 * 1024)) == id)
+            return rel;
+    }
+    return {};
+}
+
+// Open the note with this id where it now is. False when there is none.
+bool NotesBackend::followNote(const QString &id)
+{
+    const QString rel = m_following ? QString() : findNoteById(id);
+    if (rel.isEmpty())
+        return false;
+    m_following = true;
+    const QString folder = rel.section(u'/', 0, -2);
+    if (folder != m_currentFolder) {
+        m_currentFolder = folder;
+        emit currentFolderChanged();
+    }
+    m_currentNote = rel.section(u'/', -1);
+    m_lostNote = {};
+    emit currentNoteChanged();
+    rebuildNotes();
+    loadCurrentNote(); // unsaved edits merge here (keepEditsAsConflict)
+    rewatch();
+    m_following = false;
+    return true;
+}
+
+// The open note's file is gone and no file carries its id: close it, but
+// remember it, so unsaved edits can still be kept (keepEditsAsNewNote).
+void NotesBackend::loseCurrentNote()
+{
+    m_lostNote = { m_currentFolder,
+                   SyncModel::previewNote(m_noteContent, m_currentNote.chopped(3), vaultTitleMode()).title,
+                   m_noteContent, true };
+    closeNote();
+}
+
+// Unsaved edits to a note deleted elsewhere: a new note beside where it
+// was, never the deleted note's id (that would bring it back as a copy).
+bool NotesBackend::keepEditsAsNewNote(const QString &mine)
+{
+    const QString folder = QDir(folderAbsolutePath(m_lostNote.folder)).exists() ? m_lostNote.folder : QString();
+    QString title = sanitized(m_lostNote.title);
+    if (title.isEmpty())
+        title = QStringLiteral("Untitled");
+    const QDir dir(folderAbsolutePath(folder));
+    QString name = title + QStringLiteral(" (unsaved edits).md");
+    for (int n = 2; QFile::exists(dir.filePath(name)); ++n)
+        name = title + QStringLiteral(" (unsaved edits %1).md").arg(n);
+    const QString body = SyncModel::restoreEditorChars(SyncModel::splitEnvelope(m_lostNote.content).body, mine);
+    if (!writeText(dir.filePath(name), body))
+        return false;
+    m_lostNote = {};
+    if (folder != m_currentFolder) {
+        m_currentFolder = folder;
+        emit currentFolderChanged();
+    }
+    m_currentNote = name;
+    emit currentNoteChanged();
+    rebuildNotes();
+    loadCurrentNote();
+    rewatch();
+    const QString message = QStringLiteral("\"%1\" was deleted elsewhere, so your unsaved edits are in a new note, \"%2\".")
+                                .arg(title, name.chopped(3));
+    appendLog(message);
+    emit editsKeptAsNote(message);
+    emit vaultChanged();
+    return true;
+}
+
 void NotesBackend::rewatch()
 {
     const QStringList watched = m_watcher.directories() + m_watcher.files();
@@ -587,6 +681,7 @@ void NotesBackend::openNote(const QString &name)
 {
     if (!m_notes.contains(name))
         return;
+    m_lostNote = {};
     if (m_currentNote != name) {
         m_currentNote = name;
         emit currentNoteChanged();
@@ -598,8 +693,10 @@ void NotesBackend::openNote(const QString &name)
 bool NotesBackend::saveCurrentNote(const QString &body)
 {
     const QString path = noteAbsolutePath();
+    if (path.isEmpty()) // the note went away under these edits: keepEditsAsConflict keeps them
+        return body.isEmpty();
     const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
-    if (path.isEmpty() || !m_readOnlyReason.isEmpty() || text == m_noteContent)
+    if (!m_readOnlyReason.isEmpty() || text == m_noteContent)
         return true;
     // A pull (or another program) rewrote the note since it was loaded:
     // writing now would silently drop that change. The reload that follows
@@ -618,6 +715,11 @@ bool NotesBackend::saveCurrentNote(const QString &body)
 
 bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
 {
+    // Its file went away: a pull may have written the new one only after
+    // removing the old, so look for its id once more before giving up on it.
+    if (m_currentNote.isEmpty() && m_lostNote.valid
+        && !followNote(SyncModel::extractNoteId(m_lostNote.content)))
+        return keepEditsAsNewNote(mine);
     const QString path = noteAbsolutePath();
     if (path.isEmpty() || !m_readOnlyReason.isEmpty() || !QFile::exists(path))
         return false;
@@ -683,6 +785,7 @@ QString NotesBackend::deleteCurrentNote()
         return QStringLiteral("No note selected.");
     if (!QFile::moveToTrash(path)) // the next push moves the note to Recently Deleted
         return QStringLiteral("Could not move the note to the trash.");
+    m_lostNote = {}; // deleted here on purpose: its edits go with it
     closeNote();
     rebuildNotes();
     rewatch();
