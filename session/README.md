@@ -1,178 +1,247 @@
 # icloud-session
 
-A Rust crate and command-line tool that reads the iCloud sign-in saved by
-[icloud-md](https://www.npmjs.com/package/icloud-md) and makes requests to
-icloud.com with it, so several apps can share one sign-in.
+One iCloud web sign-in for every app on the machine. A small D-Bus user
+service owns the Apple account; Notes (through icloud-md), Find My and
+Photos use it instead of signing in themselves.
 
-icloud-md signs in through Apple's own page and stores the icloud.com cookie
-jar. `icloud-session` never signs in by itself: it reads that jar, attaches it
-to requests, writes back the cookies Apple rotates, and reports
-`SignInRequired` when Apple stops accepting it. Notes, Find My and Photos all
-go through it, so there is one sign-in dialog, one 2FA prompt and one 30-day
-session for all of them.
+| crate | binary | role |
+|---|---|---|
+| `icloud-session` (repo root) | – | client library the apps link |
+| `icloud-sessiond` (`sessiond/`) | `icloud-sessiond` | D-Bus user service, the only owner of the session |
+| | `icloud-session-signin` | GTK4 + WebKitGTK 6 sign-in window the daemon runs |
+| | `icloud-session` | CLI for scripts and debugging |
 
-## Requirements
+Requirements: an Apple ID with Advanced Data Protection off and "Access
+iCloud Data on the Web" on. Runtime: `gtk4`, `webkitgtk-6.0`, a D-Bus
+session bus. No systemd unit, no Python, no Node.
 
-- `npm install -g icloud-md` (Node.js 20+), signed in once, for example
-  through Notes or `icloud-md clone`.
-- An Apple ID with Advanced Data Protection off and "Access iCloud Data on the
-  Web" on.
+## Design
+
+`icloud-sessiond` is D-Bus activated
+(`/usr/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service`)
+and exits after 5 minutes with no connected clients and no sign-in in
+progress. It is the only process that holds the cookie jar, calls
+`setup.icloud.com/setup/ws/1/validate`, and writes session state. With one
+owner there are no file locks, no validate cache file, no sign-in marker,
+no truncated-read retries and no status polling.
+
+- **Sign-in.** `SignIn()` runs `icloud-session-signin`, a window showing
+  `https://www.icloud.com/`: Apple's own page, so every 2FA flavour and
+  "Trust this browser" work. Its WebKit profile persists, so a later
+  sign-in usually needs no 2FA. When the page's own `/accountLogin` or
+  `/validate` call answers with `dsInfo` and no pending
+  `hsaChallengeRequired` (icloud-md's rule), the window prints the
+  icloud.com cookies (with expiry) and the client params from that
+  request as JSON and exits. The daemon validates the capture and stores it.
+- **Heartbeat.** `/validate` once on start, then whenever the last one is
+  older than 10 minutes and a client called within the last 15 (the
+  browser's own heartbeat is 14). `Session()` also revalidates first when
+  the last validate is older than 10 minutes. Rotated cookies merge by name.
+- **Expiry** is the captured X-APPLE-WEBAUTH-TOKEN cookie's own expiry,
+  updated when Apple rotates it.
+- **Signing out.** 421/401 on `/validate` signs out. A client's 421/401
+  on a data endpoint only triggers `ReportSignInRequired()`, which runs a
+  `/validate` to confirm first, so one stray 401 does not sign every app out.
+- **icloud-md mirror.** After every sign-in and rotation the daemon writes
+  `~/.config/icloud-md/accounts/<dsid>/{session.local.json,meta.json}`
+  atomically, so `icloud-md clone --account <dsid>` syncs Notes with no
+  browser of its own. It watches that file (inotify); when icloud-md writes
+  a jar the daemon did not write (its own `/validate` rotation), the daemon
+  adopts it, also on start for writes made while it was not running.
 
 ## Library
 
 ```toml
 [dependencies]
-icloud-session = "=0.1.0"
+icloud-session = "=0.2.0"
 ```
 
 ```rust
 use icloud_session::{Error, Session};
 
-let session = Session::load()?;          // newest account icloud-md knows
-let ws = session.webservices()?;         // cached /validate, validates if stale
+let s = Session::connect()?;           // D-Bus; SignInRequired when signed out
+let ws = s.webservices()?;             // from Session(); cached in-process ≤ 60 s
 let findme = ws.url("findme").unwrap();
-let r = session.post_json(&format!("{findme}/fmipservice/client/web/refreshClient"), &body)?;
+let r = s.post_json(&format!("{findme}/fmipservice/client/web/refreshClient"), &body)?;
 let devices: serde_json::Value = r.json()?;
 
-match session.get(url) {
-    Err(Error::SignInRequired) => { /* show a banner that runs `icloud-session reauthenticate` */ }
+match s.get(url) {
+    Err(Error::SignInRequired) => { /* banner whose button calls icloud_session::sign_in() */ }
     other => { /* ... */ }
 }
+
+icloud_session::sign_in()?;            // SignIn(), returns at once
+icloud_session::status()?;             // Status { signed_in, apple_id, dsid, expires_at, signing_in }
+for status in icloud_session::watch()? { /* on its own thread: one Status per change */ }
 ```
 
 | item | what it does |
 |---|---|
-| `Session::load()` | The account whose `session.local.json` was written last. `SignInRequired` if there is none. |
-| `Session::load_dsid(dsid)` | One specific account. |
-| `session.webservices()` | The `webservices` map (`ckdatabasews`, `findme`, ...) from `/validate`, cached for 10 minutes machine-wide. |
-| `session.get(url)`, `post_json(url, &value)`, `post_bytes(url, content_type, bytes)` | Request with the cookie jar, `Origin`/`Referer: https://www.icloud.com`, and `clientBuildNumber`, `clientMasteringNumber`, `clientId`, `dsid` appended to the query (a parameter already in the URL is left alone). |
-| `session.download(url, dest)` | Streams to a temp file beside `dest`, renamed on success. Cookies attached, no client parameters. |
-| `session.apple_id()`, `dsid()`, `validated_at()`, `expires_at()` | Account facts from local files. `expires_at` is the persistent `X-APPLE-WEBAUTH-TOKEN` expiry from the Chromium profile. |
-| `Session::reauthenticate()`, `Session::reauthenticate_in(dir)` | Runs `icloud-md reauthenticate [dir]` with the terminal attached and waits. |
-| `status()` | Offline `Status { signed_in, apple_id, dsid, expires_at, validated_at }`. |
-| `expiry::token_expiry(db)`, `expiry::latest_token_expiry(dir)` | The expiry query on its own. |
-| `Config`, `Session::load_with(config)`, `status_with(&config)` | Same, with explicit paths (tests, tools). |
+| `Session::connect()` | Reads the daemon's properties (D-Bus activates it) and fetches `Session()`. `SignInRequired` when signed out. |
+| `s.webservices()` | The `webservices` map (`ckdatabasews`, `findme`, ...) from the daemon's last `/validate`. |
+| `s.get(url)`, `post_json(url, &value)`, `post_bytes(url, content_type, bytes)` | Straight to Apple with the cookie header from `Session()`, `Origin`/`Referer: https://www.icloud.com`, and `clientBuildNumber`, `clientMasteringNumber`, `clientId`, `dsid` appended to the query (a parameter already in the URL is left alone). |
+| `s.download(url, dest)` | Streams to a temp file beside `dest`, renamed on success. Cookies attached, no client params. |
+| `s.apple_id()`, `s.dsid()` | The account the session belongs to. |
+| `sign_in()`, `sign_out()` | `SignIn()` / `SignOut()`; both return at once. |
+| `status()` | `Status { signed_in, apple_id, dsid, expires_at, signing_in }`, one `GetAll`. `expires_at` is unix seconds or `None`. |
+| `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`. |
+| `Session::connect_on(&conn)`, `status_on`, `watch_on`, `sign_in_on`, `sign_out_on` | The same on a given `zbus::blocking::Connection` (tests, tools). |
+| `Session::mock(base_url)` | What mock mode gives `Session::connect()`. |
 
-Errors: `SignInRequired` (no session file, HTTP 421 or 401, or a sign-in stuck
-at 2FA), `Corrupt` (session file unreadable after retries), `Http { status,
-body }` (any other non-2xx), `Network`, `Io`.
+Every `Set-Cookie` Apple sends a request goes back to the daemon through
+`MergeCookies`, and the in-process `Session()` cache is dropped so the next
+request uses the merged jar. On 421/401 the client calls
+`ReportSignInRequired()`: if the daemon is still signed in it retries the
+request once with the fresh jar (a 421/401 again is `Http`), otherwise it
+returns `SignInRequired`.
 
-Every call is blocking (ureq with rustls, no async runtime). GTK apps run them
-on `gio::spawn_blocking` or a small thread pool. `Session` is cheap to clone
-and safe to share between threads.
+Errors: `SignInRequired`, `Http { status, body }` (any other non-2xx),
+`Network`, `Service` (the daemon could not be reached or failed), `Io`.
+
+Every call is blocking: ureq for HTTP, zbus's blocking API with its own
+small executor thread for D-Bus, no tokio. GTK apps run calls on
+`gio::spawn_blocking` or a thread pool. `Session` is cheap to clone and
+safe to share between threads.
+
+## D-Bus interface
+
+Session bus, bus name and interface `io.github.ferdousbhai.ICloudSession`,
+object `/io/github/ferdousbhai/ICloudSession`.
+
+| member | kind | signature / notes |
+|---|---|---|
+| `SignedIn` | property | `b` |
+| `AppleId` | property | `s`, empty when signed out |
+| `Dsid` | property | `s`, empty when signed out |
+| `ExpiresAt` | property | `t` unix seconds, 0 = session-only or unknown |
+| `SigningIn` | property | `b`, the sign-in window is open |
+| `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out; revalidates first if the last validate is older than 10 minutes (if Apple is unreachable it answers with what it has) |
+| `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
+| `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it rewrites the icloud-md mirror with the fresh jar and answers true (retry once); on 421/401 it signs out and answers false |
+| `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
+| `SignOut()` | method | forgets the account, the WebKit profile and the mirrored `session.local.json` |
+
+Property changes are announced with the standard
+`org.freedesktop.DBus.Properties.PropertiesChanged` signal, one signal per
+state change carrying every property that changed, so Qt (QtDBus) and GTK
+apps watch one signal for their sign-in banner.
+
+```console
+$ busctl --user introspect io.github.ferdousbhai.ICloudSession /io/github/ferdousbhai/ICloudSession
+$ gdbus call --session -d io.github.ferdousbhai.ICloudSession -o /io/github/ferdousbhai/ICloudSession \
+    -m io.github.ferdousbhai.ICloudSession.SignIn
+```
 
 ## Command line
 
-JSON goes to stdout, errors to stderr.
+JSON on stdout, errors on stderr.
 
 ```console
 $ icloud-session status
-{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":"2026-10-28T09:00:00Z","validated_at":"2026-09-28T10:02:11Z"}
-
-$ icloud-session validate
-{"dsid":"1234567890","apple_id":"you@example.com","validated_at":"2026-09-28T10:02:11Z","webservices":{"ckdatabasews":"https://p42-ckdatabasews.icloud.com:443", ...}}
-
-$ icloud-session reauthenticate ~/Documents/icloud-notes
+{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":1793000000,"signing_in":false}
+$ icloud-session sign-in     # opens the window, waits for it to close, prints status
+$ icloud-session validate    # {"dsid":…,"apple_id":…,"webservices":{…}}
+$ icloud-session sign-out
 ```
 
-- `status` reads local files only, never the network, and always exits 0.
-  Times are RFC 3339 UTC or `null`. `signed_in` is false when the session file
-  is missing, when Apple answered 421/401 after the session file was last
-  written, or when the persistent sign-in cookie has expired.
-- `validate` prints the cached `/validate` result, calling Apple only when the
-  cache is older than 10 minutes.
-- `reauthenticate [directory]` runs `icloud-md reauthenticate [directory]`
-  interactively, then prints `status`. icloud-md only signs in again for a
-  folder cloned with `icloud-md clone`. With no directory, icloud-session
-  uses the first of `$ICLOUD_NOTES_VAULT` and iCloud Notes' vault
-  (`$XDG_DOCUMENTS_DIR/icloud-notes`) whose `.icloud-md/state.json` is bound
-  to the session's account, else the current directory. So apps without a
-  vault of their own (Photos, Find My) sign in again through Notes' vault.
-
-Exit codes: 0 ok, 1 error, 2 sign-in required, 64 usage.
+Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed), 64 usage.
 
 ## Files
 
-| path | owner | contents |
+| path | written by | contents |
 |---|---|---|
-| `~/.config/icloud-md/accounts/<dsid>/session.local.json` | icloud-md | `cookie`, `clientId`, `clientBuildNumber`, `clientMasteringNumber`, `capturedAt` |
-| `~/.config/icloud-md/accounts/<dsid>/session.local.json.lock` | icloud-session | empty; `flock`ed while writing |
-| `~/.config/icloud-md/accounts/<dsid>/meta.json` | icloud-md | `appleId`, `dsid` (read for `apple_id` before the first validate) |
-| `~/.config/icloud-md/accounts/<dsid>/browser-profile/**/Cookies` | Chromium | read-only, for the token expiry |
-| `~/.cache/icloud-session/<dsid>.json` | icloud-session | `validated_at`, `webservices`, `apple_id`, `sign_in_required_at` |
+| `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at` |
+| `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
+| `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache |
+| `~/.config/icloud-md/accounts/<dsid>/session.local.json` (0600) | daemon, icloud-md | `cookie`, `clientId`, `clientBuildNumber`, `clientMasteringNumber`, `capturedAt` (fields icloud-md adds are kept) |
+| `~/.config/icloud-md/accounts/<dsid>/meta.json` (0600) | daemon | `appleId`, `dsid` |
 
-`icloud-session` is the only code in these apps that reads `~/.config/icloud-md`.
-
-## How the session file is shared
-
-icloud-md writes `session.local.json` with a plain `writeFile` and no lock, so
-`icloud-session` assumes the file can change, or be half-written, at any time:
-
-- **Re-read before every request.** Nothing caches cookies in memory, so a
-  cookie rotated by icloud-md or another app is used on the next request.
-- **Retry a truncated read.** A file that does not parse (or lacks a required
-  field) is re-read up to five more times, 50 ms apart, before it is `Corrupt`.
-- **Merge only what rotated.** After any 2xx response with `Set-Cookie`, take
-  an exclusive `flock` on `session.local.json.lock`, re-read the file, apply
-  just the cookies this response set (existing cookies keep their place, new
-  names go at the end, the same rule as icloud-md's
-  `mergeSetCookiesIntoSession`), and write it only if something changed.
-  Unknown fields and their order are kept. The jar in memory never overwrites
-  the file.
-- **Write atomically.** Temp file in the same directory, mode 0600, fsync,
-  rename.
-- **Validate once for everyone.** `webservices()` uses the cache if it is
-  younger than 10 minutes (the browser's own heartbeat is 14). Otherwise it
-  takes the lock, reads the cache again (another process may have just
-  validated), and only then calls `/validate`, so racing processes make one
-  call and one token rotation.
-- **Record sign-in failures.** A 421 or 401 sets `sign_in_required_at` in the
-  cache. `status` reports signed out until icloud-md writes a newer session
-  file (a new sign-in) or a later `/validate` succeeds.
-
-The lock orders `icloud-session`'s own processes; icloud-md does not take it,
-which is why the merge re-reads under the lock rather than trusting memory.
-
-`/validate` is called as icloud-md's `checkAuthentication` calls it: `POST
-https://setup.icloud.com/setup/ws/1/validate` with `clientBuildNumber`,
-`clientMasteringNumber`, `clientId`, a random `requestId` and `dsid` in the
-query, and `Cookie`, `Origin: https://www.icloud.com`,
-`Referer: https://www.icloud.com/`, `Accept: application/json` headers.
+`$XDG_STATE_HOME` defaults to `~/.local/state`, `$XDG_DATA_HOME` to
+`~/.local/share`, `$XDG_CACHE_HOME` to `~/.cache`. The icloud-md path
+follows icloud-md itself (`os.homedir()/.config/icloud-md`). Every daemon
+write is atomic: temp file in the same directory, mode 0600, fsync, rename.
+One account at a time; signing in with another Apple ID replaces it.
+The earlier layout, where this crate read icloud-md's accounts directory
+as its source of truth, is gone: after upgrading, sign in once more.
 
 ## Mock mode
 
-`ICLOUD_SESSION_MOCK=1` gives a signed-in fake session (dsid `mock`, Apple ID
-`mock@example.com`) that reads and writes no files and calls no Apple host.
-Every `webservices` URL is `ICLOUD_SESSION_MOCK_URL` (default
-`http://127.0.0.1:8765`), and a request to any other host is sent there with
-its path and query unchanged, so an app's mock server can serve fixtures for
-CloudKit, Find My and download URLs alike. `reauthenticate` does nothing.
+`ICLOUD_SESSION_MOCK=1` makes the client library use no D-Bus at all: a
+signed-in fake session (dsid `mock`, Apple ID `mock@example.com`) whose
+every `webservices` URL is `ICLOUD_SESSION_MOCK_URL` (default
+`http://127.0.0.1:8765`). A request to any other host is sent there with its
+path and query unchanged, so an app's mock server can serve fixtures for
+CloudKit, Find My and download URLs alike. `sign_in`/`sign_out` do nothing
+and `watch` never yields.
 
 ## Environment
 
-| variable | default |
-|---|---|
-| `ICLOUD_MD_CONFIG_DIR` | `~/.config/icloud-md` |
-| `ICLOUD_SESSION_CACHE_DIR` | `$XDG_CACHE_HOME/icloud-session`, else `~/.cache/icloud-session` |
-| `ICLOUD_SESSION_MOCK`, `ICLOUD_SESSION_MOCK_URL` | off, `http://127.0.0.1:8765` |
-| `ICLOUD_MD_BIN` | `icloud-md` |
-| `ICLOUD_SESSION_SETUP_URL` | `https://setup.icloud.com` (tests only) |
+| variable | used by | default |
+|---|---|---|
+| `ICLOUD_SESSION_MOCK`, `ICLOUD_SESSION_MOCK_URL` | client library | off, `http://127.0.0.1:8765` |
+| `ICLOUD_SESSION_SIGNIN_BIN` | daemon | `icloud-session-signin` beside `icloud-sessiond`, else on `PATH` |
+| `ICLOUD_SESSION_SIGNIN_UA` | sign-in window | WebKitGTK's own user agent; `safari` for a macOS Safari one, anything else verbatim |
+| `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
+| `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS` | daemon (tests) | 300, 600 |
+
+## The sign-in spike
+
+The one part the tests cannot cover is a real Apple sign-in through
+WebKitGTK. Try it before relying on the rest:
+
+```bash
+cargo run -p icloud-sessiond --bin icloud-session-signin
+```
+
+Sign in (password, 2FA, "Trust this browser"). When the page has signed in
+the window closes by itself and the captured session is printed as JSON:
+cookies for `.icloud.com` including `X-APPLE-WEBAUTH-TOKEN` with an
+`expires`, plus `clientId`, `clientBuildNumber`, `clientMasteringNumber`
+(`null` when the page's setup call did not carry them; the daemon then uses
+icloud-md's defaults and a fresh clientId). Progress goes to stderr. It uses
+the real profile directory, `~/.local/share/icloud-session/webkit/`; point
+`XDG_DATA_HOME`/`XDG_CACHE_HOME` elsewhere for a throwaway one. If Apple
+refuses the browser, retry with `ICLOUD_SESSION_SIGNIN_UA=safari`.
+
+To check that `/validate` accepts the capture, run the whole flow:
+`icloud-session sign-in`, then `icloud-session validate` (installed
+package, or the dev install below).
+
+## Install
+
+Package (`[ferdousbhai]` pacman repo, or `cd pkgbuild && makepkg -si`):
+installs the three binaries and the D-Bus activation file. Nothing to
+enable; the bus starts the daemon on first use.
+
+Without the package, for development:
+
+```bash
+cargo install --path sessiond
+mkdir -p ~/.local/share/dbus-1/services
+sed "s|/usr/bin|$HOME/.cargo/bin|" data/io.github.ferdousbhai.ICloudSession.service \
+  > ~/.local/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service
+```
 
 ## Development
 
 ```bash
-cargo test
+cargo test                               # whole workspace, sign-in window included
 cargo clippy --all-targets -- -D warnings
+cargo test --no-default-features         # without webkitgtk-6.0 installed
 ```
 
-The tests run against a local HTTP server in temp directories and never touch
-`~/.config/icloud-md` or `~/.cache`. They cover the rotation merge, truncated
-reads, racing threads and processes making one `/validate` call, the expiry
-query against a fixture Cookies database (including one Chromium holds
-locked), 421/401 handling and mock mode.
-
-`pkgbuild/PKGBUILD` builds the `icloud-session` pacman package from the
-committed tree (`cd pkgbuild && makepkg`).
+The sign-in window is the `signin` feature of `icloud-sessiond` (on by
+default); everything else builds and tests without it. The daemon tests run
+`icloud-sessiond` through D-Bus activation on a private `dbus-daemon`, with
+HOME and the XDG directories in a temp dir, a local HTTP server standing in
+for Apple, and a shell script standing in for the sign-in window
+(`ICLOUD_SESSION_SIGNIN_BIN`). They never touch the real session bus,
+`~/.config`, `~/.local` or Apple. Covered: `Session()` and revalidation,
+`MergeCookies`, `ReportSignInRequired` both ways, sign-in (captured,
+closed, without params), sign-out, the icloud-md mirror and adoption of
+icloud-md's writes (live and on start), the client library against the
+daemon (requests, rotation, retry, sign-out), the CLI, idle exit, a second
+daemon refusing to start, and mock mode without D-Bus.
 
 ## License
 
