@@ -581,7 +581,8 @@ fn sign_in_with_a_fake_window_stores_the_account() {
             apple_id: None,
             dsid: None,
             expires_at: None,
-            signing_in: false
+            signing_in: false,
+            find_my_authorized: false,
         }
     );
     match session(&conn) {
@@ -1001,7 +1002,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         status,
-        json!({"signed_in": false, "apple_id": null, "dsid": null, "expires_at": null, "signing_in": false})
+        json!({"signed_in": false, "apple_id": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false})
     );
 
     let out = env.cli(&["validate"]);
@@ -1454,4 +1455,254 @@ fn a_session_refuses_to_serve_another_account() {
     assert_eq!(again.dsid(), "67890");
     again.get(&format!("{base}/data")).unwrap();
     assert_eq!(server.requests("/data").pop().unwrap().query()["dsid"], "67890");
+}
+
+// ------------------------------------------------------------- Find My
+
+const INIT_CLIENT: &str = "/fmipservice/client/web/initClient";
+
+/// What the Find My window prints: a complete fresh session, with the
+/// session-only cookies Find My's password step sets.
+fn find_capture(token: &str) -> Value {
+    json!({
+        "cookies": [
+            {"name": "X-APPLE-WEBAUTH-USER", "value": "\"v=1:s=0:d=12345\"", "domain": ".icloud.com", "path": "/", "expires": now() + 1000},
+            {"name": "X-APPLE-WEBAUTH-TOKEN", "value": token, "domain": ".icloud.com", "path": "/", "expires": now() + 1000},
+            {"name": "X-APPLE-WEBAUTH-FMIP", "value": "fmip", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "X-APPLE-WEBAUTH-LOGIN", "value": "login", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "X-APPLE-UNIQUE-CLIENT-ID", "value": "ucid", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "X-APPLE-WEBAUTH-VALIDATE", "value": "v", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "x-apple-group", "value": "g", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "fmip-web", "value": "p129", "domain": "p129-fmipweb.icloud.com", "path": "/", "expires": null},
+        ],
+        "clientId": "find-client-id",
+    })
+}
+
+/// A fake window that honours `--find`: records its arguments, then prints
+/// `capture` for `--find` and fails otherwise.
+fn find_window(dir: &Path, capture: &Value, delay: &str) -> String {
+    write_script(
+        dir,
+        "signin",
+        &format!(
+            "echo \"$*\" > '{args}'\necho $$ > '{pid}'\nsleep {delay}\n[ \"$1\" = --find ] || exit 1\ncat <<'EOF'\n{capture}\nEOF",
+            args = dir.join("args").display(),
+            pid = dir.join("pid").display(),
+        ),
+    )
+}
+
+fn cookie_named<'a>(account: &'a Value, name: &str) -> Option<&'a Value> {
+    account["cookies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+}
+
+#[test]
+fn authorize_find_my_replaces_the_jar_and_a_450_takes_it_back() {
+    let refuse = Arc::new(AtomicBool::new(false));
+    let refuse2 = refuse.clone();
+    let server = Server::start(move |s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        INIT_CLIENT
+            if !refuse2.load(Ordering::SeqCst)
+                && s.header("Cookie")
+                    .unwrap_or_default()
+                    .contains("X-APPLE-WEBAUTH-FMIP=fmip") =>
+        {
+            Reply::json(200, json!({"content": []}))
+        }
+        INIT_CLIENT => Reply {
+            status: 450,
+            body: String::new(),
+            set_cookies: vec![],
+        },
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let signin = find_window(dir.path(), &find_capture("fresh"), "0.2");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
+    let s = Session::connect_on(&conn).unwrap();
+    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+
+    // A signed-in session without Find My's password: 450, not a sign-out.
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert_eq!(server.count(INIT_CLIENT), 1, "not retried");
+    assert!(prop::<bool>(&conn, "SignedIn"));
+
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    icloud_session::authorize_find_my_on(&conn).unwrap();
+    assert!(watch.next().unwrap().signing_in);
+    let done = loop {
+        let status = watch.next().unwrap();
+        if !status.signing_in {
+            break status;
+        }
+    };
+    assert!(done.signed_in && done.find_my_authorized, "{done:?}");
+    assert_eq!(done.dsid.as_deref(), Some(DSID));
+    assert_eq!(fs::read_to_string(dir.path().join("args")).unwrap().trim(), "--find");
+    assert!(icloud_session::status_on(&conn).unwrap().find_my_authorized);
+
+    // The captured jar replaced the stored one, session cookies included.
+    let account = env.account().unwrap();
+    assert_eq!(account["find_my_authorized"], true);
+    assert!(!account.to_string().contains("\"original\""));
+    assert_eq!(account["client_params"]["clientId"], "find-client-id");
+    for name in [
+        "X-APPLE-WEBAUTH-FMIP",
+        "X-APPLE-WEBAUTH-LOGIN",
+        "X-APPLE-UNIQUE-CLIENT-ID",
+        "X-APPLE-WEBAUTH-VALIDATE",
+        "x-apple-group",
+    ] {
+        let c = cookie_named(&account, name).unwrap_or_else(|| panic!("{name} kept"));
+        assert!(c["expires"].is_null(), "{name} stays session-only");
+    }
+    assert_eq!(
+        cookie_named(&account, "fmip-web").unwrap()["domain"],
+        "p129-fmipweb.icloud.com"
+    );
+    // Validated by the daemon with the fresh jar, which rotated it.
+    let v = server.requests(VALIDATE).pop().unwrap();
+    assert!(v.header("Cookie").unwrap().contains("X-APPLE-WEBAUTH-TOKEN=fresh"));
+    assert!(!v.query().contains_key("dsid"));
+    let token = cookie_named(&account, "X-APPLE-WEBAUTH-TOKEN").unwrap();
+    assert!(token["value"].as_str().unwrap().starts_with("rotated"));
+    // icloud-md's mirror holds the new jar.
+    let mirror = env.mirror().unwrap();
+    let cookie = mirror["cookie"].as_str().unwrap();
+    assert!(cookie.contains("X-APPLE-WEBAUTH-FMIP=fmip"), "{cookie}");
+    assert!(!cookie.contains("original"));
+    assert_eq!(mirror["clientId"], "find-client-id");
+
+    // The Session made before still holds the old jar in its cache: its
+    // 450 retries once with the new jar instead of undoing the authorization.
+    s.post_json(&init, &json!({})).unwrap();
+    assert!(prop::<bool>(&conn, "FindMyAuthorized"));
+
+    // Find My asks for the password again: reported, dropped, announced.
+    refuse.store(true, Ordering::SeqCst);
+    let sent = server.count(INIT_CLIENT);
+    assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert_eq!(server.count(INIT_CLIENT), sent + 1, "no retry with the same jar");
+    let changed = watch.next().unwrap();
+    assert!(changed.signed_in && !changed.find_my_authorized, "{changed:?}");
+    assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
+    let account = env.account().unwrap();
+    assert_eq!(account["find_my_authorized"], false);
+    assert!(cookie_named(&account, "X-APPLE-WEBAUTH-FMIP").is_none());
+    assert!(cookie_named(&account, "X-APPLE-WEBAUTH-LOGIN").is_some());
+    assert!(!env.mirror().unwrap()["cookie"].as_str().unwrap().contains("FMIP"));
+
+    // Still signed in, so the CLI can authorize again.
+    let out = env.cli(&["authorize-find-my"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["find_my_authorized"], true);
+    assert_eq!(printed["signing_in"], false);
+}
+
+#[test]
+fn authorize_find_my_as_another_apple_id_is_a_new_sign_in() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE if s.header("Cookie").unwrap_or_default().contains("=other") => {
+            let mut r = validate_ok(n, base);
+            r.body = r.body.replace(DSID, "67890").replace("someone@", "other@");
+            r
+        }
+        VALIDATE => validate_ok(n, base),
+        "/data" => Reply::json(200, json!({})).cookie("DATA=1; Path=/"),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let signin = find_window(dir.path(), &find_capture("other"), "0");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let s = Session::connect_on(&conn).unwrap();
+    let base = s.webservices().unwrap().url("findme").unwrap().to_string();
+    s.get(&format!("{base}/data")).unwrap(); // drops the in-process cache
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    icloud_session::authorize_find_my_on(&conn).unwrap();
+    let done = loop {
+        let status = watch.next().unwrap();
+        if !status.signing_in {
+            break status;
+        }
+    };
+    assert_eq!(done.dsid.as_deref(), Some("67890"));
+    assert_eq!(done.apple_id.as_deref(), Some("other@example.com"));
+    assert!(done.signed_in && done.find_my_authorized, "{done:?}");
+    let account = env.account().unwrap();
+    assert_eq!(account["dsid"], "67890");
+    assert!(!account.to_string().contains("\"original\""));
+    let mirror: Value = serde_json::from_slice(
+        &fs::read(
+            env.root()
+                .join("home/.config/icloud-md/accounts/67890/session.local.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(mirror["cookie"].as_str().unwrap().contains("X-APPLE-WEBAUTH-FMIP=fmip"));
+    // A Session of the old account does not send the new jar.
+    let sent = server.count("/data");
+    assert!(matches!(s.get(&format!("{base}/data")), Err(Error::SignInRequired)));
+    assert_eq!(server.count("/data"), sent);
+}
+
+#[test]
+fn sign_out_during_authorize_find_my_drops_its_result() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let signin = find_window(dir.path(), &find_capture("late"), "1.5");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    icloud_session::authorize_find_my_on(&conn).unwrap();
+    assert!(watch.next().unwrap().signing_in);
+    // A SignIn while the Find My window is open opens no second window.
+    icloud_session::sign_in_on(&conn).unwrap();
+    let pid_file = dir.path().join("pid");
+    wait_until("the window to start", Duration::from_secs(5), || {
+        fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
+    });
+    let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+    icloud_session::sign_out_on(&conn).unwrap();
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(
+        !status.signing_in && !status.signed_in && !status.find_my_authorized,
+        "{status:?}"
+    );
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "the window was killed and reaped"
+    );
+
+    thread::sleep(Duration::from_millis(2000));
+    assert!(!prop::<bool>(&conn, "SignedIn"));
+    assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
+    assert!(env.account().is_none());
+    assert_eq!(server.count(VALIDATE), 1, "only the start-up validate");
 }

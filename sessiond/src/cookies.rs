@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 /// The persistent sign-in cookie; its expiry is the session's `ExpiresAt`.
 pub const TOKEN: &str = "X-APPLE-WEBAUTH-TOKEN";
+/// Find My's authorization, a session cookie set once the password has
+/// been entered on www.icloud.com/find; without it `findme` answers 450.
+pub const FIND_MY: &str = "X-APPLE-WEBAUTH-FMIP";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cookie {
@@ -63,6 +66,20 @@ pub fn token_expiry(cookies: &[Cookie]) -> u64 {
         .find(|c| c.name == TOKEN)
         .and_then(|c| c.expires)
         .unwrap_or(0)
+}
+
+/// The jar holds an unexpired Find My cookie.
+pub fn find_my_cookie(cookies: &[Cookie], now: u64) -> bool {
+    cookies
+        .iter()
+        .any(|c| c.name == FIND_MY && c.expires.is_none_or(|e| e > now))
+}
+
+/// Removes the cookie named `name`. Returns whether there was one.
+pub fn remove(cookies: &mut Vec<Cookie>, name: &str) -> bool {
+    let before = cookies.len();
+    cookies.retain(|c| c.name != name);
+    cookies.len() != before
 }
 
 /// Parses a `Name1=Value1; Name2=Value2` header into ordered pairs. A name
@@ -366,6 +383,17 @@ mod tests {
         assert_eq!(j[0].expires, Some(NOW + 10));
         assert_eq!(j[2], Cookie::new("C", "3"));
         assert!(!adopt_header(&mut j, "B=2"));
+    }
+
+    #[test]
+    fn find_my_cookie_and_removal() {
+        let mut j = jar(&[("A", "1"), (FIND_MY, "f")]);
+        assert!(find_my_cookie(&j, NOW));
+        j[1].expires = Some(NOW);
+        assert!(!find_my_cookie(&j, NOW));
+        assert!(remove(&mut j, FIND_MY));
+        assert!(!remove(&mut j, FIND_MY));
+        assert_eq!(header(&j, NOW), "A=1");
     }
 
     #[test]

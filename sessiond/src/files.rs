@@ -101,6 +101,11 @@ pub struct Account {
     /// RFC 3339 time of the sign-in, the mirror's `capturedAt`.
     #[serde(default)]
     pub captured_at: String,
+    /// Find My was authorized (`AuthorizeFindMy()`) for this jar and no
+    /// client has reported a Find My 450 since. `FindMyAuthorized` is this
+    /// while the jar still holds the Find My cookie.
+    #[serde(default)]
+    pub find_my_authorized: bool,
 }
 
 impl Account {
@@ -110,6 +115,11 @@ impl Account {
 
     pub fn cookie_header(&self, now: u64) -> String {
         cookies::header(&self.cookies, now)
+    }
+
+    /// Authorized for Find My and still holding its cookie.
+    pub fn find_my_ready(&self, now: u64) -> bool {
+        self.find_my_authorized && cookies::find_my_cookie(&self.cookies, now)
     }
 
     pub fn load(path: &Path) -> io::Result<Option<Account>> {
@@ -334,6 +344,7 @@ mod tests {
             webservices: BTreeMap::new(),
             validated_at: 1,
             captured_at: "2026-09-28T00:00:00.000Z".into(),
+            find_my_authorized: false,
         }
     }
 

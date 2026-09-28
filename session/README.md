@@ -33,6 +33,21 @@ no truncated-read retries and no status polling.
   `hsaChallengeRequired` (icloud-md's rule), the window prints the
   icloud.com cookies (with expiry) and the client params from that
   request as JSON and exits. The daemon validates the capture and stores it.
+- **Find My.** Apple's `findme` service answers HTTP 450 (pyicloud's
+  `FIND_MY_REAUTH_REQUIRED`, empty body) to a normal signed-in session:
+  icloud.com asks for the password again on `www.icloud.com/find` first.
+  `AuthorizeFindMy()` runs `icloud-session-signin --find`, which loads that
+  page, validates once in-page, then asks Find My's `initClient` every 5 s;
+  once it answers 2xx the window prints the jar like a sign-in. That jar
+  is a complete fresh session plus session-only cookies (no expiry,
+  among them `X-APPLE-WEBAUTH-FMIP`, the Find My authorization, and one
+  scoped to the `pNN-fmipweb.icloud.com` host). The daemon validates it
+  and it replaces the stored jar (another Apple ID's jar makes it a new
+  sign-in); the session-only cookies are kept in `account.json` and the
+  mirror, though how long Apple honours them is unknown. `FindMyAuthorized`
+  is true from then until a client reports a 450
+  (`ReportFindMyAuthRequired()`, which also drops the FMIP cookie) or the
+  jar loses that cookie.
 - **Heartbeat.** `/validate` once on start, then whenever the last one is
   older than 10 minutes and a client called within the last 15 (the
   browser's own heartbeat is 14). `Session()` also revalidates first when
@@ -71,11 +86,13 @@ let devices: serde_json::Value = r.json()?;
 
 match s.get(url) {
     Err(Error::SignInRequired) => { /* banner whose button calls icloud_session::sign_in() */ }
+    Err(Error::FindMyAuthRequired) => { /* banner whose button calls icloud_session::authorize_find_my() */ }
     other => { /* ... */ }
 }
 
 icloud_session::sign_in()?;            // SignIn(), returns at once
-icloud_session::status()?;             // Status { signed_in, apple_id, dsid, expires_at, signing_in }
+icloud_session::authorize_find_my()?;  // AuthorizeFindMy(), returns at once
+icloud_session::status()?;             // Status { signed_in, apple_id, dsid, expires_at, signing_in, find_my_authorized }
 for status in icloud_session::watch()? { /* on its own thread: one Status per change */ }
 ```
 
@@ -87,9 +104,10 @@ for status in icloud_session::watch()? { /* on its own thread: one Status per ch
 | `s.download(url, dest)` | Streams to a temp file beside `dest` (parent directories created), renamed on success. Cookies attached, no client params. |
 | `s.apple_id()`, `s.dsid()` | The account the session belongs to. If the daemon later holds another account, the session's calls return `SignInRequired`; connect again. |
 | `sign_in()`, `sign_out()` | `SignIn()` / `SignOut()`; both return at once. |
-| `status()` | `Status { signed_in, apple_id, dsid, expires_at, signing_in }`, one `GetAll`. `expires_at` is unix seconds or `None`. |
+| `authorize_find_my()` | `AuthorizeFindMy()`, returns at once: `signing_in` while its window is open, then `find_my_authorized`. No-op in mock mode. |
+| `status()` | `Status { signed_in, apple_id, dsid, expires_at, signing_in, find_my_authorized }`, one `GetAll`. `expires_at` is unix seconds or `None`; `find_my_authorized` is false from a daemon without the property. Mock mode reports it true. |
 | `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`, and after the daemon dies or restarts (re-read from the new instance). |
-| `Session::connect_on(&conn)`, `status_on`, `watch_on`, `sign_in_on`, `sign_out_on` | The same on a given `zbus::blocking::Connection` (tests, tools). |
+| `Session::connect_on(&conn)`, `status_on`, `watch_on`, `sign_in_on`, `authorize_find_my_on`, `sign_out_on` | The same on a given `zbus::blocking::Connection` (tests, tools). |
 | `Session::mock(base_url)` | What mock mode gives `Session::connect()`. |
 
 Every `Set-Cookie` Apple sends a request goes back to the daemon through
@@ -98,9 +116,13 @@ request uses the merged jar. On 421/401 from icloud.com or a service host
 (a content host's 401 is a plain `Http` error) the client calls
 `ReportSignInRequired()`: if the daemon is still signed in it retries the
 request once with the fresh jar (a 421/401 again is `Http`), otherwise it
-returns `SignInRequired`.
+returns `SignInRequired`. On 450 from icloud.com or a service host (Find My
+wants the password again) it retries once only if the daemon's jar changed
+since the request was sent (Find My was authorized meanwhile); otherwise it
+calls `ReportFindMyAuthRequired()` and returns `FindMyAuthRequired`, so a
+450 never loops.
 
-Errors: `SignInRequired`, `Http { status, body }` (any other non-2xx),
+Errors: `SignInRequired`, `FindMyAuthRequired`, `Http { status, body }` (any other non-2xx),
 `Network`, `Service` (the daemon could not be reached or failed), `Io`.
 
 Every call is blocking: ureq for HTTP, zbus's blocking API with its own
@@ -119,11 +141,14 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `AppleId` | property | `s`, empty when signed out |
 | `Dsid` | property | `s`, empty when signed out |
 | `ExpiresAt` | property | `t` unix seconds, 0 = session-only or unknown |
-| `SigningIn` | property | `b`, the sign-in window is open |
+| `SigningIn` | property | `b`, the sign-in window is open (also for `AuthorizeFindMy()`) |
+| `FindMyAuthorized` | property | `b`, true after a successful `AuthorizeFindMy()` until a client reports a Find My 450 or the jar loses `X-APPLE-WEBAUTH-FMIP` |
 | `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out; revalidates first if the last validate is older than 10 minutes (if Apple is unreachable it answers with what it has) |
 | `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
 | `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it rewrites the icloud-md mirror with the fresh jar and answers true (retry once); on 421/401 it signs out and answers false |
 | `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
+| `AuthorizeFindMy()` | method | opens the sign-in window on `www.icloud.com/find` (`--find`) unless a window is open; returns at once. On success the captured jar replaces the stored one (another dsid: a new sign-in) and `FindMyAuthorized` turns true |
+| `ReportFindMyAuthRequired()` | method | a client got HTTP 450 from Find My: `FindMyAuthorized` turns false and the FMIP cookie is dropped |
 | `SignOut()` | method | forgets the account, the WebKit profile and the mirrored `session.local.json` |
 
 Property changes are announced with the standard
@@ -144,19 +169,21 @@ JSON on stdout, errors on stderr.
 
 ```console
 $ icloud-session status
-{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":1793000000,"signing_in":false}
+{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":false}
 $ icloud-session sign-in     # opens the window, waits for it to close, prints status
+$ icloud-session authorize-find-my   # the same on Find My's password page
 $ icloud-session validate    # {"dsid":…,"apple_id":…,"webservices":{…}}
 $ icloud-session sign-out
 ```
 
-Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed), 64 usage.
+Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed),
+3 Find My not authorized (or its authorization not completed), 64 usage.
 
 ## Files
 
 | path | written by | contents |
 |---|---|---|
-| `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
+| `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`, `find_my_authorized`. Session-only cookies (`expires: null`) are kept too. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
 | `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache |
 | `~/.config/icloud-md/accounts/<dsid>/session.local.json` (0600) | daemon, icloud-md | `cookie`, `clientId`, `clientBuildNumber`, `clientMasteringNumber`, `capturedAt` (fields icloud-md adds are kept) |

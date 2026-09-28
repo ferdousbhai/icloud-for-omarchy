@@ -6,7 +6,10 @@
 //! cookie header, client parameters and webservices over D-Bus, sends
 //! requests straight to Apple with them, hands rotated cookies back
 //! (`MergeCookies`), and reports a 421/401 (`ReportSignInRequired`) so the
-//! daemon can confirm before it signs every app out.
+//! daemon can confirm before it signs every app out. Find My answers 450
+//! until the password has been entered for it again: that is
+//! [`Error::FindMyAuthRequired`], reported to the daemon
+//! (`ReportFindMyAuthRequired`) and fixed with [`authorize_find_my`].
 //!
 //! ```no_run
 //! # fn main() -> icloud_session::Result<()> {
@@ -89,6 +92,11 @@ pub enum Error {
     /// someone else since): connect again.
     #[error("sign in to iCloud required")]
     SignInRequired,
+    /// Apple answered HTTP 450: Find My wants the Apple ID password entered
+    /// again before it answers this session. Apps show a banner that calls
+    /// [`authorize_find_my`] (not [`sign_in`]).
+    #[error("Find My needs the Apple ID password")]
+    FindMyAuthRequired,
     /// Any other non-2xx answer, including a 421/401 that persists after a
     /// retry although the daemon's own `/validate` still succeeds.
     #[error("HTTP {status}: {body}")]
@@ -153,8 +161,11 @@ pub struct Status {
     /// Unix seconds when the X-APPLE-WEBAUTH-TOKEN cookie expires; `None`
     /// for a session-only cookie or when unknown.
     pub expires_at: Option<u64>,
-    /// The sign-in window is open.
+    /// The sign-in window is open (also while authorizing Find My).
     pub signing_in: bool,
+    /// Find My was authorized with [`authorize_find_my`] and has not asked
+    /// for the password again since. False when the daemon predates it.
+    pub find_my_authorized: bool,
 }
 
 fn mock_url() -> Option<String> {
@@ -176,6 +187,7 @@ fn mock_status() -> Status {
         dsid: Some(MOCK_DSID.to_string()),
         expires_at: Some(unix_now() + 30 * 24 * 3600),
         signing_in: false,
+        find_my_authorized: true,
     }
 }
 
@@ -197,7 +209,9 @@ trait Daemon {
     fn session(&self) -> zbus::Result<SessionReply>;
     fn merge_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
     fn report_sign_in_required(&self) -> zbus::Result<bool>;
+    fn report_find_my_auth_required(&self) -> zbus::Result<()>;
     fn sign_in(&self) -> zbus::Result<()>;
+    fn authorize_find_my(&self) -> zbus::Result<()>;
     fn sign_out(&self) -> zbus::Result<()>;
 }
 
@@ -238,6 +252,7 @@ fn status_from(all: &HashMap<String, OwnedValue>) -> Status {
             .and_then(|v| u64::try_from(v).ok())
             .filter(|&t| t > 0),
         signing_in: bool_of("SigningIn"),
+        find_my_authorized: bool_of("FindMyAuthorized"),
     }
 }
 
@@ -253,6 +268,23 @@ pub fn sign_in() -> Result<()> {
 /// [`sign_in`] on a given bus connection.
 pub fn sign_in_on(conn: &Connection) -> Result<()> {
     Ok(proxy(conn)?.sign_in()?)
+}
+
+/// Asks the daemon to open its sign-in window on Find My, where Apple asks
+/// for the Apple ID password before Find My answers (no-op if a window is
+/// already open). Returns at once; `signing_in` is true while the window is
+/// open, and `find_my_authorized` turns true once it is done ([`watch`]).
+/// The fresh session it captures replaces the stored one for every app.
+pub fn authorize_find_my() -> Result<()> {
+    if mock_url().is_some() {
+        return Ok(());
+    }
+    authorize_find_my_on(&session_bus()?)
+}
+
+/// [`authorize_find_my`] on a given bus connection.
+pub fn authorize_find_my_on(conn: &Connection) -> Result<()> {
+    Ok(proxy(conn)?.authorize_find_my()?)
 }
 
 /// Forgets the account and the sign-in window's WebKit profile.
@@ -391,6 +423,7 @@ fn apply_property(status: &mut Status, name: &str, value: &OwnedValue) {
         "Dsid" => status.dsid = parsed.dsid,
         "ExpiresAt" => status.expires_at = parsed.expires_at,
         "SigningIn" => status.signing_in = parsed.signing_in,
+        "FindMyAuthorized" => status.find_my_authorized = parsed.find_my_authorized,
         _ => {}
     }
 }
@@ -433,7 +466,14 @@ impl std::fmt::Debug for Session {
 
 enum Sent {
     Ok(Box<ureq::Response>),
-    Unauthorized { status: u16, body: String },
+    Unauthorized {
+        status: u16,
+        body: String,
+    },
+    /// HTTP 450 from a session host, with the cookie header it was sent.
+    FindMyAuth {
+        cookie: String,
+    },
 }
 
 /// The request a public method asked for, before cookies and params.
@@ -579,7 +619,7 @@ impl Session {
     /// clientId, dsid) appended unless the URL has them. `Set-Cookie`s go
     /// back to the daemon. 421/401 → the daemon confirms with Apple:
     /// signed out → `SignInRequired`; still signed in → one retry with the
-    /// fresh jar. Other non-2xx → `Http`.
+    /// fresh jar. 450 → `FindMyAuthRequired`. Other non-2xx → `Http`.
     pub fn get(&self, url: &str) -> Result<Response> {
         self.request(Request {
             method: "GET",
@@ -681,9 +721,11 @@ impl Session {
     fn send(&self, request: &Request<'_>) -> Result<ureq::Response> {
         match self.send_once(request)? {
             Sent::Ok(response) => Ok(*response),
+            Sent::FindMyAuth { cookie } => self.find_my_auth_required(request, &cookie),
             Sent::Unauthorized { .. } if !self.report_sign_in_required()? => Err(Error::SignInRequired),
             Sent::Unauthorized { .. } => match self.send_once(request)? {
                 Sent::Ok(response) => Ok(*response),
+                Sent::FindMyAuth { .. } => self.report_find_my_auth_required(),
                 Sent::Unauthorized { status, body } => {
                     if self.report_sign_in_required()? {
                         Err(Error::Http { status, body })
@@ -693,6 +735,33 @@ impl Session {
                 }
             },
         }
+    }
+
+    /// After a 450 sent with `cookie`: if the daemon's jar changed since
+    /// (Find My was authorized meanwhile, and this process still held the
+    /// old one), retry once with the new jar; otherwise, or if that also
+    /// answers 450, report it and return `FindMyAuthRequired`. Never more
+    /// than one retry, so a 450 cannot loop.
+    fn find_my_auth_required(&self, request: &Request<'_>, cookie: &str) -> Result<ureq::Response> {
+        self.forget_snapshot();
+        if self.inner.conn.is_some() && self.snapshot()?.cookie != cookie {
+            match self.send_once(request)? {
+                Sent::Ok(response) => return Ok(*response),
+                Sent::Unauthorized { .. } if !self.report_sign_in_required()? => return Err(Error::SignInRequired),
+                Sent::Unauthorized { status, body } => return Err(Error::Http { status, body }),
+                Sent::FindMyAuth { .. } => {}
+            }
+        }
+        self.report_find_my_auth_required()
+    }
+
+    /// `ReportFindMyAuthRequired()`, then `Err(FindMyAuthRequired)`.
+    fn report_find_my_auth_required<T>(&self) -> Result<T> {
+        self.forget_snapshot();
+        if let Some(conn) = &self.inner.conn {
+            proxy(conn)?.report_find_my_auth_required()?;
+        }
+        Err(Error::FindMyAuthRequired)
     }
 
     /// `ReportSignInRequired()`: true when the daemon still has a session.
@@ -753,6 +822,9 @@ impl Session {
                 status,
                 body: read_body_lossy(response),
             }),
+            // Find My wants the password again (pyicloud's
+            // FIND_MY_REAUTH_REQUIRED); the body is empty.
+            Err(ureq::Error::Status(450, _)) if icloud => Ok(Sent::FindMyAuth { cookie: snap.cookie }),
             Err(ureq::Error::Status(status, response)) => Err(Error::Http {
                 status,
                 body: read_body_lossy(response),

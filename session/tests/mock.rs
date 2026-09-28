@@ -24,7 +24,13 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
                     .find(|h| h.field.equiv("Cookie"))
                     .map(|h| h.value.to_string());
                 seen.lock().unwrap().push((request.url().to_string(), cookie));
-                let status = if request.url().starts_with("/gone") { 421 } else { 200 };
+                let status = if request.url().starts_with("/gone") {
+                    421
+                } else if request.url().starts_with("/findme-auth") {
+                    450
+                } else {
+                    200
+                };
                 let _ = request.respond(tiny_http::Response::from_string("{\"ok\":true}").with_status_code(status));
             }
         });
@@ -38,9 +44,10 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
     }
 
     let status = icloud_session::status().unwrap();
-    assert!(status.signed_in && !status.signing_in);
+    assert!(status.signed_in && !status.signing_in && status.find_my_authorized);
     assert_eq!(status.dsid.as_deref(), Some(MOCK_DSID));
     icloud_session::sign_in().unwrap();
+    icloud_session::authorize_find_my().unwrap();
     icloud_session::sign_out().unwrap();
     assert_eq!(icloud_session::watch().unwrap().next(), None);
 
@@ -68,4 +75,10 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
     assert_eq!(seen.lock().unwrap()[1].0, "/B/abc?o=1");
 
     assert!(matches!(s.get(&format!("{base}/gone")), Err(Error::SignInRequired)));
+    let before = seen.lock().unwrap().len();
+    assert!(matches!(
+        s.post_json(&format!("{base}/findme-auth"), &serde_json::json!({})),
+        Err(Error::FindMyAuthRequired)
+    ));
+    assert_eq!(seen.lock().unwrap().len(), before + 1, "a 450 is not retried");
 }

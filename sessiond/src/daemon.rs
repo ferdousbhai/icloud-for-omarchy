@@ -97,6 +97,7 @@ struct Props {
     dsid: String,
     expires_at: u64,
     signing_in: bool,
+    find_my_authorized: bool,
 }
 
 /// How the last `/validate` of an account ended.
@@ -110,7 +111,7 @@ struct Attempt {
 
 struct State {
     account: Option<Account>,
-    /// Bumped by every `SignIn()` that opens the window and by `SignOut()`,
+    /// Bumped by every `SignIn()` or `AuthorizeFindMy()` that opens the window and by `SignOut()`,
     /// so a window that was signed out from under drops its late result.
     signin_seq: u64,
     /// Bumped whenever `account` is replaced or forgotten, so a `/validate`
@@ -138,6 +139,7 @@ impl State {
             dsid: account.map(|a| a.dsid.clone()).unwrap_or_default(),
             expires_at: account.map_or(0, |a| cookies::token_expiry(&a.cookies)),
             signing_in: self.signing_in,
+            find_my_authorized: account.is_some_and(|a| a.find_my_ready(now_unix())),
         }
     }
 }
@@ -297,6 +299,9 @@ impl Daemon {
         }
         if all || published.signing_in != now.signing_in {
             changed.insert("SigningIn", now.signing_in.into());
+        }
+        if all || published.find_my_authorized != now.find_my_authorized {
+            changed.insert("FindMyAuthorized", now.find_my_authorized.into());
         }
         if let Some(conn) = self.conn() {
             let body = (INTERFACE, changed, Vec::<&str>::new());
@@ -501,7 +506,25 @@ impl Daemon {
         }
     }
 
-    fn sign_in(self: &Arc<Daemon>) {
+    /// A client got HTTP 450 from Find My: the jar's Find My authorization
+    /// is spent. Drops it (flag and cookie), rewrites the mirror, announces.
+    fn report_find_my_auth_required(&self) {
+        let mut st = lock(&self.state);
+        if let Some(a) = st.account.as_mut() {
+            let dropped = cookies::remove(&mut a.cookies, cookies::FIND_MY);
+            let was = std::mem::replace(&mut a.find_my_authorized, false);
+            if dropped || was {
+                eprintln!("icloud-sessiond: Find My asked for the password again");
+                self.store(&mut st);
+            }
+        }
+        drop(st);
+        self.publish();
+    }
+
+    /// Opens the sign-in window (`find`: on Find My, to authorize it)
+    /// unless one is open. The outcome arrives as property changes.
+    fn sign_in(self: &Arc<Daemon>, find: bool) {
         let seq = {
             let mut st = lock(&self.state);
             if st.signing_in {
@@ -514,8 +537,9 @@ impl Daemon {
         self.publish();
         let me = self.clone();
         thread::spawn(move || {
-            if let Err(e) = me.run_sign_in(seq) {
-                eprintln!("icloud-sessiond: sign-in: {e}");
+            if let Err(e) = me.run_sign_in(seq, find) {
+                let what = if find { "Find My authorization" } else { "sign-in" };
+                eprintln!("icloud-sessiond: {what}: {e}");
             }
             let mut st = lock(&me.state);
             // A SignOut (and maybe a new SignIn) took over this window.
@@ -530,7 +554,10 @@ impl Daemon {
     }
 
     /// Runs the sign-in window, validates what it captured, stores it.
-    fn run_sign_in(&self, seq: u64) -> Result<(), String> {
+    /// With `find` the window authorizes Find My (`--find`): what it
+    /// captures is a complete fresh session, so it replaces the stored jar
+    /// the same way, now marked as authorized for Find My.
+    fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), String> {
         let bin = &self.cfg.signin_bin;
         let cancelled = || "cancelled by SignOut".to_string();
         let mut stdout = {
@@ -541,6 +568,7 @@ impl Daemon {
                 return Err(cancelled());
             }
             let mut child = Command::new(bin)
+                .args(find.then_some("--find"))
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
@@ -598,10 +626,25 @@ impl Daemon {
             webservices: v.webservices,
             validated_at: now,
             captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            find_my_authorized: find,
         };
+        if find && !cookies::find_my_cookie(&account.cookies, now) {
+            eprintln!(
+                "icloud-sessiond: the Find My window captured no {} cookie",
+                cookies::FIND_MY
+            );
+        }
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
             return Err(cancelled());
+        }
+        // Authorizing Find My as another Apple ID (or while signed out) is
+        // a new sign-in; for the same one, the fresh jar replaces the old.
+        if find
+            && let Some(old) = st.account.as_ref()
+            && old.dsid != account.dsid
+        {
+            eprintln!("icloud-sessiond: Find My was authorized for another Apple ID; switching to it");
         }
         st.account = Some(account);
         st.generation += 1;
@@ -984,11 +1027,32 @@ impl Service {
         blocking::unblock(move || d.report_sign_in_required()).await
     }
 
+    #[zbus(property, name = "FindMyAuthorized")]
+    fn find_my_authorized(&self) -> bool {
+        self.props().find_my_authorized
+    }
+
     /// Opens the sign-in window unless it is open; returns at once.
     #[zbus(name = "SignIn")]
     async fn sign_in(&self) {
         let d = self.0.clone();
-        blocking::unblock(move || d.sign_in()).await
+        blocking::unblock(move || d.sign_in(false)).await
+    }
+
+    /// Opens the sign-in window on Find My, where Apple asks for the
+    /// password before Find My answers, unless a window is open; returns at
+    /// once. The captured jar replaces the stored one.
+    #[zbus(name = "AuthorizeFindMy")]
+    async fn authorize_find_my(&self) {
+        let d = self.0.clone();
+        blocking::unblock(move || d.sign_in(true)).await
+    }
+
+    /// A client got HTTP 450 from Find My: drops the Find My authorization.
+    #[zbus(name = "ReportFindMyAuthRequired")]
+    async fn report_find_my_auth_required(&self) {
+        let d = self.0.clone();
+        blocking::unblock(move || d.report_find_my_auth_required()).await
     }
 
     /// Forgets the account and the sign-in window's WebKit profile.
