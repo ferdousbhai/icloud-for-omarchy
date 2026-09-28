@@ -3,8 +3,9 @@
 //!   cargo run --example fake_cloudkit -- [--port 8765] [--count 120] [--signed-out]
 //!   ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8765 cargo run
 //!
-//! `--signed-out` answers 421 until the app's sign-in banner runs
-//! "reauthenticate" (which, in mock mode, just tells this server).
+//! `--signed-out` answers 421 until the sign-in banner's button is pressed
+//! (in mock mode there is no icloud-sessiond or sign-in window: the button
+//! just tells this server, and the app syncs again).
 
 #[path = "../tests/support/fake_server.rs"]
 mod fake_server;
