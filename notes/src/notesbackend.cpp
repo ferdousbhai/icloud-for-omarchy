@@ -32,6 +32,8 @@ const QString kSessionPath = QStringLiteral("/io/github/ferdousbhai/ICloudSessio
 const QString kPropertiesInterface = QStringLiteral("org.freedesktop.DBus.Properties");
 // Long enough for D-Bus activation to start the daemon; never blocks the UI.
 constexpr int kSessionTimeoutMs = 10000;
+// ReportSignInRequired checks the session with Apple before it answers.
+constexpr int kReportTimeoutMs = 60000;
 
 const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to resume.");
 
@@ -967,8 +969,10 @@ void NotesBackend::finishSync(int exitCode)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the
     // session; a push with nothing to send never checks it.
+    // Only that re-arms the retry: a push that sent nothing proves nothing,
+    // and clearing it there let push-ok, pull-refused retry forever.
     const bool sessionWorks = ok && (m_syncLabel == u"Pull" || m_syncLabel == u"Clone");
-    if (ok)
+    if (sessionWorks)
         m_retriedAfterReport = false;
     setAuthExpired(sessionExpired || (m_authExpired && !sessionWorks));
     emit syncFinished(m_syncLabel, ok);
@@ -1052,8 +1056,10 @@ QDBusMessage NotesBackend::sessionCall(const QString &method) const
 // SignIn() answers through property changes. ReportSignInRequired() answers
 // whether the session still works: icloud-session checked it with Apple and
 // refreshed icloud-md's copy, so icloud-md's refusal came from a stale copy
-// and one retry should go through. A failure (no daemon) is logged, and
-// SignIn's named.
+// and one retry should go through (once, until a pull works or a new
+// sign-in arrives). An answer that comes while something else runs retries
+// once that is done. A failure (no daemon, or no answer in time) is logged;
+// SignIn's is named, and a report's leaves the sign-in unknown, not paused.
 void NotesBackend::callSession(const QString &method)
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
@@ -1062,20 +1068,30 @@ void NotesBackend::callSession(const QString &method)
         return;
     }
     ++m_sessionCalls;
-    auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(sessionCall(method), kSessionTimeoutMs), this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, method](QDBusPendingCallWatcher *call) {
+    const bool report = method == u"ReportSignInRequired";
+    auto *watcher = new QDBusPendingCallWatcher(
+        bus.asyncCall(sessionCall(method), report ? kReportTimeoutMs : kSessionTimeoutMs), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, method, report](QDBusPendingCallWatcher *call) {
         call->deleteLater();
         --m_sessionCalls;
         if (!call->isError()) {
             const QDBusPendingReply<bool> reply = *call;
-            if (method == u"ReportSignInRequired" && reply.argumentAt<0>() && !m_retriedAfterReport && !m_syncRunning) {
+            if (report && reply.argumentAt<0>() && !m_retriedAfterReport) {
                 m_retriedAfterReport = true;
                 setAuthExpired(false);
-                runSync();
+                resumeSync();
             }
             return;
         }
         appendLog(QStringLiteral("icloud-session %1 failed: %2").arg(method, call->error().message()));
+        if (report && !(m_signInKnown && !m_signedIn)) {
+            // Nobody could say whether the sign-in still works: unknown,
+            // which never pauses; the next sync finds out again.
+            setAuthExpired(false);
+            if (!m_syncRunning)
+                setSyncMessage(QStringLiteral("Sync failed: iCloud refused the sign-in, and icloud-session "
+                                              "could not check it. See log."));
+        }
         if (method == u"SignIn") {
             setSyncMessage(QStringLiteral("Could not open the iCloud sign-in: icloud-session is not available."));
             if (m_cloneWanted) {
@@ -1135,8 +1151,10 @@ void NotesBackend::sessionPropertiesChanged(const QString &interface, const QVar
 }
 
 // Takes a full read or just the changed properties. A sign-in (SignedIn
-// turning true, or a fresh expiry while signed in) resumes paused syncing
-// and a waiting clone; signed out pauses syncing without trying first.
+// turning true, a fresh expiry while signed in, or the sign-in window
+// closing while signed in, as a re-sign-in with the same expiry does)
+// resumes paused syncing and a waiting clone, and re-arms the one retry
+// after a report; signed out pauses syncing without trying first.
 void NotesBackend::applySignIn(const QVariantMap &properties)
 {
     const bool wasSignedIn = m_signInKnown && m_signedIn;
@@ -1155,7 +1173,10 @@ void NotesBackend::applySignIn(const QVariantMap &properties)
         m_signingIn = properties.value(QStringLiteral("SigningIn")).toBool();
 
     if (m_signedIn) {
-        if (m_authExpired && (!wasSignedIn || m_expiresAt != expiresBefore)) {
+        const bool signedInAnew = !wasSignedIn || m_expiresAt != expiresBefore || (wasSigningIn && !m_signingIn);
+        if (signedInAnew)
+            m_retriedAfterReport = false;
+        if (m_authExpired && signedInAnew) {
             setAuthExpired(false);
             setSyncMessage(QStringLiteral("Signed in."));
             resumeSync();

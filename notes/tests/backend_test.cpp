@@ -443,6 +443,63 @@ int main(int argc, char *argv[])
     qunsetenv("ICLOUD_MD_STUB_EXPIRED");
     fake.set({ { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(fake.expiresAt + 60) } }); // signed in again
     check(waitUntil([&] { return !b.authExpired() && !b.syncRunning(); }), "seam a new sign-in resumes after the pause");
+    waitForIdle(b);
+    fake.reportCalls = 0;
+
+    // A push with nothing to send never asks iCloud, so it proves nothing:
+    // push fine and pull refused retries once, then pauses. (It used to
+    // re-arm the retry and loop for as long as the pull was refused.)
+    fake.stillSignedIn = true;
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "pull");
+    b.runSync();
+    check(waitUntil([&] { return fake.reportCalls == 2 && b.idle() && b.authExpired(); }, 15000),
+          "seam refused pull after an empty push retries once, then pauses");
+    waitUntil([] { return false; }, 700);
+    check(fake.reportCalls == 2 && !b.syncRunning() && b.authExpired(), "seam refused pull does not retry again");
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED");
+    fake.stillSignedIn = false;
+    // Signing in again can leave the expiry as it was (0 for a sign-in that
+    // does not last): the sign-in window closing while signed in resumes.
+    fake.set({ { QStringLiteral("SigningIn"), true } });
+    waitUntil([&] { return b.signingIn(); });
+    fake.set({ { QStringLiteral("SigningIn"), false } });
+    check(waitUntil([&] { return !b.authExpired() && !b.syncRunning()
+                                 && b.syncMessage() == QStringLiteral("Pull done."); }, 15000),
+          "seam re-sign-in with an unchanged expiry resumes");
+
+    // icloud-session's answer (it checks with Apple first) arrives while
+    // another run is going: the retry waits for it instead of being dropped.
+    fake.reportCalls = 0;
+    fake.stillSignedIn = true;
+    fake.reportDelayMs = 700;
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
+    b.runPull();
+    waitForSync(b);
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED");
+    check(waitUntil([&] { return fake.reportCalls == 1; }) && b.authExpired(), "seam slow report: paused while it is checked");
+    qputenv("ICLOUD_MD_STUB_SLEEP", "1");
+    b.clearLog();
+    b.runPush(); // still running when the answer comes
+    check(waitUntil([&] { return !b.syncRunning() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000)
+              && b.syncLog().contains(QStringLiteral("$ icloud-md pull\n")) && !b.authExpired(),
+          "seam report answered during a run retries after it");
+    qunsetenv("ICLOUD_MD_STUB_SLEEP");
+    fake.reportDelayMs = 0;
+
+    // A report nobody could answer leaves the sign-in unknown: not paused,
+    // and no retry either.
+    fake.reportCalls = 0;
+    fake.reportFails = true;
+    qputenv("ICLOUD_MD_STUB_EXPIRED", "1");
+    b.clearLog();
+    b.runPull();
+    waitForSync(b);
+    check(waitUntil([&] { return fake.reportCalls == 1 && b.idle(); }) && !b.authExpired()
+              && b.syncLog().count(QStringLiteral("$ icloud-md pull\n")) == 1,
+          "seam failed report is unknown, not paused, and not retried");
+    qunsetenv("ICLOUD_MD_STUB_EXPIRED");
+    fake.reportFails = false;
+    fake.stillSignedIn = false;
     fake.reportCalls = 0;
 
     // icloud-md refused the session: icloud-session is told, and syncing

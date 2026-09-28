@@ -6,12 +6,14 @@
 #define FAKE_SESSION_H
 
 #include <QDBusConnection>
+#include <QDBusContext>
 #include <QDBusMessage>
 #include <QObject>
+#include <QTimer>
 #include <QStringList>
 #include <QVariantMap>
 
-class FakeSession : public QObject
+class FakeSession : public QObject, protected QDBusContext
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "io.github.ferdousbhai.ICloudSession")
@@ -52,12 +54,23 @@ public:
     int signInCalls = 0;
     int reportCalls = 0;
     bool stillSignedIn = false; // what ReportSignInRequired answers
+    int reportDelayMs = 0;      // how long it takes to answer, as a check with Apple does
+    bool reportFails = false;   // answer with an error instead
 
 public slots:
     void SignIn() { ++signInCalls; }
     bool ReportSignInRequired()
     {
         ++reportCalls;
+        if (reportFails) {
+            sendErrorReply(QDBusError::Failed, QStringLiteral("could not reach Apple"));
+            return false;
+        }
+        if (reportDelayMs > 0) {
+            setDelayedReply(true);
+            const QDBusMessage reply = message().createReply(stillSignedIn);
+            QTimer::singleShot(reportDelayMs, this, [this, reply] { m_bus.send(reply); });
+        }
         return stillSignedIn;
     }
 
