@@ -3,8 +3,10 @@
 //! [`REFRESH_SECS`] while the window is on screen.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::{Rc, Weak};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
@@ -23,8 +25,49 @@ pub const REFRESH_SECS: u32 = 60;
 const TRAIL_SECS: i64 = 24 * 3600;
 const LOST_MESSAGE: &str = "This device has been lost. Please call me.";
 
-type SharedFindMe = Arc<Mutex<FindMe<SessionTransport>>>;
 type SharedHistory = Arc<Mutex<Option<History>>>;
+
+/// The Find My client, shared with the worker threads. Workers hold the
+/// lock across blocking HTTP, so the main loop never takes it: it asks for
+/// a reset through `reset_pending`, which the next worker applies.
+struct Client {
+    findme: Mutex<FindMe<SessionTransport>>,
+    reset_pending: AtomicBool,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self {
+            findme: Mutex::new(FindMe::new(SessionTransport::default())),
+            reset_pending: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Client {
+    /// Worker threads only. Applies a pending reset; a client left behind
+    /// by a panicked worker is reset rather than trusted.
+    fn lock(&self) -> MutexGuard<'_, FindMe<SessionTransport>> {
+        let mut findme = self.findme.lock().unwrap_or_else(|poisoned| {
+            self.findme.clear_poison();
+            let mut findme = poisoned.into_inner();
+            findme.reset();
+            findme
+        });
+        if self.reset_pending.swap(false, Ordering::SeqCst) {
+            findme.reset();
+        }
+        findme
+    }
+}
+
+/// Locks `m` even if a worker panicked while holding it.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| {
+        m.clear_poison();
+        poisoned.into_inner()
+    })
+}
 
 pub struct Window {
     window: adw::ApplicationWindow,
@@ -34,11 +77,22 @@ pub struct Window {
     banner: SignInBanner,
     list: Rc<DeviceList>,
     map: Rc<DeviceMap>,
-    findme: SharedFindMe,
+    client: Arc<Client>,
     history: SharedHistory,
     devices: RefCell<Vec<Device>>,
     selected: RefCell<Option<String>>,
+    /// A refresh is in flight.
     busy: Cell<bool>,
+    /// A refresh asked for while one was in flight, and whether it should
+    /// locate; runs when the current one finishes.
+    refresh_queued: Cell<Option<bool>>,
+    /// Play Sound or Lost Mode is in flight.
+    acting: Cell<bool>,
+    /// Bumped on every sign-in: a `SignInRequired` from a request started
+    /// before the latest sign-in is stale and ignored.
+    sign_in_gen: Cell<u64>,
+    /// Devices this app turned Lost Mode on for, until a refresh reports it.
+    lost_sent: RefCell<HashSet<String>>,
     last_refresh: Cell<Option<Instant>>,
     last_error: RefCell<Option<String>>,
     centered: Cell<bool>,
@@ -72,8 +126,7 @@ impl Window {
             let banner = SignInBanner::new(
                 move || {
                     if let Some(this) = w1.upgrade() {
-                        this.findme.lock().unwrap().reset();
-                        this.refresh(true);
+                        this.signed_in();
                     }
                 },
                 move |msg| {
@@ -103,6 +156,21 @@ impl Window {
 
     fn toast(&self, msg: &str) {
         self.toasts.add_toast(adw::Toast::new(msg));
+    }
+
+    /// The account just signed in (maybe a different one): start the Find
+    /// My session over and load the devices, after any refresh in flight.
+    fn signed_in(self: &Rc<Self>) {
+        self.sign_in_gen.set(self.sign_in_gen.get() + 1);
+        self.client.reset_pending.store(true, Ordering::SeqCst);
+        *self.last_error.borrow_mut() = None;
+        self.refresh(true);
+    }
+
+    /// Whether a `SignInRequired` from a request started at `sign_in_gen`
+    /// still means what it says.
+    fn sign_in_is_current(&self, sign_in_gen: u64) -> bool {
+        sign_in_gen == self.sign_in_gen.get()
     }
 
     fn selected_device(&self) -> Option<Device> {
@@ -152,7 +220,7 @@ impl Window {
     }
 
     fn update_actions(&self) {
-        let d = self.selected_device();
+        let d = self.selected_device().filter(|_| !self.acting.get());
         self.set_action_enabled("play-sound", d.as_ref().is_some_and(|d| d.can_play_sound));
         self.set_action_enabled(
             "lost-mode",
@@ -193,17 +261,21 @@ impl Window {
     /// history, and updates the list and map. `locate` asks every device to
     /// report its position: only on first load and when the user asks, not
     /// on timer ticks, so the devices are not woken every minute.
+    /// While one is in flight, the next is queued (a queued `locate` wins).
     pub fn refresh(self: &Rc<Self>, locate: bool) {
         if self.busy.replace(true) {
+            let queued = self.refresh_queued.get().unwrap_or(false);
+            self.refresh_queued.set(Some(queued || locate));
             return;
         }
         self.update_actions();
-        let (findme, history) = (self.findme.clone(), self.history.clone());
+        let (client, history) = (self.client.clone(), self.history.clone());
+        let sign_in_gen = self.sign_in_gen.get();
         let weak = Rc::downgrade(self);
         background(
             move || {
-                let devices = findme.lock().unwrap().refresh(locate)?;
-                let mut history = history.lock().unwrap();
+                let devices = client.lock().refresh(locate)?;
+                let mut history = lock(&history);
                 if history.is_none() {
                     *history = History::open_default().ok();
                 }
@@ -220,6 +292,10 @@ impl Window {
                 this.last_refresh.set(Some(Instant::now()));
                 match result {
                     Ok(Ok(devices)) => this.show_devices(devices),
+                    // Started before the latest sign-in; the refresh queued
+                    // by the sign-in answers for the new session.
+                    Ok(Err(findme::Error::SignInRequired))
+                        if !this.sign_in_is_current(sign_in_gen) => {}
                     Ok(Err(findme::Error::SignInRequired)) => {
                         this.banner.show();
                         if this.devices.borrow().is_empty() {
@@ -233,6 +309,9 @@ impl Window {
                     Err(e) => this.show_error(&e),
                 }
                 this.update_actions();
+                if let Some(locate) = this.refresh_queued.take() {
+                    this.refresh(locate);
+                }
             },
         );
     }
@@ -249,8 +328,20 @@ impl Window {
         }
     }
 
-    fn show_devices(self: &Rc<Self>, devices: Vec<Device>) {
+    fn show_devices(self: &Rc<Self>, mut devices: Vec<Device>) {
         self.banner.hide();
+        // Lost Mode this app turned on shows as on until Apple reports it,
+        // so a refresh that started earlier does not re-offer it.
+        {
+            let mut sent = self.lost_sent.borrow_mut();
+            for d in &mut devices {
+                if d.lost_mode_enabled {
+                    sent.remove(&d.id);
+                } else if sent.contains(&d.id) {
+                    d.lost_mode_enabled = true;
+                }
+            }
+        }
         *self.last_error.borrow_mut() = None;
         if devices.is_empty() {
             self.list.set_placeholder(
@@ -333,7 +424,7 @@ impl Window {
         let for_id = id.clone();
         background(
             move || -> Vec<Point> {
-                let history = history.lock().unwrap();
+                let history = lock(&history);
                 history
                     .as_ref()
                     .and_then(|h| h.trail(&id, since).ok())
@@ -356,19 +447,44 @@ impl Window {
         );
     }
 
+    /// Marks a device action in flight, disabling Play Sound and Lost Mode
+    /// until [`Self::end_action`]. False if one already is.
+    fn begin_action(&self) -> bool {
+        if self.acting.replace(true) {
+            return false;
+        }
+        self.update_actions();
+        true
+    }
+
+    fn end_action(&self) {
+        self.acting.set(false);
+        self.update_actions();
+    }
+
     fn play_sound(self: &Rc<Self>) {
         let Some(device) = self.selected_device() else {
             return;
         };
-        let findme = self.findme.clone();
+        if !self.begin_action() {
+            return;
+        }
+        let client = self.client.clone();
+        let sign_in_gen = self.sign_in_gen.get();
         let weak = Rc::downgrade(self);
         let name = device.name.clone();
         background(
-            move || findme.lock().unwrap().play_sound(&device),
+            move || client.lock().play_sound(&device),
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
+                this.end_action();
                 match result {
                     Ok(Ok(())) => this.toast(&format!("Playing a sound on {name}")),
+                    Ok(Err(findme::Error::SignInRequired))
+                        if !this.sign_in_is_current(sign_in_gen) =>
+                    {
+                        this.toast("Signed in again: try once more");
+                    }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
                     Ok(Err(e)) => this.toast(&e.to_string()),
                     Err(e) => this.toast(&e),
@@ -381,6 +497,9 @@ impl Window {
         let Some(device) = self.selected_device() else {
             return;
         };
+        if self.acting.get() {
+            return;
+        }
         let dialog = adw::AlertDialog::new(
             Some(&format!("Turn On Lost Mode for {}?", device.name)),
             Some(
@@ -417,29 +536,55 @@ impl Window {
     }
 
     fn lost_mode(self: &Rc<Self>, device: Device, phone: String, message: String) {
-        let findme = self.findme.clone();
+        if !self.begin_action() {
+            return;
+        }
+        let client = self.client.clone();
+        let sign_in_gen = self.sign_in_gen.get();
         let weak = Rc::downgrade(self);
-        let name = device.name.clone();
+        let (id, name) = (device.id.clone(), device.name.clone());
         background(
             move || {
-                findme
+                client
                     .lock()
-                    .unwrap()
                     .lost_mode(&device, phone.trim(), message.trim())
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
+                this.acting.set(false);
                 match result {
                     Ok(Ok(())) => {
                         this.toast(&format!("Lost Mode is on for {name}"));
+                        this.lost_mode_sent(&id);
                         this.refresh(false);
+                    }
+                    Ok(Err(findme::Error::SignInRequired))
+                        if !this.sign_in_is_current(sign_in_gen) =>
+                    {
+                        this.toast("Signed in again: try once more");
                     }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
                     Ok(Err(e)) => this.toast(&e.to_string()),
                     Err(e) => this.toast(&e),
                 }
+                this.update_actions();
             },
         );
+    }
+
+    /// Lost Mode was turned on: show it right away rather than waiting for
+    /// Apple to report it.
+    fn lost_mode_sent(&self, id: &str) {
+        self.lost_sent.borrow_mut().insert(id.to_string());
+        let devices = {
+            let mut devices = self.devices.borrow_mut();
+            if let Some(d) = devices.iter_mut().find(|d| d.id == id) {
+                d.lost_mode_enabled = true;
+            }
+            devices.clone()
+        };
+        let selected = self.selected.borrow().clone();
+        self.list.set_devices(&devices, selected.as_deref());
     }
 }
 
@@ -518,11 +663,15 @@ fn build(
         banner,
         list,
         map,
-        findme: Arc::new(Mutex::new(FindMe::new(SessionTransport::default()))),
+        client: Arc::default(),
         history: Arc::default(),
         devices: RefCell::default(),
         selected: RefCell::default(),
         busy: Cell::new(false),
+        refresh_queued: Cell::new(None),
+        acting: Cell::new(false),
+        sign_in_gen: Cell::new(0),
+        lost_sent: RefCell::default(),
         last_refresh: Cell::new(None),
         last_error: RefCell::default(),
         centered: Cell::new(false),
