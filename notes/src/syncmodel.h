@@ -232,6 +232,8 @@ inline QString twoWayConflictBody(const QString &theirs, const QString &base, co
 // Index pairs of the lines a and b share, in order (Myers' diff); defined below.
 inline QList<std::pair<qsizetype, qsizetype>> matchLines(const QList<QStringView> &a, const QList<QStringView> &b,
                                                          bool &ok);
+// Editor text with the original's special characters put back; defined below.
+inline QString restoreEditorChars(const QString &original, const QString &edited);
 
 // Unsaved editor text (mine) whose note changed on disk (theirs) since the
 // editor loaded it (base; mine and base in editor form), merged line by
@@ -241,7 +243,8 @@ inline QList<std::pair<qsizetype, qsizetype>> matchLines(const QList<QStringView
 // parseConflicts reads (local, base, remote), to pick from instead of
 // being overwritten. No block means a clean merge, free of markers.
 // Theirs keeps its own characters (Apple's no-break spaces and soft
-// breaks) wherever its lines are used. A base that shares no line with
+// breaks) wherever its lines are used, and a clean merge also around the
+// lines taken from mine (restoreEditorChars), as a save would. A base that shares no line with
 // both sides, or notes too large or too far apart to align, fall back to
 // one block around where mine and theirs part ways (twoWayConflictBody).
 inline QString conflictBody(const QString &theirs, const QString &base, const QString &mine)
@@ -297,6 +300,7 @@ inline QString conflictBody(const QString &theirs, const QString &base, const QS
         for (const QString &line : lines)
             out << Line{ line };
     };
+    bool conflicted = false;
     qsizetype ib = 0, im = 0, it = 0;
     for (;;) {
         qsizetype next = ib;
@@ -317,6 +321,7 @@ inline QString conflictBody(const QString &theirs, const QString &base, const QS
         } else if (tc == bc) {
             take(mc);
         } else {
+            conflicted = true;
             out << Line{ QStringLiteral("<<<<<<< local") };
             take(mc);
             out << Line{ QStringLiteral("||||||| base") };
@@ -335,7 +340,10 @@ inline QString conflictBody(const QString &theirs, const QString &base, const QS
             merged += k >= 0 && out.at(i + 1).theirsIndex == k + 1 ? theirsEnds.at(k) : QChar(u'\n');
         }
     }
-    return merged;
+    // Lines taken from mine are in editor form: a soft break or no-break
+    // space of theirs next to or inside them would become a paragraph or a
+    // plain space. A clean merge is one text, so restore it like a save.
+    return conflicted ? merged : restoreEditorChars(theirs, editorForm(merged));
 }
 
 // For each line of a, whether b lacks it (a line diff by longest common

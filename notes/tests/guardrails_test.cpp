@@ -197,6 +197,18 @@ int main()
                   == QStringLiteral("# T\n\nOne, both.\n\nTwo, mine.\n\nThree, theirs.\n"),
               "merge: identical edit beside one-sided ones");
 
+        // Apple's soft breaks and no-break spaces survive lines taken from
+        // mine: the break joining a kept line of theirs to an edited one,
+        // and the no-break space inside a line only mine edited.
+        check(conflictBody(QStringLiteral("a\u00a0b\u2028c\nd\nnew\n"), QStringLiteral("a b\nc\nd\n"),
+                           QStringLiteral("a b\nc2\nd\n"))
+                  == QStringLiteral("a\u00a0b\u2028c2\nd\nnew\n"),
+              "merge: soft break before a line from mine kept");
+        check(conflictBody(QStringLiteral("a\u00a0b\nx\nc from iCloud\n"), QStringLiteral("a b\nx\nc\n"),
+                           QStringLiteral("a b!\nx\nc\n"))
+                  == QStringLiteral("a\u00a0b!\nx\nc from iCloud\n"),
+              "merge: no-break space in a line from mine kept");
+
         // Inserts and deletes at the start and end.
         check(conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nEnd.\n"), base,
                            QStringLiteral("Top.\n# T\n\nOne.\n\nTwo.\n\nThree.\n"))
