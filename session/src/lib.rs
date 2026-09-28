@@ -84,7 +84,9 @@ const REFERER: &str = "https://www.icloud.com/";
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Signed out, or Apple answered 421/401 and the daemon confirmed it.
-    /// Apps show a sign-in banner that calls [`sign_in`].
+    /// Apps show a sign-in banner that calls [`sign_in`]. Also returned by a
+    /// [`Session`] whose account is no longer the daemon's (signed in as
+    /// someone else since): connect again.
     #[error("sign in to iCloud required")]
     SignInRequired,
     /// Any other non-2xx answer, including a 421/401 that persists after a
@@ -439,9 +441,16 @@ struct Request<'a> {
     method: &'a str,
     url: &'a str,
     content_type: Option<&'a str>,
-    body: Option<&'a [u8]>,
+    body: Body<'a>,
     client_params: bool,
     accept: &'a str,
+}
+
+enum Body<'a> {
+    None,
+    Bytes(&'a [u8]),
+    /// Streamed from the file, opened afresh for every attempt.
+    File(&'a Path),
 }
 
 impl Session {
@@ -515,6 +524,7 @@ impl Session {
 
     /// The daemon's `Session()`, reused in-process for up to
     /// [`SESSION_CACHE_TTL`], dropped after any cookie rotation.
+    /// `SignInRequired` once the daemon holds a different account.
     fn snapshot(&self) -> Result<Snapshot> {
         if let Some(base) = self.mock_url() {
             let params = ["clientBuildNumber", "clientMasteringNumber", "clientId"]
@@ -534,6 +544,15 @@ impl Session {
         }
         let conn = self.inner.conn.as_ref().expect("a real session has a connection");
         let (cookie, params, webservices) = proxy(conn)?.session()?;
+        // The cookies must belong to the account this Session was made for:
+        // after a sign-out and a sign-in as someone else, they would go out
+        // with the old dsid. Read after the reply, so a switch in between
+        // is caught too. The app connects again for the new account.
+        let now = read_status(conn)?;
+        if !now.signed_in || now.dsid.as_deref() != Some(self.inner.dsid.as_str()) {
+            *cached = None;
+            return Err(Error::SignInRequired);
+        }
         let snap = Snapshot {
             cookie,
             params,
@@ -566,7 +585,7 @@ impl Session {
             method: "GET",
             url,
             content_type: None,
-            body: None,
+            body: Body::None,
             client_params: true,
             accept: "application/json",
         })
@@ -579,7 +598,7 @@ impl Session {
             method: "POST",
             url,
             content_type: Some("application/json"),
-            body: Some(&bytes),
+            body: Body::Bytes(&bytes),
             client_params: true,
             accept: "application/json",
         })
@@ -591,7 +610,22 @@ impl Session {
             method: "POST",
             url,
             content_type: Some(content_type),
-            body: Some(&body),
+            body: Body::Bytes(&body),
+            client_params: true,
+            accept: "application/json",
+        })
+    }
+
+    /// POST a file's contents with a content type, streamed from disk
+    /// rather than read into memory (large uploads). Same behaviour as
+    /// [`Session::post_bytes`], including the one retry after a 421/401,
+    /// which reads the file again from the start.
+    pub fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Response> {
+        self.request(Request {
+            method: "POST",
+            url,
+            content_type: Some(content_type),
+            body: Body::File(path),
             client_params: true,
             accept: "application/json",
         })
@@ -604,17 +638,21 @@ impl Session {
         Ok(Response { status, body })
     }
 
-    /// Streams a URL to `dest` (written to a temp file, renamed on success).
-    /// Returns bytes written. Cookies attached; no client params appended.
+    /// Streams a URL to `dest` (written to a temp file, renamed on success),
+    /// creating `dest`'s parent directories as needed. Returns bytes
+    /// written. Cookies attached; no client params appended.
     pub fn download(&self, url: &str, dest: &Path) -> Result<u64> {
         let response = self.send(&Request {
             method: "GET",
             url,
             content_type: None,
-            body: None,
+            body: Body::None,
             client_params: false,
             accept: "*/*",
         })?;
+        if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
         let tmp = temp_sibling(dest);
         let result = (|| -> Result<u64> {
             let mut file = fs::OpenOptions::new()
@@ -636,9 +674,10 @@ impl Session {
     }
 
     /// Sends one request. Returns the 2xx response after handing its
-    /// `Set-Cookie`s to the daemon; maps every other status. On 421/401 the
-    /// daemon confirms with Apple: still signed in → one retry with the
-    /// fresh jar; signed out → `SignInRequired`.
+    /// `Set-Cookie`s to the daemon; maps every other status. On 421/401 from
+    /// an icloud.com or service host the daemon confirms with Apple: still
+    /// signed in → one retry with the fresh jar; signed out →
+    /// `SignInRequired`.
     fn send(&self, request: &Request<'_>) -> Result<ureq::Response> {
         match self.send_once(request)? {
             Sent::Ok(response) => Ok(*response),
@@ -688,8 +727,13 @@ impl Session {
             req = req.set("Content-Type", content_type);
         }
         let result = match request.body {
-            Some(body) => req.send_bytes(body),
-            None => req.call(),
+            Body::None => req.call(),
+            Body::Bytes(body) => req.send_bytes(body),
+            Body::File(path) => {
+                let file = fs::File::open(path)?;
+                let len = file.metadata()?.len();
+                req.set("Content-Length", &len.to_string()).send(file)
+            }
         };
         match result {
             Ok(response) => {
@@ -703,7 +747,9 @@ impl Session {
                 }
                 Ok(Sent::Ok(Box::new(response)))
             }
-            Err(ureq::Error::Status(status @ (401 | 421), response)) => Ok(Sent::Unauthorized {
+            // Only the session's own hosts judge the session; a content
+            // host's 401 (an expired signed URL) is a plain HTTP error.
+            Err(ureq::Error::Status(status @ (401 | 421), response)) if icloud => Ok(Sent::Unauthorized {
                 status,
                 body: read_body_lossy(response),
             }),

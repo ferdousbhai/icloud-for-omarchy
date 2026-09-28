@@ -41,6 +41,7 @@ struct Seen {
     method: String,
     url: String,
     headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
 impl Seen {
@@ -109,6 +110,7 @@ impl Server {
                         .iter()
                         .map(|h| (h.field.to_string(), h.value.to_string()))
                         .collect(),
+                    body,
                 };
                 let n = {
                     let mut seen = seen2.lock().unwrap();
@@ -816,6 +818,7 @@ fn client_lib_against_the_daemon() {
     // no params, and its cookies stay out of the jar.
     let content = Server::start(|s, _, _| match s.path() {
         "/B/asset" => Reply::json(200, json!("asset")).cookie("X-APPLE-WEBAUTH-TOKEN=hijack; Path=/"),
+        "/B/expired" => Reply::json(401, json!({"expired": true})),
         _ => Reply::json(200, json!({})),
     });
     let env = Env::start(Opts {
@@ -863,14 +866,34 @@ fn client_lib_against_the_daemon() {
         Some("image/jpeg")
     );
 
-    // Download: no params, temp file renamed into place.
+    // A file, streamed: the body arrives whole with its length, and it
+    // carries the jar and params like post_bytes.
     let out = tempfile::tempdir().unwrap();
+    let upload = out.path().join("upload.bin");
+    let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    fs::write(&upload, &bytes).unwrap();
+    s.post_file(&format!("{base}/data"), "image/heic", &upload).unwrap();
+    let seen = server.requests("/data").pop().unwrap();
+    assert_eq!(seen.method, "POST");
+    assert_eq!(seen.body, bytes);
+    assert_eq!(seen.header("Content-Length"), Some("200000"));
+    assert_eq!(seen.header("Transfer-Encoding"), None);
+    assert_eq!(seen.header("Content-Type"), Some("image/heic"));
+    assert!(seen.header("Cookie").unwrap().contains("X-APPLE-WEBAUTH-TOKEN="));
+    assert_eq!(seen.query()["dsid"], DSID);
+    fs::remove_file(&upload).unwrap();
+
+    // Download: no params, temp file renamed into place, parents made.
     let dest = out.path().join("f.json");
     let n = s.download(&format!("{base}/file"), &dest).unwrap();
     assert_eq!(fs::read_to_string(&dest).unwrap(), "\"file-body\"");
     assert_eq!(n, 11);
     assert!(server.requests("/file")[0].query().is_empty());
     assert_eq!(fs::read_dir(out.path()).unwrap().count(), 1);
+    let nested = out.path().join("new/sub/dir/f.json");
+    s.download(&format!("{base}/file"), &nested).unwrap();
+    assert_eq!(fs::read_to_string(&nested).unwrap(), "\"file-body\"");
+    fs::remove_dir_all(out.path().join("new")).unwrap();
 
     // Content hosts: no cookies or params out, no Set-Cookie in.
     let asset = out.path().join("asset.json");
@@ -899,6 +922,15 @@ fn client_lib_against_the_daemon() {
         other => panic!("{other:?}"),
     }
 
+    // A content host's 401 (say, an expired signed URL) says nothing about
+    // the session: a plain Http error, not reported to the daemon.
+    let validates = server.count(VALIDATE);
+    match s.download(&format!("{}/B/expired?sig=1", content.url), &out.path().join("x")) {
+        Err(Error::Http { status: 401, .. }) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(server.count(VALIDATE), validates);
+
     // A stray 421: the daemon's validate still succeeds, so one retry.
     let validates = server.count(VALIDATE);
     *data_421.lock().unwrap() = 1;
@@ -914,6 +946,21 @@ fn client_lib_against_the_daemon() {
             .unwrap()
             .contains(&format!("X-APPLE-WEBAUTH-TOKEN=rotated{}", validates + 1))
     );
+
+    // post_file's retry sends the whole file again.
+    fs::write(&upload, b"retry me").unwrap();
+    *data_421.lock().unwrap() = 1;
+    let before = server.count("/data");
+    assert_eq!(
+        s.post_file(&format!("{base}/data"), "image/jpeg", &upload)
+            .unwrap()
+            .status,
+        200
+    );
+    let sent = server.requests("/data");
+    assert_eq!(sent.len(), before + 2);
+    assert_eq!(sent[before].body, b"retry me");
+    assert_eq!(sent[before + 1].body, b"retry me");
 
     // A 421 that persists though Apple accepts the session: Http, still signed in.
     *data_421.lock().unwrap() = 2;
@@ -1357,4 +1404,54 @@ fn cli_sign_in_ends_when_the_daemon_dies() {
     if let Ok(pid) = fs::read_to_string(&pid_file) {
         let _ = Command::new("kill").arg(pid.trim()).status();
     }
+}
+
+#[test]
+fn a_session_refuses_to_serve_another_account() {
+    // The captured jar belongs to a different Apple account.
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE if s.header("Cookie").unwrap_or_default().contains("=other") => {
+            let mut r = validate_ok(n, base);
+            r.body = r.body.replace(DSID, "67890").replace("someone@", "other@");
+            r
+        }
+        VALIDATE => validate_ok(n, base),
+        "/data" => Reply::json(200, json!({})).cookie("DATA=1; Path=/"),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "other", "domain": ".icloud.com"}]});
+    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let s = Session::connect_on(&conn).unwrap();
+    let base = s.webservices().unwrap().url("findme").unwrap().to_string();
+    s.get(&format!("{base}/data")).unwrap(); // drops the in-process cache
+
+    icloud_session::sign_out_on(&conn).unwrap();
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    icloud_session::sign_in_on(&conn).unwrap();
+    let done = loop {
+        let status = watch.next().unwrap();
+        if !status.signing_in {
+            break status;
+        }
+    };
+    assert_eq!(done.dsid.as_deref(), Some("67890"));
+
+    let sent = server.count("/data");
+    assert!(matches!(s.get(&format!("{base}/data")), Err(Error::SignInRequired)));
+    assert_eq!(
+        server.count("/data"),
+        sent,
+        "nothing sent with the new jar and the old dsid"
+    );
+    let again = Session::connect_on(&conn).unwrap();
+    assert_eq!(again.dsid(), "67890");
+    again.get(&format!("{base}/data")).unwrap();
+    assert_eq!(server.requests("/data").pop().unwrap().query()["dsid"], "67890");
 }
