@@ -95,7 +95,10 @@ fn start(app: &Rc<App>, paths: Vec<PathBuf>) {
     let (a, s) = (app.clone(), stop.clone());
     button.connect_clicked(move |b| {
         if a.upload.borrow().as_ref().is_some_and(|u| u.dialog.can_close()) {
-            if let Some(u) = a.upload.borrow_mut().take() {
+            // Release the borrow first: force_close runs the closed handler,
+            // which borrows `upload` again.
+            let ui = a.upload.borrow_mut().take();
+            if let Some(u) = ui {
                 u.dialog.force_close();
             }
         } else {
