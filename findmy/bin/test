@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run the maintained tests: the Rust suite, then the installer's shared
+# add_signed_repo hash check.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# The core (findme, history, models) tests need no GTK; the full build
+# needs libshumate, so fall back to the core when it is not installed.
+if pkg-config --exists shumate-1.0; then
+  cargo test --locked
+else
+  echo "libshumate not found: testing the core only (--no-default-features)" >&2
+  cargo test --locked --no-default-features
+fi
+
+# The installer's add_signed_repo function is shared verbatim with the other
+# installers (ferdousbhai/icloud-notes, ferdousbhai/ghost); every repository
+# pins its hash so a change to one copy fails a test until the twins match.
+bash -n install.sh
+actual="$(sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' install.sh | sed '1d;$d' | sha256sum | cut -d' ' -f1)"
+expected="$(cat tests/add_signed_repo.sha256)"
+if [[ "$actual" != "$expected" ]]; then
+  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twins in ferdousbhai/icloud-notes and ferdousbhai/ghost together" >&2
+  exit 1
+fi
+echo "ok add_signed_repo matches its pinned hash"

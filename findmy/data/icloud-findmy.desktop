@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Find My (iCloud)
+GenericName=Find My Devices
+Comment=Locate your Apple devices, play a sound, turn on Lost Mode
+Exec=icloud-findmy
+Icon=icloud-findmy
+Terminal=false
+Categories=Utility;Maps;
+Keywords=find;my;iphone;icloud;location;lost;map;
+StartupNotify=true
+StartupWMClass=com.ferdousbhai.IcloudFindMy
