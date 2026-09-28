@@ -86,15 +86,20 @@ impl Paths {
 /// The one signed-in account, `account.json`. Written by the daemon only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
+    #[serde(default)]
     pub apple_id: String,
     pub dsid: String,
     pub cookies: Vec<Cookie>,
     /// clientId, clientBuildNumber, clientMasteringNumber.
+    #[serde(default)]
     pub client_params: BTreeMap<String, String>,
+    #[serde(default)]
     pub webservices: BTreeMap<String, String>,
     /// Unix seconds of the last successful `/validate`.
+    #[serde(default)]
     pub validated_at: u64,
     /// RFC 3339 time of the sign-in, the mirror's `capturedAt`.
+    #[serde(default)]
     pub captured_at: String,
 }
 
@@ -114,6 +119,27 @@ impl Account {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
+        }
+    }
+
+    /// [`Account::load`], but a file that cannot be read or parsed is moved
+    /// aside to `account.json.bad` and treated as signed out, so one bad
+    /// write never keeps the daemon from starting.
+    pub fn load_or_set_aside(path: &Path) -> Option<Account> {
+        match Account::load(path) {
+            Ok(account) => account,
+            Err(e) => {
+                let bad = path.with_extension("json.bad");
+                eprintln!(
+                    "icloud-sessiond: cannot read {}: {e}; moved it to {} and starting signed out",
+                    path.display(),
+                    bad.display()
+                );
+                if let Err(e) = fs::rename(path, &bad) {
+                    eprintln!("icloud-sessiond: moving {} aside: {e}", path.display());
+                }
+                None
+            }
         }
     }
 
@@ -270,6 +296,35 @@ mod tests {
         );
         let names: Vec<_> = fs::read_dir(path.parent().unwrap()).unwrap().collect();
         assert_eq!(names.len(), 1, "no temp files left");
+    }
+
+    #[test]
+    fn a_bad_account_file_is_set_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("account.json");
+        fs::write(&path, "{not json").unwrap();
+        assert_eq!(Account::load_or_set_aside(&path), None);
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("account.json.bad")).unwrap(),
+            "{not json"
+        );
+        assert_eq!(
+            Account::load_or_set_aside(&path),
+            None,
+            "a missing file is plain signed out"
+        );
+    }
+
+    #[test]
+    fn optional_account_fields_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("account.json");
+        fs::write(&path, r#"{"dsid":"1","cookies":[{"name":"A","value":"1"}]}"#).unwrap();
+        let a = Account::load(&path).unwrap().unwrap();
+        assert_eq!(a.dsid, "1");
+        assert_eq!(a.validated_at, 0);
+        assert!(a.webservices.is_empty() && a.client_params.is_empty());
     }
 
     #[test]

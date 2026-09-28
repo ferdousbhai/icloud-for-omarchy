@@ -1004,3 +1004,21 @@ fn a_second_daemon_does_not_take_over() {
     assert!(!out.status.success());
     assert!(env.daemon_running(&conn));
 }
+
+#[test]
+fn an_unreadable_account_file_is_set_aside() {
+    let env = Env::start(Opts {
+        seed: false,
+        ..Default::default()
+    });
+    fs::create_dir_all(env.account_path().parent().unwrap()).unwrap();
+    fs::write(env.account_path(), "{\"dsid\": truncated").unwrap();
+    let conn = env.conn();
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(!status.signed_in);
+    assert!(!env.account_path().exists());
+    assert_eq!(
+        fs::read_to_string(env.account_path().with_extension("json.bad")).unwrap(),
+        "{\"dsid\": truncated"
+    );
+}

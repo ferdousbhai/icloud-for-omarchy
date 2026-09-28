@@ -157,8 +157,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Daemon {
-    pub fn new(cfg: Config) -> std::io::Result<Arc<Daemon>> {
-        let account = Account::load(&cfg.paths.account)?;
+    pub fn new(cfg: Config) -> Arc<Daemon> {
+        let account = Account::load_or_set_aside(&cfg.paths.account);
         let state = State {
             account,
             signing_in: false,
@@ -168,7 +168,7 @@ impl Daemon {
             clients: HashSet::new(),
         };
         let props = state.props();
-        Ok(Arc::new(Daemon {
+        Arc::new(Daemon {
             cfg,
             agent: apple::agent(),
             started_at: now_unix(),
@@ -177,7 +177,7 @@ impl Daemon {
             published: Mutex::new(props),
             conn: OnceLock::new(),
             mirror_watch: Mutex::new(None),
-        }))
+        })
     }
 
     /// Serves on the session bus until idle. Returns the process exit code.

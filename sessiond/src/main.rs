@@ -21,13 +21,7 @@ fn main() -> ExitCode {
             return ExitCode::from(64);
         }
     }
-    let daemon = match daemon::Daemon::new(daemon::Config::from_env()) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("icloud-sessiond: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let daemon = daemon::Daemon::new(daemon::Config::from_env());
     match daemon.run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
