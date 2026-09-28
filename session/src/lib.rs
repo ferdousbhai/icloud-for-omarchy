@@ -642,7 +642,13 @@ impl Session {
 
     fn send_once(&self, request: &Request<'_>) -> Result<Sent> {
         let snap = self.snapshot()?;
-        let url = self.prepare(request, &snap)?;
+        // The jar is `.icloud.com` cookies: like a browser, send them (and
+        // take Set-Cookie back) only to icloud.com and the service hosts
+        // Apple listed, never to the signed content hosts (icloud-content.com
+        // downloads and upload URLs). Judged on the URL as given, so mock
+        // mode behaves as the real hosts would.
+        let icloud = is_session_host(request.url, &snap.webservices);
+        let url = self.prepare(request, &snap, icloud)?;
         let mut req = self
             .inner
             .agent
@@ -650,7 +656,7 @@ impl Session {
             .set("Origin", ORIGIN)
             .set("Referer", REFERER)
             .set("Accept", request.accept);
-        if !snap.cookie.is_empty() {
+        if icloud && !snap.cookie.is_empty() {
             req = req.set("Cookie", &snap.cookie);
         }
         if let Some(content_type) = request.content_type {
@@ -663,7 +669,8 @@ impl Session {
         match result {
             Ok(response) => {
                 let set_cookies: Vec<&str> = response.all("set-cookie");
-                if !set_cookies.is_empty()
+                if icloud
+                    && !set_cookies.is_empty()
                     && let Some(conn) = &self.inner.conn
                 {
                     proxy(conn)?.merge_cookies(&set_cookies)?;
@@ -683,9 +690,9 @@ impl Session {
         }
     }
 
-    /// The final URL: client params added, and in mock mode rewritten to
-    /// the mock base keeping path and query.
-    fn prepare(&self, request: &Request<'_>, snap: &Snapshot) -> Result<String> {
+    /// The final URL: client params added on icloud.com hosts, and in mock
+    /// mode rewritten to the mock base keeping path and query.
+    fn prepare(&self, request: &Request<'_>, snap: &Snapshot, icloud: bool) -> Result<String> {
         let bad_url = |e: url::ParseError| Error::Network(format!("bad URL {}: {e}", request.url));
         let mut url = url::Url::parse(request.url).map_err(bad_url)?;
         if let Some(base) = self.mock_url()
@@ -698,7 +705,7 @@ impl Session {
             }
             url = url::Url::parse(&rewritten).map_err(bad_url)?;
         }
-        if request.client_params {
+        if request.client_params && icloud {
             let present: Vec<String> = url.query_pairs().map(|(k, _)| k.into_owned()).collect();
             let param = |k: &str| snap.params.get(k).map(String::as_str).unwrap_or_default();
             let wanted = [
@@ -717,6 +724,24 @@ impl Session {
         }
         Ok(url.into())
     }
+}
+
+/// Whether `url`'s host domain-matches `.icloud.com` or is one of the
+/// service hosts in `webservices`.
+fn is_session_host(url: &str, webservices: &HashMap<String, String>) -> bool {
+    let origin = |u: &str| {
+        url::Url::parse(u)
+            .ok()
+            .and_then(|u| Some((u.host_str()?.to_ascii_lowercase(), u.port_or_known_default())))
+    };
+    let Some((host, port)) = origin(url) else {
+        return false;
+    };
+    host == "icloud.com"
+        || host.ends_with(".icloud.com")
+        || webservices
+            .values()
+            .any(|service| origin(service) == Some((host.clone(), port)))
 }
 
 fn mock_webservices(base: &str) -> HashMap<String, String> {

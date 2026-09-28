@@ -791,6 +791,12 @@ fn client_lib_against_the_daemon() {
         "/file" => Reply::json(200, json!("file-body")),
         _ => Reply::json(404, json!({"missing": true})),
     });
+    // A content host (not icloud.com, not a listed service): gets no jar and
+    // no params, and its cookies stay out of the jar.
+    let content = Server::start(|s, _, _| match s.path() {
+        "/B/asset" => Reply::json(200, json!("asset")).cookie("X-APPLE-WEBAUTH-TOKEN=hijack; Path=/"),
+        _ => Reply::json(200, json!({})),
+    });
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -844,6 +850,27 @@ fn client_lib_against_the_daemon() {
     assert_eq!(n, 11);
     assert!(server.requests("/file")[0].query().is_empty());
     assert_eq!(fs::read_dir(out.path()).unwrap().count(), 1);
+
+    // Content hosts: no cookies or params out, no Set-Cookie in.
+    let asset = out.path().join("asset.json");
+    s.download(&format!("{}/B/asset?sig=1", content.url), &asset).unwrap();
+    s.post_bytes(&format!("{}/upload?sig=2", content.url), "image/jpeg", vec![1])
+        .unwrap();
+    for seen in content.requests("/B/asset").iter().chain(&content.requests("/upload")) {
+        assert_eq!(seen.header("Cookie"), None, "no jar to a content host");
+        assert!(!seen.query().contains_key("dsid"), "no client params to a content host");
+    }
+    s.get(&format!("{base}/data")).unwrap();
+    assert!(
+        !server
+            .requests("/data")
+            .pop()
+            .unwrap()
+            .header("Cookie")
+            .unwrap()
+            .contains("hijack"),
+        "a content host's Set-Cookie is not merged"
+    );
 
     // Other statuses are Http.
     match s.get(&format!("{base}/nope")) {
