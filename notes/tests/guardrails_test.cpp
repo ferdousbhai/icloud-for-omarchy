@@ -154,6 +154,85 @@ int main()
               "preview skips conflict markers");
     }
 
+    // conflictBody merges like diff3: only overlapping edits conflict.
+    {
+        using SyncModel::conflictBody;
+        const QString base = QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\n");
+        // Separate paragraphs edited on each side merge with no markers,
+        // theirs keeping its own characters.
+        const QString mine = QStringLiteral("# T\n\nOne, mine.\n\nTwo.\n\nThree.\n");
+        const QString theirs = QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree, theirs. More.\n");
+        const QString merged = conflictBody(theirs, base, mine);
+        check(merged == QStringLiteral("# T\n\nOne, mine.\n\nTwo.\n\nThree, theirs. More.\n")
+                  && !SyncModel::hasConflictMarkers(merged),
+              "merge: separate paragraphs merge cleanly");
+
+        // One overlapping edit: one block around the overlap only, and the
+        // edit elsewhere merged in.
+        const QString mine2 = QStringLiteral("# T\n\nOne, mine.\n\nTwo, mine.\n\nThree.\n");
+        const QString theirs2 = QStringLiteral("# T\n\nOne.\n\nTwo, theirs.\n\nThree, theirs.\n");
+        check(conflictBody(theirs2, base, mine2)
+                  == QStringLiteral("# T\n\nOne, mine.\n\n<<<<<<< local\nTwo, mine.\n||||||| base\nTwo.\n=======\n"
+                                    "Two, theirs.\n>>>>>>> remote\n\nThree, theirs.\n"),
+              "merge: overlap alone becomes a block");
+
+        // Two separate overlapping regions: two blocks.
+        const QString mine3 = QStringLiteral("# T\n\nOne, mine.\n\nTwo.\n\nThree, mine.\n");
+        const QString theirs3 = QStringLiteral("# T\n\nOne, theirs.\n\nTwo.\n\nThree, theirs.\n");
+        const QString two = conflictBody(theirs3, base, mine3);
+        const QList<SyncModel::ConflictHunk> hunks = SyncModel::parseConflicts(two);
+        check(hunks.size() == 2 && hunks.at(0).local == QStringList{ QStringLiteral("One, mine.") }
+                  && hunks.at(0).base == QStringList{ QStringLiteral("One.") }
+                  && hunks.at(1).remote == QStringList{ QStringLiteral("Three, theirs.") },
+              "merge: two overlaps, two blocks");
+        check(SyncModel::resolveConflicts(two, { QStringLiteral("local"), QStringLiteral("local") }) == mine3
+                  && SyncModel::resolveConflicts(two, { QStringLiteral("remote"), QStringLiteral("remote") }) == theirs3,
+              "merge: blocks resolve back to either side");
+
+        // The same edit on both sides is no conflict.
+        const QString same = QStringLiteral("# T\n\nOne, both.\n\nTwo.\n\nThree.\n");
+        check(conflictBody(same, base, same) == same, "merge: identical edits");
+        check(conflictBody(QStringLiteral("# T\n\nOne, both.\n\nTwo.\n\nThree, theirs.\n"), base,
+                           QStringLiteral("# T\n\nOne, both.\n\nTwo, mine.\n\nThree.\n"))
+                  == QStringLiteral("# T\n\nOne, both.\n\nTwo, mine.\n\nThree, theirs.\n"),
+              "merge: identical edit beside one-sided ones");
+
+        // Inserts and deletes at the start and end.
+        check(conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nEnd.\n"), base,
+                           QStringLiteral("Top.\n# T\n\nOne.\n\nTwo.\n\nThree.\n"))
+                  == QStringLiteral("Top.\n# T\n\nOne.\n\nTwo.\n\nThree.\nEnd.\n"),
+              "merge: insert at start (mine) and end (theirs)");
+        check(conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n"), base, QStringLiteral("\nOne.\n\nTwo.\n\nThree.\n"))
+                  == QStringLiteral("\nOne.\n\nTwo.\n"),
+              "merge: delete at start (mine) and end (theirs)");
+        const QString bothEnd = conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nTheirs."), base,
+                                             QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nMine.\n"));
+        check(SyncModel::parseConflicts(bothEnd).size() == 1 && bothEnd.startsWith(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\n<<<<<<< local\n"))
+                  && SyncModel::resolveConflicts(bothEnd, { QStringLiteral("remote") })
+                         == QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nTheirs."),
+              "merge: both appending conflicts at the end, theirs exact");
+
+        // Base missing or unrelated: two-way, one block where the sides part.
+        const QString twoWay = QStringLiteral("# T\na\n<<<<<<< local\nmine\n=======\ntheirs\n>>>>>>> remote\nc\n");
+        check(conflictBody(QStringLiteral("# T\na\ntheirs\nc\n"), QString(), QStringLiteral("# T\na\nmine\nc\n")) == twoWay,
+              "merge: no base falls back to two-way");
+        check(conflictBody(QStringLiteral("# T\na\ntheirs\nc\n"), QStringLiteral("zzz\n\nyyy\n"), QStringLiteral("# T\na\nmine\nc\n"))
+                  == twoWay,
+              "merge: unrelated base falls back to two-way");
+
+        // Too far apart to align: one block, still theirs byte-exact.
+        QStringList bigBase, bigMine, bigTheirs;
+        for (int i = 0; i < 3000; ++i) {
+            bigBase << QStringLiteral("line %1").arg(i);
+            bigMine << QStringLiteral("mine %1").arg(i);
+            bigTheirs << QStringLiteral("theirs %1").arg(i);
+        }
+        const QString big = conflictBody(bigTheirs.join(u'\n'), bigBase.join(u'\n'), bigMine.join(u'\n'));
+        check(SyncModel::parseConflicts(big).size() == 1
+                  && SyncModel::resolveConflicts(big, { QStringLiteral("remote") }) == bigTheirs.join(u'\n'),
+              "merge: huge divergence falls back to one block");
+    }
+
     // retitleInBody
     check(SyncModel::retitleInBody(QStringLiteral("# Old\nbody\n"), QStringLiteral("New"))
               == QStringLiteral("# New\nbody\n"),

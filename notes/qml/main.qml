@@ -1278,8 +1278,9 @@ ApplicationWindow {
                 return;
             }
             // The note changed under unsaved edits (a pull, another program).
-            // Saving would overwrite that change, so the two become a
-            // conflict to pick from; the edits live on in its local side.
+            // Saving would overwrite that change, so the two are merged:
+            // edits to different lines land in the note as it is, and only
+            // lines both sides changed open as versions to pick from.
             // Never under a running sync: the refresh after it comes back here.
             if (backend.syncRunning)
                 return;
@@ -1288,7 +1289,8 @@ ApplicationWindow {
             root.keepingEdits = false;
             if (kept) {
                 root.loadEditor();
-                root.notice = "";
+                root.notice = backend.noteConflicts.length === 0
+                    ? "Merged your edits with a change from another device." : "";
             }
         }
         function onCurrentNoteChanged() { root.conflictAsText = false; }

@@ -272,6 +272,22 @@ int main(int argc, char *argv[])
     check(readFile(QStringLiteral("D.md")).startsWith(QStringLiteral("---\napple-note-id: id-d\n---\n# D\none\n<<<<<<< local\nmine\n"))
               && b.noteConflicts().size() == 1,
           "backend kept conflict keeps the envelope and opens as versions");
+    // Edits to different lines merge into the note, with nothing to pick.
+    writeFile(QStringLiteral("D.md"), QStringLiteral("---\napple-note-id: id-d\n---\n# D\none\n\ntwo\n"));
+    b.refresh();
+    b.openNote(QStringLiteral("D.md"));
+    writeFile(QStringLiteral("D.md"), QStringLiteral("---\napple-note-id: id-d\n---\n# D\none\n\ntwo from iCloud\n"));
+    {
+        bool changed = false;
+        QObject::connect(&b, &NotesBackend::vaultChanged, &b, [&] { changed = true; }, Qt::SingleShotConnection);
+        check(!b.saveCurrentNote(QStringLiteral("# D\none, mine\n\ntwo\n")), "backend stale save refused before a merge");
+        check(b.keepEditsAsConflict(QStringLiteral("# D\none\n\ntwo\n"), QStringLiteral("# D\none, mine\n\ntwo\n")),
+              "backend separate edits merged");
+        check(readFile(QStringLiteral("D.md"))
+                      == QStringLiteral("---\napple-note-id: id-d\n---\n# D\none, mine\n\ntwo from iCloud\n")
+                  && b.noteConflicts().isEmpty() && changed,
+              "backend clean merge written without markers, and synced");
+    }
     QFile::remove(rootPath() + QStringLiteral("/D.md"));
     b.refresh();
 

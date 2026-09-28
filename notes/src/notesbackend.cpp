@@ -524,10 +524,15 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
     const QString theirs = SyncModel::editorForm(split.body);
     if (theirs == base || theirs == mine)
         return false;
-    if (!writeText(path, split.envelope + SyncModel::conflictBody(split.body, base, mine)))
+    // Edits to different lines merge on their own; only lines both sides
+    // changed differently become blocks to pick from.
+    const QString merged = SyncModel::conflictBody(split.body, base, mine);
+    if (!writeText(path, split.envelope + merged))
         return false;
     loadCurrentNote();
     rebuildNotes();
+    if (!SyncModel::hasConflictMarkers(merged))
+        emit vaultChanged(); // a clean merge syncs as any edit
     return true;
 }
 

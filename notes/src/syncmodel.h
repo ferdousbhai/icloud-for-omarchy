@@ -187,13 +187,12 @@ inline QString editorForm(QString text)
     return text;
 }
 
-// Unsaved editor text (mine) whose note changed on disk (theirs) since
-// the editor loaded it (base; mine and base in editor form): one conflict
-// block around the lines where mine and theirs part ways, in the shape
-// parseConflicts reads, so it can be picked from instead of overwritten.
-// Theirs keeps its own characters: editorForm maps one character to one,
-// so offsets found in its editor form hold in the original.
-inline QString conflictBody(const QString &theirs, const QString &base, const QString &mine)
+// The two-way fallback of conflictBody: one conflict block around the
+// lines where mine and theirs part ways, with the base section only when
+// base shares the lines kept around the block. Theirs keeps its own
+// characters: editorForm maps one character to one, so offsets found in
+// its editor form hold in the original.
+inline QString twoWayConflictBody(const QString &theirs, const QString &base, const QString &mine)
 {
     const QString theirsE = editorForm(theirs);
     const QStringList t = theirsE.split(u'\n'), m = mine.split(u'\n'), b = base.split(u'\n');
@@ -222,9 +221,121 @@ inline QString conflictBody(const QString &theirs, const QString &base, const QS
     const bool baseFits = b.size() >= head + tail && b.mid(0, head) == t.mid(0, head)
         && b.mid(b.size() - tail) == t.mid(t.size() - tail);
     const qsizetype tailAt = offset(t, t.size() - tail, theirs.size());
+    // A block that ends theirs without a final newline ends without one
+    // too, so picking theirs gives it back byte for byte.
+    const bool openEnd = tailAt >= theirs.size() && !theirs.endsWith(u'\n');
     return theirs.left(offset(t, head, theirs.size())) + u"<<<<<<< local\n" + middle(mine, m)
          + (baseFits ? u"||||||| base\n" + middle(base, b) : QString()) + u"=======\n" + middle(theirs, t)
-         + u">>>>>>> remote\n" + theirs.mid(tailAt);
+         + (openEnd ? QStringLiteral(">>>>>>> remote") : QStringLiteral(">>>>>>> remote\n")) + theirs.mid(tailAt);
+}
+
+// Index pairs of the lines a and b share, in order (Myers' diff); defined below.
+inline QList<std::pair<qsizetype, qsizetype>> matchLines(const QList<QStringView> &a, const QList<QStringView> &b,
+                                                         bool &ok);
+
+// Unsaved editor text (mine) whose note changed on disk (theirs) since the
+// editor loaded it (base; mine and base in editor form), merged line by
+// line the way diff3 does: a stretch only one side changed takes that
+// side, a stretch both changed alike takes it once, and only a stretch
+// both changed differently becomes a conflict block in the shape
+// parseConflicts reads (local, base, remote), to pick from instead of
+// being overwritten. No block means a clean merge, free of markers.
+// Theirs keeps its own characters (Apple's no-break spaces and soft
+// breaks) wherever its lines are used. A base that shares no line with
+// both sides, or notes too large or too far apart to align, fall back to
+// one block around where mine and theirs part ways (twoWayConflictBody).
+inline QString conflictBody(const QString &theirs, const QString &base, const QString &mine)
+{
+    const QString theirsE = editorForm(theirs);
+    const QStringList t = theirsE.split(u'\n'), m = mine.split(u'\n'), b = base.split(u'\n');
+    if (t.size() + m.size() + b.size() > 30000)
+        return twoWayConflictBody(theirs, base, mine);
+    auto views = [](const QStringList &lines) {
+        QList<QStringView> out;
+        out.reserve(lines.size());
+        for (const QString &line : lines)
+            out << QStringView(line);
+        return out;
+    };
+    const QList<QStringView> bv = views(b), mv = views(m), tv = views(t);
+    bool okMine = false, okTheirs = false;
+    const auto pairsMine = matchLines(bv, mv, okMine);
+    const auto pairsTheirs = matchLines(bv, tv, okTheirs);
+    if (!okMine || !okTheirs)
+        return twoWayConflictBody(theirs, base, mine);
+    // For each base line, the line of mine (of theirs) it stayed as, or -1.
+    QList<qsizetype> inMine(b.size(), -1), inTheirs(b.size(), -1);
+    for (const auto &[bi, mi] : pairsMine)
+        inMine[bi] = mi;
+    for (const auto &[bi, ti] : pairsTheirs)
+        inTheirs[bi] = ti;
+    auto anchor = [&](qsizetype bi) { return inMine.at(bi) >= 0 && inTheirs.at(bi) >= 0; };
+    bool related = false;
+    for (qsizetype bi = 0; bi < b.size() && !related; ++bi)
+        related = anchor(bi) && !b.at(bi).trimmed().isEmpty();
+    if (!related)
+        return twoWayConflictBody(theirs, base, mine);
+
+    // Theirs line by line in its own characters, with the character that
+    // ended each line there ('\n', or a separator the editor form split at).
+    QStringList theirsLines;
+    QString theirsEnds;
+    for (qsizetype k = 0, at = 0; k < t.size(); at += t.at(k).size() + 1, ++k) {
+        theirsLines << theirs.mid(at, t.at(k).size());
+        theirsEnds += at + t.at(k).size() < theirs.size() ? theirs.at(at + t.at(k).size()) : QChar(u'\n');
+    }
+    struct Line {
+        QString text;
+        qsizetype theirsIndex = -1; // a line of theirs, joined to the next one as theirs joins them
+    };
+    QList<Line> out;
+    auto takeTheirs = [&](qsizetype from, qsizetype to) {
+        for (qsizetype k = from; k < to; ++k)
+            out << Line{ theirsLines.at(k), k };
+    };
+    auto take = [&](const QStringList &lines) {
+        for (const QString &line : lines)
+            out << Line{ line };
+    };
+    qsizetype ib = 0, im = 0, it = 0;
+    for (;;) {
+        qsizetype next = ib;
+        while (next < b.size() && !anchor(next))
+            ++next;
+        const qsizetype mEnd = next < b.size() ? inMine.at(next) : m.size();
+        const qsizetype tEnd = next < b.size() ? inTheirs.at(next) : t.size();
+        if (next == ib && mEnd == im && tEnd == it) { // a line nobody changed
+            if (next == b.size())
+                break;
+            takeTheirs(it, it + 1);
+            ++ib, ++im, ++it;
+            continue;
+        }
+        const QStringList bc = b.mid(ib, next - ib), mc = m.mid(im, mEnd - im), tc = t.mid(it, tEnd - it);
+        if (mc == bc || mc == tc) {
+            takeTheirs(it, tEnd);
+        } else if (tc == bc) {
+            take(mc);
+        } else {
+            out << Line{ QStringLiteral("<<<<<<< local") };
+            take(mc);
+            out << Line{ QStringLiteral("||||||| base") };
+            take(bc);
+            out << Line{ QStringLiteral("=======") };
+            takeTheirs(it, tEnd);
+            out << Line{ QStringLiteral(">>>>>>> remote") };
+        }
+        ib = next, im = mEnd, it = tEnd;
+    }
+    QString merged;
+    for (qsizetype i = 0; i < out.size(); ++i) {
+        merged += out.at(i).text;
+        if (i + 1 < out.size()) {
+            const qsizetype k = out.at(i).theirsIndex;
+            merged += k >= 0 && out.at(i + 1).theirsIndex == k + 1 ? theirsEnds.at(k) : QChar(u'\n');
+        }
+    }
+    return merged;
 }
 
 // For each line of a, whether b lacks it (a line diff by longest common
