@@ -1,35 +1,31 @@
 [package]
 name = "icloud-session"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Shared iCloud web session for apps that sign in through icloud-md"
+description = "Client for icloud-sessiond, the D-Bus service that owns one iCloud web sign-in for all apps"
 license = "MIT"
 repository = "https://github.com/ferdousbhai/icloud-session"
 readme = "README.md"
-keywords = ["icloud", "apple", "session", "cookies"]
-categories = ["command-line-utilities", "api-bindings"]
-exclude = ["pkgbuild/"]
+keywords = ["icloud", "apple", "session", "dbus"]
+categories = ["api-bindings"]
+exclude = ["pkgbuild/", "sessiond/", "data/"]
 
 [lib]
 name = "icloud_session"
 
-[[bin]]
-name = "icloud-session"
-path = "src/main.rs"
-
 [dependencies]
-humantime = "2.4.0"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = "1"
 thiserror = "2"
 ureq = "2"
 url = "2"
-uuid = { version = "1.26.1", features = ["v4"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]
-humantime = "2.4.0"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
-tempfile = "3.27.0"
-tiny_http = "0.12.0"
-url = "2"
+tempfile = "3"
+tiny_http = "0.12"
+
+[workspace]
+members = ["sessiond"]
+default-members = [".", "sessiond"]
+resolver = "3"
