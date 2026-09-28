@@ -53,9 +53,9 @@ fn init_then_refresh_carries_server_context() {
         Ok(fixture("refreshClient")),
     ]);
 
-    let devices = fm.refresh().unwrap();
+    let devices = fm.refresh(true).unwrap();
     assert_eq!(devices.len(), 4);
-    let devices2 = fm.refresh().unwrap();
+    let devices2 = fm.refresh(true).unwrap();
     assert_eq!(devices2.len(), 4);
 
     let log = log.lock().unwrap();
@@ -184,9 +184,9 @@ fn sign_in_required_resets_to_init_client() {
         Err(Error::SignInRequired),
         Ok(fixture("initClient")),
     ]);
-    fm.refresh().unwrap();
-    assert!(matches!(fm.refresh(), Err(Error::SignInRequired)));
-    fm.refresh().unwrap();
+    fm.refresh(true).unwrap();
+    assert!(matches!(fm.refresh(true), Err(Error::SignInRequired)));
+    fm.refresh(true).unwrap();
     let urls: Vec<_> = log
         .lock()
         .unwrap()
@@ -203,8 +203,8 @@ fn http_450_reinitialises_once() {
         Err(Error::Http(450)),
         Ok(fixture("refreshClient")),
     ]);
-    fm.refresh().unwrap();
-    assert_eq!(fm.refresh().unwrap().len(), 4);
+    fm.refresh(true).unwrap();
+    assert_eq!(fm.refresh(true).unwrap().len(), 4);
     let urls: Vec<_> = log
         .lock()
         .unwrap()
@@ -222,13 +222,13 @@ fn refreshes_feed_history_only_when_moved() {
     ]);
     let history = History::open_in_memory().unwrap();
 
-    let first = fm.refresh().unwrap();
+    let first = fm.refresh(true).unwrap();
     // "Now" is the fixture's time, so retention keeps its fixes.
     let now = first[0].location.unwrap().ts_ms / 1000;
     // phone + mac; the watch's fix is old and the AirPods have none.
     assert_eq!(history.record_devices(&first, now).unwrap(), 2);
 
-    let second = fm.refresh().unwrap();
+    let second = fm.refresh(true).unwrap();
     // The phone walked ~400 m; the Mac wobbled 10 m inside its 65 m accuracy.
     assert_eq!(history.record_devices(&second, now).unwrap(), 1);
 
@@ -238,4 +238,58 @@ fn refreshes_feed_history_only_when_moved() {
     assert!(trail[0].ts < trail[1].ts);
     assert_eq!(trail[1].battery, Some(0.81));
     assert_eq!(history.trail(&second[1].id, 0).unwrap().len(), 1);
+}
+
+#[test]
+fn periodic_refresh_does_not_ask_devices_to_locate() {
+    let (mut fm, log) = client(vec![
+        Ok(fixture("initClient")),
+        Ok(fixture("refreshClient")),
+        Ok(fixture("refreshClient")),
+    ]);
+    // First load and a timer tick, then the user presses refresh.
+    fm.refresh(true).unwrap();
+    fm.refresh(false).unwrap();
+    fm.refresh(true).unwrap();
+
+    let log = log.lock().unwrap();
+    let tick = &log[1].1;
+    assert!(log[1].0.ends_with("/refreshClient"));
+    assert!(tick["clientContext"].get("shouldLocate").is_none());
+    assert!(tick["clientContext"].get("selectedDevice").is_none());
+    assert!(tick.get("isUpdatingAllLocations").is_none());
+    assert_eq!(tick["serverContext"]["prsId"], 12345678901_i64);
+
+    let asked = &log[2].1;
+    assert_eq!(asked["clientContext"]["shouldLocate"], true);
+    assert_eq!(asked["isUpdatingAllLocations"], true);
+}
+
+/// Counts `Transport::reset` calls.
+struct Resettable {
+    resets: Arc<Mutex<usize>>,
+}
+
+impl Transport for Resettable {
+    fn service_root(&mut self) -> findme::Result<String> {
+        Ok(ROOT.into())
+    }
+    fn post_json(&mut self, _url: &str, _body: &Value) -> findme::Result<Value> {
+        Ok(fixture("initClient"))
+    }
+    fn reset(&mut self) {
+        *self.resets.lock().unwrap() += 1;
+    }
+}
+
+#[test]
+fn reset_forgets_the_transport_session() {
+    let resets = Arc::new(Mutex::new(0));
+    let mut fm = FindMe::new(Resettable {
+        resets: resets.clone(),
+    });
+    fm.refresh(true).unwrap();
+    assert_eq!(*resets.lock().unwrap(), 0);
+    fm.reset();
+    assert_eq!(*resets.lock().unwrap(), 1);
 }

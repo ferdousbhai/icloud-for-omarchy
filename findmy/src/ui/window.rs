@@ -64,7 +64,7 @@ impl Window {
                 move || {
                     if let Some(this) = w1.upgrade() {
                         this.findme.lock().unwrap().reset();
-                        this.refresh();
+                        this.refresh(true);
                     }
                 },
                 move |msg| {
@@ -84,7 +84,7 @@ impl Window {
         });
         this.install_actions();
         this.start_refresh_loop();
-        this.refresh();
+        this.refresh(true);
         this
     }
 
@@ -107,7 +107,7 @@ impl Window {
         refresh.connect_activate(move |_, _| {
             if let Some(this) = weak.upgrade() {
                 *this.last_error.borrow_mut() = None;
-                this.refresh();
+                this.refresh(true);
             }
         });
         self.window.add_action(&refresh);
@@ -163,7 +163,7 @@ impl Window {
                 return glib::ControlFlow::Break;
             };
             if this.window.is_visible() && !this.window.is_suspended() {
-                this.refresh();
+                this.refresh(false);
             }
             glib::ControlFlow::Continue
         });
@@ -175,14 +175,16 @@ impl Window {
                 .get()
                 .is_none_or(|t| t.elapsed() >= Duration::from_secs(REFRESH_SECS.into()));
             if !win.is_suspended() && stale {
-                this.refresh();
+                this.refresh(false);
             }
         });
     }
 
     /// Fetches devices on a worker thread, stores moved positions in the
-    /// history, and updates the list and map.
-    pub fn refresh(self: &Rc<Self>) {
+    /// history, and updates the list and map. `locate` asks every device to
+    /// report its position: only on first load and when the user asks, not
+    /// on timer ticks, so the devices are not woken every minute.
+    pub fn refresh(self: &Rc<Self>, locate: bool) {
         if self.busy.replace(true) {
             return;
         }
@@ -191,7 +193,7 @@ impl Window {
         let weak = Rc::downgrade(self);
         background(
             move || {
-                let devices = findme.lock().unwrap().refresh()?;
+                let devices = findme.lock().unwrap().refresh(locate)?;
                 let mut history = history.lock().unwrap();
                 if history.is_none() {
                     *history = History::open_default().ok();
@@ -404,7 +406,7 @@ impl Window {
                 match result {
                     Ok(Ok(())) => {
                         this.toast(&format!("Lost Mode is on for {name}"));
-                        this.refresh();
+                        this.refresh(false);
                     }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
                     Ok(Err(e)) => this.toast(&e.to_string()),

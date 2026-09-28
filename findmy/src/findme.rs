@@ -48,6 +48,9 @@ pub trait Transport: Send {
     /// The `findme` web service root, e.g. `https://p42-fmipweb.icloud.com:443`.
     fn service_root(&mut self) -> Result<String>;
     fn post_json(&mut self, url: &str, body: &Value) -> Result<Value>;
+    /// Forgets any per-account state, e.g. after a different Apple ID
+    /// signed in.
+    fn reset(&mut self) {}
 }
 
 /// [`Transport`] over the shared `icloud-session` crate. Connects to
@@ -99,6 +102,11 @@ impl Transport for SessionTransport {
             return Ok(Value::Null);
         }
         resp.json::<Value>().map_err(Error::from)
+    }
+
+    /// Drops the daemon connection, and with it the old account's dsid.
+    fn reset(&mut self) {
+        self.session = None;
     }
 }
 
@@ -209,10 +217,12 @@ impl<T: Transport> FindMe<T> {
         self
     }
 
-    /// Forget the Find My session, e.g. after the user signed in again.
+    /// Forget the Find My session, e.g. after the user signed in again
+    /// (possibly as someone else): the next call reconnects from scratch.
     pub fn reset(&mut self) {
         self.root = None;
         self.server_ctx = None;
+        self.transport.reset();
     }
 
     fn url(&mut self, endpoint: &str) -> Result<String> {
@@ -223,18 +233,21 @@ impl<T: Transport> FindMe<T> {
         Ok(format!("{root}/fmipservice/client/web/{endpoint}"))
     }
 
-    /// Fetches all devices: `initClient` the first time, then `refreshClient`
-    /// asking every device to locate. On `SignInRequired` the context is
-    /// dropped so the next call starts over with `initClient`.
+    /// Fetches all devices: `initClient` the first time, then
+    /// `refreshClient`. With `locate` the refresh asks every device to report
+    /// its position (which wakes them), so pass it only when the user asked;
+    /// periodic refreshes pass `false` and get what Apple last heard, as
+    /// pyicloud's monitor does. On `SignInRequired` the context is dropped so
+    /// the next call starts over with `initClient`.
     ///
     /// HTTP 450 or 500 means the Find My server session lapsed (pyicloud
     /// re-initialises on both): start over with `initClient` once before
     /// giving up.
-    pub fn refresh(&mut self) -> Result<Vec<Device>> {
-        let mut result = self.refresh_inner();
+    pub fn refresh(&mut self, locate: bool) -> Result<Vec<Device>> {
+        let mut result = self.refresh_inner(locate);
         if matches!(result, Err(Error::Http(450 | 500))) {
             self.reset();
-            result = self.refresh_inner();
+            result = self.refresh_inner(locate);
         }
         if matches!(result, Err(Error::SignInRequired)) {
             self.reset();
@@ -242,14 +255,14 @@ impl<T: Transport> FindMe<T> {
         result
     }
 
-    fn refresh_inner(&mut self) -> Result<Vec<Device>> {
+    fn refresh_inner(&mut self, locate: bool) -> Result<Vec<Device>> {
         let endpoint = if self.server_ctx.is_some() {
             "refreshClient"
         } else {
             "initClient"
         };
         let url = self.url(endpoint)?;
-        let body = refresh_body(self.server_ctx.as_ref(), true, self.with_family);
+        let body = refresh_body(self.server_ctx.as_ref(), locate, self.with_family);
         let resp = self.transport.post_json(&url, &body)?;
         let snap = parse_response(&resp)?;
         if snap.server_ctx.is_some() {

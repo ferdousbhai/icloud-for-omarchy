@@ -48,8 +48,8 @@ fn app_client_runs_against_fake_server() {
     std::thread::spawn(move || fake::serve(listener));
 
     let mut fm = FindMe::new(PlainHttp { base });
-    let first = fm.refresh().unwrap();
-    let second = fm.refresh().unwrap();
+    let first = fm.refresh(true).unwrap();
+    let second = fm.refresh(true).unwrap();
     assert_eq!(first.len(), 4);
     let (a, b) = (first[0].location.unwrap(), second[0].location.unwrap());
     assert!(b.lat > a.lat, "the fake walks the phone on each refresh");

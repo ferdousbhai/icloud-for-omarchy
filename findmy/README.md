@@ -52,6 +52,9 @@ three for `icloud-session` if nothing else uses it).
   locked device.
 - The list refreshes every minute while the window is on screen (not
   while it is minimised or on another workspace), and on **Ctrl+R**.
+  Only the first load and **Ctrl+R** (or the refresh button) ask your
+  devices to report a fresh position; the minute ticks show what Apple
+  last heard, so the devices are not woken every minute.
 - When no one is signed in to iCloud, or the sign-in has expired, a
   banner offers **Sign In**, which opens Apple's sign-in page (the
   icloud-session sign-in window). The banner follows the sign-in as it
