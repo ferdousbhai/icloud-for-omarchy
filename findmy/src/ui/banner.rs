@@ -21,6 +21,9 @@ const TITLE: &str = "Sign in to iCloud to see your devices";
 const SIGNING_IN: &str = "Signing in…";
 const BUTTON: &str = "Sign In";
 const FIND_MY_TITLE: &str = "Find My needs your Apple password";
+/// The same when no password is stored for the daemon to use by itself.
+const FIND_MY_TITLE_HINT: &str =
+    "Find My needs your Apple password (to stop being asked: icloud-session set-password)";
 const FIND_MY_WAITING: &str = "Finish in the Apple window…";
 const FIND_MY_BUTTON: &str = "Enter Password";
 
@@ -71,8 +74,9 @@ impl State {
                 button: Some((BUTTON, Action::SignIn)),
             });
         }
+        let stored = self.status.as_ref().is_some_and(|s| s.find_my_password_stored);
         find_my.then_some(View {
-            title: FIND_MY_TITLE,
+            title: if stored { FIND_MY_TITLE } else { FIND_MY_TITLE_HINT },
             button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
         })
     }
@@ -255,6 +259,7 @@ mod tests {
             expires_at: None,
             signing_in,
             find_my_authorized,
+            find_my_password_stored: true,
         }
     }
 
@@ -331,5 +336,30 @@ mod tests {
         let mut state = State::default();
         assert_eq!(state.update(status(true, false, true)), Change::None);
         assert_eq!(state.view(), None);
+    }
+}
+
+#[cfg(test)]
+mod password_hint_tests {
+    use super::*;
+
+    #[test]
+    fn the_find_my_banner_mentions_set_password_when_none_is_stored() {
+        let mut state = State::default();
+        let mut status = icloud_session::Status {
+            signed_in: true,
+            apple_id: None,
+            dsid: None,
+            expires_at: None,
+            signing_in: false,
+            find_my_authorized: false,
+            find_my_password_stored: false,
+        };
+        state.update(status.clone());
+        state.find_my_needed = true;
+        assert_eq!(state.view().unwrap().title, FIND_MY_TITLE_HINT);
+        status.find_my_password_stored = true;
+        state.update(status);
+        assert_eq!(state.view().unwrap().title, FIND_MY_TITLE);
     }
 }
