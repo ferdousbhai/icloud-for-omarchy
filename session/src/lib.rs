@@ -27,10 +27,12 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_lite::{Stream, StreamExt};
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedValue;
 
@@ -278,6 +280,9 @@ pub fn status_on(conn: &Connection) -> Result<Status> {
 }
 
 /// A blocking iterator yielding the new [`Status`] after every change.
+/// It also notices the daemon going away or being restarted, and then
+/// yields the status re-read from the new instance (D-Bus activation
+/// starts one), with `signing_in` false if none can be reached.
 /// Run it on its own thread. In mock mode it never yields.
 pub fn watch() -> Result<Watch> {
     if mock_url().is_some() {
@@ -288,18 +293,24 @@ pub fn watch() -> Result<Watch> {
 
 /// [`watch`] on a given bus connection.
 pub fn watch_on(conn: &Connection) -> Result<Watch> {
-    let props = zbus::blocking::fdo::PropertiesProxy::builder(conn)
-        .destination(BUS_NAME)?
-        .path(OBJECT_PATH)?
-        .cache_properties(zbus::proxy::CacheProperties::No)
-        .build()?;
     // Subscribe before reading, so no change falls between the two.
-    let signals = props.receive_properties_changed()?;
+    let events = futures_lite::future::block_on(async {
+        let props = zbus::fdo::PropertiesProxy::builder(conn.inner())
+            .destination(BUS_NAME)?
+            .path(OBJECT_PATH)?
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .await?;
+        let changes = props.receive_properties_changed().await?;
+        let dbus = zbus::fdo::DBusProxy::new(conn.inner()).await?;
+        let owners = dbus.receive_name_owner_changed_with_args(&[(0, BUS_NAME)]).await?;
+        Ok::<_, zbus::Error>(changes.map(Event::Changed).or(owners.map(|_| Event::OwnerChanged)))
+    })?;
     let last = read_status(conn)?;
     Ok(Watch {
         inner: Some(WatchInner {
             conn: conn.clone(),
-            signals,
+            events: Box::pin(events),
             last,
         }),
     })
@@ -310,9 +321,15 @@ pub struct Watch {
     inner: Option<WatchInner>,
 }
 
+enum Event {
+    Changed(zbus::fdo::PropertiesChanged),
+    /// The daemon left the bus, or a new one took the name.
+    OwnerChanged,
+}
+
 struct WatchInner {
     conn: Connection,
-    signals: zbus::blocking::fdo::PropertiesChangedIterator,
+    events: Pin<Box<dyn Stream<Item = Event> + Send>>,
     last: Status,
 }
 
@@ -329,23 +346,31 @@ impl Iterator for Watch {
     fn next(&mut self) -> Option<Status> {
         let w = self.inner.as_mut()?;
         loop {
-            let signal = w.signals.next()?;
-            let Ok(args) = signal.args() else { continue };
-            if args.interface_name().as_str() != INTERFACE {
-                continue;
-            }
-            let mut next = w.last.clone();
-            for (name, value) in args.changed_properties() {
-                let Ok(value) = OwnedValue::try_from(value) else {
-                    continue;
-                };
-                apply_property(&mut next, name, &value);
-            }
-            if !args.invalidated_properties().is_empty()
-                && let Ok(fresh) = read_status(&w.conn)
-            {
-                next = fresh;
-            }
+            let next = match futures_lite::future::block_on(w.events.next())? {
+                Event::OwnerChanged => read_status(&w.conn).unwrap_or_else(|_| Status {
+                    signing_in: false,
+                    ..w.last.clone()
+                }),
+                Event::Changed(signal) => {
+                    let Ok(args) = signal.args() else { continue };
+                    if args.interface_name().as_str() != INTERFACE {
+                        continue;
+                    }
+                    let mut next = w.last.clone();
+                    for (name, value) in args.changed_properties() {
+                        let Ok(value) = OwnedValue::try_from(value) else {
+                            continue;
+                        };
+                        apply_property(&mut next, name, &value);
+                    }
+                    if !args.invalidated_properties().is_empty()
+                        && let Ok(fresh) = read_status(&w.conn)
+                    {
+                        next = fresh;
+                    }
+                    next
+                }
+            };
             if next != w.last {
                 w.last = next.clone();
                 return Some(next);

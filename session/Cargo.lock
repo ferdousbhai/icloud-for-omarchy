@@ -765,6 +765,7 @@ checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
 name = "icloud-session"
 version = "0.2.0"
 dependencies = [
+ "futures-lite",
  "serde",
  "serde_json",
  "tempfile",

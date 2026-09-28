@@ -227,17 +227,19 @@ impl Daemon {
         let messages = zbus::blocking::MessageIterator::from(&conn);
         let me = self.clone();
         thread::spawn(move || me.track_clients(messages));
-        // Never queue behind another instance; fail instead.
-        let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
-        if conn.request_name_with_flags(icloud_session::BUS_NAME, flags)? != zbus::fdo::RequestNameReply::PrimaryOwner {
-            return Err(zbus::Error::NameTaken);
-        }
-
         // Pick up what icloud-md rotated while we were not running, and make
-        // sure the mirror exists. Holding the validate lock makes a
-        // `Session()` that is already waiting use the adopted jar.
+        // sure the mirror exists. The validate lock is taken before the name,
+        // so a `Session()` delivered as soon as we own it waits for this and
+        // uses the adopted jar.
         {
             let _one = lock(&self.validate_lock);
+            // Never queue behind another instance; fail instead.
+            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+            if conn.request_name_with_flags(icloud_session::BUS_NAME, flags)?
+                != zbus::fdo::RequestNameReply::PrimaryOwner
+            {
+                return Err(zbus::Error::NameTaken);
+            }
             let dsid = lock(&self.state).account.as_ref().map(|a| a.dsid.clone());
             if let Some(dsid) = dsid {
                 self.adopt_mirror(&dsid);
@@ -246,6 +248,9 @@ impl Daemon {
             }
             self.start_mirror_watch();
         }
+        // A restarted daemon may differ from the one watchers last heard
+        // from: announce every property once.
+        self.announce(true);
 
         // Validate once on start (unless a caller already made us).
         let me = self.clone();
@@ -266,25 +271,31 @@ impl Daemon {
     /// Announces every property that changed since the last announcement
     /// with one `PropertiesChanged`.
     fn publish(&self) {
+        self.announce(false);
+    }
+
+    /// `PropertiesChanged` with the properties that changed, or with all of
+    /// them.
+    fn announce(&self, all: bool) {
         let mut published = lock(&self.published);
         let now = lock(&self.state).props();
-        if *published == now {
+        if *published == now && !all {
             return;
         }
         let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
-        if published.signed_in != now.signed_in {
+        if all || published.signed_in != now.signed_in {
             changed.insert("SignedIn", now.signed_in.into());
         }
-        if published.apple_id != now.apple_id {
+        if all || published.apple_id != now.apple_id {
             changed.insert("AppleId", now.apple_id.as_str().into());
         }
-        if published.dsid != now.dsid {
+        if all || published.dsid != now.dsid {
             changed.insert("Dsid", now.dsid.as_str().into());
         }
-        if published.expires_at != now.expires_at {
+        if all || published.expires_at != now.expires_at {
             changed.insert("ExpiresAt", now.expires_at.into());
         }
-        if published.signing_in != now.signing_in {
+        if all || published.signing_in != now.signing_in {
             changed.insert("SigningIn", now.signing_in.into());
         }
         if let Some(conn) = self.conn() {

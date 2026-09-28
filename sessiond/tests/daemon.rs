@@ -317,6 +317,24 @@ impl Env {
             .unwrap()
     }
 
+    /// SIGKILLs the running daemon and waits until it has left the bus.
+    fn kill_daemon(&self, conn: &Connection) {
+        let dbus = zbus::blocking::fdo::DBusProxy::new(conn).unwrap();
+        let pid = dbus
+            .get_connection_unix_process_id(BUS_NAME.try_into().unwrap())
+            .unwrap();
+        assert!(
+            Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        wait_until("the daemon to die", Duration::from_secs(5), || {
+            !Path::new(&format!("/proc/{pid}")).exists() || !self.daemon_running(conn)
+        });
+    }
+
     fn daemon_running(&self, conn: &Connection) -> bool {
         zbus::blocking::fdo::DBusProxy::new(conn)
             .unwrap()
@@ -1266,4 +1284,77 @@ fn the_mirror_is_watched_again_after_its_directory_goes_away() {
     wait_until("the rotation to be adopted", Duration::from_secs(5), || {
         adopted("afterrecreate")
     });
+}
+
+/// `watch.next()`, or None after `timeout`.
+fn next_within(watch: icloud_session::Watch, timeout: Duration) -> Option<icloud_session::Status> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut watch = watch;
+        let _ = tx.send(watch.next());
+    });
+    rx.recv_timeout(timeout).ok().flatten()
+}
+
+#[test]
+fn watch_notices_the_daemon_restarting() {
+    let env = Env::start(Opts::default());
+    let conn = env.conn();
+    let watch = icloud_session::watch_on(&conn).unwrap();
+    assert!(watch.current().unwrap().signed_in);
+    // The next instance starts from a different state.
+    fs::remove_file(env.account_path()).unwrap();
+    let observer = env.conn();
+    env.kill_daemon(&observer);
+    let status = next_within(watch, Duration::from_secs(5)).expect("the watch noticed");
+    assert!(!status.signed_in, "{status:?}");
+    assert!(env.daemon_running(&observer), "re-read from a new instance");
+}
+
+#[test]
+fn cli_sign_in_ends_when_the_daemon_dies() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!("echo $$ > '{}'\nexec sleep 30", pid_file.display()),
+    );
+    let env = Env::start(Opts {
+        signin: Some(&signin),
+        seed: false,
+        ..Default::default()
+    });
+    let mut cli = Command::new(CLI)
+        .arg("sign-in")
+        .env_clear()
+        .env("DBUS_SESSION_BUS_ADDRESS", &env.address)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let conn = env.conn();
+    wait_until("the window to open", Duration::from_secs(5), || {
+        env.daemon_running(&conn) && prop::<bool>(&conn, "SigningIn")
+    });
+    env.kill_daemon(&conn);
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = cli.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(5) {
+            let _ = cli.kill();
+            panic!("icloud-session sign-in still waiting after the daemon died");
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    let out = cli.wait_with_output().unwrap();
+    assert_eq!(status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["signing_in"], false);
+    assert_eq!(printed["signed_in"], false);
+    if let Ok(pid) = fs::read_to_string(&pid_file) {
+        let _ = Command::new("kill").arg(pid.trim()).status();
+    }
 }
