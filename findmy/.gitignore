@@ -1,0 +1,5 @@
+/target
+/dist
+/pkgbuild/src
+/pkgbuild/pkg
+/pkgbuild/*.pkg.tar.*
