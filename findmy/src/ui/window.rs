@@ -81,6 +81,8 @@ pub struct Window {
     history: SharedHistory,
     devices: RefCell<Vec<Device>>,
     selected: RefCell<Option<String>>,
+    /// The selected device's name, shown while it is unavailable.
+    selected_name: RefCell<String>,
     /// A refresh is in flight.
     busy: Cell<bool>,
     /// A refresh asked for while one was in flight, and whether it should
@@ -349,14 +351,15 @@ impl Window {
                 Some("Find My has no devices for this Apple ID."),
             );
         }
-        // Keep the selection if the device is still there; otherwise pick
-        // the first located one.
-        let keep = self
-            .selected
-            .borrow()
-            .clone()
-            .filter(|id| devices.iter().any(|d| &d.id == id));
-        let selected = keep.or_else(|| {
+        // Keep the selection even if the device left the list (it shows as
+        // unavailable, and comes back if the device does); with nothing
+        // selected yet, pick the first located device.
+        let kept = self.selected.borrow().clone();
+        let vanished = kept.as_ref().is_some_and(|id| {
+            self.devices.borrow().iter().any(|d| &d.id == id)
+                && !devices.iter().any(|d| &d.id == id)
+        });
+        let selected = kept.or_else(|| {
             devices
                 .iter()
                 .find(|d| d.location.is_some())
@@ -367,16 +370,37 @@ impl Window {
         self.map.set_devices(&devices, selected.as_deref());
         *self.devices.borrow_mut() = devices;
 
-        if let Some(d) = self.selected_device() {
-            self.title.set_subtitle(&d.name);
-            if !self.centered.replace(true)
-                && let Some(fix) = d.location
-            {
-                self.map.show_initial(&fix);
+        match (self.selected_device(), selected) {
+            (Some(d), _) => {
+                self.show_selected(&d);
+                if !self.centered.replace(true)
+                    && let Some(fix) = d.location
+                {
+                    self.map.show_initial(&fix);
+                }
+                self.load_trail(&d);
             }
-            self.load_trail(&d);
+            (None, Some(_)) => {
+                let name = self.selected_name.borrow().clone();
+                self.title.set_subtitle(&format!("{name} (unavailable)"));
+                self.map.clear_trail();
+                if vanished {
+                    self.toast(&format!("{name} is no longer in Find My"));
+                }
+            }
+            (None, None) => {
+                self.title.set_subtitle("");
+                self.map.clear_trail();
+            }
         }
         self.update_actions();
+    }
+
+    /// Names the selected device in the header, and remembers the name in
+    /// case the device later leaves the list.
+    fn show_selected(&self, d: &Device) {
+        self.title.set_subtitle(&d.name);
+        self.selected_name.replace(d.name.clone());
     }
 
     /// Selects a device (from the list, by mouse or keyboard, or a marker):
@@ -389,7 +413,7 @@ impl Window {
         let Some(d) = self.selected_device() else {
             return;
         };
-        self.title.set_subtitle(&d.name);
+        self.show_selected(&d);
         match d.location {
             Some(fix) => self.map.center_on(&fix),
             None => self.toast(&format!("No location for {}", d.name)),
@@ -436,7 +460,12 @@ impl Window {
                 if this.selected.borrow().as_deref() != Some(for_id.as_str()) {
                     return;
                 }
-                let current = this.selected_device().and_then(|d| d.location);
+                let Some(device) = this.selected_device() else {
+                    // It left the list meanwhile.
+                    this.map.clear_trail();
+                    return;
+                };
+                let current = device.location;
                 match result {
                     Ok(points) if points.len() + usize::from(current.is_some()) >= 2 => {
                         this.map.set_trail(&points, current.as_ref());
@@ -667,6 +696,7 @@ fn build(
         history: Arc::default(),
         devices: RefCell::default(),
         selected: RefCell::default(),
+        selected_name: RefCell::default(),
         busy: Cell::new(false),
         refresh_queued: Cell::new(None),
         acting: Cell::new(false),
