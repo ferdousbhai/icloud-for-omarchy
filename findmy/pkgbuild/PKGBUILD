@@ -8,7 +8,7 @@
 # (../icloud-session next to this repository), as Cargo.toml says.
 
 pkgname=icloud-findmy
-pkgver=0.1.0
+pkgver=0.0.0.r4
 pkgrel=1
 pkgdesc='Find My devices on Omarchy: locate, play a sound, Lost Mode, history trail'
 arch=('x86_64')
@@ -37,17 +37,21 @@ prepare() {
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
+# Keep build paths out of the binary (panic locations name source files).
+_rustflags() {
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build"
+}
+
 build() {
   cd "$srcdir/$pkgname"
-  export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR=target
+  _rustflags
   cargo build --frozen --release --bin icloud-findmy
 }
 
 check() {
   cd "$srcdir/$pkgname"
-  export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR=target
+  _rustflags
   cargo test --frozen
 }
 
