@@ -2,9 +2,10 @@
 //!
 //! `cloudkit`, `sync`, `upload` and `thumbs` talk only to [`Transport`], so
 //! tests drive them with recorded fixtures and the dev fake server, while the
-//! app uses [`SessionTransport`], a thin wrapper over the `icloud-session`
-//! crate (cookie jar, `/validate`, rotation merge and 421 mapping all live
-//! there).
+//! app uses `session::SessionTransport`, a thin wrapper over the
+//! `icloud-session` crate (cookie jar, `/validate`, rotation merge and 421
+//! mapping all live there). `src/session.rs` is the only file that names
+//! that crate.
 
 use std::path::Path;
 use std::time::Duration;
@@ -44,17 +45,6 @@ impl Error {
     }
 }
 
-impl From<icloud_session::Error> for Error {
-    fn from(e: icloud_session::Error) -> Self {
-        match e {
-            icloud_session::Error::SignInRequired => Error::SignInRequired,
-            icloud_session::Error::Http { status, body } => Error::Http { status, body },
-            icloud_session::Error::Io(e) => Error::Io(e),
-            other => Error::Other(other.to_string()),
-        }
-    }
-}
-
 /// Everything the Photos code needs from an HTTP client with an iCloud session.
 pub trait Transport: Send + Sync {
     /// Base URL of a `webservices` entry, e.g. `ckdatabasews`, `photosupload`.
@@ -71,47 +61,6 @@ pub trait Transport: Send + Sync {
     /// are allowed only there.
     fn is_mock(&self) -> bool {
         false
-    }
-}
-
-/// The real transport: every call goes through `icloud_session::Session`.
-pub struct SessionTransport {
-    session: icloud_session::Session,
-}
-
-impl SessionTransport {
-    pub fn load() -> Result<Self> {
-        // The session crate is young; never let a panic in it take the UI down.
-        let session = std::panic::catch_unwind(icloud_session::Session::load)
-            .map_err(|_| Error::Other("icloud-session could not load the session".into()))??;
-        Ok(Self { session })
-    }
-}
-
-impl Transport for SessionTransport {
-    fn service_url(&self, key: &str) -> Result<String> {
-        let ws = self.session.webservices()?;
-        ws.url(key)
-            .map(str::to_owned)
-            .ok_or_else(|| Error::Other(format!("iCloud did not offer the {key} service for this account")))
-    }
-
-    fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        Ok(self.session.post_json(url, body)?.json()?)
-    }
-
-    fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Value> {
-        Ok(self.session.post_bytes(url, content_type, body)?.json()?)
-    }
-
-    fn download(&self, url: &str, dest: &Path) -> Result<u64> {
-        Ok(self.session.download(url, dest)?)
-    }
-
-    fn reauthenticate(&self) -> Result<()> {
-        std::panic::catch_unwind(icloud_session::Session::reauthenticate)
-            .map_err(|_| Error::Other("icloud-session could not start the sign-in".into()))??;
-        Ok(())
     }
 }
 
@@ -208,6 +157,12 @@ pub fn from_env() -> Result<std::sync::Arc<dyn Transport>> {
     if MockTransport::active() {
         Ok(std::sync::Arc::new(MockTransport::from_env()))
     } else {
-        Ok(std::sync::Arc::new(SessionTransport::load()?))
+        Ok(std::sync::Arc::new(crate::session::SessionTransport::load()?))
     }
+}
+
+/// Interactive sign-in when there is no transport yet (the session could not
+/// even load). Blocks until it finishes; call it off the main loop.
+pub fn sign_in() -> Result<()> {
+    if MockTransport::active() { MockTransport::from_env().reauthenticate() } else { crate::session::sign_in() }
 }
