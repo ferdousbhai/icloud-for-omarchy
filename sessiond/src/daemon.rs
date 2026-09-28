@@ -3,8 +3,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -109,6 +110,9 @@ struct Attempt {
 
 struct State {
     account: Option<Account>,
+    /// Bumped by every `SignIn()` that opens the window and by `SignOut()`,
+    /// so a window that was signed out from under drops its late result.
+    signin_seq: u64,
     /// Bumped whenever `account` is replaced or forgotten, so a `/validate`
     /// of an earlier account never touches the current one.
     generation: u64,
@@ -157,6 +161,8 @@ pub struct Daemon {
     /// A heartbeat `/validate` is running (on its own thread, so a slow
     /// Apple never holds up the idle exit).
     heartbeat_busy: AtomicBool,
+    /// The open sign-in window, with the `signin_seq` that opened it.
+    signin_child: Mutex<Option<(u64, Child)>>,
 }
 
 /// How fresh the session must be before `ensure_fresh` skips `/validate`.
@@ -187,6 +193,7 @@ impl Daemon {
             account,
             generation: 0,
             last_attempt: None,
+            signin_seq: 0,
             signing_in: false,
             mirror_cookie: None,
             last_call: Instant::now(),
@@ -204,6 +211,7 @@ impl Daemon {
             conn: OnceLock::new(),
             mirror_watch: Mutex::new(None),
             heartbeat_busy: AtomicBool::new(false),
+            signin_child: Mutex::new(None),
         })
     }
 
@@ -456,21 +464,26 @@ impl Daemon {
     }
 
     fn sign_in(self: &Arc<Daemon>) {
-        {
+        let seq = {
             let mut st = lock(&self.state);
             if st.signing_in {
                 return;
             }
             st.signing_in = true;
-        }
+            st.signin_seq += 1;
+            st.signin_seq
+        };
         self.publish();
         let me = self.clone();
         thread::spawn(move || {
-            if let Err(e) = me.run_sign_in() {
+            if let Err(e) = me.run_sign_in(seq) {
                 eprintln!("icloud-sessiond: sign-in: {e}");
             }
             let mut st = lock(&me.state);
-            st.signing_in = false;
+            // A SignOut (and maybe a new SignIn) took over this window.
+            if st.signin_seq == seq {
+                st.signing_in = false;
+            }
             st.last_activity = Instant::now();
             drop(st);
             me.rewatch();
@@ -479,23 +492,49 @@ impl Daemon {
     }
 
     /// Runs the sign-in window, validates what it captured, stores it.
-    fn run_sign_in(&self) -> Result<(), String> {
+    fn run_sign_in(&self, seq: u64) -> Result<(), String> {
         let bin = &self.cfg.signin_bin;
-        let output = Command::new(bin)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .output()
-            .map_err(|e| format!("running {}: {e}", bin.display()))?;
-        if !output.status.success() {
-            return Err(format!(
-                "{} exited with {} (window closed?)",
-                bin.display(),
-                output.status
-            ));
+        let cancelled = || "cancelled by SignOut".to_string();
+        let mut stdout = {
+            // Spawned under the slot's lock, so a SignOut either sees the
+            // child (and kills it) or has already cancelled this sign-in.
+            let mut slot = lock(&self.signin_child);
+            if lock(&self.state).signin_seq != seq {
+                return Err(cancelled());
+            }
+            let mut child = Command::new(bin)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .map_err(|e| format!("running {}: {e}", bin.display()))?;
+            let stdout = child.stdout.take().expect("stdout is piped");
+            *slot = Some((seq, child));
+            stdout
+        };
+        let mut out = Vec::new();
+        let read = stdout.read_to_end(&mut out);
+        let child = {
+            let mut slot = lock(&self.signin_child);
+            match slot.take() {
+                Some((s, child)) if s == seq => Some(child),
+                other => {
+                    *slot = other;
+                    None
+                }
+            }
+        };
+        // Gone from the slot: SignOut killed and reaped it.
+        let mut child = child.ok_or_else(cancelled)?;
+        let status = child
+            .wait()
+            .map_err(|e| format!("waiting for {}: {e}", bin.display()))?;
+        read.map_err(|e| format!("reading the sign-in window's output: {e}"))?;
+        if !status.success() {
+            return Err(format!("{} exited with {status} (window closed?)", bin.display()));
         }
         let capture: Capture =
-            serde_json::from_slice(&output.stdout).map_err(|e| format!("reading the sign-in window's output: {e}"))?;
+            serde_json::from_slice(&out).map_err(|e| format!("reading the sign-in window's output: {e}"))?;
         let (mut jar, params) = capture.into_parts();
         if jar.is_empty() {
             return Err("the sign-in window captured no icloud.com cookies".into());
@@ -523,6 +562,9 @@ impl Daemon {
             captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
         };
         let mut st = lock(&self.state);
+        if st.signin_seq != seq {
+            return Err(cancelled());
+        }
         st.account = Some(account);
         st.generation += 1;
         st.mirror_cookie = None;
@@ -530,15 +572,26 @@ impl Daemon {
         Ok(())
     }
 
+    /// Forgets the account, closes an open sign-in window (its result is
+    /// dropped), then deletes the window's WebKit profile.
     fn sign_out(&self) {
-        let mut st = lock(&self.state);
-        if let Some(dsid) = st.account.as_ref().map(|a| a.dsid.clone()) {
-            if let Err(e) = files::remove(&self.cfg.paths.mirror_session(&dsid)) {
-                eprintln!("icloud-sessiond: removing the icloud-md mirror: {e}");
+        {
+            let mut slot = lock(&self.signin_child);
+            if let Some((_, mut child)) = slot.take() {
+                let _ = child.kill();
+                let _ = child.wait();
             }
-            self.forget(&mut st);
+            let mut st = lock(&self.state);
+            st.signin_seq += 1;
+            st.signing_in = false;
+            st.last_activity = Instant::now();
+            if let Some(dsid) = st.account.as_ref().map(|a| a.dsid.clone()) {
+                if let Err(e) = files::remove(&self.cfg.paths.mirror_session(&dsid)) {
+                    eprintln!("icloud-sessiond: removing the icloud-md mirror: {e}");
+                }
+                self.forget(&mut st);
+            }
         }
-        drop(st);
         for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
             if let Err(e) = files::remove_dir(dir) {
                 eprintln!("icloud-sessiond: removing {}: {e}", dir.display());

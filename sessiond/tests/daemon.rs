@@ -1160,3 +1160,53 @@ fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
     let account = env.account().expect("the new account stays");
     assert!(!account.to_string().contains("\"original\""));
 }
+
+#[test]
+fn sign_out_closes_an_open_sign_in_window() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "late", "domain": ".icloud.com"}]});
+    // The window: records its pid, then "signs in" after a while.
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!(
+            "echo $$ > '{}'\nsleep 1.5\ncat <<'EOF'\n{capture}\nEOF",
+            pid_file.display()
+        ),
+    );
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let webkit_data = env.root().join("data/icloud-session/webkit");
+    fs::create_dir_all(&webkit_data).unwrap();
+    let conn = env.conn();
+    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    icloud_session::sign_in_on(&conn).unwrap();
+    assert!(watch.next().unwrap().signing_in);
+    wait_until("the window to start", Duration::from_secs(5), || {
+        fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
+    });
+    let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+    icloud_session::sign_out_on(&conn).unwrap();
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(!status.signing_in && !status.signed_in, "{status:?}");
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "the window was killed and reaped"
+    );
+    assert!(!webkit_data.exists());
+
+    // Whatever the window would have printed never lands.
+    thread::sleep(Duration::from_millis(2000));
+    assert!(!prop::<bool>(&conn, "SignedIn"));
+    assert!(env.account().is_none());
+    assert_eq!(server.count(VALIDATE), 1, "only the start-up validate");
+}
