@@ -1,0 +1,12 @@
+{
+  "dryRun": true,
+  "entries": [
+    {
+      "kind": "update",
+      "file": "Notes/Test Note.md",
+      "resolution": "ready"
+    }
+  ],
+  "unchanged": 0,
+  "notices": []
+}
