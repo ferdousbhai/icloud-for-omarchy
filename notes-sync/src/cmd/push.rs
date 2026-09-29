@@ -1094,13 +1094,18 @@ fn build_create_payload(
     } else {
         parsed
     };
-    let mut doc = build_initial_note_document(&desired.text, replica);
+    // A thrown error anywhere below is TS's `catch (cause)`: the message is
+    // the refusal reason.
+    let thrown = |e: crate::doc::DocError| Refusal::CreateBuildError { message: e.to_string() };
+    let mut doc = build_initial_note_document(&desired.text, replica).map_err(thrown)?;
     reconcile_note_format(&mut doc, &desired.paragraphs, replica)
+        .map_err(thrown)?
         .map_err(|reason| Refusal::CreateReconcile { reason })?;
-    let compressed = compress_note_document(&encode_note_document(&doc));
-    let rebuilt = decode_note_string(&compressed).map_err(|e| Refusal::CreateBuildError { message: e.to_string() })?;
-    let format = decode_note_format(rebuilt.string(), &rebuilt.attributeRun);
-    let verified = rebuilt.string() == desired.text
+    let compressed = compress_note_document(&encode_note_document(&doc).map_err(thrown)?);
+    let rebuilt = decode_note_string(&compressed).map_err(thrown)?;
+    let rebuilt_text = rebuilt.string();
+    let format = decode_note_format(rebuilt_text, &rebuilt.attribute_run);
+    let verified = rebuilt_text == desired.text
         && format
             .as_ref()
             .is_ok_and(|f| formats_round_trip_equal(f, &desired.paragraphs));
@@ -1495,8 +1500,9 @@ pub fn prepare_note_text_update(
         Err(e) => return Ok(Err(exception(e))),
     };
     let format_changed = match reconcile_note_format(&mut doc, &desired.paragraphs, replica) {
-        Ok(changed) => changed,
-        Err(reason) => {
+        Ok(Ok(changed)) => changed,
+        Err(e) => return Ok(Err(exception(e))),
+        Ok(Err(reason)) => {
             return Ok(Err(TextUpdateRefusal::Reconcile {
                 reason,
                 file: file.to_owned(),
@@ -1509,7 +1515,11 @@ pub fn prepare_note_text_update(
     if let Err(e) = validate_document_invariants(&doc) {
         return Ok(Err(exception(e)));
     }
-    let compressed = compress_note_document(&encode_note_document(&doc));
+    let raw = match encode_note_document(&doc) {
+        Ok(raw) => raw,
+        Err(e) => return Ok(Err(exception(e))),
+    };
+    let compressed = compress_note_document(&raw);
     match decode_note_body_text(&compressed) {
         Ok(text) if text == desired.text => {}
         Ok(_) => return Ok(Err(TextUpdateRefusal::RebuiltDecodeFailed)),
@@ -1524,7 +1534,7 @@ pub fn prepare_note_text_update(
         Ok(s) => s,
         Err(e) => return Ok(Err(exception(e))),
     };
-    match decode_note_format(rebuilt.string(), &rebuilt.attributeRun) {
+    match decode_note_format(rebuilt.string(), &rebuilt.attribute_run) {
         Ok(format) if formats_round_trip_equal(&format, &desired.paragraphs) => {}
         _ => return Ok(Err(TextUpdateRefusal::RebuiltFormatFailed)),
     }

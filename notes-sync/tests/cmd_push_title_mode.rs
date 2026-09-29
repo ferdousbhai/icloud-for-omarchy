@@ -48,15 +48,17 @@ fn record_with(text: &str, compressed: &[u8]) -> CloudKitRecord {
 /// A Note record carrying a real document, built like push's create path.
 fn note_record(markdown: &str) -> CloudKitRecord {
     let parsed = parse_note_markdown(markdown).expect("parses");
-    let mut doc = build_initial_note_document(&parsed.text, &REPLICA);
-    reconcile_note_format(&mut doc, &parsed.paragraphs, &REPLICA).expect("reconciles");
-    record_with(&parsed.text, &compress_note_document(&encode_note_document(&doc)))
+    let mut doc = build_initial_note_document(&parsed.text, &REPLICA).expect("builds");
+    reconcile_note_format(&mut doc, &parsed.paragraphs, &REPLICA)
+        .expect("reconciles")
+        .expect("reconciles");
+    record_with(&parsed.text, &compress_note_document(&encode_note_document(&doc).expect("encodes")))
 }
 
 /// From raw text (titles the markdown parser would alter).
 fn raw_note_record(text: &str) -> CloudKitRecord {
-    let doc = build_initial_note_document(text, &REPLICA);
-    record_with(text, &compress_note_document(&encode_note_document(&doc)))
+    let doc = build_initial_note_document(text, &REPLICA).expect("builds");
+    record_with(text, &compress_note_document(&encode_note_document(&doc).expect("encodes")))
 }
 
 fn classify_ok(record: &CloudKitRecord, title_mode: TitleMode) -> DecodedNote {
@@ -75,7 +77,7 @@ fn decode_payload(payload_base64: &str) -> (String, Option<ParagraphKind>) {
         .decode(payload_base64)
         .unwrap();
     let decoded = decode_note_string(&bytes).unwrap();
-    let kind = decode_note_format(decoded.string(), &decoded.attributeRun)
+    let kind = decode_note_format(decoded.string(), &decoded.attribute_run)
         .ok()
         .and_then(|f| f.first().map(|p| p.kind));
     (decoded.string().to_owned(), kind)
