@@ -65,3 +65,76 @@ pub fn strings(rows: &[&[&str]]) -> Vec<Vec<String>> {
         .map(|row| row.iter().map(|s| s.to_string()).collect())
         .collect()
 }
+
+/// icloud-md's `parseNoteMarkdown` of `markdown`, as recorded in
+/// `tests/doc_node/parsed_markdown.json` (regenerate with the oracle):
+/// `(text, paragraphs)`.
+pub fn parsed_markdown(markdown: &str) -> (String, Vec<icloud_notes_sync::doc::format::FormatParagraph>) {
+    let path = format!("{}/tests/doc_node/parsed_markdown.json", env!("CARGO_MANIFEST_DIR"));
+    let all: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let parsed = &all[markdown];
+    assert_eq!(parsed["status"], "ok", "no recorded parse for {markdown:?}");
+    (
+        parsed["text"].as_str().unwrap().to_string(),
+        serde_json::from_value(parsed["paragraphs"].clone()).unwrap(),
+    )
+}
+
+/// Runs requests through `tests/doc_node/oracle.mts` (icloud-md itself);
+/// `None` when node/tsx or the icloud-md clone isn't available.
+pub fn oracle(requests: &Value) -> Option<Value> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let root = env!("CARGO_MANIFEST_DIR");
+    let icloud_md = std::env::var("ICLOUD_MD").unwrap_or_else(|_| format!("{root}/../../coddingtonbear/icloud-md"));
+    let tsx = format!("{icloud_md}/node_modules/.bin/tsx");
+    if !std::path::Path::new(&tsx).exists() {
+        eprintln!("icloud-md oracle unavailable ({tsx} missing) - skipping the Node comparison");
+        return None;
+    }
+    let mut child = Command::new(tsx)
+        .arg(format!("{root}/tests/doc_node/oracle.mts"))
+        .env("ICLOUD_MD", &icloud_md)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take().unwrap();
+    let payload = serde_json::to_vec(requests).unwrap();
+    let writer = std::thread::spawn(move || stdin.write_all(&payload).unwrap());
+    let output = child.wait_with_output().ok()?;
+    writer.join().unwrap();
+    assert!(output.status.success(), "oracle failed");
+    Some(serde_json::from_slice(&output.stdout).unwrap())
+}
+
+/// A deterministic, never-repeating 16-byte source (a process-wide counter,
+/// like `randomBytes` never handing out the same identity twice).
+pub fn counting_uuids() -> impl FnMut() -> [u8; 16] {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    move || {
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let mut bytes = [0x5a; 16];
+        bytes[8..].copy_from_slice(&n.to_be_bytes());
+        bytes[6] = 0x40 | (bytes[6] & 0x0f);
+        bytes
+    }
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `bytes` as a canonical UUID string (what `randomUUID` returns).
+pub fn uuid_string(bytes: &[u8; 16]) -> String {
+    let h = hex(bytes);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
