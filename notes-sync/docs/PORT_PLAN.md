@@ -166,3 +166,14 @@ Order: (1) D seam stubs + CLI skeleton, A proto codegen, Node driver;
 first, differentially tested; (3) history, diff, restore; (4) status and push
 --dry-run with request-body diffs; (5) live push in the test folder;
 (6) Notes switch-over, then remove the icloud-session mirror.
+
+## 7. Deliberate differences from icloud-md 0.6.2 (after parity)
+
+Upstream PR #29 (ferdousbhai, "Fetch the text of notes too large to store it
+inline", open and unmerged as of 2026-09-29; fork branch
+`fetch-asset-note-bodies`, commits 768bcb3 and 10fa221 in the icloud-md clone)
+is not in 0.6.2, so 0.6.2 skips notes whose body lives in TextDataAsset (the
+user has one: an ~833 KB pinned note). Port it once the read path matches 0.6.2:
+request TextDataAsset, inline the downloaded bytes, mark such notes unpublishable
+("is so large that Apple keeps its text in a separate file, which can't be
+written back yet"). Differential tests then run with a flag that turns it off.
