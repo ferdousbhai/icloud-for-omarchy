@@ -11,7 +11,7 @@
 //! | `parse`, `mdast_fix` | parseNoteMarkdown over markdown-rs, plus fixups where markdown-rs's tree differs from micromark's |
 //! | `projection` | noteFormat's round-trip projection (normalizeSpans & co.; workstream B's `doc::format` declares them) |
 //! | `table` | markdownTable |
-//! | `frontmatter` | frontmatter + noteIdFrontmatter (stub) |
+//! | `frontmatter`, `yaml` | frontmatter + noteIdFrontmatter, and the slice of the `yaml` package they use |
 //! | `title`, `filename` | noteTitleParagraph, titleFilename, filename |
 //! | `js` | JS string semantics (whitespace, UTF-16, `path.posix`) |
 //!
@@ -28,3 +28,4 @@ pub mod render;
 pub mod table;
 pub mod title;
 pub mod to_markdown;
+pub mod yaml;
