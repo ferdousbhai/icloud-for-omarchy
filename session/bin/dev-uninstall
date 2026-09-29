@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Undo bin/dev-install: remove the three binaries from ~/.local/bin and the
+# D-Bus activation file from ~/.local/share/dbus-1/services. An installed
+# package, if any, takes over again. Your signed-in session is kept.
+set -euo pipefail
+
+service=io.github.ferdousbhai.ICloudSession.service
+bin_dir="$HOME/.local/bin"
+services_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
+
+rm -f "$services_dir/$service"
+rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/io.github.ferdousbhai.ICloudSession.desktop"
+for bin in icloud-sessiond icloud-session icloud-session-signin; do
+  rm -f "$bin_dir/$bin"
+done
+
+dbus-send --session --type=method_call --dest=org.freedesktop.DBus \
+  /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+
+echo "Removed the dev install from $bin_dir and $services_dir"
+if pgrep -x icloud-sessiond >/dev/null; then
+  echo "A daemon is still running the removed binary; it exits when idle, or: pkill -x icloud-sessiond"
+fi

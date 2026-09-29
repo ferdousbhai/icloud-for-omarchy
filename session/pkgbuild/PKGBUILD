@@ -1,0 +1,66 @@
+# Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
+#
+# Builds from this checkout. The release workflow runs it on a tagged commit
+# and publishes the result as a signed pacman repository on GitHub Releases;
+# a plain `makepkg` in this directory does the same build locally.
+
+pkgname=icloud-session
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='D-Bus service, sign-in window and CLI that own one iCloud web sign-in for all apps'
+arch=('x86_64')
+url='https://github.com/ferdousbhai/icloud-session'
+license=('MIT')
+options=('!debug' '!lto')
+depends=('gtk4' 'webkitgtk-6.0' 'dbus' 'glib2' 'gcc-libs' 'glibc')
+makedepends=('rust' 'cargo' 'git')
+checkdepends=('dbus')
+
+# The version is the git tag: v0.2.0 builds 0.2.0, and a commit past it
+# builds 0.2.0.r<count>.<sha> so `pacman -Q` says where a build came from.
+pkgver() {
+  git -C "$startdir/.." describe --tags --long 2>/dev/null |
+    sed 's/^v//; s/-\([0-9]*\)-g\([0-9a-f]*\)$/.r\1.\2/; s/\.r0\.[0-9a-f]*$//' |
+    grep . || printf '0.0.0.r%s\n' "$(git -C "$startdir/.." rev-list --count HEAD)"
+}
+
+prepare() {
+  # Only committed files: a release build never picks up local leftovers.
+  mkdir -p "$srcdir/$pkgname"
+  git -C "$startdir/.." archive HEAD | tar -x -C "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p icloud-sessiond --bins
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # The daemon tests run their own private dbus-daemon and a local fake
+  # Apple server; nothing touches the build user's session bus or files.
+  cargo test --frozen --workspace
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  local bin
+  for bin in icloud-sessiond icloud-session icloud-session-signin; do
+    install -Dm755 "target/release/$bin" "$pkgdir/usr/bin/$bin"
+  done
+  # D-Bus activation, no systemd unit: the bus starts the daemon on the
+  # first call and it exits when idle.
+  install -Dm644 data/io.github.ferdousbhai.ICloudSession.service \
+    "$pkgdir/usr/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service"
+  install -Dm644 data/io.github.ferdousbhai.ICloudSession.desktop \
+    "$pkgdir/usr/share/applications/io.github.ferdousbhai.ICloudSession.desktop"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

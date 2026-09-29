@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Sign in to iCloud
+Comment=Apple sign-in shared by the iCloud apps
+Exec=icloud-session sign-in
+Icon=dialog-password
+Terminal=false
+NoDisplay=true
+Categories=Network;

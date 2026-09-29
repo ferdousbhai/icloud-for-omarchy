@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Build the daemon, the sign-in window and the CLI (release). The sign-in
+# window needs gtk4 and webkitgtk-6.0.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+cargo build --release --locked -p icloud-sessiond --bins
+echo "Binaries: $(pwd)/target/release/{icloud-sessiond,icloud-session,icloud-session-signin}"
