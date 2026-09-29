@@ -2465,3 +2465,20 @@ fn set_password_from_bitwarden_and_1password() {
         assert!(stderr.contains("not installed") && stderr.contains(hint), "{stderr}");
     }
 }
+
+#[test]
+fn the_call_that_starts_the_daemon_already_sees_the_stored_password() {
+    // `icloud-session status` starts the daemon and reads its properties at
+    // once: the keyring look must be done by then, not announced later.
+    let (_accepted, server) = accepting("auto1");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    env.store_password(PASSWORD);
+    let out = env.cli(&["status"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["signed_in"], true, "{printed}");
+    assert_eq!(printed["find_my_password_stored"], true, "{printed}");
+}

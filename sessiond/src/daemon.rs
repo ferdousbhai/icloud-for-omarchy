@@ -25,6 +25,9 @@ use crate::secrets::{self, Password, SecretStore};
 /// Heartbeat keeps running while a client called within this window
 /// (the browser's own heartbeat is 14 minutes).
 const ACTIVE_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// How long start-up waits for the keyring's answer before taking the bus
+/// name (well inside D-Bus's activation timeout).
+const KEYRING_LOOK_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -292,6 +295,19 @@ impl Daemon {
         let messages = zbus::blocking::MessageIterator::from(&conn);
         let me = self.clone();
         thread::spawn(move || me.track_clients(messages));
+        // Look in the keyring before taking the name: the call that
+        // activated us (often `status`, reading every property) is answered
+        // as soon as we own it, and must not see FindMyPasswordStored
+        // false for want of a look. A keyring slower than that is still
+        // announced when it answers.
+        let (looked, keyring_looked) = std::sync::mpsc::channel();
+        let me = self.clone();
+        thread::spawn(move || {
+            me.look_for_password();
+            let _ = looked.send(());
+            me.publish();
+        });
+        let _ = keyring_looked.recv_timeout(KEYRING_LOOK_WAIT);
         // Pick up what icloud-md rotated while we were not running, and make
         // sure the mirror exists. The validate lock is taken before the name,
         // so a `Session()` delivered as soon as we own it waits for this and
@@ -322,8 +338,6 @@ impl Daemon {
         thread::spawn(move || {
             let _ = me.ensure_fresh(Fresh::Since(me.started_at));
         });
-        let me = self.clone();
-        thread::spawn(move || me.refresh_password_stored());
 
         self.tick_until_idle();
         Ok(())
@@ -631,6 +645,12 @@ impl Daemon {
     /// Looks in the keyring for the account's password and announces
     /// `FindMyPasswordStored`.
     fn refresh_password_stored(&self) {
+        self.look_for_password();
+        self.publish();
+    }
+
+    /// [`Daemon::refresh_password_stored`] without the announcement.
+    fn look_for_password(&self) {
         let Some((apple_id, generation)) = ({
             let st = lock(&self.state);
             st.account.as_ref().map(|a| (a.apple_id.clone(), st.generation))
@@ -648,8 +668,6 @@ impl Daemon {
         if st.generation == generation {
             st.password_stored = stored;
         }
-        drop(st);
-        self.publish();
     }
 
     /// The client params for a Find My sign-in: the account's build
