@@ -389,9 +389,9 @@ fn relock(manager: &Manager, unlock: &Unlock) {
         .status();
 }
 
-/// The password from `manager`: ITEM, or the first of the default names
-/// that names exactly one item with a password. Unlocks the vault first if
-/// needed, and locks it again after if it did.
+/// The password from `manager`: ITEM, or with none the login saved for
+/// apple.com or icloud.com (see [`find_apple_login`]). Unlocks the vault
+/// first if needed, and locks it again after if it did.
 fn from_manager(manager: &Manager, item: Option<&str>, apple_id: &str) -> Result<Secret, String> {
     let unlock = if manager.bin == BITWARDEN.bin {
         bitwarden_unlock()
@@ -415,14 +415,10 @@ fn from_manager(manager: &Manager, item: Option<&str>, apple_id: &str) -> Result
 }
 
 fn find_item(manager: &Manager, item: Option<&str>, apple_id: &str, unlock: &Unlock) -> Result<Secret, String> {
-    if item.is_none() {
+    let Some(item) = item else {
         return find_apple_login(manager, apple_id, unlock);
-    }
-    let defaults = [apple_id, "Apple ID", "Apple", "iCloud"];
-    let candidates: Vec<&str> = match item {
-        Some(item) => vec![item],
-        None => defaults.to_vec(),
     };
+    let candidates = [item];
     for candidate in &candidates {
         match lookup(manager, candidate, unlock)? {
             Lookup::Found(p) => {
