@@ -54,10 +54,12 @@ is the one attached to the latest release, verified with it; read it
 first if you like. It also installs an Omarchy `pre-refresh-pacman` hook
 so `omarchy refresh pacman` keeps the repository.
 
-To uninstall: `systemctl --user disable --now icloud-notes-sync.timer`
-and `omarchy pkg drop icloud-notes`, then remove
-`/etc/pacman.d/icloud-notes.conf`, its `Include` line in
-`/etc/pacman.conf`, and `~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-notes`.
+To uninstall: `omarchy pkg drop icloud-notes icloud-notes-sync icloud-session`
+(drop `icloud-session` only if no other iCloud app uses it; removing the
+package also removes the background-sync timer). Then, for each of the
+`icloud-notes`, `icloud-notes-sync` and `icloud-session` repositories, remove
+`/etc/pacman.d/<name>.conf`, its `Include` line in `/etc/pacman.conf`, and
+`~/.config/omarchy/hooks/pre-refresh-pacman.d/<name>`.
 
 To build and run from source instead:
 
@@ -162,8 +164,8 @@ Apple refused is reported to icloud-session just as the app does.
 
 The package turns it on for every user (from the next login; the installer
 also starts it at once). To turn it off for yourself:
-`systemctl --user mask --now icloud-notes-sync.timer` (`unmask` undoes it).
-What it did is in `journalctl --user -u icloud-notes-sync`.
+`systemctl --user mask --now icloud-notes-background.timer` (`unmask` undoes it).
+What it did is in `journalctl --user -u icloud-notes-background`.
 
 Built from source without the package, the units are not installed. From
 the checkout, after `./bin/build`, install them for your user with the
@@ -171,11 +173,11 @@ service pointed at the binary you built:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-sed "s|^ExecStart=.*|ExecStart=$PWD/build/icloud-notes --sync|" data/icloud-notes-sync.service \
-  > ~/.config/systemd/user/icloud-notes-sync.service
-cp data/icloud-notes-sync.timer ~/.config/systemd/user/
+sed "s|^ExecStart=.*|ExecStart=$PWD/build/icloud-notes --sync|" data/icloud-notes-background.service \
+  > ~/.config/systemd/user/icloud-notes-background.service
+cp data/icloud-notes-background.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now icloud-notes-sync.timer
+systemctl --user enable --now icloud-notes-background.timer
 ```
 
 ## Your files

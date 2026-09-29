@@ -97,7 +97,7 @@ fi
 # this starts it now in the desktop user's systemd, not root's.
 start_background_sync() {
   local user uid
-  local start_cmd='systemctl --user daemon-reload && systemctl --user start icloud-notes-sync.timer'
+  local start_cmd='systemctl --user daemon-reload && systemctl --user start icloud-notes-background.timer'
   user="${SUDO_USER:-${USER:-$(id -un)}}"
   uid="$(id -u "$user" 2>/dev/null)" || return 0
   if (( uid == 0 )) || [[ ! -S /run/user/$uid/bus ]]; then
@@ -106,7 +106,7 @@ start_background_sync() {
   fi
   local ctl=(env "XDG_RUNTIME_DIR=/run/user/$uid" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" systemctl --user)
   (( EUID == 0 )) && ctl=(runuser -u "$user" -- "${ctl[@]}")
-  if "${ctl[@]}" daemon-reload && "${ctl[@]}" start icloud-notes-sync.timer; then
+  if "${ctl[@]}" daemon-reload && "${ctl[@]}" start icloud-notes-background.timer; then
     echo "Background sync is on (every 15 minutes while Notes is closed)."
   else
     echo "Could not start background sync now; it starts at your next login." >&2
