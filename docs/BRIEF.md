@@ -14,7 +14,9 @@ Four repos, one Apple sign-in, no Python. Each app repo has the same shape as
 Dependency line: `icloud-session` (Rust: D-Bus daemon + WebKitGTK sign-in +
 client crate) owns the Apple account → findmy and photos link the client crate;
 Notes talks to the daemon over D-Bus and syncs through `icloud-md` (npm, third
-party), which the daemon feeds with the session.
+party), which the daemon feeds with the session. (Since 2026-09-29 Notes syncs
+through `icloud-notes-sync`, the Rust port, which gets the session over D-Bus
+like the other apps; see "icloud-md was a consumer" below.)
 
 ## What changed from the first brief
 
@@ -93,10 +95,10 @@ object `/io/github/ferdousbhai/ICloudSession`, session bus:
 | `FindMyAuthorized` | property | `b`, a Find My jar is held and has `X-APPLE-WEBAUTH-FMIP` |
 | `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out; revalidates first if the last validate is older than 10 minutes |
 | `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
-| `ReportSignInRequired()` | method | `→ b still_signed_in`: a client got 421/401; the daemon validates, and on success rewrites the icloud-md mirror and returns true so the caller retries once; on 421/401 it signs out and returns false |
+| `ReportSignInRequired()` | method | `→ b still_signed_in`: a client got 421/401; the daemon validates, and on success keeps the fresh jar and returns true so the caller fetches `Session()` and retries once; on 421/401 it signs out and returns false |
 | `SignIn()` | method | opens the sign-in window if not already open; returns at once, the outcome arrives as property changes |
 | `SignOut()` | method | forgets the account and the WebKit profile |
-| `AuthorizeFindMy()` | method | opens the sign-in window with `--find` on `www.icloud.com/find`, where Apple asks for the password before Find My stops answering 450; returns at once like `SignIn()`. That is a one-factor sign-in `/validate` refuses, so the captured jar (session-only cookies incl. `X-APPLE-WEBAUTH-FMIP`, plus client params) is kept unvalidated as a separate Find My jar in account.json; main jar, generation and icloud-md mirror untouched; dsid checked only if the window reports it (or X-APPLE-WEBAUTH-USER names it) |
+| `AuthorizeFindMy()` | method | opens the sign-in window with `--find` on `www.icloud.com/find`, where Apple asks for the password before Find My stops answering 450; returns at once like `SignIn()`. That is a one-factor sign-in `/validate` refuses, so the captured jar (session-only cookies incl. `X-APPLE-WEBAUTH-FMIP`, plus client params) is kept unvalidated as a separate Find My jar in account.json; main jar and generation untouched; dsid checked only if the window reports it (or X-APPLE-WEBAUTH-USER names it) |
 | `FindMySession()` | method | `→ (s cookie_header, a{ss} client_params)` of the Find My jar; error `…Error.FindMyAuthRequired` when there is none |
 | `MergeFindMyCookies(as)` | method | `Set-Cookie`s a client got from the `findme` host, merged into the Find My jar |
 | `ReportFindMyAuthRequired()` | method | `→ b reauthorized`: a client got HTTP 450 from Find My: the Find My jar is deleted (SignOut deletes it too); with a stored password the daemon signs in to Find My again and answers true (client retries once) |
@@ -165,7 +167,12 @@ and query.
 
 CLI: `icloud-session status | sign-in | authorize-find-my | set-password | forget-password | sign-out | validate`, JSON on stdout.
 
-### icloud-md is a consumer
+### icloud-md was a consumer (retired 2026-09-29)
+
+Retired on 2026-09-29, when Notes moved to icloud-notes-sync, which gets the
+session from the daemon over D-Bus. The daemon (icloud-sessiond 0.2.1 on) no
+longer writes, watches or deletes anything under `~/.config/icloud-md`, and
+`ReportSignInRequired()` only confirms with `/validate`. The design as it was:
 
 icloud-md can already sync from a stored session alone: `icloud-md clone
 --account <dsid>` reuses `accounts/<dsid>/session.local.json` plus
@@ -190,7 +197,7 @@ So the daemon mirrors the session there:
 - Banner and days-left from the D-Bus properties via QtDBus
   (`PropertiesChanged`); no `icloud-session status` process, no
   `.icloud-notes-signin-expired` flag file, no session-file watching.
-- An icloud-md failure that says to reauthenticate → `ReportSignInRequired()`: true → retry the sync once (the mirror was refreshed), false → paused;
+- An icloud-md failure that says to reauthenticate → `ReportSignInRequired()`: true → retry the sync once (the mirror was refreshed; since 2026-09-29 icloud-notes-sync fetches `Session()` again), false → paused;
   the "Sign in" button → `SignIn()`. Notes never runs `icloud-md
   reauthenticate`.
 - PKGBUILD depends on `icloud-session`; `webkitgtk-6.0` comes with it.
@@ -276,7 +283,7 @@ apps. They become a crate only if a third GTK app appears.
 ### 0. icloud-session
 - [ ] sign-in window spike: real account signs in through WebKitGTK, cookies captured, `/validate` accepts them
 - [ ] daemon: state file, D-Bus API, heartbeat, confirm-before-sign-out, idle exit, activation file
-- [ ] icloud-md mirror + inotify adoption
+- [x] ~~icloud-md mirror + inotify adoption~~ (built, then retired 2026-09-29)
 - [ ] client crate on D-Bus, mock mode, CLI
 - [ ] tests against a private dbus-daemon and a fake Apple server
 - [x] upstream PR to icloud-md: atomic write (#31)
@@ -315,9 +322,8 @@ apps. They become a crate only if a third GTK app appears.
 - Apple may refuse sign-in in WebKitGTK. The spike settles it first; a Safari
   user agent is the first fix. If it still fails, fall back to native SRP login
   (as icloudpd does) behind the same `SignIn()`.
-- icloud-md rotates the mirrored session on its own `/validate`. The daemon
-  adopts those writes via inotify; the brief window where both rotate at once
-  is the remaining race.
+- ~~icloud-md rotates the mirrored session on its own `/validate`.~~ Gone
+  with the mirror (2026-09-29): every client now rotates through the daemon.
 - Photos write is the least documented part. Only the icloudpd fork shows it
   working; capture fixtures from icloud.com first, and ship read-only if it
   stalls.

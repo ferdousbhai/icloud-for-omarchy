@@ -309,14 +309,14 @@ impl Env {
             .map(|b| serde_json::from_slice(&b).unwrap())
     }
 
-    fn mirror_dir(&self) -> PathBuf {
-        self.root().join("home/.config/icloud-md/accounts").join(DSID)
-    }
-
-    fn mirror(&self) -> Option<Value> {
-        fs::read(self.mirror_dir().join("session.local.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
+    /// The value of cookie `name` in `account.json`'s main jar.
+    fn account_cookie(&self, name: &str) -> Option<String> {
+        self.account()?["cookies"]
+            .as_array()?
+            .iter()
+            .find(|c| c["name"] == name)
+            .and_then(|c| c["value"].as_str())
+            .map(str::to_string)
     }
 
     fn cli(&self, args: &[&str]) -> std::process::Output {
@@ -498,12 +498,14 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     assert_eq!(v.header("Accept"), Some("application/json"));
     assert!(v.header("Cookie").unwrap().contains("X-APPLE-WEBAUTH-TOKEN=original"));
 
-    // Persisted, and mirrored for icloud-md.
+    // Persisted.
     let account = env.account().unwrap();
     assert!(account["validated_at"].as_u64().unwrap() >= now() - 5);
     assert_eq!(account["webservices"]["findme"], findme_url(&server.url));
-    let mirror = env.mirror().unwrap();
-    assert_eq!(mirror["cookie"], cookie);
+    assert_eq!(
+        env.account_cookie("X-APPLE-WEBAUTH-TOKEN"),
+        cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN")
+    );
     let mode = fs::metadata(env.account_path()).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
     assert!(prop::<u64>(&conn, "ExpiresAt") >= now() + 2_592_000 - 10);
@@ -556,7 +558,6 @@ fn merge_cookies_merges_by_name_and_persists() {
     assert_eq!(names, ["X-APPLE-WEBAUTH-USER", "X-APPLE-WEBAUTH-TOKEN", "NEW"]);
     let exp = prop::<u64>(&conn, "ExpiresAt");
     assert!(exp.abs_diff(expiry) <= 5, "{exp} vs {expiry}");
-    assert_eq!(env.mirror().unwrap()["cookie"], cookie);
     assert_eq!(server.count(VALIDATE), 1);
 }
 
@@ -577,17 +578,12 @@ fn report_sign_in_required_confirms_with_validate() {
     session(&conn).unwrap();
 
     // A stray 401: Apple still accepts the session. SignedIn stays, the
-    // mirror is rewritten with the fresh jar, the answer is true.
-    fs::remove_file(env.mirror_dir().join("session.local.json")).unwrap();
+    // fresh jar is saved, the answer is true.
     let still: bool = call(&conn, "ReportSignInRequired").unwrap();
     assert!(still);
     assert!(prop::<bool>(&conn, "SignedIn"));
     assert_eq!(server.count(VALIDATE), 2);
-    let mirror = env.mirror().expect("mirror rewritten");
-    assert_eq!(
-        cookie_of(mirror["cookie"].as_str().unwrap(), "X-APPLE-WEBAUTH-TOKEN").as_deref(),
-        Some("rotated2")
-    );
+    assert_eq!(env.account_cookie("X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("rotated2"));
 
     // Now Apple answers 421: signed out, announced, account forgotten.
     let mut watch = icloud_session::watch_on(&conn).unwrap();
@@ -603,7 +599,9 @@ fn report_sign_in_required_confirms_with_validate() {
     assert_eq!(prop::<String>(&conn, "AppleId"), "");
     assert!(env.account().is_none());
     match session(&conn) {
-        Err(zbus::Error::MethodError(name, _, _)) => assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED),
+        Err(zbus::Error::MethodError(name, _, _)) => {
+            assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED)
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -648,7 +646,9 @@ fn sign_in_with_a_fake_window_stores_the_account() {
         }
     );
     match session(&conn) {
-        Err(zbus::Error::MethodError(name, _, _)) => assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED),
+        Err(zbus::Error::MethodError(name, _, _)) => {
+            assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED)
+        }
         other => panic!("{other:?}"),
     }
 
@@ -684,34 +684,10 @@ fn sign_in_with_a_fake_window_stores_the_account() {
     assert_eq!(account["dsid"], DSID);
     assert_eq!(account["client_params"]["clientMasteringNumber"], "2530Hotfix3");
 
-    // icloud-md's files, in its shape.
-    let mirror = env.mirror().unwrap();
-    let keys: Vec<&str> = mirror.as_object().unwrap().keys().map(String::as_str).collect();
-    for k in [
-        "cookie",
-        "clientId",
-        "clientBuildNumber",
-        "clientMasteringNumber",
-        "capturedAt",
-    ] {
-        assert!(keys.contains(&k), "{k} in {keys:?}");
-    }
-    assert_eq!(mirror["clientId"], "page-client-id");
-    assert!(
-        mirror["cookie"]
-            .as_str()
-            .unwrap()
-            .contains("X-APPLE-WEBAUTH-TOKEN=rotated1")
-    );
-    let captured = mirror["capturedAt"].as_str().unwrap();
+    let captured = account["captured_at"].as_str().unwrap();
     assert!(captured.ends_with('Z') && captured.len() == 24, "{captured}");
-    let meta: Value = serde_json::from_slice(&fs::read(env.mirror_dir().join("meta.json")).unwrap()).unwrap();
-    assert_eq!(meta, json!({"appleId": "someone@example.com", "dsid": DSID}));
-    let mode = fs::metadata(env.mirror_dir().join("session.local.json"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
+    // icloud-md's mirror was retired: nothing is written for it.
+    assert!(!env.root().join("home/.config/icloud-md").exists());
 
     // The session works through the client lib at once.
     let s = Session::connect_on(&conn).unwrap();
@@ -762,7 +738,7 @@ fn sign_in_closed_or_without_params() {
 }
 
 #[test]
-fn sign_out_forgets_account_profile_and_mirror() {
+fn sign_out_forgets_account_and_profile() {
     let server = Server::start(|s, n, base| match s.path() {
         VALIDATE => validate_ok(n, base),
         _ => Reply::json(404, json!({})),
@@ -779,7 +755,6 @@ fn sign_out_forgets_account_profile_and_mirror() {
 
     let conn = env.conn();
     session(&conn).unwrap();
-    assert!(env.mirror().is_some());
     let mut watch = icloud_session::watch_on(&conn).unwrap();
     icloud_session::sign_out_on(&conn).unwrap();
     let change = watch.next().unwrap();
@@ -787,75 +762,9 @@ fn sign_out_forgets_account_profile_and_mirror() {
     assert!(env.account().is_none());
     assert!(!webkit_data.exists());
     assert!(!webkit_cache.exists());
-    assert!(env.mirror().is_none());
-    assert!(
-        env.mirror_dir().join("meta.json").exists(),
-        "icloud-md's account binding stays"
-    );
     assert!(matches!(Session::connect_on(&conn), Err(Error::SignInRequired)));
     let status = icloud_session::status_on(&conn).unwrap();
     assert!(!status.signed_in);
-}
-
-#[test]
-fn icloud_md_rotation_in_the_mirror_is_adopted() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
-    let env = Env::start(Opts {
-        setup_url: &server.url,
-        ..Default::default()
-    });
-    let conn = env.conn();
-    session(&conn).unwrap();
-    let mut mirror = env.mirror().unwrap();
-    let rotated = mirror["cookie"]
-        .as_str()
-        .unwrap()
-        .replace("X-APPLE-WEBAUTH-TOKEN=rotated1", "X-APPLE-WEBAUTH-TOKEN=fromicloudmd");
-    mirror["cookie"] = Value::String(rotated);
-    // icloud-md's own write: plain writeFile, not atomic.
-    fs::write(
-        env.mirror_dir().join("session.local.json"),
-        serde_json::to_string_pretty(&mirror).unwrap() + "\n",
-    )
-    .unwrap();
-    wait_until("the daemon to adopt the jar", Duration::from_secs(5), || {
-        env.account().is_some_and(|a| a.to_string().contains("fromicloudmd"))
-    });
-    let (cookie, _, _) = session(&conn).unwrap();
-    assert_eq!(
-        cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(),
-        Some("fromicloudmd")
-    );
-    // The adopted token keeps the expiry we knew.
-    assert!(prop::<u64>(&conn, "ExpiresAt") >= now() + 2_592_000 - 10);
-    assert_eq!(server.count(VALIDATE), 1);
-}
-
-#[test]
-fn icloud_md_rotation_while_stopped_is_adopted_on_start() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
-    let env = Env::start(Opts {
-        setup_url: &server.url,
-        ..Default::default()
-    });
-    fs::create_dir_all(env.mirror_dir()).unwrap();
-    fs::write(
-        env.mirror_dir().join("session.local.json"),
-        json!({"cookie": "X-APPLE-WEBAUTH-USER=\"v=1:s=0:d=12345\"; X-APPLE-WEBAUTH-TOKEN=newer", "clientId": "auth-client-id",
-               "clientBuildNumber": "2624Build27", "clientMasteringNumber": "2624Build27M", "capturedAt": "2026-09-01T00:00:00.000Z"})
-        .to_string(),
-    )
-    .unwrap();
-    let conn = env.conn();
-    session(&conn).unwrap();
-    let v = &server.requests(VALIDATE)[0];
-    assert!(v.header("Cookie").unwrap().contains("X-APPLE-WEBAUTH-TOKEN=newer"));
 }
 
 #[test]
@@ -1339,63 +1248,6 @@ fn sign_out_closes_an_open_sign_in_window() {
     assert_eq!(server.count(VALIDATE), 1, "only the start-up validate");
 }
 
-#[test]
-fn the_mirror_is_watched_again_after_its_directory_goes_away() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
-    let env = Env::start(Opts {
-        setup_url: &server.url,
-        idle_secs: 2.0,
-        ..Default::default()
-    });
-    let conn = env.conn();
-    session(&conn).unwrap();
-    let session_file = env.mirror_dir().join("session.local.json");
-    let rotate = |token: &str| {
-        let mut mirror = env.mirror().unwrap();
-        let cookie = mirror["cookie"].as_str().unwrap();
-        let old = cookie_of(cookie, "X-APPLE-WEBAUTH-TOKEN").unwrap();
-        mirror["cookie"] = Value::String(cookie.replace(&format!("TOKEN={old}"), &format!("TOKEN={token}")));
-        fs::write(&session_file, serde_json::to_string_pretty(&mirror).unwrap() + "\n").unwrap();
-    };
-    let adopted = |token: &str| {
-        let (cookie, _, _) = session(&conn).unwrap();
-        cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref() == Some(token)
-    };
-
-    // Deleted, then our next store writes the mirror again and re-watches.
-    let saved = env.mirror().unwrap();
-    fs::remove_dir_all(env.mirror_dir()).unwrap();
-    thread::sleep(Duration::from_millis(200));
-    conn.call_method(
-        Some(BUS_NAME),
-        OBJECT_PATH,
-        Some(INTERFACE),
-        "MergeCookies",
-        &(vec!["OTHER=1; Path=/"],),
-    )
-    .unwrap();
-    wait_until("the mirror to be rewritten", Duration::from_secs(2), || {
-        env.mirror().is_some()
-    });
-    rotate("afterstore");
-    wait_until("the rotation to be adopted", Duration::from_secs(5), || {
-        adopted("afterstore")
-    });
-
-    // Deleted, then icloud-md makes it again before we store anything.
-    fs::remove_dir_all(env.mirror_dir()).unwrap();
-    thread::sleep(Duration::from_millis(200));
-    fs::create_dir_all(env.mirror_dir()).unwrap();
-    fs::write(&session_file, saved.to_string()).unwrap();
-    rotate("afterrecreate");
-    wait_until("the rotation to be adopted", Duration::from_secs(5), || {
-        adopted("afterrecreate")
-    });
-}
-
 /// `watch.next()`, or None after `timeout`.
 fn next_within(watch: icloud_session::Watch, timeout: Duration) -> Option<icloud_session::Status> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -1626,7 +1478,6 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     assert!(!dir.path().join("count").exists(), "no window run");
     let validates = server.count(VALIDATE);
     let before = env.account().unwrap();
-    let mirror_before = env.mirror();
 
     let mut watch = icloud_session::watch_on(&conn).unwrap();
     icloud_session::authorize_find_my_on(&conn).unwrap();
@@ -1636,13 +1487,12 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     assert_eq!(done.dsid.as_deref(), Some(DSID));
     assert_eq!(fs::read_to_string(dir.path().join("args")).unwrap().trim(), "--find");
 
-    // Not validated, and the main account and the mirror are untouched.
+    // Not validated, and the main account is untouched.
     assert_eq!(server.count(VALIDATE), validates);
     let account = env.account().unwrap();
     for key in ["cookies", "client_params", "dsid", "validated_at", "captured_at"] {
         assert_eq!(account[key], before[key], "{key}");
     }
-    assert_eq!(env.mirror(), mirror_before);
     // The Find My jar, session-only cookies included.
     let fm = &account["find_my"];
     assert_eq!(fm["client_params"]["clientId"], "find-client-id");
@@ -1941,7 +1791,6 @@ fn a_450_signs_in_with_the_stored_password_and_retries_once() {
     let s = Session::connect_on(&conn).unwrap();
     let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
     let before = env.account().unwrap();
-    let mirror_before = env.mirror();
     let validates = server.count(VALIDATE);
 
     // Two requests at once, both with the stale jar: one sign-in serves both.
@@ -1977,13 +1826,11 @@ fn a_450_signs_in_with_the_stored_password_and_retries_once() {
     assert_eq!(autofill.last_password(), PASSWORD);
 
     // Kept as the Find My jar only, with the client params the window
-    // captured; the main jar, the mirror and the validate count are
-    // untouched.
+    // captured; the main jar and the validate count are untouched.
     let account = env.account().unwrap();
     for key in ["cookies", "client_params", "dsid", "validated_at", "captured_at"] {
         assert_eq!(account[key], before[key], "{key}");
     }
-    assert_eq!(env.mirror(), mirror_before);
     assert_eq!(server.count(VALIDATE), validates);
     assert_eq!(find_my_cookie(&account["find_my"]["cookies"]).as_deref(), Some("auto1"));
     assert_eq!(

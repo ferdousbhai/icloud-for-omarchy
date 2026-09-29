@@ -86,22 +86,6 @@ pub fn user_dsid(cookies: &[Cookie]) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Parses a `Name1=Value1; Name2=Value2` header into ordered pairs. A name
-/// seen twice keeps its first position and its last value, like a JS `Map`.
-pub fn parse_cookie_header(header: &str) -> Vec<(String, String)> {
-    let mut cookies: Vec<(String, String)> = Vec::new();
-    for part in header.split(';') {
-        let part = part.trim();
-        let Some(eq) = part.find('=') else { continue };
-        let (name, value) = (&part[..eq], &part[eq + 1..]);
-        match cookies.iter_mut().find(|(n, _)| n == name) {
-            Some(entry) => entry.1 = value.to_string(),
-            None => cookies.push((name.to_string(), value.to_string())),
-        }
-    }
-    cookies
-}
-
 /// One parsed `Set-Cookie` header.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SetCookie {
@@ -267,26 +251,6 @@ pub fn merge_set_cookies<S: AsRef<str>>(jar: &mut Vec<Cookie>, headers: &[S], no
     changed
 }
 
-/// Adopts the values of a plain cookie header (icloud-md's jar) by name.
-/// Known cookies keep their expiry; new names become session cookies.
-pub fn adopt_header(jar: &mut Vec<Cookie>, header: &str) -> bool {
-    let mut changed = false;
-    for (name, value) in parse_cookie_header(header) {
-        match jar.iter_mut().find(|c| c.name == name) {
-            Some(c) if c.value == value => {}
-            Some(c) => {
-                c.value = value;
-                changed = true;
-            }
-            None => {
-                jar.push(Cookie::new(&name, &value));
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,23 +334,6 @@ mod tests {
         let mut j = jar(&[("A", "1"), ("B", "2")]);
         j[0].expires = Some(NOW - 1);
         assert_eq!(header(&j, NOW), "B=2");
-    }
-
-    #[test]
-    fn duplicate_names_keep_first_position_last_value() {
-        let parsed = parse_cookie_header("A=1; B=2; A=3;; noequals");
-        assert_eq!(parsed, vec![("A".into(), "3".into()), ("B".into(), "2".into())]);
-    }
-
-    #[test]
-    fn adopting_a_header_keeps_expiry() {
-        let mut j = jar(&[(TOKEN, "old"), ("B", "2")]);
-        j[0].expires = Some(NOW + 10);
-        assert!(adopt_header(&mut j, "X-APPLE-WEBAUTH-TOKEN=new; B=2; C=3"));
-        assert_eq!(j[0].value, "new");
-        assert_eq!(j[0].expires, Some(NOW + 10));
-        assert_eq!(j[2], Cookie::new("C", "3"));
-        assert!(!adopt_header(&mut j, "B=2"));
     }
 
     #[test]

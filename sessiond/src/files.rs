@@ -1,5 +1,4 @@
-//! Where things live, the account file, the icloud-md mirror, and atomic
-//! 0600 writes.
+//! Where things live, the account file, and atomic 0600 writes.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -9,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::cookies::{self, Cookie};
 
@@ -31,8 +30,6 @@ pub struct Paths {
     pub webkit_data: PathBuf,
     /// `$XDG_CACHE_HOME/icloud-session/webkit`
     pub webkit_cache: PathBuf,
-    /// `~/.config/icloud-md/accounts` (icloud-md uses `os.homedir()`, not XDG)
-    pub icloud_md_accounts: PathBuf,
 }
 
 fn env_dir(name: &str) -> Option<PathBuf> {
@@ -70,16 +67,7 @@ impl Paths {
             account: state_dir().join("account.json"),
             webkit_data: data_dir().join("webkit"),
             webkit_cache: cache_dir().join("webkit"),
-            icloud_md_accounts: home().join(".config/icloud-md/accounts"),
         }
-    }
-
-    pub fn mirror_dir(&self, dsid: &str) -> PathBuf {
-        self.icloud_md_accounts.join(dsid)
-    }
-
-    pub fn mirror_session(&self, dsid: &str) -> PathBuf {
-        self.mirror_dir(dsid).join("session.local.json")
     }
 }
 
@@ -98,13 +86,13 @@ pub struct Account {
     /// Unix seconds of the last successful `/validate`.
     #[serde(default)]
     pub validated_at: u64,
-    /// RFC 3339 time of the sign-in, the mirror's `capturedAt`.
+    /// RFC 3339 time of the sign-in.
     #[serde(default)]
     pub captured_at: String,
     /// Find My's own session from `AuthorizeFindMy()`, until a client
     /// reports a Find My 450. Apple's password prompt on icloud.com/find is
     /// a one-factor sign-in: good for Find My, refused by `/validate`, so
-    /// it is kept apart from the main jar, never validated or mirrored.
+    /// it is kept apart from the main jar and never validated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub find_my: Option<FindMyJar>,
 }
@@ -187,110 +175,6 @@ pub fn remove_dir(path: &Path) -> io::Result<()> {
     }
 }
 
-// ----------------------------------------------------------- icloud-md
-
-/// What [`write_mirror`] did.
-#[derive(Debug, PartialEq, Eq)]
-pub enum MirrorWrite {
-    /// Written; the cookie header it holds.
-    Written(String),
-    /// icloud-md rewrote the session file while we were writing ours, so
-    /// ours was not put in place: adopt its jar, then write again.
-    Changed,
-}
-
-/// Writes `accounts/<dsid>/{session.local.json,meta.json}` in icloud-md's
-/// shape. Fields icloud-md added to an existing session file are kept.
-pub fn write_mirror(paths: &Paths, account: &Account, now: u64) -> io::Result<MirrorWrite> {
-    write_mirror_checked(paths, account, now, || {})
-}
-
-/// [`write_mirror`], with a hook that runs just before the rename (tests).
-fn write_mirror_checked(
-    paths: &Paths,
-    account: &Account,
-    now: u64,
-    before_rename: impl FnOnce(),
-) -> io::Result<MirrorWrite> {
-    let dir = paths.mirror_dir(&account.dsid);
-    create_private_dir(&dir)?;
-    let session_path = paths.mirror_session(&account.dsid);
-    // Read-modify-rename: icloud-md writes this file in place, and a
-    // rotation it writes between our read and our rename would be lost.
-    // The file must still hold what we read when ours goes in.
-    let original = read_file(&session_path)?;
-    let mut fields = original
-        .as_deref()
-        .and_then(|bytes| serde_json::from_slice(bytes).ok())
-        .and_then(|v: Value| match v {
-            Value::Object(map) => Some(map),
-            _ => None,
-        })
-        .unwrap_or_default();
-    let cookie = account.cookie_header(now);
-    let set = |fields: &mut Map<String, Value>, k: &str, v: &str| {
-        fields.insert(k.to_string(), Value::String(v.to_string()));
-    };
-    set(&mut fields, "cookie", &cookie);
-    set(&mut fields, CLIENT_ID, account.param(CLIENT_ID));
-    set(&mut fields, CLIENT_BUILD_NUMBER, account.param(CLIENT_BUILD_NUMBER));
-    set(
-        &mut fields,
-        CLIENT_MASTERING_NUMBER,
-        account.param(CLIENT_MASTERING_NUMBER),
-    );
-    set(&mut fields, "capturedAt", &account.captured_at);
-    let unchanged = write_json_if(&session_path, &Value::Object(fields), || {
-        before_rename();
-        read_file(&session_path).is_ok_and(|now| now == original)
-    })?;
-    if !unchanged {
-        return Ok(MirrorWrite::Changed);
-    }
-
-    let meta_path = dir.join("meta.json");
-    let meta = serde_json::json!({"appleId": account.apple_id, "dsid": account.dsid});
-    if read_json_object(&meta_path).map(Value::Object).as_ref() != Some(&meta) {
-        write_json(&meta_path, &meta)?;
-    }
-    Ok(MirrorWrite::Written(cookie))
-}
-
-/// The file's bytes, `None` when it does not exist.
-fn read_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// What icloud-md last wrote to the mirrored session file, if it parses.
-pub struct MirrorSession {
-    pub cookie: String,
-    pub params: BTreeMap<String, String>,
-}
-
-pub fn read_mirror(paths: &Paths, dsid: &str) -> Option<MirrorSession> {
-    let fields = read_json_object(&paths.mirror_session(dsid))?;
-    let cookie = fields.get("cookie")?.as_str().filter(|c| !c.is_empty())?.to_string();
-    let params = [CLIENT_ID, CLIENT_BUILD_NUMBER, CLIENT_MASTERING_NUMBER]
-        .into_iter()
-        .filter_map(|k| {
-            let v = fields.get(k)?.as_str().filter(|v| !v.is_empty())?;
-            Some((k.to_string(), v.to_string()))
-        })
-        .collect();
-    Some(MirrorSession { cookie, params })
-}
-
-fn read_json_object(path: &Path) -> Option<Map<String, Value>> {
-    match serde_json::from_slice(&fs::read(path).ok()?).ok()? {
-        Value::Object(map) => Some(map),
-        _ => None,
-    }
-}
-
 // --------------------------------------------------------------- writes
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -298,24 +182,17 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// `JSON.stringify(value, null, 2) + "\n"`, written atomically, mode 0600,
 /// creating the parent directory 0700.
 pub fn write_json(path: &Path, value: &Value) -> io::Result<()> {
-    write_json_if(path, value, || true).map(|_| ())
-}
-
-/// [`write_json`], put in place only if `proceed()` says so just before the
-/// rename. Returns whether it was.
-fn write_json_if(path: &Path, value: &Value, proceed: impl FnOnce() -> bool) -> io::Result<bool> {
     if let Some(dir) = path.parent() {
         create_private_dir(dir)?;
     }
     let mut bytes = serde_json::to_vec_pretty(value).expect("JSON serializes");
     bytes.push(b'\n');
-    write_atomic_if(path, &bytes, proceed)
+    write_atomic(path, &bytes)
 }
 
-/// Writes `bytes` to a temp file (mode 0600) beside `path`, then, if
-/// `proceed()` agrees, renames it over `path`, so a reader sees either the
-/// old file or the new one. Returns whether it did.
-fn write_atomic_if(path: &Path, bytes: &[u8], proceed: impl FnOnce() -> bool) -> io::Result<bool> {
+/// Writes `bytes` to a temp file (mode 0600) beside `path`, then renames it
+/// over `path`, so a reader sees either the old file or the new one.
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
@@ -323,12 +200,9 @@ fn write_atomic_if(path: &Path, bytes: &[u8], proceed: impl FnOnce() -> bool) ->
         let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        if !proceed() {
-            return Ok(false);
-        }
-        fs::rename(&tmp, path).map(|()| true)
+        fs::rename(&tmp, path)
     })();
-    if !matches!(result, Ok(true)) {
+    if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
@@ -405,58 +279,5 @@ mod tests {
         assert_eq!(a.dsid, "1");
         assert_eq!(a.validated_at, 0);
         assert!(a.webservices.is_empty() && a.client_params.is_empty());
-    }
-
-    #[test]
-    fn mirror_keeps_unknown_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths {
-            account: dir.path().join("a.json"),
-            webkit_data: dir.path().join("w"),
-            webkit_cache: dir.path().join("c"),
-            icloud_md_accounts: dir.path().join("accounts"),
-        };
-        create_private_dir(&paths.mirror_dir("123")).unwrap();
-        fs::write(paths.mirror_session("123"), r#"{"cookie":"old","extra":[1]}"#).unwrap();
-        assert_eq!(
-            write_mirror(&paths, &account(), 0).unwrap(),
-            MirrorWrite::Written("A=1; B=2".into())
-        );
-        let text = fs::read_to_string(paths.mirror_session("123")).unwrap();
-        let v: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["cookie"], "A=1; B=2");
-        assert_eq!(v["extra"], serde_json::json!([1]));
-        assert_eq!(v["clientMasteringNumber"], "m");
-        let meta: Value =
-            serde_json::from_slice(&fs::read(paths.mirror_dir("123").join("meta.json")).unwrap()).unwrap();
-        assert_eq!(meta, serde_json::json!({"appleId": "a@example.com", "dsid": "123"}));
-        let m = read_mirror(&paths, "123").unwrap();
-        assert_eq!(m.cookie, "A=1; B=2");
-        assert_eq!(m.params[CLIENT_ID], "id");
-    }
-
-    #[test]
-    fn a_rotation_written_during_our_write_is_kept() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths {
-            account: dir.path().join("a.json"),
-            webkit_data: dir.path().join("w"),
-            webkit_cache: dir.path().join("c"),
-            icloud_md_accounts: dir.path().join("accounts"),
-        };
-        create_private_dir(&paths.mirror_dir("123")).unwrap();
-        let session = paths.mirror_session("123");
-        fs::write(&session, r#"{"cookie":"A=0"}"#).unwrap();
-        let rotation = r#"{"cookie":"A=icloud-md"}"#;
-        let wrote = write_mirror_checked(&paths, &account(), 0, || fs::write(&session, rotation).unwrap()).unwrap();
-        assert_eq!(wrote, MirrorWrite::Changed);
-        assert_eq!(fs::read_to_string(&session).unwrap(), rotation);
-        let names: Vec<_> = fs::read_dir(paths.mirror_dir("123")).unwrap().collect();
-        assert_eq!(names.len(), 1, "no temp file left");
-        // Nothing in between: written.
-        assert!(matches!(
-            write_mirror(&paths, &account(), 0).unwrap(),
-            MirrorWrite::Written(_)
-        ));
     }
 }

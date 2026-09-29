@@ -1,6 +1,6 @@
 [package]
 name = "icloud-sessiond"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 description = "D-Bus service, sign-in window and CLI that own one iCloud web sign-in"
 license.workspace = true
@@ -30,7 +30,6 @@ required-features = ["signin"]
 icloud-session.workspace = true
 blocking = "1"
 humantime = "2"
-inotify = { version = "0.11", default-features = false }
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 ureq = { workspace = true, default-features = true }

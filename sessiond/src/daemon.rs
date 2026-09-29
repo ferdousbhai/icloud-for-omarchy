@@ -1,8 +1,7 @@
 //! The daemon: the only owner of the account, its D-Bus interface, the
-//! sign-in child, the icloud-md mirror, the heartbeat and the idle exit.
+//! sign-in child, the heartbeat and the idle exit.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ffi::OsStr;
 use std::hash::{BuildHasher, RandomState};
 use std::io::Read;
 use std::path::PathBuf;
@@ -19,7 +18,7 @@ use zbus::zvariant::Value;
 
 use crate::apple::{self, LoginError, ValidateError};
 use crate::cookies::{self, Cookie};
-use crate::files::{self, Account, FindMyJar, MirrorSession, MirrorWrite, Paths};
+use crate::files::{self, Account, FindMyJar, Paths};
 use crate::secrets::{self, Password, SecretStore};
 
 /// Heartbeat keeps running while a client called within this window
@@ -164,9 +163,6 @@ struct State {
     generation: u64,
     last_attempt: Option<Attempt>,
     signing_in: bool,
-    /// The cookie header now in icloud-md's session file, as far as we know
-    /// (written by us or adopted from it). Tells our own writes apart.
-    mirror_cookie: Option<String>,
     /// Last method call from a client (heartbeat).
     last_call: Instant,
     /// Last call or sign-in end (idle exit).
@@ -197,11 +193,6 @@ impl State {
     }
 }
 
-struct MirrorWatch {
-    watches: inotify::Watches,
-    current: Option<(inotify::WatchDescriptor, String)>,
-}
-
 pub struct Daemon {
     cfg: Config,
     agent: ureq::Agent,
@@ -212,7 +203,6 @@ pub struct Daemon {
     /// Orders property announcements.
     published: Mutex<Props>,
     conn: OnceLock<Connection>,
-    mirror_watch: Mutex<Option<MirrorWatch>>,
     /// A heartbeat `/validate` is running (on its own thread, so a slow
     /// Apple never holds up the idle exit).
     heartbeat_busy: AtomicBool,
@@ -256,7 +246,6 @@ impl Daemon {
             last_attempt: None,
             signin_seq: 0,
             signing_in: false,
-            mirror_cookie: None,
             last_call: Instant::now(),
             last_activity: Instant::now(),
             clients: HashSet::new(),
@@ -274,7 +263,6 @@ impl Daemon {
             validate_lock: Mutex::new(()),
             published: Mutex::new(props),
             conn: OnceLock::new(),
-            mirror_watch: Mutex::new(None),
             heartbeat_busy: AtomicBool::new(false),
             signin_child: Mutex::new(None),
             secrets: secrets::from_env(),
@@ -308,26 +296,10 @@ impl Daemon {
             me.publish();
         });
         let _ = keyring_looked.recv_timeout(KEYRING_LOOK_WAIT);
-        // Pick up what icloud-md rotated while we were not running, and make
-        // sure the mirror exists. The validate lock is taken before the name,
-        // so a `Session()` delivered as soon as we own it waits for this and
-        // uses the adopted jar.
-        {
-            let _one = lock(&self.validate_lock);
-            // Never queue behind another instance; fail instead.
-            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
-            if conn.request_name_with_flags(icloud_session::BUS_NAME, flags)?
-                != zbus::fdo::RequestNameReply::PrimaryOwner
-            {
-                return Err(zbus::Error::NameTaken);
-            }
-            let dsid = lock(&self.state).account.as_ref().map(|a| a.dsid.clone());
-            if let Some(dsid) = dsid {
-                self.adopt_mirror(&dsid);
-                let mut st = lock(&self.state);
-                self.store(&mut st);
-            }
-            self.start_mirror_watch();
+        // Never queue behind another instance; fail instead.
+        let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+        if conn.request_name_with_flags(icloud_session::BUS_NAME, flags)? != zbus::fdo::RequestNameReply::PrimaryOwner {
+            return Err(zbus::Error::NameTaken);
         }
         // A restarted daemon may differ from the one watchers last heard
         // from: announce every property once.
@@ -402,56 +374,10 @@ impl Daemon {
 
     // ------------------------------------------------------------- store
 
-    /// Persists the account and, if its cookie header changed, the
-    /// icloud-md mirror. Errors are logged: the session in memory is still
-    /// right, and the next change retries.
-    fn store(&self, st: &mut State) {
-        let State {
-            account: Some(account),
-            mirror_cookie,
-            ..
-        } = st
-        else {
-            return;
-        };
-        // A rotation icloud-md writes while we write ours is adopted first,
-        // then the merged jar is written; a few rounds at most.
-        for _ in 0..3 {
-            let now = now_unix();
-            if mirror_cookie.as_deref() == Some(account.cookie_header(now).as_str()) {
-                break;
-            }
-            match files::write_mirror(&self.cfg.paths, account, now) {
-                Ok(MirrorWrite::Written(cookie)) => {
-                    *mirror_cookie = Some(cookie);
-                    break;
-                }
-                Ok(MirrorWrite::Changed) => {
-                    if let Some(m) = files::read_mirror(&self.cfg.paths, &account.dsid) {
-                        *mirror_cookie = Some(m.cookie.clone());
-                        if adopt(account, m) {
-                            eprintln!("icloud-sessiond: adopted the session icloud-md rotated");
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("icloud-sessiond: writing the icloud-md mirror: {e}");
-                    break;
-                }
-            }
-        }
-        if let Err(e) = account.save(&self.cfg.paths.account) {
-            eprintln!("icloud-sessiond: saving {}: {e}", self.cfg.paths.account.display());
-        }
-        let dsid = account.dsid.clone();
-        self.watch_mirror(Some(&dsid));
-    }
-
     /// Forgets the account (confirmed 421/401 or `SignOut`).
     fn forget(&self, st: &mut State) {
         st.account = None;
         st.generation += 1;
-        st.mirror_cookie = None;
         if let Err(e) = files::remove(&self.cfg.paths.account) {
             eprintln!("icloud-sessiond: removing {}: {e}", self.cfg.paths.account.display());
         }
@@ -465,7 +391,7 @@ impl Daemon {
         let arrived = Instant::now();
         let _one = lock(&self.validate_lock);
         let (cookie, params, dsid, generation) = {
-            let mut st = lock(&self.state);
+            let st = lock(&self.state);
             let generation = st.generation;
             let Some(a) = &st.account else {
                 return Err(Refresh::SignedOut);
@@ -474,14 +400,7 @@ impl Daemon {
             // Waited behind an attempt that finished meanwhile: its answer
             // is ours too, rather than another serial round trip to Apple.
             if let Some(at) = last.filter(|at| at.finished >= arrived) {
-                if !at.ok {
-                    return Err(Refresh::Failed);
-                }
-                if matches!(fresh, Fresh::Confirm) {
-                    st.mirror_cookie = None;
-                    self.store(&mut st);
-                }
-                return Ok(());
+                return if at.ok { Ok(()) } else { Err(Refresh::Failed) };
             }
             if let Fresh::Since(t) = fresh {
                 if a.validated_at >= t {
@@ -517,12 +436,7 @@ impl Daemon {
                     a.webservices = v.webservices;
                     a.apple_id = v.apple_id;
                     a.validated_at = now_unix();
-                    if matches!(fresh, Fresh::Confirm) {
-                        // A client (icloud-md) may hold a stale jar: rewrite
-                        // the mirror so it can retry with the fresh one.
-                        st.mirror_cookie = None;
-                    }
-                    self.store(&mut st);
+                    self.save_account(&st);
                 }
                 Ok(())
             }
@@ -539,7 +453,6 @@ impl Daemon {
             }
         };
         drop(st);
-        self.rewatch();
         self.publish();
         outcome
     }
@@ -570,14 +483,14 @@ impl Daemon {
         if let Some(a) = st.account.as_mut()
             && cookies::merge_set_cookies(&mut a.cookies, set_cookies, now_unix())
         {
-            self.store(&mut st);
+            self.save_account(&st);
         }
         drop(st);
         self.publish();
     }
 
     /// Confirms with Apple before signing every app out. A 2xx keeps the
-    /// session (and rewrites the mirror); an unreachable Apple changes
+    /// session; an unreachable Apple changes
     /// nothing. A `/validate` that finishes after the report arrived counts
     /// as the confirmation, so a burst of reports costs one round trip.
     /// Returns whether the account is still signed in.
@@ -588,8 +501,8 @@ impl Daemon {
         }
     }
 
-    /// Saves `account.json` as it is, without touching the mirror (the
-    /// Find My jar is not icloud-md's business).
+    /// Saves `account.json`. Errors are logged: the session in memory is
+    /// still right, and the next change retries.
     fn save_account(&self, st: &State) {
         if let Some(a) = &st.account
             && let Err(e) = a.save(&self.cfg.paths.account)
@@ -923,7 +836,6 @@ impl Daemon {
             }
             st.last_activity = Instant::now();
             drop(st);
-            me.rewatch();
             me.publish();
             if result.is_ok() && !find {
                 me.refresh_password_stored();
@@ -1082,14 +994,13 @@ impl Daemon {
         }
         st.account = Some(account);
         st.generation += 1;
-        st.mirror_cookie = None;
-        self.store(&mut st);
+        self.save_account(&st);
         Ok(())
     }
 
     /// Keeps what the Find My window captured as the account's Find My jar:
     /// not validated (Apple's `/validate` refuses a one-factor session),
-    /// and the main jar, its generation and the mirror are left alone. A
+    /// and the main jar and its generation are left alone. A
     /// dsid the window reported (or the jar's X-APPLE-WEBAUTH-USER names)
     /// must be the account's.
     fn store_find_my(
@@ -1142,10 +1053,7 @@ impl Daemon {
             st.signin_seq += 1;
             st.signing_in = false;
             st.last_activity = Instant::now();
-            if let Some(dsid) = st.account.as_ref().map(|a| a.dsid.clone()) {
-                if let Err(e) = files::remove(&self.cfg.paths.mirror_session(&dsid)) {
-                    eprintln!("icloud-sessiond: removing the icloud-md mirror: {e}");
-                }
+            if st.account.is_some() {
                 self.forget(&mut st);
             }
         }
@@ -1154,143 +1062,6 @@ impl Daemon {
                 eprintln!("icloud-sessiond: removing {}: {e}", dir.display());
             }
         }
-        self.rewatch();
-        self.publish();
-    }
-
-    // ------------------------------------------------------------ mirror
-
-    fn start_mirror_watch(self: &Arc<Daemon>) {
-        let mut inotify = match inotify::Inotify::init() {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("icloud-sessiond: inotify: {e}; icloud-md rotations will not be adopted");
-                return;
-            }
-        };
-        *lock(&self.mirror_watch) = Some(MirrorWatch {
-            watches: inotify.watches(),
-            current: None,
-        });
-        self.rewatch();
-        let me = self.clone();
-        thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
-            loop {
-                let events = match inotify.read_events_blocking(&mut buffer) {
-                    Ok(events) => events,
-                    Err(e) => {
-                        eprintln!("icloud-sessiond: inotify: {e}");
-                        return;
-                    }
-                };
-                let mut hit = None;
-                let mut lost = false;
-                for event in events {
-                    let mut watch = lock(&me.mirror_watch);
-                    let Some(w) = watch.as_mut() else { continue };
-                    let Some(dsid) = w
-                        .current
-                        .as_ref()
-                        .filter(|(wd, _)| *wd == event.wd)
-                        .map(|(_, d)| d.clone())
-                    else {
-                        continue;
-                    };
-                    if event
-                        .mask
-                        .intersects(inotify::EventMask::IGNORED | inotify::EventMask::DELETE_SELF)
-                    {
-                        // The directory is gone and the watch with it. The next
-                        // store writes the mirror again and re-watches; the
-                        // tick re-watches if the directory comes back first.
-                        eprintln!("icloud-sessiond: the icloud-md mirror directory went away");
-                        w.current = None;
-                        lost = true;
-                        hit = None;
-                    } else if event.name == Some(OsStr::new("session.local.json")) {
-                        hit = Some(dsid);
-                    }
-                }
-                if lost {
-                    lock(&me.state).mirror_cookie = None;
-                }
-                if let Some(dsid) = hit {
-                    me.adopt_mirror(&dsid);
-                }
-            }
-        });
-    }
-
-    /// Points the inotify watch at the current account's mirror directory.
-    fn rewatch(&self) {
-        let dsid = lock(&self.state).account.as_ref().map(|a| a.dsid.clone());
-        self.watch_mirror(dsid.as_deref());
-    }
-
-    /// Points the inotify watch at `dsid`'s mirror directory, if it exists
-    /// (or at nothing). Takes only the watch lock, so `store` may call it
-    /// while it holds the state.
-    fn watch_mirror(&self, dsid: Option<&str>) {
-        let mut guard = lock(&self.mirror_watch);
-        let Some(w) = guard.as_mut() else { return };
-        if w.current.as_ref().map(|(_, d)| d.as_str()) == dsid {
-            return;
-        }
-        if let Some((wd, _)) = w.current.take() {
-            let _ = w.watches.remove(wd);
-        }
-        let Some(dsid) = dsid else { return };
-        let dir = self.cfg.paths.mirror_dir(dsid);
-        if !dir.is_dir() {
-            return;
-        }
-        let mask = inotify::WatchMask::CLOSE_WRITE | inotify::WatchMask::MOVED_TO | inotify::WatchMask::DELETE_SELF;
-        match w.watches.add(&dir, mask) {
-            Ok(wd) => w.current = Some((wd, dsid.to_string())),
-            Err(e) => eprintln!("icloud-sessiond: watching {}: {e}", dir.display()),
-        }
-    }
-
-    /// After the mirror directory went away: once it is back (icloud-md
-    /// made it again), watch it and adopt what it holds.
-    fn recover_mirror_watch(&self) {
-        let Some(dsid) = lock(&self.state).account.as_ref().map(|a| a.dsid.clone()) else {
-            return;
-        };
-        let lost = lock(&self.mirror_watch).as_ref().is_some_and(|w| w.current.is_none());
-        if !lost || !self.cfg.paths.mirror_dir(&dsid).is_dir() {
-            return;
-        }
-        self.watch_mirror(Some(&dsid));
-        self.adopt_mirror(&dsid);
-    }
-
-    /// Adopts a cookie jar icloud-md wrote to the mirror (its own
-    /// `/validate` rotation). Our own writes are recognised and skipped.
-    fn adopt_mirror(&self, dsid: &str) {
-        let Some(m) = files::read_mirror(&self.cfg.paths, dsid) else {
-            return;
-        };
-        let mut st = lock(&self.state);
-        if st.mirror_cookie.as_deref() == Some(m.cookie.as_str()) {
-            return;
-        }
-        let Some(a) = st.account.as_mut().filter(|a| a.dsid == dsid) else {
-            return;
-        };
-        let cookie = m.cookie.clone();
-        let changed = adopt(a, m);
-        st.mirror_cookie = Some(cookie);
-        if changed {
-            eprintln!("icloud-sessiond: adopted the session icloud-md rotated");
-            if let Some(a) = &st.account
-                && let Err(e) = a.save(&self.cfg.paths.account)
-            {
-                eprintln!("icloud-sessiond: saving {}: {e}", self.cfg.paths.account.display());
-            }
-        }
-        drop(st);
         self.publish();
     }
 
@@ -1354,7 +1125,6 @@ impl Daemon {
                 }
                 st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
             };
-            self.recover_mirror_watch();
             if heartbeat && !self.heartbeat_busy.swap(true, Ordering::SeqCst) {
                 let me = self.clone();
                 thread::spawn(move || {
@@ -1364,19 +1134,6 @@ impl Daemon {
             }
         }
     }
-}
-
-/// Takes icloud-md's jar and client params into the account. Returns
-/// whether anything changed.
-fn adopt(a: &mut Account, m: MirrorSession) -> bool {
-    let mut changed = cookies::adopt_header(&mut a.cookies, &m.cookie);
-    for (k, v) in m.params {
-        if a.client_params.get(&k) != Some(&v) {
-            a.client_params.insert(k, v);
-            changed = true;
-        }
-    }
-    changed
 }
 
 /// What `icloud-session-signin` prints.
@@ -1498,8 +1255,8 @@ impl Service {
     }
 
     /// A client got 421/401 with the current cookie. The daemon confirms
-    /// with `/validate`: true = still signed in (the mirror was rewritten,
-    /// retry once), false = signed out.
+    /// with `/validate`: true = still signed in (fetch `Session()` and retry
+    /// once), false = signed out.
     #[zbus(name = "ReportSignInRequired", out_args("still_signed_in"))]
     async fn report_sign_in_required(&self) -> bool {
         let d = self.0.clone();

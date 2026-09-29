@@ -1,7 +1,7 @@
 # icloud-session
 
 One iCloud web sign-in for every app on the machine. A small D-Bus user
-service owns the Apple account; Notes (through icloud-md), Find My and
+service owns the Apple account; Notes (through icloud-notes-sync), Find My and
 Photos use it instead of signing in themselves.
 
 | crate | binary | role |
@@ -41,8 +41,8 @@ no truncated-read retries and no status polling.
   once it answers 2xx the window prints the jar like a sign-in. That
   password step is a one-factor sign-in (pyicloud's
   `canLaunchWithOneFactor`): good for Find My, refused by `/validate`. So
-  the daemon never validates it and leaves the main jar, and the icloud-md
-  mirror, alone: it keeps it as a separate Find My jar in `account.json`
+  the daemon never validates it and leaves the main jar alone: it keeps
+  it as a separate Find My jar in `account.json`
   (`find_my`: cookies, session-only ones such as `X-APPLE-WEBAUTH-FMIP`
   included, and client params), after checking the dsid the window
   reports (or the jar's X-APPLE-WEBAUTH-USER names), if any, is the
@@ -63,18 +63,18 @@ no truncated-read retries and no status polling.
   on a data endpoint only triggers `ReportSignInRequired()`, which runs a
   `/validate` to confirm first, so one stray 401 does not sign every app out.
   Reports that arrive while a `/validate` is running share its answer.
-- **icloud-md mirror.** After every sign-in and rotation the daemon writes
-  `~/.config/icloud-md/accounts/<dsid>/{session.local.json,meta.json}`
-  atomically, so `icloud-md clone --account <dsid>` syncs Notes with no
-  browser of its own. It watches that file (inotify); when icloud-md writes
-  a jar the daemon did not write (its own `/validate` rotation), the daemon
-  adopts it, also on start for writes made while it was not running.
+- **No icloud-md mirror.** Up to 0.2.0 the daemon also wrote the session
+  to `~/.config/icloud-md/accounts/<dsid>/` for icloud-md and adopted
+  icloud-md's rotations from it. That was retired on 2026-09-29, when
+  Notes moved to icloud-notes-sync, which asks the daemon over D-Bus; the
+  daemon no longer reads, writes or deletes anything under
+  `~/.config/icloud-md`.
 
 ## Library
 
 ```toml
 [dependencies]
-icloud-session = "=0.2.0"
+icloud-session = "=0.2.1"
 ```
 
 ```rust
@@ -150,16 +150,16 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `FindMyAuthorized` | property | `b`, a Find My jar is held and has `X-APPLE-WEBAUTH-FMIP` |
 | `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out; revalidates first if the last validate is older than 10 minutes (if Apple is unreachable it answers with what it has) |
 | `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
-| `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it rewrites the icloud-md mirror with the fresh jar and answers true (retry once); on 421/401 it signs out and answers false |
+| `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it keeps the fresh jar and answers true (fetch `Session()` and retry once); on 421/401 it signs out and answers false |
 | `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
-| `AuthorizeFindMy()` | method | opens the sign-in window on `www.icloud.com/find` (`--find`) unless a window is open; returns at once. On success the captured one-factor jar is kept, unvalidated, as the Find My jar (not if it names another dsid, or when signed out); the main jar and the mirror are untouched |
+| `AuthorizeFindMy()` | method | opens the sign-in window on `www.icloud.com/find` (`--find`) unless a window is open; returns at once. On success the captured one-factor jar is kept, unvalidated, as the Find My jar (not if it names another dsid, or when signed out); the main jar is untouched |
 | `FindMySession()` | method | `→ (s cookie_header, a{ss} client_params)` of the Find My jar, for the `findme` host; with none, and a password stored, signs in to Find My first; error `io.github.ferdousbhai.ICloudSession.Error.FindMyAuthRequired` when there is still none (`SignInRequired` when signed out) |
 | `MergeFindMyCookies(as)` | method | raw `Set-Cookie` header values a client received from the `findme` host |
 | `ReportFindMyAuthRequired()` | method | `→ b reauthorized`. A client got HTTP 450 from Find My: the Find My jar is forgotten; with a password stored, the daemon signs in to Find My again (see below) and answers true, so the client retries once |
 | `FindMyPasswordStored` | property | `b`, the keyring holds the Apple ID password for the signed-in account (false when signed out) |
 | `SetPassword(s)` | method | signs in to Find My once with the password (the autofill window, below). If Apple refuses it, nothing is stored (`…Error.PasswordRejected`); otherwise it is stored in the keyring, and a sign-in that failed for another reason is reported as `…Error.Failed` ("stored the password, but the Find My sign-in with it failed: …"). Also `…Error.Failed` (keyring), `…Error.SignInRequired` |
 | `ForgetPassword()` | method | removes every icloud-session item from the keyring |
-| `SignOut()` | method | forgets the account (and its Find My jar), the WebKit profile and the mirrored `session.local.json` |
+| `SignOut()` | method | forgets the account (and its Find My jar) and the WebKit profile |
 
 Property changes are announced with the standard
 `org.freedesktop.DBus.Properties.PropertiesChanged` signal, one signal per
@@ -198,12 +198,9 @@ Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed),
 | `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`, and `find_my` (the Find My jar: `cookies`, `client_params`, `captured_at`) once authorized. Session-only cookies (`expires: null`) are kept too. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
 | `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache |
-| `~/.config/icloud-md/accounts/<dsid>/session.local.json` (0600) | daemon, icloud-md | `cookie`, `clientId`, `clientBuildNumber`, `clientMasteringNumber`, `capturedAt` (fields icloud-md adds are kept) |
-| `~/.config/icloud-md/accounts/<dsid>/meta.json` (0600) | daemon | `appleId`, `dsid` |
 
 `$XDG_STATE_HOME` defaults to `~/.local/state`, `$XDG_DATA_HOME` to
-`~/.local/share`, `$XDG_CACHE_HOME` to `~/.cache`. The icloud-md path
-follows icloud-md itself (`os.homedir()/.config/icloud-md`). Every daemon
+`~/.local/share`, `$XDG_CACHE_HOME` to `~/.cache`. Every daemon
 write is atomic: temp file in the same directory, mode 0600, fsync, rename.
 One account at a time; signing in with another Apple ID replaces it.
 The earlier layout, where this crate read icloud-md's accounts directory
@@ -248,7 +245,7 @@ lockout), and once Find My's `initClient` answers prints the capture as
 Apple wants more than the password (a 2FA code, a new-browser check) the
 window shows itself after 40 s for the user to finish. The window uses
 its own WebKit profile, as `--find` does; the daemon hands it no cookies,
-and the main jar and the icloud-md mirror are left alone. The client then
+and the main jar is left alone. The client then
 retries its request once. Concurrent reports share one sign-in. Apple
 saying the password is wrong (the window exits 3), or Find My refusing
 the session it just made, stops automatic sign-in until the stored
@@ -384,8 +381,8 @@ for Apple, and a shell script standing in for the sign-in window
 (`ICLOUD_SESSION_SIGNIN_BIN`). They never touch the real session bus,
 `~/.config`, `~/.local` or Apple. Covered: `Session()` and revalidation,
 `MergeCookies`, `ReportSignInRequired` both ways, sign-in (captured,
-closed, without params), sign-out, the icloud-md mirror and adoption of
-icloud-md's writes (live and on start), the client library against the
+closed, without params; nothing written under `~/.config/icloud-md`),
+sign-out, the client library against the
 daemon (requests, rotation, retry, sign-out), the CLI, idle exit, a second
 daemon refusing to start, mock mode without D-Bus, and automatic Find My
 re-authorization through a fake `--find --autofill` window (which checks
