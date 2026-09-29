@@ -222,8 +222,10 @@ fn open_and_record_devices_prune() {
         h.record("new", &fix(20.0, 20.0, 5.0, now - 60), None)
             .unwrap();
     }
-    // Opening drops the stale row.
+    // Opening drops the stale row, and says so.
     let h = History::open(&path).unwrap();
+    assert_eq!(h.pruned_on_open(), 1);
+    assert_eq!(h.count().unwrap(), 1);
     assert!(h.trail("old", 0).unwrap().is_empty());
     assert_eq!(h.trail("new", 0).unwrap().len(), 1);
 

@@ -8,14 +8,33 @@
 //! refreshClient so the history trail has something to draw. Also answers
 //! `/setup/ws/1/validate` with a webservices map pointing `findme` here, in
 //! case the session crate's mock mode validates against the mock URL.
+//!
+//! Every `playSound` and `lostDevice` request is recorded (endpoint and
+//! JSON body): `GET /fake/actions` lists them, so a test or an agent can
+//! check what the app sent without a real device ringing.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-static REFRESHES: AtomicU64 = AtomicU64::new(0);
+/// One server's state: how far the iPhone has walked, and the actions sent.
+#[derive(Default)]
+pub struct State {
+    refreshes: AtomicU64,
+    actions: Mutex<Vec<Value>>,
+}
+
+impl State {
+    /// The recorded `playSound` / `lostDevice` requests, oldest first, each
+    /// `{"endpoint": ..., "body": ...}`.
+    #[allow(dead_code)] // used by tests/cli.rs, not by the example itself.
+    pub fn actions(&self) -> Vec<Value> {
+        self.actions.lock().unwrap().clone()
+    }
+}
 
 fn fixture(name: &str) -> Value {
     let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
@@ -56,8 +75,15 @@ fn live(mut v: Value, step: u64) -> Value {
     v
 }
 
-fn route(base: &str, path: &str) -> (u16, Value) {
+fn route(state: &State, base: &str, path: &str, sent: &Value) -> (u16, Value) {
     let path = path.split('?').next().unwrap_or(path);
+    let record = |endpoint: &str| {
+        state
+            .actions
+            .lock()
+            .unwrap()
+            .push(json!({"endpoint": endpoint, "body": sent}));
+    };
     match path {
         "/setup/ws/1/validate" => (
             200,
@@ -67,21 +93,28 @@ fn route(base: &str, path: &str) -> (u16, Value) {
             }),
         ),
         // A restarted app picks up where the walk left off.
-        "/fmipservice/client/web/initClient" => match REFRESHES.load(Ordering::SeqCst) {
+        "/fmipservice/client/web/initClient" => match state.refreshes.load(Ordering::SeqCst) {
             0 => (200, live(fixture("initClient"), 0)),
             n => (200, live(fixture("refreshClient"), n)),
         },
         "/fmipservice/client/web/refreshClient" => {
-            let n = REFRESHES.fetch_add(1, Ordering::SeqCst) + 1;
+            let n = state.refreshes.fetch_add(1, Ordering::SeqCst) + 1;
             (200, live(fixture("refreshClient"), n))
         }
-        "/fmipservice/client/web/playSound" => (200, fixture("playSound")),
-        "/fmipservice/client/web/lostDevice" => (200, fixture("lostDevice")),
+        "/fmipservice/client/web/playSound" => {
+            record("playSound");
+            (200, fixture("playSound"))
+        }
+        "/fmipservice/client/web/lostDevice" => {
+            record("lostDevice");
+            (200, fixture("lostDevice"))
+        }
+        "/fake/actions" => (200, json!(state.actions())),
         _ => (404, json!({"error": "not found"})),
     }
 }
 
-fn handle(mut stream: TcpStream, base: &str) -> std::io::Result<()> {
+fn handle(mut stream: TcpStream, state: &State, base: &str) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -102,8 +135,8 @@ fn handle(mut stream: TcpStream, base: &str) -> std::io::Result<()> {
 
     let mut parts = request_line.split_whitespace();
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
-    let (status, reply) = route(base, path);
     let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let (status, reply) = route(state, base, path, &sent);
     let device = sent.get("device").and_then(Value::as_str).unwrap_or("");
     eprintln!("{method} {path} -> {status} {device}");
 
@@ -119,13 +152,18 @@ fn handle(mut stream: TcpStream, base: &str) -> std::io::Result<()> {
 
 /// Serves requests on `listener` forever, one thread per connection.
 pub fn serve(listener: TcpListener) -> std::io::Result<()> {
+    serve_with(listener, Arc::default())
+}
+
+/// [`serve`] with a state the caller keeps, to read the recorded actions.
+pub fn serve_with(listener: TcpListener, state: Arc<State>) -> std::io::Result<()> {
     let base = format!("http://{}", listener.local_addr()?);
     for stream in listener.incoming() {
-        let base = base.clone();
+        let (base, state) = (base.clone(), state.clone());
         match stream {
             Ok(s) => {
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(s, &base) {
+                    if let Err(e) = handle(s, &state, &base) {
                         eprintln!("request failed: {e}");
                     }
                 });

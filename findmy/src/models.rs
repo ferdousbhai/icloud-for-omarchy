@@ -61,6 +61,18 @@ impl DeviceClass {
         }
     }
 
+    /// A stable lowercase name, for the command line and its JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IPhone => "iphone",
+            Self::IPad => "ipad",
+            Self::Mac => "mac",
+            Self::Watch => "watch",
+            Self::AirPods => "airpods",
+            Self::Other => "other",
+        }
+    }
+
     /// A symbolic icon from the Adwaita theme.
     pub fn icon_name(self) -> &'static str {
         match self {

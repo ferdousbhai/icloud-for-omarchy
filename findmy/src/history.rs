@@ -39,6 +39,7 @@ pub struct Point {
 
 pub struct History {
     conn: Connection,
+    pruned_on_open: usize,
 }
 
 /// `~/.local/share/icloud-findmy/history.db` (honours `XDG_DATA_HOME`).
@@ -99,8 +100,11 @@ impl History {
              );
              CREATE INDEX IF NOT EXISTS history_device_ts ON history(device_id, ts);",
         )?;
-        let history = History { conn };
-        history.prune(models::now_ms() / 1000)?;
+        let mut history = History {
+            conn,
+            pruned_on_open: 0,
+        };
+        history.pruned_on_open = history.prune(models::now_ms() / 1000)?;
         Ok(history)
     }
 
@@ -111,6 +115,18 @@ impl History {
             "DELETE FROM history WHERE ts < ?1",
             params![now - RETENTION_SECS],
         )
+    }
+
+    /// Rows the prune on open deleted.
+    pub fn pruned_on_open(&self) -> usize {
+        self.pruned_on_open
+    }
+
+    /// Rows stored, for every device.
+    pub fn count(&self) -> rusqlite::Result<usize> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM history", [], |r| r.get::<_, i64>(0))
+            .map(|n| n as usize)
     }
 
     /// The newest stored point for a device.
