@@ -2,15 +2,20 @@
 //!
 //! The cassette and request-log types below are the Rust side of the format
 //! documented in `tests/differential/README.md`; the Node driver
-//! (`tests/differential/driver.ts`) reads and writes the same JSON, so a
+//! (`tests/differential/driver.mts`) reads and writes the same JSON, so a
 //! vault cloned by icloud-md and one cloned by this crate can be served
 //! identical responses and their requests compared.
-#![allow(unused_variables)]
 
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use url::Url;
 
 use super::CkError;
 
@@ -28,6 +33,26 @@ pub trait Transport {
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError>;
 }
 
+impl<T: Transport + ?Sized> Transport for &T {
+    fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
+        (**self).post_json(path, body)
+    }
+
+    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
+        (**self).download(url, dest)
+    }
+}
+
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
+        (**self).post_json(path, body)
+    }
+
+    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
+        (**self).download(url, dest)
+    }
+}
+
 /// The real thing: requests go through icloud-session.
 pub struct LiveTransport {
     pub session: icloud_session::Session,
@@ -40,7 +65,18 @@ impl LiveTransport {
     /// `Session::connect()` + the `ckdatabasews` URL. No ckdatabasews in the
     /// webservices map is icloud-md's `NotesUnavailableError`.
     pub fn connect() -> Result<LiveTransport, CkError> {
-        todo!()
+        LiveTransport::from_session(icloud_session::Session::connect()?)
+    }
+
+    /// [`LiveTransport::connect`] over an existing session.
+    pub fn from_session(session: icloud_session::Session) -> Result<LiveTransport, CkError> {
+        let base = session
+            .webservices()?
+            .url("ckdatabasews")
+            .ok_or(CkError::NotesUnavailable)?
+            .trim_end_matches('/')
+            .to_owned();
+        Ok(LiveTransport { session, base })
     }
 
     /// The signed-in account's dsid (`--account` is checked against it).
@@ -55,40 +91,239 @@ impl LiveTransport {
 
 impl Transport for LiveTransport {
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
-        todo!()
+        let response = self.session.post_json(&format!("{}{path}", self.base), body)?;
+        serde_json::from_slice(&response.body)
+            .map_err(|e| CkError::UnexpectedResponse(format!("invalid JSON from ckdatabasews: {e}")))
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
-        todo!()
+        Ok(self.session.download(url, dest)?)
     }
 }
 
-/// Serves requests from a cassette (see [`Cassette`]) and, with `record`,
-/// appends every request to a [`RequestLog`] written next to it, in the same
+/// Serves requests from a cassette (see [`Cassette`]) and, with a record
+/// path, rewrites a [`RequestLog`] there after every request, in the same
 /// shape the Node driver writes, so the two can be diffed.
 pub struct ReplayTransport {
-    pub cassette: PathBuf,
-    /// Where to write the request log; `None` = don't record.
-    pub record: Option<PathBuf>,
+    cassette: Cassette,
+    ck_host: String,
+    record: Option<PathBuf>,
+    state: Mutex<ReplayState>,
+}
+
+#[derive(Default)]
+struct ReplayState {
+    used: HashSet<usize>,
+    log: RequestLog,
+}
+
+/// Per-session query parameters whose values say nothing about the request.
+const QUERY_NOISE: &[&str] = &[
+    "clientId",
+    "clientBuildNumber",
+    "clientMasteringNumber",
+    "dsid",
+    "requestId",
+];
+
+pub const DEFAULT_CKDATABASEWS_URL: &str = "https://p00-ckdatabasews.icloud.com:443";
+
+enum Answer {
+    Json(Value),
+    Bytes(Vec<u8>),
 }
 
 impl ReplayTransport {
+    /// Loads `cassette`; `record` is where the request log goes.
+    pub fn open(cassette: &Path, record: Option<PathBuf>) -> Result<ReplayTransport, CkError> {
+        ReplayTransport::from_cassette(Cassette::load(cassette)?, record)
+    }
+
+    pub fn from_cassette(cassette: Cassette, record: Option<PathBuf>) -> Result<ReplayTransport, CkError> {
+        if cassette.version != 1 {
+            return Err(CkError::Other(format!(
+                "unsupported cassette version {}",
+                cassette.version
+            )));
+        }
+        let ck_host = Url::parse(cassette.base_url())
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .ok_or_else(|| CkError::Other(format!("bad ckdatabasewsUrl {}", cassette.base_url())))?;
+        Ok(ReplayTransport {
+            cassette,
+            ck_host,
+            record,
+            state: Mutex::new(ReplayState::default()),
+        })
+    }
+
     /// Environment hook for CLI-level differential runs:
     /// `ICLOUD_NOTES_SYNC_CASSETTE=<cassette.json>` (and optionally
     /// `ICLOUD_NOTES_SYNC_REQUEST_LOG=<out.json>`) makes the binary use a
-    /// ReplayTransport instead of icloud-session.
-    pub fn from_env() -> Option<ReplayTransport> {
-        todo!()
+    /// ReplayTransport instead of icloud-session. `None` when unset.
+    pub fn from_env() -> Option<Result<ReplayTransport, CkError>> {
+        let cassette = std::env::var_os("ICLOUD_NOTES_SYNC_CASSETTE").filter(|v| !v.is_empty())?;
+        let record = std::env::var_os("ICLOUD_NOTES_SYNC_REQUEST_LOG")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        Some(ReplayTransport::open(Path::new(&cassette), record))
+    }
+
+    /// The cassette's account (what `--account` must match).
+    pub fn account(&self) -> &CassetteAccount {
+        &self.cassette.account
+    }
+
+    /// Everything requested so far.
+    pub fn request_log(&self) -> RequestLog {
+        self.lock().log.clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ReplayState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Logs the request, answers it from the first matching unused
+    /// interaction (HTTP 599 when none matches, as the Node driver does).
+    fn serve(&self, method: &str, url: &Url, body: Option<&Value>) -> Result<Answer, CkError> {
+        let service = if url.host_str() == Some(self.ck_host.as_str()) {
+            "ckdatabasews"
+        } else {
+            "other"
+        };
+        let path = if service == "other" {
+            format!("{}{}", url.origin().ascii_serialization(), url.path())
+        } else {
+            url.path().to_owned()
+        };
+        let query: BTreeMap<String, String> = url
+            .query_pairs()
+            .filter(|(k, _)| !QUERY_NOISE.contains(&k.as_ref()))
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+
+        let mut state = self.lock();
+        let index = self
+            .cassette
+            .interactions
+            .iter()
+            .enumerate()
+            .position(|(i, interaction)| {
+                let request = &interaction.request;
+                if (state.used.contains(&i) && !interaction.repeat) || !request.method.eq_ignore_ascii_case(method) {
+                    return false;
+                }
+                let place_matches = if service == "ckdatabasews" {
+                    request.path.as_deref() == Some(url.path())
+                } else {
+                    match request.url.as_deref().and_then(|u| Url::parse(u).ok()) {
+                        None => false,
+                        Some(wanted) => {
+                            let same_query = wanted.query().unwrap_or("").is_empty() || wanted.query() == url.query();
+                            wanted.origin() == url.origin() && wanted.path() == url.path() && same_query
+                        }
+                    }
+                };
+                place_matches && request.body.as_ref().is_none_or(|b| Some(b) == body)
+            });
+        state.log.requests.push(LoggedRequest {
+            method: method.to_owned(),
+            service: service.to_owned(),
+            path: path.clone(),
+            query,
+            body: body.cloned(),
+            matched: index,
+        });
+        if let Some(i) = index {
+            state.used.insert(i);
+        }
+        self.write_log(&state.log)?;
+        drop(state);
+
+        let Some(index) = index else {
+            eprintln!("[driver] no cassette interaction for {method} {path}");
+            return Err(CkError::Http {
+                status: 599,
+                body: r#"{"error":"no cassette interaction matched"}"#.into(),
+            });
+        };
+        let response = &self.cassette.interactions[index].response;
+        let bytes = match &response.body_base64 {
+            Some(b64) => Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map_err(|e| CkError::Other(format!("cassette interaction {index}: bad bodyBase64: {e}")))?,
+            ),
+            None => None,
+        };
+        if !(200..300).contains(&response.status) {
+            let body = match &bytes {
+                Some(b) => String::from_utf8_lossy(b).into_owned(),
+                None => response
+                    .body
+                    .as_ref()
+                    .unwrap_or(&Value::Object(Default::default()))
+                    .to_string(),
+            };
+            return Err(CkError::Http {
+                status: response.status,
+                body,
+            });
+        }
+        Ok(match bytes {
+            Some(b) => Answer::Bytes(b),
+            None => Answer::Json(response.body.clone().unwrap_or(Value::Object(Default::default()))),
+        })
+    }
+
+    fn write_log(&self, log: &RequestLog) -> Result<(), CkError> {
+        let Some(path) = &self.record else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+        let text = serde_json::to_string_pretty(log).map_err(|e| CkError::Other(e.to_string()))?;
+        fs::write(path, text + "\n")?;
+        Ok(())
     }
 }
 
 impl Transport for ReplayTransport {
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
-        todo!()
+        let url = Url::parse(&format!("{}{path}", self.cassette.base_url().trim_end_matches('/')))
+            .map_err(|e| CkError::Other(format!("bad request path {path}: {e}")))?;
+        match self.serve("POST", &url, Some(body))? {
+            Answer::Json(v) => Ok(v),
+            Answer::Bytes(b) => serde_json::from_slice(&b)
+                .map_err(|e| CkError::UnexpectedResponse(format!("invalid JSON from ckdatabasews: {e}"))),
+        }
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
-        todo!()
+        let parsed = Url::parse(url).map_err(|e| CkError::Other(format!("bad asset URL {url}: {e}")))?;
+        let bytes = match self.serve("GET", &parsed, None)? {
+            Answer::Bytes(b) => b,
+            Answer::Json(v) => v.to_string().into_bytes(),
+        };
+        if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+        let mut tmp_name = dest.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(format!(".{}.tmp", std::process::id()));
+        let tmp = dest.with_file_name(tmp_name);
+        let result = (|| -> std::io::Result<()> {
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&tmp, dest)
+        })();
+        if let Err(e) = result {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+        Ok(bytes.len() as u64)
     }
 }
 
@@ -173,6 +408,11 @@ impl Cassette {
         let text = std::fs::read_to_string(path)?;
         serde_json::from_str(&text).map_err(|e| CkError::Other(format!("{}: {e}", path.display())))
     }
+
+    /// `ckdatabasewsUrl` or the default.
+    pub fn base_url(&self) -> &str {
+        self.ckdatabasews_url.as_deref().unwrap_or(DEFAULT_CKDATABASEWS_URL)
+    }
 }
 
 /// What a run sent, in order. Written by the Node driver (`--requests`) and
@@ -194,7 +434,7 @@ pub struct LoggedRequest {
     /// Query parameters minus the per-session noise (`clientId`,
     /// `clientBuildNumber`, `clientMasteringNumber`, `dsid`, `requestId`),
     /// keys sorted.
-    pub query: std::collections::BTreeMap<String, String>,
+    pub query: BTreeMap<String, String>,
     /// Parsed JSON body, or the raw string if it wasn't JSON; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
