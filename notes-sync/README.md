@@ -5,8 +5,18 @@ command line. A Rust port of [icloud-md](https://github.com/coddingtonbear/iclou
 0.6.2 by Adam Coddington, using [icloud-session](../session) for the
 Apple sign-in instead of a browser of its own.
 
-Work in progress: the crate currently holds the port's interfaces with
-`todo!()` bodies. The plan is [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
+Every command below is implemented: clone, pull, status, push (with
+`--dry-run` and every refusal), history, diff and restore, over the note
+codec (protobuf, the Notes document model, tables, attachments), the
+Markdown renderer and parser, diff3 merging and the CloudKit client. The
+tests are icloud-md's own test suites ported to Rust, golden outputs from
+icloud-md's code, recorded CloudKit sessions replayed end to end, and a
+differential suite (`cargo test -p icloud-notes-sync -- --ignored`) that runs
+icloud-md itself on the same inputs and requires the same exit codes,
+output, requests and vault files. A live write test runs against a real
+account on request only (see below). How the port was planned and where it
+deliberately differs from icloud-md 0.6.2 is in
+[docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 
 ```console
 $ icloud-notes-sync clone --account <dsid> ~/Notes

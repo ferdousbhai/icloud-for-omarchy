@@ -5,8 +5,9 @@ checks every push against an independent oracle: a fresh clone made by the
 installed `icloud-md`. It is never run by `cargo test`.
 
 ```bash
-cargo build --release
-ICLOUD_NOTES_SYNC_LIVE=1 ICLOUD_NOTES_SYNC_ITEST_ACCOUNT=<dsid> tests/live/push_itest.sh
+# from the repository root
+cargo build --release -p icloud-notes-sync
+ICLOUD_NOTES_SYNC_LIVE=1 ICLOUD_NOTES_SYNC_ITEST_ACCOUNT=<dsid> notes-sync/tests/live/push_itest.sh
 ```
 
 Sign-in comes from icloud-session, which also mirrors the session into
