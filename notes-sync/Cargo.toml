@@ -21,6 +21,7 @@ base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 icloud-session = { path = "../icloud-session" }
+icu_collator = "2"
 indexmap = { version = "2", features = ["serde"] }
 markdown = "1.0.0"
 mdast_util_to_markdown = "0.0.2"
