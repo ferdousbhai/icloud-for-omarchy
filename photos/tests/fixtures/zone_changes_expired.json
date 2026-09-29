@@ -1,0 +1,13 @@
+{
+  "zones": [
+    {
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      },
+      "serverErrorCode": "CHANGE_TOKEN_EXPIRED",
+      "reason": "change token expired"
+    }
+  ]
+}

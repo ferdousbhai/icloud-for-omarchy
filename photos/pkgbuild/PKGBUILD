@@ -1,0 +1,69 @@
+# Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
+#
+# Builds from this checkout. The release workflow runs it on a tagged commit
+# and publishes the result as a signed pacman repository on GitHub Releases;
+# a plain `makepkg` in this directory does the same build locally.
+#
+# The app links the icloud-session crate from the sibling checkout
+# (../icloud-session next to this repository), as Cargo.toml says.
+
+pkgname=icloud-photos
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='iCloud Photos on Omarchy: browse, download, upload and delete'
+arch=('x86_64')
+url='https://github.com/ferdousbhai/icloud-photos'
+license=('MIT')
+options=('!debug' '!lto')
+depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme')
+makedepends=('rust' 'cargo' 'git')
+
+# The version is the git tag: v0.1.0 builds 0.1.0, and a commit past it
+# builds 0.1.0.r<count>.<sha> so `pacman -Q` says where a build came from.
+pkgver() {
+  git -C "$startdir/.." describe --tags --long 2>/dev/null |
+    sed 's/^v//; s/-\([0-9]*\)-g\([0-9a-f]*\)$/.r\1.\2/; s/\.r0\.[0-9a-f]*$//' |
+    grep . || printf '0.0.0.r%s\n' "$(git -C "$startdir/.." rev-list --count HEAD)"
+}
+
+prepare() {
+  # Only committed files: a release build never picks up local leftovers.
+  mkdir -p "$srcdir/$pkgname" "$srcdir/icloud-session"
+  git -C "$startdir/.." archive HEAD | tar -x -C "$srcdir/$pkgname"
+  # Until icloud-session is on crates.io, Cargo.toml uses the sibling checkout.
+  if git -C "$startdir/../../icloud-session" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$startdir/../../icloud-session" archive HEAD | tar -x -C "$srcdir/icloud-session"
+  else
+    tar -C "$startdir/../../icloud-session" --exclude=./target -c . | tar -x -C "$srcdir/icloud-session"
+  fi
+  cd "$srcdir/$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+# Keep build paths out of the binary (panic locations name source files).
+_rustflags() {
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  _rustflags
+  cargo build --frozen --release --bin icloud-photos
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  _rustflags
+  cargo test --frozen
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm755 target/release/icloud-photos "$pkgdir/usr/bin/icloud-photos"
+  install -Dm644 data/com.ferdousbhai.IcloudPhotos.desktop "$pkgdir/usr/share/applications/com.ferdousbhai.IcloudPhotos.desktop"
+  install -Dm644 data/com.ferdousbhai.IcloudPhotos.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.ferdousbhai.IcloudPhotos.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

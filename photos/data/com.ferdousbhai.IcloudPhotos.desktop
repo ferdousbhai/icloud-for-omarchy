@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Photos (iCloud)
+GenericName=Photos
+Comment=Browse, download, upload and delete your iCloud photos
+Exec=icloud-photos
+Icon=com.ferdousbhai.IcloudPhotos
+Terminal=false
+Categories=Graphics;Photography;Viewer;
+Keywords=photos;pictures;icloud;apple;gallery;
+StartupNotify=true
+StartupWMClass=com.ferdousbhai.IcloudPhotos

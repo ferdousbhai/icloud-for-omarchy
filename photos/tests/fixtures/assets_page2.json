@@ -1,0 +1,220 @@
+{
+  "records": [
+    {
+      "recordName": "AX/m003+ccc",
+      "recordType": "CPLMaster",
+      "fields": {
+        "filenameEnc": {
+          "value": "SU1HXzAwMDMuTU9W",
+          "type": "ENCRYPTED_BYTES"
+        },
+        "itemType": {
+          "value": "com.apple.quicktime-movie",
+          "type": "STRING"
+        },
+        "resOriginalRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 9000000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/orig/AX/m003+ccc/${f}?o=1"
+          },
+          "type": "ASSETID"
+        },
+        "resOriginalFileType": {
+          "value": "com.apple.quicktime-movie",
+          "type": "STRING"
+        },
+        "resOriginalWidth": {
+          "value": 1920,
+          "type": "INT64"
+        },
+        "resOriginalHeight": {
+          "value": 1080,
+          "type": "INT64"
+        },
+        "resJPEGThumbRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 18000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/thumb/AX/m003+ccc/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resJPEGThumbFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        },
+        "resJPEGMedRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 250000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/med/AX/m003+ccc/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resJPEGMedFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        },
+        "resVidSmallRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 90000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/vsmall/AX/m003+ccc/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resVidSmallFileType": {
+          "value": "com.apple.quicktime-movie",
+          "type": "STRING"
+        },
+        "duration": {
+          "value": 12,
+          "type": "INT64"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "mccc",
+      "created": {
+        "timestamp": 1700000000000,
+        "userRecordName": "_owner",
+        "deviceID": "2"
+      },
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    },
+    {
+      "recordName": "ASSET-004",
+      "recordType": "CPLAsset",
+      "fields": {
+        "assetDate": {
+          "value": 1757003600000,
+          "type": "TIMESTAMP"
+        },
+        "addedDate": {
+          "value": 1757003660000,
+          "type": "TIMESTAMP"
+        },
+        "masterRef": {
+          "value": {
+            "recordName": "AX/m004+ddd",
+            "action": "DELETE_SELF",
+            "zoneID": {
+              "zoneName": "PrimarySync",
+              "ownerRecordName": "_owner",
+              "zoneType": "REGULAR_CUSTOM_ZONE"
+            }
+          },
+          "type": "REFERENCE"
+        },
+        "isDeleted": {
+          "value": 0,
+          "type": "INT64"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "t004",
+      "created": {
+        "timestamp": 1757003600000,
+        "userRecordName": "_owner",
+        "deviceID": "2"
+      },
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    },
+    {
+      "recordName": "AX/m004+ddd",
+      "recordType": "CPLMaster",
+      "fields": {
+        "filenameEnc": {
+          "value": "SU1HXzAwMDEuSEVJQw==",
+          "type": "ENCRYPTED_BYTES"
+        },
+        "itemType": {
+          "value": "public.heic",
+          "type": "STRING"
+        },
+        "resOriginalRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 3000000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/orig/AX/m004+ddd/${f}?o=1"
+          },
+          "type": "ASSETID"
+        },
+        "resOriginalFileType": {
+          "value": "public.heic",
+          "type": "STRING"
+        },
+        "resOriginalWidth": {
+          "value": 4032,
+          "type": "INT64"
+        },
+        "resOriginalHeight": {
+          "value": 3024,
+          "type": "INT64"
+        },
+        "resJPEGThumbRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 18000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/thumb/AX/m004+ddd/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resJPEGThumbFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        },
+        "resJPEGMedRes": {
+          "value": {
+            "fileChecksum": "AQ",
+            "size": 250000,
+            "wrappingKey": "wk==",
+            "referenceChecksum": "AR",
+            "downloadURL": "https://cvws.icloud-content.com/B/med/AX/m004+ddd/${f}"
+          },
+          "type": "ASSETID"
+        },
+        "resJPEGMedFileType": {
+          "value": "public.jpeg",
+          "type": "STRING"
+        }
+      },
+      "pluginFields": {},
+      "recordChangeTag": "mddd",
+      "created": {
+        "timestamp": 1700000000000,
+        "userRecordName": "_owner",
+        "deviceID": "2"
+      },
+      "deleted": false,
+      "zoneID": {
+        "zoneName": "PrimarySync",
+        "ownerRecordName": "_owner",
+        "zoneType": "REGULAR_CUSTOM_ZONE"
+      }
+    }
+  ],
+  "syncToken": "HwoECJGaGRgAIhYI"
+}

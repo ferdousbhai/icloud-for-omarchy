@@ -1,0 +1,9 @@
+{
+  "records": [
+    {
+      "recordName": "ASSET-002",
+      "reason": "client oplock error updating record",
+      "serverErrorCode": "CONFLICT"
+    }
+  ]
+}
