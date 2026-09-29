@@ -38,6 +38,12 @@ constexpr int kReportTimeoutMs = 60000;
 
 const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to resume.");
 
+// The sync engine: icloud-notes-sync, a Rust port of icloud-md that takes
+// the sign-in from icloud-session. A normal binary on PATH.
+constexpr char kSyncTool[] = "icloud-notes-sync";
+const QString kNotInstalledMessage =
+    QStringLiteral("icloud-notes-sync is not installed (not found on PATH). Install it to sync.");
+
 // A note larger than this is not a note anymore; the guardrail scans
 // stop here so a stray huge file cannot stall the list.
 constexpr qsizetype kScanLimit = 2 * 1024 * 1024;
@@ -63,7 +69,7 @@ bool writeText(const QString &path, const QString &text)
     return true;
 }
 
-// Dot-directories (icloud-md bookkeeping, .git) hold no notes.
+// Dot-directories (the sync tool's bookkeeping, .git) hold no notes.
 bool isHidden(const QString &relativePath)
 {
     for (const QStringView part : QStringView(relativePath).split(u'/')) {
@@ -96,7 +102,7 @@ double readUiScale()
     return ok && v >= 0.5 && v <= 3.0 ? v : 1.0;
 }
 
-// The files a note links to under attachments/. icloud-md keeps one
+// The files a note links to under attachments/. The sync tool keeps one
 // attachments/ directory per folder, shared by every note in it and named
 // after the attachment, and always rewrites each attachment into the note
 // text as a link (an embed for images), so the links are the full list.
@@ -162,7 +168,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, this, &NotesBackend::loadTheme);
 
         // The vault's lock, held until the app exits so a background sync
-        // never runs icloud-md beside it. While one holds it, the window
+        // never runs icloud-notes-sync beside it. While one holds it, the window
         // opens anyway and its syncs wait for it (see startProcess).
         switch (lockVault()) {
         case VaultLock::Locked:
@@ -179,7 +185,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     connect(&m_lockRetry, &QTimer::timeout, this, &NotesBackend::retryLock);
     m_lockRetry.setInterval(500);
 
-    // External changes (an icloud-md pull in a terminal, say) re-list;
+    // External changes (an icloud-notes-sync pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
         rebuildFolders();
@@ -195,22 +201,24 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
             emit vaultChanged();
     });
 
-    m_syncProcess.setProgram(QStringLiteral("icloud-md"));
-    m_syncProcess.setProcessChannelMode(QProcess::MergedChannels);
+    // Separate channels: with --json, stdout carries only the JSON result
+    // (parsed), and progress, warnings and errors go to stderr (logged).
+    m_syncProcess.setProgram(QString::fromLatin1(kSyncTool));
     connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this, [this] {
         const QByteArray out = m_syncProcess.readAllStandardOutput();
         m_captured += out;
         appendLog(QString::fromUtf8(out));
-        // icloud-md spends up to 90 s quietly trying to renew an expired
-        // session before it gives up; say so instead of a bare "Push…".
-        if (out.contains("attempting silent re-authentication"))
-            setSyncMessage(QStringLiteral("iCloud sign-in expired. Trying to renew it in the background (up to 90 s)…"));
+    });
+    connect(&m_syncProcess, &QProcess::readyReadStandardError, this, [this] {
+        const QByteArray err = m_syncProcess.readAllStandardError();
+        m_capturedErr += err;
+        appendLog(QString::fromUtf8(err));
     });
     connect(&m_syncProcess, &QProcess::finished, this, [this](int exitCode) { finishSync(exitCode); });
     connect(&m_syncProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error != QProcess::FailedToStart)
             return; // finished() follows for every other error
-        appendLog(QStringLiteral("Failed to start icloud-md: ") + m_syncProcess.errorString());
+        appendLog(QStringLiteral("Failed to start %1: ").arg(QLatin1StringView(kSyncTool)) + m_syncProcess.errorString());
         finishSync(-1);
     });
 
@@ -229,7 +237,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     }
     refreshSignIn();
     refresh();
-    setSyncMessage(!icloudMdAvailable() ? QStringLiteral("icloud-md not found on PATH. Install it to sync.")
+    setSyncMessage(!syncToolAvailable() ? kNotInstalledMessage
                    : cloned()           ? QStringLiteral("Ready.")
                                         : QStringLiteral("Not linked to iCloud yet. Press Clone."));
 }
@@ -270,7 +278,7 @@ QString NotesBackend::rootPath()
 }
 
 // In the runtime directory, or beside the vault without one: never inside
-// it, since icloud-md clones only into an empty directory. A vault named
+// it, since icloud-notes-sync clones only into an empty directory. A vault named
 // by ICLOUD_NOTES_VAULT gets a lock of its own, so tests never share the
 // real vault's.
 QString NotesBackend::lockPath()
@@ -298,7 +306,7 @@ QString NotesBackend::lockHolder() const
     return holder.isEmpty() ? QStringLiteral("another sync") : holder;
 }
 
-// icloud-md has no lock of its own: it only ever runs with the vault's
+// icloud-notes-sync has no lock of its own: it only ever runs with the vault's
 // held. Someone else holding it (a background sync) means waiting for as
 // long as that takes; a lock that cannot be opened at all means no sync.
 void NotesBackend::startProcess()
@@ -313,7 +321,7 @@ void NotesBackend::startProcess()
             m_lockRetry.start();
         return;
     case VaultLock::Failed:
-        appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-md without it.")
+        appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-notes-sync without it.")
                       .arg(m_lock.path()));
         finishSync(-1);
         return;
@@ -332,7 +340,7 @@ void NotesBackend::retryLock()
     case VaultLock::Failed:
         m_lockRetry.stop();
         if (m_syncRunning) {
-            appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-md without it.")
+            appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-notes-sync without it.")
                           .arg(m_lock.path()));
             finishSync(-1);
         }
@@ -364,7 +372,8 @@ QString NotesBackend::vaultRelative(const QString &name) const
     return m_currentFolder.isEmpty() ? name : m_currentFolder + u'/' + name;
 }
 
-// icloud-md's state directory: the current name, or the one it used to use.
+// The sync tool's state directory (icloud-md's .icloud-md, which
+// icloud-notes-sync keeps), or the name it used to use.
 QString NotesBackend::stateDir()
 {
     for (const char *name : { ".icloud-md", ".icloud-notes-sync" }) {
@@ -381,9 +390,9 @@ QByteArray NotesBackend::stateJson() const
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
 }
 
-bool NotesBackend::icloudMdAvailable() const
+bool NotesBackend::syncToolAvailable() const
 {
-    return !QStandardPaths::findExecutable(QStringLiteral("icloud-md")).isEmpty();
+    return !QStandardPaths::findExecutable(QString::fromLatin1(kSyncTool)).isEmpty();
 }
 
 QString NotesBackend::vaultTitleMode() const
@@ -474,7 +483,7 @@ void NotesBackend::rebuildNotes()
 {
     QFileInfoList entries =
         QDir(folderAbsolutePath(m_currentFolder)).entryInfoList({ QStringLiteral("*.md") }, QDir::Files);
-    // icloud-md syncs note mtimes, so newest-first matches Notes.app ordering.
+    // The sync tool syncs note mtimes, so newest-first matches Notes.app ordering.
     std::sort(entries.begin(), entries.end(),
               [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
     QStringList found;
@@ -499,7 +508,7 @@ void NotesBackend::rebuildNotes()
 }
 
 // Per-note list details plus the guardrail flags the badges show: notes
-// icloud-md does not track ("new"), tracked notes that lost their id,
+// the sync tool does not track ("new"), tracked notes that lost their id,
 // untracked notes carrying an id from elsewhere, conflicts and tables.
 void NotesBackend::classifyNotes()
 {
@@ -1006,8 +1015,9 @@ void NotesBackend::runClone()
 }
 
 // Where a clone waits for the sign-in: icloud-session's first answer, then
-// its sign-in window. icloud-md clones the daemon's account by dsid from the
-// session the daemon mirrors for it, and never opens a window itself.
+// its sign-in window. icloud-notes-sync clones the daemon's account (named
+// by dsid) with the session it takes from the daemon, and never opens a
+// window itself.
 void NotesBackend::continueClone()
 {
     if (!m_cloneWanted || m_syncRunning)
@@ -1024,7 +1034,7 @@ void NotesBackend::continueClone()
         m_cloneWanted = false;
         // Clone targets a fresh directory; the root doubles as that directory.
         // Titles stay the first line of each note, as in Notes.app and as
-        // icloud-md defaults to; a vault cloned with --filename-as-title from
+        // icloud-notes-sync defaults to; a vault cloned with --filename-as-title from
         // the CLI is still read correctly (see vaultTitleMode).
         startSync(Mode::Plain,
                   { QStringLiteral("clone"), QStringLiteral("--account"), m_dsid,
@@ -1086,12 +1096,13 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     m_mode = mode;
     m_syncLabel = label;
     m_captured.clear();
+    m_capturedErr.clear();
     m_syncRunning = true;
     emit syncRunningChanged();
-    appendLog(QStringLiteral("$ icloud-md ") + args.join(u' '));
+    appendLog(QStringLiteral("$ %1 ").arg(QLatin1StringView(kSyncTool)) + args.join(u' '));
     setSyncMessage(label + QStringLiteral("…"));
-    if (!icloudMdAvailable()) {
-        appendLog(QStringLiteral("icloud-md not found on PATH. Install it to sync."));
+    if (!syncToolAvailable()) {
+        appendLog(kNotInstalledMessage);
         finishSync(-1);
         return;
     }
@@ -1104,7 +1115,9 @@ void NotesBackend::finishSync(int exitCode)
 {
     m_syncRunning = false;
     emit syncRunningChanged();
-    const bool ok = exitCode == 0;
+    // Exit 3 is an answer, not a failure: status has entries to push, or
+    // diff found differences.
+    const bool ok = exitCode == 0 || (exitCode == 3 && (m_mode == Mode::Preview || m_mode == Mode::Diff));
     appendLog(QStringLiteral("(exit %1)").arg(exitCode));
 
     QVariantMap parsed;
@@ -1115,12 +1128,15 @@ void NotesBackend::finishSync(int exitCode)
     const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
                              : QStringLiteral("%1 failed (exit %2). See log.").arg(m_syncLabel).arg(exitCode);
 
-    // Every icloud-md failure that only a sign-in fixes (expired session,
-    // missing session file) hints at reauthenticate. Notes never runs that:
-    // icloud-session owns the sign-in, so it is told (it confirms with Apple
-    // before signing everyone out) and syncing pauses until it reports a
-    // sign-in, since every further sync would fail the same way.
-    const bool sessionExpired = !ok && m_captured.contains("icloud-md reauthenticate");
+    // Every failure that only a sign-in fixes exits 4 (and still names
+    // icloud-md's `reauthenticate`, matched too while tools that only say
+    // that are around). Notes never signs in by itself: icloud-session owns
+    // the sign-in, so it is told (it confirms with Apple before signing
+    // everyone out) and syncing pauses until it reports a sign-in, since
+    // every further sync would fail the same way.
+    const bool sessionExpired = !ok
+        && (exitCode == 4 || m_capturedErr.contains("icloud-md reauthenticate")
+            || m_captured.contains("icloud-md reauthenticate"));
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the
@@ -1232,7 +1248,7 @@ QDBusMessage NotesBackend::sessionCall(const QString &method) const
 
 // SignIn() answers through property changes. ReportSignInRequired() answers
 // whether the session still works: icloud-session checked it with Apple and
-// refreshed icloud-md's copy, so icloud-md's refusal came from a stale copy
+// refreshed the sync tool's copy, so its refusal came from a stale copy
 // and one retry should go through (once, until a pull works or a new
 // sign-in arrives). An answer that comes while something else runs retries
 // once that is done. A failure (no daemon, or no answer in time) is logged;

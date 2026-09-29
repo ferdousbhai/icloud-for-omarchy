@@ -9,7 +9,7 @@
 // items struck through. As in Typora, heading, emphasis, code and link
 // marks show only on the line being edited and shrink out of sight
 // elsewhere. It only formats; the text stays byte-for-byte the Markdown
-// icloud-md wrote, so nothing here can create a sync diff.
+// the sync tool wrote, so nothing here can create a sync diff.
 class MarkdownHighlighter : public QSyntaxHighlighter
 {
     Q_OBJECT

@@ -10,12 +10,12 @@
 #include <unistd.h>
 
 // An exclusive flock on a lock file, held until release() or destruction.
-// icloud-md has no lock of its own, so the app and `icloud-notes --sync`
+// icloud-notes-sync has no lock of its own, so the app and `icloud-notes --sync`
 // take this one before running it: the app for its whole lifetime, the
 // background sync for its run. The file is never removed (removing a
 // flock file races with the next locker); it holds only the holder's own
 // description, for whoever waits, and lives in the runtime directory.
-// Close-on-exec, so icloud-md never inherits it.
+// Close-on-exec, so icloud-notes-sync never inherits it.
 class VaultLock
 {
 public:

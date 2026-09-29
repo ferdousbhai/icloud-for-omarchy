@@ -3,20 +3,16 @@
 #include "vaultlock.h"
 
 #include <QCoreApplication>
-#include <QDir>
 #include <QEventLoop>
 #include <QHash>
-#include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
-#include <QVersionNumber>
-#include <algorithm>
 #include <functional>
 
 namespace {
 
-// Spin the event loop until cond holds: D-Bus answers and icloud-md's exit
-// arrive through it. No timeout; the systemd unit bounds the run.
+// Spin the event loop until cond holds: D-Bus answers and the sync tool's
+// exit arrive through it. No timeout; the systemd unit bounds the run.
 void waitFor(const std::function<bool()> &cond)
 {
     QEventLoop loop;
@@ -32,32 +28,6 @@ void waitFor(const std::function<bool()> &cond)
 
 } // namespace
 
-// A systemd user unit may not see the PATH a login shell sets up, where
-// `npm install -g` (into ~/.local, say), mise, nvm or volta put icloud-md
-// and node.
-void findIcloudMd()
-{
-    if (!QStandardPaths::findExecutable(QStringLiteral("icloud-md")).isEmpty())
-        return;
-    const QString home = QDir::homePath();
-    QStringList dirs;
-    for (const char *dir : { "/.local/bin", "/.local/share/mise/shims", "/.npm-global/bin", "/.bun/bin", "/.volta/bin" })
-        dirs << home + QLatin1StringView(dir);
-    // nvm keeps a bin directory per Node version: the newest first.
-    const QDir nvm(home + QStringLiteral("/.nvm/versions/node"));
-    QStringList versions = nvm.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    auto version = [](const QString &name) { return QVersionNumber::fromString(QStringView(name).mid(1)); };
-    std::sort(versions.begin(), versions.end(),
-              [&](const QString &a, const QString &b) { return version(a) > version(b); });
-    for (const QString &name : std::as_const(versions))
-        dirs << nvm.filePath(name + QStringLiteral("/bin"));
-    QStringList path = qEnvironmentVariable("PATH").split(u':', Qt::SkipEmptyParts);
-    for (const QString &dir : std::as_const(dirs))
-        if (!path.contains(dir))
-            path << dir;
-    qputenv("PATH", path.join(u':').toLocal8Bit());
-}
-
 int runBackgroundSync(QTextStream &out)
 {
     const QString vault = NotesBackend::rootPath();
@@ -65,7 +35,7 @@ int runBackgroundSync(QTextStream &out)
         out << "No notes cloned at " << vault << "; nothing to sync.\n";
         return 0;
     }
-    // The backend's own lock: it checks it again before each icloud-md run.
+    // The backend's own lock: it checks it again before each icloud-notes-sync run.
     NotesBackend backend(nullptr, NotesBackend::Role::Background);
     switch (backend.lockVault()) {
     case VaultLock::Locked:
@@ -78,7 +48,6 @@ int runBackgroundSync(QTextStream &out)
         out << "Could not open the sync lock " << NotesBackend::lockPath() << "; not syncing.\n";
         return 1;
     }
-    findIcloudMd();
     waitFor([&] { return !backend.signInPending(); });
     if (!backend.signInKnown()) {
         out << "icloud-session is not available, so the sign-in is unknown; skipped.\n";
@@ -88,8 +57,8 @@ int runBackgroundSync(QTextStream &out)
         out << "Not signed in to iCloud; skipped.\n";
         return 0;
     }
-    if (!backend.icloudMdAvailable()) {
-        out << "icloud-md not found on PATH; install it with: npm install -g icloud-md\n";
+    if (!backend.syncToolAvailable()) {
+        out << "icloud-notes-sync is not installed (not found on PATH); install it with: sudo pacman -S icloud-notes-sync\n";
         return 1;
     }
 

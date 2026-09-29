@@ -2,7 +2,7 @@
 // demo vault in a temporary directory, shows the real main.qml, grabs the
 // window to a PNG and quits. Usage: shots out.png [path/to/main.qml]
 // NOTES_SHOT=bare seeds an empty, unlinked vault instead.
-// NOTES_SHOT=readonly shows the open note as one icloud-md will not push.
+// NOTES_SHOT=readonly shows the open note as one the sync tool will not push.
 // NOTES_SHOT=conflict opens it on a merge conflict, for the version picker.
 #include "../src/notesbackend.h"
 

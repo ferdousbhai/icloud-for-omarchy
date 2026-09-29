@@ -56,7 +56,7 @@ ApplicationWindow {
     property bool dirty: editor.text !== savedText
     property bool filenameTitles: backend.vaultTitleMode === "filename"
     property string notice: ""
-    // icloud-md reads this note but will never push it, so it opens locked.
+    // The sync tool reads this note but will never push it, so it opens locked.
     readonly property bool noteLocked: backend.readOnlyReason.length > 0
     // A note both sides edited opens on its conflict blocks, one version
     // picked per block, instead of on the raw markers ("Edit as text").
@@ -549,7 +549,7 @@ ApplicationWindow {
         spacing: 0
 
         Rectangle {
-            visible: !backend.icloudMdAvailable || !backend.cloned
+            visible: !backend.syncToolAvailable || !backend.cloned
             Layout.fillWidth: true
             Layout.margins: 10
             implicitHeight: bannerRow.implicitHeight + 20
@@ -560,17 +560,17 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.margins: 10
                 spacing: 12
-                Glyph { text: backend.icloudMdAvailable ? "\uf0c2" : "\uf071"; color: backend.icloudMdAvailable ? root.colAccent : root.colYellow }
+                Glyph { text: backend.syncToolAvailable ? "\uf0c2" : "\uf071"; color: backend.syncToolAvailable ? root.colAccent : root.colYellow }
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
-                    text: backend.icloudMdAvailable
+                    text: backend.syncToolAvailable
                           ? "This folder is not linked to iCloud yet. Clone to download your Apple Notes."
-                          : "icloud-md was not found on PATH. Install it (npm install -g icloud-md, needs Node 20+) and restart to enable sync."
+                          : "icloud-notes-sync, the sync engine, is not installed. Install it (sudo pacman -S icloud-notes-sync) and restart to enable sync."
                 }
                 PrimaryButton {
-                    visible: backend.icloudMdAvailable
+                    visible: backend.syncToolAvailable
                     text: "Clone…"
                     enabled: !backend.syncRunning
                     onClicked: onboardDialog.open()
@@ -583,7 +583,7 @@ ApplicationWindow {
         Rectangle {
             id: signInBanner
             readonly property int daysLeft: backend.signInDaysLeft
-            readonly property bool shortSignIn: backend.cloned && backend.icloudMdAvailable && daysLeft === -1 // -2: unknown
+            readonly property bool shortSignIn: backend.cloned && backend.syncToolAvailable && daysLeft === -1 // -2: unknown
             readonly property string howTo: "In Apple's window, use your Apple ID and password (not the iPhone QR code), tick Keep me signed in, and click Trust."
             visible: backend.authExpired || shortSignIn || (daysLeft >= 0 && daysLeft <= 5)
             Layout.fillWidth: true
@@ -1188,7 +1188,7 @@ ApplicationWindow {
             .some(function (d) { return d.visible; });
     }
 
-    // Like Notes, changes reach iCloud on their own. icloud-md keeps this
+    // Like Notes, changes reach iCloud on their own. The sync tool keeps this
     // safe: it merges, refuses a note it cannot push safely (the badges say
     // which; Push… shows why), and deletions only move notes to Recently
     // Deleted. Pushes wait until edits settle so a burst of typing is one push.
@@ -1267,11 +1267,11 @@ ApplicationWindow {
             return;
         started = true;
         if (backend.cloned) {
-            if (backend.icloudMdAvailable && !backend.authExpired) {
+            if (backend.syncToolAvailable && !backend.authExpired) {
                 root.lastFocusSync = Date.now(); // the window's first activation is this sync
                 backend.runSync(); // edits made while the app was closed go up first
             }
-        } else if (backend.icloudMdAvailable && backend.signedIn) {
+        } else if (backend.syncToolAvailable && backend.signedIn) {
             root.notice = "Downloading your notes as " + backend.appleId + "…";
             backend.runClone();
         } else {
@@ -1549,7 +1549,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.colTextMuted
-                text: "Snapshots from past pulls and pushes, newest first. Restoring is read-only here; use `icloud-md revert` deliberately."
+                text: "Snapshots from past pulls and pushes, newest first. Read-only here; to discard a note's local edits, run `icloud-notes-sync restore <note>` in a terminal."
             }
             SplitView {
                 Layout.fillWidth: true
@@ -1605,7 +1605,7 @@ ApplicationWindow {
                 text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
                       + (backend.signedIn ? "It uses the iCloud account signed in on this computer, " + backend.appleId + ". "
                                           : "Apple's own sign-in window opens first (password and 2FA stay on Apple's pages); the sign-in is shared with the other iCloud apps. ")
-                      + "Apple Notes must not use Advanced Data Protection, because icloud-md cannot decrypt it."
+                      + "Apple Notes must not use Advanced Data Protection, because icloud-notes-sync cannot decrypt it."
             }
         }
     }

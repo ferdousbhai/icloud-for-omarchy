@@ -450,7 +450,7 @@ inline QSet<QString> trackedFiles(const QByteArray &stateJson)
     return files;
 }
 
-// Tracked notes icloud-md reads but will never push, keyed by vault-relative
+// Tracked notes the sync tool reads but will never push, keyed by vault-relative
 // file, with its reason ("is so large that ...", phrased to follow "this
 // note"). A very large note, or formatting it cannot round-trip, lands here.
 inline QHash<QString, QString> readOnlyReasons(const QByteArray &stateJson)
@@ -500,7 +500,7 @@ inline QVariantMap arrayItems(const QJsonDocument &doc, const QString &key, cons
     return { { key, items } };
 }
 
-// `icloud-md status --json`: {entries:[{kind,file,resolution,reason?,
+// `icloud-notes-sync --json status`: {entries:[{kind,file,resolution,reason?,
 // remark?,...}], unchanged, notices:[{level,message}]}.
 inline QVariantMap parseStatusJson(const QByteArray &bytes)
 {
@@ -516,7 +516,7 @@ inline QVariantMap parseStatusJson(const QByteArray &bytes)
     return result;
 }
 
-// `icloud-md history --json`: {mode:"epochs",epochs:[{id,timestamp,changed[]}]}.
+// `icloud-notes-sync --json history`: {mode:"epochs",epochs:[{id,timestamp,changed[]}]}.
 inline QVariantMap parseHistoryJson(const QByteArray &bytes)
 {
     return arrayItems(QJsonDocument::fromJson(bytes), QStringLiteral("epochs"), QStringLiteral("history"));

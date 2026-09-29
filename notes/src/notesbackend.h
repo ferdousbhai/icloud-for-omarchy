@@ -16,7 +16,7 @@
 class QDBusMessage;
 class QDBusServiceWatcher;
 
-// The vault on disk plus the icloud-md CLI, exposed to QML. One sync
+// The vault on disk plus the icloud-notes-sync CLI, exposed to QML. One sync
 // process runs at a time; its Mode says how the output is consumed.
 class NotesBackend : public QObject
 {
@@ -24,7 +24,7 @@ class NotesBackend : public QObject
     Q_PROPERTY(QStringList folders READ folders NOTIFY foldersChanged)
     Q_PROPERTY(QVariantMap folderNoteCounts READ folderNoteCounts NOTIFY foldersChanged)
     Q_PROPERTY(bool cloned READ cloned NOTIFY foldersChanged)
-    Q_PROPERTY(bool icloudMdAvailable READ icloudMdAvailable NOTIFY foldersChanged)
+    Q_PROPERTY(bool syncToolAvailable READ syncToolAvailable NOTIFY foldersChanged)
     Q_PROPERTY(QString vaultTitleMode READ vaultTitleMode NOTIFY foldersChanged)
     Q_PROPERTY(QString currentFolder READ currentFolder WRITE setCurrentFolder NOTIFY currentFolderChanged)
     Q_PROPERTY(QStringList notes READ notes NOTIFY notesChanged)
@@ -34,14 +34,14 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString noteBody READ noteBody NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteAttachments READ noteAttachments NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteConflicts READ noteConflicts NOTIFY noteContentChanged)
-    // Why icloud-md will never push the current note, or empty when it is
+    // Why the sync tool will never push the current note, or empty when it is
     // editable. A read-only note opens locked: edits could never sync.
     Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY noteContentChanged)
     Q_PROPERTY(QString syncMessage READ syncMessage NOTIFY syncMessageChanged)
     Q_PROPERTY(QString syncLog READ syncLog NOTIFY syncLogChanged)
     Q_PROPERTY(bool syncRunning READ syncRunning NOTIFY syncRunningChanged)
     // The iCloud sign-in is gone (icloud-session says signed out, or
-    // icloud-md was refused); syncing pauses until icloud-session reports
+    // icloud-notes-sync was refused); syncing pauses until icloud-session reports
     // a sign-in again.
     Q_PROPERTY(bool authExpired READ authExpired NOTIFY authExpiredChanged)
     // The account as icloud-session (the D-Bus daemon that owns the Apple
@@ -74,7 +74,7 @@ public:
     // lifetime (waiting, syncs deferred, while a background sync has it).
     // Background: `icloud-notes --sync`, which takes the lock with
     // lockVault() before syncing; no theme, fonts or desktop settings are
-    // read. Either way icloud-md never runs without the lock held.
+    // read. Either way icloud-notes-sync never runs without the lock held.
     enum class Role { App, Background };
     explicit NotesBackend(QObject *parent = nullptr, Role role = Role::App);
     ~NotesBackend() override;
@@ -95,7 +95,8 @@ public:
     // No sync running or waiting to run, and no icloud-session call or
     // read unanswered: what a background sync waits for before exiting.
     bool idle() const { return !m_syncRunning && m_sessionCalls == 0 && m_signInReads == 0; }
-    bool icloudMdAvailable() const;
+    // icloud-notes-sync is on PATH.
+    bool syncToolAvailable() const;
     QString vaultTitleMode() const;
     QString currentFolder() const { return m_currentFolder; }
     void setCurrentFolder(const QString &folder);
@@ -174,7 +175,7 @@ public:
     Q_INVOKABLE QString exportPdf();
     // Clone the account's notes into the vault: signs in through
     // icloud-session first when needed, then clones its account (by dsid)
-    // without icloud-md ever opening a window of its own.
+    // without icloud-notes-sync ever opening a window of its own.
     Q_INVOKABLE void runClone();
     Q_INVOKABLE void runPull();
     Q_INVOKABLE void runPush();
@@ -224,7 +225,7 @@ signals:
     void editsKeptAsNote(const QString &message);
     // A save refused while a sync ran was written after it (body as given).
     void queuedSaveWritten(const QString &body);
-    // One icloud-md run ended ("Push", "Pull", "Clone", ...).
+    // One icloud-notes-sync run ended ("Push", "Pull", "Clone", ...).
     void syncFinished(const QString &label, bool ok);
     // The last run of a chain ended and nothing follows it: after the pull
     // of runSync (or its push, when that found the sign-in gone), unlike
@@ -351,7 +352,8 @@ private:
     // Runs while someone else holds the lock: a sync asked for meanwhile
     // starts once it is free, never before.
     QTimer m_lockRetry;
-    QByteArray m_captured;
+    QByteArray m_captured; // the run's stdout: its --json result, or diff text
+    QByteArray m_capturedErr; // its stderr: progress, warnings, errors
     const double m_uiScale;
     QVariantMap m_theme;
     MarkdownHighlighter *m_highlighter = nullptr;
