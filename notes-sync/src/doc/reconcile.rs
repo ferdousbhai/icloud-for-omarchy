@@ -18,13 +18,31 @@ pub type ReconcileResult = std::result::Result<bool, String>;
 
 const MISALIGNED: &str = "the note's paragraphs don't line up with the edited text - refusing to guess";
 
-/// `reconcileNoteFormat`, minting todo uuids with `randomUUID`.
+/// `reconcileNoteFormat`, minting todo uuids with `randomUUID`
+/// (`vault::rt::random_uuid`, so the differential harness's deterministic
+/// sequence lines up with icloud-md's).
 pub fn reconcile_note_format(
     doc: &mut NoteDocument,
     desired: &[FormatParagraph],
     replica_id: &[u8; 16],
 ) -> Result<ReconcileResult> {
-    reconcile_note_format_with(doc, desired, replica_id, &mut || *uuid::Uuid::new_v4().as_bytes())
+    reconcile_note_format_with(doc, desired, replica_id, &mut || {
+        uuid_string_bytes(&crate::vault::rt::random_uuid())
+    })
+}
+
+/// `uuidBytes()`: a `randomUUID()` string's hex digits as 16 bytes.
+fn uuid_string_bytes(uuid: &str) -> [u8; 16] {
+    let hex: Vec<u8> = uuid.bytes().filter(|b| *b != b'-').collect();
+    let mut out = [0u8; 16];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let pair = hex
+            .get(2 * i..2 * i + 2)
+            .and_then(|p| std::str::from_utf8(p).ok())
+            .unwrap_or("00");
+        *byte = u8::from_str_radix(pair, 16).unwrap_or(0);
+    }
+    out
 }
 
 /// `reconcileNoteFormat` with an injectable uuid source (called once per

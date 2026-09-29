@@ -573,3 +573,50 @@ pub fn plan_embed_representations(
         tables: representations.into_iter().filter_map(|r| r.table).collect(),
     })
 }
+
+/// `decodeAttachmentFilename`: a Media record's `FilenameEncrypted`, or
+/// `recordName` + an extension guessed from the UTI.
+pub fn decode_attachment_filename(
+    field: Option<&crate::cloudkit::FieldValue>,
+    record_name: &str,
+    type_uti: &str,
+) -> String {
+    if let Some(serde_json::Value::String(value)) = field.map(|f| &f.value) {
+        let name = super::js::buffer_to_utf8(&super::js::base64_decode(value));
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    let extension = match type_uti {
+        "public.jpeg" => ".jpeg",
+        "public.png" => ".png",
+        "public.heic" => ".heic",
+        "public.tiff" => ".tiff",
+        "public.gif" => ".gif",
+        "public.webp" => ".webp",
+        "com.apple.m4a-audio" => ".m4a",
+        "com.adobe.pdf" => ".pdf",
+        _ => "",
+    };
+    format!("{record_name}{extension}")
+}
+
+/// `AttachmentAsset`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentAsset {
+    pub download_url: String,
+    pub file_checksum: String,
+}
+
+/// `parseAssetField`: the download URL + checksum of an `ASSETID` field.
+pub fn parse_asset_field(field: Option<&crate::cloudkit::FieldValue>) -> Option<AttachmentAsset> {
+    let field = field?;
+    if field.type_ != "ASSETID" {
+        return None;
+    }
+    let value = field.value.as_object()?;
+    Some(AttachmentAsset {
+        download_url: value.get("downloadURL")?.as_str()?.to_string(),
+        file_checksum: value.get("fileChecksum")?.as_str()?.to_string(),
+    })
+}

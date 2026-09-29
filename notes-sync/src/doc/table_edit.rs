@@ -33,8 +33,10 @@ const ORC: &str = "\u{FFFC}";
 /// A 16-byte random source (`randomBytes(16)`), injectable for tests.
 pub type RandomSource<'a> = &'a mut dyn FnMut() -> [u8; 16];
 
+/// `randomBytes(16)`, through `vault::rt` (the differential harness's
+/// deterministic sequence).
 fn random_uuid_bytes() -> [u8; 16] {
-    *uuid::Uuid::new_v4().as_bytes()
+    crate::vault::rt::random_16()
 }
 
 // --- tablePushEdit ------------------------------------------------------------
@@ -255,34 +257,57 @@ fn rows_multiset_equal(a: &[Vec<String>], b: &[Vec<String>]) -> bool {
 
 // --- tableCellEdit ----------------------------------------------------------------
 
-/// `TopotextClockSource`, backed by the document's `ttTimestamp` entry for
+/// The session's clock position: the document's `ttTimestamp` entry for
 /// our replica (index `tt_index`; `replica_index` is its 1-based rank).
 #[derive(Debug, Clone, Copy)]
-pub struct TextClock {
-    pub replica_index: u32,
+struct TextClock {
+    replica_index: u32,
     tt_index: usize,
     style_floor: u64,
 }
 
-impl TextClock {
-    fn entry<'a>(&self, tt: &'a mut topotext::VectorTimestamp) -> &'a mut Clock {
-        &mut tt.clock[self.tt_index]
+/// `TopotextClockSource`: a table's document-global topotext clock, scoped
+/// to the writing replica (`tableCellEdit.ts`).
+pub trait TopotextClockSource {
+    /// 1-based `CharID.replicaID` of the writing replica.
+    fn replica_index(&self) -> u32;
+    /// `take(units)`: the first clock of a fresh run; advances the text clock.
+    fn take(&mut self, units: u32) -> u32;
+    /// `takeTombstoneAnchor(previousClock)`: `max(previous + 8, floor)`,
+    /// advancing the style clock past it.
+    fn take_tombstone_anchor(&mut self, previous_clock: u32) -> Result<u32>;
+}
+
+/// The write session's clock: `TextClock` over the live `ttTimestamp`.
+struct SessionClock<'a> {
+    clock: TextClock,
+    tt: &'a mut topotext::VectorTimestamp,
+}
+
+impl SessionClock<'_> {
+    fn entry(&mut self) -> &mut Clock {
+        &mut self.tt.clock[self.clock.tt_index]
+    }
+}
+
+impl TopotextClockSource for SessionClock<'_> {
+    fn replica_index(&self) -> u32 {
+        self.clock.replica_index
     }
 
-    /// `take(units)`: the first clock of a fresh run; advances the text clock.
-    fn take(&self, tt: &mut topotext::VectorTimestamp, units: u32) -> u32 {
-        let counter = &mut self.entry(tt).replica_clock[0];
+    fn take(&mut self, units: u32) -> u32 {
+        let counter = &mut self.entry().replica_clock[0];
         let value = counter.clock.unwrap_or(0);
         counter.clock = Some(value.wrapping_add(units));
         value
     }
 
-    /// `takeTombstoneAnchor(previousClock)`.
-    fn take_tombstone_anchor(&self, tt: &mut topotext::VectorTimestamp, previous_clock: u32) -> Result<u32> {
-        let Some(style) = self.entry(tt).replica_clock.get_mut(1) else {
+    fn take_tombstone_anchor(&mut self, previous_clock: u32) -> Result<u32> {
+        let floor = self.clock.style_floor;
+        let Some(style) = self.entry().replica_clock.get_mut(1) else {
             return fail("Table's topotext clock entry is missing its style clock - refusing to guess");
         };
-        let assigned = (u64::from(previous_clock) + TOMBSTONE_STYLE_CLOCK_BIAS).max(self.style_floor);
+        let assigned = (u64::from(previous_clock) + TOMBSTONE_STYLE_CLOCK_BIAS).max(floor);
         style.clock = Some(u64::from(style.clock.unwrap_or(0)).max(assigned + 1) as u32);
         Ok(assigned as u32)
     }
@@ -328,11 +353,11 @@ fn visible_length(runs: &[TextRun]) -> u64 {
     runs.iter().filter(|r| !r.tombstone).map(|r| u64::from(r.length)).sum()
 }
 
-fn apply_cell_text_edit(
+/// `applyCellTextEdit`: one splice (`computeSplice`), clocks from `clock`.
+pub fn apply_cell_text_edit(
     cell: &mut TableCellDocument,
     new_text: &str,
-    clock: &TextClock,
-    tt: &mut topotext::VectorTimestamp,
+    clock: &mut dyn TopotextClockSource,
 ) -> Result<bool> {
     if cell.text == new_text {
         return Ok(false);
@@ -340,10 +365,10 @@ fn apply_cell_text_edit(
     validate_cell_invariants(cell)?;
     let (start, delete_length, insert) = compute_splice16(&utf16(&cell.text), &utf16(new_text));
     if delete_length > 0 {
-        cell_tombstone_visible_range(cell, start, delete_length, clock, tt)?;
+        cell_tombstone_visible_range(cell, start, delete_length, clock)?;
     }
     if !insert.is_empty() {
-        cell_insert_visible_text(cell, start, insert.len(), clock, tt)?;
+        cell_insert_visible_text(cell, start, insert.len(), clock)?;
     }
     adjust_attribute_runs(
         &mut cell.attribute_runs,
@@ -358,12 +383,12 @@ fn apply_cell_text_edit(
     Ok(true)
 }
 
-fn cell_tombstone_visible_range(
+/// `tombstoneVisibleRange` (cells and ordering mirrors).
+pub fn cell_tombstone_visible_range(
     cell: &mut TableCellDocument,
     start: usize,
     length: usize,
-    clock: &TextClock,
-    tt: &mut topotext::VectorTimestamp,
+    clock: &mut dyn TopotextClockSource,
 ) -> Result<()> {
     let end = start + length;
     if end as u64 > visible_length(&cell.runs) {
@@ -373,27 +398,28 @@ fn cell_tombstone_visible_range(
         let previous = target.anchor.clock;
         target.tombstone = true;
         target.anchor = RunCoord {
-            replica: clock.replica_index,
-            clock: clock.take_tombstone_anchor(tt, previous)?,
+            replica: clock.replica_index(),
+            clock: clock.take_tombstone_anchor(previous)?,
         };
         Ok(())
     })
 }
 
-fn cell_insert_visible_text(
+/// `insertVisibleText` (cells and ordering mirrors): a new run under the
+/// caller's replica at visible position `start`.
+pub fn cell_insert_visible_text(
     cell: &mut TableCellDocument,
     start: usize,
     length: usize,
-    clock: &TextClock,
-    tt: &mut topotext::VectorTimestamp,
+    clock: &mut dyn TopotextClockSource,
 ) -> Result<()> {
     if start as u64 > visible_length(&cell.runs) {
         return fail("Cell insertion point is past the end of its visible text - CRDT model out of sync");
     }
     let insert_index = find_insert_index(&mut cell.runs, start)?;
     let coord = RunCoord {
-        replica: clock.replica_index,
-        clock: clock.take(tt, length as u32),
+        replica: clock.replica_index(),
+        clock: clock.take(length as u32),
     };
     insert_run_at(
         &mut cell.runs,
@@ -402,7 +428,7 @@ fn cell_insert_visible_text(
             coord,
             length: length as u32,
             anchor: RunCoord {
-                replica: clock.replica_index,
+                replica: clock.replica_index(),
                 clock: 0,
             },
             tombstone: false,
@@ -447,6 +473,13 @@ impl Session {
 
     fn mark_structural_save(&mut self) {
         self.highest_tick = self.highest_tick.max(self.base_clock + 2);
+    }
+}
+
+fn session_clock<'a>(doc: &'a mut TableDocument, session: &Session) -> SessionClock<'a> {
+    SessionClock {
+        clock: session.text_clock,
+        tt: tt_mut(doc),
     }
 }
 
@@ -751,7 +784,7 @@ fn apply_cell_edits(doc: &mut TableDocument, session: &Session, edits: &[CellEdi
             return fail(format!("Table pool[{}] is not a cell-text object", cell.text_ref));
         };
         let mut cell_doc = parse_cell_document(string)?;
-        apply_cell_text_edit(&mut cell_doc, &edit.text, &session.text_clock, tt_mut(doc))?;
+        apply_cell_text_edit(&mut cell_doc, &edit.text, &mut session_clock(doc, session))?;
         doc.document.object[cell.text_ref as usize].string = Some(encode_cell_document(&cell_doc));
     }
     Ok(())
@@ -973,7 +1006,7 @@ fn content_identity_refs_by_row_position(doc: &TableDocument) -> Result<Vec<u32>
 fn push_cell_text(doc: &mut TableDocument, session: &Session, text: &str) -> Result<u32> {
     let mut cell = new_cell_document();
     if !text.is_empty() {
-        apply_cell_text_edit(&mut cell, text, &session.text_clock, tt_mut(doc))?;
+        apply_cell_text_edit(&mut cell, text, &mut session_clock(doc, session))?;
     }
     Ok(push_object(
         doc,
@@ -995,7 +1028,7 @@ fn edit_mirror(
     doc: &mut TableDocument,
     ordered_set_ref: u32,
     session: &Session,
-    splice: impl FnOnce(&mut TableCellDocument, &TextClock, &mut topotext::VectorTimestamp) -> Result<()>,
+    splice: impl FnOnce(&mut TableCellDocument, &mut dyn TopotextClockSource) -> Result<()>,
 ) -> Result<()> {
     let contents = require_ordered_set(doc, ordered_set_ref)?
         .array
@@ -1004,7 +1037,7 @@ fn edit_mirror(
         .and_then(|s| s.contents.clone())
         .unwrap_or_default();
     let mut mirror = parse_cell_document(&contents)?;
-    splice(&mut mirror, &session.text_clock, tt_mut(doc))?;
+    splice(&mut mirror, &mut session_clock(doc, session))?;
     let visible = visible_length(&mirror.runs) as usize;
     mirror.text = ORC.repeat(visible);
     mirror.attribute_runs = (0..visible).map(|_| AttributeRun::with_length(1)).collect();
@@ -1041,8 +1074,8 @@ fn insert_into_ordered_set(
             renumber_attachments(&mut string_array.attachments);
         }
     }
-    edit_mirror(doc, ordered_set_ref, session, |mirror, clock, tt| {
-        cell_insert_visible_text(mirror, position, 1, clock, tt)
+    edit_mirror(doc, ordered_set_ref, session, |mirror, clock| {
+        cell_insert_visible_text(mirror, position, 1, clock)
     })?;
     let ordered_set = require_ordered_set(doc, ordered_set_ref)?;
     if let Some(dictionary) = ordered_set.array.as_mut().and_then(|a| a.dictionary.as_mut()) {
@@ -1155,8 +1188,8 @@ fn remove_from_ordered_set(
         string_array.attachments.remove(position);
         renumber_attachments(&mut string_array.attachments);
     }
-    edit_mirror(doc, ordered_set_ref, session, |mirror, clock, tt| {
-        cell_tombstone_visible_range(mirror, position, 1, clock, tt)
+    edit_mirror(doc, ordered_set_ref, session, |mirror, clock| {
+        cell_tombstone_visible_range(mirror, position, 1, clock)
     })?;
 
     let set = require_ordered_set(doc, ordered_set_ref)?

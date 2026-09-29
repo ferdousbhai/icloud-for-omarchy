@@ -416,3 +416,8 @@ pub fn resolve_cell_text(pool: &crdt::Document, pool_ref: u32) -> Result<String>
         None => fail(format!("Expected pool[{pool_ref}] to be a cell-text object (field 10)")),
     }
 }
+
+/// `pool.keyNames.indexOf(name)` (-1 when absent).
+pub fn key_index_of(doc: &TableDocument, name: &str) -> i64 {
+    key_index(&doc.document, name)
+}

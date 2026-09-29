@@ -783,6 +783,13 @@ pub mod topotext {
         }
     }
 
+    impl String {
+        /// `str.string` (`""` when unset, protobuf-es's default).
+        pub fn string(&self) -> &str {
+            self.string.as_deref().unwrap_or("")
+        }
+    }
+
     impl AttributeRun {
         /// `run.length` (0 when unset, like protobuf-es's zero default).
         #[allow(clippy::len_without_is_empty)]
