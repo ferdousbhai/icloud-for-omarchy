@@ -1,0 +1,14 @@
+[Unit]
+Description=Sync Notes (icloud-notes) with iCloud every 15 minutes
+Documentation=https://github.com/ferdousbhai/icloud-notes#background-sync
+
+[Timer]
+OnBootSec=2min
+# A calendar time, not OnUnitActiveSec: Persistent= only applies to these,
+# and it runs a sync missed while the machine slept as soon as it wakes.
+OnCalendar=*:0/15
+Persistent=true
+RandomizedDelaySec=1min
+
+[Install]
+WantedBy=timers.target

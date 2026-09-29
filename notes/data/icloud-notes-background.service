@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync Notes (icloud-notes) with iCloud while the app is closed
+Documentation=https://github.com/ferdousbhai/icloud-notes#background-sync
+
+[Service]
+Type=oneshot
+# Push, then pull, with no window. Skips (and succeeds) when Notes is open,
+# which syncs on its own, or when nobody is signed in to icloud-session.
+ExecStart=/usr/bin/icloud-notes --sync
+# The app waits for a running sync before syncing itself; never for long.
+TimeoutStartSec=3min
+Nice=10

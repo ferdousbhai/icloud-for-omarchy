@@ -1,0 +1,389 @@
+// Guardrail logic tests: the pure parsing/classification behind safe sync.
+// Run with bin/test.
+#include "../src/syncmodel.h"
+#include "check.h"
+
+#include <QRandomGenerator>
+
+int main()
+{
+    // extractNoteId
+    check(SyncModel::extractNoteId(QStringLiteral("---\napple-note-id: 12345678-1234-1234-1234-123456789abc\n---\n# T\n"))
+              == QStringLiteral("12345678-1234-1234-1234-123456789abc"),
+          "id plain");
+    check(SyncModel::extractNoteId(QStringLiteral("---\napple-note-id: \"abc-123\"\n---\n"))
+              == QStringLiteral("abc-123"),
+          "id double-quoted");
+    check(SyncModel::extractNoteId(QStringLiteral("---\napple-note-id: 'abc-123'\ntags: [x]\n---\n"))
+              == QStringLiteral("abc-123"),
+          "id single-quoted");
+    check(SyncModel::extractNoteId(QStringLiteral("---\napple-note-id: x\n---")) == QStringLiteral("x"),
+          "id fence without trailing newline");
+    check(SyncModel::extractNoteId(QStringLiteral("# No envelope\n")).isEmpty(), "id no envelope");
+    check(SyncModel::extractNoteId(QStringLiteral("---\ntags: [x]\n---\n")).isEmpty(), "id missing key");
+    check(SyncModel::extractNoteId(QStringLiteral("---\n  apple-note-id: nested\n---\n")).isEmpty(),
+          "id nested key ignored");
+    check(SyncModel::extractNoteId(QStringLiteral("---\napple-note-id: |\n  not a scalar\n---\n")).isEmpty(),
+          "id literal block ignored");
+    check(SyncModel::extractNoteId(QStringLiteral("---\nunclosed\n")).isEmpty(), "id unterminated ignored");
+
+    // hasConflictMarkers
+    check(SyncModel::hasConflictMarkers(QStringLiteral("a\n<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n")),
+          "markers diff3");
+    check(!SyncModel::hasConflictMarkers(QStringLiteral("# Title\n\n- [ ] task\n")), "markers clean note");
+    check(!SyncModel::hasConflictMarkers(QStringLiteral("a == b\nx === y\n")), "markers equals signs");
+    check(SyncModel::hasConflictMarkers(QStringLiteral("x\n||||||| base\n")), "markers ancestor");
+
+    // readTitleMode
+    check(SyncModel::readTitleMode(QByteArrayLiteral(R"({"titleMode":"filename"})")) == QStringLiteral("filename"),
+          "mode filename");
+    check(SyncModel::readTitleMode(QByteArrayLiteral(R"({"titleMode":"in-body"})")) == QStringLiteral("in-body"),
+          "mode in-body");
+    check(SyncModel::readTitleMode(QByteArrayLiteral(R"({"notes":{}})")) == QStringLiteral("in-body"),
+          "mode absent defaults");
+    check(SyncModel::readTitleMode(QByteArrayLiteral("not json")) == QStringLiteral("in-body"),
+          "mode garbage defaults");
+
+    // trackedFiles
+    {
+        const QSet<QString> t = SyncModel::trackedFiles(
+            QByteArrayLiteral(R"({"notes":{"uuid-1":{"file":"A.md"},"uuid-2":{"file":"Sub/B.md"}}})"));
+        check(t.size() == 2 && t.contains(QStringLiteral("A.md")) && t.contains(QStringLiteral("Sub/B.md")),
+              "tracked set");
+    }
+    check(SyncModel::trackedFiles(QByteArrayLiteral(R"({})")).isEmpty(), "tracked empty");
+
+    // readOnlyReasons
+    {
+        const QHash<QString, QString> r = SyncModel::readOnlyReasons(QByteArrayLiteral(
+            R"({"notes":{"u1":{"file":"Big.md","unpublishableReason":"is too large"},"u2":{"file":"A.md"}}})"));
+        check(r.size() == 1 && r.value(QStringLiteral("Big.md")) == QStringLiteral("is too large"),
+              "read-only reasons");
+    }
+    check(SyncModel::readOnlyReasons(QByteArrayLiteral("not json")).isEmpty(), "read-only garbage empty");
+
+    // parseStatusJson
+    {
+        const QByteArray payload = QByteArrayLiteral(
+            R"({"entries":[{"kind":"update","file":"A.md","resolution":"ready"},{"kind":"update","file":"B.md","resolution":"refused","reason":"B.md: has attachments"},{"kind":"delete","file":"C.md","resolution":"ready"}],"unchanged":4,"notices":[{"level":"warn","message":"careful"}]})");
+        const QVariantMap r = SyncModel::parseStatusJson(payload);
+        check(!r.contains(QStringLiteral("error")), "status no error");
+        check(r.value(QStringLiteral("entries")).toList().size() == 3, "status entry count");
+        check(r.value(QStringLiteral("entries")).toList().at(1).toMap().value(QStringLiteral("reason")).toString()
+                  == QStringLiteral("B.md: has attachments"),
+              "status reason kept");
+        check(r.value(QStringLiteral("unchanged")).toInt() == 4, "status unchanged");
+        check(r.value(QStringLiteral("notices")).toStringList() == QStringList{ QStringLiteral("careful") },
+              "status notices");
+    }
+    check(SyncModel::parseStatusJson(QByteArrayLiteral("not json")).contains(QStringLiteral("error")),
+          "status garbage errors");
+    check(SyncModel::parseStatusJson(QByteArrayLiteral(R"({"unchanged":1})")).contains(QStringLiteral("error")),
+          "status missing entries errors");
+
+    // parseHistoryJson
+    {
+        const QVariantMap r = SyncModel::parseHistoryJson(
+            QByteArrayLiteral(R"({"mode":"epochs","epochs":[{"id":"e3","timestamp":"2026-09-01","changed":["Note"],"carriedOver":[]}]})"));
+        check(!r.contains(QStringLiteral("error")), "history no error");
+        check(r.value(QStringLiteral("epochs")).toList().size() == 1, "history epoch count");
+        check(r.value(QStringLiteral("epochs")).toList().at(0).toMap().value(QStringLiteral("id")).toString()
+                  == QStringLiteral("e3"),
+              "history epoch id");
+    }
+    check(SyncModel::parseHistoryJson(QByteArrayLiteral(R"({"mode":"records"})")).contains(QStringLiteral("error")),
+          "history wrong shape errors");
+
+    // splitEnvelope
+    {
+        const SyncModel::EnvelopeSplit s =
+            SyncModel::splitEnvelope(QStringLiteral("---\napple-note-id: x\n---\n# T\nbody\n"));
+        check(s.envelope == QStringLiteral("---\napple-note-id: x\n---\n"), "envelope kept");
+        check(s.body == QStringLiteral("# T\nbody\n"), "body split");
+    }
+    {
+        const SyncModel::EnvelopeSplit s = SyncModel::splitEnvelope(QStringLiteral("# T\n"));
+        check(s.envelope.isEmpty() && s.body == QStringLiteral("# T\n"), "no envelope");
+    }
+    check(SyncModel::splitEnvelope(QStringLiteral("---\nunclosed\n")).envelope.isEmpty(), "unterminated is body");
+
+    // parseConflicts / resolveConflicts / linesMissingFrom
+    {
+        const QString text = QStringLiteral("# T\nkeep\n<<<<<<< local\nmine\n||||||| base\nold\n=======\ntheirs\nshared\n>>>>>>> remote\ntail\n"
+                                            "<<<<<<< local\n=======\nadded\n>>>>>>> remote\n");
+        const QList<SyncModel::ConflictHunk> hunks = SyncModel::parseConflicts(text);
+        check(hunks.size() == 2, "conflicts two hunks");
+        check(hunks.value(0).local == QStringList{ QStringLiteral("mine") }
+                  && hunks.value(0).base == QStringList{ QStringLiteral("old") }
+                  && hunks.value(0).remote == QStringList{ QStringLiteral("theirs"), QStringLiteral("shared") },
+              "conflicts sides");
+        check(hunks.value(1).local.isEmpty() && hunks.value(1).remote == QStringList{ QStringLiteral("added") },
+              "conflicts empty side, no base");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("local"), QStringLiteral("remote") })
+                  == QStringLiteral("# T\nkeep\nmine\ntail\nadded\n"),
+              "resolve per hunk");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("both"), QStringLiteral("local") })
+                  == QStringLiteral("# T\nkeep\nmine\ntheirs\nshared\ntail\n"),
+              "resolve both keeps mine first");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("local") }) == text, "resolve needs every choice");
+        check(SyncModel::resolveConflicts(text, { QStringLiteral("x"), QStringLiteral("local") }) == text,
+              "resolve rejects unknown choice");
+        check(SyncModel::parseConflicts(QStringLiteral("<<<<<<< local\nx\n")).isEmpty(), "conflicts unclosed");
+        check(SyncModel::parseConflicts(QStringLiteral("=======\n")).isEmpty(), "conflicts stray separator");
+        check(SyncModel::parseConflicts(QStringLiteral("# plain\n")).isEmpty(), "conflicts none");
+        check(SyncModel::linesMissingFrom({ QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c") },
+                                          { QStringLiteral("a"), QStringLiteral("c"), QStringLiteral("d") })
+                  == QList<bool>{ false, true, false },
+              "line diff marks the missing line");
+    }
+
+    // conflictBody: unsaved edits against a note that changed on disk
+    {
+        const QString base = QStringLiteral("# T\na\nb\nc\n");
+        const QString mine = QStringLiteral("# T\na\nmine\nc\n");
+        const QString theirs = QStringLiteral("# T\na\ntheirs\u00a0x\u2028y\nc\n");
+        const QString body = SyncModel::conflictBody(theirs, base, mine);
+        check(body == QStringLiteral("# T\na\n<<<<<<< local\nmine\n||||||| base\nb\n=======\ntheirs\u00a0x\u2028y\n>>>>>>> remote\nc\n"),
+              "conflict body wraps only the parted lines, theirs byte-exact");
+        check(SyncModel::resolveConflicts(body, { QStringLiteral("remote") }) == theirs, "conflict body resolves back to theirs");
+        check(SyncModel::resolveConflicts(body, { QStringLiteral("local") }) == mine, "conflict body resolves back to mine");
+        const QString appended = SyncModel::conflictBody(QStringLiteral("x\nnew"), QStringLiteral("x"), QStringLiteral("x\nmine"));
+        check(SyncModel::parseConflicts(appended).size() == 1, "conflict body at the end parses");
+        check(SyncModel::previewNote(QStringLiteral("<<<<<<< local\n# Mine\n=======\n# Theirs\n>>>>>>> remote\n"),
+                                     QStringLiteral("f"), QStringLiteral("in-body")).title == QStringLiteral("Mine"),
+              "preview skips conflict markers");
+    }
+
+    // conflictBody merges like diff3: only overlapping edits conflict.
+    {
+        using SyncModel::conflictBody;
+        const QString base = QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\n");
+        // Separate paragraphs edited on each side merge with no markers,
+        // theirs keeping its own characters.
+        const QString mine = QStringLiteral("# T\n\nOne, mine.\n\nTwo.\n\nThree.\n");
+        const QString theirs = QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree, theirs. More.\n");
+        const QString merged = conflictBody(theirs, base, mine);
+        check(merged == QStringLiteral("# T\n\nOne, mine.\n\nTwo.\n\nThree, theirs. More.\n")
+                  && !SyncModel::hasConflictMarkers(merged),
+              "merge: separate paragraphs merge cleanly");
+
+        // One overlapping edit: one block around the overlap only, and the
+        // edit elsewhere merged in.
+        const QString mine2 = QStringLiteral("# T\n\nOne, mine.\n\nTwo, mine.\n\nThree.\n");
+        const QString theirs2 = QStringLiteral("# T\n\nOne.\n\nTwo, theirs.\n\nThree, theirs.\n");
+        check(conflictBody(theirs2, base, mine2)
+                  == QStringLiteral("# T\n\nOne, mine.\n\n<<<<<<< local\nTwo, mine.\n||||||| base\nTwo.\n=======\n"
+                                    "Two, theirs.\n>>>>>>> remote\n\nThree, theirs.\n"),
+              "merge: overlap alone becomes a block");
+
+        // Two separate overlapping regions: two blocks.
+        const QString mine3 = QStringLiteral("# T\n\nOne, mine.\n\nTwo.\n\nThree, mine.\n");
+        const QString theirs3 = QStringLiteral("# T\n\nOne, theirs.\n\nTwo.\n\nThree, theirs.\n");
+        const QString two = conflictBody(theirs3, base, mine3);
+        const QList<SyncModel::ConflictHunk> hunks = SyncModel::parseConflicts(two);
+        check(hunks.size() == 2 && hunks.at(0).local == QStringList{ QStringLiteral("One, mine.") }
+                  && hunks.at(0).base == QStringList{ QStringLiteral("One.") }
+                  && hunks.at(1).remote == QStringList{ QStringLiteral("Three, theirs.") },
+              "merge: two overlaps, two blocks");
+        check(SyncModel::resolveConflicts(two, { QStringLiteral("local"), QStringLiteral("local") }) == mine3
+                  && SyncModel::resolveConflicts(two, { QStringLiteral("remote"), QStringLiteral("remote") }) == theirs3,
+              "merge: blocks resolve back to either side");
+
+        // The same edit on both sides is no conflict.
+        const QString same = QStringLiteral("# T\n\nOne, both.\n\nTwo.\n\nThree.\n");
+        check(conflictBody(same, base, same) == same, "merge: identical edits");
+        check(conflictBody(QStringLiteral("# T\n\nOne, both.\n\nTwo.\n\nThree, theirs.\n"), base,
+                           QStringLiteral("# T\n\nOne, both.\n\nTwo, mine.\n\nThree.\n"))
+                  == QStringLiteral("# T\n\nOne, both.\n\nTwo, mine.\n\nThree, theirs.\n"),
+              "merge: identical edit beside one-sided ones");
+
+        // Apple's soft breaks and no-break spaces survive lines taken from
+        // mine: the break joining a kept line of theirs to an edited one,
+        // and the no-break space inside a line only mine edited.
+        check(conflictBody(QStringLiteral("a\u00a0b\u2028c\nd\nnew\n"), QStringLiteral("a b\nc\nd\n"),
+                           QStringLiteral("a b\nc2\nd\n"))
+                  == QStringLiteral("a\u00a0b\u2028c2\nd\nnew\n"),
+              "merge: soft break before a line from mine kept");
+        check(conflictBody(QStringLiteral("a\u00a0b\nx\nc from iCloud\n"), QStringLiteral("a b\nx\nc\n"),
+                           QStringLiteral("a b!\nx\nc\n"))
+                  == QStringLiteral("a\u00a0b!\nx\nc from iCloud\n"),
+              "merge: no-break space in a line from mine kept");
+
+        // Inserts and deletes at the start and end.
+        check(conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nEnd.\n"), base,
+                           QStringLiteral("Top.\n# T\n\nOne.\n\nTwo.\n\nThree.\n"))
+                  == QStringLiteral("Top.\n# T\n\nOne.\n\nTwo.\n\nThree.\nEnd.\n"),
+              "merge: insert at start (mine) and end (theirs)");
+        check(conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n"), base, QStringLiteral("\nOne.\n\nTwo.\n\nThree.\n"))
+                  == QStringLiteral("\nOne.\n\nTwo.\n"),
+              "merge: delete at start (mine) and end (theirs)");
+        const QString bothEnd = conflictBody(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nTheirs."), base,
+                                             QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nMine.\n"));
+        check(SyncModel::parseConflicts(bothEnd).size() == 1 && bothEnd.startsWith(QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\n<<<<<<< local\n"))
+                  && SyncModel::resolveConflicts(bothEnd, { QStringLiteral("remote") })
+                         == QStringLiteral("# T\n\nOne.\n\nTwo.\n\nThree.\nTheirs."),
+              "merge: both appending conflicts at the end, theirs exact");
+
+        // Base missing or unrelated: two-way, one block where the sides part.
+        const QString twoWay = QStringLiteral("# T\na\n<<<<<<< local\nmine\n=======\ntheirs\n>>>>>>> remote\nc\n");
+        check(conflictBody(QStringLiteral("# T\na\ntheirs\nc\n"), QString(), QStringLiteral("# T\na\nmine\nc\n")) == twoWay,
+              "merge: no base falls back to two-way");
+        check(conflictBody(QStringLiteral("# T\na\ntheirs\nc\n"), QStringLiteral("zzz\n\nyyy\n"), QStringLiteral("# T\na\nmine\nc\n"))
+                  == twoWay,
+              "merge: unrelated base falls back to two-way");
+
+        // Too far apart to align: one block, still theirs byte-exact.
+        QStringList bigBase, bigMine, bigTheirs;
+        for (int i = 0; i < 3000; ++i) {
+            bigBase << QStringLiteral("line %1").arg(i);
+            bigMine << QStringLiteral("mine %1").arg(i);
+            bigTheirs << QStringLiteral("theirs %1").arg(i);
+        }
+        const QString big = conflictBody(bigTheirs.join(u'\n'), bigBase.join(u'\n'), bigMine.join(u'\n'));
+        check(SyncModel::parseConflicts(big).size() == 1
+                  && SyncModel::resolveConflicts(big, { QStringLiteral("remote") }) == bigTheirs.join(u'\n'),
+              "merge: huge divergence falls back to one block");
+    }
+
+    // retitleInBody
+    check(SyncModel::retitleInBody(QStringLiteral("# Old\nbody\n"), QStringLiteral("New"))
+              == QStringLiteral("# New\nbody\n"),
+          "retitle heading");
+    check(SyncModel::retitleInBody(QStringLiteral("---\napple-note-id: x\n---\n# Old\nbody\n"), QStringLiteral("New"))
+              == QStringLiteral("---\napple-note-id: x\n---\n# New\nbody\n"),
+          "retitle keeps envelope");
+    check(SyncModel::retitleInBody(QStringLiteral("Old\nbody\n"), QStringLiteral("New"))
+              == QStringLiteral("New\nbody\n"),
+          "retitle bare line stays bare");
+    check(SyncModel::retitleInBody(QStringLiteral("---\napple-note-id: x\n---\n"), QStringLiteral("New"))
+              == QStringLiteral("---\napple-note-id: x\n---\n# New\n"),
+          "retitle empty body gains heading");
+
+    // previewNote
+    {
+        const SyncModel::NotePreview p =
+            SyncModel::previewNote(QStringLiteral("---\napple-note-id: x\n---\n# Groceries\nmilk and eggs\n"),
+                                   QStringLiteral("File"), QStringLiteral("in-body"));
+        check(p.title == QStringLiteral("Groceries"), "preview title heading");
+        check(p.snippet == QStringLiteral("milk and eggs"), "preview snippet next line");
+    }
+    {
+        const SyncModel::NotePreview p =
+            SyncModel::previewNote(QStringLiteral("Just text\n- [ ] task one\n"), QStringLiteral("File"),
+                                   QStringLiteral("in-body"));
+        check(p.title == QStringLiteral("Just text"), "preview bare title");
+        check(p.snippet == QStringLiteral("task one"), "preview snippet strips checkbox");
+    }
+    {
+        const SyncModel::NotePreview p =
+            SyncModel::previewNote(QStringLiteral("body only\n"), QStringLiteral("File"),
+                                   QStringLiteral("filename"));
+        check(p.title == QStringLiteral("File"), "preview filename mode keeps file title");
+        check(p.snippet == QStringLiteral("body only"), "preview filename snippet");
+    }
+    {
+        const SyncModel::NotePreview p =
+            SyncModel::previewNote(QString(), QStringLiteral("File"), QStringLiteral("in-body"));
+        check(p.title == QStringLiteral("File") && p.snippet.isEmpty(), "preview empty falls back");
+    }
+
+    // stripMarkdownLead
+    check(SyncModel::stripMarkdownLead(QStringLiteral("- [ ] **milk** from [the shop](http://x) and `eggs`"))
+              == QStringLiteral("milk from the shop and eggs"),
+          "strip inline markup");
+    check(SyncModel::stripMarkdownLead(QStringLiteral("## Title *here*")) == QStringLiteral("Title here"),
+          "strip heading and emphasis");
+
+    // toggleCheckbox
+    check(SyncModel::toggleCheckbox(QStringLiteral("a\n- [ ] milk\nb"), 1) == QStringLiteral("a\n- [x] milk\nb"),
+          "checkbox check");
+    check(SyncModel::toggleCheckbox(QStringLiteral("- [x] milk"), 0) == QStringLiteral("- [ ] milk"),
+          "checkbox uncheck");
+    check(SyncModel::toggleCheckbox(QStringLiteral("  2. [X] eggs"), 0) == QStringLiteral("  2. [ ] eggs"),
+          "checkbox numbered indent");
+    check(SyncModel::toggleCheckbox(QStringLiteral("- milk"), 0) == QStringLiteral("- [ ] milk"),
+          "checkbox plant");
+    check(SyncModel::toggleCheckbox(QStringLiteral("# Title"), 0) == QStringLiteral("# Title"),
+          "checkbox non-list noop");
+    check(SyncModel::toggleCheckbox(QStringLiteral("a"), 5) == QStringLiteral("a"), "checkbox range noop");
+
+    // defaultFolderDir / sortFolders
+    check(SyncModel::defaultFolderDir(R"({"folders":{"DefaultFolder-CloudKit":{"name":"Notizen","dirName":"Notizen"}}})")
+              == QStringLiteral("Notizen"),
+          "default folder read from state");
+    check(SyncModel::defaultFolderDir("{}").isEmpty(), "default folder absent");
+    QStringList folders{ QStringLiteral("Work"), QStringLiteral("bets"), QStringLiteral("Notes/Old"),
+                         QStringLiteral("Year 10"), QString(), QStringLiteral("Notes"), QStringLiteral("Work/A"),
+                         QStringLiteral("Year 2"), QStringLiteral("Work Stuff") };
+    SyncModel::sortFolders(folders, QStringLiteral("Notes"));
+    check(folders == QStringList{ QString(), QStringLiteral("Notes"), QStringLiteral("Notes/Old"), QStringLiteral("bets"),
+                                  QStringLiteral("Work"), QStringLiteral("Work/A"), QStringLiteral("Work Stuff"),
+                                  QStringLiteral("Year 2"), QStringLiteral("Year 10") },
+          "folders sort like Apple Notes");
+
+    // restoreEditorChars
+    const QString apple = QStringLiteral("Bank\u00a0Name\u2028IBAN\u2028\nBIC here");
+    check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nIBAN\n\nBIC here")) == apple,
+          "editor chars untouched text restored");
+    check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nIBAN\n\nBIC code here"))
+              == QStringLiteral("Bank\u00a0Name\u2028IBAN\u2028\nBIC code here"),
+          "editor chars kept around an insertion");
+    check(SyncModel::restoreEditorChars(apple, QStringLiteral("Bank Name\nBIC here"))
+              == QStringLiteral("Bank\u00a0Name\u2028BIC here"),
+          "editor chars kept around a deletion");
+    check(SyncModel::restoreEditorChars(QStringLiteral("a\u00a0a"), QStringLiteral("a a a"))
+              == QStringLiteral("a\u00a0a a"),
+          "editor chars repeated text");
+    check(SyncModel::restoreEditorChars(QString(), QStringLiteral("new")) == QStringLiteral("new"),
+          "editor chars empty original");
+    // Two edits far apart, one save: the lines between keep their characters.
+    const QString letter = QStringLiteral("Dear team\nIBAN\u00a0123\u2028BIC\u00a0X\nSort\u00a0code\nThanks\n");
+    check(SyncModel::restoreEditorChars(letter, QStringLiteral("Dear all\nIBAN 123\nBIC X\nSort code\nThanks a lot\n"))
+              == QStringLiteral("Dear all\nIBAN\u00a0123\u2028BIC\u00a0X\nSort\u00a0code\nThanks a lot\n"),
+          "editor chars kept between two separate edits");
+    check(SyncModel::restoreEditorChars(letter, QStringLiteral("Dear team\nNew line\nIBAN 123\nBIC X\nSort code\nThanks\n"))
+              == QStringLiteral("Dear team\nNew line\nIBAN\u00a0123\u2028BIC\u00a0X\nSort\u00a0code\nThanks\n"),
+          "editor chars kept after an inserted line");
+    check(SyncModel::restoreEditorChars(letter, QStringLiteral("Dear team\nIBAN 123\nBIC Y\nSort code\nThanks\n"))
+              == QStringLiteral("Dear team\nIBAN\u00a0123\u2028BIC\u00a0Y\nSort\u00a0code\nThanks\n"),
+          "editor chars kept around an edit inside a soft-broken line");
+    check(SyncModel::restoreEditorChars(QStringLiteral("plain\n"), QStringLiteral("edited\n")) == QStringLiteral("edited\n"),
+          "editor chars plain note untouched");
+    // Whatever the edit, the saved text reads exactly as typed: only the
+    // editor's own conversions are ever undone.
+    {
+        QRandomGenerator rng(42);
+        const QString alphabet = QStringLiteral("ab \n\u00a0\u2028");
+        auto randomText = [&](int len) {
+            QString t;
+            for (int i = 0; i < len; ++i)
+                t += alphabet[rng.bounded(alphabet.size())];
+            return t;
+        };
+        bool faithful = true;
+        for (int round = 0; round < 3000 && faithful; ++round) {
+            const QString original = randomText(rng.bounded(40));
+            QString edited = original;
+            for (QChar &c : edited)
+                c = SyncModel::editorChar(c);
+            for (int e = rng.bounded(4); e > 0; --e) { // up to three separate edits
+                const int at = rng.bounded(int(edited.size()) + 1);
+                edited = edited.left(at) + randomText(rng.bounded(4)).replace(QChar::Nbsp, u' ').replace(QChar::LineSeparator, u'\n')
+                       + edited.mid(at + rng.bounded(4));
+            }
+            QString restored = SyncModel::restoreEditorChars(original, edited);
+            for (QChar &c : restored)
+                c = SyncModel::editorChar(c);
+            faithful = restored == edited;
+        }
+        check(faithful, "editor chars never change what was typed");
+    }
+
+    // hasTable
+    check(SyncModel::hasTable(QStringLiteral("| a | b |\n| c | d |\n")), "table two rows");
+    check(!SyncModel::hasTable(QStringLiteral("text\n| a |\nmore\n| b |\n")), "table broken rows ignored");
+    check(!SyncModel::hasTable(QStringLiteral("a | b\nplain\n")), "table single pipe");
+    check(!SyncModel::hasTable(QStringLiteral("# T\n- [ ] x\n")), "table clean note");
+
+    return report();
+}

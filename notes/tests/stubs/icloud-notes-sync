@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Test double for the icloud-notes-sync CLI: canned answers, no Apple
+# account, no network. Used by backend_test to exercise the exact
+# argv/stdout/stderr/exit-code path the app uses in production. Like the
+# real tool, --json results go to stdout alone and everything else
+# (progress, notices) to stderr; exit 3 means status has entries or diff
+# found differences, 4 that a sign-in is required, 2 a usage error.
+if [ "$1" = "--json" ] && [ "$2" = "status" ]; then
+  echo "Fetching changes from iCloud..." >&2
+  echo "icloud-md:progress:fetch:12" >&2
+  cat <<'JSON'
+{"entries":[{"kind":"update","file":"A.md","resolution":"ready"},{"kind":"update","file":"B.md","resolution":"refused","reason":"B.md: has attachments"},{"kind":"createFolder","file":"New","resolution":"ready","folderTitle":"New"}],"unchanged":2,"notices":[{"level":"warn","message":"careful"}]}
+JSON
+  echo "Checked 5 notes." >&2
+  exit 3
+elif [ "$1" = "--json" ] && [ "$2" = "history" ]; then
+  echo "Reading history..." >&2
+  cat <<'JSON'
+{"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}
+JSON
+elif [ "$1" = "diff" ]; then
+  echo "Fetching the current remote copy..." >&2
+  printf -- '--- remote\n+++ local\n- old\n+ new\n'
+  exit 3
+elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
+  # ICLOUD_NOTES_SYNC_STUB_SLEEP: seconds a run takes.
+  # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
+  # only that one (a push with nothing to send never asks iCloud).
+  # ICLOUD_NOTES_SYNC_STUB_SIGNIN: how a refusal is reported: "code" exit 4
+  # without the old text marker, "marker" icloud-md's exit 1 with only the
+  # marker; unset, both, as the real tool does.
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
+  if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
+    case "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" in
+      code)
+        echo "Not signed in to iCloud." >&2
+        exit 4 ;;
+      marker)
+        echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
+        exit 1 ;;
+      *)
+        echo "Not signed in to iCloud." >&2
+        echo 'Sign in to iCloud again with icloud-session, then retry (what "icloud-md reauthenticate" did for icloud-md).' >&2
+        exit 4 ;;
+    esac
+  fi
+  echo "stub $1 ok"
+else
+  echo "stub: unknown args: $*" >&2
+  exit 2
+fi

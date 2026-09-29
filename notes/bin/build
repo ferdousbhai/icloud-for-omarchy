@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Build the app with the Qt6 qmake, mirroring Omawrite's qmake setup.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p build
+cd build
+qmake6 ../icloud-notes.pro
+make -j"$(nproc)"
+echo "Binary: $(pwd)/icloud-notes"

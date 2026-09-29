@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Render the real UI offscreen and grab a PNG for styling review.
+# Usage: bin/shots [out.png]   (NOTES_SHOT=bare for the unlinked-vault view)
+set -euo pipefail
+cd "$(dirname "$0")/../tests/shots"
+mkdir -p build
+cd build
+qmake6 ../shots.pro > /dev/null
+make -j"$(nproc)" > /dev/null
+# The stub icloud-notes-sync answers the startup pull, so no real account is touched
+# and the status line reads "Pull done." instead of an error.
+# A private session bus keeps the real icloud-session out of it too: the
+# sign-in reads as unknown, so no banner.
+PATH="$(cd ../../stubs && pwd):$PATH" dbus-run-session --config-file="$(cd ../.. && pwd)/session-bus.conf" -- \
+  ./shots "${1:-/tmp/notes-shot.png}"
