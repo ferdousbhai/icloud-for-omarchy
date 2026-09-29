@@ -157,7 +157,7 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `MergeFindMyCookies(as)` | method | raw `Set-Cookie` header values a client received from the `findme` host |
 | `ReportFindMyAuthRequired()` | method | `→ b reauthorized`. A client got HTTP 450 from Find My: the Find My jar is forgotten; with a password stored, the daemon signs in to Find My again (see below) and answers true, so the client retries once |
 | `FindMyPasswordStored` | property | `b`, the keyring holds the Apple ID password for the signed-in account (false when signed out) |
-| `SetPassword(s)` | method | signs in to Find My once with the password; only if Apple accepts it, stores it in the keyring and keeps the new Find My jar. Errors `…Error.PasswordRejected`, `…Error.Failed` (unreachable, keyring), `…Error.SignInRequired` |
+| `SetPassword(s)` | method | signs in to Find My once with the password (the autofill window, below). If Apple refuses it, nothing is stored (`…Error.PasswordRejected`); otherwise it is stored in the keyring, and a sign-in that failed for another reason is reported as `…Error.Failed` ("stored the password, but the Find My sign-in with it failed: …"). Also `…Error.Failed` (keyring), `…Error.SignInRequired` |
 | `ForgetPassword()` | method | removes every icloud-session item from the keyring |
 | `SignOut()` | method | forgets the account (and its Find My jar), the WebKit profile and the mirrored `session.local.json` |
 
@@ -224,7 +224,9 @@ $ icloud-session forget-password                    # undo
 ```
 
 `set-password` checks the password with one Find My sign-in and stores it
-only if Apple accepts it. It lives in the Secret Service's default
+unless Apple refuses it; if the sign-in fails for another reason (Apple
+unreachable, the page changed) the password is stored anyway and the
+failure reported, since it says nothing about the password. It lives in the Secret Service's default
 collection (GNOME Keyring, unlocked at login) as `iCloud (icloud-session):
 <apple id>` with the attributes `application=icloud-session`,
 `apple-id=<apple id>`; nothing else is written to disk, and the daemon
@@ -233,19 +235,29 @@ never reads a password manager. `sign-out` keeps it (it is yours);
 (the daemon notices at its next start).
 
 When a client reports a 450, or asks `FindMySession()` with no Find My
-jar, the daemon does the same one-factor sign-in icloud.com/find's
-password prompt does (pyicloud's `_authenticate_with_credentials_service
-("find")`): `POST setup.icloud.com/setup/ws/1/accountLogin` with
-`{"appName": "find", "apple_id", "password"}` from a fresh, empty cookie
-jar with a clientId of its own. The main session's jar is never sent or
-changed (a second holder rotating the main token gets it ended). The
-answer, `hsaChallengeRequired` and all, becomes the Find My jar. The
-client then retries its request once. Concurrent reports share one
-sign-in. Apple refusing the password (401/403), or Find My refusing the
-session it just made, stops automatic sign-in until the stored password
-changes; an unreachable Apple is retried after a minute. Either way the
-apps fall back to the banner and `AuthorizeFindMy()`. The password and
-cookie values are never logged.
+jar, the daemon signs in on Apple's own page, filled in as a password
+manager would (a plain-password `POST setup/ws/1/accountLogin` now
+answers 421). It runs `icloud-session-signin --find --autofill` hidden
+and writes the Apple ID and the password, one per line, to its stdin
+(never argv, env or disk). The window loads `www.icloud.com/find`, opens
+the sign-in, fills Apple's form (the Apple ID if asked, then the
+password; at most twice, so a refused password cannot be retried into a
+lockout), and once Find My's `initClient` answers prints the capture as
+`--find` does: the one-factor jar with `X-APPLE-WEBAUTH-FMIP`, the
+`dsid`, and the page's client params, which become the Find My jar's. If
+Apple wants more than the password (a 2FA code, a new-browser check) the
+window shows itself after 40 s for the user to finish. The window uses
+its own WebKit profile, as `--find` does; the daemon hands it no cookies,
+and the main jar and the icloud-md mirror are left alone. The client then
+retries its request once. Concurrent reports share one sign-in. Apple
+saying the password is wrong (the window exits 3), or Find My refusing
+the session it just made, stops automatic sign-in until the stored
+password changes; any other failure (the window exits non-zero) is
+retried after a minute. Either way the apps fall back to the banner and
+`AuthorizeFindMy()`. The password and cookie values are never logged;
+`ICLOUD_SESSION_SIGNIN_TRACE=1` makes the window report the page's form
+fields, buttons and requests (never values) on stderr, to see why an
+autofill stalls.
 
 The trade-off: any process running as you can read keyring items while
 the keyring is unlocked (as with every Secret Service secret), so a
@@ -255,20 +267,27 @@ password. Skip this if that is not acceptable; the manual path stays.
 
 ### From Bitwarden
 
-`--from-bitwarden` runs `bw get password ITEM` once and reads the password
-from its stdout (never argv, env, logs or disk). Without ITEM it tries
-the Apple ID, then "Apple ID", "Apple", "iCloud", and uses the first that
-names exactly one item; several matches stop it with bw's list, so pass
-ITEM. With `BW_SESSION` exported it uses that session. Otherwise it runs
+`--from-bitwarden` reads the password from `bw`'s stdout (never argv,
+env, logs or disk). Without ITEM it lists the logins saved for Apple's
+sites (`bw list items --search apple.com` and `--search icloud.com`),
+keeps those whose URL host is apple.com, icloud.com or a subdomain, and
+prefers the ones whose username is the Apple ID. One left: its password
+is fetched with `bw get password <id>`. Several: on a terminal it lists
+their names, usernames and sites and asks for a number; without one it
+stops ("several Apple logins match; pass the one to use as ITEM"). With
+ITEM it runs `bw get password ITEM`; several matches stop it with bw's
+list. With `BW_SESSION` exported it uses that session. Otherwise it runs
 `bw unlock --raw` (or `bw login --raw` when signed out) on the terminal,
-passes the key only in the lookups' environment, and runs `bw lock`
-afterwards. Needs `sudo pacman -S bitwarden-cli` and `bw login` once.
+passes the key only in the listings' and lookups' environment, and runs
+`bw lock` afterwards. A failed unlock is usually a mistyped master
+password. Needs `sudo pacman -S bitwarden-cli` and `bw login` once.
 
 ### From 1Password
 
-`--from-1password` runs `op item get ITEM --fields label=password
---reveal`, or `op read ITEM` for an `op://` reference, with the same
-default items. With the 1Password app's CLI integration on (Settings →
+`--from-1password` picks a login the same way from `op item list
+--categories Login --format json` and fetches it with `op item get <id>
+--fields label=password --reveal`. With ITEM it runs `op item get ITEM
+…`, or `op read ITEM` for an `op://` reference. With the 1Password app's CLI integration on (Settings →
 Developer → "Integrate with 1Password CLI"), `op` unlocks through the
 app. Otherwise it runs `op signin --raw` on the terminal, passes that
 session to the lookups, and signs out afterwards. Omarchy installs both
@@ -290,6 +309,7 @@ and `watch` never yields.
 |---|---|---|
 | `ICLOUD_SESSION_MOCK`, `ICLOUD_SESSION_MOCK_URL` | client library | off, `http://127.0.0.1:8765` |
 | `ICLOUD_SESSION_SIGNIN_BIN` | daemon | `icloud-session-signin` beside `icloud-sessiond`, else on `PATH` |
+| `ICLOUD_SESSION_SIGNIN_TRACE` | sign-in window | off; `1` reports the page's form fields, buttons and requests (never values) on stderr |
 | `ICLOUD_SESSION_SIGNIN_UA` | sign-in window | WebKitGTK's own user agent; `safari` for a macOS Safari one, anything else verbatim |
 | `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
 | `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring |
@@ -370,8 +390,9 @@ closed, without params), sign-out, the icloud-md mirror and adoption of
 icloud-md's writes (live and on start), the client library against the
 daemon (requests, rotation, retry, sign-out), the CLI, idle exit, a second
 daemon refusing to start, mock mode without D-Bus, and automatic Find My
-re-authorization against a fake `accountLogin` with a file standing in for
-the keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`) and fake `bw`/`op` scripts.
+re-authorization through a fake `--find --autofill` window (which checks
+the password reaches it on stdin only) with a file standing in for the
+keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`) and fake `bw`/`op` scripts.
 
 ## Releasing
 
