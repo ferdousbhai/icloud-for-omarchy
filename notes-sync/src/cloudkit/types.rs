@@ -291,3 +291,13 @@ impl RecordUpdateResult {
         matches!(self, RecordUpdateResult::Ok(_))
     }
 }
+
+/// `NoteDeleteResult`: the outcome of a `forceDelete`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeleteResult {
+    Ok,
+    Rejected {
+        server_error_code: String,
+        reason: Option<String>,
+    },
+}

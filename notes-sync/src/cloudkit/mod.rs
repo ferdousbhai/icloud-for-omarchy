@@ -49,6 +49,11 @@ pub enum CkError {
     /// ("Unexpected response shape from ..."), message verbatim.
     #[error("{0}")]
     UnexpectedResponse(String),
+    /// `NotesUnavailableError`: the session's webservices have no
+    /// `ckdatabasews`. `cmd::errors` should map it to its own
+    /// `Error::NotesUnavailable` (exit 1, with the hint).
+    #[error("Authenticated, but the account reported no ckdatabasews host - can't reach Notes.")]
+    NotesUnavailable,
     #[error("network: {0}")]
     Network(String),
     #[error(transparent)]
