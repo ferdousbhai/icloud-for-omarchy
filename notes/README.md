@@ -12,23 +12,29 @@ both ways with iCloud.
   your name → iCloud → Advanced Data Protection (same path in macOS
   System Settings). Without this, nothing outside Apple's own apps can
   read your notes.
-- The sync tool: `npm install -g icloud-md` (needs Node.js 20+).
+- The sync engine, `icloud-notes-sync`: a command-line tool that syncs
+  a folder of Markdown files with iCloud Notes (a Rust port of
+  [icloud-md](https://github.com/coddingtonbear/icloud-md); see
+  [Credits](#credits)).
 - `icloud-session`, which owns the iCloud sign-in for Notes and the other
   iCloud apps. It is a small D-Bus service
   (`io.github.ferdousbhai.ICloudSession`, started on demand) with Apple's
-  own sign-in window; it keeps the account signed in and hands icloud-md
-  the session it syncs with. The package depends on it and it comes from
-  the same signed repository; when building from source, install it too.
+  own sign-in window; it keeps the account signed in, and
+  icloud-notes-sync takes the session it syncs with from it.
   Without it Notes cannot sign in, and shows no sign-in warnings.
+
+The package depends on both, and the installer adds their signed
+repositories; when building from source, install them too.
 
 ## Sign-in
 
-Notes never signs in by itself, and never runs icloud-md's own sign-in.
+Notes never signs in by itself, and icloud-notes-sync has no sign-in of
+its own.
 icloud-session holds the one Apple account on this computer; Notes reads
 from it over D-Bus whether you are signed in, as whom, and when the
 sign-in lapses, and follows its changes as they happen. **Sign in** asks
 icloud-session to open its window; a sign-in there (or in any other
-iCloud app) resumes syncing here. When icloud-md reports that Apple
+iCloud app) resumes syncing here. When icloud-notes-sync reports that Apple
 refused the session, Notes tells icloud-session, which checks with Apple
 before signing every app out. A sign-in made before icloud-session took
 over the account is not carried over: sign in once more.
@@ -70,8 +76,8 @@ and password rather than the iPhone QR code, tick **Keep me signed in**,
 and click **Trust** when asked: that sign-in lasts about 30 days, while a
 QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/icloud-notes`,
 one Markdown file per note with the title as its first line, just like
-in Notes (icloud-md clones icloud-session's account, `icloud-md clone
---account <dsid>`). If the vault is ever missing while the computer is
+in Notes (icloud-notes-sync clones icloud-session's account,
+`icloud-notes-sync clone --account <dsid>`). If the vault is ever missing while the computer is
 signed in (a reinstall, say), the app downloads it again on its own,
 without asking.
 
@@ -89,9 +95,10 @@ without asking.
   the line you are editing, and the file stays plain Markdown on disk. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`),
   a checklist toggle (`Ctrl+Enter`), and PDF export (saved next to the
   note) are in the toolbar. The window follows the active Omarchy theme.
-- **History** shows past versions of the current note with diffs.
-  Restoring an old version is a deliberate terminal step
-  (`icloud-md revert`), never a click.
+- **History** shows past versions of the current note with diffs,
+  read-only. Throwing away a note's local edits is a deliberate terminal
+  step (`icloud-notes-sync restore`, see
+  [If something looks wrong](#if-something-looks-wrong)), never a click.
 
 ## Syncing
 
@@ -123,7 +130,7 @@ Sync is automatic, like Notes:
 - Edits made in the app are pushed sooner, about 20 seconds after you
   stop making them, so a burst of typing becomes one push. Nothing waits
   for a click.
-- What keeps this safe is icloud-md itself: a note it cannot push safely
+- What keeps this safe is icloud-notes-sync itself: a note it cannot push safely
   (attachments, a reordered table, an unresolved conflict) is refused,
   not mangled, and a deleted note moves to Recently Deleted in iCloud
   (recoverable for ~30 days). Small badges in the note list warn you:
@@ -149,7 +156,7 @@ while the computer slept): the same push-then-pull the app does, with no
 window. Edits made elsewhere reach this computer, and edits made here by
 other programs reach iCloud, so a note is less likely to be hours stale
 when you next edit it. It does nothing while the app is open (the app
-syncs itself, and the two never run icloud-md at once), when nobody is
+syncs itself, and the two never run icloud-notes-sync at once), when nobody is
 signed in to icloud-session, or before the notes are cloned. A sign-in
 Apple refused is reported to icloud-session just as the app does.
 
@@ -171,10 +178,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now icloud-notes-sync.timer
 ```
 
-The service finds icloud-md in the usual places (`~/.local/bin`, mise,
-npm's `~/.npm-global`, bun, nvm and volta) even though systemd gives it
-a bare `PATH`.
-
 ## Your files
 
 Each note is one `.md` file. A small ID block at the top of every file
@@ -191,10 +194,10 @@ preview-only: notes with attachments can't be edited back to iCloud.
 
 - Notes with images, audio, or file attachments are read-only upstream;
   you can't add attachments from here either.
-- A note icloud-md can read but not safely write back opens read-only,
-  with the reason under its title. A very large note is the usual case:
-  Apple keeps its text in a separate file, which only a patched
-  icloud-md can read so far (stock 0.6.2 skips such notes entirely).
+- A note icloud-notes-sync can read but not safely write back opens
+  read-only, with the reason under its title. A very large note is the
+  usual case: Apple keeps its text in a separate file, which
+  icloud-notes-sync reads but does not write back.
   Edit it in Apple Notes; the changes still sync here.
 - Folders carry no id in iCloud, so a folder rename here becomes a new
   folder plus note moves on push, and a folder delete moves its notes to
@@ -215,8 +218,16 @@ away local edits on one note and go back to the last synced copy:
 
 ```bash
 cd ~/Documents/icloud-notes
-icloud-md restore "<note file>"
+icloud-notes-sync restore "<note file>"
 ```
+
+## Credits
+
+The sync engine started as [icloud-md](https://github.com/coddingtonbear/icloud-md)
+by Adam Coddington, which Notes ran directly until icloud-notes-sync, its
+Rust port, took over. Vaults are icloud-md vaults (the `.icloud-md/` state
+directory is unchanged), so a vault cloned with either tool works with the
+other.
 
 ## Releasing
 
