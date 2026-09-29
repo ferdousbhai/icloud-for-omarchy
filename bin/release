@@ -175,8 +175,12 @@ undo_tags() {
 
 rm -rf dist
 mkdir dist
+# --nodeps: packages here depend on each other (icloud-notes-sync on
+# icloud-session, ...), and those are built in this same run, not installed;
+# --syncdeps would try to install them with sudo. The build tools themselves
+# (rust, cargo, qt6) are this machine's, and a missing one fails the build.
 for pkg in "${pkgs[@]}"; do
-  (cd "packaging/$pkg" && PKGDEST="$PWD/../../dist" makepkg --force --syncdeps --sign) \
+  (cd "packaging/$pkg" && PKGDEST="$PWD/../../dist" makepkg --force --nodeps --sign) \
     || { echo "Building $pkg failed; not releasing." >&2; undo_tags; exit 1; }
 done
 # makepkg writes each computed pkgver back into its PKGBUILD; keep the
