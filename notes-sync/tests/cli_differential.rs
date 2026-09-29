@@ -8,6 +8,11 @@
 //! `--json` stdout, request log, the vault tree (state.json's `generator`
 //! normalized) and the deterministic file mtimes.
 //!
+//! Scenarios without an `icloudMd` ref have expectations from stock icloud-md
+//! 0.6.2, so they run with `ICLOUD_NOTES_SYNC_ASSET_BODIES=0` (upstream PR
+//! #29 off). The `asset-*` scenarios (`"icloudMd": "fetch-asset-note-bodies"`)
+//! have expectations from the PR #29 fork branch and run with it on.
+//!
 //! `ICLOUD_NOTES_SYNC_DIFF_ONLY=name[,name]` limits the run.
 
 use std::collections::BTreeMap;
@@ -193,8 +198,14 @@ fn run_scenario(scenario: &Scenario) -> Vec<String> {
     let log_path = out.join("requests.json");
     std::fs::create_dir_all(out.join("home")).unwrap();
 
+    let asset_bodies = if scenario.raw.contains_key("icloudMd") {
+        "1"
+    } else {
+        "0"
+    };
     let output = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
         .args(&args)
+        .env("ICLOUD_NOTES_SYNC_ASSET_BODIES", asset_bodies)
         .current_dir(&cwd)
         .env("HOME", out.join("home"))
         .env("ICLOUD_NOTES_SYNC_CASSETTE", &cassette)

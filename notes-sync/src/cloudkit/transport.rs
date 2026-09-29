@@ -31,6 +31,22 @@ pub trait Transport {
     /// GET an absolute (signed, cookie-less) asset URL into `dest`; returns
     /// the byte count.
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError>;
+
+    /// [`Transport::download`] into memory (a note's `TextDataAsset`). The
+    /// default goes through a private temp file.
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("icloud-notes-sync-{}-{n}", std::process::id()));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&dir)?;
+        let dest = dir.join("asset");
+        let result = self.download(url, &dest).and_then(|_| Ok(fs::read(&dest)?));
+        let _ = fs::remove_dir_all(&dir);
+        result
+    }
 }
 
 impl<T: Transport + ?Sized> Transport for &T {
@@ -41,6 +57,10 @@ impl<T: Transport + ?Sized> Transport for &T {
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
         (**self).download(url, dest)
     }
+
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        (**self).download_bytes(url)
+    }
 }
 
 impl<T: Transport + ?Sized> Transport for Box<T> {
@@ -50,6 +70,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
         (**self).download(url, dest)
+    }
+
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        (**self).download_bytes(url)
     }
 }
 
@@ -301,12 +325,16 @@ impl Transport for ReplayTransport {
         }
     }
 
-    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         let parsed = Url::parse(url).map_err(|e| CkError::Other(format!("bad asset URL {url}: {e}")))?;
-        let bytes = match self.serve("GET", &parsed, None)? {
+        Ok(match self.serve("GET", &parsed, None)? {
             Answer::Bytes(b) => b,
             Answer::Json(v) => v.to_string().into_bytes(),
-        };
+        })
+    }
+
+    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
+        let bytes = self.download_bytes(url)?;
         if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent)?;
         }

@@ -50,6 +50,33 @@ pub const NOTE_DESIRED_KEYS: &[&str] = &[
     "TextDataEncrypted",
 ];
 
+/// Where a very large note keeps its text instead of `TextDataEncrypted`;
+/// requested (after [`NOTE_DESIRED_KEYS`]) only with asset bodies on - see
+/// [`Database::inline_asset_bodies`].
+pub const TEXT_DATA_ASSET_KEY: &str = "TextDataAsset";
+
+/// `ICLOUD_NOTES_SYNC_ASSET_BODIES=0` turns off upstream icloud-md PR #29
+/// ("Fetch the text of notes too large to store it inline", unmerged in
+/// 0.6.2): no `TextDataAsset` in the desired keys, no asset download, and no
+/// read-only marking - stock 0.6.2 behaviour, for the differential scenarios
+/// whose expected output comes from 0.6.2. On by default.
+pub const ASSET_BODIES_ENV: &str = "ICLOUD_NOTES_SYNC_ASSET_BODIES";
+
+/// Whether PR #29's asset-body behaviour is on (see [`ASSET_BODIES_ENV`]).
+pub fn asset_bodies_enabled() -> bool {
+    std::env::var_os(ASSET_BODIES_ENV).is_none_or(|v| v != "0")
+}
+
+/// The `desiredKeys` of a note `changes/zone` request: [`NOTE_DESIRED_KEYS`],
+/// plus `TextDataAsset` with asset bodies on.
+pub fn note_desired_keys() -> Vec<&'static str> {
+    let mut keys = NOTE_DESIRED_KEYS.to_vec();
+    if asset_bodies_enabled() {
+        keys.push(TEXT_DATA_ASSET_KEY);
+    }
+    keys
+}
+
 pub const NOTE_DESIRED_RECORD_TYPES: &[&str] = &[
     "AccountData",
     "Note",
@@ -114,7 +141,7 @@ impl<T: Transport> Database<T> {
         while more_coming {
             let mut zone_request = Map::new();
             zone_request.insert("zoneID".into(), zone_id_json(zone_id));
-            zone_request.insert("desiredKeys".into(), json!(NOTE_DESIRED_KEYS));
+            zone_request.insert("desiredKeys".into(), json!(note_desired_keys()));
             zone_request.insert("desiredRecordTypes".into(), json!(NOTE_DESIRED_RECORD_TYPES));
             // The shared database rejects `reverse` outright.
             if database == DatabaseScope::Private {
@@ -133,6 +160,9 @@ impl<T: Transport> Database<T> {
             }
             more_coming = zone.more_coming == Some(true);
             on_page(count);
+        }
+        if asset_bodies_enabled() {
+            self.inline_asset_bodies(&mut records)?;
         }
         Ok((records, sync_token))
     }
@@ -282,6 +312,9 @@ impl<T: Transport> Database<T> {
                 };
                 let looked_up = self.lookup_records(&zone, &missing)?;
                 merge_looked_up_records(&mut records, looked_up);
+                if asset_bodies_enabled() {
+                    self.inline_asset_bodies(&mut records)?;
+                }
             }
 
             let still_missing: Vec<String> = records
@@ -431,6 +464,57 @@ impl<T: Transport> Database<T> {
             ))),
             other => other,
         }
+    }
+
+    /// `fetchAssetBytes`: [`Database::fetch_asset`] into memory.
+    pub fn fetch_asset_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        match self.transport.download_bytes(url) {
+            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
+                "Attachment download failed: HTTP {status}"
+            ))),
+            other => other,
+        }
+    }
+
+    /// `inlineAssetBodies` (upstream PR #29): moves a very large note's text
+    /// inline, where every reader expects it. Past some size Apple stores a
+    /// note's text as a `TextDataAsset` instead of `TextDataEncrypted`, and
+    /// the record then carries no `TextDataEncrypted` at all - so without
+    /// this the note reads as body-less and is never cloned or pulled. The
+    /// asset holds the same bytes the inline field would (a gzipped
+    /// NoteStoreProto document), so its download is inlined as-is and decodes
+    /// on the normal path.
+    ///
+    /// Only the in-memory record changes. Push re-reads the record before any
+    /// write and still refuses a note stored as an asset. A failed download
+    /// propagates rather than leaving the note body-less: that would read as
+    /// a clean sync while the syncToken moved past the note.
+    pub fn inline_asset_bodies(&self, records: &mut [CloudKitRecord]) -> Result<(), CkError> {
+        use base64::Engine;
+        for record in records.iter_mut() {
+            if !needs_body_lookup(record) {
+                continue;
+            }
+            let Some(url) = record
+                .fields
+                .get(TEXT_DATA_ASSET_KEY)
+                .map(|f| &f.value)
+                .filter(|v| is_record(v))
+                .and_then(|v| get_str(v, "downloadURL"))
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let bytes = self.fetch_asset_bytes(&url)?;
+            record.fields.insert(
+                "TextDataEncrypted".into(),
+                FieldValue {
+                    value: Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    type_: "ENCRYPTED_BYTES".into(),
+                },
+            );
+        }
+        Ok(())
     }
 }
 

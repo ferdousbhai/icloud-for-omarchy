@@ -78,8 +78,35 @@ pub enum NoteDecodeResult {
     Ok(Box<DecodedNote>),
 }
 
+/// Why a note whose text lives in a `TextDataAsset` is read-only (upstream
+/// icloud-md PR #29, verbatim).
+pub const TEXT_DATA_ASSET_UNPUBLISHABLE_REASON: &str =
+    "is so large that Apple keeps its text in a separate file, which can't be written back yet";
+
 /// `classifyNoteRecord`.
+///
+/// With asset bodies on (see [`crate::cloudkit::client::asset_bodies_enabled`];
+/// upstream PR #29), a note whose text Apple moved into a `TextDataAsset`
+/// reads like any other once `inline_asset_bodies` has fetched it, but
+/// writing it back would mean uploading a new asset - a path never captured -
+/// so it arrives read-only.
 pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {
+    let result = classify_note_body(record, options);
+    match result {
+        NoteDecodeResult::Ok(mut note)
+            if note.publishable
+                && crate::cloudkit::client::asset_bodies_enabled()
+                && record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) =>
+        {
+            note.publishable = false;
+            note.unpublishable_reason = Some(TEXT_DATA_ASSET_UNPUBLISHABLE_REASON.into());
+            NoteDecodeResult::Ok(note)
+        }
+        other => other,
+    }
+}
+
+fn classify_note_body(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {
     if is_deleted(record) {
         return NoteDecodeResult::Deleted;
     }

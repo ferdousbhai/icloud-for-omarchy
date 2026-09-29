@@ -1,0 +1,92 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "service": "setup",
+      "path": "/setup/ws/1/validate",
+      "query": {},
+      "matched": null
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/changes/zone",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "zones": [
+          {
+            "zoneID": {
+              "zoneName": "Notes"
+            },
+            "desiredKeys": [
+              "TitleEncrypted",
+              "SnippetEncrypted",
+              "FirstAttachmentUTIEncrypted",
+              "FirstAttachmentThumbnail",
+              "FirstAttachmentThumbnailOrientation",
+              "CreationDate",
+              "ModificationDate",
+              "Deleted",
+              "Folders",
+              "Folder",
+              "Attachments",
+              "ParentFolder",
+              "Note",
+              "LastViewedModificationDate",
+              "MinimumSupportedNotesVersion",
+              "DisplayTextEncrypted",
+              "StandardizedContentEncrypted",
+              "TokenContentIdentifierEncrypted",
+              "AltTextEncrypted",
+              "UTIEncrypted",
+              "MergeableDataEncrypted",
+              "IsPinned",
+              "TextDataEncrypted",
+              "TextDataAsset"
+            ],
+            "desiredRecordTypes": [
+              "AccountData",
+              "Note",
+              "SearchIndexes",
+              "Folder",
+              "PasswordProtectedNote",
+              "User",
+              "Users",
+              "Note_UserSpecific",
+              "PasswordProtectedNote_UserSpecific",
+              "Folder_UserSpecific",
+              "cloudkit.share",
+              "Hashtag",
+              "InlineAttachment"
+            ],
+            "reverse": true
+          }
+        ]
+      },
+      "matched": 0
+    },
+    {
+      "method": "GET",
+      "service": "other",
+      "path": "https://cvws.icloud-content.com/B/AbigNote1/$%7Bf%7D",
+      "query": {
+        "a": "CAog",
+        "ckc": "com.apple.notes",
+        "ckz": "Notes",
+        "e": "1790003600",
+        "fl": "",
+        "k": "${uk}",
+        "o": "AsBigOne",
+        "p": "43",
+        "r": "r1",
+        "s": "sig1",
+        "v": "1",
+        "x": "3"
+      },
+      "matched": 1
+    }
+  ]
+}

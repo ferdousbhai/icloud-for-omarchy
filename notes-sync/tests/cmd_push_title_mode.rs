@@ -52,13 +52,19 @@ fn note_record(markdown: &str) -> CloudKitRecord {
     reconcile_note_format(&mut doc, &parsed.paragraphs, &REPLICA)
         .expect("reconciles")
         .expect("reconciles");
-    record_with(&parsed.text, &compress_note_document(&encode_note_document(&doc).expect("encodes")))
+    record_with(
+        &parsed.text,
+        &compress_note_document(&encode_note_document(&doc).expect("encodes")),
+    )
 }
 
 /// From raw text (titles the markdown parser would alter).
 fn raw_note_record(text: &str) -> CloudKitRecord {
     let doc = build_initial_note_document(text, &REPLICA).expect("builds");
-    record_with(text, &compress_note_document(&encode_note_document(&doc).expect("encodes")))
+    record_with(
+        text,
+        &compress_note_document(&encode_note_document(&doc).expect("encodes")),
+    )
 }
 
 fn classify_ok(record: &CloudKitRecord, title_mode: TitleMode) -> DecodedNote {

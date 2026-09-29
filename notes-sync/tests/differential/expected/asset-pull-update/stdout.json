@@ -1,0 +1,25 @@
+{
+  "added": 0,
+  "updated": 1,
+  "merged": 0,
+  "removed": 0,
+  "attachmentsDownloaded": 0,
+  "unpublishable": 1,
+  "skippedNewUnsyncable": 0,
+  "droppedUnsyncable": 0,
+  "unsharedUntracked": 0,
+  "changes": [
+    {
+      "kind": "update",
+      "file": "Notes/Big Note.md",
+      "remarks": [
+        {
+          "tone": "unsyncable",
+          "message": "read-only: contains content this tool couldn't fully parse"
+        }
+      ]
+    }
+  ],
+  "conflicts": [],
+  "notices": []
+}

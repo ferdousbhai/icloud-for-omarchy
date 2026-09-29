@@ -12,6 +12,12 @@ writes).
     tests/differential/regen.py [scenario ...]
 
 Needs the icloud-md clone with node_modules (see README.md, ICLOUD_MD).
+
+A scenario with `"icloudMd": "<git ref>"` runs that ref of the clone
+instead of its working tree: the ref's tree is extracted with `git archive`
+into a temp dir (the clone itself is never touched) and given the clone's
+node_modules. The `asset-*` scenarios use this to run upstream PR #29
+(`fetch-asset-note-bodies`); every other scenario runs stock 0.6.2.
 """
 
 import json
@@ -23,6 +29,22 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ICLOUD_MD = os.environ.get("ICLOUD_MD") or os.path.normpath(
+    os.path.join(HERE, "..", "..", "..", "..", "coddingtonbear", "icloud-md"))
+_trees = {}
+
+
+def icloud_md_tree(ref):
+    """The icloud-md source to run: the clone itself, or `ref` extracted."""
+    if not ref:
+        return ICLOUD_MD
+    if ref not in _trees:
+        tree = tempfile.mkdtemp(prefix=f"icloud-md-{ref.replace('/', '-')}-")
+        archive = subprocess.run(["git", "-C", ICLOUD_MD, "archive", ref], check=True, stdout=subprocess.PIPE).stdout
+        subprocess.run(["tar", "-x", "-C", tree], input=archive, check=True)
+        os.symlink(os.path.join(ICLOUD_MD, "node_modules"), os.path.join(tree, "node_modules"))
+        _trees[ref] = tree
+    return _trees[ref]
 EXPECTED = os.path.join(HERE, "expected")
 STATE_DIR = ".icloud-md"
 
@@ -104,7 +126,8 @@ def run(scenario, defaults):
     now = str(scenario.get("now", defaults["now"]))
     cmd = [os.path.join(HERE, "run-node.sh"), os.path.join(HERE, "cassettes", scenario["cassette"]), out,
            "--now", now, "--cwd", cwd, "--", *args]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    env = dict(os.environ, ICLOUD_MD=icloud_md_tree(scenario.get("icloudMd")))
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, env=env)
 
     dest = os.path.join(EXPECTED, name)
     shutil.rmtree(dest, ignore_errors=True)
@@ -132,6 +155,8 @@ def main():
     for scenario in manifest["scenarios"]:
         if not wanted or scenario["name"] in wanted:
             run(scenario, manifest["defaults"])
+    for tree in _trees.values():
+        shutil.rmtree(tree)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,14 @@ impl Transport for AnyTransport {
             AnyTransport::Boxed(t) => t.download(url, dest),
         }
     }
+
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        match self {
+            AnyTransport::Live(t) => t.download_bytes(url),
+            AnyTransport::Replay(t) => t.download_bytes(url),
+            AnyTransport::Boxed(t) => t.download_bytes(url),
+        }
+    }
 }
 
 /// A connected CloudKit database plus the account it belongs to.

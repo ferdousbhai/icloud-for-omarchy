@@ -15,6 +15,25 @@ sent to CloudKit.
   and writes the same request log (`ICLOUD_NOTES_SYNC_CASSETTE`,
   `ICLOUD_NOTES_SYNC_REQUEST_LOG`); stubbed until workstream A fills it in.
 
+## Stock 0.6.2 and upstream PR #29
+
+The port includes upstream icloud-md PR #29 ("Fetch the text of notes too
+large to store it inline", unmerged; fork branch `fetch-asset-note-bodies`
+in the icloud-md clone): it requests `TextDataAsset`, downloads and inlines
+such a note's text, and marks the note read-only. 0.6.2 doesn't, so:
+
+- Scenarios without an `icloudMd` key have expectations from stock 0.6.2
+  (the clone's working tree), and `tests/cli_differential.rs` runs the port
+  on them with `ICLOUD_NOTES_SYNC_ASSET_BODIES=0`, which turns PR #29 off
+  (no `TextDataAsset` in `desiredKeys`, no download, no read-only marking).
+- The `asset-*` scenarios carry `"icloudMd": "fetch-asset-note-bodies"`:
+  `regen.py` extracts that ref with `git archive` into a temp dir (the clone
+  is not modified), links the clone's `node_modules`, and runs the driver
+  there. The port runs them with PR #29 on (the default). Their cassettes
+  (`asset-*.json`) hold notes whose text is only a `TextDataAsset` (private,
+  and shared via the `records/lookup` backfill), a failed asset download, a
+  pull of a changed asset, and status/push refusing the read-only note.
+
 ## Requirements
 
 The icloud-md clone with its `node_modules` installed (it ships `tsx`). The

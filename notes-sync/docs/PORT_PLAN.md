@@ -177,3 +177,12 @@ user has one: an ~833 KB pinned note). Port it once the read path matches 0.6.2:
 request TextDataAsset, inline the downloaded bytes, mark such notes unpublishable
 ("is so large that Apple keeps its text in a separate file, which can't be
 written back yet"). Differential tests then run with a flag that turns it off.
+
+Done: `cloudkit::client` (`note_desired_keys`, `Database::inline_asset_bodies`
+at the end of every zone walk and after the shared lookup backfill; a failed
+download fails the fetch) and `doc::decode::classify_note_record` (the PR's
+reason string). `ICLOUD_NOTES_SYNC_ASSET_BODIES=0` restores stock 0.6.2; the
+0.6.2 differential scenarios run with it, the `asset-*` scenarios compare with
+the fork branch (see tests/differential/README.md). PR tests ported in
+tests/cloudkit_asset_body.rs. Live: a fresh clone of the real account matches
+the installed PR #29 build byte for byte (bar `generator`).

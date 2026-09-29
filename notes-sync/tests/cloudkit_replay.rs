@@ -25,6 +25,22 @@ fn node_log_without_setup(dir: &str) -> String {
     serde_json::to_string_pretty(&log).unwrap() + "\n"
 }
 
+/// [`node_log_without_setup`] for a 0.6.2 log, with the one request change
+/// upstream PR #29 makes (on by default in-process): `TextDataAsset` appended
+/// to every `changes/zone` `desiredKeys`.
+fn node_log_with_asset_key(dir: &str) -> String {
+    let mut log: Value = serde_json::from_str(&node_log_without_setup(dir)).unwrap();
+    for request in log["requests"].as_array_mut().unwrap() {
+        let zones = request.get_mut("body").and_then(|b| b.get_mut("zones"));
+        for zone in zones.and_then(Value::as_array_mut).into_iter().flatten() {
+            if let Some(keys) = zone["desiredKeys"].as_array_mut() {
+                keys.push(json!("TextDataAsset"));
+            }
+        }
+    }
+    serde_json::to_string_pretty(&log).unwrap() + "\n"
+}
+
 #[test]
 fn tiny_clone_requests_match_the_node_driver() {
     let tmp = tempfile::tempdir().unwrap();
@@ -50,7 +66,7 @@ fn tiny_clone_requests_match_the_node_driver() {
 
     assert_eq!(
         std::fs::read_to_string(&log_path).unwrap(),
-        node_log_without_setup("tiny-clone")
+        node_log_with_asset_key("tiny-clone")
     );
     assert_eq!(database.transport.request_log().requests.len(), 2);
 }
@@ -312,7 +328,7 @@ fn body_pinned_interactions_match_on_json_equality() {
     // Pinned to the second walk only (the token-free one).
     first.request.body = Some(json!({ "zones": [{
         "zoneID": { "zoneName": "Notes" },
-        "desiredKeys": icloud_notes_sync::cloudkit::client::NOTE_DESIRED_KEYS,
+        "desiredKeys": icloud_notes_sync::cloudkit::client::note_desired_keys(),
         "desiredRecordTypes": icloud_notes_sync::cloudkit::client::NOTE_DESIRED_RECORD_TYPES,
         "reverse": true,
     }] }));
