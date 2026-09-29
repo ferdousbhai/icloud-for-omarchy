@@ -1,11 +1,20 @@
 //! Record classification: the shared skip/decode rules `clone`, `pull` and
 //! `push` use. Ports icloud-md `src/notes/decodeNoteRecord.ts`.
 //! Owner: workstream B.
-#![allow(unused_variables)]
 
-use super::embeds::{AttachmentReference, EmbedSlot};
-use super::format::FormatParagraph;
-use crate::cloudkit::CloudKitRecord;
+use serde_json::Value;
+
+use super::embeds::{
+    AttachmentReference, EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, UNKNOWN_CONTENT_BANNER, embed_slots_of,
+};
+use super::encode::TRASH_FOLDER_RECORD_NAME;
+use super::format::{FormatParagraph, decode_note_format, formats_round_trip_equal, trim_trailing_whitespace};
+use super::js::{base64_decode, buffer_to_utf8};
+use super::text::decode_note_string;
+use crate::cloudkit::{CloudKitRecord, FieldValue};
+use crate::md::parse::parse_note_markdown;
+use crate::md::render::render_note_markdown;
+use crate::md::title::split_title_paragraph;
 use crate::vault::state::TitleMode;
 
 /// `ClassifyNoteOptions`.
@@ -71,10 +80,130 @@ pub enum NoteDecodeResult {
 
 /// `classifyNoteRecord`.
 pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {
-    todo!()
+    if is_deleted(record) {
+        return NoteDecodeResult::Deleted;
+    }
+    let Some(Value::String(text_value)) = record.fields.get("TextDataEncrypted").map(|f| &f.value) else {
+        return NoteDecodeResult::Unsyncable(UnsyncableReason::MissingBody);
+    };
+    let Ok(string) = decode_note_string(&base64_decode(text_value)) else {
+        return NoteDecodeResult::Unsyncable(UnsyncableReason::Undecodable);
+    };
+    let body_text = string.string.clone().unwrap_or_default();
+    let title = decode_title_field(record.fields.get("TitleEncrypted"));
+    let title_line = body_text.split('\n').next().unwrap_or("").to_string();
+
+    let Some(embed_slots) = embed_slots_of(&string) else {
+        let banner_text = format!("{UNKNOWN_CONTENT_BANNER}{body_text}");
+        return NoteDecodeResult::Ok(Box::new(DecodedNote {
+            title,
+            title_line,
+            body_text: banner_text.clone(),
+            markdown_text: banner_text,
+            format: None,
+            title_stripped: false,
+            embed_slots: Vec::new(),
+            attachments: Vec::new(),
+            publishable: false,
+            unpublishable_reason: Some(
+                "contains unrecognized embedded content this tool couldn't parse or place precisely".into(),
+            ),
+        }));
+    };
+    let attachments: Vec<AttachmentReference> = embed_slots
+        .iter()
+        .filter_map(|slot| match slot {
+            EmbedSlot::Attachment(reference) => Some(reference.clone()),
+            EmbedSlot::Unknown { .. } => None,
+        })
+        .collect();
+    let base = DecodedNote {
+        title,
+        title_line,
+        body_text: body_text.clone(),
+        markdown_text: body_text.clone(),
+        format: None,
+        title_stripped: false,
+        embed_slots,
+        attachments,
+        publishable: false,
+        unpublishable_reason: None,
+    };
+    let unpublishable = |reason: String| {
+        NoteDecodeResult::Ok(Box::new(DecodedNote {
+            unpublishable_reason: Some(reason),
+            ..base.clone()
+        }))
+    };
+
+    let paragraphs = match decode_note_format(&body_text, &string.attribute_run) {
+        Ok(paragraphs) => paragraphs,
+        Err(reason) => return unpublishable(reason),
+    };
+    let strip_title = options.title_mode == TitleMode::Filename
+        && paragraphs
+            .first()
+            .is_some_and(|title| !title.text.contains(OBJECT_REPLACEMENT_CHARACTER));
+    let projected = if strip_title {
+        split_title_paragraph(&paragraphs).body
+    } else {
+        paragraphs.clone()
+    };
+
+    if strip_title && projected.is_empty() {
+        return NoteDecodeResult::Ok(Box::new(DecodedNote {
+            markdown_text: String::new(),
+            format: Some(paragraphs),
+            title_stripped: true,
+            publishable: true,
+            ..base
+        }));
+    }
+
+    let rendered = render_note_markdown(&projected);
+    let reparsed = parse_note_markdown(&rendered);
+    let projected_text = projected
+        .iter()
+        .map(|p| trim_trailing_whitespace(p).text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let survives = match &reparsed {
+        Ok(reparsed) => reparsed.text == projected_text && formats_round_trip_equal(&projected, &reparsed.paragraphs),
+        Err(_) => false,
+    };
+    if !survives {
+        return unpublishable("the note's formatting doesn't survive this tool's markdown round trip".into());
+    }
+    NoteDecodeResult::Ok(Box::new(DecodedNote {
+        markdown_text: rendered,
+        format: Some(paragraphs),
+        title_stripped: strip_title,
+        publishable: true,
+        ..base
+    }))
 }
 
-/// `isDeleted` (Deleted field, or trashed/purged shapes - see TS).
+/// `isDeleted`: the record-level `deleted` flag, a non-zero `Deleted` field,
+/// or a note parented to the Trash folder.
 pub fn is_deleted(record: &CloudKitRecord) -> bool {
-    todo!()
+    if record.deleted == Some(true) {
+        return true;
+    }
+    if let Some(Value::Number(n)) = record.fields.get("Deleted").map(|f| &f.value)
+        && n.as_f64() != Some(0.0)
+    {
+        return true;
+    }
+    matches!(
+        record.fields.get("Folder").map(|f| &f.value),
+        Some(Value::Object(folder)) if folder.get("recordName") == Some(&Value::String(TRASH_FOLDER_RECORD_NAME.into()))
+    )
+}
+
+/// `decodeTitleField`.
+fn decode_title_field(field: Option<&FieldValue>) -> String {
+    match field.map(|f| &f.value) {
+        Some(Value::String(value)) => buffer_to_utf8(&base64_decode(value)),
+        _ => String::new(),
+    }
 }

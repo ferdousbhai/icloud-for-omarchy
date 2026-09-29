@@ -10,10 +10,12 @@
 //! text is held as `String`. See `format.rs`.
 
 pub mod decode;
+pub mod deflate;
 pub mod document;
 pub mod embeds;
 pub mod encode;
 pub mod format;
+pub mod js;
 pub mod proto;
 pub mod reconcile;
 pub mod table_edit;
@@ -25,7 +27,7 @@ pub mod text;
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
     #[error("{0}")]
-    Protobuf(#[from] protobuf::Error),
+    Protobuf(#[from] proto::ProtoError),
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
