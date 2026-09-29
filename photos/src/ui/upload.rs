@@ -10,7 +10,7 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use icloud_photos::transport::Error;
-use icloud_photos::upload::{Step, Uploaded, Uploader, is_supported};
+use icloud_photos::upload::{BatchEvent, BatchSummary, Step, Uploaded, is_supported, upload_batch};
 
 use super::window::{App, Msg};
 
@@ -115,46 +115,11 @@ fn start(app: &Rc<App>, paths: Vec<PathBuf>) {
         let send = |m: UploadMsg| {
             let _ = tx.send_blocking(Msg::Upload(m));
         };
-        let (mut uploaded, mut duplicates, mut failed) = (0, 0, 0);
-        let mut jobs = Vec::new();
-        let total = paths.len();
-        let up = match Uploader::connect(&*t) {
-            Ok(u) => u,
-            Err(e) => {
-                send(UploadMsg::FileDone { name: String::new(), result: Err(e) });
-                send(UploadMsg::Finished { uploaded, duplicates, failed: total, stopped: false });
-                return;
-            }
-        };
-        let mut stopped = false;
-        for (index, path) in paths.iter().enumerate() {
-            if stop.load(Ordering::Relaxed) {
-                stopped = true;
-                break;
-            }
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let client_id = uuid::Uuid::new_v4().to_string();
-            let result = up.upload(path, &client_id, &|step| send(UploadMsg::Step { index, total, name: name.clone(), step }));
-            match &result {
-                Ok(u) if u.duplicate => duplicates += 1,
-                Ok(u) => {
-                    uploaded += 1;
-                    jobs.extend(u.job_id.clone());
-                }
-                Err(e) if e.is_sign_in() => {
-                    failed += total - index;
-                    send(UploadMsg::FileDone { name, result });
-                    break;
-                }
-                Err(_) => failed += 1,
-            }
-            send(UploadMsg::FileDone { name, result });
-        }
-        if !jobs.is_empty() {
-            let _ = up.wait_for_ingest(&jobs, Duration::from_secs(60), &|step| {
-                send(UploadMsg::Step { index: total, total, name: String::new(), step })
-            });
-        }
+        let summary = upload_batch(&*t, &paths, Duration::from_secs(60), &|| stop.load(Ordering::Relaxed), &|event| match event {
+            BatchEvent::Step { index, total, name, step } => send(UploadMsg::Step { index, total, name, step }),
+            BatchEvent::FileDone { name, result, .. } => send(UploadMsg::FileDone { name, result }),
+        });
+        let BatchSummary { uploaded, duplicates, failed, stopped } = summary;
         send(UploadMsg::Finished { uploaded, duplicates, failed, stopped });
     });
 }

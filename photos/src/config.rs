@@ -78,7 +78,13 @@ impl Default for Settings {
 
 impl Settings {
     pub fn load(dirs: &Dirs) -> Settings {
-        std::fs::read(dirs.settings()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        Settings::load_or(dirs, Settings::default())
+    }
+
+    /// The saved settings, or `fallback` when there are none (the CLI's
+    /// `--data-dir` keeps the library under that directory too).
+    pub fn load_or(dirs: &Dirs, fallback: Settings) -> Settings {
+        std::fs::read(dirs.settings()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(fallback)
     }
 
     pub fn save(&self, dirs: &Dirs) -> std::io::Result<()> {

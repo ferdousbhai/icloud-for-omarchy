@@ -25,7 +25,7 @@
 //! The new asset is not queryable for ~15-20 s after step 3; the caller runs
 //! an incremental sync after `wait_for_ingest`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -203,6 +203,79 @@ impl<'t> Uploader<'t> {
             interval = (interval * 2).min(Duration::from_secs(4));
         }
     }
+}
+
+/// What [`upload_batch`] reports as it goes.
+#[derive(Debug)]
+pub enum BatchEvent {
+    /// A step of file `index` (0-based) of `total`. The final wait for
+    /// iCloud to ingest the batch comes as `index == total` with no name.
+    Step { index: usize, total: usize, name: String, step: Step },
+    /// File `index` is done. When the upload service cannot be reached at
+    /// all, one event with an empty `name` carries that error.
+    FileDone { index: usize, name: String, result: Result<Uploaded> },
+}
+
+/// Counts for a whole batch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchSummary {
+    pub uploaded: usize,
+    /// Files iCloud already had.
+    pub duplicates: usize,
+    pub failed: usize,
+    /// `should_stop` answered true before every file was sent.
+    pub stopped: bool,
+}
+
+/// Upload `paths` one after another (each with a fresh client UUID), then
+/// wait up to `ingest_timeout` for iCloud to ingest the new ones. A lapsed
+/// sign-in fails the rest of the batch. `should_stop` is asked before each
+/// file. The app's upload dialog and `icloud-photos upload` both run this.
+pub fn upload_batch(
+    t: &dyn Transport,
+    paths: &[PathBuf],
+    ingest_timeout: Duration,
+    should_stop: &dyn Fn() -> bool,
+    on: &dyn Fn(BatchEvent),
+) -> BatchSummary {
+    let total = paths.len();
+    let mut summary = BatchSummary::default();
+    let up = match Uploader::connect(t) {
+        Ok(u) => u,
+        Err(e) => {
+            on(BatchEvent::FileDone { index: 0, name: String::new(), result: Err(e) });
+            summary.failed = total;
+            return summary;
+        }
+    };
+    let mut jobs = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        if should_stop() {
+            summary.stopped = true;
+            break;
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let client_id = uuid::Uuid::new_v4().to_string();
+        let result = up.upload(path, &client_id, &|step| on(BatchEvent::Step { index, total, name: name.clone(), step }));
+        let sign_in = matches!(&result, Err(e) if e.is_sign_in());
+        match &result {
+            Ok(u) if u.duplicate => summary.duplicates += 1,
+            Ok(u) => {
+                summary.uploaded += 1;
+                jobs.extend(u.job_id.clone());
+            }
+            Err(_) if sign_in => summary.failed += total - index,
+            Err(_) => summary.failed += 1,
+        }
+        on(BatchEvent::FileDone { index, name, result });
+        if sign_in {
+            break;
+        }
+    }
+    if !jobs.is_empty() {
+        let _ = up.wait_for_ingest(&jobs, ingest_timeout, &|step| on(BatchEvent::Step { index: total, total, name: String::new(), step }));
+    }
+    summary
 }
 
 /// Is this a file iCloud Photos takes?

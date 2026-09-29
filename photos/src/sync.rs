@@ -9,7 +9,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::catalog::{Catalog, LAST_SYNC_KEY, SYNC_TOKEN_KEY};
 use crate::cloudkit::{Album, AssetPart, CloudKit, LIST_ALL, MasterInfo, Paired, Record, Relation, pair_assets};
-use crate::transport::{Error, Result};
+use crate::config::Dirs;
+use crate::thumbs;
+use crate::transport::{Error, Result, Transport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -53,6 +55,25 @@ pub fn sync(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Re
     }
     let report = full(ck, cat, progress)?;
     finish(cat, report)
+}
+
+/// A full listing even when a sync token is stored (`icloud-photos sync --full`).
+pub fn sync_full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Result<Report> {
+    let report = full(ck, cat, progress)?;
+    finish(cat, report)
+}
+
+/// What the app and the CLI run: open the catalog, sync it (`force_full`
+/// skips the incremental path), then prune cached renditions of assets that
+/// left the library. A pruning failure is logged, not returned.
+pub fn run(t: &dyn Transport, dirs: &Dirs, force_full: bool, progress: &dyn Fn(Progress)) -> Result<Report> {
+    let mut cat = Catalog::open(&dirs.catalog())?;
+    let ck = CloudKit::connect(t)?;
+    let report = if force_full { sync_full(&ck, &mut cat, progress)? } else { sync(&ck, &mut cat, progress)? };
+    if let Err(e) = thumbs::prune_cache(&cat, dirs, thumbs::MEDIUM_CACHE_CAP) {
+        eprintln!("icloud-photos: pruning the cache: {e}");
+    }
+    Ok(report)
 }
 
 fn finish(cat: &Catalog, report: Report) -> Result<Report> {

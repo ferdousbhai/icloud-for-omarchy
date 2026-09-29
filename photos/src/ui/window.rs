@@ -470,18 +470,10 @@ impl App {
         self.set_busy(true, "Syncing…");
         let (tx, dirs) = (self.tx.clone(), self.dirs.clone());
         std::thread::spawn(move || {
-            let result = (|| {
-                let mut cat = Catalog::open(&dirs.catalog())?;
-                let ck = CloudKit::connect(&*t)?;
-                let ptx = tx.clone();
-                let report = sync::sync(&ck, &mut cat, &move |p| {
-                    let _ = ptx.send_blocking(Msg::SyncProgress(p));
-                })?;
-                if let Err(e) = thumbs::prune_cache(&cat, &dirs, thumbs::MEDIUM_CACHE_CAP) {
-                    eprintln!("icloud-photos: pruning the cache: {e}");
-                }
-                Ok(report)
-            })();
+            let ptx = tx.clone();
+            let result = sync::run(&*t, &dirs, false, &move |p| {
+                let _ = ptx.send_blocking(Msg::SyncProgress(p));
+            });
             let _ = tx.send_blocking(Msg::SyncDone(result));
         });
     }
