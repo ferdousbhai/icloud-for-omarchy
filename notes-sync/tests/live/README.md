@@ -64,5 +64,5 @@ stay in the run directory; nothing is cleaned up.
 | `ICLOUD_NOTES_SYNC_ITEST_ACCOUNT` | Apple ID or dsid to clone as. Required. |
 | `ICLOUD_NOTES_SYNC_ITEST_FOLDER` | Containment folder (default `icloud-notes-sync-itest`). |
 | `ICLOUD_NOTES_SYNC_ITEST_WORKROOT` | Where run directories go (default `~/.cache/icloud-apps-test/push-live`). |
-| `ICLOUD_NOTES_SYNC_BIN` | Binary under test (default `target/release/icloud-notes-sync`). |
+| `ICLOUD_NOTES_SYNC_BIN` | Binary under test (default `target/release/icloud-notes-sync` at the workspace root). |
 | `ICLOUD_NOTES_SYNC_ORACLE` | Oracle command (default `icloud-md`). |

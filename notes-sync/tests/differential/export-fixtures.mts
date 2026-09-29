@@ -3,7 +3,7 @@
 // the Rust codec and renderer can be tested against both the bytes and what
 // icloud-md makes of them.
 //
-//   ICLOUD_MD=../coddingtonbear/icloud-md \
+//   ICLOUD_MD=../../../coddingtonbear/icloud-md \
 //     $ICLOUD_MD/node_modules/.bin/tsx tests/differential/export-fixtures.mts
 //
 // Re-running it must reproduce the committed files byte for byte.
@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
-const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../coddingtonbear/icloud-md"));
+const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../../coddingtonbear/icloud-md"));
 const outDir = path.join(repoRoot, "tests/fixtures/real");
 
 const mod = async (rel: string): Promise<any> => import(pathToFileURL(path.join(icloudMd, "src", rel)).href);

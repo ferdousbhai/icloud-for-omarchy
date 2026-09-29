@@ -7,7 +7,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-ICLOUD_MD=${ICLOUD_MD:-$(cd "$repo/../../coddingtonbear/icloud-md" && pwd)}
+ICLOUD_MD=${ICLOUD_MD:-$(cd "$repo/../../../coddingtonbear/icloud-md" && pwd)}
 export ICLOUD_MD
 cassette=$1 out=$2
 shift 2

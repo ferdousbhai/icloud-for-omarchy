@@ -1,10 +1,10 @@
 [package]
 name = "icloud-photos"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 description = "iCloud Photos for Omarchy: browse, download, upload and delete, over the shared icloud-session sign-in"
-license = "MIT"
-repository = "https://github.com/ferdousbhai/icloud-photos"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [lib]
@@ -17,26 +17,22 @@ path = "src/main.rs"
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
-icloud-session = { path = "../icloud-session" }
-gtk = { package = "gtk4", version = "0.11", features = ["v4_22"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_9"] }
-async-channel = "2"
-clap = { version = "4", features = ["derive"] }
+icloud-session.workspace = true
+gtk.workspace = true
+adw.workspace = true
+async-channel.workspace = true
+clap.workspace = true
 base64 = "0.22"
-rusqlite = { version = "0.40", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-uuid = { version = "1", features = ["v4"] }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 # renameat2(RENAME_NOREPLACE): originals never replace a file on disk.
 libc = "0.2"
 # Only for ICLOUD_SESSION_MOCK=1: plain HTTP to a local fake server, no TLS.
-ureq = { version = "2", default-features = false }
+ureq.workspace = true
 
 [dev-dependencies]
-tiny_http = "0.12"
+tiny_http.workspace = true
 jpeg-encoder = "0.7"
-
-[profile.release]
-lto = "thin"
-strip = true

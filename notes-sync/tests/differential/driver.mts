@@ -18,7 +18,7 @@ import { isDeepStrictEqual } from "node:util";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
-const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../coddingtonbear/icloud-md"));
+const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../../coddingtonbear/icloud-md"));
 
 // --- arguments -------------------------------------------------------------
 

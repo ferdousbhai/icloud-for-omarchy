@@ -1,10 +1,10 @@
 [package]
 name = "icloud-findmy"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 description = "Find My devices on Omarchy: locate, play a sound, lost mode, history trail"
-license = "MIT"
-repository = "https://github.com/ferdousbhai/icloud-findmy"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [lib]
@@ -25,18 +25,17 @@ gtk = ["dep:gtk", "dep:adw", "dep:async-channel"]
 ui = ["gtk", "dep:shumate"]
 
 [dependencies]
-# Built from the sibling checkout (the PKGBUILD copies it in too); the
-# version is the API this app is written against.
-icloud-session = { version = "0.2", path = "../icloud-session" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-rusqlite = { version = "0.40", features = ["bundled"] }
+# The workspace's session/ crate.
+icloud-session.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rusqlite.workspace = true
 dirs = "7"
-gtk = { package = "gtk4", version = "0.11", features = ["v4_22"], optional = true }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_9"], optional = true }
+gtk = { workspace = true, optional = true }
+adw = { workspace = true, optional = true }
 shumate = { package = "libshumate", version = "0.8", optional = true }
-async-channel = { version = "2", optional = true }
+async-channel = { workspace = true, optional = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

@@ -30,7 +30,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ICLOUD_MD = os.environ.get("ICLOUD_MD") or os.path.normpath(
-    os.path.join(HERE, "..", "..", "..", "..", "coddingtonbear", "icloud-md"))
+    os.path.join(HERE, "..", "..", "..", "..", "..", "coddingtonbear", "icloud-md"))
 _trees = {}
 
 

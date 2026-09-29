@@ -23,6 +23,6 @@ Note goldens: `text` (decoded visible text), `attributeRunLengths`,
 Regenerate (must reproduce the files byte for byte):
 
 ```bash
-ICLOUD_MD=../../coddingtonbear/icloud-md   # the default
+ICLOUD_MD=../../../coddingtonbear/icloud-md   # the default
 $ICLOUD_MD/node_modules/.bin/tsx tests/differential/export-fixtures.mts
 ```

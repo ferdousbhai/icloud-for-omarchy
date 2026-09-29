@@ -4,7 +4,7 @@
 // return to tests/golden/*.json.gz. The Rust tests (tests/md_*.rs,
 // tests/diff3_*.rs) assert byte-for-byte equality with these.
 //
-//   ICLOUD_MD=../../coddingtonbear/icloud-md \
+//   ICLOUD_MD=../../../coddingtonbear/icloud-md \
 //     $ICLOUD_MD/node_modules/.bin/tsx tests/golden/gen.mts
 //
 // Deterministic: re-running reproduces the files byte for byte.
@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
-const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../coddingtonbear/icloud-md"));
+const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../../coddingtonbear/icloud-md"));
 const mod = async (rel: string): Promise<any> => import(pathToFileURL(path.join(icloudMd, rel)).href);
 
 const { renderNoteMarkdown, spellingCandidates } = await mod("src/notes/renderNoteMarkdown.ts");

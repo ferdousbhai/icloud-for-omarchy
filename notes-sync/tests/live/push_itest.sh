@@ -6,7 +6,7 @@ set -uo pipefail
 [[ ${ICLOUD_NOTES_SYNC_LIVE:-} == 1 ]] || { echo "refusing: set ICLOUD_NOTES_SYNC_LIVE=1 to run live writes" >&2; exit 2; }
 ACCOUNT=${ICLOUD_NOTES_SYNC_ITEST_ACCOUNT:?set ICLOUD_NOTES_SYNC_ITEST_ACCOUNT to an Apple ID or dsid}
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-BIN=${ICLOUD_NOTES_SYNC_BIN:-$REPO/target/release/icloud-notes-sync}
+BIN=${ICLOUD_NOTES_SYNC_BIN:-$REPO/../target/release/icloud-notes-sync}  # the workspace target dir
 ORACLE=${ICLOUD_NOTES_SYNC_ORACLE:-icloud-md}
 FOLDER=${ICLOUD_NOTES_SYNC_ITEST_FOLDER:-icloud-notes-sync-itest}
 RUN=$(date +%Y%m%d%H%M%S)

@@ -706,7 +706,7 @@ fn every_refusal_variant_is_listed() {
 #[test]
 fn sites_match_icloud_md_source() {
     let root = std::env::var("ICLOUD_MD")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../coddingtonbear/icloud-md").to_owned());
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../../coddingtonbear/icloud-md").to_owned());
     let Ok(push) = std::fs::read_to_string(format!("{root}/src/commands/push.ts")) else {
         eprintln!("icloud-md clone not found at {root}; skipping");
         return;

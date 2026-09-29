@@ -37,14 +37,14 @@ such a note's text, and marks the note read-only. 0.6.2 doesn't, so:
 ## Requirements
 
 The icloud-md clone with its `node_modules` installed (it ships `tsx`). The
-default location is `../../coddingtonbear/icloud-md` relative to this repo
+default location is `../../../coddingtonbear/icloud-md` relative to notes-sync/
 (`/home/dous/github.com/coddingtonbear/icloud-md`); override with
 `ICLOUD_MD=/path/to/icloud-md`. Node ≥ 20.
 
 ## Running icloud-md
 
 ```bash
-ICLOUD_MD=${ICLOUD_MD:-../../coddingtonbear/icloud-md}
+ICLOUD_MD=${ICLOUD_MD:-../../../coddingtonbear/icloud-md}
 OUT=tests/differential/out/tiny        # git-ignored
 $ICLOUD_MD/node_modules/.bin/tsx tests/differential/driver.mts \
   --cassette tests/differential/cassettes/tiny-clone.json \

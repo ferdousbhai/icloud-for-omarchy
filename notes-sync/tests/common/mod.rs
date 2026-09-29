@@ -86,7 +86,7 @@ pub fn oracle(requests: &Value) -> Option<Value> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let root = env!("CARGO_MANIFEST_DIR");
-    let icloud_md = std::env::var("ICLOUD_MD").unwrap_or_else(|_| format!("{root}/../../coddingtonbear/icloud-md"));
+    let icloud_md = std::env::var("ICLOUD_MD").unwrap_or_else(|_| format!("{root}/../../../coddingtonbear/icloud-md"));
     let tsx = format!("{icloud_md}/node_modules/.bin/tsx");
     if !std::path::Path::new(&tsx).exists() {
         eprintln!("icloud-md oracle unavailable ({tsx} missing) - skipping the Node comparison");

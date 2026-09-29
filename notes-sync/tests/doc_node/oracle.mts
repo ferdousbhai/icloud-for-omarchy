@@ -32,7 +32,7 @@ syncBuiltinESMExports();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
-const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../coddingtonbear/icloud-md"));
+const icloudMd = path.resolve(process.env.ICLOUD_MD ?? path.join(repoRoot, "../../../coddingtonbear/icloud-md"));
 const mod = async (rel: string): Promise<any> => import(pathToFileURL(path.join(icloudMd, "src", rel)).href);
 
 const pb = await import(pathToFileURL(path.join(icloudMd, "node_modules/@bufbuild/protobuf/dist/esm/index.js")).href);

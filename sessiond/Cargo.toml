@@ -1,10 +1,10 @@
 [package]
 name = "icloud-sessiond"
 version = "0.2.0"
-edition = "2024"
+edition.workspace = true
 description = "D-Bus service, sign-in window and CLI that own one iCloud web sign-in"
-license = "MIT"
-repository = "https://github.com/ferdousbhai/icloud-session"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [features]
@@ -27,22 +27,22 @@ path = "src/bin/signin.rs"
 required-features = ["signin"]
 
 [dependencies]
-icloud-session = { path = ".." }
+icloud-session.workspace = true
 blocking = "1"
 humantime = "2"
 inotify = { version = "0.11", default-features = false }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-ureq = "2"
-url = "2"
-uuid = { version = "1", features = ["v4"] }
-zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+ureq = { workspace = true, default-features = true }
+url.workspace = true
+uuid.workspace = true
+zbus.workspace = true
 webkit6 = { version = "0.6", features = ["v2_42", "gtk_v4_18"], optional = true }
 oo7 = { version = "0.5", default-features = false, features = ["async-std", "native_crypto"] }
 rpassword = "7"
 zeroize = "1"
-futures-lite = "2"
+futures-lite.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
-tiny_http = "0.12"
+tempfile.workspace = true
+tiny_http.workspace = true
