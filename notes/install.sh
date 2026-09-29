@@ -5,13 +5,19 @@
 #   curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash
 #
 # Every step is idempotent, so re-running is safe. It trusts the package-signing
-# key (checked against the fingerprint pinned below), adds the repository,
-# installs an Omarchy hook that restores the repository after
+# key (checked against the fingerprint pinned below), adds the repositories
+# for the app and for what it depends on (icloud-session, the Apple sign-in
+# every iCloud app shares, and icloud-notes-sync, the sync engine), installs
+# an Omarchy hook per repository that restores it after
 # `omarchy refresh pacman` rewrites /etc/pacman.conf, and installs the app.
 set -euo pipefail
 
 REPO=icloud-notes
 RELEASES=https://github.com/ferdousbhai/icloud-notes/releases/latest/download
+SESSION_REPO=icloud-session
+SESSION_RELEASES=https://github.com/ferdousbhai/icloud-session/releases/latest/download
+SYNC_REPO=icloud-notes-sync
+SYNC_RELEASES=https://github.com/ferdousbhai/icloud-notes-sync/releases/latest/download
 SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
 
 # --- add_signed_repo (shared) ---
@@ -68,6 +74,10 @@ if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
   exit 1
 fi
 
+echo "Adding the [$SESSION_REPO] repository"
+add_signed_repo "$SESSION_REPO" "$SESSION_RELEASES" "$SIGNING_KEY_FINGERPRINT"
+echo "Adding the [$SYNC_REPO] repository"
+add_signed_repo "$SYNC_REPO" "$SYNC_RELEASES" "$SIGNING_KEY_FINGERPRINT"
 echo "Adding the [$REPO] repository"
 add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
@@ -107,6 +117,7 @@ start_background_sync
 cat <<EOF
 
 Done. Launch "Notes (iCloud)" from the app launcher (Super + Space).
-Syncing needs the icloud-md CLI:  npm install -g icloud-md   (Node.js 20+)
+If you have not signed in to iCloud (here or from another iCloud app), the
+app opens Apple's sign-in page when you clone your notes.
 Updates arrive with the rest of the system through: omarchy update
 EOF
