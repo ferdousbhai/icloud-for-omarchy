@@ -1,0 +1,102 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "service": "setup",
+      "path": "/setup/ws/1/validate",
+      "query": {},
+      "matched": null
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/lookup",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "records": [
+          {
+            "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 0
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/modify",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "operations": [
+          {
+            "operationType": "update",
+            "record": {
+              "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+              "recordType": "Note",
+              "recordChangeTag": "25q",
+              "fields": {
+                "CreationDate": {
+                  "value": 1752563940000
+                },
+                "ModificationDate": {
+                  "value": 1790000000000
+                },
+                "TitleEncrypted": {
+                  "value": "VGVzdCBOb3Rl"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "TrashFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes"
+                      }
+                    }
+                  ]
+                },
+                "FoldersModificationDate": {
+                  "value": 1790000000000
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "TrashFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes"
+                    }
+                  }
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg"
+                },
+                "FirstAttachmentThumbnail": {},
+                "FirstAttachmentUTIEncrypted": {},
+                "TextDataAsset": {},
+                "TextDataEncrypted": {
+                  "value": "eJzjYBA6wMTBIMAgtZNJyD0ktbhEwS+/JJUrJCOzWAGIEhVKQGJ5QDGF0uLUFIW0/CKwUGZeukJ+aYlCQmZyTn5pii5IRbFucWVecgKXlAAXC8hMoKlgWoMRLMIIFOGWAtMaTFARcQEdqAgzVMRVgAMqwgIVCRZghIqwQkV8BdigImxSQmARZwEmiIgCowY7VIwbZhtQjAOqUwxuFqeUGBcH0HX/gYAf6FI4W0mGS4pLYFegMuu3GeHWniE5925+eFEkxMQRAsSMWhwcXEIgX7EAWbZAFrMACwANjjft"
+                }
+              },
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 1
+    }
+  ]
+}

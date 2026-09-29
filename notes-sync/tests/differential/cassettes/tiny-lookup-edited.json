@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "lookup of the tiny note after the remote edit (tag 26a)",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/records/lookup"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "records": [
+            {
+              "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+              "recordType": "Note",
+              "fields": {
+                "TitleEncrypted": {
+                  "value": "VGVzdCBOb3Rl",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "CreationDate": {
+                  "value": 1752563940000,
+                  "type": "TIMESTAMP"
+                },
+                "ModificationDate": {
+                  "value": 1752650400000,
+                  "type": "TIMESTAMP"
+                },
+                "Deleted": {
+                  "value": 0,
+                  "type": "INT64"
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ],
+                  "type": "REFERENCE_LIST"
+                },
+                "TextDataEncrypted": {
+                  "value": "eJxd0DFLAzEUB/Akd22f6eAjQ4W4PHQ5inUWnEQcHBTEAx1be9E7OBLppYOrm9/Az+I3cXF2dHI9SYwdzPIPv/deHgSYesmAIdPPmborTefp0nkjy7rpqOloQT6Ydd7QujMV3btVpMY+kFt7mjfL1q2rWejoZt2TXc6lPKG2sYYWVWUqcpZ8beixdtYcapR5WIdMxyx4FI4MxzpmIZLs4EGSLMkZQpI8yTXyJIMkFzhMMtQqyimKXyFejJKN/7YRLyBNTjZvbUURWOKuDskKqScSgGHf9/02Mr257x1JLfHtan/w/XpzfF62H+9fnysloFQCeKiN/h0lwIXaFECq8Af5FOBW5ZBh/gM9q0NP",
+                  "type": "ENCRYPTED_BYTES"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "26a",
+              "created": {
+                "timestamp": 1752563940000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752650400000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false,
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

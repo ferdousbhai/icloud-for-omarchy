@@ -1,0 +1,28 @@
+{
+  "account": {
+    "appleId": "harness@example.com",
+    "dsid": "10000000001"
+  },
+  "titleMode": "in-body",
+  "syncToken": "AQAAAAAAAAAB",
+  "sharedZoneSyncTokens": {},
+  "notes": {
+    "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1": {
+      "file": "Notes/Test Note.md",
+      "recordChangeTag": "25q",
+      "modificationDate": 1752564000000,
+      "folderRecordName": "DefaultFolder-CloudKit"
+    }
+  },
+  "folders": {
+    "DefaultFolder-CloudKit": {
+      "name": "Notes",
+      "dirName": "Notes"
+    }
+  },
+  "sharerHomes": {},
+  "attachments": {},
+  "tableAttachments": {},
+  "layoutVersion": 4,
+  "generator": "icloud-md 0.6.2"
+}
