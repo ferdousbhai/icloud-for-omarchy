@@ -13,7 +13,6 @@
 //! and strips the prefix again with `stripFilePrefix` for the plan entry;
 //! those messages are [`PrepareRefusal`] / [`TextUpdateRefusal`], whose
 //! `message()` is the unprefixed text.
-#![allow(unused_variables)]
 
 use serde::{Deserialize, Serialize};
 
@@ -525,6 +524,75 @@ pub struct RenderPlanOptions {
     pub unchanged: Option<usize>,
 }
 
+/// `PlanEntry`: what `buildPushPlan` produces (minus push's `execute`,
+/// which lives in `push.rs`). `refusal` is kept alongside the `reason` it
+/// produced so tests can name the site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanEntry {
+    pub kind: PlanEntryKind,
+    pub file: String,
+    pub resolution: PlanResolution,
+    pub reason: Option<String>,
+    pub folder_title: Option<String>,
+    pub previous_file: Option<String>,
+    pub pending_rename: Option<String>,
+    pub remark: Option<String>,
+    pub refusal: Option<Refusal>,
+}
+
+impl PlanEntry {
+    /// An entry with no reason.
+    pub fn new(kind: PlanEntryKind, file: impl Into<String>, resolution: PlanResolution) -> Self {
+        PlanEntry {
+            kind,
+            file: file.into(),
+            resolution,
+            reason: None,
+            folder_title: None,
+            previous_file: None,
+            pending_rename: None,
+            remark: None,
+            refusal: None,
+        }
+    }
+
+    /// A refused or conflicting entry: resolution and reason from `refusal`.
+    pub fn refused(kind: PlanEntryKind, file: impl Into<String>, refusal: Refusal) -> Self {
+        let mut entry = PlanEntry::new(kind, file, refusal.resolution());
+        entry.reason = Some(refusal.reason());
+        entry.refusal = Some(refusal);
+        entry
+    }
+
+    /// `serializePlanEntry`.
+    pub fn serialize(&self) -> SerializedPlanEntry {
+        SerializedPlanEntry {
+            kind: self.kind,
+            file: self.file.clone(),
+            resolution: self.resolution,
+            reason: self.reason.clone(),
+            previous_file: self.previous_file.clone(),
+            pending_rename: self.pending_rename.clone(),
+            folder_title: self.folder_title.clone(),
+            remark: self.remark.clone(),
+        }
+    }
+}
+
+fn label_of(kind: PlanEntryKind) -> &'static str {
+    match kind {
+        PlanEntryKind::Create => "new file:",
+        PlanEntryKind::CreateFolder => "new dir:",
+        PlanEntryKind::Update => "modified:",
+        PlanEntryKind::Delete => "deleted:",
+        PlanEntryKind::Move => "moved:",
+        PlanEntryKind::Rename => "rename:",
+    }
+}
+
+/// `LABEL_WIDTH`: the longest label.
+const LABEL_WIDTH: usize = 9;
+
 /// `renderPlan`: the git-status-style listing (human text; not
 /// byte-compared).
 pub fn render_plan(
@@ -532,12 +600,126 @@ pub fn render_plan(
     format_path: &dyn Fn(&str) -> String,
     options: RenderPlanOptions,
 ) -> Vec<String> {
-    todo!()
+    use super::report::{LISTING_INDENT, labelled_line, remark_line};
+    let visible: Vec<&SerializedPlanEntry> = entries
+        .iter()
+        .filter(|e| e.resolution != PlanResolution::Noop)
+        .collect();
+    if visible.is_empty() {
+        return vec![match options.unchanged {
+            Some(n) if n > 0 => format!(
+                "Nothing to push; all {n} {} the last pull.",
+                if n == 1 { "note matches" } else { "notes match" }
+            ),
+            _ => "Nothing to push.".into(),
+        }];
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    if options.preview {
+        lines.push("Changes not yet pushed to iCloud:".into());
+        lines.push("  (use \"icloud-notes-sync push\" to send them)".into());
+        lines.push("  (use \"icloud-notes-sync restore <file>\" to discard a local edit)".into());
+        lines.push(String::new());
+    } else {
+        lines.push(String::new());
+    }
+    let (mut to_create, mut to_create_folder, mut to_update, mut to_delete, mut to_move) = (0, 0, 0, 0, 0);
+    let (mut refused, mut conflicts) = (0, 0);
+    for entry in visible {
+        let subject = match entry.kind {
+            PlanEntryKind::CreateFolder => format!("{}/", format_path(&entry.file)),
+            PlanEntryKind::Move => format!(
+                "{} -> {}",
+                format_path(entry.previous_file.as_deref().unwrap_or(&entry.file)),
+                format_path(&entry.file)
+            ),
+            PlanEntryKind::Rename if entry.pending_rename.is_some() => format!(
+                "{} -> {}",
+                format_path(&entry.file),
+                format_path(entry.pending_rename.as_deref().unwrap_or_default())
+            ),
+            _ => format_path(&entry.file),
+        };
+        lines.push(format!(
+            "{LISTING_INDENT}{}",
+            labelled_line(label_of(entry.kind), LABEL_WIDTH, &subject)
+        ));
+        if matches!(entry.resolution, PlanResolution::Refused | PlanResolution::Conflict) {
+            let reason = entry
+                .reason
+                .as_deref()
+                .unwrap_or("refused")
+                .split(entry.file.as_str())
+                .collect::<Vec<_>>()
+                .join(&format_path(&entry.file));
+            lines.push(format!(
+                "{LISTING_INDENT}{}",
+                remark_line(LABEL_WIDTH, &format!("! {reason}"))
+            ));
+            if entry.resolution == PlanResolution::Refused {
+                refused += 1;
+            } else {
+                conflicts += 1;
+            }
+            continue;
+        }
+        if let Some(remark) = &entry.remark {
+            lines.push(format!("{LISTING_INDENT}{}", remark_line(LABEL_WIDTH, remark)));
+        }
+        match entry.kind {
+            PlanEntryKind::Create => to_create += 1,
+            PlanEntryKind::CreateFolder => to_create_folder += 1,
+            PlanEntryKind::Update => to_update += 1,
+            PlanEntryKind::Move => to_move += 1,
+            PlanEntryKind::Delete => to_delete += 1,
+            PlanEntryKind::Rename => {}
+        }
+    }
+
+    let mut summary = format!("{to_create} to create, {to_update} changed, {to_delete} to delete");
+    if to_move > 0 {
+        summary.push_str(&format!(", {to_move} to move"));
+    }
+    if to_create_folder > 0 {
+        summary.push_str(&format!(
+            ", {to_create_folder} new folder{}",
+            if to_create_folder == 1 { "" } else { "s" }
+        ));
+    }
+    summary.push('.');
+    if conflicts > 0 || refused > 0 {
+        let mut parts = Vec::new();
+        if conflicts > 0 {
+            parts.push(format!("{conflicts} conflict(s)"));
+        }
+        if refused > 0 {
+            parts.push(format!("{refused} refused"));
+        }
+        summary.push_str(&format!(" ({})", parts.join(", ")));
+    }
+    lines.push(String::new());
+    lines.push(summary);
+    if let Some(n) = options.unchanged.filter(|n| *n > 0) {
+        lines.push(if n == 1 {
+            "1 other note matches the last pull.".into()
+        } else {
+            format!("{n} other notes match the last pull.")
+        });
+    }
+    lines
 }
 
-/// `countUnchangedNotes`.
+/// `countUnchangedNotes`: tracked notes minus the non-create, non-rename,
+/// non-noop entries.
 pub fn count_unchanged_notes(entries: &[SerializedPlanEntry], tracked_notes: usize) -> usize {
-    todo!()
+    let touched = entries
+        .iter()
+        .filter(|e| {
+            e.kind != PlanEntryKind::Create && e.kind != PlanEntryKind::Rename && e.resolution != PlanResolution::Noop
+        })
+        .count();
+    tracked_notes.saturating_sub(touched)
 }
 
 /// `stripFilePrefix`.
