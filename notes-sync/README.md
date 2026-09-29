@@ -37,6 +37,11 @@ The differential harness that runs icloud-md itself against the same
 recorded CloudKit answers is described in
 [tests/differential/README.md](tests/differential/README.md).
 
+A live write test against a real iCloud account, confined to one test
+folder and checked against icloud-md, lives in
+[tests/live/](tests/live/README.md). It only runs with
+`ICLOUD_NOTES_SYNC_LIVE=1`.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Derived from icloud-md (MIT, Adam Coddington)

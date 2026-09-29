@@ -6,3 +6,4 @@
 /dist/
 *.pkg.tar.zst
 *.sig
+__pycache__/
