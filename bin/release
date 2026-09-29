@@ -24,7 +24,8 @@
 # The GitHub release hangs on the first tag named. Its assets are the
 # packages, the repository database, the signing key, install.sh and the
 # per-app installers (bin/make-installers). If icloud-session is released,
-# its client crate goes to crates.io once the release is verified.
+# with PUBLISH_CRATE=1 its client crate also goes to crates.io once the
+# release is verified.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -122,9 +123,10 @@ session_version=''
 for i in "${!pkgs[@]}"; do
   [[ ${pkgs[i]} == icloud-session ]] && session_version=${versions[i]}
 done
-# crates.io never had icloud-session before this repository; a version it
-# already has is not published again.
-if [[ -n $session_version ]] \
+# crates.io is opt-in (PUBLISH_CRATE=1): a published version can be yanked
+# but never removed, and nothing outside this repository needs the crate yet.
+# A version crates.io already has is not published again.
+if [[ ${PUBLISH_CRATE:-0} == 1 && -n $session_version ]] \
   && ! curl -fsS -o /dev/null -A "$repo release (github.com/$gh_repo)" "https://crates.io/api/v1/crates/icloud-session/$session_version"; then
   publish_crate=1
 fi

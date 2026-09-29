@@ -146,8 +146,9 @@ A release counts as shipped only once `bin/verify-release` has installed
 each named package in a clean Arch container, the apps through their
 per-app installers and the shared packages through `install.sh`, and found
 that version installed; otherwise `bin/release` deletes the release and the
-tags. Releasing icloud-session also publishes its client crate to crates.io
-after the release is verified, unless crates.io already has that version.
+tags. With `PUBLISH_CRATE=1`, releasing icloud-session also publishes its client
+crate to crates.io after the release is verified, unless crates.io already has
+that version; by default it does not.
 
 The `add_signed_repo` function in `install.sh` is shared verbatim with the
 Ghost installer (ferdousbhai/ghost), and both repositories pin its hash in
