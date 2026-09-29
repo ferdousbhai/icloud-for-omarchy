@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# Build the app (release). Needs gtk4 and libadwaita, and the icloud-session
-# checkout next to this one (../icloud-session).
-set -euo pipefail
-cd "$(dirname "$0")/.."
-cargo build --release --locked --bin icloud-photos
-echo "Binary: $(pwd)/target/release/icloud-photos"

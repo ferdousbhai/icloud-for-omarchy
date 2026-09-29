@@ -1,0 +1,9 @@
+# Cargo (one workspace target directory)
+/target
+# bin/release output
+/dist
+# makepkg work directories and packages
+/packaging/*/src/
+/packaging/*/pkg/
+*.pkg.tar.*
+*.sig

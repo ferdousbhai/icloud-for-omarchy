@@ -1,9 +1,3 @@
-/target
 /tests/differential/out/
 *.tmp
-/pkgbuild/pkg/
-/pkgbuild/src/
-/dist/
-*.pkg.tar.zst
-*.sig
 __pycache__/

@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# Build the release binary. The icloud-session client crate comes from its
-# checkout beside this one (../icloud-session).
-set -euo pipefail
-cd "$(dirname "$0")/.."
-cargo build --release --locked --bin icloud-notes-sync
-echo "Binary: $(pwd)/target/release/icloud-notes-sync"

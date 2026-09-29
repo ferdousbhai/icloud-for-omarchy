@@ -1,9 +1,4 @@
 build*/
-pkgbuild/pkg/
-pkgbuild/src/
-dist/
-*.pkg.tar.zst
-*.sig
 *.o
 moc_*
 qrc_*
