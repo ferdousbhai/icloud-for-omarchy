@@ -2,7 +2,7 @@
 
 Your iCloud Notes as a folder of Markdown files, synced both ways from the
 command line. A Rust port of [icloud-md](https://github.com/coddingtonbear/icloud-md)
-0.6.2 by Adam Coddington, using [icloud-session](../icloud-session) for the
+0.6.2 by Adam Coddington, using [icloud-session](../session) for the
 Apple sign-in instead of a browser of its own.
 
 Work in progress: the crate currently holds the port's interfaces with
@@ -28,9 +28,10 @@ stay readable by icloud-md.
 ## Development
 
 ```bash
-cargo build
-cargo clippy --all-targets
-cargo test
+cargo build -p icloud-notes-sync
+cargo clippy -p icloud-notes-sync --all-targets
+cargo test -p icloud-notes-sync
+cargo test -p icloud-notes-sync -- --ignored   # needs the icloud-md clone and node
 ```
 
 The differential harness that runs icloud-md itself against the same
@@ -44,5 +45,5 @@ folder and checked against icloud-md, lives in
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Derived from icloud-md (MIT, Adam Coddington)
-and node-diff3 (MIT); see [NOTICE](NOTICE).
+MIT, see [LICENSE](../LICENSE). Derived from icloud-md (MIT, Adam Coddington)
+and node-diff3 (MIT); see [NOTICE](../NOTICE).

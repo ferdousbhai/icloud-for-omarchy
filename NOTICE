@@ -1,11 +1,20 @@
-icloud-notes-sync
+icloud-for-omarchy
 Copyright (c) 2026 Ferdous Bhai. MIT License, see LICENSE.
 
-This program is a Rust port of icloud-md 0.6.2
+This repository holds icloud-session (session/, sessiond/),
+icloud-notes-sync (notes-sync/), icloud-photos (photos/), icloud-findmy
+(findmy/) and icloud-notes (notes/). The third-party credits below apply
+to the parts named; everything else is the author's own work.
+
+============================================================================
+notes-sync/ (icloud-notes-sync)
+============================================================================
+
+icloud-notes-sync is a Rust port of icloud-md 0.6.2
 (https://github.com/coddingtonbear/icloud-md) by Adam Coddington. Its
 behaviour, file formats, request shapes, message strings and algorithms are
-taken from icloud-md, and proto/*.proto and tests/fixtures/ are copied or
-derived from it. icloud-md's license:
+taken from icloud-md, and notes-sync/proto/*.proto and
+notes-sync/tests/fixtures/ are copied or derived from it. icloud-md's license:
 
 MIT License
 
@@ -31,7 +40,7 @@ SOFTWARE.
 
 ----------------------------------------------------------------------------
 
-src/diff3.rs is a port of node-diff3 3.2.1
+notes-sync/src/diff3.rs is a port of node-diff3 3.2.1
 (https://github.com/bhousel/node-diff3), MIT License:
 Copyright (c) 2006, 2008 Tony Garnock-Jones <tonyg@lshift.net>
 Copyright (c) 2006, 2008 LShift Ltd. <query@lshift.net>
@@ -47,8 +56,8 @@ Both are distributed under the same MIT terms as reproduced above.
 
 ----------------------------------------------------------------------------
 
-src/doc/deflate.rs ports the compressor of zlib 1.3.2 as bundled with
-Node.js (Chromium's fork, "1.3.2.1-motley"), zlib License:
+notes-sync/src/doc/deflate.rs ports the compressor of zlib 1.3.2 as bundled
+with Node.js (Chromium's fork, "1.3.2.1-motley"), zlib License:
 Copyright (C) 1995-2026 Jean-loup Gailly and Mark Adler
 Chromium modifications Copyright 2022 The Chromium Authors (BSD-style).
 
@@ -70,8 +79,8 @@ Chromium modifications Copyright 2022 The Chromium Authors (BSD-style).
 
 These are distributed under the same MIT terms as reproduced above.
 
-src/md/yaml.rs ports parts of yaml 2.9.0 (https://github.com/eemeli/yaml),
-ISC License:
+notes-sync/src/md/yaml.rs ports parts of yaml 2.9.0
+(https://github.com/eemeli/yaml), ISC License:
 
 Copyright Eemeli Aro <eemeli@gmail.com>
 
@@ -86,3 +95,16 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
 OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
 TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
+
+============================================================================
+Other acknowledgements (no third-party code)
+============================================================================
+
+photos/ (icloud-photos) calls iCloud Photos' web endpoints as documented by
+the requests and fixtures of timlaing/pyicloud
+(https://github.com/timlaing/pyicloud) and the icloudpd project; no code
+from either is included.
+
+findmy/ (icloud-findmy) shows OpenStreetMap map tiles through libshumate.
+Map data (c) OpenStreetMap contributors, available under the Open Database
+License (https://www.openstreetmap.org/copyright).

@@ -340,20 +340,19 @@ package, or the dev install below).
 
 ## Install
 
-The iCloud apps' installers add the signed `[icloud-session]` pacman
-repository (served from this repository's GitHub releases) and pull the
-package in as a dependency. On its own:
+The iCloud apps pull the package in as a dependency from the signed
+`[icloud-for-omarchy]` pacman repository. On its own:
 
 ```bash
-curl -fsSL https://ferdousbhai.com/icloud-session/install.sh | sudo bash
+curl -fsSL https://ferdousbhai.com/icloud-session/install.sh | sudo bash -s -- icloud-session
 ```
 
-or build the package from this checkout: `cd pkgbuild && makepkg -si`.
-Either installs the three binaries and the D-Bus activation file. Nothing
-to enable; the bus starts the daemon on first use. Updates arrive through
-`omarchy update`.
+or build the package from this checkout: `cd packaging/icloud-session &&
+makepkg -si`. Either installs the three binaries and the D-Bus activation
+file. Nothing to enable; the bus starts the daemon on first use. Updates
+arrive through `omarchy update`.
 
-For development, without the package:
+For development, without the package (from the repository root):
 
 ```bash
 bin/dev-install     # release build into ~/.local/bin, D-Bus file into ~/.local/share/dbus-1/services
@@ -372,10 +371,9 @@ session.
 ## Development
 
 ```bash
-bin/test                                 # workspace tests + the installer's shared-function hash
-cargo test                               # whole workspace, sign-in window included
-cargo clippy --all-targets -- -D warnings
-cargo test --no-default-features         # without webkitgtk-6.0 installed
+cargo test -p icloud-session -p icloud-sessiond                          # sign-in window included
+cargo clippy -p icloud-session -p icloud-sessiond --all-targets -- -D warnings
+cargo test -p icloud-session -p icloud-sessiond --no-default-features    # without webkitgtk-6.0
 ```
 
 The sign-in window is the `signin` feature of `icloud-sessiond` (on by
@@ -396,17 +394,13 @@ keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`) and fake `bw`/`op` scripts.
 
 ## Releasing
 
-`bin/release <major.minor.patch>` runs `bin/test` and a `cargo publish
---dry-run`, sets the version in both crates, `pkgbuild/PKGBUILD` and the
-dependency snippet above, commits and tags, builds the package with
-`makepkg --sign`, makes a signed one-package repository with `repo-add
---sign`, and publishes it with the signing key and `install.sh` as the
-tag's GitHub release. `bin/verify-release` then installs it in a clean Arch
-container through the public one-liner and rolls the release back if that
-fails. Only after that does it `cargo publish` the client crate. It needs
-the package-signing key pinned in `install.sh`, `gh`, docker, and a
-crates.io token.
+Released with the other packages from the repository root; see the root
+[README](../README.md#releasing). Its tags are `session-v<version>`.
+Releasing icloud-session also sets the version in both crates, the
+workspace's `icloud-session` dependency and the snippet above, and, once
+the release is verified, publishes the client crate to crates.io (so it
+needs a crates.io token).
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](../LICENSE).

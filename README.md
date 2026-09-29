@@ -1,0 +1,161 @@
+# icloud-for-omarchy
+
+iCloud apps for [Omarchy](https://omarchy.org) (and any Arch Linux), sharing
+one Apple sign-in, published as one signed pacman repository.
+
+| Directory | Package | What it is |
+|---|---|---|
+| [notes/](notes/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app, synced with iCloud through icloud-notes-sync. |
+| [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4/libadwaita: browse, download, upload and delete. |
+| [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4/libadwaita: locate, play a sound, Lost Mode, history trail. |
+| [notes-sync/](notes-sync/README.md) | `icloud-notes-sync` | Command-line sync between iCloud Notes and a folder of Markdown files (a Rust port of icloud-md). |
+| [session/](session/README.md), [sessiond/](sessiond/) | `icloud-session` | The shared sign-in: a D-Bus daemon, a sign-in window and a CLI (sessiond/), plus the Rust client crate every app links (session/). |
+
+[docs/BRIEF.md](docs/BRIEF.md) is the design brief the apps were built from.
+
+## Install
+
+```bash
+curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
+```
+
+installs all three apps (icloud-notes, icloud-photos, icloud-findmy), which
+pull in icloud-session and icloud-notes-sync. To install only some, name
+them:
+
+```bash
+curl -fsSL .../install.sh | sudo bash -s -- icloud-photos icloud-findmy
+```
+
+The script ([install.sh](install.sh)) trusts the package-signing key (after
+checking it against the fingerprint pinned in the script), adds the signed
+`[icloud-for-omarchy]` repository as `/etc/pacman.d/icloud-for-omarchy.conf`
+with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
+`pre-refresh-pacman` hook that restores the repository after
+`omarchy refresh pacman`, and installs the packages in one `pacman -Syu`.
+Re-running it is safe. Updates then arrive with `omarchy update`.
+
+The per-app one-liners (`https://ferdousbhai.com/<package>/install.sh`)
+live on the website, not here. They should redirect to this repository's
+release asset, `releases/latest/download/install.sh`, and pass the app's
+package name (`| sudo bash -s -- icloud-photos`); without an argument the
+script installs every app.
+
+To uninstall: `omarchy pkg drop <packages>`, then remove
+`/etc/pacman.d/icloud-for-omarchy.conf`, its `Include` line in
+`/etc/pacman.conf`, and
+`~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-for-omarchy`.
+
+## Layout
+
+```
+Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, photos, findmy
+session/  sessiond/      icloud-session: client crate / daemon, sign-in window, CLI
+notes-sync/              icloud-notes-sync
+photos/  findmy/         icloud-photos, icloud-findmy
+notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
+packaging/<package>/     one PKGBUILD per package
+install.sh               the one installer
+bin/                     build, test, release, verify-release; dev-install/dev-uninstall for the daemon
+tests/                   the installer's add_signed_repo hash pin
+docs/                    the design brief
+```
+
+Each directory kept its history: the five former repositories
+(ferdousbhai/icloud-session, icloud-notes-sync, icloud-photos, icloud-findmy
+and icloud-notes) were imported with `git filter-repo` into their
+subdirectories and merged, so `git log --follow` on a file reaches back past
+the move. icloud-notes' release tags `v0.1.0`...`v0.3.8` are here as
+`notes-v0.1.0`...`notes-v0.3.8`.
+
+## Development
+
+Needs `rust`, `gtk4`, `libadwaita`, `libshumate` (findmy) and
+`webkitgtk-6.0` (the sign-in window) for the Rust crates, and `qt6-base`,
+`qt6-declarative` and `make` for Notes. The apps talk to the icloud-session
+daemon over D-Bus; for development without the package, `bin/dev-install`
+puts a release build of it in `~/.local/bin` with a user D-Bus activation
+file (`bin/dev-uninstall` undoes it).
+
+```bash
+bin/build                       # every package; or name some: bin/build icloud-photos
+bin/test                        # clippy, all Rust tests, notes/bin/test, the installer hash check
+cargo test -p icloud-findmy     # one crate
+notes/bin/test                  # the Qt app's tests alone (they run on a private D-Bus)
+```
+
+Rust binaries land in `target/release/`, Notes in `notes/build/`. Each app
+can also run against a local fake of Apple's servers; its README says how.
+
+notes-sync's differential suite runs icloud-md itself against the same
+recorded CloudKit answers. It needs a clone of
+[icloud-md](https://github.com/coddingtonbear/icloud-md) with its
+`node_modules` at `../../coddingtonbear/icloud-md` from this checkout (or
+`ICLOUD_MD=/path`) and Node 20+:
+
+```bash
+cargo test -p icloud-notes-sync -- --ignored
+```
+
+## Releasing
+
+Releases are cut from a checkout with the package-signing key in its
+keyring, no CI involved:
+
+```bash
+bin/release icloud-notes 0.3.9
+bin/release icloud-session 0.3.0 icloud-notes-sync 0.2.0   # several at once
+```
+
+Versions are per package and so are the tags: `<name>-v<version>`, where
+`<name>` is the package name without `icloud-` (`session`, `notes-sync`,
+`photos`, `findmy`, `notes`), e.g. `notes-v0.3.9`. Each PKGBUILD takes its
+`pkgver` from its own newest tag: at the tag it is the plain version, and a
+later commit builds `<version>.r<count>.<sha>` (`0.0.0.r<count>` for a package
+never tagged).
+
+`bin/release` runs `bin/test`, sets the named packages' versions (PKGBUILD,
+and Cargo.toml for the Rust ones), commits and tags them, then builds all
+five packages with `makepkg` from `packaging/`, each from the committed
+HEAD via `git archive` and building only its own package. It signs the
+packages and one repository database, `icloud-for-omarchy.db`, with the key
+whose fingerprint `install.sh` pins, and publishes everything, with the
+public key and `install.sh`, as one GitHub release on the first tag named;
+`releases/latest/download` in `install.sh` resolves to it. A release counts
+as shipped only once `bin/verify-release` has run the release's
+`install.sh` for each named package in a clean Arch container and found that
+version installed; otherwise `bin/release` deletes the release and the
+tags. Releasing icloud-session also publishes its client crate to crates.io
+after the release is verified.
+
+The `add_signed_repo` function in `install.sh` is shared verbatim with the
+Ghost installer (ferdousbhai/ghost), and both repositories pin its hash in
+their tests (`tests/add_signed_repo.sha256` here): change it in both places,
+and both hashes, together.
+
+### The signing key
+
+One key signs these packages and Ghost's; its fingerprint is pinned in both
+installers and it lives only in the releasing machine's keyring, protected
+by a passphrase. Losing it would break the trust chain on every machine
+that installed from these repositories, so keep an encrypted backup
+somewhere off this machine:
+
+```bash
+gpg --armor --export-secret-keys 35C47A06567940B6796B4D0F9B3C7BDF85268B31 \
+  | gpg --symmetric --armor --output package-signing-key.backup.asc
+```
+
+Restoring is `gpg --decrypt package-signing-key.backup.asc | gpg --import`.
+
+To rotate the key: generate the new one, publish one release from each
+project signed with the old key that also ships the new public key as
+`<repository>-signing-key.asc`, update the pinned fingerprint in both
+installers and the tests, then sign the next releases with the new key.
+Machines that installed earlier pick up the new key by re-running the
+one-liner, which is idempotent.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Third-party credits (icloud-md, node-diff3,
+the mdast/micromark utilities, zlib, yaml) are in [NOTICE](NOTICE).

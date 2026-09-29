@@ -14,24 +14,28 @@ originals, upload photos and videos, and move photos to Recently Deleted.
 
 ## Install
 
-On Omarchy (or any Arch Linux), one command trusts the package-signing key,
-adds the signed `[icloud-session]` and `[icloud-photos]` repositories, and
-installs the app:
+On Omarchy (or any Arch Linux), one command trusts the package-signing
+key, adds the signed `[icloud-for-omarchy]` repository (all the iCloud
+apps and what they share), and installs the app:
 
 ```bash
-curl -fsSL https://ferdousbhai.com/icloud-photos/install.sh | sudo bash
+curl -fsSL https://ferdousbhai.com/icloud-photos/install.sh | sudo bash -s -- icloud-photos
 ```
 
-Updates arrive with `omarchy update`. The script is [`install.sh`](install.sh)
-in this repo; the one-liner runs the copy attached to the latest release.
+Updates then arrive with `omarchy update`. The script is
+[`install.sh`](../install.sh) at the root of this repository, attached to
+every release; the one-liner runs the copy from the latest release. It
+also installs an Omarchy `pre-refresh-pacman` hook so
+`omarchy refresh pacman` keeps the repository. See the root
+[README](../README.md#install) for uninstalling.
 
-To build and run from source instead (needs gtk4, libadwaita, Rust, the
-`icloud-session` checkout next to this one, at `../icloud-session`, and its
-daemon installed, as that repository's README describes):
+To build and run from source instead (needs gtk4, libadwaita and Rust, and
+the icloud-session daemon installed, as [session/](../session/README.md)
+describes), from the repository root:
 
 ```bash
-./bin/build
-./target/release/icloud-photos
+bin/build icloud-photos
+target/release/icloud-photos
 ```
 
 ## Everyday use
@@ -186,9 +190,10 @@ Layout:
 - `src/ui/` the GTK 4 / libadwaita app
 - `src/cli.rs` the command line (no GTK), over the same library code
 
-`bin/test` runs clippy, the test suite (fixtures in `tests/fixtures/`, plus
+`cargo test -p icloud-photos` runs the test suite (fixtures in `tests/fixtures/`, plus
 an end-to-end run against the fake server, and `tests/cli.rs`, which runs
-the built binary against it for every command), and the installer hash check.
+the built binary against it for every command); the root `bin/test` runs
+it with clippy and every other crate's tests.
 In debug builds, `ICLOUD_PHOTOS_SCREENSHOT=out.png` (optionally with
 `ICLOUD_PHOTOS_SCREENSHOT_VIEW=viewer` or `prefs`) renders the window to a
 PNG after the first sync and quits, so the UI can be checked headless with
@@ -196,13 +201,5 @@ PNG after the first sync and quits, so the UI can be checked headless with
 
 ## Releasing
 
-Same as icloud-notes: `bin/release 0.1.0` runs the tests, tags, builds the
-package from `pkgbuild/PKGBUILD` with `makepkg`, signs it and the repository
-database with the key `install.sh` pins, publishes the GitHub release, and
-has `bin/verify-release` install it with the public one-liner in a clean
-Arch container, rolling the release back if that fails. The package-signing
-key and its backup are described in icloud-notes' README.
-
-The `add_signed_repo` function in `install.sh` is shared verbatim with the
-other installers (icloud-notes, icloud-findmy, ghost); `tests/add_signed_repo.sha256`
-pins its hash here as in each twin, so change them all together.
+Released with the other packages from the repository root; see the root
+[README](../README.md#releasing). Its tags are `photos-v<version>`.

@@ -3,7 +3,7 @@
 Source: /home/dous/github.com/coddingtonbear/icloud-md (MIT, Adam Coddington),
 pinned to v0.6.2 behaviour (HEAD 27072f1 differs only in docs and the session
 file). The real vault is `layoutVersion: 3`, `generator: "icloud-md 0.6.2"`.
-Decided 2026-09-29. All Apple calls go through ../icloud-session; icloud-md's
+Decided 2026-09-29. All Apple calls go through icloud-session (then ../icloud-session, now session/); icloud-md's
 auth/ and session files are dropped.
 
 ## 0. What icloud-notes depends on

@@ -42,26 +42,25 @@ over the account is not carried over: sign in once more.
 ## Install
 
 On Omarchy (or any Arch Linux), one command trusts the package-signing
-key, adds the signed `[icloud-notes]` repository, and installs the app:
+key, adds the signed `[icloud-for-omarchy]` repository (all the iCloud
+apps and what they share), and installs the app:
 
 ```bash
-curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash
+curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash -s -- icloud-notes
 ```
 
 Updates then arrive with `omarchy update`. The script is
-[`install.sh`](install.sh) in this repo, and the copy the one-liner runs
-is the one attached to the latest release, verified with it; read it
-first if you like. It also installs an Omarchy `pre-refresh-pacman` hook
-so `omarchy refresh pacman` keeps the repository.
+[`install.sh`](../install.sh) at the root of this repository, attached to
+every release; the one-liner runs the copy from the latest release. It
+also installs an Omarchy `pre-refresh-pacman` hook so
+`omarchy refresh pacman` keeps the repository. See the root
+[README](../README.md#install) for uninstalling.
 
-To uninstall: `omarchy pkg drop icloud-notes icloud-notes-sync icloud-session`
-(drop `icloud-session` only if no other iCloud app uses it; removing the
-package also removes the background-sync timer). Then, for each of the
-`icloud-notes`, `icloud-notes-sync` and `icloud-session` repositories, remove
-`/etc/pacman.d/<name>.conf`, its `Include` line in `/etc/pacman.conf`, and
-`~/.config/omarchy/hooks/pre-refresh-pacman.d/<name>`.
+Uninstalling (`omarchy pkg drop icloud-notes`, and `icloud-notes-sync`
+and `icloud-session` if nothing else uses them) also removes the
+background-sync timer.
 
-To build and run from source instead:
+To build and run from source instead (from `notes/`):
 
 ```bash
 ./bin/build
@@ -168,7 +167,7 @@ also starts it at once). To turn it off for yourself:
 What it did is in `journalctl --user -u icloud-notes-background`.
 
 Built from source without the package, the units are not installed. From
-the checkout, after `./bin/build`, install them for your user with the
+`notes/`, after `./bin/build`, install them for your user with the
 service pointed at the binary you built:
 
 ```bash
@@ -233,47 +232,7 @@ other.
 
 ## Releasing
 
-Releases are cut from a checkout with the package-signing key in its
-keyring, no CI involved:
-
-```bash
-bin/release 0.2.0
-```
-
-That runs the tests, tags `v0.2.0`, builds the package with `makepkg` from
-`pkgbuild/PKGBUILD`, signs it and the repository database with the key
-whose fingerprint `install.sh` pins, and publishes everything as the
-GitHub release for the tag, which is what `releases/latest/download` in
-`install.sh` resolves to; `install.sh` itself is attached too, and the
-one-liner runs that copy. A release counts as shipped only once
-`bin/verify-release` has run the public one-liner in a clean Arch
-container and found that version installed; otherwise `bin/release`
-deletes the release and the tag.
-
-The `add_signed_repo` function in `install.sh` is shared verbatim with the
-Ghost installer (`install.sh` in ferdousbhai/ghost, published as a release
-asset and served from ferdousbhai.com/ghost/install.sh), and both
-repositories pin its hash in their tests: change it in both places, and both
-hashes, together.
-
-### The signing key
-
-One key signs both projects' packages; its fingerprint is pinned in both
-installers and it lives only in the releasing machine's keyring, protected
-by a passphrase. Losing it would break the trust chain on every machine
-that installed from these repositories, so keep an encrypted backup
-somewhere off this machine:
-
-```bash
-gpg --armor --export-secret-keys 35C47A06567940B6796B4D0F9B3C7BDF85268B31 \
-  | gpg --symmetric --armor --output package-signing-key.backup.asc
-```
-
-Restoring is `gpg --decrypt package-signing-key.backup.asc | gpg --import`.
-
-To rotate the key: generate the new one, publish one release from each
-project signed with the old key that also ships the new public key as
-`<name>-signing-key.asc`, update the pinned fingerprint in both
-installers and the tests, then sign the next releases with the new key.
-Machines that installed earlier pick up the new key by re-running the
-one-liner, which is idempotent.
+Released with the other packages from the repository root; see the root
+[README](../README.md#releasing), which also covers the package-signing
+key. Its tags are `notes-v<version>` (`notes-v0.3.8` was `v0.3.8` before
+the move into this repository).

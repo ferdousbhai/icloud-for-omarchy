@@ -22,24 +22,19 @@ service lists only devices signed in to your Apple ID.
 ## Install
 
 On Omarchy (or any Arch Linux), one command trusts the package-signing
-key, adds the signed `[icloud-findmy]` and `[icloud-session]`
-repositories, and installs the app:
+key, adds the signed `[icloud-for-omarchy]` repository (all the iCloud
+apps and what they share), and installs the app:
 
 ```bash
-curl -fsSL https://ferdousbhai.com/icloud-findmy/install.sh | sudo bash
+curl -fsSL https://ferdousbhai.com/icloud-findmy/install.sh | sudo bash -s -- icloud-findmy
 ```
 
 Updates then arrive with `omarchy update`. The script is
-[`install.sh`](install.sh) in this repo, and the copy the one-liner runs
-is the one attached to the latest release, verified with it. It also
-installs an Omarchy `pre-refresh-pacman` hook per repository so
-`omarchy refresh pacman` keeps them.
-
-To uninstall: `omarchy pkg drop icloud-findmy`, then remove
-`/etc/pacman.d/icloud-findmy.conf`, its `Include` line in
-`/etc/pacman.conf`, and
-`~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-findmy` (and the same
-three for `icloud-session` if nothing else uses it).
+[`install.sh`](../install.sh) at the root of this repository, attached to
+every release; the one-liner runs the copy from the latest release. It
+also installs an Omarchy `pre-refresh-pacman` hook so
+`omarchy refresh pacman` keeps the repository. See the root
+[README](../README.md#install) for uninstalling.
 
 ## Using it
 
@@ -119,13 +114,13 @@ authorize-find-my`), 64 usage.
 
 ## Building from source
 
-Needs `rust`, `cargo`, `gtk4`, `libadwaita` and `libshumate`, and the
-[`icloud-session`](https://github.com/ferdousbhai/icloud-session)
-checkout next to this one (`../icloud-session`).
+Needs `rust`, `cargo`, `gtk4`, `libadwaita` and `libshumate`; the
+`icloud-session` crate is the workspace's [`session/`](../session). From
+the repository root:
 
 ```bash
-./bin/build
-./target/release/icloud-findmy
+bin/build icloud-findmy
+target/release/icloud-findmy
 ```
 
 ### Running without an Apple account
@@ -156,10 +151,10 @@ curl -s http://127.0.0.1:8765/fake/actions
 ### Tests
 
 ```bash
-./bin/test
+cargo test -p icloud-findmy
 ```
 
-runs the full Rust test suite and the installer check. The core
+runs the full Rust test suite (the root `bin/test` runs every crate's). The core
 (`findme.rs`, `history.rs`, `models.rs`) and the command line (`cli.rs`)
 have no GTK dependency, so `cargo test --no-default-features` tests them
 on a machine without the GTK stack (the binary is then the command line
@@ -183,7 +178,5 @@ on worker threads, never on the GTK main loop.
 
 ## Releasing
 
-`bin/release <version>` tests, tags, builds and signs the package, and
-publishes the one-package pacman repository as the tag's GitHub release;
-`bin/verify-release` then installs it in a clean Arch container with the
-public one-liner and rolls the release back if that fails.
+Released with the other packages from the repository root; see the root
+[README](../README.md#releasing). Its tags are `findmy-v<version>`.
