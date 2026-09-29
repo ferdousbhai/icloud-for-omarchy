@@ -74,9 +74,16 @@ impl State {
                 button: Some((BUTTON, Action::SignIn)),
             });
         }
-        let stored = self.status.as_ref().is_some_and(|s| s.find_my_password_stored);
+        let stored = self
+            .status
+            .as_ref()
+            .is_some_and(|s| s.find_my_password_stored);
         find_my.then_some(View {
-            title: if stored { FIND_MY_TITLE } else { FIND_MY_TITLE_HINT },
+            title: if stored {
+                FIND_MY_TITLE
+            } else {
+                FIND_MY_TITLE_HINT
+            },
             button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
         })
     }
