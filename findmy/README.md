@@ -78,6 +78,45 @@ days are deleted when the app opens the file and after every refresh.
 The directory is readable only by you (`0700`, the database files
 `0600`). Delete the file to clear the history.
 
+## Command line
+
+The same `icloud-findmy` binary runs without its window when given a
+command (GTK is not started), with the same Find My client and history as
+the app:
+
+```console
+$ icloud-findmy devices                  # name, model, battery, online, last fix
+$ icloud-findmy devices --locate --coords
+$ icloud-findmy locate "Dous iPhone 15 Pro" --wait 60
+$ icloud-findmy play-sound iphone        # asks first; --yes to skip
+$ icloud-findmy lost-mode ipad --phone "+358 40 123 4567" --message "Please call me" --yes
+$ icloud-findmy history iphone --since 7d
+$ icloud-findmy prune-history
+$ icloud-findmy help
+```
+
+- `devices` shows what Apple last heard; `--locate` asks every device to
+  report first (it wakes them, like **Ctrl+R** in the app). Coordinates
+  are printed only with `--coords`. Positions are stored in the history
+  as the app stores them.
+- `locate` asks one device for a fresh fix and waits (30 s unless
+  `--wait SECS`) until one newer than the last arrives, then prints it
+  with its coordinates; it fails if none comes.
+- `play-sound` and `lost-mode` ask for confirmation on a terminal, and
+  refuse to act without `--yes` when stdin is not one.
+- A device is named by its ID or its name, ignoring case (a unique part
+  of the name is enough); an ambiguous name lists the matching devices.
+- `history` prints the stored trail (24 h unless `--since`, e.g. `90m`,
+  `7d`); a device ID already in the history needs no network.
+- `--json` prints JSON on stdout (errors as JSON on stderr) for scripts
+  and agents; `--data-dir DIR` keeps `history.db` in `DIR` instead of
+  `~/.local/share/icloud-findmy`.
+
+Exit codes: 0 ok, 1 error, 2 sign-in required (`icloud-session
+sign-in`), 4 Find My needs the Apple password after `icloud-session`
+could not re-authorize with a stored one (`icloud-session
+authorize-find-my`), 64 usage.
+
 ## Building from source
 
 Needs `rust`, `cargo`, `gtk4`, `libadwaita` and `libshumate`, and the
@@ -102,7 +141,17 @@ ICLOUD_SESSION_MOCK=1 XDG_DATA_HOME=/tmp/findmy-dev cargo run
 ```
 
 (`ICLOUD_SESSION_MOCK_URL` moves the fake elsewhere; `XDG_DATA_HOME`
-keeps the fake history out of your real one.)
+keeps the fake history out of your real one.) The command line works the
+same way, with `--data-dir` for the history; the fake records every Play
+Sound and Lost Mode request instead of acting, and lists them at
+`GET /fake/actions`:
+
+```bash
+ICLOUD_SESSION_MOCK=1 cargo run -- play-sound "Test's iPhone" --yes --data-dir /tmp/findmy-dev
+curl -s http://127.0.0.1:8765/fake/actions
+```
+
+`tests/cli.rs` runs the built binary this way for every command.
 
 ### Tests
 
@@ -111,9 +160,10 @@ keeps the fake history out of your real one.)
 ```
 
 runs the full Rust test suite and the installer check. The core
-(`findme.rs`, `history.rs`, `models.rs`) has no GTK dependency, so
-`cargo test --no-default-features` tests it on a machine without the GTK
-stack; `--features gtk` builds the widgets that need only GTK and
+(`findme.rs`, `history.rs`, `models.rs`) and the command line (`cli.rs`)
+have no GTK dependency, so `cargo test --no-default-features` tests them
+on a machine without the GTK stack (the binary is then the command line
+only); `--features gtk` builds the widgets that need only GTK and
 libadwaita.
 
 ## How it works
