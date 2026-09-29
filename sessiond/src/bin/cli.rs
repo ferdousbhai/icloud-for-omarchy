@@ -318,11 +318,12 @@ fn interactive(manager: &Manager, args: &[&str]) -> Result<Secret, String> {
         .map_err(|e| not_installed(manager, e))?;
     let key = strip_newline(Zeroizing::new(String::from_utf8_lossy(&out.stdout).into_owned()));
     if !out.status.success() || key.is_empty() {
+        // The manager is installed (it ran), so the usual cause is a
+        // mistyped master password; its own error is already on screen.
         return Err(format!(
-            "`{} {}` did not unlock the vault; {}",
+            "`{} {}` did not unlock the vault (usually a mistyped master password); run the command again",
             manager.bin,
             args.join(" "),
-            manager.help
         ));
     }
     Ok(key)
