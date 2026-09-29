@@ -1,0 +1,488 @@
+{
+ "plain line": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "plain line",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 10
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "plain line"
+ },
+ "- [x] buy milk": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": true,
+    "startNumber": 0,
+    "text": "buy milk",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 8
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "buy milk"
+ },
+ "## make me a heading": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "heading",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "make me a heading",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 17
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "make me a heading"
+ },
+ "first line\n**bold** me here": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "first line",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 10
+     }
+    ],
+    "start": 0
+   },
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "bold me here",
+    "spans": [
+     {
+      "bold": true,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 4
+     },
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 8
+     }
+    ],
+    "start": 11
+   }
+  ],
+  "text": "first line\nbold me here"
+ },
+ "- dash item\n## plain": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "bulletList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "dash item",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 9
+     }
+    ],
+    "start": 0
+   },
+   {
+    "kind": "heading",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "plain",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 5
+     }
+    ],
+    "start": 10
+   }
+  ],
+  "text": "dash item\nplain"
+ },
+ "- [ ] todo item": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": false,
+    "startNumber": 0,
+    "text": "todo item",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 9
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "todo item"
+ },
+ "> a\n> ￼": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 1,
+    "startNumber": 0,
+    "text": "a",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 1
+     }
+    ],
+    "start": 0
+   },
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 1,
+    "startNumber": 0,
+    "text": "￼",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 1
+     }
+    ],
+    "start": 2
+   }
+  ],
+  "text": "a\n￼"
+ },
+ "- [x] check me": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": true,
+    "startNumber": 0,
+    "text": "check me",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 8
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "check me"
+ },
+ "# Title\n\n- [ ] first todo\n- [x] second": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "title",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "Title",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 5
+     }
+    ],
+    "start": 0
+   },
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "",
+    "spans": [],
+    "start": 6
+   },
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": false,
+    "startNumber": 0,
+    "text": "first todo",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 10
+     }
+    ],
+    "start": 7
+   },
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": true,
+    "startNumber": 0,
+    "text": "second",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 6
+     }
+    ],
+    "start": 18
+   }
+  ],
+  "text": "Title\n\nfirst todo\nsecond"
+ },
+ "## new heading": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "heading",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "new heading",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 11
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "new heading"
+ },
+ "- [ ] todo two\n- [ ] step2 verify line": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": false,
+    "startNumber": 0,
+    "text": "todo two",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 8
+     }
+    ],
+    "start": 0
+   },
+   {
+    "kind": "todoList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "done": false,
+    "startNumber": 0,
+    "text": "step2 verify line",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 17
+     }
+    ],
+    "start": 9
+   }
+  ],
+  "text": "todo two\nstep2 verify line"
+ },
+ "1. num one\n2. num two": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "numberedList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "num one",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 7
+     }
+    ],
+    "start": 0
+   },
+   {
+    "kind": "numberedList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "num two",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 7
+     }
+    ],
+    "start": 8
+   }
+  ],
+  "text": "num one\nnum two"
+ },
+ "5. five": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "numberedList",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 5,
+    "text": "five",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 4
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "five"
+ },
+ "different text": {
+  "status": "ok",
+  "paragraphs": [
+   {
+    "kind": "body",
+    "indent": 0,
+    "blockQuoteLevel": 0,
+    "startNumber": 0,
+    "text": "different text",
+    "spans": [
+     {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "link": "",
+      "length": 14
+     }
+    ],
+    "start": 0
+   }
+  ],
+  "text": "different text"
+ }
+}

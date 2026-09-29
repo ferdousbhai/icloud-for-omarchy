@@ -1,0 +1,181 @@
+{
+  "defaults": { "now": 1790000000000, "setupMtimeMs": 1789999990000 },
+  "scenarios": [
+    {
+      "name": "tiny-clone",
+      "cassette": "tiny-clone.json",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "tiny-clone-filename",
+      "cassette": "tiny-clone.json",
+      "args": ["--json", "clone", "--filename-as-title", "--account", "harness@example.com", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "tiny-clone-wrong-account",
+      "cassette": "tiny-clone.json",
+      "args": ["--json", "clone", "--account", "10000000002", "--non-interactive", "@VAULT@"],
+      "compare": ["exit"]
+    },
+    {
+      "name": "dup-clone",
+      "cassette": "dup-clone.json",
+      "portDeviation": "dedupe-records",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "tiny-status-clean",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "tiny-status",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
+      "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "tiny-push-dry-run",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
+      "args": ["--json", "push", "--dry-run", "@VAULT@"]
+    },
+    {
+      "name": "tiny-push",
+      "cassette": "tiny-push.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
+      "args": ["--json", "push", "@VAULT@"]
+    },
+    {
+      "name": "tiny-push-create",
+      "cassette": "tiny-push-create.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Fresh.md", "write": "# Fresh\nA note made locally." }],
+      "args": ["--json", "push", "@VAULT@"]
+    },
+    {
+      "name": "tiny-push-delete",
+      "cassette": "tiny-push-delete.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "delete": true }],
+      "args": ["--json", "push", "@VAULT@"]
+    },
+    {
+      "name": "tiny-pull-noop",
+      "cassette": "tiny-pull-noop.json",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "tiny-pull-update",
+      "cassette": "tiny-pull-update.json",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "tiny-pull-merge",
+      "cassette": "tiny-pull-update.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "replace": ["# Test Note\n", "# Test Note\nA line added locally at the top.\n"] }],
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "tiny-pull-filename",
+      "cassette": "tiny-pull-update.json",
+      "vaultFrom": "tiny-clone-filename",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "tiny-history",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-pull-update",
+      "cwd": "@VAULT@/Notes",
+      "args": ["--json", "history", "Test Note.md"]
+    },
+    {
+      "name": "tiny-history-records",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-pull-update",
+      "cwd": "@VAULT@",
+      "args": ["--json", "history", "--records", "Notes/Test Note.md"]
+    },
+    {
+      "name": "tiny-diff",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-pull-update",
+      "cwd": "@VAULT@",
+      "args": ["--json", "diff", "Test Note.md", "00000000-0000-4000-8000-000000000001"]
+    },
+    {
+      "name": "tiny-diff-epoch",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-pull-update",
+      "cwd": "@VAULT@",
+      "args": ["--json", "diff", "Test Note.md", "00000000-0000-4000-8000-000000000002"]
+    },
+    {
+      "name": "tiny-restore",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
+      "cwd": "@VAULT@",
+      "args": ["--json", "restore", "Notes/Test Note.md"]
+    },
+    {
+      "name": "tiny-migrate-v2",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [
+        { "file": "Notes/Test Note.md", "replace": ["---\napple-note-id: 03667d1d-eee8-4e98-82fb-8c5cd02fd9d1\n---\n\n", ""] },
+        { "file": ".icloud-md/state.json", "json": { "layoutVersion": 2, "titleMode": null } }
+      ],
+      "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "tiny-newer-layout",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": ".icloud-md/state.json", "json": { "layoutVersion": 4 } }],
+      "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "asset-clone",
+      "icloudMd": "fetch-asset-note-bodies",
+      "cassette": "asset-clone.json",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "asset-clone-download-failed",
+      "icloudMd": "fetch-asset-note-bodies",
+      "cassette": "asset-clone-download-failed.json",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "asset-status",
+      "icloudMd": "fetch-asset-note-bodies",
+      "cassette": "asset-lookup.json",
+      "vaultFrom": "asset-clone",
+      "edits": [{ "file": "Notes/Big Note.md", "append": "\nA line added locally." }],
+      "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "asset-push",
+      "icloudMd": "fetch-asset-note-bodies",
+      "cassette": "asset-lookup.json",
+      "vaultFrom": "asset-clone",
+      "edits": [{ "file": "Notes/Big Note.md", "append": "\nA line added locally." }],
+      "args": ["--json", "push", "@VAULT@"]
+    },
+    {
+      "name": "asset-pull-update",
+      "icloudMd": "fetch-asset-note-bodies",
+      "cassette": "asset-pull-update.json",
+      "vaultFrom": "asset-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    }
+  ]
+}

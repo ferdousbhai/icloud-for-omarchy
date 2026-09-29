@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "push/status lookup: the big note still keeps its text in a TextDataAsset",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/records/lookup"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "records": [
+            {
+              "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+              "recordType": "Note",
+              "fields": {
+                "TitleEncrypted": {
+                  "value": "VGVzdCBOb3Rl",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "CreationDate": {
+                  "value": 1752563940000,
+                  "type": "TIMESTAMP"
+                },
+                "ModificationDate": {
+                  "value": 1752564000000,
+                  "type": "TIMESTAMP"
+                },
+                "Deleted": {
+                  "value": 0,
+                  "type": "INT64"
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ],
+                  "type": "REFERENCE_LIST"
+                },
+                "TextDataEncrypted": {
+                  "value": "eJzjYBA6wMTBIMAgtZNJyD0ktbhEwS+/JJUrJCOzWAGIEhVKQGJ5QDGF0uLUFIW0/CKwUGZeukJ+aYlCQmZyTn5pii5IRbFucWVecgKXlAAXC8hMoKlgWoMRLMIIFOGWAtMaTFARcQEdqAgzVMRVgAMqwgIVCRZghIqwQkV8BdigImxSQmARZwEmiIgCowY7VIwbZhtQjAOqUwxuFqeUGBcH0HX/gYAf6FI4W0mGS4pLYFegMuu3GeHWniE5925+eFEkxMQRAsSMWhwcXEIgX7EAWbZAFrMACwANjjft",
+                  "type": "ENCRYPTED_BYTES"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "25q",
+              "created": {
+                "timestamp": 1752563940000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752564000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false,
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            },
+            {
+              "recordName": "7c1e2d3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5",
+              "recordType": "Note",
+              "fields": {
+                "TitleEncrypted": {
+                  "value": "QmlnIE5vdGU=",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBub3RlIGlzIHRvbyBsYXJnZSB0byBrZWVwIGl0cyB0ZXh0IGlubGluZQ==",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "CreationDate": {
+                  "value": 1752600000000,
+                  "type": "TIMESTAMP"
+                },
+                "ModificationDate": {
+                  "value": 1752600060000,
+                  "type": "TIMESTAMP"
+                },
+                "Deleted": {
+                  "value": 0,
+                  "type": "INT64"
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ],
+                  "type": "REFERENCE_LIST"
+                },
+                "TextDataAsset": {
+                  "value": {
+                    "fileChecksum": "AWNoZWNrc3VtT25l",
+                    "size": 189,
+                    "wrappingKey": "d3JhcHBpbmdLZXkxMjM0NQ==",
+                    "referenceChecksum": "AXJlZmVyZW5jZUNoZWNrc3Vt",
+                    "downloadURL": "https://cvws.icloud-content.com/B/AbigNote1/${f}?o=AsBigOne&v=1&x=3&a=CAog&e=1790003600&fl=&r=r1&k=${uk}&ckc=com.apple.notes&ckz=Notes&p=43&s=sig1"
+                  },
+                  "type": "ASSETID"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "30a",
+              "created": {
+                "timestamp": 1752600000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752600060000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false,
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          ]
+        }
+      },
+      "repeat": true
+    }
+  ]
+}

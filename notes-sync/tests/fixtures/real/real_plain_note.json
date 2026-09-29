@@ -1,0 +1,69 @@
+{
+  "name": "REAL_PLAIN_NOTE",
+  "kind": "note",
+  "source": "icloud-md v0.6.2 src/notes/realFixtures.ts",
+  "description": "Real `TextDataEncrypted` captured live from the private Notes zone, record\n`03667d1d-eee8-4e98-82fb-8c5cd02fd9d1` (recordChangeTag `25q`, dev notes\n2026-07-15T07:19), titled \"Test Note\": plain text, no attribute-run\nformatting beyond the single whole-note paragraph style. Round-trips\ncleanly against the existing hand-rolled codec - the baseline case.",
+  "base64": "eJzjYBA6wMTBIMAgtZNJyD0ktbhEwS+/JJUrJCOzWAGIEhVKQGJ5QDGF0uLUFIW0/CKwUGZeukJ+aYlCQmZyTn5pii5IRbFucWVecgKXlAAXC8hMoKlgWoMRLMIIFOGWAtMaTFARcQEdqAgzVMRVgAMqwgIVCRZghIqwQkV8BdigImxSQmARZwEmiIgCowY7VIwbZhtQjAOqUwxuFqeUGBcH0HX/gYAf6FI4W0mGS4pLYFegMuu3GeHWniE5925+eFEkxMQRAsSMWhwcXEIgX7EAWbZAFrMACwANjjft",
+  "golden": {
+    "text": "Test Note\nThis is a test note used for testing out `icloud-notes-sync`\n",
+    "attributeRunLengths": [
+      10,
+      61
+    ],
+    "roundTrips": true,
+    "document": {
+      "runs": 10,
+      "replicas": 1,
+      "minimumSupportedVersion": 0
+    },
+    "embedSlots": [],
+    "format": [
+      {
+        "kind": "title",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "Test Note",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 9
+          }
+        ],
+        "start": 0
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "This is a test note used for testing out `icloud-notes-sync`",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 60
+          }
+        ],
+        "start": 10
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 71
+      }
+    ],
+    "markdown": "# Test Note\nThis is a test note used for testing out \\`icloud-notes-sync\\`\n"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "TABLE_LONG_LIVED_REV_2AV",
+  "kind": "table",
+  "source": "icloud-md v0.6.2 src/notes/realFixtures.ts",
+  "description": "Real `MergeableDataEncrypted` payloads of a *long-lived* table - Attachment\n`92df3572-94a6-48f5-be27-075e91f80a2c` (owning note\n`66d82a2c-b6dd-47e8-abc7-7c219608f846`, \"Test Table Note (2)\"), preserved\nfrom two local history snapshots after Adam cleared the source note from\nthe account (dev notes, 2026-07-16, \"Table write engine (2/4)\"). Unlike\nall ten `TABLE_WRITE_PATH_REVISIONS` above, this table's months of real\naccumulated edit history carries `CRDT.Document`'s `startVersion` (field\n2, always zero-length; `unknown_field_2` pre-alignment) and `ttTimestamp`\n(field 7, a `topotext.VectorTimestamp`: `{16-byte replica UUID, per-replica\nclock/subclock}` entries; `unknown_field_7` pre-alignment) - which Apple\nemits in field-number order, so leaving them undeclared broke the byte\nround-trip gate on ordering alone (protobuf-es re-emits unknown fields\nlast). These two fixtures are the regression proof for declaring them.\n`2AV` -> `2AX` is one real Apple-client edit apart (a row removed, and one\nof `ttTimestamp`'s clocks incremented).",
+  "base64": "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",
+  "golden": {
+    "roundTrips": true,
+    "grid": [
+      [
+        "A0",
+        "B0",
+        "B0-new",
+        "C0"
+      ],
+      [
+        "A1",
+        "B1",
+        "B1-new",
+        "C1"
+      ],
+      [
+        "A2",
+        "B2",
+        "B2-new",
+        "C2"
+      ],
+      [
+        "A3",
+        "B3",
+        "B3-new",
+        "C3-edited"
+      ],
+      [
+        "A4",
+        "B4",
+        "B4-new",
+        "C4"
+      ],
+      [
+        "beep",
+        "",
+        "boop",
+        ""
+      ]
+    ],
+    "markdown": "| A0 | B0 | B0-new | C0 |\n| - | - | - | - |\n| A1 | B1 | B1-new | C1 |\n| A2 | B2 | B2-new | C2 |\n| A3 | B3 | B3-new | C3-edited |\n| A4 | B4 | B4-new | C4 |\n| beep | | boop | |"
+  }
+}

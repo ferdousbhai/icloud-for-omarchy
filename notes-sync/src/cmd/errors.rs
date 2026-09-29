@@ -1,0 +1,184 @@
+//! Known failures and their exit codes. Ports icloud-md `src/errors.ts` (the
+//! classes that survive the port; auth/session/browser/object/revert/delete
+//! ones are gone). Owner: workstream D.
+//!
+//! Exit codes: 0 ok, 1 known error (`IcloudNotesSyncError`), 2 usage,
+//! 3 status has entries / diff has differences (not an error), 4 sign-in
+//! required (new; icloud-md said `Run "icloud-md reauthenticate"` with 1),
+//! 70 internal (`EX_SOFTWARE`, anything unexpected).
+//!
+//! Messages keep icloud-md's wording (with `icloud-md` → `icloud-notes-sync`
+//! in hints); `name()` is the `--json` `error` field (icloud-md's class name).
+
+use crate::cloudkit::CkError;
+
+pub const EXIT_OK: i32 = 0;
+pub const EXIT_ERROR: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
+pub const EXIT_HAS_ENTRIES: i32 = 3;
+pub const EXIT_SIGN_IN: i32 = 4;
+pub const EXIT_INTERNAL: i32 = 70;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("\"{file}\" isn't a tracked note in {target_dir}.")]
+    UntrackedFile { file: String, target_dir: String },
+    #[error("{target_dir} doesn't look like a cloned notes directory (no .icloud-md/state.json).")]
+    NotClonedDirectory { target_dir: String },
+    #[error("\"{base_name}\" matches more than one tracked note: {}.", candidates.join(", "))]
+    AmbiguousTrackedFile { base_name: String, candidates: Vec<String> },
+    #[error(
+        "{target_dir} was cloned before folder support and uses the old flat layout, which this version no longer reads."
+    )]
+    UnsupportedVaultLayout { target_dir: String },
+    #[error(
+        "{target_dir} was written by a newer version of icloud-md (vault layout {vault_version}; this build understands {supported_version})."
+    )]
+    VaultFromNewerTool {
+        target_dir: String,
+        vault_version: u64,
+        supported_version: u32,
+    },
+    #[error("Authenticated, but the account reported no ckdatabasews host - can't reach Notes.")]
+    NotesUnavailable,
+    #[error("{0}")]
+    CorruptStateFile(String),
+    #[error("{target_dir} is already a cloned notes directory (.icloud-md/state.json exists).")]
+    AlreadyClonedDirectory { target_dir: String },
+    #[error("{target_dir} has no account bound to it (missing \"account\" in .icloud-md/state.json).")]
+    UnboundAccount { target_dir: String },
+    /// `--account` (clone) or the vault's bound account doesn't match the
+    /// icloud-session account.
+    #[error("{target_dir} was cloned for {expected}, but the session just authenticated is for {actual}.")]
+    AccountMismatch {
+        target_dir: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("--account asked for {requested}, but the signed-in account is {actual}.")]
+    RequestedAccountMismatch { requested: String, actual: String },
+    #[error("No version snapshot with id \"{id}\" found for \"{file}\".")]
+    UnknownVersionSnapshot { id: String, file: String },
+    #[error("Can't complete this operation: {0}.")]
+    VersionContentUnavailable(String),
+    /// Sign-in required: exit 4.
+    #[error("Not signed in to iCloud.")]
+    SignInRequired,
+    #[error(transparent)]
+    CloudKit(CkError),
+    #[error("{0}")]
+    Usage(String),
+    /// Anything else (a plain `Error` in icloud-md): exit 70.
+    #[error("{0}")]
+    Internal(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+impl From<CkError> for Error {
+    fn from(e: CkError) -> Error {
+        match e {
+            CkError::SignInRequired => Error::SignInRequired,
+            CkError::NotesUnavailable => Error::NotesUnavailable,
+            other => Error::CloudKit(other),
+        }
+    }
+}
+
+impl Error {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Error::SignInRequired => EXIT_SIGN_IN,
+            Error::Usage(_) => EXIT_USAGE,
+            Error::Internal(_) | Error::Io(_) => EXIT_INTERNAL,
+            Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => EXIT_ERROR,
+            Error::CloudKit(_) => EXIT_INTERNAL,
+            _ => EXIT_ERROR,
+        }
+    }
+
+    /// The `--json` `error` field.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Error::UntrackedFile { .. } => "UntrackedFileError",
+            Error::NotClonedDirectory { .. } => "NotClonedDirectoryError",
+            Error::AmbiguousTrackedFile { .. } => "AmbiguousTrackedFileError",
+            Error::UnsupportedVaultLayout { .. } => "UnsupportedVaultLayoutError",
+            Error::VaultFromNewerTool { .. } => "VaultFromNewerToolError",
+            Error::NotesUnavailable => "NotesUnavailableError",
+            Error::CorruptStateFile(_) => "CorruptStateFileError",
+            Error::AlreadyClonedDirectory { .. } => "AlreadyClonedDirectoryError",
+            Error::UnboundAccount { .. } => "UnboundAccountError",
+            Error::AccountMismatch { .. } => "AccountMismatchError",
+            Error::RequestedAccountMismatch { .. } => "RequestedAccountMismatchError",
+            Error::UnknownVersionSnapshot { .. } => "UnknownVersionSnapshotError",
+            Error::VersionContentUnavailable(_) => "VersionContentUnavailableError",
+            Error::SignInRequired => "SignInRequiredError",
+            Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "CloudKitZoneFetchFailedError",
+            Error::CloudKit(CkError::RequestFailed(_)) => "CloudKitRequestFailedError",
+            Error::CloudKit(_) | Error::Internal(_) | Error::Io(_) => "InternalError",
+            Error::Usage(_) => "UsageError",
+        }
+    }
+
+    /// The hint line icloud-md prints under the message, if any.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Error::UntrackedFile { .. } => Some("Check the file name (it's case-sensitive) and try again.".into()),
+            Error::NotClonedDirectory { .. } => Some("Run \"icloud-notes-sync clone <directory>\" first.".into()),
+            Error::AmbiguousTrackedFile { .. } => {
+                Some("Qualify it with its folder (or run the command from inside that folder).".into())
+            }
+            Error::UnsupportedVaultLayout { .. } => Some(
+                "Re-clone into a fresh directory: \"icloud-notes-sync clone <new-directory>\". (This tool made no changes.)"
+                    .into(),
+            ),
+            Error::VaultFromNewerTool { .. } => {
+                Some("Upgrade icloud-notes-sync to the latest release. (This tool made no changes.)".into())
+            }
+            Error::NotesUnavailable => {
+                Some("Check that Notes is enabled for this Apple ID (icloud.com → Notes) and try again.".into())
+            }
+            Error::CorruptStateFile(_) => Some(
+                "This usually means state.json was hand-edited or written by an incompatible version. If you don't have \
+                 local edits worth preserving, remove .icloud-md/ and run \"icloud-notes-sync clone\" again into a fresh directory."
+                    .into(),
+            ),
+            Error::AlreadyClonedDirectory { .. } => {
+                Some("Run \"icloud-notes-sync pull\" instead to fetch changes into an existing clone.".into())
+            }
+            Error::UnboundAccount { .. } => Some(
+                "This folder may predate per-folder account binding. If you don't have local edits worth preserving, \
+                 remove .icloud-md/ and run \"icloud-notes-sync clone\" again into a fresh directory."
+                    .into(),
+            ),
+            Error::AccountMismatch { expected, .. } => {
+                Some(format!("Sign in as {expected} to continue working with this folder."))
+            }
+            Error::RequestedAccountMismatch { .. } => None,
+            Error::UnknownVersionSnapshot { file, .. } => {
+                Some(format!("Run \"icloud-notes-sync history {file}\" to see available snapshot ids."))
+            }
+            Error::VersionContentUnavailable(_) => {
+                Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
+            }
+            // Keeps icloud-md's sign-in marker (`icloud-md reauthenticate`),
+            // which wrappers match on alongside exit code 4.
+            Error::SignInRequired => Some(
+                "Sign in to iCloud again with icloud-session, then retry (what \"icloud-md reauthenticate\" did for icloud-md)."
+                    .into(),
+            ),
+            Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. }) if server_error_code == "ZONE_NOT_FOUND" => {
+                Some(
+                    "The server no longer has this zone - most likely a share that was revoked or deleted. Retrying won't \
+                     change that."
+                        .into(),
+                )
+            }
+            Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => Some(
+                "This may be a transient network or iCloud-service issue - wait a moment and try again.".into(),
+            ),
+            Error::CloudKit(_) | Error::Usage(_) | Error::Internal(_) | Error::Io(_) => None,
+        }
+    }
+}

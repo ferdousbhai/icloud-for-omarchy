@@ -1,0 +1,75 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "service": "setup",
+      "path": "/setup/ws/1/validate",
+      "query": {},
+      "matched": null
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/modify",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "operations": [
+          {
+            "operationType": "create",
+            "record": {
+              "recordName": "00000000-0000-4000-8000-000000000002",
+              "recordType": "Note",
+              "fields": {
+                "CreationDate": {
+                  "value": 1789999990000
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes"
+                      }
+                    }
+                  ]
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes"
+                    }
+                  }
+                },
+                "ModificationDate": {
+                  "value": 1789999990000
+                },
+                "TitleEncrypted": {
+                  "value": "RnJlc2g="
+                },
+                "SnippetEncrypted": {
+                  "value": "QSBub3RlIG1hZGUgbG9jYWxseS4="
+                },
+                "FirstAttachmentThumbnail": {},
+                "FirstAttachmentUTIEncrypted": {},
+                "TextDataAsset": {},
+                "TextDataEncrypted": {
+                  "value": "eJw9yrEKwjAUheGTNMZr1PYSisjFITiVDuIj6OLgWxQtOFQL6uLbuPmYkQZx+g8fh+A/isCQt/JyuLePi9uHW/9sw7U5t6HrT03XvTbCzgw3hqRWKolisJWhqtI/sVwmQZXJwhGBY4yxYMh/r1dOHCudmZEd08RNZ/O8YK9JvCZde7I+J7BZImCLHY6oNZVfuYgZBw=="
+                }
+              }
+            }
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 0
+    }
+  ]
+}

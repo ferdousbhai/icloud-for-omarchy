@@ -1,0 +1,17 @@
+{
+  "dryRun": false,
+  "pushed": 1,
+  "entries": [
+    {
+      "kind": "delete",
+      "file": "Notes/Test Note.md",
+      "resolution": "ready",
+      "outcome": {
+        "succeeded": true,
+        "message": "Moved Notes/Test Note.md to Recently Deleted"
+      }
+    }
+  ],
+  "unchanged": 0,
+  "notices": []
+}

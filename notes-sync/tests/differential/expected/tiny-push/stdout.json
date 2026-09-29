@@ -1,0 +1,17 @@
+{
+  "dryRun": false,
+  "pushed": 1,
+  "entries": [
+    {
+      "kind": "update",
+      "file": "Notes/Test Note.md",
+      "resolution": "ready",
+      "outcome": {
+        "succeeded": true,
+        "message": "Pushed Notes/Test Note.md"
+      }
+    }
+  ],
+  "unchanged": 0,
+  "notices": []
+}

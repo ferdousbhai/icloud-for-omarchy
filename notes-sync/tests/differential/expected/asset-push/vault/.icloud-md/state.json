@@ -1,0 +1,50 @@
+{
+  "layoutVersion": 3,
+  "generator": "icloud-md 0.6.2",
+  "titleMode": "in-body",
+  "account": {
+    "appleId": "harness@example.com",
+    "dsid": "10000000001"
+  },
+  "syncToken": "AQAAAAAAAAAB",
+  "sharedZoneSyncTokens": {
+    "_0123456789abcdef0123456789abcdef": "AQAAAAAAAAAT"
+  },
+  "replicaId": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "notes": {
+    "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1": {
+      "file": "Notes/Test Note.md",
+      "recordChangeTag": "25q",
+      "modificationDate": 1752564000000,
+      "folderRecordName": "DefaultFolder-CloudKit"
+    },
+    "7c1e2d3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5": {
+      "file": "Notes/Big Note.md",
+      "recordChangeTag": "30a",
+      "modificationDate": 1752600060000,
+      "unpublishableReason": "is so large that Apple keeps its text in a separate file, which can't be written back yet",
+      "folderRecordName": "DefaultFolder-CloudKit"
+    },
+    "9d8c7b6a-5f4e-4d3c-8b2a-192837465abc": {
+      "file": "_0123456789abcdef0123456789abcdef/Shared Big Note.md",
+      "recordChangeTag": "40a",
+      "modificationDate": 1752700060000,
+      "sharedZoneOwner": "_0123456789abcdef0123456789abcdef",
+      "unpublishableReason": "is so large that Apple keeps its text in a separate file, which can't be written back yet"
+    }
+  },
+  "folders": {
+    "DefaultFolder-CloudKit": {
+      "name": "Notes",
+      "dirName": "Notes"
+    }
+  },
+  "sharerHomes": {
+    "_0123456789abcdef0123456789abcdef": {
+      "name": "_0123456789abcdef0123456789abcdef",
+      "dirName": "_0123456789abcdef0123456789abcdef"
+    }
+  },
+  "attachments": {},
+  "tableAttachments": {}
+}
