@@ -1,0 +1,680 @@
+{
+  "name": "REAL_FORMATTED_MULTI_EDIT_NOTE",
+  "kind": "note",
+  "source": "icloud-md v0.6.2 src/notes/realFixtures.ts",
+  "description": "Real `TextDataEncrypted` captured live from the private Notes zone, record\n`d85be482-6cdd-42b1-9780-f683424e33cc` (recordChangeTag `27z`, dev notes\n2026-07-15T07:19), titled \"Test Note\" - updated live by Adam specifically\nfor this fixture: 58 `AttributeRun`s exercising `font_weight`/\n`underlined`/`strikethrough`/`emphasis_style`/`attachment_info`, and 75\n`TextRun`s across 6 replicas with 21 tombstoned - a genuinely\nmultiply-edited document, not just a multiply-formatted one.\n\nDoes **not** round-trip against the current hand-rolled codec: one\n`TextRun` encodes its `sequence` field (this project's own field 5, not\npart of the cross-checked Apple schema) twice in the same message\n(`... 28 0e ... 28 10`, i.e. two different sequence values). `parseRun`\ntreats `sequence` as a plain optional scalar and silently keeps only the\nlast occurrence - see dev notes, 2026-07-15T07:27. This is exactly the\nkind of gap Step 0 exists to surface: the migration's `.proto` must\ndeclare `TextRun.sequence` as `repeated int32`, not `optional int32`, for\nprotobuf-es to preserve every occurrence.",
+  "base64": "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",
+  "golden": {
+    "text": "Test Note\nThis is a test note for use with `icloud-notes-sync` to verify the round-trip works correctly.\n\n￼\n\n\nBeep boop\n\n￼\n\nOne item\nSecond item\n\n\n￼\nheading\nsubtraction\ntrain\nbold\nundertones\nsurely\njust\noak\none\ntwo\nthree\na\nb\nc\nindented\n\n\nok\n\n\nquoted\n\n\n",
+    "attributeRunLengths": [
+      10,
+      96,
+      1,
+      14,
+      1,
+      1,
+      1,
+      3,
+      5,
+      1,
+      6,
+      1,
+      5,
+      1,
+      1,
+      1,
+      1,
+      7,
+      1,
+      11,
+      1,
+      5,
+      1,
+      5,
+      10,
+      1,
+      6,
+      1,
+      5,
+      3,
+      1,
+      3,
+      1,
+      4,
+      4,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      2,
+      5,
+      2,
+      1,
+      1,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      3,
+      1,
+      1,
+      1
+    ],
+    "roundTrips": true,
+    "document": {
+      "runs": 75,
+      "replicas": 6,
+      "minimumSupportedVersion": 0
+    },
+    "embedSlots": [
+      {
+        "kind": "attachment",
+        "ref": {
+          "attachmentIdentifier": "eeab28b8-8e4f-420a-802e-e8fc66517042",
+          "typeUti": "com.apple.notes.table"
+        }
+      },
+      {
+        "kind": "attachment",
+        "ref": {
+          "attachmentIdentifier": "7ED80274-4400-4C02-87EA-F542F056FF02",
+          "typeUti": "public.jpeg"
+        }
+      },
+      {
+        "kind": "attachment",
+        "ref": {
+          "attachmentIdentifier": "4A55F3CB-5202-4DEB-AE6D-EBF1475809DE",
+          "typeUti": "com.apple.paper"
+        }
+      }
+    ],
+    "format": [
+      {
+        "kind": "title",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "Test Note",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 9
+          }
+        ],
+        "start": 0
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "This is a test note for use with `icloud-notes-sync` to verify the round-trip works correctly.",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 94
+          }
+        ],
+        "start": 10
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 105
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "￼",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 1
+          }
+        ],
+        "start": 106
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 108
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 109
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "Beep boop",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 9
+          }
+        ],
+        "start": 110
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 120
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "￼",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 1
+          }
+        ],
+        "start": 121
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 123
+      },
+      {
+        "kind": "todoList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "done": false,
+        "startNumber": 0,
+        "text": "One item",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 8
+          }
+        ],
+        "start": 124
+      },
+      {
+        "kind": "todoList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "done": false,
+        "startNumber": 0,
+        "text": "Second item",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 11
+          }
+        ],
+        "start": 133
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 145
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 146
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "￼",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 1
+          }
+        ],
+        "start": 147
+      },
+      {
+        "kind": "heading",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "heading",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 7
+          }
+        ],
+        "start": 149
+      },
+      {
+        "kind": "subheading",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "subtraction",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 11
+          }
+        ],
+        "start": 157
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "train",
+        "spans": [
+          {
+            "bold": false,
+            "italic": true,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 5
+          }
+        ],
+        "start": 169
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "bold",
+        "spans": [
+          {
+            "bold": true,
+            "italic": true,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 4
+          }
+        ],
+        "start": 175
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "undertones",
+        "spans": [
+          {
+            "bold": true,
+            "italic": true,
+            "strikethrough": false,
+            "underline": true,
+            "link": "",
+            "length": 10
+          }
+        ],
+        "start": 180
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "surely",
+        "spans": [
+          {
+            "bold": true,
+            "italic": true,
+            "strikethrough": true,
+            "underline": true,
+            "link": "",
+            "length": 6
+          }
+        ],
+        "start": 191
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "just",
+        "spans": [
+          {
+            "bold": true,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 4
+          }
+        ],
+        "start": 198
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "oak",
+        "spans": [
+          {
+            "bold": false,
+            "italic": true,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 3
+          }
+        ],
+        "start": 203
+      },
+      {
+        "kind": "bulletList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "one",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 3
+          }
+        ],
+        "start": 207
+      },
+      {
+        "kind": "bulletList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "two",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 3
+          }
+        ],
+        "start": 211
+      },
+      {
+        "kind": "bulletList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "three",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 5
+          }
+        ],
+        "start": 215
+      },
+      {
+        "kind": "numberedList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "a",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 1
+          }
+        ],
+        "start": 221
+      },
+      {
+        "kind": "numberedList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "b",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 1
+          }
+        ],
+        "start": 223
+      },
+      {
+        "kind": "numberedList",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "c",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 1
+          }
+        ],
+        "start": 225
+      },
+      {
+        "kind": "body",
+        "indent": 1,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "indented",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 8
+          }
+        ],
+        "start": 227
+      },
+      {
+        "kind": "body",
+        "indent": 1,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 236
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 237
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "ok",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 2
+          }
+        ],
+        "start": 238
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 241
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 242
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 1,
+        "startNumber": 0,
+        "text": "quoted",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 6
+          }
+        ],
+        "start": 243
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 250
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 251
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 252
+      }
+    ],
+    "markdown": "# Test Note\nThis is a test note for use with \\`icloud-notes-sync\\` to verify the round-trip works correctly.\n\n￼\n\n\nBeep boop\n\n￼\n\n- [ ] One item\n- [ ] Second item\n\n\n￼\n## heading\n### subtraction\n*train*\n***bold***\n***<u>undertones</u>***\n***~~<u>surely</u>~~***\n**just**\n*oak*\n- one\n- two\n- three\n1. a\n2. b\n3. c\nindented\n\n\nok\n\n\n> quoted\n\n\n"
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "name": "REAL_UNICODE_NOTE",
+  "kind": "note",
+  "source": "icloud-md v0.6.2 src/notes/realFixtures.ts",
+  "description": "Real `TextDataEncrypted` captured live from the private Notes zone, record\n`72BE6881-7A65-4DF4-B1CC-D3F5033743BD` (recordChangeTag `j2`, dev notes\n2026-07-15T07:19, originally authored 2019-09-22), titled \"this is a test\nnote. how well does this work when compared to the...\": plain text with\nnon-ASCII (Spanish + an emoji), exercising UTF-8/UTF-16 boundary handling.\nRound-trips cleanly against the existing hand-rolled codec.",
+  "base64": "H4sIAAAAAAAAE+NgENrDxMEgwCC1lUkolaskI7NYAYgSFUpSi0sU8vJLUvUUFDLyyxXKU3NyFFLyU4sVwGrK84uyFcozUvMUkvNzCxKLUlMUSvKBUqkK6fn56TmpCmWpRcWZ+Xn2XFxJpal5+cUKKYfXJhZ/mL90lpQAFwvIRqCdYFqDESzCCBRhlALRjBpMUBFGAX6wCIMGs5QQWERAgBkswqHAqMECVSUs4ApVxQpVFQE1iROoig2qKlKAF6qKXUqMiwNo838g4Ae6As5WkuGS4hJQOemW+UbM0XGP7amvaxv/PBNi4kgDYi4tNo4QISYJRi2gKUIMQB4viAcAkzD6YUEBAAA=",
+  "golden": {
+    "text": "\nthis is a test note.  how well does this work when compared to the google version?\n\nbuenos días🥚",
+    "attributeRunLengths": [
+      84,
+      1,
+      13
+    ],
+    "roundTrips": true,
+    "document": {
+      "runs": 8,
+      "replicas": 1,
+      "minimumSupportedVersion": 0
+    },
+    "embedSlots": [],
+    "format": [
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 0
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "this is a test note.  how well does this work when compared to the google version?",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 82
+          }
+        ],
+        "start": 1
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "",
+        "spans": [],
+        "start": 84
+      },
+      {
+        "kind": "body",
+        "indent": 0,
+        "blockQuoteLevel": 0,
+        "startNumber": 0,
+        "text": "buenos días🥚",
+        "spans": [
+          {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "link": "",
+            "length": 13
+          }
+        ],
+        "start": 85
+      }
+    ],
+    "markdown": "\nthis is a test note.  how well does this work when compared to the google version?\n\nbuenos días🥚"
+  }
+}
