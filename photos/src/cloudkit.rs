@@ -568,6 +568,39 @@ impl<'t> CloudKit<'t> {
             change_tag: rec.get("recordChangeTag").and_then(Value::as_str).map(str::to_owned),
         })
     }
+
+    /// Add assets to an album: one CPLContainerRelation per asset, named
+    /// `<asset>-IN-<album>` like the relations Apple lists. UNVERIFIED
+    /// AGAINST APPLE: the record shape is the one `album_members` reads back
+    /// (fixtures from pyicloud); no capture of icloud.com creating one has
+    /// been made. Returns the relations created; a per-record error fails
+    /// the call (the request is atomic).
+    pub fn add_to_album(&self, album_id: &str, asset_ids: &[&str]) -> Result<Vec<Relation>> {
+        let operations: Vec<Value> = asset_ids
+            .iter()
+            .map(|asset| {
+                json!({ "operationType": "create", "record": {
+                    "recordName": format!("{asset}-IN-{album_id}"),
+                    "recordType": "CPLContainerRelation",
+                    "fields": {
+                        "containerId": { "value": album_id, "type": "STRING" },
+                        "itemId": { "value": asset, "type": "STRING" },
+                        "isKeyAsset": { "value": 0, "type": "INT64" },
+                    },
+                } })
+            })
+            .collect();
+        let v = self.post("records/modify", &json!({ "atomic": true, "operations": operations, "zoneID": Self::zone() }))?;
+        let mut out = Vec::new();
+        for rec in v.get("records").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
+            if let Some(code) = rec.get("serverErrorCode").and_then(Value::as_str) {
+                let reason = rec.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
+                return Err(Error::CloudKit { code: code.to_owned(), reason });
+            }
+            out.extend(Record::parse(rec).as_ref().and_then(Relation::from_record));
+        }
+        Ok(out)
+    }
 }
 
 fn records_of(v: &Value) -> Vec<Record> {

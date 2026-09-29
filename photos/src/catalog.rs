@@ -319,6 +319,15 @@ impl Catalog {
         Ok(self.conn.query_row(&format!("SELECT {ROW_COLUMNS} FROM assets WHERE id = ?1"), [id], row).optional()?)
     }
 
+    /// The albums an asset is in: (id, name), in sidebar order.
+    pub fn albums_of(&self, asset_id: &str) -> Result<Vec<(String, String)>> {
+        let mut st = self.conn.prepare(
+            "SELECT al.id, al.name FROM albums al JOIN album_assets aa ON aa.album_id = al.id
+             WHERE aa.asset_id = ?1 ORDER BY al.position, al.name COLLATE NOCASE",
+        )?;
+        Ok(st.query_map([asset_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn count(&self) -> Result<i64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM assets WHERE deleted = 0", [], |r| r.get(0))?)
     }

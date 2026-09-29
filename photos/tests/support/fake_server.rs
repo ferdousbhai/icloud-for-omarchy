@@ -88,6 +88,16 @@ impl FakeServer {
         self.state.lock().unwrap().signed_out = true;
     }
 
+    /// Simulate an edit made on another device: the asset's change tag moves on.
+    pub fn edit_elsewhere(&self, asset_id: &str) {
+        let mut s = self.state.lock().unwrap();
+        if let Some(i) = s.assets.iter().position(|a| a.id == asset_id) {
+            s.assets[i].tag += 1;
+            let rec = s.asset_record(i);
+            s.log.push(rec);
+        }
+    }
+
     /// Simulate a change made on another device: delete an asset.
     pub fn delete_elsewhere(&self, asset_id: &str) {
         let mut s = self.state.lock().unwrap();
@@ -279,6 +289,23 @@ impl State {
         for op in body["operations"].as_array().cloned().unwrap_or_default() {
             let rec = &op["record"];
             let name = rec["recordName"].as_str().unwrap_or("");
+            if op["operationType"] == "create" && rec["recordType"] == "CPLContainerRelation" {
+                let album = rec.pointer("/fields/containerId/value").and_then(Value::as_str).unwrap_or("").to_owned();
+                let asset = rec.pointer("/fields/itemId/value").and_then(Value::as_str).unwrap_or("").to_owned();
+                if !self.albums.iter().any(|(id, _)| *id == album) || !self.assets.iter().any(|a| a.id == asset && !a.deleted) {
+                    out.push(json!({ "recordName": name, "serverErrorCode": "NOT_FOUND", "reason": "no such album or asset" }));
+                    continue;
+                }
+                if !self.members.iter().any(|(al, a)| *al == album && *a == asset) {
+                    self.members.push((album.clone(), asset.clone()));
+                }
+                let r = json!({ "recordName": name, "recordType": "CPLContainerRelation", "recordChangeTag": "r1",
+                                "fields": { "containerId": { "value": album, "type": "STRING" }, "itemId": { "value": asset, "type": "STRING" } },
+                                "deleted": false, "zoneID": Self::zone() });
+                self.log.push(r.clone());
+                out.push(r);
+                continue;
+            }
             let Some(i) = self.assets.iter().position(|a| a.id == name) else {
                 out.push(json!({ "recordName": name, "serverErrorCode": "NOT_FOUND", "reason": "Record not found" }));
                 continue;

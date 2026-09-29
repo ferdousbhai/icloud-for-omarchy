@@ -53,6 +53,12 @@ impl Transport for SessionTransport {
     }
 }
 
+/// The daemon's current `SignedIn` / `SigningIn` properties.
+pub fn sign_in_state() -> Result<SignInState> {
+    let s = icloud_session::status()?;
+    Ok(SignInState { signed_in: s.signed_in, signing_in: s.signing_in })
+}
+
 /// Asks the daemon to open its sign-in window; returns at once.
 pub fn start_sign_in() -> Result<()> {
     Ok(icloud_session::sign_in()?)

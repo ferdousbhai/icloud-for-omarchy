@@ -173,6 +173,22 @@ pub struct SignInState {
     pub signing_in: bool,
 }
 
+/// The sign-in state right now, for `icloud-photos status`: icloud-sessiond's
+/// properties (one D-Bus round trip, no request to Apple). In mock mode the
+/// fake server is asked, since it is what plays the signed-out account.
+pub fn sign_in_state() -> Result<SignInState> {
+    if MockTransport::active() {
+        let t = MockTransport::from_env();
+        let url = format!("{}{}/zones/list", t.base, crate::cloudkit::DB_PATH);
+        return match t.post_json(&url, &Value::Object(Default::default())) {
+            Ok(_) => Ok(SignInState { signed_in: true, signing_in: false }),
+            Err(Error::SignInRequired) => Ok(SignInState { signed_in: false, signing_in: false }),
+            Err(e) => Err(e),
+        };
+    }
+    crate::session::sign_in_state()
+}
+
 /// Opens the interactive sign-in and returns at once; the outcome arrives
 /// through [`watch_sign_in`]. In mock mode the fake server is told and
 /// `notify` hears "signed in" straight away. Call it off the main loop.
