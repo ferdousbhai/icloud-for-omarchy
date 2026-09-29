@@ -260,15 +260,7 @@ fn protobuf_codec_matches_protobuf_es_on_real_and_hostile_inputs() {
     let mut decoded_by_both = 0;
     for (i, ((schema, bytes), want)) in cases.iter().zip(expected.as_array().unwrap()).enumerate() {
         let got = codec_round_trip(schema, bytes);
-        // Decode error messages are compared only for presence: V8's
-        // DataView bounds errors word "premature EOF" differently.
-        let comparable = |v: &Value| {
-            if v["decoded"] == false {
-                json!({"decoded": false})
-            } else {
-                v.clone()
-            }
-        };
+        let comparable = |v: &Value| v.clone();
         if comparable(&got) != comparable(want) {
             mismatches.push(format!("#{i} {schema}: rust {got} vs node {want}"));
         }

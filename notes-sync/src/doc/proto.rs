@@ -193,7 +193,7 @@ impl<'a> Reader<'a> {
 
     fn fixed32(&mut self) -> ProtoResult<u32> {
         if self.pos + 4 > self.buf.len() {
-            return err("premature EOF");
+            return err("Offset is outside the bounds of the DataView");
         }
         let v = u32::from_le_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap_or([0; 4]));
         self.pos += 4;
@@ -202,7 +202,7 @@ impl<'a> Reader<'a> {
 
     fn fixed64(&mut self) -> ProtoResult<u64> {
         if self.pos + 8 > self.buf.len() {
-            return err("premature EOF");
+            return err("Offset is outside the bounds of the DataView");
         }
         let v = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap_or([0; 8]));
         self.pos += 8;
