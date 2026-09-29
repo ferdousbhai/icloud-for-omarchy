@@ -62,6 +62,41 @@ daemon installed, as that repository's README describes):
   offers **Sign In**, which opens Apple's sign-in page in a window of its
   own; syncing resumes on its own once you are signed in.
 
+## Command line
+
+The same binary is a command-line tool: `icloud-photos` with no arguments
+opens the app; `icloud-photos <command>` runs without GTK or a display, over
+the same sign-in, catalog, cache and library folder as the app.
+
+| command | what it does |
+|---|---|
+| `status` | signed in?, catalog path, item/album/downloaded counts, last sync, library and cache folders |
+| `sync [--full]` | incremental sync (falling back to a full listing), or `--full`; prints what changed |
+| `albums` | id, name, count |
+| `list [--album ID] [--since DATE] [--limit N] [--kind photo\|video\|live]` | id, date, kind, size, file name, local path if downloaded; newest first |
+| `info ID` | everything the catalog knows about one item, including its albums |
+| `thumb ID [--out PATH]` | fetches iCloud's thumbnail into the cache (and copies it to `PATH`) |
+| `download ID... \| --all [--medium] [--out DIR]` | originals (plus a Live Photo's video) into the library folder, or under `DIR`; `--medium` fetches the viewer's preview instead; prints the saved paths |
+| `upload FILE... [--album ID] [--no-sync]` | uploads, progress on stderr, prints the new ids, then syncs until they are in the catalog |
+| `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal, refuses without `--yes` otherwise |
+| `prune-cache` | drops cached previews of deleted items, trims the preview cache |
+| `sign-in` | opens the iCloud sign-in window |
+| `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
+
+- `--json` prints JSON on stdout (errors as a JSON object on stderr);
+  otherwise output is plain text, tab-separated for lists.
+- Exit codes: 0 ok, 1 error, 2 sign-in required (`status` also exits 2
+  when signed out), 64 usage.
+- `--data-dir DIR` keeps the catalog, cache, preferences and library all
+  under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`), so a
+  test run never touches your own.
+- `DATE` is `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS` (UTC) or Unix seconds; dates
+  print as UTC.
+- A delete that conflicts with a change made on another device syncs and
+  tries once more, as the app does.
+- `upload --album` adds the new items to an album with a CloudKit request
+  that has not been checked against Apple (see below).
+
 ## Your files
 
 | what | where |
@@ -92,6 +127,10 @@ run against a real account:
 - **Delete** (`records/modify`, `isDeleted = 1` on the CPLAsset with its
   current change tag): matches a sanitised browser capture published with
   timlaing/pyicloud.
+- **Adding to an album** (`upload --album`, command line only):
+  `records/modify` creating a `CPLContainerRelation` named
+  `<asset>-IN-<album>`, the shape the album listing returns; no capture of
+  icloud.com doing it has been made.
 - **Upload**: the four-step `photosupload` flow (`createUploadUrl`, bytes
   to the reserved content URL, `putAsset`, `uploadStatus`) ported from
   timlaing/pyicloud, whose fixtures say they matched a live account. The
@@ -104,7 +143,8 @@ run against a real account:
   Hidden photos are left out of All Photos, as on icloud.com.
 - Folders of albums are flattened: their albums appear in the list, the
   folders themselves do not.
-- No editing, favourites, album management, or moving photos between albums.
+- No editing, favourites, album management, or moving photos between albums
+  (the command line can only add new uploads to an existing album).
 - HEIC originals download fine but show in the viewer through iCloud's JPEG
   preview.
 - Packages are built for x86_64 only.
@@ -118,6 +158,15 @@ deletes and uploads come back through incremental sync:
 ```bash
 cargo run --example fake_cloudkit -- --port 8765            # add --signed-out to test the banner
 ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8765 cargo run
+```
+
+The command line works the same way, and `--data-dir` keeps it away from
+your own files:
+
+```bash
+export ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8765
+cargo run -- --data-dir /tmp/photos-dev sync
+cargo run -- --data-dir /tmp/photos-dev --json list --limit 3
 ```
 
 `ICLOUD_SESSION_MOCK=1` swaps the session for a plain local HTTP client
@@ -135,9 +184,11 @@ Layout:
 - `src/transport.rs` the HTTP seam every module above goes through, and the mock
 - `src/session.rs` the only file that uses the `icloud-session` crate
 - `src/ui/` the GTK 4 / libadwaita app
+- `src/cli.rs` the command line (no GTK), over the same library code
 
 `bin/test` runs clippy, the test suite (fixtures in `tests/fixtures/`, plus
-an end-to-end run against the fake server), and the installer hash check.
+an end-to-end run against the fake server, and `tests/cli.rs`, which runs
+the built binary against it for every command), and the installer hash check.
 In debug builds, `ICLOUD_PHOTOS_SCREENSHOT=out.png` (optionally with
 `ICLOUD_PHOTOS_SCREENSHOT_VIEW=viewer` or `prefs`) renders the window to a
 PNG after the first sync and quits, so the UI can be checked headless with
