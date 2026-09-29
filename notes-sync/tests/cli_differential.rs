@@ -16,7 +16,7 @@
 //! Scenarios with a `portDeviation` key cover a deliberate difference from
 //! icloud-md 0.6.2 (docs/PORT_PLAN.md §7): their expectations still come from
 //! 0.6.2, but instead of a byte comparison a dedicated test asserts how the
-//! two differ (`dup_clone_*`).
+//! two differ (`dup_clone_*`, `bodyless_pull_*`).
 //!
 //! `ICLOUD_NOTES_SYNC_DIFF_ONLY=name[,name]` limits the run.
 
@@ -235,6 +235,8 @@ fn run_scenario_against(scenario: &Scenario, expected_name: &str) -> (Vec<String
     let wants = |what: &str| compare.iter().any(|c| c == what);
     let mut failures = Vec::new();
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Kept beside the vault for the port-deviation tests.
+    std::fs::write(out.join("stdout.json"), &output.stdout).unwrap();
 
     if wants("exit") {
         let want: i32 = std::fs::read_to_string(expected.join("exit"))
@@ -499,4 +501,144 @@ fn dup_clone_icloud_md_duplicates_and_the_port_does_not() {
     let port_vault = tmp.path().canonicalize().unwrap().join("vault");
     assert_eq!(note_files(&port_vault), ["Notes/Test Note.md"]);
     assert_eq!(tracked_files(&port_vault), ["Notes/Test Note.md"]);
+}
+
+/// A pull scenario's `requests.json` entries, `setup` dropped.
+fn node_requests(name: &str) -> Vec<Value> {
+    let log: Value = serde_json::from_str(
+        &std::fs::read_to_string(here().join("expected").join(name).join("requests.json")).unwrap(),
+    )
+    .unwrap();
+    log["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["service"] != "setup")
+        .cloned()
+        .collect()
+}
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+const LOOKUP: &str = "/database/1/com.apple.notes/production/private/records/lookup";
+const FRESH: &str = "5f1d0c3a-7b2e-4c9a-9e61-2b8d4a6c0f17";
+
+/// Runs a `bodyless-pull*` scenario (portDeviation
+/// `look-up-new-bodyless-notes`) with nothing compared, after checking what
+/// icloud-md 0.6.2 did: skipped the new note listed without its text, never
+/// looked it up, and saved the new sync token past it - so it would never be
+/// added until it changed again. Returns the run's temp dir.
+fn run_bodyless(name: &str) -> tempfile::TempDir {
+    let all = scenarios();
+    let scenario = all.iter().find(|s| s.name == name).expect("scenario");
+    assert_eq!(scenario.raw["portDeviation"], "look-up-new-bodyless-notes");
+    let expected = here().join("expected").join(name);
+    let node_stdout = read_json(&expected.join("stdout.json"));
+    assert_eq!(node_stdout["skippedNewUnsyncable"], 1);
+    assert_eq!(node_stdout["added"], 0);
+    assert!(node_requests(name).iter().all(|r| r["path"] != LOOKUP));
+    let node_state = read_json(&expected.join("vault/.icloud-md/state.json"));
+    assert_eq!(node_state["syncToken"], "AQAAAAAAAAAD", "icloud-md moved past the note");
+    assert!(node_state["notes"].get(FRESH).is_none());
+
+    let mut raw = scenario.raw.clone();
+    raw.insert("compare".into(), serde_json::json!(["exit"]));
+    let run = Scenario {
+        name: scenario.name.clone(),
+        raw,
+        now: scenario.now,
+        setup_mtime: scenario.setup_mtime,
+    };
+    let (failures, tmp) = run_scenario_against(&run, name);
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+
+    // The port sends icloud-md's requests plus one private lookup of the note.
+    let out = tmp.path().canonicalize().unwrap();
+    let ours: Vec<Value> = read_json(&out.join("requests.json"))["requests"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let (lookups, rest): (Vec<Value>, Vec<Value>) = ours.into_iter().partition(|r| r["path"] == LOOKUP);
+    assert_eq!(rest, node_requests(name));
+    assert_eq!(lookups.len(), 1);
+    assert_eq!(
+        lookups[0]["body"]["records"],
+        serde_json::json!([{ "recordName": FRESH }])
+    );
+    tmp
+}
+
+/// The lookup returns the note's text: the port adds the note and moves
+/// the sync token on, as if the listing had carried the text.
+#[test]
+fn bodyless_pull_looks_the_new_note_up_and_adds_it() {
+    let tmp = run_bodyless("bodyless-pull");
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    let stdout = read_json(&out.join("stdout.json"));
+    assert_eq!(stdout["added"], 1);
+    assert_eq!(stdout["skippedNewUnsyncable"], 0);
+    assert_eq!(stdout["notices"], serde_json::json!([]));
+    assert_eq!(
+        std::fs::read_to_string(vault.join("Notes/Fresh.md")).unwrap(),
+        format!("---\napple-note-id: {FRESH}\n---\n\n# Fresh\nA note made locally.")
+    );
+    let state = read_json(&vault.join(".icloud-md/state.json"));
+    assert_eq!(state["syncToken"], "AQAAAAAAAAAD");
+    assert_eq!(state["notes"][FRESH]["file"], "Notes/Fresh.md");
+    assert_eq!(state["notes"][FRESH]["recordChangeTag"], "27a");
+    // The note that was already there is untouched, as in icloud-md's run.
+    let node_vault = here().join("expected/bodyless-pull/vault");
+    assert_eq!(
+        std::fs::read(vault.join("Notes/Test Note.md")).unwrap(),
+        std::fs::read(node_vault.join("Notes/Test Note.md")).unwrap()
+    );
+}
+
+/// The lookup comes back without the text too: the note is still skipped,
+/// but the private sync token stays where it was (so the next pull sees
+/// the note again) and a warning says so. Otherwise the vault is icloud-md's.
+#[test]
+fn bodyless_pull_unfilled_keeps_the_previous_sync_token() {
+    let tmp = run_bodyless("bodyless-pull-unfilled");
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    let mut stdout = read_json(&out.join("stdout.json"));
+    let notices = stdout["notices"].as_array().unwrap().clone();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["level"], "warn");
+    let message = notices[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("1 new note(s)") && message.contains("next pull"),
+        "{message}"
+    );
+    stdout["notices"] = serde_json::json!([]);
+    assert_eq!(
+        stdout,
+        read_json(&here().join("expected/bodyless-pull-unfilled/stdout.json")),
+        "otherwise icloud-md's summary: skippedNewUnsyncable 1"
+    );
+
+    let state = read_json(&vault.join(".icloud-md/state.json"));
+    let before = read_json(&here().join("expected/tiny-clone/vault/.icloud-md/state.json"));
+    assert_eq!(state["syncToken"], before["syncToken"], "the previous token is kept");
+    assert_ne!(state["syncToken"], "AQAAAAAAAAAD");
+
+    // Everything else matches icloud-md's run: same files, and the same
+    // state.json bar the token (and the generator).
+    let node_vault = here().join("expected/bodyless-pull-unfilled/vault");
+    let (want, got) = (all_files(&node_vault), all_files(&vault));
+    assert_eq!(want.keys().collect::<Vec<_>>(), got.keys().collect::<Vec<_>>());
+    for (name, bytes) in &want {
+        if name == &format!("{STATE_DIR}/state.json") {
+            let mut node_state: Value = serde_json::from_slice(&normalize_generator(bytes)).unwrap();
+            node_state["syncToken"] = before["syncToken"].clone();
+            let ours: Value = serde_json::from_slice(&normalize_generator(&got[name])).unwrap();
+            assert_eq!(ours, node_state);
+        } else {
+            assert_eq!(&got[name], bytes, "{name}");
+        }
+    }
 }

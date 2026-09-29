@@ -234,6 +234,8 @@ ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test --test cli_different
 | `cassettes/tiny-push-create.json` | the `records/modify` answer for a create |
 | `cassettes/tiny-push-delete.json` | lookup + the answer for the trash move |
 | `cassettes/dup-clone.json` | `tiny-clone` split over two `changes/zone` pages, the note repeated on the second (what live clones hit about 1 in 9 times); scenario `dup-clone` (`portDeviation: dedupe-records`): icloud-md writes the note twice (an untracked byte-identical `Test Note.md` beside the tracked `Test Note 2.md`), the port writes it once - same requests as icloud-md, same vault/stdout/mtimes as icloud-md's `tiny-clone` |
+| `cassettes/bodyless-pull.json` | a pull whose private listing adds a note (`Fresh`, tag `27a`) without its `TextDataEncrypted`, and a private `records/lookup` answering it with its text; scenario `bodyless-pull` (`portDeviation: look-up-new-bodyless-notes`): icloud-md skips the note, never looks it up and saves the new token; the port looks it up and adds it |
+| `cassettes/bodyless-pull-unfilled.json` | the same, with the lookup also answering without the text; scenario `bodyless-pull-unfilled`: the port skips it too but keeps the previous private sync token and warns |
 
 Randomness in icloud-md that the Rust side must mirror through
 `vault::rt`: `recordVersion`/`recordEpoch` ids, `planFolderCreates` record

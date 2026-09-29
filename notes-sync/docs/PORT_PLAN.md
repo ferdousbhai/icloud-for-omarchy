@@ -231,3 +231,41 @@ backfill, a shared zone listed twice), tests/cmd_push.rs
 (`portDeviation: dedupe-records`): icloud-md's expectation is recorded as
 usual and asserted to contain the duplicate; the port is asserted to send the
 same requests and to produce icloud-md's `tiny-clone` vault/stdout/mtimes.
+
+### New notes listed without their text (not in 0.6.2)
+
+Found in review (2026-09-29). In 0.6.2's `pull` (`src/commands/pull.ts`
+L294-306) a note new to the vault that the private `changes/zone` walk
+delivers without `TextDataEncrypted` is counted in `skippedNewUnsyncable`
+and skipped, while the new `syncToken` is still saved - so it is never
+added until it changes again. (Shared zones already look such notes up and
+hold back the whole zone, carrying its old token.) The port deviates in
+`cmd::pull::backfill_new_note_bodies`, run after both fetches:
+
+- Every live Note in the private listing that has no string
+  `TextDataEncrypted` and is not tracked is looked up by id (one private
+  `records/lookup`, merged in with `merge_looked_up_records`, then
+  `inline_asset_bodies` when asset bodies are on - the shared backfill's
+  steps). A note the lookup fills is added like any other.
+- If any still has no text, it is skipped and counted as before, a warning
+  says so ("Skipped N new note(s) that came through without their text, even
+  when looked up - this vault's sync token was kept where it was, so the next
+  pull will look for them again"), and `state.json` keeps the previous
+  private `syncToken`. Chosen over remembering the record names in state:
+  no new state field, and the next walk simply delivers the note again. The
+  cost is that everything else in that window is delivered again too and
+  re-applied (a clean note is rewritten with the same text and reported as
+  updated), until the text arrives or the note is deleted.
+- Tracked notes listed without text keep 0.6.2's behaviour (a warning, the
+  file left alone).
+
+`clone` still skips such a note as 0.6.2 does (`skippedUndecodable`); a
+later `pull` does not see it unless it changes.
+
+Tests: tests/cli_differential.rs `bodyless_pull_*` with the scenarios
+`bodyless-pull` and `bodyless-pull-unfilled` (`portDeviation:
+look-up-new-bodyless-notes`): icloud-md's expectation is asserted to skip
+the note, send no lookup and save the new token; the port is asserted to
+send the same requests plus one lookup, and then either to add the note
+(lookup has the text) or to keep the previous token with otherwise
+icloud-md's summary and vault (lookup still without text).

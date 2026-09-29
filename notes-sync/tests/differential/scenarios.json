@@ -90,6 +90,20 @@
       "args": ["--json", "pull", "@VAULT@"]
     },
     {
+      "name": "bodyless-pull",
+      "cassette": "bodyless-pull.json",
+      "portDeviation": "look-up-new-bodyless-notes",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "bodyless-pull-unfilled",
+      "cassette": "bodyless-pull-unfilled.json",
+      "portDeviation": "look-up-new-bodyless-notes",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
       "name": "tiny-history",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-pull-update",

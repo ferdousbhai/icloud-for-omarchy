@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "private Notes zone: a note made on another device (\"Fresh\", tag 27a), listed without its TextDataEncrypted",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/changes/zone"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [
+            {
+              "zoneID": {
+                "zoneName": "Notes",
+                "ownerRecordName": "_defaultOwner",
+                "zoneType": "REGULAR_CUSTOM_ZONE"
+              },
+              "moreComing": false,
+              "syncToken": "AQAAAAAAAAAD",
+              "records": [
+                {
+                  "recordName": "5f1d0c3a-7b2e-4c9a-9e61-2b8d4a6c0f17",
+                  "recordType": "Note",
+                  "fields": {
+                    "TitleEncrypted": {
+                      "value": "RnJlc2g=",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "SnippetEncrypted": {
+                      "value": "QSBub3RlIG1hZGUgbG9jYWxseS4=",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "CreationDate": {
+                      "value": 1752700000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "ModificationDate": {
+                      "value": 1752700000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "Deleted": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Folder": {
+                      "value": {
+                        "recordName": "DefaultFolder-CloudKit",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes",
+                          "ownerRecordName": "_defaultOwner"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "Folders": {
+                      "value": [
+                        {
+                          "recordName": "DefaultFolder-CloudKit",
+                          "action": "VALIDATE",
+                          "zoneID": {
+                            "zoneName": "Notes",
+                            "ownerRecordName": "_defaultOwner"
+                          }
+                        }
+                      ],
+                      "type": "REFERENCE_LIST"
+                    }
+                  },
+                  "pluginFields": {},
+                  "recordChangeTag": "27a",
+                  "created": {
+                    "timestamp": 1752700000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "modified": {
+                    "timestamp": 1752700000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "deleted": false,
+                  "parent": {
+                    "recordName": "DefaultFolder-CloudKit"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "note": "no zones shared with this account",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/shared/changes/database"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [],
+          "moreComing": false,
+          "syncToken": "AQAAAAAAAAAC"
+        }
+      }
+    },
+    {
+      "note": "records/lookup of the new note: still without its text (icloud-md 0.6.2 never asks; the port does)",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/records/lookup"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "records": [
+            {
+              "recordName": "5f1d0c3a-7b2e-4c9a-9e61-2b8d4a6c0f17",
+              "recordType": "Note",
+              "fields": {
+                "TitleEncrypted": {
+                  "value": "RnJlc2g=",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "SnippetEncrypted": {
+                  "value": "QSBub3RlIG1hZGUgbG9jYWxseS4=",
+                  "type": "ENCRYPTED_BYTES"
+                },
+                "CreationDate": {
+                  "value": 1752700000000,
+                  "type": "TIMESTAMP"
+                },
+                "ModificationDate": {
+                  "value": 1752700000000,
+                  "type": "TIMESTAMP"
+                },
+                "Deleted": {
+                  "value": 0,
+                  "type": "INT64"
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ],
+                  "type": "REFERENCE_LIST"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "27a",
+              "created": {
+                "timestamp": 1752700000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752700000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false,
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

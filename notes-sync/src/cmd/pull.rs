@@ -12,7 +12,8 @@ use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
     Error, NoticeLevel, SyncNotice, SyncProgress, is_purged, skipped_zone_owner, used_names_for, zone_for_owner,
 };
-use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport};
+use crate::cloudkit::client::{asset_bodies_enabled, merge_looked_up_records, needs_body_lookup};
+use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
 use crate::cloudkit::{Database, SkippedSharedZone};
 use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
@@ -180,7 +181,7 @@ pub fn run_pull_with(
 
     progress.on_fetch_start();
     let mut fetched = 0usize;
-    let changes = {
+    let mut changes = {
         let mut on_page = |n: usize| {
             fetched += n;
             progress.on_fetch_page(fetched);
@@ -195,6 +196,7 @@ pub fn run_pull_with(
         db.fetch_shared_note_records(&state.shared_zone_sync_tokens.clone().unwrap_or_default(), &mut on_page)?
     };
     backfill_share_permissions(db, state.folders.as_ref(), &mut shared.zones)?;
+    let held_back = backfill_new_note_bodies(db, &state.notes, &mut changes.records)?;
 
     let mut tracked = Tracked {
         notes: state.notes.clone(),
@@ -288,6 +290,17 @@ pub fn run_pull_with(
         summary.notices.push(SyncNotice {
             level: NoticeLevel::Warn,
             message,
+        });
+    }
+
+    if !held_back.is_empty() {
+        summary.notices.push(SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!(
+                "Skipped {} new note(s) that came through without their text, even when looked up - this vault's \
+                 sync token was kept where it was, so the next pull will look for them again",
+                held_back.len()
+            ),
         });
     }
 
@@ -668,7 +681,12 @@ pub fn run_pull_with(
 
     let new_state = CloneState {
         account: state.account.clone(),
-        sync_token: changes.sync_token.clone(),
+        // Held back: the next pull walks from the old token and sees them again.
+        sync_token: if held_back.is_empty() {
+            changes.sync_token.clone()
+        } else {
+            state.sync_token.clone()
+        },
         shared_zone_sync_tokens: Some(shared_zone_sync_tokens),
         replica_id: state.replica_id.clone(),
         title_mode: state.title_mode,
@@ -683,6 +701,37 @@ pub fn run_pull_with(
     };
     write_clone_state(target_dir, &new_state)?;
     Ok(summary)
+}
+
+/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7): a note
+/// new to this vault that the private `changes/zone` walk listed without its
+/// text is looked up by id (`records/lookup`, then the asset-body inlining)
+/// instead of being skipped while the new sync token moves past it. Returns
+/// the recordNames that still have no text; the caller keeps the previous
+/// private sync token for them. (Shared zones are covered by the fetch, which
+/// already looks such notes up and holds back the zone.)
+fn backfill_new_note_bodies<T: Transport>(
+    db: &Database<T>,
+    tracked: &IndexMap<String, NoteEntry>,
+    records: &mut [CloudKitRecord],
+) -> Result<Vec<String>, Error> {
+    let missing = |records: &[CloudKitRecord]| -> Vec<String> {
+        records
+            .iter()
+            .filter(|r| needs_body_lookup(r) && !tracked.contains_key(&r.record_name))
+            .map(|r| r.record_name.clone())
+            .collect()
+    };
+    let names = missing(records);
+    if names.is_empty() {
+        return Ok(names);
+    }
+    let looked_up = db.lookup_records(&note_zone(None), &names)?;
+    merge_looked_up_records(records, looked_up);
+    if asset_bodies_enabled() {
+        db.inline_asset_bodies(records)?;
+    }
+    Ok(missing(records))
 }
 
 /// `backfillSharePermissions`: look up shared folders with no stored
