@@ -337,13 +337,12 @@ ApplicationWindow {
     // Edit the latest copy: opening a note, focusing the editor or typing
     // into an untouched note pulls first when the last pull is over a
     // minute old. The editor waits (read-only) until the pull is in, so an
-    // edit never starts on a copy iCloud has already moved past. Nothing
-    // runs on a timer.
+    // edit never starts on a copy iCloud has already moved past.
     property bool freshening: false
     property bool keepingEdits: false
     property string keptNotice: ""
     function pullIfStale() {
-        if (!autoButton.checked || !backend.cloned || backend.authExpired || backend.syncRunning
+        if (!backend.cloned || backend.authExpired || backend.syncRunning
                 || dirty || dialogOpen() || Date.now() - lastFocusSync < 60 * 1000)
             return false;
         lastFocusSync = Date.now();
@@ -464,13 +463,6 @@ ApplicationWindow {
                 enabled: backend.cloned && !backend.syncRunning
                 // Preview first: push only runs after explicit confirmation.
                 onClicked: { if (root.flushEdits()) backend.refreshPushPreview(); }
-            }
-            IconButton {
-                id: autoButton
-                glyph: "\uf021"; tip: "Sync automatically: pull when you switch to Notes, push once edits settle"
-                checkable: true
-                checked: true // like Notes, sync on its own; the setting remembers a change
-                enabled: backend.cloned
             }
             IconButton {
                 id: moreButton
@@ -1204,7 +1196,7 @@ ApplicationWindow {
         id: autoPush
         interval: 20 * 1000
         onTriggered: {
-            if (!autoButton.checked || !backend.cloned || backend.authExpired)
+            if (!backend.cloned || backend.authExpired)
                 return;
             if (backend.syncRunning || root.dirty || root.dialogOpen()) {
                 restart();
@@ -1213,21 +1205,55 @@ ApplicationWindow {
             backend.runPush();
         }
     }
-    // Changes from other devices come in when the window is looked at, not
-    // on a timer: nothing runs while Notes sits unused, and a phone edit is
-    // there the moment you switch back. At most once a minute, so flipping
-    // between windows does not sync on every flip.
+    // Changes from other devices come in the moment you switch to the
+    // window, at most once a minute so flipping between windows does not
+    // sync on every flip, and on a timer (below) while it stays in front.
     property double lastFocusSync: 0
     onActiveChanged: {
         if (active)
             backend.refreshSignIn(); // the day count moves on; also keeps icloud-session validating
-        if (!active || !autoButton.checked || !backend.cloned || backend.authExpired)
+        if (!active || !backend.cloned || backend.authExpired)
             return;
         if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running
                 || Date.now() - lastFocusSync < 60 * 1000)
             return;
         lastFocusSync = Date.now();
         backend.runSync(); // both directions: a change from any program in any folder
+    }
+
+    // iCloud does not tell a web client that something changed, so a phone
+    // edit made while Notes stays open is fetched by polling: every minute
+    // while the window is active, every 15 minutes (like the background
+    // timer) while it is not. A pull that finds nothing is three small
+    // requests. Never faster than once a minute, and slower after each
+    // failed pull, up to 15 minutes, so a bad network or an outage is not
+    // retried at full rate.
+    property int pollFailures: 0
+    Timer {
+        id: poll
+        interval: root.active ? Math.min(60 * 1000 * Math.pow(2, root.pollFailures), 15 * 60 * 1000)
+                              : 15 * 60 * 1000
+        repeat: true
+        running: backend.cloned && !backend.authExpired
+        onTriggered: {
+            if (backend.syncRunning || root.dirty || root.dialogOpen() || autoPush.running)
+                return;
+            root.lastFocusSync = Date.now();
+            backend.runSync(); // pending edits go up first, then the pull
+        }
+    }
+    Connections {
+        target: backend
+        // Counted from the end of the last sync, whatever started it (a
+        // focus, a push, Pull), so a poll never follows one within the interval.
+        function onSyncChainFinished() {
+            if (poll.running)
+                poll.restart();
+        }
+        function onSyncFinished(label, ok) {
+            if (label === "Pull")
+                root.pollFailures = ok ? 0 : Math.min(root.pollFailures + 1, 4);
+        }
     }
 
     // Sync on startup, like Notes does on launch, once icloud-session has
@@ -1263,7 +1289,6 @@ ApplicationWindow {
 
     Settings {
         id: settings
-        property alias autoPull: autoButton.checked
         property alias windowWidth: root.width
         property alias windowHeight: root.height
         property var panes
@@ -1336,8 +1361,7 @@ ApplicationWindow {
                 root.notice = backend.statusError;
         }
         function onVaultChanged() {
-            if (autoButton.checked)
-                autoPush.restart();
+            autoPush.restart();
         }
         function onCloneFinished(ok) {
             root.notice = "";

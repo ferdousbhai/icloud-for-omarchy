@@ -95,8 +95,7 @@ without asking.
 
 ## Syncing
 
-Sync is automatic, like Notes, while **Auto** is on (it is, unless you
-turn it off):
+Sync is automatic, like Notes:
 
 - On launch, and whenever you switch to the window (at most once a
   minute), the app pushes whatever changed locally
@@ -106,6 +105,11 @@ turn it off):
   minute old, and the note waits the few seconds until it is in, so you
   edit the latest copy. Edits made on both sides merge automatically
   when they don't overlap.
+- While the window stays open it keeps checking: every minute while it
+  is the active window, every 15 minutes while it is not. iCloud does not
+  notify a web client of changes, so an edit on your phone shows up here
+  within about a minute. After a failed pull it waits longer each time,
+  up to 15 minutes, and goes back to every minute once a pull works.
 - When they do overlap, the note opens on the two versions side by
   side, this computer's and iCloud's, with the lines that differ
   highlighted. Pick one for each change (or keep both) and the note
@@ -128,7 +132,6 @@ turn it off):
 - **Push…** shows a preview on demand — what would be created, updated,
   moved, or deleted, plus anything refused and why — and pushes on
   confirmation. **Pull** fetches now. **Sync log** holds the details.
-- With **Auto** off, nothing moves until you press Pull or Push….
 - Apple ends a web session now and then. Syncing then pauses and a
   banner offers **Sign in**: icloud-session opens Apple's window, which
   skips 2FA for a browser you trusted; syncing resumes on its own once
@@ -199,9 +202,10 @@ preview-only: notes with attachments can't be edited back to iCloud.
   it there. Both are in the folder's right-click menu.
 - Table edits mostly round-trip, but reordering rows/columns is
   refused — the push preview will tell you.
-- Changes from other devices arrive when you switch to the window, open
-  a note, or start editing one (or press Pull), not instantly like the
-  Mac app. While the app is closed, [background sync](#background-sync)
+- Changes from other devices arrive within about a minute while the
+  window is active, and right away when you switch to it, open a note, or
+  start editing one (or press Pull). They don't arrive instantly like on
+  the Mac app. While the app is closed, [background sync](#background-sync)
   catches up every 15 minutes.
 
 ## If something looks wrong
