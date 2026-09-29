@@ -161,7 +161,12 @@ impl Error {
             Error::VersionContentUnavailable(_) => {
                 Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
             }
-            Error::SignInRequired => Some("Sign in to iCloud (icloud-session sign-in), then retry.".into()),
+            // Keeps icloud-md's sign-in marker (`icloud-md reauthenticate`),
+            // which wrappers match on alongside exit code 4.
+            Error::SignInRequired => Some(
+                "Sign in to iCloud again with icloud-session, then retry (what \"icloud-md reauthenticate\" did for icloud-md)."
+                    .into(),
+            ),
             Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. }) if server_error_code == "ZONE_NOT_FOUND" => {
                 Some(
                     "The server no longer has this zone - most likely a share that was revoked or deleted. Retrying won't \

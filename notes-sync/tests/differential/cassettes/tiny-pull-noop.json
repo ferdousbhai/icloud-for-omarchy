@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "private Notes zone: nothing changed since the tiny clone",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/changes/zone"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [
+            {
+              "zoneID": {
+                "zoneName": "Notes",
+                "ownerRecordName": "_defaultOwner",
+                "zoneType": "REGULAR_CUSTOM_ZONE"
+              },
+              "moreComing": false,
+              "syncToken": "AQAAAAAAAAAD",
+              "records": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "note": "no zones shared with this account",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/shared/changes/database"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [],
+          "moreComing": false,
+          "syncToken": "AQAAAAAAAAAC"
+        }
+      }
+    }
+  ]
+}

@@ -154,30 +154,64 @@ the rest. `body` is the parsed JSON body (or the raw string), absent when
 there was none. `matched` is the index of the interaction that answered, or
 null when none did. Rust: `cloudkit::transport::{RequestLog, LoggedRequest}`.
 
+## Scenarios
+
+`scenarios.json` lists the comparisons; `expected/<name>/` holds what
+icloud-md did for each, regenerated with
+
+```bash
+tests/differential/regen.py [scenario ...]
+```
+
+which prepares the vault, runs `run-node.sh` on the scenario's cassette and
+stores `exit`, `stdout.json` (the out-dir path replaced by `@OUT@`),
+`requests.json`, `vault/` and `mtimes.json` (the mtimes of the vault's files
+that are deterministic: set from note dates, or by the setup). Commit the
+result.
+
+| key | meaning |
+|---|---|
+| `name` | `expected/<name>/` |
+| `cassette` | file in `cassettes/` |
+| `args` | icloud-md / icloud-notes-sync arguments; `@VAULT@` = the vault, `@OUT@` = the run's temp dir |
+| `vaultFrom` | start from a copy of `expected/<scenario>/vault` (an earlier scenario) instead of nothing |
+| `edits` | applied in order: `{file, write}`, `{file, append}`, `{file, replace: [old, new]}` (first occurrence), `{file, delete: true}`, `{file, json: {key: value or null}}` (set in place / remove, rewritten 2-space + newline) |
+| `cwd` | working directory (default `@OUT@`) |
+| `now` | frozen clock, ms (default in `defaults`) |
+| `setupMtimeMs` | after the edits, every file outside `.icloud-md/` gets this mtime (push reads file mtimes into request bodies) |
+| `compare` | subset of `exit`, `stdout`, `requests`, `vault`, `mtimes` (default all) |
+
+The Rust side is `tests/cli_differential.rs`: it prepares each scenario the
+same way, runs the `icloud-notes-sync` binary with
+`ICLOUD_NOTES_SYNC_CASSETTE`, `ICLOUD_NOTES_SYNC_REQUEST_LOG`,
+`ICLOUD_NOTES_SYNC_NOW` and `ICLOUD_NOTES_SYNC_DETERMINISTIC=1`, and compares
+exit code, stdout, the request log (icloud-md's minus `setup` entries), the
+vault tree (`generator` normalized) and `mtimes.json`. The full run is
+`#[ignore]`d until the codec, Markdown and CloudKit workstreams land:
+
+```bash
+cargo test --test cli_differential -- --ignored
+ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test --test cli_differential -- --ignored
+```
+
 ## Cassettes
 
 | file | what |
 |---|---|
 | `cassettes/tiny-clone.json` | private zone with the default folder and one plain note (`REAL_PLAIN_NOTE`), no shared zones |
-| `cassettes/tiny-lookup.json` | `records/lookup` answering that note unchanged (for status / push --dry-run on the tiny clone) |
+| `cassettes/tiny-lookup.json` | `records/lookup` answering that note unchanged |
+| `cassettes/tiny-lookup-edited.json` | the same lookup after the remote edit below |
+| `cassettes/tiny-pull-noop.json` | a pull with nothing changed |
+| `cassettes/tiny-pull-update.json` | a pull delivering the note edited on another device (a line appended via icloud-md's own `applyTextEdit`; tag `26a`) |
+| `cassettes/tiny-push.json` | lookup + the `records/modify` answer for an update (tag `26b`) |
+| `cassettes/tiny-push-create.json` | the `records/modify` answer for a create |
+| `cassettes/tiny-push-delete.json` | lookup + the answer for the trash move |
 
-`expected/` holds icloud-md's results for them, as the Rust side's first
-targets: `tiny-clone/` (`--json clone --account 10000000001
---non-interactive <vault>` with `--now 1790000000000`: stdout, exit code,
-request log and the resulting vault) and `tiny-push-dry-run/` (`--json push
---dry-run` on that vault after appending a line to `Notes/Test Note.md`:
-exit 3, one ready update).
-
-`run-node.sh CASSETTE OUTDIR [driver options] -- ARGS` wraps the driver
-(always `--deterministic`, `HOME=OUTDIR/home`) and writes
-`OUTDIR/{stdout,stderr,exit,requests.json}`; `@OUT@` in ARGS expands to
-OUTDIR:
-
-```bash
-tests/differential/run-node.sh tests/differential/cassettes/tiny-clone.json \
-  tests/differential/out/tiny --now 1790000000000 \
-  -- --json clone --account 10000000001 --non-interactive @OUT@/vault
-```
+Randomness in icloud-md that the Rust side must mirror through
+`vault::rt`: `recordVersion`/`recordEpoch` ids, `planFolderCreates` record
+names, push's create record name and replica id, and formatReconcile's
+per-paragraph `uuidBytes()` (drawn for every planned paragraph, used or
+not - workstream B has to draw the same way).
 
 Planned (PORT_PLAN §4.2): cassettes recorded from read-only live sessions,
 hand-mutated copies for push, and runs of pull/status/push --dry-run on a

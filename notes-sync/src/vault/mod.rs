@@ -13,14 +13,18 @@
 //! | attachments | attachmentSync |
 //! | pairing | noteIdPairing, pendingRename |
 //! | local | localFileState, noteTimestamps, `vaultRoot.ts` |
+//! | js | JavaScript string/date/path semantics the ports rely on |
+//! | rt | clock and randomness (with the differential harness's hooks) |
 
 pub mod attachments;
 pub mod base;
 pub mod epoch;
 pub mod folders;
 pub mod history;
+pub mod js;
 pub mod layout;
 pub mod local;
 pub mod migrate;
 pub mod pairing;
+pub mod rt;
 pub mod state;

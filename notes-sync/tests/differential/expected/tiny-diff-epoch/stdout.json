@@ -1,0 +1,13 @@
+{
+  "kind": "epoch",
+  "epochId": "00000000-0000-4000-8000-000000000002",
+  "hasDifferences": true,
+  "sections": [
+    {
+      "label": "note text",
+      "skipped": false,
+      "hasDifferences": true,
+      "text": "--- 00000000-0000-4000-8000-000000000002\n+++ current\n  Test Note\n  This is a test note used for testing out `icloud-notes-sync`\n  \n- A line added on the phone."
+    }
+  ]
+}
