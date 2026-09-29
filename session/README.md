@@ -344,7 +344,7 @@ The iCloud apps pull the package in as a dependency from the signed
 `[icloud-for-omarchy]` pacman repository. On its own:
 
 ```bash
-curl -fsSL https://ferdousbhai.com/icloud-session/install.sh | sudo bash -s -- icloud-session
+curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash -s -- icloud-session
 ```
 
 or build the package from this checkout: `cd packaging/icloud-session &&

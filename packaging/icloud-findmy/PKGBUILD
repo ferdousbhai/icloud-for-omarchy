@@ -1,9 +1,10 @@
 # Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
 #
 # Builds this package from the icloud-for-omarchy monorepo's committed HEAD
-# (the checkout two directories up). bin/release builds every package this
-# way into the one signed [icloud-for-omarchy] pacman repository; a plain
-# `makepkg` in this directory does the same build locally.
+# (the checkout two directories up). bin/release builds the packages it
+# releases this way into the one signed [icloud-for-omarchy] pacman
+# repository; a plain `makepkg` in this directory does the same build
+# locally.
 
 pkgname=icloud-findmy
 pkgver=0.1.0

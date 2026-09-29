@@ -46,15 +46,16 @@ key, adds the signed `[icloud-for-omarchy]` repository (all the iCloud
 apps and what they share), and installs the app:
 
 ```bash
-curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash -s -- icloud-notes
+curl -fsSL https://ferdousbhai.com/icloud-notes/install.sh | sudo bash
 ```
 
-Updates then arrive with `omarchy update`. The script is
-[`install.sh`](../install.sh) at the root of this repository, attached to
-every release; the one-liner runs the copy from the latest release. It
-also installs an Omarchy `pre-refresh-pacman` hook so
-`omarchy refresh pacman` keeps the repository. See the root
-[README](../README.md#install) for uninstalling.
+Updates then arrive with `omarchy update`. The one-liner runs
+`install-notes.sh` from the latest release: [`install.sh`](../install.sh)
+at the root of this repository, set to install just this app. It also
+installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh pacman`
+keeps the repository, and replaces the per-app repositories earlier
+releases used. See the root [README](../README.md#install) for
+uninstalling.
 
 Uninstalling (`omarchy pkg drop icloud-notes`, and `icloud-notes-sync`
 and `icloud-session` if nothing else uses them) also removes the
