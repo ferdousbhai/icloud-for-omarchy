@@ -1,12 +1,21 @@
-//! iCloud Photos for Omarchy.
+//! iCloud Photos for Omarchy: the app with no arguments, the command-line
+//! interface (`src/cli.rs`, no GTK) with any.
 
+mod cli;
 mod ui;
 
 use adw::prelude::*;
 
 const APP_ID: &str = "com.ferdousbhai.IcloudPhotos";
 
-fn main() -> gtk::glib::ExitCode {
+fn main() -> std::process::ExitCode {
+    if std::env::args_os().len() > 1 {
+        return cli::main();
+    }
+    gui().into()
+}
+
+fn gui() -> gtk::glib::ExitCode {
     gtk::glib::set_prgname(Some("icloud-photos"));
     gtk::glib::set_application_name("iCloud Photos");
     let app = adw::Application::builder().application_id(APP_ID).build();

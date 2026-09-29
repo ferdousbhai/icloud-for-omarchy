@@ -21,6 +21,7 @@ icloud-session = { path = "../icloud-session" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_22"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_9"] }
 async-channel = "2"
+clap = { version = "4", features = ["derive"] }
 base64 = "0.22"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
