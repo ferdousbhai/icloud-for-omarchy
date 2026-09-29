@@ -1,7 +1,32 @@
 #!/usr/bin/env bash
-# Build the daemon, the sign-in window and the CLI (release). The sign-in
-# window needs gtk4 and webkitgtk-6.0.
+# Build release binaries: every package, or the ones named.
+#
+# Usage: bin/build [package...]   e.g. bin/build icloud-photos icloud-notes
+#
+# The Rust packages need rust and, for the apps' windows, gtk4, libadwaita,
+# libshumate (icloud-findmy) and webkitgtk-6.0 (icloud-session's sign-in
+# window). icloud-notes needs qt6-base, qt6-declarative and make.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-cargo build --release --locked -p icloud-sessiond --bins
-echo "Binaries: $(pwd)/target/release/{icloud-sessiond,icloud-session,icloud-session-signin}"
+
+all=(icloud-session icloud-notes-sync icloud-photos icloud-findmy icloud-notes)
+(( $# )) && pkgs=("$@") || pkgs=("${all[@]}")
+
+cargo_args=()
+notes=0
+for pkg in "${pkgs[@]}"; do
+  case $pkg in
+    icloud-session) cargo_args+=(-p icloud-sessiond) ;;
+    icloud-notes-sync | icloud-photos | icloud-findmy) cargo_args+=(-p "$pkg") ;;
+    icloud-notes) notes=1 ;;
+    *) echo "Unknown package '$pkg'. Choose from: ${all[*]}" >&2; exit 64 ;;
+  esac
+done
+
+if (( ${#cargo_args[@]} )); then
+  cargo build --release --locked --bins "${cargo_args[@]}"
+  echo "Rust binaries: $(pwd)/target/release/"
+fi
+if (( notes )); then
+  notes/bin/build
+fi

@@ -1,45 +1,51 @@
 # Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
 #
-# Builds from this checkout. The release workflow runs it on a tagged commit
-# and publishes the result as a signed pacman repository on GitHub Releases;
-# a plain `makepkg` in this directory does the same build locally.
+# Builds this package from the icloud-for-omarchy monorepo's committed HEAD
+# (the checkout two directories up). bin/release builds every package this
+# way into the one signed [icloud-for-omarchy] pacman repository; a plain
+# `makepkg` in this directory does the same build locally.
 
 pkgname=icloud-notes
 pkgver=0.3.8
 pkgrel=1
 pkgdesc='Apple Notes on Omarchy, synced with iCloud via icloud-notes-sync'
 arch=('x86_64')
-url='https://github.com/ferdousbhai/icloud-notes'
+url='https://github.com/ferdousbhai/icloud-for-omarchy'
 license=('MIT')
 options=('!debug')
 depends=('hicolor-icon-theme' 'icloud-notes-sync' 'icloud-session' 'qt6-base' 'qt6-declarative')
 makedepends=('gcc' 'git' 'make')
 
-# The version is the git tag: v0.1.0 builds 0.1.0, and a commit past it
-# builds 0.1.0.r<count>.<sha> so `pacman -Q` says where a build came from.
+# The version is this package's newest tag, notes-v<version>: notes-v0.3.8
+# builds 0.3.8, and a commit past it builds 0.3.8.r<count>.<sha> so
+# `pacman -Q` says where a build came from. Untagged: 0.0.0.r<count>.
+_tag=notes
 pkgver() {
-  git -C "$startdir/.." describe --tags --long 2>/dev/null |
-    sed 's/^v//; s/-\([0-9]*\)-g\([0-9a-f]*\)$/.r\1.\2/; s/\.r0\.[0-9a-f]*$//' |
-    grep . || printf '0.0.0.r%s\n' "$(git -C "$startdir/.." rev-list --count HEAD)"
+  local root="$startdir/../.."
+  git -C "$root" describe --tags --long --match "$_tag-v[0-9]*" 2>/dev/null |
+    sed "s/^$_tag-v//; s/-\([0-9]*\)-g\([0-9a-f]*\)\$/.r\1.\2/; s/\.r0\.[0-9a-f]*\$//" |
+    grep . || printf '0.0.0.r%s\n' "$(git -C "$root" rev-list --count HEAD)"
 }
 
 prepare() {
   # Only committed files: a release build never picks up local leftovers.
+  # The Qt app needs nothing outside notes/ but the license files.
   mkdir -p "$srcdir/$pkgname"
-  git -C "$startdir/.." archive HEAD | tar -x -C "$srcdir/$pkgname"
+  git -C "$startdir/../.." archive HEAD notes LICENSE NOTICE | tar -x -C "$srcdir/$pkgname"
 }
 
 build() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname/notes"
   ./bin/build
 }
 
 package() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname/notes"
   install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
   install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
   install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 ../LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 ../NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
   # Background sync while the app is closed, enabled just below; install.sh
   # only starts it at once instead of at the next login.
   install -Dm644 data/icloud-notes-background.service "$pkgdir/usr/lib/systemd/user/icloud-notes-background.service"

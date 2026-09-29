@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# Run the maintained tests: the Rust workspace suite, then the installer's
-# shared add_signed_repo hash check.
+# Run the maintained tests: clippy and the Rust workspace suite, the Qt
+# app's tests (notes/bin/test), then the installer's shared add_signed_repo
+# hash check. The notes-sync differential suite against icloud-md is
+# separate: cargo test -p icloud-notes-sync -- --ignored (see
+# notes-sync/tests/differential/README.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The sign-in window needs webkitgtk-6.0; everything else tests without it.
+cargo clippy --locked --workspace --all-targets -- -D warnings
+
+# The sign-in window needs webkitgtk-6.0; the daemon tests without it.
 if pkg-config --exists webkitgtk-6.0; then
   cargo test --locked --workspace
 else
-  echo "webkitgtk-6.0 not found: testing without the sign-in window (--no-default-features)" >&2
-  cargo test --locked --workspace --no-default-features
+  echo "webkitgtk-6.0 not found: testing icloud-sessiond without the sign-in window (--no-default-features)" >&2
+  cargo test --locked --workspace --exclude icloud-sessiond
+  cargo test --locked -p icloud-sessiond --no-default-features
 fi
 
-# The installer's add_signed_repo function is shared verbatim with the other
-# installers (ferdousbhai/icloud-notes, icloud-findmy, icloud-photos, ghost);
-# every repository pins its hash so a change to one copy fails a test until
-# the twins match.
+notes/bin/test
+
+# The installer's add_signed_repo function is shared verbatim with Ghost's
+# installer (ferdousbhai/ghost); both repositories pin its hash so a change
+# to one copy fails a test until the twin matches.
 bash -n install.sh
 actual="$(sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' install.sh | sed '1d;$d' | sha256sum | cut -d' ' -f1)"
 expected="$(cat tests/add_signed_repo.sha256)"
 if [[ "$actual" != "$expected" ]]; then
-  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twins in the other ferdousbhai installers together" >&2
+  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twin in ferdousbhai/ghost together" >&2
   exit 1
 fi
 echo "ok add_signed_repo matches its pinned hash"

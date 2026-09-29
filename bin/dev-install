@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install this checkout for development, without the package: the three
+# Install this checkout's icloud-session daemon for development, without the package: the three
 # binaries into ~/.local/bin and a D-Bus activation file into
 # ~/.local/share/dbus-1/services pointing at ~/.local/bin/icloud-sessiond.
 # The user services directory is searched before /usr/share, so this build
@@ -16,9 +16,9 @@ for bin in icloud-sessiond icloud-session icloud-session-signin; do
   install -Dm755 "target/release/$bin" "$bin_dir/$bin"
 done
 install -d "$services_dir"
-sed "s|^Exec=.*|Exec=$bin_dir/icloud-sessiond|" "data/$service" >"$services_dir/$service"
+sed "s|^Exec=.*|Exec=$bin_dir/icloud-sessiond|" "sessiond/data/$service" >"$services_dir/$service"
 # The sign-in window's desktop entry: its name and icon in bars and docks.
-install -Dm644 data/io.github.ferdousbhai.ICloudSession.desktop \
+install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.desktop \
   "${XDG_DATA_HOME:-$HOME/.local/share}/applications/io.github.ferdousbhai.ICloudSession.desktop"
 
 # dbus-broker only notices new service files on a reload.

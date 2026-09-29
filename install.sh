@@ -1,20 +1,27 @@
 #!/bin/bash
-# Install icloud-session on Omarchy (or any Arch Linux) from its signed
-# package repository, and keep it updating with the system:
+# Install the iCloud apps for Omarchy (or any Arch Linux) from their signed
+# package repository, and keep them updating with the system:
 #
-#   curl -fsSL https://ferdousbhai.com/icloud-session/install.sh | sudo bash
+#   curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
+#   curl -fsSL .../install.sh | sudo bash -s -- icloud-photos        # just one app
 #
-# The iCloud apps' own installers add this repository for you; run this one
-# only to get the daemon, sign-in window and CLI on their own. Every step is
-# idempotent, so re-running is safe. It trusts the package-signing key
-# (checked against the fingerprint pinned below), adds the repository,
-# installs an Omarchy hook that restores the repository after
-# `omarchy refresh pacman` rewrites /etc/pacman.conf, and installs the package.
+# With no arguments it installs every app: icloud-notes, icloud-photos and
+# icloud-findmy. Name packages to install only those; icloud-session (the
+# Apple sign-in every app shares) and icloud-notes-sync (the Notes sync
+# engine) can be named too, and come in as dependencies anyway.
+#
+# Every step is idempotent, so re-running is safe. It trusts the
+# package-signing key (checked against the fingerprint pinned below), adds
+# the one [icloud-for-omarchy] repository that holds all five packages,
+# installs an Omarchy hook that restores it after `omarchy refresh pacman`
+# rewrites /etc/pacman.conf, and installs the packages.
 set -euo pipefail
 
-REPO=icloud-session
-RELEASES=https://github.com/ferdousbhai/icloud-session/releases/latest/download
+REPO=icloud-for-omarchy
+RELEASES=https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download
 SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
+APPS=(icloud-notes icloud-photos icloud-findmy)
+PACKAGES=(icloud-session icloud-notes-sync "${APPS[@]}")
 
 # --- add_signed_repo (shared) ---
 # Trust a project's package-signing key (checked against the pinned
@@ -70,23 +77,63 @@ if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
   exit 1
 fi
 
+wanted=("$@")
+(( ${#wanted[@]} )) || wanted=("${APPS[@]}")
+for pkg in "${wanted[@]}"; do
+  if [[ " ${PACKAGES[*]} " != *" $pkg "* ]]; then
+    echo "Unknown package '$pkg'. Choose from: ${PACKAGES[*]}" >&2
+    exit 64
+  fi
+done
+
 echo "Adding the [$REPO] repository"
 add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
-echo "Installing $REPO"
+echo "Installing ${wanted[*]}"
 # Upgrade and install in one transaction. add_signed_repo has just synced
 # every repository's database, and installing from those without upgrading
 # is Arch's unsupported partial upgrade: a new dependency can need newer
 # libraries than the ones installed. (omarchy-pkg-add only runs pacman -S.)
 if (( EUID == 0 )); then
-  pacman -Syu --needed --noconfirm "$REPO"
+  pacman -Syu --needed --noconfirm "${wanted[@]}"
 else
-  sudo pacman -Syu --needed --noconfirm "$REPO"
+  sudo pacman -Syu --needed --noconfirm "${wanted[@]}"
 fi
 
-cat <<EOF
+# Notes' background sync: a systemd user timer syncs every 15 minutes while
+# Notes is closed. The package enables it for every user from their next
+# login; this starts it now in the desktop user's systemd, not root's.
+start_background_sync() {
+  local user uid
+  local start_cmd='systemctl --user daemon-reload && systemctl --user start icloud-notes-background.timer'
+  user="${SUDO_USER:-${USER:-$(id -un)}}"
+  uid="$(id -u "$user" 2>/dev/null)" || return 0
+  if (( uid == 0 )) || [[ ! -S /run/user/$uid/bus ]]; then
+    echo "Background sync starts at your next login (or now: $start_cmd)."
+    return 0
+  fi
+  local ctl=(env "XDG_RUNTIME_DIR=/run/user/$uid" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" systemctl --user)
+  (( EUID == 0 )) && ctl=(runuser -u "$user" -- "${ctl[@]}")
+  if "${ctl[@]}" daemon-reload && "${ctl[@]}" start icloud-notes-background.timer; then
+    echo "Background sync is on (every 15 minutes while Notes is closed)."
+  else
+    echo "Could not start background sync now; it starts at your next login." >&2
+  fi
+}
+[[ " ${wanted[*]} " == *" icloud-notes "* ]] && start_background_sync
 
-Done. Nothing to enable: the session bus starts icloud-sessiond on first use.
-Sign in to iCloud once for every app:  icloud-session sign-in
+echo
+echo "Done."
+for pkg in "${wanted[@]}"; do
+  case $pkg in
+    icloud-notes) echo 'Launch "Notes (iCloud)" from the app launcher (Super + Space).' ;;
+    icloud-photos) echo 'Launch "Photos (iCloud)" from the app launcher (Super + Space).' ;;
+    icloud-findmy) echo 'Launch "Find My (iCloud)" from the app launcher (Super + Space).' ;;
+    icloud-notes-sync) echo 'Sync a notes folder from the terminal: icloud-notes-sync --help' ;;
+  esac
+done
+cat <<EOT
+If you have not signed in to iCloud yet, each app offers Apple's sign-in page
+(or, from a terminal: icloud-session sign-in). One sign-in serves every app.
 Updates arrive with the rest of the system through: omarchy update
-EOF
+EOT
