@@ -45,6 +45,8 @@ build() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
+  # Keep build paths out of the binary (makepkg's "reference to $srcdir").
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build --remap-path-prefix=$HOME/.cargo=/cargo"
   cargo build --frozen --release --bin icloud-notes-sync
 }
 
