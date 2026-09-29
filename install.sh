@@ -5,23 +5,31 @@
 #   curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
 #   curl -fsSL .../install.sh | sudo bash -s -- icloud-photos        # just one app
 #
-# With no arguments it installs every app: icloud-notes, icloud-photos and
-# icloud-findmy. Name packages to install only those; icloud-session (the
-# Apple sign-in every app shares) and icloud-notes-sync (the Notes sync
-# engine) can be named too, and come in as dependencies anyway.
+# With no arguments it installs DEFAULT_PACKAGES below: every app
+# (icloud-notes, icloud-photos, icloud-findmy). Name packages to install
+# only those; icloud-session (the Apple sign-in every app shares) and
+# icloud-notes-sync (the Notes sync engine) can be named too, and come in
+# as dependencies anyway. Each release also carries install-notes.sh,
+# install-photos.sh and install-findmy.sh: this script with
+# DEFAULT_PACKAGES set to that one app (bin/make-installers writes them).
 #
 # Every step is idempotent, so re-running is safe. It trusts the
 # package-signing key (checked against the fingerprint pinned below), adds
 # the one [icloud-for-omarchy] repository that holds all five packages,
 # installs an Omarchy hook that restores it after `omarchy refresh pacman`
-# rewrites /etc/pacman.conf, and installs the packages.
+# rewrites /etc/pacman.conf, removes the per-app repositories earlier
+# releases used, and installs the packages.
 set -euo pipefail
 
 REPO=icloud-for-omarchy
 RELEASES=https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download
 SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
-APPS=(icloud-notes icloud-photos icloud-findmy)
-PACKAGES=(icloud-session icloud-notes-sync "${APPS[@]}")
+PACKAGES=(icloud-session icloud-notes-sync icloud-notes icloud-photos icloud-findmy)
+# What a run with no arguments installs. bin/make-installers rewrites this
+# one line for the per-app installers.
+DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy)
+# The one-repository-per-app layout of earlier releases.
+OLD_REPOS=(icloud-notes icloud-session icloud-notes-sync icloud-photos icloud-findmy)
 
 # --- add_signed_repo (shared) ---
 # Trust a project's package-signing key (checked against the pinned
@@ -78,7 +86,7 @@ if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
 fi
 
 wanted=("$@")
-(( ${#wanted[@]} )) || wanted=("${APPS[@]}")
+(( ${#wanted[@]} )) || wanted=("${DEFAULT_PACKAGES[@]}")
 for pkg in "${wanted[@]}"; do
   if [[ " ${PACKAGES[*]} " != *" $pkg "* ]]; then
     echo "Unknown package '$pkg'. Choose from: ${PACKAGES[*]}" >&2
@@ -88,6 +96,38 @@ done
 
 echo "Adding the [$REPO] repository"
 add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
+
+# Earlier releases came from one repository per app ([icloud-notes], ...),
+# each with its own /etc/pacman.d/<name>.conf, Include line and Omarchy
+# hook. Their packages now come from [icloud-for-omarchy], so the old
+# entries go: pacman would otherwise keep syncing them, and a repository
+# listed first wins for a package in both.
+remove_old_repos() {
+  local sudo='' name conf include user home hook rest
+  (( EUID == 0 )) || sudo=sudo
+  user="${SUDO_USER:-${USER:-$(id -un)}}"
+  home="$(getent passwd "$user" | cut -d: -f6)"
+  for name in "${OLD_REPOS[@]}"; do
+    conf="/etc/pacman.d/$name.conf"
+    include="Include = $conf"
+    hook=''
+    [[ -n $home ]] && hook="$home/.config/omarchy/hooks/pre-refresh-pacman.d/$name"
+    if [[ ! -e $conf && ! ( -n $hook && -e $hook ) ]] && ! grep -qxF "$include" /etc/pacman.conf; then
+      continue
+    fi
+    echo "Removing the old [$name] repository"
+    if grep -qxF "$include" /etc/pacman.conf; then
+      # Rewritten in place (not sed -i), so the file keeps its owner and mode.
+      rest="$(grep -vxF "$include" /etc/pacman.conf)"
+      printf '%s\n' "$rest" | $sudo tee /etc/pacman.conf >/dev/null
+    fi
+    $sudo rm -f "$conf"
+    if [[ -n $hook ]]; then
+      rm -f "$hook"
+    fi
+  done
+}
+remove_old_repos
 
 echo "Installing ${wanted[*]}"
 # Upgrade and install in one transaction. add_signed_repo has just synced

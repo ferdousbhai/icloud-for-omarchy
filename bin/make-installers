@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Write the per-app installers into a directory: install-notes.sh,
+# install-photos.sh and install-findmy.sh. Each is install.sh with its
+# DEFAULT_PACKAGES line set to that one app, so a bare
+# `curl .../install-photos.sh | sudo bash` installs only Photos; install.sh
+# stays the one source. bin/release attaches them to every release.
+#
+# Usage: bin/make-installers <directory>
+set -euo pipefail
+out="${1:?Usage: bin/make-installers <directory>}"
+src="$(dirname "$0")/../install.sh"
+mkdir -p "$out"
+
+for app in notes photos findmy; do
+  dest="$out/install-$app.sh"
+  {
+    sed -n '1p' "$src"
+    echo "# Generated from install.sh by bin/make-installers: installs icloud-$app by default."
+    sed '1d' "$src" | sed "s/^DEFAULT_PACKAGES=(.*)\$/DEFAULT_PACKAGES=(icloud-$app)/"
+  } >"$dest"
+  if [[ $(grep -cx "DEFAULT_PACKAGES=(icloud-$app)" "$dest") != 1 ]]; then
+    echo "install.sh has no single DEFAULT_PACKAGES=(...) line to set for $app." >&2
+    exit 1
+  fi
+  chmod 755 "$dest"
+done
+echo "Wrote install-notes.sh, install-photos.sh and install-findmy.sh to $out"

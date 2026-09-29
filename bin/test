@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run the maintained tests: clippy and the Rust workspace suite, the Qt
-# app's tests (notes/bin/test), then the installer's shared add_signed_repo
-# hash check. The notes-sync differential suite against icloud-md is
+# app's tests (notes/bin/test), the installer's shared add_signed_repo hash
+# check, then install.sh and the per-app installers against stubbed pacman
+# (tests/install_test.sh). The notes-sync differential suite against icloud-md is
 # separate: cargo test -p icloud-notes-sync -- --ignored (see
 # notes-sync/tests/differential/README.md).
 set -euo pipefail
@@ -31,3 +32,5 @@ if [[ "$actual" != "$expected" ]]; then
   exit 1
 fi
 echo "ok add_signed_repo matches its pinned hash"
+
+tests/install_test.sh
