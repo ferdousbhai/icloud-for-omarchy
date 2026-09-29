@@ -7,7 +7,7 @@
 # locally.
 
 pkgname=icloud-notes
-pkgver=0.3.8
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Apple Notes on Omarchy, synced with iCloud via icloud-notes-sync'
 arch=('x86_64')
