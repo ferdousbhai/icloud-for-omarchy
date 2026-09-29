@@ -186,3 +186,48 @@ reason string). `ICLOUD_NOTES_SYNC_ASSET_BODIES=0` restores stock 0.6.2; the
 the fork branch (see tests/differential/README.md). PR tests ported in
 tests/cloudkit_asset_body.rs. Live: a fresh clone of the real account matches
 the installed PR #29 build byte for byte (bar `generator`).
+
+### Records listed twice by CloudKit (not in 0.6.2)
+
+Live testing (2026-09-29, a ~118-note account) found about 1 clone in 9
+writing one note twice: a second byte-identical file under a uniquified
+name (`X 2.md`), only one of the two tracked in `state.json`, so the next
+`push` would create the other as a duplicate note. icloud-md 0.6.2 does exactly the same. Cause: a `changes/zone` walk
+occasionally lists the same record on two pages (the run logs show the fetch
+total one higher than the clones before and after it with no note created in
+between, and `written` one higher, for icloud-md and the port alike);
+`fetchZoneNoteRecords` concatenates pages and `clone` materializes every
+occurrence (and `state.json` keeps only the last one, so the first file is
+untracked). The port deviates in two places:
+
+- `cloudkit::client::dedupe_zone_records`, applied at the end of every zone
+  walk (`walk_zone`, so private and each shared zone, before the
+  `records/lookup` backfill and asset inlining; and `fetch_all_zone_records`):
+  one record per recordName within a zone. The winner is the occurrence with
+  the greater `modified.timestamp` when both have one and they differ, else
+  the later occurrence in listing order (a later page is a later server read,
+  never staler; this also lets a later tombstone replace a live copy).
+  `recordChangeTag`s are opaque and never compared. The winner keeps the
+  position of the first occurrence. The same recordName in a different zone
+  (private vs shared) is a different record and is kept.
+  `fetch_shared_zone_ids` likewise keeps a zone listed twice once. `on_page`
+  progress still counts raw page sizes. Pull uses the same fetches, so it is
+  covered too.
+- `push` (and `status`) refuse to create an untracked file whose
+  `apple-note-id` names a note this clone tracks while that note's own file is
+  still present (`Refusal::CreateDuplicatesTrackedNote`: "carries the
+  "apple-note-id" of <tracked file>, a note this clone already tracks, so
+  pushing it would create a duplicate of that note - delete this file if it
+  is a leftover copy, or remove its "apple-note-id" line to push it as a new
+  note"). 0.6.2 treats such a file as a copy and creates it. Moves (the
+  tracked file gone, one claimant) and ambiguous claims are unchanged.
+
+Tests: tests/cloudkit_dedupe.rs (same page, across pages, timestamps vs page
+order, differing tags, tombstone, private vs shared plus the lookup
+backfill, a shared zone listed twice), tests/cmd_push.rs
+(`copy_with_original_in_place_is_refused_as_a_duplicate`,
+`byte_identical_twin_from_a_double_clone_is_refused`), tests/cmd_refusals.rs
+(port-only row), and the differential scenario `dup-clone`
+(`portDeviation: dedupe-records`): icloud-md's expectation is recorded as
+usual and asserted to contain the duplicate; the port is asserted to send the
+same requests and to produce icloud-md's `tiny-clone` vault/stdout/mtimes.

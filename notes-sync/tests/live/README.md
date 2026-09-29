@@ -30,10 +30,13 @@ Sign-in comes from icloud-session, which also mirrors the session into
   too where they are known.
 - Only this run's notes are ever deleted. The folder is left in place.
 
-A fresh clone (by icloud-md 0.6.2 as well as the port, intermittently) can
-write one note twice, once as an untracked byte-identical copy, which the next push would
-then create as a new note. `guard.py dedupe` deletes such copies from the
-scratch vault before any plan is made; the guard would refuse the push anyway.
+A fresh icloud-md 0.6.2 clone can (intermittently, when CloudKit lists a
+record twice) write one note twice, once as an untracked byte-identical copy,
+which its next push would then create as a new note. The port dedupes the
+listing and never writes the copy, and its push refuses such a file anyway
+(docs/PORT_PLAN.md §7). `guard.py dedupe` still deletes such copies from
+every scratch vault before any plan is made; with the port it should always
+report 0.
 
 ## Scenarios
 

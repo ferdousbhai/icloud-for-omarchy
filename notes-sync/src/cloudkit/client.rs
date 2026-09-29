@@ -161,6 +161,7 @@ impl<T: Transport> Database<T> {
             more_coming = zone.more_coming == Some(true);
             on_page(count);
         }
+        let mut records = dedupe_zone_records(records);
         if asset_bodies_enabled() {
             self.inline_asset_bodies(&mut records)?;
         }
@@ -234,7 +235,7 @@ impl<T: Transport> Database<T> {
             more_coming = zone.more_coming == Some(true);
             on_page(count);
         }
-        Ok(records)
+        Ok(dedupe_zone_records(records))
     }
 
     /// `fetchSharedZoneIds`: page shared `changes/database` (empty body, then
@@ -265,6 +266,10 @@ impl<T: Transport> Database<T> {
             }
             more_coming = page.more_coming;
         }
+        // Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7):
+        // a zone listed on two pages is fetched - and its notes cloned - once.
+        let mut seen = std::collections::HashSet::new();
+        zone_ids.retain(|z| seen.insert((z.zone_name.clone(), z.owner_record_name.clone())));
         Ok(zone_ids)
     }
 
@@ -826,6 +831,55 @@ pub fn parse_note_delete_response(body: &Value) -> Result<DeleteResult, CkError>
         ));
     }
     Ok(DeleteResult::Ok)
+}
+
+/// Collapses repeated occurrences of a record in one zone's `changes/zone`
+/// listing. Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md
+/// §7): CloudKit occasionally returns the same record on two pages of one
+/// walk (and could within a page); 0.6.2 keeps every occurrence, so `clone`
+/// writes the note twice - the second copy under a uniquified name, one of
+/// the two left untracked - and the next `push` would create it as a new
+/// note. Callers pass the records of a single zone, so the key is
+/// `recordName`; the same recordName in another zone (private vs a shared
+/// zone) is a different record and is never collapsed here.
+///
+/// Which occurrence wins:
+/// 1. the one with the greater `modified.timestamp`, when both carry one and
+///    they differ;
+/// 2. otherwise the later one in listing order (a later page is a later read
+///    of the server, so it is never staler). This covers a tombstone (no
+///    `modified`) that follows a live copy, and two copies whose
+///    `recordChangeTag`s differ - change tags are opaque, not ordered, so they
+///    are never compared.
+///
+/// The winner takes the position of the record's first occurrence, so file
+/// naming order is the listing order of first appearance.
+pub fn dedupe_zone_records(records: Vec<CloudKitRecord>) -> Vec<CloudKitRecord> {
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut out: Vec<CloudKitRecord> = Vec::with_capacity(records.len());
+    for record in records {
+        match index.get(&record.record_name) {
+            Some(&at) => {
+                if supersedes(&record, &out[at]) {
+                    out[at] = record;
+                }
+            }
+            None => {
+                index.insert(record.record_name.clone(), out.len());
+                out.push(record);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `later` (seen after `kept` in the listing) replaces it; see
+/// [`dedupe_zone_records`].
+fn supersedes(later: &CloudKitRecord, kept: &CloudKitRecord) -> bool {
+    match (&later.modified, &kept.modified) {
+        (Some(a), Some(b)) if a.timestamp != b.timestamp => a.timestamp > b.timestamp,
+        _ => true,
+    }
 }
 
 /// `mergeLookedUpRecords`: replace listing records in place with their

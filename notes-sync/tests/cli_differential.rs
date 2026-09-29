@@ -13,6 +13,11 @@
 //! #29 off). The `asset-*` scenarios (`"icloudMd": "fetch-asset-note-bodies"`)
 //! have expectations from the PR #29 fork branch and run with it on.
 //!
+//! Scenarios with a `portDeviation` key cover a deliberate difference from
+//! icloud-md 0.6.2 (docs/PORT_PLAN.md §7): their expectations still come from
+//! 0.6.2, but instead of a byte comparison a dedicated test asserts how the
+//! two differ (`dup_clone_*`).
+//!
 //! `ICLOUD_NOTES_SYNC_DIFF_ONLY=name[,name]` limits the run.
 
 use std::collections::BTreeMap;
@@ -160,7 +165,13 @@ fn subst(text: &str, out: &Path, vault: &Path) -> String {
 
 /// Runs one scenario; returns the list of mismatches.
 fn run_scenario(scenario: &Scenario) -> Vec<String> {
-    let expected = here().join("expected").join(&scenario.name);
+    run_scenario_against(scenario, &scenario.name).0
+}
+
+/// Runs `scenario` and compares it with `expected/<expected_name>/`; returns
+/// the mismatches and the run's temp dir (the vault is `<dir>/vault`).
+fn run_scenario_against(scenario: &Scenario, expected_name: &str) -> (Vec<String>, tempfile::TempDir) {
+    let expected = here().join("expected").join(expected_name);
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().canonicalize().unwrap();
     let vault = out.join("vault");
@@ -313,7 +324,7 @@ fn run_scenario(scenario: &Scenario) -> Vec<String> {
             }
         }
     }
-    failures
+    (failures, tmp)
 }
 
 fn scenarios() -> Vec<Scenario> {
@@ -381,6 +392,9 @@ fn differential_scenarios() {
         if only.as_ref().is_some_and(|only| !only.contains(&scenario.name)) {
             continue;
         }
+        if scenario.raw.contains_key("portDeviation") {
+            continue; // asserted by its own test below, not byte-compared
+        }
         let failures = run_scenario(&scenario);
         if !failures.is_empty() {
             report.push(format!("## {}\n{}", scenario.name, failures.join("\n\n")));
@@ -404,4 +418,85 @@ fn differential_scenarios_before_the_codec() {
         }
     }
     assert!(report.is_empty(), "differential mismatches:\n\n{}", report.join("\n\n"));
+}
+
+/// `.md` files under `vault` (outside the state dir) as relative paths.
+fn note_files(vault: &Path) -> Vec<String> {
+    working_files(vault)
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "md"))
+        .map(|p| p.strip_prefix(vault).unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
+fn tracked_files(vault: &Path) -> Vec<String> {
+    let state: Value =
+        serde_json::from_str(&std::fs::read_to_string(vault.join(STATE_DIR).join("state.json")).unwrap()).unwrap();
+    state["notes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|n| n["file"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// `dup-clone` (portDeviation `dedupe-records`): the private `changes/zone`
+/// listing repeats the tiny-clone note on its second page. icloud-md 0.6.2
+/// writes it twice - a byte-identical, untracked "Test Note.md" beside the
+/// tracked "Test Note 2.md", which its next push would create as a second
+/// note. The port writes it once: same requests as icloud-md, and a vault,
+/// stdout and mtimes identical to icloud-md's single-listing `tiny-clone`.
+#[test]
+fn dup_clone_icloud_md_duplicates_and_the_port_does_not() {
+    let all = scenarios();
+    let scenario = all.iter().find(|s| s.name == "dup-clone").expect("dup-clone scenario");
+    assert_eq!(scenario.raw["portDeviation"], "dedupe-records");
+
+    // What 0.6.2 did (recorded by regen.py): two copies, one untracked.
+    let node_vault = here().join("expected/dup-clone/vault");
+    let node_files = note_files(&node_vault);
+    assert_eq!(node_files, ["Notes/Test Note 2.md", "Notes/Test Note.md"]);
+    assert_eq!(
+        std::fs::read(node_vault.join(&node_files[0])).unwrap(),
+        std::fs::read(node_vault.join(&node_files[1])).unwrap(),
+        "icloud-md's two copies are byte-identical"
+    );
+    assert_eq!(tracked_files(&node_vault), ["Notes/Test Note 2.md"]);
+    let node_stdout: Value =
+        serde_json::from_str(&std::fs::read_to_string(here().join("expected/dup-clone/stdout.json")).unwrap()).unwrap();
+    assert_eq!(node_stdout["written"], 2);
+
+    // The port sends the same requests (both pages are still fetched)...
+    let requests_only = Scenario {
+        name: scenario.name.clone(),
+        raw: {
+            let mut raw = scenario.raw.clone();
+            raw.insert("compare".into(), serde_json::json!(["exit", "requests"]));
+            raw
+        },
+        now: scenario.now,
+        setup_mtime: scenario.setup_mtime,
+    };
+    let (failures, _) = run_scenario_against(&requests_only, "dup-clone");
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+
+    // ...but writes the note once: exactly icloud-md's tiny-clone result.
+    let outputs = Scenario {
+        name: scenario.name.clone(),
+        raw: {
+            let mut raw = scenario.raw.clone();
+            raw.insert(
+                "compare".into(),
+                serde_json::json!(["exit", "stdout", "vault", "mtimes"]),
+            );
+            raw
+        },
+        now: scenario.now,
+        setup_mtime: scenario.setup_mtime,
+    };
+    let (failures, tmp) = run_scenario_against(&outputs, "tiny-clone");
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    let port_vault = tmp.path().canonicalize().unwrap().join("vault");
+    assert_eq!(note_files(&port_vault), ["Notes/Test Note.md"]);
+    assert_eq!(tracked_files(&port_vault), ["Notes/Test Note.md"]);
 }

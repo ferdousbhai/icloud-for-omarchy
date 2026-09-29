@@ -206,6 +206,7 @@ result.
 | `now` | frozen clock, ms (default in `defaults`) |
 | `setupMtimeMs` | after the edits, every file outside `.icloud-md/` gets this mtime (push reads file mtimes into request bodies) |
 | `compare` | subset of `exit`, `stdout`, `requests`, `vault`, `mtimes` (default all) |
+| `portDeviation` | a deliberate difference from 0.6.2 (docs/PORT_PLAN.md §7): the expectation is still 0.6.2's, but `differential_scenarios` skips the byte comparison and a dedicated test in `tests/cli_differential.rs` asserts the difference |
 
 The Rust side is `tests/cli_differential.rs`: it prepares each scenario the
 same way, runs the `icloud-notes-sync` binary with
@@ -232,6 +233,7 @@ ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test --test cli_different
 | `cassettes/tiny-push.json` | lookup + the `records/modify` answer for an update (tag `26b`) |
 | `cassettes/tiny-push-create.json` | the `records/modify` answer for a create |
 | `cassettes/tiny-push-delete.json` | lookup + the answer for the trash move |
+| `cassettes/dup-clone.json` | `tiny-clone` split over two `changes/zone` pages, the note repeated on the second (what live clones hit about 1 in 9 times); scenario `dup-clone` (`portDeviation: dedupe-records`): icloud-md writes the note twice (an untracked byte-identical `Test Note.md` beside the tracked `Test Note 2.md`), the port writes it once - same requests as icloud-md, same vault/stdout/mtimes as icloud-md's `tiny-clone` |
 
 Randomness in icloud-md that the Rust side must mirror through
 `vault::rt`: `recordVersion`/`recordEpoch` ids, `planFolderCreates` record

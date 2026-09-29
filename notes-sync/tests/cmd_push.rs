@@ -699,18 +699,60 @@ fn envelope_stripped_falls_back_to_delete_plus_create() {
     assert_unbound(dir.path());
 }
 
+/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7): 0.6.2
+/// plans a copy that keeps the original's `apple-note-id` (original still in
+/// place) as a create; the port refuses it, naming the tracked note.
 #[test]
 #[ignore = "needs A/B/C"]
-fn copy_with_original_in_place_plans_as_create() {
+fn copy_with_original_in_place_is_refused_as_a_duplicate() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "Synced text");
-    write_vault_file(dir.path(), "Pat/Tracked copy.md", &with_id(NOTE_ID, "Synced text"));
+    write_vault_file(dir.path(), "Recipes/Tracked copy.md", &with_id(NOTE_ID, "Synced text"));
     write_clone_state(dir.path(), &id_state()).unwrap();
     let entries = plan_entries(dir.path());
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].kind, PlanEntryKind::Create);
-    assert_eq!(entries[0].file, "Pat/Tracked copy.md");
+    assert_eq!(entries[0].file, "Recipes/Tracked copy.md");
+    assert_eq!(entries[0].resolution, PlanResolution::Refused);
+    assert_eq!(
+        reason(&entries[0]),
+        "carries the \"apple-note-id\" of Notes/Tracked.md, a note this clone already tracks, so pushing it would \
+         create a duplicate of that note - delete this file if it is a leftover copy, or remove its \
+         \"apple-note-id\" line to push it as a new note"
+    );
+}
+
+/// The file a clone that saw one record twice leaves behind: a byte-identical
+/// twin of the tracked file under a uniquified name. Push refuses it (no
+/// network needed) and leaves the tracked note alone.
+#[test]
+#[ignore = "needs A/B/C"]
+fn byte_identical_twin_from_a_double_clone_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = with_id(NOTE_ID, "Synced text");
+    write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", &file);
+    write_vault_file(dir.path(), "Notes/Tracked 2.md", &file);
+    write_clone_state(dir.path(), &id_state()).unwrap();
+    let entries = plan_entries(dir.path());
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].file, "Notes/Tracked 2.md");
+    assert_eq!(entries[0].kind, PlanEntryKind::Create);
+    assert_eq!(entries[0].resolution, PlanResolution::Refused);
+    assert!(reason(&entries[0]).contains("of Notes/Tracked.md, a note this clone already tracks"));
+}
+
+/// Without the id line the same copy is an ordinary new note.
+#[test]
+#[ignore = "needs A/B/C"]
+fn copy_without_the_id_line_is_still_a_create() {
+    let dir = tempfile::tempdir().unwrap();
+    write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", &with_id(NOTE_ID, "Synced text"));
+    write_vault_file(dir.path(), "Notes/Tracked 2.md", "Synced text");
+    write_clone_state(dir.path(), &id_state()).unwrap();
+    assert_unbound(dir.path());
 }
 
 #[test]

@@ -18,6 +18,12 @@
       "compare": ["exit"]
     },
     {
+      "name": "dup-clone",
+      "cassette": "dup-clone.json",
+      "portDeviation": "dedupe-records",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
       "name": "tiny-status-clean",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",

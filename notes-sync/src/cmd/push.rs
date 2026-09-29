@@ -699,6 +699,15 @@ pub fn build_push_plan(
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             PlanEntry::refused(PlanEntryKind::Create, file.clone(), refusal).into()
         };
+        // Port only (docs/PORT_PLAN.md §7): an id claimed by a move or an
+        // ambiguous claim was handled above, so a tracked id here means that
+        // note's own file is still present - this file is a duplicate of it.
+        if let Some(tracked) = u.note_id.as_deref().and_then(|id| state.notes.get(id)) {
+            entries.push(refuse(Refusal::CreateDuplicatesTrackedNote {
+                tracked_file: tracked.file.clone(),
+            }));
+            continue;
+        }
         if dir.is_empty() {
             entries.push(refuse(Refusal::CreateAtTopLevel));
             continue;

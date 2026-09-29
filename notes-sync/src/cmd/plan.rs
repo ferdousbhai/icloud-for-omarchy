@@ -376,6 +376,13 @@ pub enum Refusal {
     CreateEmbedMarker,
     /// 715 (create, refused)
     CreateAttachmentReference,
+    /// Port only, no push.ts site (create, refused): an untracked file whose
+    /// `apple-note-id` names a note this clone tracks while that note's own
+    /// file is still present. 0.6.2 pushes such a file as a brand-new note;
+    /// the port refuses, so a stray duplicate (e.g. one written by a clone
+    /// that saw a record twice) never becomes a second note on the account.
+    /// See docs/PORT_PLAN.md §7.
+    CreateDuplicatesTrackedNote { tracked_file: String },
 
     // --- after the live lookup ---
     /// 845 (move, conflict)
@@ -492,6 +499,11 @@ impl Refusal {
             CreateEmptyFile => "the file is empty - nothing to create".into(),
             CreateUnknownContent => "this file contains the unknown-content banner - remove it before pushing".into(),
             CreateEmbedMarker => "contains an embed marker, but this tool can't create embeds - remove it before pushing".into(),
+            CreateDuplicatesTrackedNote { tracked_file } => format!(
+                "carries the \"{NOTE_ID_KEY}\" of {tracked_file}, a note this clone already tracks, so pushing it would \
+                 create a duplicate of that note - delete this file if it is a leftover copy, or remove its \
+                 \"{NOTE_ID_KEY}\" line to push it as a new note"
+            ),
             CreateAttachmentReference => {
                 "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first."
                     .into()

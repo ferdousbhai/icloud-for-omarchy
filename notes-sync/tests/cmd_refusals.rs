@@ -6,7 +6,8 @@
 //! `every_refusal_variant_is_listed` fails to compile when a variant is
 //! added without a row here, and `sites_match_icloud_md_source` (when the
 //! icloud-md clone is present) checks each row's line in push.ts still says
-//! what the row claims.
+//! what the row claims. Rows with line 0 are port-only refusals (deliberate
+//! differences from 0.6.2, docs/PORT_PLAN.md §7) with no push.ts site.
 
 use icloud_notes_sync::cmd::plan::{
     FolderRefusal, PlanEntry, PlanEntryKind, PlanResolution, PrepareRefusal, Refusal, RetitleRefusal,
@@ -250,6 +251,19 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::CreateAttachmentReference,
             Refused,
             "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first.".into(),
+        ),
+        (
+            // Port only (docs/PORT_PLAN.md §7): no push.ts site.
+            0,
+            "",
+            Refusal::CreateDuplicatesTrackedNote {
+                tracked_file: "Notes/Pie.md".into(),
+            },
+            Refused,
+            "carries the \"apple-note-id\" of Notes/Pie.md, a note this clone already tracks, so pushing it would \
+             create a duplicate of that note - delete this file if it is a leftover copy, or remove its \
+             \"apple-note-id\" line to push it as a new note"
+                .into(),
         ),
         (
             845,
@@ -638,6 +652,7 @@ fn every_refusal_variant_is_listed() {
             | CreateUnknownContent
             | CreateEmbedMarker
             | CreateAttachmentReference
+            | CreateDuplicatesTrackedNote { .. }
             | MoveGoneRemotely
             | MoveChangedRemotely
             | MoveRetitle { .. }
@@ -658,7 +673,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 37, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 38, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()
@@ -698,6 +713,9 @@ fn sites_match_icloud_md_source() {
     };
     let lines: Vec<&str> = push.lines().collect();
     for (line, fragment, _, _, _) in sites() {
+        if line == 0 {
+            continue; // port-only refusal
+        }
         let at = line as usize - 1;
         let window = lines[at.saturating_sub(3)..(at + 4).min(lines.len())].join("\n");
         assert!(
@@ -714,7 +732,7 @@ fn sites_match_icloud_md_source() {
     }
     // Every `resolution: "refused" | "conflict"` literal in push.ts is one of
     // the listed lines (or within its statement).
-    let listed: Vec<usize> = sites().iter().map(|(l, ..)| *l as usize).collect();
+    let listed: Vec<usize> = sites().iter().map(|(l, ..)| *l as usize).filter(|&l| l != 0).collect();
     for (i, text) in lines.iter().enumerate() {
         if text.contains("resolution: \"refused\"") || text.contains("resolution: \"conflict\"") {
             let n = i + 1;
