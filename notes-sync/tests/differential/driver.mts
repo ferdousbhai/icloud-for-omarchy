@@ -137,21 +137,66 @@ process.env.HOME = home;
 // --- determinism -----------------------------------------------------------
 
 // One UUID stream shared by `node:crypto`'s randomUUID and Web Crypto's
-// (icloud-md uses both): the n-th call (1-based) returns
-// 00000000-0000-4000-8000-<n as 12 hex digits>. `/validate` draws one for its
-// requestId, which the Rust side never sends, so the stub below hands it back.
-// randomBytes(k) on its m-th call (1-based) returns bytes (m + j) & 0xff for
-// j = 0..k-1. The Rust side mirrors both under ICLOUD_NOTES_SYNC_DETERMINISTIC=1.
+// (icloud-md uses both): the n-th counted call (1-based) returns
+// 00000000-0000-4000-8000-<n as 12 hex digits>. randomBytes(k) on its m-th
+// counted call (1-based) returns bytes (m + j) & 0xff for j = 0..k-1. The Rust
+// side mirrors both under ICLOUD_NOTES_SYNC_DETERMINISTIC=1.
+//
+// Only draws made by code the port keeps are counted. A draw whose immediate
+// caller is code the port dropped - playwright-core (which draws 9
+// randomBytes(16) guids at import time), browser login and the account store
+// under src/auth/, session.ts, and setupClient.ts's /validate requestId - gets
+// real randomness and leaves both counters alone. `DRIVER_TRACE_DRAWS=1` logs
+// every draw with its stack on stderr.
+const DROPPED_CALLERS = [
+  /\/node_modules\/playwright(-core)?\//,
+  /\/src\/auth\//,
+  /\/src\/session\.ts:/,
+  /\/src\/cloudkit\/setupClient\.ts:/,
+];
+const traceDraws = process.env.DRIVER_TRACE_DRAWS === "1";
+
+/** The stack below the driver's stub; its first line is the drawing caller. */
+function callerStack(): string[] {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 50;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = limit;
+  return stack
+    .split("\n")
+    .slice(1)
+    .filter((line) => !line.includes(fileURLToPath(import.meta.url)));
+}
+
+/** Whether this draw counts; logs it under DRIVER_TRACE_DRAWS. */
+function counted(what: string): boolean {
+  const stack = callerStack();
+  const caller = stack[0] ?? "";
+  const dropped = DROPPED_CALLERS.some((pattern) => pattern.test(caller));
+  if (traceDraws) {
+    console.error(`[draw] ${what}${dropped ? " (dropped code, not counted)" : ""}\n${stack.join("\n")}`);
+  }
+  return !dropped;
+}
+
 let uuidCounter = 0;
 let bytesCounter = 0;
 if (options.deterministic) {
+  const nodeCrypto = crypto as unknown as Record<string, unknown>;
+  const realUuid = crypto.randomUUID.bind(crypto);
+  const realBytes = crypto.randomBytes.bind(crypto);
   const nextUuid = (): `${string}-${string}-${string}-${string}-${string}` => {
+    if (!counted(`uuid #${uuidCounter + 1}`)) {
+      return realUuid();
+    }
     uuidCounter += 1;
     return `00000000-0000-4000-8000-${uuidCounter.toString(16).padStart(12, "0")}`;
   };
-  const nodeCrypto = crypto as unknown as Record<string, unknown>;
   nodeCrypto.randomUUID = nextUuid;
   nodeCrypto.randomBytes = (size: number): Buffer => {
+    if (!counted(`bytes #${bytesCounter + 1} (${size})`)) {
+      return realBytes(size);
+    }
     bytesCounter += 1;
     return Buffer.from(Array.from({ length: size }, (_, j) => (bytesCounter + j) & 0xff));
   };
@@ -251,9 +296,6 @@ globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Pr
   log.push(entry);
 
   if (service === "setup" && url.pathname === "/setup/ws/1/validate") {
-    if (options.deterministic) {
-      uuidCounter -= 1;
-    }
     return new Response(JSON.stringify(validateBody), { status: 200, headers: { "content-type": "application/json" } });
   }
 

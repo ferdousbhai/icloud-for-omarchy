@@ -65,12 +65,19 @@ The Rust side has to draw from the same streams in the same order when
 `ICLOUD_NOTES_SYNC_NOW=<ms>`):
 
 - UUIDs (`randomUUID` from `node:crypto` and Web Crypto's
-  `crypto.randomUUID`, one shared counter): the n-th call (1-based) returns
-  `00000000-0000-4000-8000-<n as 12 lowercase hex digits>`. `/validate`'s
-  `requestId` draw is handed back, since the Rust side never calls
-  `/validate`.
-- `randomBytes(k)`: the m-th call (1-based) returns the bytes
+  `crypto.randomUUID`, one shared counter): the n-th counted call (1-based)
+  returns `00000000-0000-4000-8000-<n as 12 lowercase hex digits>`.
+- `randomBytes(k)`: the m-th counted call (1-based) returns the bytes
   `(m + j) & 0xff` for `j = 0..k-1`.
+
+Only draws from code the port keeps are counted. A draw whose immediate
+caller is code the port dropped gets real randomness and advances neither
+counter: playwright-core (it draws nine `randomBytes(16)` guids when
+icloud-md imports it), `src/auth/`, `src/session.ts`, and
+`src/cloudkit/setupClient.ts` (`/validate`'s `requestId`). Without this the
+push replica id came out as bytes `0x0a..0x19` instead of `0x01..0x10`.
+`DRIVER_TRACE_DRAWS=1` logs every draw, counted or not, with its stack on
+stderr.
 
 File mtimes that icloud-md sets from note dates (`noteTimestamps.ts`) are
 deterministic already; mtimes of files it merely writes are not, so compare
