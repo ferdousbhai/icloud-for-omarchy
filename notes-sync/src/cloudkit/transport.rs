@@ -118,7 +118,13 @@ struct ReplayState {
 }
 
 /// Per-session query parameters whose values say nothing about the request.
-const QUERY_NOISE: &[&str] = &["clientId", "clientBuildNumber", "clientMasteringNumber", "dsid", "requestId"];
+const QUERY_NOISE: &[&str] = &[
+    "clientId",
+    "clientBuildNumber",
+    "clientMasteringNumber",
+    "dsid",
+    "requestId",
+];
 
 pub const DEFAULT_CKDATABASEWS_URL: &str = "https://p00-ckdatabasews.icloud.com:443";
 
@@ -135,7 +141,10 @@ impl ReplayTransport {
 
     pub fn from_cassette(cassette: Cassette, record: Option<PathBuf>) -> Result<ReplayTransport, CkError> {
         if cassette.version != 1 {
-            return Err(CkError::Other(format!("unsupported cassette version {}", cassette.version)));
+            return Err(CkError::Other(format!(
+                "unsupported cassette version {}",
+                cassette.version
+            )));
         }
         let ck_host = Url::parse(cassette.base_url())
             .ok()
@@ -195,24 +204,29 @@ impl ReplayTransport {
             .collect();
 
         let mut state = self.lock();
-        let index = self.cassette.interactions.iter().enumerate().position(|(i, interaction)| {
-            let request = &interaction.request;
-            if (state.used.contains(&i) && !interaction.repeat) || !request.method.eq_ignore_ascii_case(method) {
-                return false;
-            }
-            let place_matches = if service == "ckdatabasews" {
-                request.path.as_deref() == Some(url.path())
-            } else {
-                match request.url.as_deref().and_then(|u| Url::parse(u).ok()) {
-                    None => false,
-                    Some(wanted) => {
-                        let same_query = wanted.query().unwrap_or("").is_empty() || wanted.query() == url.query();
-                        wanted.origin() == url.origin() && wanted.path() == url.path() && same_query
-                    }
+        let index = self
+            .cassette
+            .interactions
+            .iter()
+            .enumerate()
+            .position(|(i, interaction)| {
+                let request = &interaction.request;
+                if (state.used.contains(&i) && !interaction.repeat) || !request.method.eq_ignore_ascii_case(method) {
+                    return false;
                 }
-            };
-            place_matches && request.body.as_ref().is_none_or(|b| Some(b) == body)
-        });
+                let place_matches = if service == "ckdatabasews" {
+                    request.path.as_deref() == Some(url.path())
+                } else {
+                    match request.url.as_deref().and_then(|u| Url::parse(u).ok()) {
+                        None => false,
+                        Some(wanted) => {
+                            let same_query = wanted.query().unwrap_or("").is_empty() || wanted.query() == url.query();
+                            wanted.origin() == url.origin() && wanted.path() == url.path() && same_query
+                        }
+                    }
+                };
+                place_matches && request.body.as_ref().is_none_or(|b| Some(b) == body)
+            });
         state.log.requests.push(LoggedRequest {
             method: method.to_owned(),
             service: service.to_owned(),
@@ -246,7 +260,11 @@ impl ReplayTransport {
         if !(200..300).contains(&response.status) {
             let body = match &bytes {
                 Some(b) => String::from_utf8_lossy(b).into_owned(),
-                None => response.body.as_ref().unwrap_or(&Value::Object(Default::default())).to_string(),
+                None => response
+                    .body
+                    .as_ref()
+                    .unwrap_or(&Value::Object(Default::default()))
+                    .to_string(),
             };
             return Err(CkError::Http {
                 status: response.status,

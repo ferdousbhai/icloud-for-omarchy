@@ -189,7 +189,11 @@ impl<T: Transport> Database<T> {
             if let Some(token) = truthy(sync_token.as_deref()) {
                 zone_request.insert("syncToken".into(), Value::String(token.to_owned()));
             }
-            let body = self.post_database(DatabaseScope::Private, "changes/zone", &json!({ "zones": [zone_request] }))?;
+            let body = self.post_database(
+                DatabaseScope::Private,
+                "changes/zone",
+                &json!({ "zones": [zone_request] }),
+            )?;
             let zone = first_zone(&body)?;
             let page = zone.records.unwrap_or_default();
             let count = page.len();
@@ -422,9 +426,9 @@ impl<T: Transport> Database<T> {
     /// the byte count.
     pub fn fetch_asset(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
         match self.transport.download(url, dest) {
-            Err(CkError::Http { status, .. }) => {
-                Err(CkError::RequestFailed(format!("Attachment download failed: HTTP {status}")))
-            }
+            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
+                "Attachment download failed: HTTP {status}"
+            ))),
             other => other,
         }
     }
@@ -596,9 +600,7 @@ fn parse_participants(value: Option<&Value>) -> Option<Vec<Participant>> {
 fn parse_record_stamp(value: Option<&Value>) -> Option<Stamp> {
     let value = value?;
     let timestamp = get(value, "timestamp")?;
-    let timestamp = timestamp
-        .as_i64()
-        .or_else(|| timestamp.as_f64().map(|f| f as i64))?;
+    let timestamp = timestamp.as_i64().or_else(|| timestamp.as_f64().map(|f| f as i64))?;
     Some(Stamp {
         timestamp,
         device_id: get_str(value, "deviceID").map(str::to_owned),
