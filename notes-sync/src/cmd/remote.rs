@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::errors::Error;
-use crate::cloudkit::transport::{Cassette, LiveTransport, ReplayTransport};
+use crate::cloudkit::transport::{LiveTransport, ReplayTransport};
 use crate::cloudkit::{CkError, Database, Transport};
 use crate::vault::state::Account;
 
@@ -23,7 +23,7 @@ pub const REQUEST_LOG_ENV: &str = "ICLOUD_NOTES_SYNC_REQUEST_LOG";
 /// The transports a command can run over.
 pub enum AnyTransport {
     Live(LiveTransport),
-    Replay(ReplayTransport),
+    Replay(Box<ReplayTransport>),
     /// A test double.
     Boxed(Box<dyn Transport>),
 }
@@ -66,20 +66,17 @@ pub struct DefaultConnector;
 impl Connector for DefaultConnector {
     fn connect(&self) -> Result<Remote, Error> {
         if let Some(cassette) = std::env::var_os(CASSETTE_ENV).filter(|v| !v.is_empty()) {
-            let cassette = PathBuf::from(cassette);
-            let loaded = Cassette::load(&cassette)?;
-            let transport = ReplayTransport {
-                cassette,
-                record: std::env::var_os(REQUEST_LOG_ENV)
-                    .filter(|v| !v.is_empty())
-                    .map(PathBuf::from),
+            let record = std::env::var_os(REQUEST_LOG_ENV)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from);
+            let transport = ReplayTransport::open(&PathBuf::from(cassette), record)?;
+            let account = Account {
+                apple_id: transport.account().apple_id.clone(),
+                dsid: transport.account().dsid.clone(),
             };
             return Ok(Remote {
-                db: Database::new(AnyTransport::Replay(transport)),
-                account: Account {
-                    apple_id: loaded.account.apple_id,
-                    dsid: loaded.account.dsid,
-                },
+                db: Database::new(AnyTransport::Replay(Box::new(transport))),
+                account,
             });
         }
         let live = LiveTransport::connect()?;

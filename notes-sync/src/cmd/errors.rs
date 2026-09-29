@@ -79,6 +79,7 @@ impl From<CkError> for Error {
     fn from(e: CkError) -> Error {
         match e {
             CkError::SignInRequired => Error::SignInRequired,
+            CkError::NotesUnavailable => Error::NotesUnavailable,
             other => Error::CloudKit(other),
         }
     }
