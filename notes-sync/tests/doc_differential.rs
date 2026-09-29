@@ -608,3 +608,139 @@ fn table_edits_match_icloud_md_byte_for_byte() {
         assert_eq!(got, want["result"], "grid {grid:?} replica {:02x}", replica[0]);
     }
 }
+
+// --- classifyNoteRecord vs icloud-md (needs workstream C's Markdown) ------------
+
+#[test]
+#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
+fn classify_note_record_matches_icloud_md() {
+    use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
+    use icloud_notes_sync::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
+    use icloud_notes_sync::vault::state::TitleMode;
+
+    let mut bodies: Vec<String> = [
+        "real_plain_note.json",
+        "real_unicode_note.json",
+        "real_first_save_note.json",
+        "real_formatted_multi_edit_note.json",
+    ]
+    .iter()
+    .map(|f| common::payload_base64(f))
+    .collect();
+    let mut next = xorshift(0xc1a5_5100_0000_0001);
+    for file in ["real_plain_note.json", "real_formatted_multi_edit_note.json"] {
+        let raw = decompress_note_document(&common::payload(file)).unwrap();
+        for _ in 0..8 {
+            let mut doc = parse_note_document(&raw).unwrap();
+            let text = random_edit(&doc.text, &mut next);
+            apply_text_edit(&mut doc, &text, &ApplyTextEditOptions { replica_id: [9; 16] }).unwrap();
+            bodies.push(base64_encode(&compress_note_document(
+                &encode_note_document(&doc).unwrap(),
+            )));
+        }
+    }
+    let mut requests = Vec::new();
+    let mut cases = Vec::new();
+    for body in &bodies {
+        for mode in [TitleMode::InBody, TitleMode::Filename] {
+            let record = json!({"recordName": "R", "recordType": "Note", "fields": {
+                "TextDataEncrypted": {"value": body, "type": "ENCRYPTED_BYTES"},
+                "TitleEncrypted": {"value": base64_encode("Title".as_bytes()), "type": "ENCRYPTED_BYTES"}}});
+            requests.push(json!({"op": "classify", "record": record, "titleMode": mode.as_str()}));
+            cases.push((record, mode));
+        }
+    }
+    let Some(expected) = common::oracle(&Value::Array(requests)) else {
+        return;
+    };
+    for ((record, mode), want) in cases.iter().zip(expected.as_array().unwrap()) {
+        let record: CloudKitRecord = CloudKitRecord {
+            record_name: "R".into(),
+            record_type: "Note".into(),
+            fields: record["fields"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        FieldValue {
+                            value: v["value"].clone(),
+                            type_: v["type"].as_str().unwrap().into(),
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let NoteDecodeResult::Ok(got) = classify_note_record(&record, &ClassifyOptions { title_mode: *mode }) else {
+            panic!("expected ok");
+        };
+        assert_eq!(want["status"], "ok");
+        assert_eq!(got.body_text, want["bodyText"].as_str().unwrap());
+        assert_eq!(got.markdown_text, want["markdownText"].as_str().unwrap(), "{mode:?}");
+        assert_eq!(got.publishable, want["publishable"].as_bool().unwrap());
+        assert_eq!(
+            got.unpublishable_reason.as_deref(),
+            want["unpublishableReason"].as_str()
+        );
+        assert_eq!(got.title_stripped, want["titleStripped"].as_bool().unwrap_or(false));
+        assert_eq!(
+            serde_json::to_value(&got.format).unwrap(),
+            want.get("format").cloned().unwrap_or(Value::Null)
+        );
+        assert_eq!(serde_json::to_value(&got.embed_slots).unwrap(), want["embedSlots"]);
+        assert_eq!(got.title, want["title"].as_str().unwrap());
+        assert_eq!(got.title_line, want["titleLine"].as_str().unwrap());
+    }
+}
+
+// --- the round-trip gates on mutated documents -----------------------------------
+
+#[test]
+fn round_trip_gates_match_icloud_md_on_mutated_documents() {
+    use icloud_notes_sync::doc::document::note_document_round_trips;
+    use icloud_notes_sync::doc::tables::table_document_round_trips;
+
+    let mut next = xorshift(0x0bad_cafe_0000_0042);
+    let mut cases: Vec<(bool, Vec<u8>)> = Vec::new();
+    for (_, kind, compressed, _) in common::all_payloads() {
+        let raw = decompress_note_document(&compressed).unwrap();
+        let is_note = kind == "note";
+        cases.push((is_note, raw.clone()));
+        for _ in 0..10 {
+            let mut mutated = raw.clone();
+            let at = (next() as usize) % mutated.len();
+            match next() % 3 {
+                0 => mutated[at] ^= 1 << (next() % 8),
+                1 => mutated[at] = mutated[at].wrapping_add(1),
+                _ => mutated.truncate(at.max(1)),
+            }
+            cases.push((is_note, mutated));
+        }
+    }
+    let requests: Vec<Value> = cases
+        .iter()
+        .map(|(is_note, raw)| {
+            if *is_note {
+                json!({"op": "noteRoundTrips", "raw": base64_encode(raw)})
+            } else {
+                json!({"op": "tableRoundTrips", "compressed": base64_encode(&compress_note_document(raw))})
+            }
+        })
+        .collect();
+    let Some(expected) = common::oracle(&Value::Array(requests)) else {
+        return;
+    };
+    let mut trues = 0;
+    for (i, ((is_note, raw), want)) in cases.iter().zip(expected.as_array().unwrap()).enumerate() {
+        let got = if *is_note {
+            note_document_round_trips(raw)
+        } else {
+            table_document_round_trips(&compress_note_document(raw))
+        };
+        assert_eq!(Some(got), want.as_bool(), "case #{i} (note: {is_note})");
+        trues += usize::from(got);
+    }
+    assert!(trues > 60, "only {trues} documents round-tripped");
+}

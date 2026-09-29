@@ -45,6 +45,7 @@ const { reconcileNoteFormat } = await mod("notes/formatReconcile.ts");
 const { decodeNoteFormat } = await mod("notes/noteFormat.ts");
 const { compressNoteDocument, decompressNoteDocument } = await mod("notes/noteText.ts");
 const { prepareTableAttachmentUpdate } = await mod("notes/tablePushEdit.ts");
+const { tableDocumentRoundTrips } = await mod("notes/decodeTableRecord.ts");
 const { classifyNoteRecord } = await mod("notes/decodeNoteRecord.ts");
 
 const SCHEMAS: Record<string, any> = {
@@ -76,6 +77,8 @@ function handle(request: any): any {
     }
     case "noteRoundTrips":
       return doc.noteDocumentRoundTrips(unb64(request.raw));
+    case "tableRoundTrips":
+      return tableDocumentRoundTrips(Buffer.from(request.compressed, "base64"));
     case "edit": {
       // A push's edit pipeline on one decompressed note document: per step,
       // applyTextEdit to the step's text, then (when it carries markdown)
