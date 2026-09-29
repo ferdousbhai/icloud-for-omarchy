@@ -13,12 +13,12 @@ name = "icloud_findmy"
 [[bin]]
 name = "icloud-findmy"
 path = "src/main.rs"
-required-features = ["ui"]
 
 # The core (findme, history, models) needs no GTK, so `cargo test
 # --no-default-features` runs on a machine without the GTK stack.
 # `gtk` builds the widgets that need only gtk4 + libadwaita; `ui` adds
-# libshumate for the map and builds the app.
+# libshumate for the map and the app. Without `ui` the binary is the
+# command line only.
 [features]
 default = ["ui"]
 gtk = ["dep:gtk", "dep:adw", "dep:async-channel"]
