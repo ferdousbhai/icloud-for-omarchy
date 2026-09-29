@@ -31,7 +31,12 @@ impl Call {
 
     /// The value of an EQUALS filter in a records/query body.
     pub fn filter(&self, field: &str) -> Option<&Value> {
-        self.body.pointer("/query/filterBy")?.as_array()?.iter().find(|f| f["fieldName"] == field).map(|f| &f["fieldValue"]["value"])
+        self.body
+            .pointer("/query/filterBy")?
+            .as_array()?
+            .iter()
+            .find(|f| f["fieldName"] == field)
+            .map(|f| &f["fieldValue"]["value"])
     }
 }
 
@@ -49,7 +54,13 @@ pub struct FixtureTransport {
 
 impl FixtureTransport {
     pub fn new(handler: impl Fn(&Call) -> Result<Value> + Send + Sync + 'static) -> Self {
-        Self { calls: Mutex::default(), downloads: Mutex::default(), handler: Box::new(handler), files: Mutex::default(), mock: false }
+        Self {
+            calls: Mutex::default(),
+            downloads: Mutex::default(),
+            handler: Box::new(handler),
+            files: Mutex::default(),
+            mock: false,
+        }
     }
 
     pub fn calls(&self) -> Vec<Call> {
@@ -73,7 +84,12 @@ impl FixtureTransport {
         } else {
             url.to_owned()
         };
-        let call = Call { url: url.to_owned(), op, body, bytes };
+        let call = Call {
+            url: url.to_owned(),
+            op,
+            body,
+            bytes,
+        };
         self.calls.lock().unwrap().push(call.clone());
         (self.handler)(&call)
     }
@@ -99,9 +115,15 @@ impl Transport for FixtureTransport {
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {
         self.downloads.lock().unwrap().push(url.to_owned());
         if url.contains("/expired/") {
-            return Err(Error::Http { status: 403, body: "expired".into() });
+            return Err(Error::Http {
+                status: 403,
+                body: "expired".into(),
+            });
         }
-        let bytes = self.files.lock().unwrap().get(url).cloned().ok_or(Error::Http { status: 404, body: url.into() })?;
+        let bytes = self.files.lock().unwrap().get(url).cloned().ok_or(Error::Http {
+            status: 404,
+            body: url.into(),
+        })?;
         // Exactly what icloud-session does: a temp file next to `dest`, then
         // a rename over it; no directory is created.
         icloud_photos::transport::write_atomically(dest, &mut bytes.as_slice())
@@ -131,21 +153,32 @@ pub fn library(call: &Call) -> Result<Value> {
                 ("CPLAlbumByPositionLive", Some("A-TRIPS-FOLDER"), _) => fixture("albums_in_folder.json"),
                 ("CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted", None, Some(0)) => fixture("assets_page1.json"),
                 ("CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted", None, Some(2)) => fixture("assets_page2.json"),
-                ("CPLContainerRelationLiveByAssetDate", Some("A-FAMILY"), Some(0)) => fixture("album_family_members.json"),
-                ("CPLContainerRelationLiveByAssetDate", Some("A-ITALY"), Some(0)) => fixture("album_italy_members.json"),
+                ("CPLContainerRelationLiveByAssetDate", Some("A-FAMILY"), Some(0)) => {
+                    fixture("album_family_members.json")
+                }
+                ("CPLContainerRelationLiveByAssetDate", Some("A-ITALY"), Some(0)) => {
+                    fixture("album_italy_members.json")
+                }
                 _ => fixture("assets_empty.json"),
             })
         }
         "zones/list" => Ok(fixture("zones_list.json")),
         "records/lookup" => {
-            let name = call.body.pointer("/records/0/recordName").and_then(Value::as_str).unwrap_or("");
+            let name = call
+                .body
+                .pointer("/records/0/recordName")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             Ok(match name {
                 "AX/m006+fff" => fixture("lookup_m006.json"),
                 "AX/m002+bbb" => fixture("lookup_m002_fresh.json"),
                 _ => serde_json::json!({ "records": [] }),
             })
         }
-        other => Err(Error::Http { status: 404, body: format!("no fixture for {other}") }),
+        other => Err(Error::Http {
+            status: 404,
+            body: format!("no fixture for {other}"),
+        }),
     }
 }
 

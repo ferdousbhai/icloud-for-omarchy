@@ -25,13 +25,17 @@ struct Run {
 
 impl Run {
     fn json(&self) -> Value {
-        serde_json::from_str(&self.stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{}\nstderr:\n{}", self.stdout, self.stderr))
+        serde_json::from_str(&self.stdout)
+            .unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{}\nstderr:\n{}", self.stdout, self.stderr))
     }
 }
 
 impl Env {
     fn new(name: &str, count: usize) -> Env {
-        Env { server: FakeServer::start(0, count), root: temp_dir(&format!("cli-{name}")) }
+        Env {
+            server: FakeServer::start(0, count),
+            root: temp_dir(&format!("cli-{name}")),
+        }
     }
 
     fn data(&self) -> PathBuf {
@@ -87,7 +91,12 @@ impl Env {
     fn ids(&self, args: &[&str]) -> Vec<String> {
         let mut all = vec!["list"];
         all.extend_from_slice(args);
-        self.json(&all).as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_owned()).collect()
+        self.json(&all)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
     }
 }
 
@@ -100,7 +109,20 @@ fn usage_help_and_exit_codes() {
     let env = Env::new("usage", 3);
     let help = env.bare(&["--help"]);
     assert_eq!(help.code, 0);
-    for cmd in ["status", "sync", "albums", "list", "info", "thumb", "download", "upload", "delete", "prune-cache", "sign-in", "config"] {
+    for cmd in [
+        "status",
+        "sync",
+        "albums",
+        "list",
+        "info",
+        "thumb",
+        "download",
+        "upload",
+        "delete",
+        "prune-cache",
+        "sign-in",
+        "config",
+    ] {
         assert!(help.stdout.contains(cmd), "--help lists {cmd}");
     }
     assert_eq!(env.bare(&["--version"]).code, 0);
@@ -115,7 +137,10 @@ fn usage_help_and_exit_codes() {
     assert_eq!(r.code, 1);
     assert!(r.stdout.is_empty());
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
-    assert_eq!((err["kind"].as_str(), err["exit_code"].as_i64()), (Some("error"), Some(1)));
+    assert_eq!(
+        (err["kind"].as_str(), err["exit_code"].as_i64()),
+        (Some("error"), Some(1))
+    );
 }
 
 #[test]
@@ -127,32 +152,60 @@ fn status_and_sync() {
     assert_eq!(s["catalog_exists"], false);
     assert_eq!(s["last_sync"], Value::Null);
     let data = env.data();
-    assert_eq!(s["catalog"].as_str().map(PathBuf::from), Some(data.join("data/catalog.db")));
+    assert_eq!(
+        s["catalog"].as_str().map(PathBuf::from),
+        Some(data.join("data/catalog.db"))
+    );
     assert_eq!(s["library_dir"].as_str().map(PathBuf::from), Some(data.join("library")));
     assert_eq!(s["cache_dir"].as_str().map(PathBuf::from), Some(data.join("cache")));
-    assert!(!data.join("data/catalog.db").exists(), "status does not create the catalog");
+    assert!(
+        !data.join("data/catalog.db").exists(),
+        "status does not create the catalog"
+    );
 
     let r = env.run(&["sync"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(r.stdout.starts_with("Full sync: 12 updated, 0 removed, 3 albums"), "{}", r.stdout);
+    assert!(
+        r.stdout.starts_with("Full sync: 12 updated, 0 removed, 3 albums"),
+        "{}",
+        r.stdout
+    );
     let again = env.json(&["sync"]);
-    assert_eq!((again["mode"].as_str(), again["assets"].as_i64()), (Some("incremental"), Some(0)));
+    assert_eq!(
+        (again["mode"].as_str(), again["assets"].as_i64()),
+        (Some("incremental"), Some(0))
+    );
     let full = env.json(&["sync", "--full"]);
-    assert_eq!((full["mode"].as_str(), full["assets"].as_i64(), full["albums"].as_i64()), (Some("full"), Some(12), Some(3)));
+    assert_eq!(
+        (full["mode"].as_str(), full["assets"].as_i64(), full["albums"].as_i64()),
+        (Some("full"), Some(12), Some(3))
+    );
 
     let s = env.json(&["status"]);
-    assert_eq!((s["assets"].as_i64(), s["albums"].as_i64(), s["downloaded"].as_i64()), (Some(12), Some(3), Some(0)));
+    assert_eq!(
+        (s["assets"].as_i64(), s["albums"].as_i64(), s["downloaded"].as_i64()),
+        (Some(12), Some(3), Some(0))
+    );
     assert_eq!(s["incremental_sync_ready"], true);
     assert!(s["last_sync"].as_str().is_some_and(|t| t.ends_with('Z')));
     let human = env.run(&["status"]);
-    assert!(human.stdout.contains("Signed in:     yes [mock]") && human.stdout.contains("Items:         12"), "{}", human.stdout);
+    assert!(
+        human.stdout.contains("Signed in:     yes [mock]") && human.stdout.contains("Items:         12"),
+        "{}",
+        human.stdout
+    );
 }
 
 #[test]
 fn albums_list_and_info() {
     let env = Env::synced("list", 30);
     let albums = env.json(&["albums"]);
-    let names: Vec<(&str, i64)> = albums.as_array().unwrap().iter().map(|a| (a["name"].as_str().unwrap(), a["count"].as_i64().unwrap())).collect();
+    let names: Vec<(&str, i64)> = albums
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["name"].as_str().unwrap(), a["count"].as_i64().unwrap()))
+        .collect();
     assert_eq!(names, vec![("Trips", 10), ("Family", 6), ("Empty album", 0)]);
     let human = env.run(&["albums"]);
     assert_eq!(human.stdout.lines().next(), Some("ALBUM-TRIPS\t10\tTrips"));
@@ -188,7 +241,12 @@ fn albums_list_and_info() {
     let info = env.json(&["info", id]);
     assert_eq!(info["id"], id);
     assert_eq!(info["deleted"], false);
-    let in_albums: Vec<&str> = info["albums"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+    let in_albums: Vec<&str> = info["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
     assert_eq!(in_albums, vec!["Trips", "Family"], "item #0 is in both albums");
     assert!(env.run(&["info", id]).stdout.contains("Albums:    Trips, Family"));
 }
@@ -212,7 +270,11 @@ fn thumb_and_download() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     let paths: Vec<PathBuf> = r.stdout.lines().map(PathBuf::from).collect();
     assert_eq!(paths.len(), 2, "{}", r.stdout);
-    assert!(paths.iter().all(|p| p.starts_with(env.data().join("library")) && p.exists()));
+    assert!(
+        paths
+            .iter()
+            .all(|p| p.starts_with(env.data().join("library")) && p.exists())
+    );
     assert!(paths[0].extension().is_some_and(|e| e == "HEIC") && paths[1].extension().is_some_and(|e| e == "MOV"));
     let info = env.json(&["info", &live]);
     assert_eq!(info["local_path"].as_str().map(PathBuf::from).as_ref(), Some(&paths[0]));
@@ -258,9 +320,19 @@ fn upload_then_sync_into_the_catalog() {
     let txt = env.root.join("notes.txt");
     std::fs::write(&txt, b"not a photo").unwrap();
 
-    let r = env.run(&["upload", a.to_str().unwrap(), b.to_str().unwrap(), "--album", "ALBUM-EMPTY"]);
+    let r = env.run(&[
+        "upload",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+        "--album",
+        "ALBUM-EMPTY",
+    ]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
-    assert!(r.stderr.contains("[1/2] sending NEW_A.JPG") && r.stderr.contains("[2/2]"), "progress on stderr: {}", r.stderr);
+    assert!(
+        r.stderr.contains("[1/2] sending NEW_A.JPG") && r.stderr.contains("[2/2]"),
+        "progress on stderr: {}",
+        r.stderr
+    );
     let ids: Vec<&str> = r.stdout.lines().take(2).collect();
     assert!(ids.iter().all(|id| id.contains("-UPLD-")), "{}", r.stdout);
     assert!(r.stdout.contains("Incremental sync: 2 updated"), "{}", r.stdout);
@@ -280,10 +352,17 @@ fn upload_then_sync_into_the_catalog() {
     let r = env.run(&["--json", "upload", a.to_str().unwrap(), txt.to_str().unwrap()]);
     assert_eq!(r.code, 1);
     let v = r.json();
-    assert_eq!((v["uploaded"].as_i64(), v["duplicates"].as_i64(), v["failed"].as_i64()), (Some(0), Some(1), Some(1)));
+    assert_eq!(
+        (v["uploaded"].as_i64(), v["duplicates"].as_i64(), v["failed"].as_i64()),
+        (Some(0), Some(1), Some(1))
+    );
     let files = v["files"].as_array().unwrap();
     assert!(files.iter().any(|f| f["asset_id"] == ids[0] && f["duplicate"] == true));
-    assert!(files.iter().any(|f| f["error"].is_string() && f["file"].as_str().is_some_and(|p| p.ends_with("notes.txt"))));
+    assert!(
+        files
+            .iter()
+            .any(|f| f["error"].is_string() && f["file"].as_str().is_some_and(|p| p.ends_with("notes.txt")))
+    );
 
     // --no-sync leaves the catalog alone.
     let c = env.root.join("NEW_C.png");
@@ -340,7 +419,11 @@ fn prune_cache_drops_renditions_of_deleted_items() {
     let env = Env::synced("prune", 5);
     let ids = env.ids(&[]);
     let thumb = PathBuf::from(env.json(&["thumb", &ids[0]])["path"].as_str().unwrap());
-    let medium = PathBuf::from(env.json(&["download", &ids[0], "--medium"])[0]["path"].as_str().unwrap());
+    let medium = PathBuf::from(
+        env.json(&["download", &ids[0], "--medium"])[0]["path"]
+            .as_str()
+            .unwrap(),
+    );
     env.json(&["thumb", &ids[1]]);
     assert_eq!(env.json(&["prune-cache"])["removed"], 0);
     env.json(&["delete", &ids[0], "--yes"]);
@@ -358,7 +441,11 @@ fn signed_out_exits_2_until_sign_in() {
     let s = env.run(&["--json", "status"]);
     assert_eq!(s.code, 2);
     assert_eq!(s.json()["signed_in"], false);
-    for args in [vec!["sync"], vec!["sync", "--full"], vec!["delete", id.as_str(), "--yes"]] {
+    for args in [
+        vec!["sync"],
+        vec!["sync", "--full"],
+        vec!["delete", id.as_str(), "--yes"],
+    ] {
         let r = env.run(&args);
         assert_eq!(r.code, 2, "{args:?}: {}", r.stderr);
         assert!(r.stderr.contains("sign in"), "{}", r.stderr);
@@ -388,7 +475,10 @@ fn config_reads_and_writes_the_preferences() {
     assert_eq!(c["saved"], false);
     let lib = env.root.join("my-library");
     let c = env.json(&["config", "--library-dir", lib.to_str().unwrap(), "--download", "all"]);
-    assert_eq!((c["download"].as_str(), c["saved"].as_bool()), (Some("all"), Some(true)));
+    assert_eq!(
+        (c["download"].as_str(), c["saved"].as_bool()),
+        (Some("all"), Some(true))
+    );
     assert!(env.data().join("config/settings.json").exists());
     let s = env.json(&["status"]);
     assert_eq!(s["library_dir"].as_str().map(PathBuf::from), Some(lib.clone()));
@@ -408,10 +498,23 @@ fn without_data_dir_it_uses_the_xdg_directories() {
     assert!(home.join("xdg-data/icloud-photos/catalog.db").exists());
     let s: Value = serde_json::from_str(&env.bare(&["--json", "status"]).stdout).unwrap();
     assert_eq!(s["assets"], 3);
-    assert_eq!(s["library_dir"].as_str().map(PathBuf::from), Some(home.join("Pictures/iCloud")));
-    assert_eq!(s["cache_dir"].as_str().map(PathBuf::from), Some(home.join("xdg-cache/icloud-photos")));
-    let id = serde_json::from_str::<Value>(&env.bare(&["--json", "list", "--limit", "1"]).stdout).unwrap()[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        s["library_dir"].as_str().map(PathBuf::from),
+        Some(home.join("Pictures/iCloud"))
+    );
+    assert_eq!(
+        s["cache_dir"].as_str().map(PathBuf::from),
+        Some(home.join("xdg-cache/icloud-photos"))
+    );
+    let id = serde_json::from_str::<Value>(&env.bare(&["--json", "list", "--limit", "1"]).stdout).unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let t: Value = serde_json::from_str(&env.bare(&["--json", "thumb", &id]).stdout).unwrap();
-    assert!(t["path"].as_str().is_some_and(|p| Path::new(p).starts_with(home.join("xdg-cache/icloud-photos/thumbs"))));
+    assert!(
+        t["path"]
+            .as_str()
+            .is_some_and(|p| Path::new(p).starts_with(home.join("xdg-cache/icloud-photos/thumbs")))
+    );
     assert!(!env.data().exists());
 }

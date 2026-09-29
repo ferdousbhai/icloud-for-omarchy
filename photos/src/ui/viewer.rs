@@ -46,13 +46,47 @@ impl Viewer {
     pub fn new() -> Viewer {
         let title = adw::WindowTitle::new("", "");
         let header = adw::HeaderBar::builder().title_widget(&title).build();
-        header.pack_end(&gtk::Button::builder().icon_name("user-trash-symbolic").action_name("win.viewer-delete").tooltip_text("Delete (Del)").build());
-        header.pack_end(&gtk::Button::builder().icon_name("document-save-symbolic").action_name("win.viewer-download").tooltip_text("Download Original (Ctrl+S)").build());
-        header.pack_end(&gtk::Button::builder().icon_name("adw-external-link-symbolic").action_name("win.viewer-open").tooltip_text("Open in Default App (Ctrl+O)").build());
+        header.pack_end(
+            &gtk::Button::builder()
+                .icon_name("user-trash-symbolic")
+                .action_name("win.viewer-delete")
+                .tooltip_text("Delete (Del)")
+                .build(),
+        );
+        header.pack_end(
+            &gtk::Button::builder()
+                .icon_name("document-save-symbolic")
+                .action_name("win.viewer-download")
+                .tooltip_text("Download Original (Ctrl+S)")
+                .build(),
+        );
+        header.pack_end(
+            &gtk::Button::builder()
+                .icon_name("adw-external-link-symbolic")
+                .action_name("win.viewer-open")
+                .tooltip_text("Open in Default App (Ctrl+O)")
+                .build(),
+        );
 
-        let picture = gtk::Picture::builder().content_fit(gtk::ContentFit::Contain).can_shrink(true).hexpand(true).vexpand(true).build();
-        let spinner = adw::Spinner::builder().width_request(32).height_request(32).halign(gtk::Align::Center).valign(gtk::Align::Center).visible(false).build();
-        let prev = osd_button("go-previous-symbolic", "win.viewer-prev", gtk::Align::Start, "Previous (←)");
+        let picture = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Contain)
+            .can_shrink(true)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        let spinner = adw::Spinner::builder()
+            .width_request(32)
+            .height_request(32)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        let prev = osd_button(
+            "go-previous-symbolic",
+            "win.viewer-prev",
+            gtk::Align::Start,
+            "Previous (←)",
+        );
         let next = osd_button("go-next-symbolic", "win.viewer-next", gtk::Align::End, "Next (→)");
         let overlay = gtk::Overlay::builder().child(&picture).build();
         overlay.add_overlay(&spinner);
@@ -68,9 +102,24 @@ impl Viewer {
         tv.add_top_bar(&header);
         tv.set_content(Some(&overlay));
         tv.add_bottom_bar(&info);
-        let page = adw::NavigationPage::builder().title("Photo").tag("viewer").child(&tv).build();
+        let page = adw::NavigationPage::builder()
+            .title("Photo")
+            .tag("viewer")
+            .child(&tv)
+            .build();
 
-        Viewer { page, title, picture, info, spinner, prev, next, ids: RefCell::default(), index: Cell::new(0), sharp: Cell::new(false) }
+        Viewer {
+            page,
+            title,
+            picture,
+            info,
+            spinner,
+            prev,
+            next,
+            ids: RefCell::default(),
+            index: Cell::new(0),
+            sharp: Cell::new(false),
+        }
     }
 
     pub fn connect(&self, app: &Rc<App>) {
@@ -85,11 +134,32 @@ impl Viewer {
         let a = app.clone();
         add("viewer-next", Box::new(move || a.viewer.step(&a, 1)));
         let a = app.clone();
-        add("viewer-delete", Box::new(move || if let Some(id) = a.viewer.current() { a.delete(&id) }));
+        add(
+            "viewer-delete",
+            Box::new(move || {
+                if let Some(id) = a.viewer.current() {
+                    a.delete(&id)
+                }
+            }),
+        );
         let a = app.clone();
-        add("viewer-download", Box::new(move || if let Some(id) = a.viewer.current() { a.fetch_original(&id, false) }));
+        add(
+            "viewer-download",
+            Box::new(move || {
+                if let Some(id) = a.viewer.current() {
+                    a.fetch_original(&id, false)
+                }
+            }),
+        );
         let a = app.clone();
-        add("viewer-open", Box::new(move || if let Some(id) = a.viewer.current() { a.fetch_original(&id, true) }));
+        add(
+            "viewer-open",
+            Box::new(move || {
+                if let Some(id) = a.viewer.current() {
+                    a.fetch_original(&id, true)
+                }
+            }),
+        );
 
         let keys = gtk::ShortcutController::new();
         keys.set_scope(gtk::ShortcutScope::Managed);
@@ -100,7 +170,10 @@ impl Viewer {
             ("<Primary>s", "win.viewer-download"),
             ("<Primary>o", "win.viewer-open"),
         ] {
-            keys.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(gtk::NamedAction::new(action))));
+            keys.add_shortcut(gtk::Shortcut::new(
+                gtk::ShortcutTrigger::parse_string(trigger),
+                Some(gtk::NamedAction::new(action)),
+            ));
         }
         self.page.add_controller(keys);
         let esc = gtk::ShortcutController::new();
@@ -146,7 +219,9 @@ impl Viewer {
         self.prev.set_visible(index > 0);
         self.next.set_visible(index + 1 < len);
         let Some(id) = self.current() else { return };
-        let Some(row) = app.cat.asset(&id).ok().flatten() else { return };
+        let Some(row) = app.cat.asset(&id).ok().flatten() else {
+            return;
+        };
         self.title.set_title(&row.filename);
         self.title.set_subtitle(&format!("{} of {len}", index + 1));
         self.page.set_title(&row.filename);
@@ -189,7 +264,9 @@ impl Viewer {
 
     pub fn refresh_info(&self, app: &App) {
         let Some(id) = self.current() else { return };
-        let Some(row) = app.cat.asset(&id).ok().flatten() else { return };
+        let Some(row) = app.cat.asset(&id).ok().flatten() else {
+            return;
+        };
         let mut parts = Vec::new();
         if let Ok(dt) = glib::DateTime::from_unix_local(row.created)
             && let Ok(s) = dt.format("%e %B %Y, %H:%M")
@@ -218,7 +295,10 @@ impl Viewer {
         self.sharp.set(true);
         let (a, id, path) = (app.clone(), id.to_owned(), path.to_owned());
         glib::spawn_future_local(async move {
-            let tex = gio::spawn_blocking(move || gdk::Texture::from_filename(&path).ok()).await.ok().flatten();
+            let tex = gio::spawn_blocking(move || gdk::Texture::from_filename(&path).ok())
+                .await
+                .ok()
+                .flatten();
             // Only if the viewer is still on this photo.
             if a.viewer.current().as_deref() == Some(id.as_str()) {
                 a.viewer.spinner.set_visible(false);

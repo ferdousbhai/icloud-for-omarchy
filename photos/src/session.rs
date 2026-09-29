@@ -28,7 +28,9 @@ impl SessionTransport {
     /// Asks icloud-sessiond (D-Bus activated) for the session;
     /// `SignInRequired` when signed out.
     pub fn connect() -> Result<Self> {
-        Ok(Self { session: icloud_session::Session::connect()? })
+        Ok(Self {
+            session: icloud_session::Session::connect()?,
+        })
     }
 }
 
@@ -56,7 +58,10 @@ impl Transport for SessionTransport {
 /// The daemon's current `SignedIn` / `SigningIn` properties.
 pub fn sign_in_state() -> Result<SignInState> {
     let s = icloud_session::status()?;
-    Ok(SignInState { signed_in: s.signed_in, signing_in: s.signing_in })
+    Ok(SignInState {
+        signed_in: s.signed_in,
+        signing_in: s.signing_in,
+    })
 }
 
 /// Asks the daemon to open its sign-in window; returns at once.
@@ -72,7 +77,10 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 /// change. The watch ends when icloud-sessiond goes away (it exits when idle
 /// or is restarted); reconnecting D-Bus-activates it again.
 pub fn watch_sign_in(notify: &dyn Fn(SignInState)) {
-    let state = |s: &icloud_session::Status| SignInState { signed_in: s.signed_in, signing_in: s.signing_in };
+    let state = |s: &icloud_session::Status| SignInState {
+        signed_in: s.signed_in,
+        signing_in: s.signing_in,
+    };
     let mut retry = RETRY_MIN;
     loop {
         let started = Instant::now();

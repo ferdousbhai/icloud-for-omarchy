@@ -76,7 +76,11 @@ impl FakeServer {
                     let _ = req.as_reader().read_to_end(&mut body);
                     let (status, ctype, bytes) = handle(&state, req.method().as_str(), req.url(), &body);
                     let header = tiny_http::Header::from_bytes("Content-Type", ctype).expect("header");
-                    let _ = req.respond(tiny_http::Response::from_data(bytes).with_status_code(status).with_header(header));
+                    let _ = req.respond(
+                        tiny_http::Response::from_data(bytes)
+                            .with_status_code(status)
+                            .with_header(header),
+                    );
                 }
             });
         }
@@ -110,7 +114,14 @@ impl FakeServer {
     }
 
     pub fn asset_ids(&self) -> Vec<String> {
-        self.state.lock().unwrap().assets.iter().filter(|a| !a.deleted).map(|a| a.id.clone()).collect()
+        self.state
+            .lock()
+            .unwrap()
+            .assets
+            .iter()
+            .filter(|a| !a.deleted)
+            .map(|a| a.id.clone())
+            .collect()
     }
 }
 
@@ -120,7 +131,13 @@ impl State {
         for i in 0..count {
             let video = i % 10 == 7;
             let live = i % 10 == 2;
-            let (uti, ext) = if video { ("com.apple.quicktime-movie", "MOV") } else if live { ("public.heic", "HEIC") } else { ("public.jpeg", "JPG") };
+            let (uti, ext) = if video {
+                ("com.apple.quicktime-movie", "MOV")
+            } else if live {
+                ("public.heic", "HEIC")
+            } else {
+                ("public.jpeg", "JPG")
+            };
             let portrait = i % 4 == 1;
             // Newest first in time, spread over ~8 months.
             let date_ms = NEWEST_MS - (i as i64) * 2 * 86_400_000 - (i as i64 % 5) * 3_600_000;
@@ -140,7 +157,11 @@ impl State {
                 uploaded: None,
             });
         }
-        let albums = vec![("ALBUM-TRIPS".to_owned(), "Trips".to_owned()), ("ALBUM-FAMILY".to_owned(), "Family".to_owned()), ("ALBUM-EMPTY".to_owned(), "Empty album".to_owned())];
+        let albums = vec![
+            ("ALBUM-TRIPS".to_owned(), "Trips".to_owned()),
+            ("ALBUM-FAMILY".to_owned(), "Family".to_owned()),
+            ("ALBUM-EMPTY".to_owned(), "Empty album".to_owned()),
+        ];
         let mut members = Vec::new();
         for (i, a) in assets.iter().enumerate() {
             if i % 3 == 0 {
@@ -150,7 +171,17 @@ impl State {
                 members.push(("ALBUM-FAMILY".to_owned(), a.id.clone()));
             }
         }
-        State { base: base.to_owned(), assets, albums, members, log: Vec::new(), signed_out: false, uploads: HashMap::new(), jpegs: HashMap::new(), next_id: count }
+        State {
+            base: base.to_owned(),
+            assets,
+            albums,
+            members,
+            log: Vec::new(),
+            signed_out: false,
+            uploads: HashMap::new(),
+            jpegs: HashMap::new(),
+            next_id: count,
+        }
     }
 
     fn token(&self) -> String {
@@ -219,7 +250,13 @@ impl State {
     fn ranked(&self, album: Option<&str>) -> Vec<usize> {
         let mut idx: Vec<usize> = (0..self.assets.len())
             .filter(|&i| !self.assets[i].deleted)
-            .filter(|&i| album.is_none_or(|al| self.members.iter().any(|(m_al, m_as)| m_al == al && *m_as == self.assets[i].id)))
+            .filter(|&i| {
+                album.is_none_or(|al| {
+                    self.members
+                        .iter()
+                        .any(|(m_al, m_as)| m_al == al && *m_as == self.assets[i].id)
+                })
+            })
             .collect();
         idx.sort_by_key(|&i| self.assets[i].date_ms);
         idx
@@ -238,11 +275,18 @@ impl State {
         let records: Vec<Value> = match rtype {
             "CheckIndexingState" => vec![json!({ "recordName": "_indexing", "recordType": "CheckIndexingState",
                                                  "fields": { "state": { "value": "FINISHED", "type": "STRING" } } })],
-            "CPLAlbumByPositionLive" if parent.is_none() => {
-                self.albums.iter().enumerate().map(|(i, (id, name))| self.album_record(id, name, i + 1)).collect()
-            }
+            "CPLAlbumByPositionLive" if parent.is_none() => self
+                .albums
+                .iter()
+                .enumerate()
+                .map(|(i, (id, name))| self.album_record(id, name, i + 1))
+                .collect(),
             "CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted" | "CPLContainerRelationLiveByAssetDate" => {
-                let album = if rtype.starts_with("CPLContainer") { parent.as_deref().or(Some("")) } else { None };
+                let album = if rtype.starts_with("CPLContainer") {
+                    parent.as_deref().or(Some(""))
+                } else {
+                    None
+                };
                 self.ranked(album)
                     .into_iter()
                     .skip(rank)
@@ -259,7 +303,11 @@ impl State {
         let token = body.pointer("/zones/0/syncToken").and_then(Value::as_str);
         let from = match token {
             None => 0,
-            Some(t) => match t.strip_prefix("tok-").and_then(|n| n.parse::<usize>().ok()).filter(|&n| n <= self.log.len()) {
+            Some(t) => match t
+                .strip_prefix("tok-")
+                .and_then(|n| n.parse::<usize>().ok())
+                .filter(|&n| n <= self.log.len())
+            {
                 Some(n) => n,
                 None => {
                     return json!({ "zones": [{ "zoneID": Self::zone(), "serverErrorCode": "CHANGE_TOKEN_EXPIRED", "reason": "unknown token" }] });
@@ -272,14 +320,19 @@ impl State {
     }
 
     fn lookup(&self, body: &Value) -> Value {
-        let names: Vec<&str> = body["records"].as_array().map(|a| a.iter().filter_map(|r| r["recordName"].as_str()).collect()).unwrap_or_default();
+        let names: Vec<&str> = body["records"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|r| r["recordName"].as_str()).collect())
+            .unwrap_or_default();
         let records: Vec<Value> = names
             .iter()
-            .map(|n| match self.assets.iter().position(|a| a.master == *n || a.id == *n) {
-                Some(i) if self.assets[i].master == *n => self.master_record(i),
-                Some(i) => self.asset_record(i),
-                None => json!({ "recordName": n, "serverErrorCode": "NOT_FOUND", "reason": "Record not found" }),
-            })
+            .map(
+                |n| match self.assets.iter().position(|a| a.master == *n || a.id == *n) {
+                    Some(i) if self.assets[i].master == *n => self.master_record(i),
+                    Some(i) => self.asset_record(i),
+                    None => json!({ "recordName": n, "serverErrorCode": "NOT_FOUND", "reason": "Record not found" }),
+                },
+            )
             .collect();
         json!({ "records": records })
     }
@@ -290,9 +343,19 @@ impl State {
             let rec = &op["record"];
             let name = rec["recordName"].as_str().unwrap_or("");
             if op["operationType"] == "create" && rec["recordType"] == "CPLContainerRelation" {
-                let album = rec.pointer("/fields/containerId/value").and_then(Value::as_str).unwrap_or("").to_owned();
-                let asset = rec.pointer("/fields/itemId/value").and_then(Value::as_str).unwrap_or("").to_owned();
-                if !self.albums.iter().any(|(id, _)| *id == album) || !self.assets.iter().any(|a| a.id == asset && !a.deleted) {
+                let album = rec
+                    .pointer("/fields/containerId/value")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                let asset = rec
+                    .pointer("/fields/itemId/value")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                if !self.albums.iter().any(|(id, _)| *id == album)
+                    || !self.assets.iter().any(|a| a.id == asset && !a.deleted)
+                {
                     out.push(json!({ "recordName": name, "serverErrorCode": "NOT_FOUND", "reason": "no such album or asset" }));
                     continue;
                 }
@@ -329,12 +392,21 @@ impl State {
     fn put_asset(&mut self, body: &Value) -> Value {
         let mut out = Vec::new();
         for f in body["files"].as_array().cloned().unwrap_or_default() {
-            let receipt = f.pointer("/singleFileUploadRequest/receipt").and_then(Value::as_str).unwrap_or("");
+            let receipt = f
+                .pointer("/singleFileUploadRequest/receipt")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let Some(bytes) = self.uploads.get(receipt).cloned() else {
-                out.push(json!({ "response": { "status": 400, "isRetryable": false, "errorMessage": "unknown receipt" } }));
+                out.push(
+                    json!({ "response": { "status": 400, "isRetryable": false, "errorMessage": "unknown receipt" } }),
+                );
                 continue;
             };
-            if let Some(dup) = self.assets.iter().find(|a| !a.deleted && a.uploaded.as_ref().is_some_and(|b| **b == *bytes)) {
+            if let Some(dup) = self
+                .assets
+                .iter()
+                .find(|a| !a.deleted && a.uploaded.as_ref().is_some_and(|b| **b == *bytes))
+            {
                 out.push(json!({ "cplMaster": dup.master, "cplAsset": dup.id, "response": { "status": 409, "errorMessage": "duplicate asset" } }));
                 continue;
             }
@@ -342,12 +414,19 @@ impl State {
             self.next_id += 1;
             let name = f["fileName"].as_str().unwrap_or("upload.jpg").to_owned();
             let video = name.to_ascii_lowercase().ends_with(".mov") || name.to_ascii_lowercase().ends_with(".mp4");
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
             self.assets.push(FakeAsset {
                 id: format!("{:08X}-UPLD-4000-8000-{:012X}", 0xB0B0 + n, n),
                 master: format!("AX/upld+{n:05}"),
                 filename: name,
-                uti: if video { "com.apple.quicktime-movie" } else { "public.jpeg" },
+                uti: if video {
+                    "com.apple.quicktime-movie"
+                } else {
+                    "public.jpeg"
+                },
                 date_ms: f["lastModDate"].as_i64().unwrap_or(now),
                 w: 1600,
                 h: 1200,
@@ -363,8 +442,10 @@ impl State {
             self.log.push(m);
             self.log.push(a);
             let asset = &self.assets[i];
-            out.push(json!({ "uploadJobId": format!("{}#PrimarySync:{}", asset.master, asset.id), "cplMaster": asset.master,
-                             "cplAsset": asset.id, "response": { "status": 200, "isRetryable": false } }));
+            out.push(
+                json!({ "uploadJobId": format!("{}#PrimarySync:{}", asset.master, asset.id), "cplMaster": asset.master,
+                             "cplAsset": asset.id, "response": { "status": 200, "isRetryable": false } }),
+            );
         }
         Value::Array(out)
     }
@@ -383,7 +464,12 @@ impl State {
         };
         let (w, h) = if a.h > a.w { (h, w) } else { (w, h) };
         let hue = a.hue;
-        Some(self.jpegs.entry((i, kind)).or_insert_with(|| Arc::new(jpeg(w, h, hue, i))).clone())
+        Some(
+            self.jpegs
+                .entry((i, kind))
+                .or_insert_with(|| Arc::new(jpeg(w, h, hue, i)))
+                .clone(),
+        )
     }
 }
 
@@ -397,7 +483,10 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
     }
     if path.starts_with("/content/") {
         let mut parts = path.trim_start_matches("/content/").split('/');
-        let (kind, i) = (parts.next().unwrap_or(""), parts.next().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX));
+        let (kind, i) = (
+            parts.next().unwrap_or(""),
+            parts.next().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX),
+        );
         return match s.content(kind, i) {
             Some(b) => (200, "image/jpeg", b.to_vec()),
             None => (404, "text/plain", b"no such content".to_vec()),
@@ -408,8 +497,10 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
     }
     if let Some(uuid) = path.strip_prefix("/content-upload/") {
         s.uploads.insert(uuid.to_owned(), Arc::new(body.to_vec()));
-        return json_ok(json!({ "singleFile": { "referenceChecksum": "AZref", "size": body.len(), "fileChecksum": "AZfile",
-                                               "wrappingKey": "wk==", "receipt": uuid } }));
+        return json_ok(
+            json!({ "singleFile": { "referenceChecksum": "AZref", "size": body.len(), "fileChecksum": "AZfile",
+                                               "wrappingKey": "wk==", "receipt": uuid } }),
+        );
     }
     let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     if method != "POST" {
@@ -419,7 +510,11 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
         "/photosupload/createUploadUrl" => {
             let urls: serde_json::Map<String, Value> = body["assets"]
                 .as_object()
-                .map(|m| m.keys().map(|k| (k.clone(), json!(format!("{}/content-upload/{k}", s.base)))).collect())
+                .map(|m| {
+                    m.keys()
+                        .map(|k| (k.clone(), json!(format!("{}/content-upload/{k}", s.base))))
+                        .collect()
+                })
                 .unwrap_or_default();
             json_ok(json!({ "uploadUrls": urls }))
         }
@@ -427,13 +522,20 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
         "/photosupload/uploadStatus" => {
             let m: serde_json::Map<String, Value> = body["uploadJobIds"]
                 .as_array()
-                .map(|a| a.iter().filter_map(Value::as_str).map(|id| (id.to_owned(), json!({ "progress": 100 }))).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(|id| (id.to_owned(), json!({ "progress": 100 })))
+                        .collect()
+                })
                 .unwrap_or_default();
             json_ok(Value::Object(m))
         }
         p if p.starts_with(DB) => match &p[DB.len()..] {
             "records/query" => json_ok(s.query(&body)),
-            "zones/list" => json_ok(json!({ "zones": [{ "zoneID": State::zone(), "syncToken": s.token(), "deleted": false }] })),
+            "zones/list" => {
+                json_ok(json!({ "zones": [{ "zoneID": State::zone(), "syncToken": s.token(), "deleted": false }] }))
+            }
             "changes/zone" => json_ok(s.changes(&body)),
             "records/lookup" => json_ok(s.lookup(&body)),
             "records/modify" => json_ok(s.modify(&body)),
@@ -447,7 +549,11 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
 /// told apart at a glance.
 fn jpeg(w: usize, h: usize, hue: f32, seed: usize) -> Vec<u8> {
     let mut px = Vec::with_capacity(w * h * 3);
-    let (cx, cy, r) = ((w as f32) * (0.3 + (seed % 5) as f32 * 0.1), (h as f32) * 0.4, (w.min(h) as f32) * 0.22);
+    let (cx, cy, r) = (
+        (w as f32) * (0.3 + (seed % 5) as f32 * 0.1),
+        (h as f32) * 0.4,
+        (w.min(h) as f32) * 0.22,
+    );
     for y in 0..h {
         for x in 0..w {
             let t = (x as f32 / w as f32 + y as f32 / h as f32) / 2.0;

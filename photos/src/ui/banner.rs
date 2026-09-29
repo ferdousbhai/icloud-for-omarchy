@@ -31,7 +31,8 @@ impl App {
 
     fn show_signing_in(&self) {
         self.signing_in.set(true);
-        self.banner.set_title("Signing in… finish in the Apple window that opened");
+        self.banner
+            .set_title("Signing in… finish in the Apple window that opened");
         self.banner.set_button_label(None);
         self.banner.set_revealed(true);
     }

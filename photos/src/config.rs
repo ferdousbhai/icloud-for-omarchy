@@ -5,11 +5,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 fn xdg(var: &str, fallback: &str) -> PathBuf {
-    std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home().join(fallback))
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home().join(fallback))
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +38,11 @@ impl Dirs {
 
     /// Everything under one directory (tests).
     pub fn under(root: &Path) -> Dirs {
-        Dirs { data: root.join("data"), cache: root.join("cache"), config: root.join("config") }
+        Dirs {
+            data: root.join("data"),
+            cache: root.join("cache"),
+            config: root.join("config"),
+        }
     }
 
     pub fn catalog(&self) -> PathBuf {
@@ -72,7 +81,10 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { library_dir: home().join("Pictures").join("iCloud"), download: DownloadMode::OnDemand }
+        Settings {
+            library_dir: home().join("Pictures").join("iCloud"),
+            download: DownloadMode::OnDemand,
+        }
     }
 }
 
@@ -84,7 +96,10 @@ impl Settings {
     /// The saved settings, or `fallback` when there are none (the CLI's
     /// `--data-dir` keeps the library under that directory too).
     pub fn load_or(dirs: &Dirs, fallback: Settings) -> Settings {
-        std::fs::read(dirs.settings()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(fallback)
+        std::fs::read(dirs.settings())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(fallback)
     }
 
     pub fn save(&self, dirs: &Dirs) -> std::io::Result<()> {

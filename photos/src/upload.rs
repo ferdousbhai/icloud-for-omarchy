@@ -87,7 +87,10 @@ impl<'t> Uploader<'t> {
     }
 
     pub fn with_base(t: &'t dyn Transport, base: &str) -> Self {
-        Self { t, base: base.trim_end_matches('/').to_owned() }
+        Self {
+            t,
+            base: base.trim_end_matches('/').to_owned(),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -99,7 +102,10 @@ impl<'t> Uploader<'t> {
     pub fn upload(&self, path: &Path, client_id: &str, progress: &dyn Fn(Step)) -> Result<Uploaded> {
         // Streamed from disk by post_file: a multi-GB video is never in memory.
         let size = std::fs::metadata(path)?.len();
-        let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "photo".into());
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "photo".into());
         let modified_ms = std::fs::metadata(path)
             .and_then(|m| m.modified())
             .ok()
@@ -108,9 +114,15 @@ impl<'t> Uploader<'t> {
             .as_millis() as i64;
 
         progress(Step::Reserving);
-        let reserved = self.t.post_json(&self.url(CREATE_UPLOAD_URL), &json!({ "zoneName": ZONE, "assets": { client_id: size } }))?;
+        let reserved = self.t.post_json(
+            &self.url(CREATE_UPLOAD_URL),
+            &json!({ "zoneName": ZONE, "assets": { client_id: size } }),
+        )?;
         let target = reserved
-            .pointer(&format!("/uploadUrls/{}", client_id.replace('~', "~0").replace('/', "~1")))
+            .pointer(&format!(
+                "/uploadUrls/{}",
+                client_id.replace('~', "~0").replace('/', "~1")
+            ))
             .and_then(Value::as_str)
             .ok_or_else(|| Error::Other("createUploadUrl did not return an upload URL".into()))?
             .to_owned();
@@ -121,7 +133,10 @@ impl<'t> Uploader<'t> {
         // sends neither the cookie jar nor its client params to hosts outside
         // the iCloud service list, so the signed upload URL gets neither.
         let receipt = self.t.post_file(&target, "application/octet-stream", path)?;
-        let single = receipt.get("singleFile").cloned().ok_or_else(|| Error::Other("upload host returned no receipt".into()))?;
+        let single = receipt
+            .get("singleFile")
+            .cloned()
+            .ok_or_else(|| Error::Other("upload host returned no receipt".into()))?;
 
         progress(Step::Registering);
         let (zone_id, offset) = local_time_zone();
@@ -137,11 +152,19 @@ impl<'t> Uploader<'t> {
             "importGroup": client_id,
         });
         let results = self.t.post_json(&self.url(PUT_ASSET), &body)?;
-        let results = results.as_array().ok_or_else(|| Error::Other("putAsset returned an unexpected payload".into()))?;
+        let results = results
+            .as_array()
+            .ok_or_else(|| Error::Other("putAsset returned an unexpected payload".into()))?;
         let [result] = results.as_slice() else {
-            return Err(Error::Other(format!("putAsset returned {} results for one file", results.len())));
+            return Err(Error::Other(format!(
+                "putAsset returned {} results for one file",
+                results.len()
+            )));
         };
-        let status = result.pointer("/response/status").and_then(Value::as_i64).unwrap_or(200);
+        let status = result
+            .pointer("/response/status")
+            .and_then(Value::as_i64)
+            .unwrap_or(200);
         let ids = (
             result.get("cplAsset").and_then(Value::as_str).map(str::to_owned),
             result.get("cplMaster").and_then(Value::as_str).map(str::to_owned),
@@ -150,8 +173,14 @@ impl<'t> Uploader<'t> {
             return Err(Error::Other(format!("putAsset gave no record names (status {status})")));
         };
         if status >= 400 && status != DUPLICATE {
-            let msg = result.pointer("/response/errorMessage").and_then(Value::as_str).unwrap_or("rejected");
-            return Err(Error::Http { status: status as u16, body: format!("putAsset: {msg}") });
+            let msg = result
+                .pointer("/response/errorMessage")
+                .and_then(Value::as_str)
+                .unwrap_or("rejected");
+            return Err(Error::Http {
+                status: status as u16,
+                body: format!("putAsset: {msg}"),
+            });
         }
         Ok(Uploaded {
             asset_id,
@@ -168,18 +197,26 @@ impl<'t> Uploader<'t> {
         if url.starts_with("https://") || (self.t.is_mock() && loopback) {
             Ok(())
         } else {
-            Err(Error::Other("upload URL is not HTTPS; refusing to send the file".into()))
+            Err(Error::Other(
+                "upload URL is not HTTPS; refusing to send the file".into(),
+            ))
         }
     }
 
     /// Progress (0..=100) per job; `None` for a job Apple does not know.
     pub fn status(&self, job_ids: &[String]) -> Result<Vec<Option<i64>>> {
-        let v = self.t.post_json(&self.url(UPLOAD_STATUS), &json!({ "uploadJobIds": job_ids }))?;
+        let v = self
+            .t
+            .post_json(&self.url(UPLOAD_STATUS), &json!({ "uploadJobIds": job_ids }))?;
         Ok(job_ids
             .iter()
             .map(|id| {
                 let entry = v.get(id)?;
-                if entry.get("errorCode").is_some() { None } else { entry.get("progress").and_then(Value::as_i64) }
+                if entry.get("errorCode").is_some() {
+                    None
+                } else {
+                    entry.get("progress").and_then(Value::as_i64)
+                }
             })
             .collect())
     }
@@ -210,10 +247,19 @@ impl<'t> Uploader<'t> {
 pub enum BatchEvent {
     /// A step of file `index` (0-based) of `total`. The final wait for
     /// iCloud to ingest the batch comes as `index == total` with no name.
-    Step { index: usize, total: usize, name: String, step: Step },
+    Step {
+        index: usize,
+        total: usize,
+        name: String,
+        step: Step,
+    },
     /// File `index` is done. When the upload service cannot be reached at
     /// all, one event with an empty `name` carries that error.
-    FileDone { index: usize, name: String, result: Result<Uploaded> },
+    FileDone {
+        index: usize,
+        name: String,
+        result: Result<Uploaded>,
+    },
 }
 
 /// Counts for a whole batch.
@@ -243,7 +289,11 @@ pub fn upload_batch(
     let up = match Uploader::connect(t) {
         Ok(u) => u,
         Err(e) => {
-            on(BatchEvent::FileDone { index: 0, name: String::new(), result: Err(e) });
+            on(BatchEvent::FileDone {
+                index: 0,
+                name: String::new(),
+                result: Err(e),
+            });
             summary.failed = total;
             return summary;
         }
@@ -254,9 +304,19 @@ pub fn upload_batch(
             summary.stopped = true;
             break;
         }
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let client_id = uuid::Uuid::new_v4().to_string();
-        let result = up.upload(path, &client_id, &|step| on(BatchEvent::Step { index, total, name: name.clone(), step }));
+        let result = up.upload(path, &client_id, &|step| {
+            on(BatchEvent::Step {
+                index,
+                total,
+                name: name.clone(),
+                step,
+            })
+        });
         let sign_in = matches!(&result, Err(e) if e.is_sign_in());
         match &result {
             Ok(u) if u.duplicate => summary.duplicates += 1,
@@ -273,7 +333,14 @@ pub fn upload_batch(
         }
     }
     if !jobs.is_empty() {
-        let _ = up.wait_for_ingest(&jobs, ingest_timeout, &|step| on(BatchEvent::Step { index: total, total, name: String::new(), step }));
+        let _ = up.wait_for_ingest(&jobs, ingest_timeout, &|step| {
+            on(BatchEvent::Step {
+                index: total,
+                total,
+                name: String::new(),
+                step,
+            })
+        });
     }
     summary
 }
@@ -283,5 +350,10 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
-        .is_some_and(|e| matches!(e.as_str(), "jpg" | "jpeg" | "heic" | "heif" | "png" | "gif" | "tif" | "tiff" | "mov" | "mp4" | "m4v" | "dng"))
+        .is_some_and(|e| {
+            matches!(
+                e.as_str(),
+                "jpg" | "jpeg" | "heic" | "heif" | "png" | "gif" | "tif" | "tiff" | "mov" | "mp4" | "m4v" | "dng"
+            )
+        })
 }

@@ -54,25 +54,37 @@ pub fn fetch(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job:
 /// A 4xx on a signed URL means it expired: the master is looked up again for
 /// fresh URLs and the download retried once.
 pub fn fetch_detailed(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job: Job) -> Result<Fetched> {
-    let mut row = cat.asset(id)?.ok_or_else(|| Error::Other(format!("unknown asset {id}")))?;
+    let mut row = cat
+        .asset(id)?
+        .ok_or_else(|| Error::Other(format!("unknown asset {id}")))?;
     let (dir, kind, url_of): (PathBuf, PathKind, UrlOf) = match job {
         Job::Thumb => (targets.dirs.thumbs(), PathKind::Thumb, |r| r.thumb_url.as_ref()),
         Job::Medium => (targets.dirs.medium(), PathKind::Medium, |r| r.medium_url.as_ref()),
         Job::Original => return original(t, cat, targets, row),
     };
-    let cached = if job == Job::Thumb { &row.thumb_path } else { &row.medium_path };
+    let cached = if job == Job::Thumb {
+        &row.thumb_path
+    } else {
+        &row.medium_path
+    };
     if let Some(p) = cached.as_ref().filter(|p| p.exists()) {
         if job == Job::Medium {
             touch(p);
         }
-        return Ok(Fetched { path: p.clone(), live_error: None });
+        return Ok(Fetched {
+            path: p.clone(),
+            live_error: None,
+        });
     }
     // The cache is ours and named by asset id: replacing a file there is fine.
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(format!("{}.jpg", sanitize(&row.id)));
     download_fresh(t, cat, &mut row, url_of, job, &dest)?;
     cat.set_path(id, kind, Some(&dest))?;
-    Ok(Fetched { path: dest, live_error: None })
+    Ok(Fetched {
+        path: dest,
+        live_error: None,
+    })
 }
 
 type UrlOf = fn(&Row) -> Option<&String>;
@@ -94,7 +106,9 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row) -
             let tmp = Temp::beside(&dest)?;
             download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0)?;
             let library = targets.library.clone();
-            let photo = settle(tmp, dest, &mut hold, |taken| Ok(plan_original(cat, &library, &row, taken)?.0))?;
+            let photo = settle(tmp, dest, &mut hold, |taken| {
+                Ok(plan_original(cat, &library, &row, taken)?.0)
+            })?;
             cat.set_path(&row.id, PathKind::Original, Some(&photo))?;
             row.local_path = Some(photo.clone());
             photo
@@ -105,7 +119,10 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row) -
     } else {
         None
     };
-    Ok(Fetched { path: photo, live_error })
+    Ok(Fetched {
+        path: photo,
+        live_error,
+    })
 }
 
 /// The Live Photo's video, named after the photo's (already unique) stem.
@@ -129,7 +146,9 @@ fn live(t: &dyn Transport, cat: &Catalog, row: &mut Row, photo: &Path, mut hold:
 /// Download `url_of(row)` to `dest`; on an expired URL, refresh `row` from
 /// iCloud and try once more.
 fn download_fresh(t: &dyn Transport, cat: &Catalog, row: &mut Row, url_of: UrlOf, job: Job, dest: &Path) -> Result<()> {
-    let url = url_of(row).cloned().ok_or_else(|| Error::Other(format!("{} has no {job:?} rendition", row.filename)))?;
+    let url = url_of(row)
+        .cloned()
+        .ok_or_else(|| Error::Other(format!("{} has no {job:?} rendition", row.filename)))?;
     match t.download(&url, dest) {
         Ok(_) => Ok(()),
         Err(e) if e.is_expired_url() => {
@@ -144,9 +163,12 @@ fn download_fresh(t: &dyn Transport, cat: &Catalog, row: &mut Row, url_of: UrlOf
 fn refresh(t: &dyn Transport, cat: &Catalog, row: &Row) -> Result<Row> {
     let ck = CloudKit::connect(t)?;
     let masters = ck.lookup_masters(&[row.master_id.as_str()])?;
-    let m = masters.first().ok_or_else(|| Error::Other(format!("{} is no longer in iCloud", row.filename)))?;
+    let m = masters
+        .first()
+        .ok_or_else(|| Error::Other(format!("{} is no longer in iCloud", row.filename)))?;
     cat.update_master(m)?;
-    cat.asset(&row.id)?.ok_or_else(|| Error::Other(format!("unknown asset {}", row.id)))
+    cat.asset(&row.id)?
+        .ok_or_else(|| Error::Other(format!("unknown asset {}", row.id)))
 }
 
 /// Library paths chosen for downloads that are not in the catalog yet,
@@ -188,9 +210,14 @@ struct Temp(PathBuf);
 
 impl Temp {
     fn beside(dest: &Path) -> Result<Temp> {
-        let dir = dest.parent().ok_or_else(|| Error::Other(format!("{} has no directory", dest.display())))?;
+        let dir = dest
+            .parent()
+            .ok_or_else(|| Error::Other(format!("{} has no directory", dest.display())))?;
         std::fs::create_dir_all(dir)?;
-        Ok(Temp(dir.join(format!(".icloud-photos-{}.part", uuid::Uuid::new_v4().simple()))))
+        Ok(Temp(dir.join(format!(
+            ".icloud-photos-{}.part",
+            uuid::Uuid::new_v4().simple()
+        ))))
     }
 }
 
@@ -227,9 +254,20 @@ fn settle(
 pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
-    let (f, t) = (CString::new(from.as_os_str().as_bytes())?, CString::new(to.as_os_str().as_bytes())?);
+    let (f, t) = (
+        CString::new(from.as_os_str().as_bytes())?,
+        CString::new(to.as_os_str().as_bytes())?,
+    );
     // SAFETY: both are valid NUL-terminated paths that outlive the call.
-    let r = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_NOREPLACE) };
+    let r = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            f.as_ptr(),
+            libc::AT_FDCWD,
+            t.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
     if r == 0 {
         return Ok(());
     }
@@ -257,13 +295,22 @@ fn split_name(name: &str) -> (&str, &str) {
 }
 
 fn numbered(dir: &Path, stem: &str, n: u32, ext: &str) -> PathBuf {
-    if n == 1 { dir.join(format!("{stem}{ext}")) } else { dir.join(format!("{stem} ({n}){ext}")) }
+    if n == 1 {
+        dir.join(format!("{stem}{ext}"))
+    } else {
+        dir.join(format!("{stem} ({n}){ext}"))
+    }
 }
 
 /// `<library>/<YYYY>/<MM>/<filename>`, with ` (2)` etc. when the name is
 /// taken (IMG_0001.JPG repeats across cameras). For a Live Photo the video's
 /// name (same stem) must be free too. Returns (photo, video).
-fn plan_original(cat: &Catalog, library: &Path, row: &Row, taken: &BTreeSet<PathBuf>) -> Result<(PathBuf, Option<PathBuf>)> {
+fn plan_original(
+    cat: &Catalog,
+    library: &Path,
+    row: &Row,
+    taken: &BTreeSet<PathBuf>,
+) -> Result<(PathBuf, Option<PathBuf>)> {
     let (y, m) = year_month(row.created);
     let dir = library.join(format!("{y:04}")).join(format!("{m:02}"));
     let filename = safe_filename(&row.filename);
@@ -289,7 +336,10 @@ fn plan_original(cat: &Catalog, library: &Path, row: &Row, taken: &BTreeSet<Path
 /// stem with the video's extension, numbered if that is taken.
 fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) -> Result<PathBuf> {
     let dir = photo.parent().unwrap_or(Path::new("."));
-    let stem = photo.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "photo".into());
+    let stem = photo
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "photo".into());
     let ext = live_ext(row.live_type.as_deref());
     for n in 1..10_000 {
         let candidate = numbered(dir, &stem, n, ext);
@@ -297,7 +347,10 @@ fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) 
             return Ok(candidate);
         }
     }
-    Err(Error::Other(format!("no free name for the video of {}", photo.display())))
+    Err(Error::Other(format!(
+        "no free name for the video of {}",
+        photo.display()
+    )))
 }
 
 /// Where this asset's original is, or would go if downloaded now.
@@ -309,7 +362,10 @@ pub fn original_dest(cat: &Catalog, library: &Path, row: &Row) -> Result<PathBuf
 }
 
 fn safe_filename(name: &str) -> String {
-    let cleaned: String = name.chars().map(|c| if c == '/' || c == '\0' { '_' } else { c }).collect();
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+        .collect();
     match cleaned.trim() {
         "" | "." | ".." => "photo".into(),
         s => s.to_owned(),
@@ -337,10 +393,11 @@ pub const MEDIUM_CACHE_CAP: u64 = 2 << 30;
 pub fn prune_cache(cat: &Catalog, dirs: &Dirs, medium_cap: u64) -> Result<usize> {
     let mut removed = 0;
     let remove = |p: &Path| -> bool {
-        p.starts_with(&dirs.cache) && match std::fs::remove_file(p) {
-            Ok(()) => true,
-            Err(e) => e.kind() == io::ErrorKind::NotFound,
-        }
+        p.starts_with(&dirs.cache)
+            && match std::fs::remove_file(p) {
+                Ok(()) => true,
+                Err(e) => e.kind() == io::ErrorKind::NotFound,
+            }
     };
     for (id, thumb, medium) in cat.cached_renditions_of_removed()? {
         if let Some(p) = thumb
@@ -437,9 +494,19 @@ pub struct Downloader {
 }
 
 impl Downloader {
-    pub fn start(transport: Arc<dyn Transport>, dirs: Dirs, library: PathBuf, workers: usize, notify: Notify) -> Downloader {
+    pub fn start(
+        transport: Arc<dyn Transport>,
+        dirs: Dirs,
+        library: PathBuf,
+        workers: usize,
+        notify: Notify,
+    ) -> Downloader {
         let inner = Arc::new(Inner {
-            queues: Mutex::new(Queues { now: VecDeque::new(), background: VecDeque::new(), pending: HashSet::new() }),
+            queues: Mutex::new(Queues {
+                now: VecDeque::new(),
+                background: VecDeque::new(),
+                pending: HashSet::new(),
+            }),
             wake: Condvar::new(),
             transport,
             dirs,
@@ -514,7 +581,10 @@ fn worker(inner: Arc<Inner>) {
         }
         let result = match &cat {
             Some(cat) => {
-                let targets = Targets { dirs: inner.dirs.clone(), library: inner.library.lock().unwrap_or_else(|e| e.into_inner()).clone() };
+                let targets = Targets {
+                    dirs: inner.dirs.clone(),
+                    library: inner.library.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                };
                 fetch_detailed(&*inner.transport, cat, &targets, &id, job)
             }
             None => Err(Error::Other("could not open the catalog".into())),
@@ -523,7 +593,17 @@ fn worker(inner: Arc<Inner>) {
             Ok(f) => (Ok(f.path), f.live_error),
             Err(e) => (Err(e), None),
         };
-        inner.queues.lock().unwrap_or_else(|e| e.into_inner()).pending.remove(&(id.clone(), job));
-        (inner.notify)(Event { id, job, result, live_error });
+        inner
+            .queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .remove(&(id.clone(), job));
+        (inner.notify)(Event {
+            id,
+            job,
+            result,
+            live_error,
+        });
     }
 }

@@ -129,22 +129,40 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     let cat = match Catalog::open(&dirs.catalog()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("icloud-photos: cannot open {}: {e}; using a temporary catalog", dirs.catalog().display());
+            eprintln!(
+                "icloud-photos: cannot open {}: {e}; using a temporary catalog",
+                dirs.catalog().display()
+            );
             Catalog::open_in_memory().expect("in-memory catalog")
         }
     };
 
-    let window = adw::ApplicationWindow::builder().application(application).title("iCloud Photos").default_width(1100).default_height(760).build();
+    let window = adw::ApplicationWindow::builder()
+        .application(application)
+        .title("iCloud Photos")
+        .default_width(1100)
+        .default_height(760)
+        .build();
     window.set_icon_name(Some("com.ferdousbhai.IcloudPhotos"));
 
     // Sidebar: albums, sync status at the bottom.
     let albums = Albums::new();
-    let status = gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).build();
+    let status = gtk::Label::builder()
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
     status.add_css_class("dim-label");
     status.add_css_class("caption");
     let spinner = adw::Spinner::new();
     spinner.set_visible(false);
-    let footer = gtk::Box::builder().spacing(8).margin_start(12).margin_end(12).margin_top(6).margin_bottom(6).build();
+    let footer = gtk::Box::builder()
+        .spacing(8)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
     footer.append(&spinner);
     footer.append(&status);
     let sidebar_header = adw::HeaderBar::new();
@@ -153,29 +171,65 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     menu.append(Some("Upload…"), Some("win.upload"));
     menu.append(Some("Preferences"), Some("win.preferences"));
     menu.append(Some("About iCloud Photos"), Some("win.about"));
-    sidebar_header.pack_end(&gtk::MenuButton::builder().icon_name("open-menu-symbolic").menu_model(&menu).tooltip_text("Main Menu").build());
+    sidebar_header.pack_end(
+        &gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .menu_model(&menu)
+            .tooltip_text("Main Menu")
+            .build(),
+    );
     let sidebar_tv = adw::ToolbarView::new();
     sidebar_tv.add_top_bar(&sidebar_header);
-    sidebar_tv.set_content(Some(&gtk::ScrolledWindow::builder().child(&albums.list).vexpand(true).build()));
+    sidebar_tv.set_content(Some(
+        &gtk::ScrolledWindow::builder().child(&albums.list).vexpand(true).build(),
+    ));
     sidebar_tv.add_bottom_bar(&footer);
-    let sidebar_page = adw::NavigationPage::builder().title("Albums").child(&sidebar_tv).build();
+    let sidebar_page = adw::NavigationPage::builder()
+        .title("Albums")
+        .child(&sidebar_tv)
+        .build();
 
     // Content: the grid page, with the viewer pushed on top.
     let grid = Grid::new();
     let grid_header = adw::HeaderBar::new();
-    grid_header.pack_end(&gtk::Button::builder().icon_name("list-add-symbolic").action_name("win.upload").tooltip_text("Upload Photos (Ctrl+U)").build());
-    grid_header.pack_end(&gtk::Button::builder().icon_name("view-refresh-symbolic").action_name("win.refresh").tooltip_text("Sync Now (Ctrl+R)").build());
+    grid_header.pack_end(
+        &gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .action_name("win.upload")
+            .tooltip_text("Upload Photos (Ctrl+U)")
+            .build(),
+    );
+    grid_header.pack_end(
+        &gtk::Button::builder()
+            .icon_name("view-refresh-symbolic")
+            .action_name("win.refresh")
+            .tooltip_text("Sync Now (Ctrl+R)")
+            .build(),
+    );
     let grid_tv = adw::ToolbarView::new();
     grid_tv.add_top_bar(&grid_header);
     grid_tv.set_content(Some(&grid.root));
-    let grid_page = adw::NavigationPage::builder().title("All Photos").tag("grid").child(&grid_tv).build();
+    let grid_page = adw::NavigationPage::builder()
+        .title("All Photos")
+        .tag("grid")
+        .child(&grid_tv)
+        .build();
     let viewer = Viewer::new();
     let nav = adw::NavigationView::new();
     nav.add(&grid_page);
     let content_page = adw::NavigationPage::builder().title("Photos").child(&nav).build();
 
-    let split = adw::NavigationSplitView::builder().sidebar(&sidebar_page).content(&content_page).min_sidebar_width(200.0).max_sidebar_width(280.0).build();
-    let banner = adw::Banner::builder().title("iCloud needs you to sign in again").button_label("Sign In").revealed(false).build();
+    let split = adw::NavigationSplitView::builder()
+        .sidebar(&sidebar_page)
+        .content(&content_page)
+        .min_sidebar_width(200.0)
+        .max_sidebar_width(280.0)
+        .build();
+    let banner = adw::Banner::builder()
+        .title("iCloud needs you to sign in again")
+        .button_label("Sign In")
+        .revealed(false)
+        .build();
     let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
     body.append(&banner);
     split.set_vexpand(true);
@@ -338,7 +392,9 @@ impl App {
     /// fake server.
     #[cfg(debug_assertions)]
     fn dev_screenshot(self: &Rc<Self>) {
-        let Some(path) = std::env::var_os("ICLOUD_PHOTOS_SCREENSHOT") else { return };
+        let Some(path) = std::env::var_os("ICLOUD_PHOTOS_SCREENSHOT") else {
+            return;
+        };
         let view = std::env::var("ICLOUD_PHOTOS_SCREENSHOT_VIEW").unwrap_or_default();
         let a = self.clone();
         glib::timeout_add_seconds_local_once(6, move || {
@@ -418,7 +474,12 @@ impl App {
     }
 
     pub fn toast(&self, text: &str) {
-        self.toasts.add_toast(adw::Toast::builder().title(glib::markup_escape_text(text)).timeout(4).build());
+        self.toasts.add_toast(
+            adw::Toast::builder()
+                .title(glib::markup_escape_text(text))
+                .timeout(4)
+                .build(),
+        );
     }
 
     /// Report an error: the banner for a lapsed sign-in, a toast otherwise.
@@ -450,7 +511,11 @@ impl App {
             .and_then(|s| s.parse::<i64>().ok())
             .and_then(|t| glib::DateTime::from_unix_local(t).ok())
             .and_then(|d| d.format("%H:%M").ok());
-        let photos = if count == 1 { "1 item".to_owned() } else { format!("{count} items") };
+        let photos = if count == 1 {
+            "1 item".to_owned()
+        } else {
+            format!("{count} items")
+        };
         self.status.set_label(&match when {
             Some(w) => format!("{photos} · synced {w}"),
             None => photos,
@@ -529,10 +594,14 @@ impl App {
         let (path, album, columns) = (self.dirs.catalog(), self.album.borrow().clone(), self.grid.columns());
         let a = self.clone();
         glib::spawn_future_local(async move {
-            let snap = gio::spawn_blocking(move || Catalog::open(&path).ok().map(|cat| snapshot(&cat, album, albums, columns)))
-                .await
-                .ok()
-                .flatten();
+            let snap = gio::spawn_blocking(move || {
+                Catalog::open(&path)
+                    .ok()
+                    .map(|cat| snapshot(&cat, album, albums, columns))
+            })
+            .await
+            .ok()
+            .flatten();
             if a.reload_gen.get() != generation {
                 return;
             }
@@ -552,7 +621,9 @@ impl App {
             self.reloading.set(false);
         }
         let first = snap.first_sync;
-        self.grid.empty.set_title(if first { "Getting your photos" } else { "No photos here" });
+        self.grid
+            .empty
+            .set_title(if first { "Getting your photos" } else { "No photos here" });
         self.grid.empty.set_description(Some(if first {
             "The first sync lists your whole library; thumbnails follow as you scroll."
         } else {
@@ -583,7 +654,10 @@ impl App {
         }
         let (a, id, path) = (self.clone(), id.to_owned(), path.to_owned());
         glib::spawn_future_local(async move {
-            let tex = gio::spawn_blocking(move || gdk::Texture::from_filename(&path).ok()).await.ok().flatten();
+            let tex = gio::spawn_blocking(move || gdk::Texture::from_filename(&path).ok())
+                .await
+                .ok()
+                .flatten();
             let mut textures = a.textures.borrow_mut();
             textures.loading.remove(&id);
             if let Some(t) = tex {
@@ -613,20 +687,28 @@ impl App {
                 }
                 if self.want_toast.borrow_mut().remove(&e.id) {
                     let toast = adw::Toast::builder()
-                        .title(glib::markup_escape_text(&format!("Saved {}", path.file_name().unwrap_or_default().to_string_lossy())))
+                        .title(glib::markup_escape_text(&format!(
+                            "Saved {}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        )))
                         .button_label("Show")
                         .timeout(5)
                         .build();
                     let (win, file) = (self.window.clone(), gio::File::for_path(&path));
                     toast.connect_button_clicked(move |_| {
-                        gtk::FileLauncher::new(Some(&file)).open_containing_folder(Some(&win), gio::Cancellable::NONE, |_| {});
+                        gtk::FileLauncher::new(Some(&file)).open_containing_folder(
+                            Some(&win),
+                            gio::Cancellable::NONE,
+                            |_| {},
+                        );
                     });
                     self.toasts.add_toast(toast);
                 }
                 self.viewer.refresh_info(self);
             }
             (job, Err(err)) => {
-                let wanted = job != Job::Thumb && (self.want_open.borrow_mut().remove(&e.id) | self.want_toast.borrow_mut().remove(&e.id));
+                let wanted = job != Job::Thumb
+                    && (self.want_open.borrow_mut().remove(&e.id) | self.want_toast.borrow_mut().remove(&e.id));
                 if err.is_sign_in() || wanted || job == Job::Medium {
                     self.fail("Download failed", &err);
                 } else {
@@ -674,14 +756,19 @@ impl App {
     }
 
     pub fn delete(self: &Rc<Self>, id: &str) {
-        let Some(row) = self.cat.asset(id).ok().flatten() else { return };
+        let Some(row) = self.cat.asset(id).ok().flatten() else {
+            return;
+        };
         let Some(t) = self.transport() else {
             self.toast("Not connected to iCloud yet");
             return;
         };
         let dialog = adw::AlertDialog::new(
             Some("Delete this photo?"),
-            Some(&format!("{} moves to Recently Deleted in iCloud on all your devices, and can be recovered there for about 30 days.", row.filename)),
+            Some(&format!(
+                "{} moves to Recently Deleted in iCloud on all your devices, and can be recovered there for about 30 days.",
+                row.filename
+            )),
         );
         dialog.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
@@ -720,7 +807,11 @@ impl App {
         let ids = self.grid.ids();
         if let Some(i) = ids.iter().position(|x| x == id) {
             self.viewer.show(self, ids, i);
-            if self.nav.visible_page().is_none_or(|p| p.tag().as_deref() != Some("viewer")) {
+            if self
+                .nav
+                .visible_page()
+                .is_none_or(|p| p.tag().as_deref() != Some("viewer"))
+            {
                 self.nav.push(&self.viewer.page);
             }
         }
@@ -730,12 +821,29 @@ impl App {
 /// Albums (when `with_albums`), the total, and the grid rows for `album`,
 /// which falls back to All Photos when that album is gone.
 fn snapshot(cat: &Catalog, mut album: Option<String>, with_albums: bool, columns: usize) -> Snapshot {
-    let albums = if with_albums { cat.albums().unwrap_or_default() } else { Vec::new() };
+    let albums = if with_albums {
+        cat.albums().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     if with_albums && album.as_ref().is_some_and(|c| !albums.iter().any(|a| &a.id == c)) {
         album = None;
     }
     let assets = cat.assets(album.as_deref()).unwrap_or_default();
-    let first_sync = assets.is_empty() && cat.meta(icloud_photos::catalog::SYNC_TOKEN_KEY).ok().flatten().is_none();
+    let first_sync = assets.is_empty()
+        && cat
+            .meta(icloud_photos::catalog::SYNC_TOKEN_KEY)
+            .ok()
+            .flatten()
+            .is_none();
     let rows = super::grid::rows_of(&assets, columns);
-    Snapshot { albums, total: if with_albums { cat.count().unwrap_or(0) } else { 0 }, album, assets, rows, columns, first_sync }
+    Snapshot {
+        albums,
+        total: if with_albums { cat.count().unwrap_or(0) } else { 0 },
+        album,
+        assets,
+        rows,
+        columns,
+        first_sync,
+    }
 }

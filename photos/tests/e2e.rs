@@ -29,12 +29,18 @@ fn browse_download_delete_upload_and_resync() {
     let r = sync(&ck, &mut cat, &|_| {}).unwrap();
     assert_eq!((r.mode, r.assets, r.albums), (Mode::Full, 60, 3));
     assert_eq!(cat.count().unwrap(), 60);
-    assert_eq!(cat.albums().unwrap().iter().map(|a| a.count).collect::<Vec<_>>(), vec![20, 12, 0]);
+    assert_eq!(
+        cat.albums().unwrap().iter().map(|a| a.count).collect::<Vec<_>>(),
+        vec![20, 12, 0]
+    );
     let newest = cat.assets(None).unwrap()[0].clone();
     assert_eq!(newest.id, server.asset_ids()[0]);
 
     // A thumb is a real JPEG from the fake content host.
-    let targets = Targets { dirs: dirs.clone(), library: root.join("Pictures/iCloud") };
+    let targets = Targets {
+        dirs: dirs.clone(),
+        library: root.join("Pictures/iCloud"),
+    };
     let thumb = fetch(&t, &cat, &targets, &newest.id, Job::Thumb).unwrap();
     assert_eq!(&std::fs::read(&thumb).unwrap()[..2], b"\xFF\xD8");
 
@@ -50,11 +56,16 @@ fn browse_download_delete_upload_and_resync() {
     let file = root.join("IMG_UPLOAD.JPG");
     std::fs::write(&file, b"\xFF\xD8 pretend jpeg").unwrap();
     let up = Uploader::connect(&t).unwrap();
-    let uploaded = up.upload(&file, "0f0f0f0f-0000-4000-8000-000000000001", &|_| {}).unwrap();
+    let uploaded = up
+        .upload(&file, "0f0f0f0f-0000-4000-8000-000000000001", &|_| {})
+        .unwrap();
     assert!(!uploaded.duplicate);
-    up.wait_for_ingest(&[uploaded.job_id.clone().unwrap()], Duration::from_secs(5), &|_| {}).unwrap();
+    up.wait_for_ingest(&[uploaded.job_id.clone().unwrap()], Duration::from_secs(5), &|_| {})
+        .unwrap();
     // The same bytes again are a duplicate.
-    let again = up.upload(&file, "0f0f0f0f-0000-4000-8000-000000000002", &|_| {}).unwrap();
+    let again = up
+        .upload(&file, "0f0f0f0f-0000-4000-8000-000000000002", &|_| {})
+        .unwrap();
     assert!(again.duplicate);
     assert_eq!(again.asset_id, uploaded.asset_id);
 
@@ -63,7 +74,10 @@ fn browse_download_delete_upload_and_resync() {
     assert_eq!(r.mode, Mode::Incremental, "{:?}", r.fell_back);
     assert_eq!(cat.count().unwrap(), 60 - 2 + 1);
     assert!(cat.asset(&second.id).unwrap().unwrap().deleted);
-    assert_eq!(cat.asset(&uploaded.asset_id).unwrap().unwrap().filename, "IMG_UPLOAD.JPG");
+    assert_eq!(
+        cat.asset(&uploaded.asset_id).unwrap().unwrap().filename,
+        "IMG_UPLOAD.JPG"
+    );
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("tok-4"));
 
     // Nothing new: an empty incremental sync.
@@ -94,7 +108,13 @@ fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
 
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = Mutex::new(tx);
-    let pool = Downloader::start(t, dirs, root.join("lib"), 3, Box::new(move |e| tx.lock().unwrap().send(e).unwrap()));
+    let pool = Downloader::start(
+        t,
+        dirs,
+        root.join("lib"),
+        3,
+        Box::new(move |e| tx.lock().unwrap().send(e).unwrap()),
+    );
     let ids = cat.missing_thumbs().unwrap();
     assert_eq!(ids.len(), 12);
     for id in &ids {
@@ -108,7 +128,10 @@ fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
         assert!(e.result.is_ok(), "{:?}", e.result);
         done += 1;
     }
-    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "each job ran once");
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "each job ran once"
+    );
     assert!(cat.missing_thumbs().unwrap().is_empty());
     let orig = cat.asset(&ids[0]).unwrap().unwrap().local_path.unwrap();
     assert!(orig.starts_with(root.join("lib")) && orig.exists());

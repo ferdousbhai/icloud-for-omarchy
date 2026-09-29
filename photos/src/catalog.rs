@@ -154,12 +154,18 @@ impl Catalog {
     }
 
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
-        Ok(self.conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
     }
 
     pub fn set_meta(&self, key: &str, value: Option<&str>) -> Result<()> {
         match value {
-            Some(v) => self.conn.execute("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key, v])?,
+            Some(v) => self.conn.execute(
+                "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [key, v],
+            )?,
             None => self.conn.execute("DELETE FROM meta WHERE key = ?1", [key])?,
         };
         Ok(())
@@ -179,9 +185,23 @@ impl Catalog {
                thumb_url = excluded.thumb_url, medium_url = excluded.medium_url,
                live_url = excluded.live_url, live_type = excluded.live_type",
             params![
-                a.id, m.master_id, m.filename, a.created, m.size, m.width, m.height, m.kind.as_str(),
-                a.is_live() as i64, a.deleted as i64, a.change_tag,
-                url(&m.original), file_type(&m.original), url(&m.thumb), url(&m.medium), url(&m.live), file_type(&m.live),
+                a.id,
+                m.master_id,
+                m.filename,
+                a.created,
+                m.size,
+                m.width,
+                m.height,
+                m.kind.as_str(),
+                a.is_live() as i64,
+                a.deleted as i64,
+                a.change_tag,
+                url(&m.original),
+                file_type(&m.original),
+                url(&m.thumb),
+                url(&m.medium),
+                url(&m.live),
+                file_type(&m.live),
             ],
         )?;
         Ok(())
@@ -204,8 +224,19 @@ impl Catalog {
                orig_url = ?8, orig_type = ?9, thumb_url = ?10, medium_url = ?11, live_url = ?12, live_type = ?13
              WHERE master_id = ?1",
             params![
-                m.master_id, m.filename, m.size, m.width, m.height, m.kind.as_str(), m.live.is_some() as i64,
-                url(&m.original), file_type(&m.original), url(&m.thumb), url(&m.medium), url(&m.live), file_type(&m.live),
+                m.master_id,
+                m.filename,
+                m.size,
+                m.width,
+                m.height,
+                m.kind.as_str(),
+                m.live.is_some() as i64,
+                url(&m.original),
+                file_type(&m.original),
+                url(&m.thumb),
+                url(&m.medium),
+                url(&m.live),
+                file_type(&m.live),
             ],
         )?)
     }
@@ -221,9 +252,15 @@ impl Catalog {
     /// A CloudKit tombstone: the record is gone for good. Downloaded files stay
     /// on disk; the catalog forgets the record.
     pub fn apply_tombstone(&self, record_name: &str) -> Result<()> {
-        self.conn.execute("UPDATE assets SET deleted = 1 WHERE id = ?1 OR master_id = ?1", [record_name])?;
+        self.conn.execute(
+            "UPDATE assets SET deleted = 1 WHERE id = ?1 OR master_id = ?1",
+            [record_name],
+        )?;
         self.conn.execute("DELETE FROM albums WHERE id = ?1", [record_name])?;
-        self.conn.execute("DELETE FROM album_assets WHERE album_id = ?1 OR relation_id = ?1", [record_name])?;
+        self.conn.execute(
+            "DELETE FROM album_assets WHERE album_id = ?1 OR relation_id = ?1",
+            [record_name],
+        )?;
         Ok(())
     }
 
@@ -243,7 +280,8 @@ impl Catalog {
     pub fn upsert_album(&self, a: &Album) -> Result<()> {
         if a.deleted || a.is_folder {
             self.conn.execute("DELETE FROM albums WHERE id = ?1", [&a.id])?;
-            self.conn.execute("DELETE FROM album_assets WHERE album_id = ?1", [&a.id])?;
+            self.conn
+                .execute("DELETE FROM album_assets WHERE album_id = ?1", [&a.id])?;
             return Ok(());
         }
         self.conn.execute(
@@ -260,12 +298,16 @@ impl Catalog {
         for a in albums {
             self.upsert_album(a)?;
         }
-        self.conn.execute("DELETE FROM album_assets WHERE album_id NOT IN (SELECT id FROM albums)", [])?;
+        self.conn.execute(
+            "DELETE FROM album_assets WHERE album_id NOT IN (SELECT id FROM albums)",
+            [],
+        )?;
         Ok(())
     }
 
     pub fn set_album_members(&self, album_id: &str, members: &[Relation]) -> Result<()> {
-        self.conn.execute("DELETE FROM album_assets WHERE album_id = ?1", [album_id])?;
+        self.conn
+            .execute("DELETE FROM album_assets WHERE album_id = ?1", [album_id])?;
         for m in members {
             self.apply_relation(m)?;
         }
@@ -275,7 +317,10 @@ impl Catalog {
     pub fn apply_relation(&self, r: &Relation) -> Result<()> {
         let relation_id = (!r.id.is_empty()).then_some(r.id.as_str());
         if r.deleted {
-            self.conn.execute("DELETE FROM album_assets WHERE album_id = ?1 AND asset_id = ?2", [&r.album_id, &r.asset_id])?;
+            self.conn.execute(
+                "DELETE FROM album_assets WHERE album_id = ?1 AND asset_id = ?2",
+                [&r.album_id, &r.asset_id],
+            )?;
         } else {
             self.conn.execute(
                 "INSERT INTO album_assets(album_id, asset_id, relation_id) VALUES(?1, ?2, ?3)
@@ -292,7 +337,13 @@ impl Catalog {
                                       WHERE aa.album_id = al.id AND a.deleted = 0)
              FROM albums al ORDER BY al.position, al.name COLLATE NOCASE",
         )?;
-        let rows = st.query_map([], |r| Ok(AlbumRow { id: r.get(0)?, name: r.get(1)?, count: r.get(2)? }))?;
+        let rows = st.query_map([], |r| {
+            Ok(AlbumRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                count: r.get(2)?,
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -300,7 +351,9 @@ impl Catalog {
     pub fn assets(&self, album: Option<&str>) -> Result<Vec<Row>> {
         let rows = match album {
             None => {
-                let mut st = self.conn.prepare(&format!("SELECT {ROW_COLUMNS} FROM assets WHERE deleted = 0 ORDER BY created DESC, id"))?;
+                let mut st = self.conn.prepare(&format!(
+                    "SELECT {ROW_COLUMNS} FROM assets WHERE deleted = 0 ORDER BY created DESC, id"
+                ))?;
                 st.query_map([], row)?.collect::<rusqlite::Result<Vec<_>>>()?
             }
             Some(album) => {
@@ -316,7 +369,10 @@ impl Catalog {
     }
 
     pub fn asset(&self, id: &str) -> Result<Option<Row>> {
-        Ok(self.conn.query_row(&format!("SELECT {ROW_COLUMNS} FROM assets WHERE id = ?1"), [id], row).optional()?)
+        Ok(self
+            .conn
+            .query_row(&format!("SELECT {ROW_COLUMNS} FROM assets WHERE id = ?1"), [id], row)
+            .optional()?)
     }
 
     /// The albums an asset is in: (id, name), in sidebar order.
@@ -325,11 +381,15 @@ impl Catalog {
             "SELECT al.id, al.name FROM albums al JOIN album_assets aa ON aa.album_id = al.id
              WHERE aa.asset_id = ?1 ORDER BY al.position, al.name COLLATE NOCASE",
         )?;
-        Ok(st.query_map([asset_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        Ok(st
+            .query_map([asset_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM assets WHERE deleted = 0", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM assets WHERE deleted = 0", [], |r| r.get(0))?)
     }
 
     /// Assets with no downloaded original ("download all" mode).
@@ -351,7 +411,8 @@ impl Catalog {
             PathKind::Medium => "medium_path",
         };
         let p = path.map(|p| p.to_string_lossy().into_owned());
-        self.conn.execute(&format!("UPDATE assets SET {col} = ?2 WHERE id = ?1"), params![id, p])?;
+        self.conn
+            .execute(&format!("UPDATE assets SET {col} = ?2 WHERE id = ?1"), params![id, p])?;
         Ok(())
     }
 
@@ -371,7 +432,10 @@ impl Catalog {
 
     /// A medium JPEG was evicted from the cache.
     pub fn forget_medium(&self, path: &Path) -> Result<()> {
-        self.conn.execute("UPDATE assets SET medium_path = NULL WHERE medium_path = ?1", [path.to_string_lossy()])?;
+        self.conn.execute(
+            "UPDATE assets SET medium_path = NULL WHERE medium_path = ?1",
+            [path.to_string_lossy()],
+        )?;
         Ok(())
     }
 
@@ -380,7 +444,11 @@ impl Catalog {
         let p = path.to_string_lossy();
         Ok(self
             .conn
-            .query_row("SELECT 1 FROM assets WHERE (local_path = ?1 OR live_path = ?1) AND id != ?2", params![p, id], |_| Ok(()))
+            .query_row(
+                "SELECT 1 FROM assets WHERE (local_path = ?1 OR live_path = ?1) AND id != ?2",
+                params![p, id],
+                |_| Ok(()),
+            )
             .optional()?
             .is_some())
     }

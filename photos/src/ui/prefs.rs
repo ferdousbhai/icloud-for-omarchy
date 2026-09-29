@@ -11,8 +11,14 @@ use super::window::App;
 pub fn show(app: &Rc<App>) {
     let settings = app.settings.borrow().clone();
 
-    let folder = adw::ActionRow::builder().title("Originals folder").subtitle(settings.library_dir.display().to_string()).build();
-    let choose = gtk::Button::builder().label("Choose…").valign(gtk::Align::Center).build();
+    let folder = adw::ActionRow::builder()
+        .title("Originals folder")
+        .subtitle(settings.library_dir.display().to_string())
+        .build();
+    let choose = gtk::Button::builder()
+        .label("Choose…")
+        .valign(gtk::Align::Center)
+        .build();
     folder.add_suffix(&choose);
 
     let modes = gtk::StringList::new(&["On demand", "All"]);
@@ -33,14 +39,19 @@ pub fn show(app: &Rc<App>) {
 
     let (a, row) = (app.clone(), folder.clone());
     choose.connect_clicked(move |_| {
-        let picker = gtk::FileDialog::builder().title("Folder for Originals").modal(true).build();
+        let picker = gtk::FileDialog::builder()
+            .title("Folder for Originals")
+            .modal(true)
+            .build();
         let current = a.settings.borrow().library_dir.clone();
         if current.exists() {
             picker.set_initial_folder(Some(&gio::File::for_path(&current)));
         }
         let (a, row) = (a.clone(), row.clone());
         picker.select_folder(Some(&a.window.clone()), gio::Cancellable::NONE, move |r| {
-            let Some(path) = r.ok().and_then(|f| f.path()) else { return };
+            let Some(path) = r.ok().and_then(|f| f.path()) else {
+                return;
+            };
             a.settings.borrow_mut().library_dir = path.clone();
             save(&a);
             row.set_subtitle(&path.display().to_string());

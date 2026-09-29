@@ -64,17 +64,28 @@ pub fn rows_of(assets: &[Row], columns: usize) -> Vec<RowItem> {
     let mut rows: Vec<RowItem> = Vec::new();
     for a in assets {
         let (month, label) = month_of(a.created);
-        let tile = Tile { id: a.id.clone(), thumb: a.thumb_path.clone(), kind: a.kind, is_live: a.is_live, filename: a.filename.clone() };
+        let tile = Tile {
+            id: a.id.clone(),
+            thumb: a.thumb_path.clone(),
+            kind: a.kind,
+            is_live: a.is_live,
+            filename: a.filename.clone(),
+        };
         match rows.last_mut() {
             Some(r) if r.month == month && r.tiles.len() < columns => r.tiles.push(tile),
-            _ => rows.push(RowItem { month, label, tiles: vec![tile] }),
+            _ => rows.push(RowItem {
+                month,
+                label,
+                tiles: vec![tile],
+            }),
         }
     }
     rows
 }
 
 fn row_item(obj: &glib::Object) -> Option<std::cell::Ref<'_, RowItem>> {
-    obj.downcast_ref::<glib::BoxedAnyObject>().map(|b| b.borrow::<RowItem>())
+    obj.downcast_ref::<glib::BoxedAnyObject>()
+        .map(|b| b.borrow::<RowItem>())
 }
 
 impl Grid {
@@ -93,10 +104,17 @@ impl Grid {
 
         let factory = gtk::SignalListItemFactory::new();
         factory.connect_setup(|_, obj| {
-            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
+            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
             item.set_activatable(false);
             item.set_focusable(false);
-            let row = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(GAP).halign(gtk::Align::Start).margin_start(PAD).build();
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(GAP)
+                .halign(gtk::Align::Start)
+                .margin_start(PAD)
+                .build();
             row.set_margin_bottom(GAP);
             item.set_child(Some(&row));
         });
@@ -104,8 +122,12 @@ impl Grid {
         let size = tile.clone();
         let bind_cb = on_bind.clone();
         factory.connect_bind(move |_, obj| {
-            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
-            let Some(row) = item.child().and_downcast::<gtk::Box>() else { return };
+            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(row) = item.child().and_downcast::<gtk::Box>() else {
+                return;
+            };
             let Some(data) = item.item() else { return };
             let Some(data) = row_item(&data) else { return };
             // Make the row hold exactly `columns` tile slots.
@@ -126,7 +148,9 @@ impl Grid {
             let mut i = 0;
             while let Some(w) = slot {
                 slot = w.next_sibling();
-                let Some(button) = w.downcast_ref::<gtk::Button>() else { continue };
+                let Some(button) = w.downcast_ref::<gtk::Button>() else {
+                    continue;
+                };
                 match data.tiles.get(i) {
                     Some(t) => {
                         button.set_visible(true);
@@ -140,7 +164,11 @@ impl Grid {
                         }
                         picture.set_paintable(None::<&gtk::gdk::Paintable>);
                         badge.set_visible(t.kind == Kind::Video || t.is_live);
-                        badge.set_icon_name(Some(if t.kind == Kind::Video { "media-playback-start-symbolic" } else { "camera-photo-symbolic" }));
+                        badge.set_icon_name(Some(if t.kind == Kind::Video {
+                            "media-playback-start-symbolic"
+                        } else {
+                            "camera-photo-symbolic"
+                        }));
                         if let Some(cb) = bind_cb.borrow().as_ref() {
                             cb(&t.id, t.thumb.as_ref(), &picture);
                         }
@@ -151,8 +179,12 @@ impl Grid {
             }
         });
         factory.connect_unbind(|_, obj| {
-            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
-            let Some(row) = item.child().and_downcast::<gtk::Box>() else { return };
+            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(row) = item.child().and_downcast::<gtk::Box>() else {
+                return;
+            };
             let mut slot = row.first_child();
             while let Some(w) = slot {
                 slot = w.next_sibling();
@@ -166,13 +198,25 @@ impl Grid {
 
         let headers = gtk::SignalListItemFactory::new();
         headers.connect_setup(|_, obj| {
-            let Some(h) = obj.downcast_ref::<gtk::ListHeader>() else { return };
-            let label = gtk::Label::builder().xalign(0.0).css_classes(["title-4"]).margin_top(18).margin_bottom(8).margin_start(PAD).build();
+            let Some(h) = obj.downcast_ref::<gtk::ListHeader>() else {
+                return;
+            };
+            let label = gtk::Label::builder()
+                .xalign(0.0)
+                .css_classes(["title-4"])
+                .margin_top(18)
+                .margin_bottom(8)
+                .margin_start(PAD)
+                .build();
             h.set_child(Some(&label));
         });
         headers.connect_bind(|_, obj| {
-            let Some(h) = obj.downcast_ref::<gtk::ListHeader>() else { return };
-            let (Some(label), Some(item)) = (h.child().and_downcast::<gtk::Label>(), h.item()) else { return };
+            let Some(h) = obj.downcast_ref::<gtk::ListHeader>() else {
+                return;
+            };
+            let (Some(label), Some(item)) = (h.child().and_downcast::<gtk::Label>(), h.item()) else {
+                return;
+            };
             if let Some(r) = row_item(&item) {
                 label.set_label(&r.label);
             }
@@ -183,13 +227,29 @@ impl Grid {
         list.add_css_class("photo-grid");
         list.set_single_click_activate(false);
 
-        let scrolled = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).child(&list).vexpand(true).build();
-        let empty = adw::StatusPage::builder().icon_name("image-x-generic-symbolic").title("No photos yet").build();
+        let scrolled = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&list)
+            .vexpand(true)
+            .build();
+        let empty = adw::StatusPage::builder()
+            .icon_name("image-x-generic-symbolic")
+            .title("No photos yet")
+            .build();
         let root = gtk::Stack::new();
         root.add_named(&scrolled, Some("grid"));
         root.add_named(&empty, Some("empty"));
 
-        let grid = Grid { root, empty, scrolled, store, columns, tile, assets: RefCell::new(Vec::new()), on_bind };
+        let grid = Grid {
+            root,
+            empty,
+            scrolled,
+            store,
+            columns,
+            tile,
+            assets: RefCell::new(Vec::new()),
+            on_bind,
+        };
         grid.watch_width();
         grid
     }
@@ -245,10 +305,15 @@ impl Grid {
 
     fn show_rows(&self, rows: Vec<RowItem>) {
         let adj = self.scrolled.vadjustment();
-        let fraction = if adj.upper() > adj.page_size() { adj.value() / (adj.upper() - adj.page_size()) } else { 0.0 };
+        let fraction = if adj.upper() > adj.page_size() {
+            adj.value() / (adj.upper() - adj.page_size())
+        } else {
+            0.0
+        };
         let objects: Vec<glib::BoxedAnyObject> = rows.into_iter().map(glib::BoxedAnyObject::new).collect();
         self.store.splice(0, self.store.n_items(), &objects);
-        self.root.set_visible_child_name(if objects.is_empty() { "empty" } else { "grid" });
+        self.root
+            .set_visible_child_name(if objects.is_empty() { "empty" } else { "grid" });
         // The list view anchors on the first row, which would hide the first
         // month header; put the scroll position back explicitly.
         let adj = adj.clone();
@@ -290,9 +355,17 @@ fn walk(root: &gtk::Widget, f: &mut dyn FnMut(&gtk::Widget)) {
 fn tile_widget() -> gtk::Button {
     let spacer = gtk::Box::builder().width_request(TILE).height_request(TILE).build();
     spacer.add_css_class("tile-spacer");
-    let picture = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).can_shrink(true).build();
+    let picture = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Cover)
+        .can_shrink(true)
+        .build();
     picture.add_css_class("tile-picture");
-    let badge = gtk::Image::builder().halign(gtk::Align::End).valign(gtk::Align::End).margin_end(6).margin_bottom(6).build();
+    let badge = gtk::Image::builder()
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::End)
+        .margin_end(6)
+        .margin_bottom(6)
+        .build();
     badge.add_css_class("tile-badge");
     let overlay = gtk::Overlay::builder().child(&spacer).build();
     overlay.add_overlay(&picture);
@@ -307,7 +380,10 @@ fn tile_widget() -> gtk::Button {
 fn tile_parts(button: &gtk::Button) -> (gtk::Picture, gtk::Image) {
     let overlay = button.child().and_downcast::<gtk::Overlay>().expect("tile overlay");
     let spacer = overlay.child().expect("tile spacer");
-    let picture = spacer.next_sibling().and_downcast::<gtk::Picture>().expect("tile picture");
+    let picture = spacer
+        .next_sibling()
+        .and_downcast::<gtk::Picture>()
+        .expect("tile picture");
     let badge = picture.next_sibling().and_downcast::<gtk::Image>().expect("tile badge");
     (picture, badge)
 }
@@ -347,10 +423,16 @@ mod tests {
         // Mid-month noon UTC, so no time zone moves these across a month.
         let sep = 1_789_905_600; // 2026-09-20
         let aug = sep - 31 * 86_400; // 2026-08-20
-        let assets: Vec<Row> = (0..5).map(|i| row(&format!("s{i}"), sep - i)).chain((0..2).map(|i| row(&format!("a{i}"), aug - i))).collect();
+        let assets: Vec<Row> = (0..5)
+            .map(|i| row(&format!("s{i}"), sep - i))
+            .chain((0..2).map(|i| row(&format!("a{i}"), aug - i)))
+            .collect();
         let rows = rows_of(&assets, 3);
         let shape: Vec<(usize, &str)> = rows.iter().map(|r| (r.tiles.len(), r.label.as_str())).collect();
-        assert_eq!(shape, vec![(3, "September 2026"), (2, "September 2026"), (2, "August 2026")]);
+        assert_eq!(
+            shape,
+            vec![(3, "September 2026"), (2, "September 2026"), (2, "August 2026")]
+        );
         assert!(rows[0].month > rows[2].month);
         assert_eq!(rows[1].tiles[0].id, "s3");
     }

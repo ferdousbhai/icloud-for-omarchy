@@ -1,11 +1,13 @@
 mod support;
 
 use icloud_photos::catalog::Catalog;
+use icloud_photos::catalog::PathKind;
 use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
-use icloud_photos::catalog::PathKind;
-use icloud_photos::thumbs::{Job, Targets, fetch, fetch_detailed, live_ext, original_dest, prune_cache, rename_noreplace, year_month};
+use icloud_photos::thumbs::{
+    Job, Targets, fetch, fetch_detailed, live_ext, original_dest, prune_cache, rename_noreplace, year_month,
+};
 use icloud_photos::transport::{Result, Transport};
 use serde_json::Value;
 use support::{FixtureTransport, fixture, library, temp_dir};
@@ -14,7 +16,13 @@ fn synced(t: &FixtureTransport, root: &std::path::Path) -> (Catalog, Targets) {
     let dirs = Dirs::under(root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();
     sync(&CloudKit::connect(t).unwrap(), &mut cat, &|_| {}).unwrap();
-    (cat, Targets { dirs, library: root.join("Pictures/iCloud") })
+    (
+        cat,
+        Targets {
+            dirs,
+            library: root.join("Pictures/iCloud"),
+        },
+    )
 }
 
 fn url(cat: &Catalog, id: &str, f: impl Fn(&icloud_photos::catalog::Row) -> Option<String>) -> String {
@@ -68,7 +76,10 @@ fn same_filename_in_the_same_month_gets_a_suffix() {
     assert_eq!(second, root.join("Pictures/iCloud/2025/09/IMG_0001 (2).HEIC"));
     // The first asset keeps its own name on a re-plan.
     let row = cat.asset("ASSET-001").unwrap().unwrap();
-    assert_eq!(original_dest(&cat, &targets.library, &row).unwrap(), root.join("Pictures/iCloud/2025/09/IMG_0001.HEIC"));
+    assert_eq!(
+        original_dest(&cat, &targets.library, &row).unwrap(),
+        root.join("Pictures/iCloud/2025/09/IMG_0001.HEIC")
+    );
 }
 
 #[test]
@@ -90,17 +101,27 @@ fn an_expired_url_is_refreshed_once() {
         medium: None,
         live: None,
     };
-    m.medium = Some(icloud_photos::cloudkit::Resource { url: "https://cvws.icloud-content.com/expired/med".into(), size: 1, file_type: None });
+    m.medium = Some(icloud_photos::cloudkit::Resource {
+        url: "https://cvws.icloud-content.com/expired/med".into(),
+        size: 1,
+        file_type: None,
+    });
     cat.update_master(&m).unwrap();
     let fresh = fixture("lookup_m002_fresh.json");
-    let fresh_url = fresh.pointer("/records/0/fields/resJPEGMedRes/value/downloadURL").and_then(Value::as_str).unwrap();
+    let fresh_url = fresh
+        .pointer("/records/0/fields/resJPEGMedRes/value/downloadURL")
+        .and_then(Value::as_str)
+        .unwrap();
     assert!(fresh_url.contains("/B2/"));
     t.serve(fresh_url, b"medium");
 
     let path = fetch(&t, &cat, &targets, "ASSET-002", Job::Medium).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), b"medium");
     assert!(t.ops().contains(&"records/lookup".to_string()));
-    assert_eq!(cat.asset("ASSET-002").unwrap().unwrap().medium_url.as_deref(), Some(fresh_url));
+    assert_eq!(
+        cat.asset("ASSET-002").unwrap().unwrap().medium_url.as_deref(),
+        Some(fresh_url)
+    );
 }
 
 #[test]
@@ -108,7 +129,10 @@ fn missing_rendition_is_an_error_not_a_panic() {
     let root = temp_dir("missing");
     let t = FixtureTransport::new(library);
     let (cat, targets) = synced(&t, &root);
-    assert!(fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).is_err(), "404 from the content host");
+    assert!(
+        fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).is_err(),
+        "404 from the content host"
+    );
     assert!(fetch(&t, &cat, &targets, "NOPE", Job::Thumb).is_err());
 }
 
@@ -136,17 +160,34 @@ fn a_fresh_install_gets_its_directories() {
     let (cat, targets) = synced(&t, &root);
     // Like icloud-session, the fixture transport creates no directories.
     t.serve("https://x/probe", b"x");
-    let err = t.download("https://x/probe", &root.join("missing/probe.jpg")).unwrap_err();
-    assert!(matches!(err, icloud_photos::transport::Error::Io(ref e) if e.kind() == std::io::ErrorKind::NotFound), "{err}");
+    let err = t
+        .download("https://x/probe", &root.join("missing/probe.jpg"))
+        .unwrap_err();
+    assert!(
+        matches!(err, icloud_photos::transport::Error::Io(ref e) if e.kind() == std::io::ErrorKind::NotFound),
+        "{err}"
+    );
 
     t.serve(&url(&cat, "ASSET-001", |r| r.thumb_url.clone()), b"thumb");
     t.serve(&url(&cat, "ASSET-001", |r| r.medium_url.clone()), b"medium");
     serve_originals(&t, &cat);
     assert!(!root.join("cache").exists() && !targets.library.exists());
-    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).unwrap(), root.join("cache/thumbs/ASSET-001.jpg"));
-    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Medium).unwrap(), root.join("cache/medium/ASSET-001.jpg"));
-    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap(), targets.library.join("2025/09/IMG_0001.HEIC"));
-    let leftovers: Vec<_> = std::fs::read_dir(targets.library.join("2025/09")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(
+        fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).unwrap(),
+        root.join("cache/thumbs/ASSET-001.jpg")
+    );
+    assert_eq!(
+        fetch(&t, &cat, &targets, "ASSET-001", Job::Medium).unwrap(),
+        root.join("cache/medium/ASSET-001.jpg")
+    );
+    assert_eq!(
+        fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap(),
+        targets.library.join("2025/09/IMG_0001.HEIC")
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(targets.library.join("2025/09"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
     assert_eq!(leftovers.len(), 2, "photo and video, no temp files: {leftovers:?}");
 }
 
@@ -165,11 +206,17 @@ fn files_already_on_disk_are_never_overwritten() {
     let photo = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
     // (2) is out: its video name is taken. The pair moves to (3) together.
     assert_eq!(photo, month.join("IMG_0001 (3).HEIC"));
-    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().live_path, Some(month.join("IMG_0001 (3).MOV")));
+    assert_eq!(
+        cat.asset("ASSET-001").unwrap().unwrap().live_path,
+        Some(month.join("IMG_0001 (3).MOV"))
+    );
     assert_eq!(std::fs::read(month.join("IMG_0001.HEIC")).unwrap(), b"mine");
     assert_eq!(std::fs::read(month.join("IMG_0001 (2).MOV")).unwrap(), b"my video");
     // The next same-named asset still avoids every one of them.
-    assert_eq!(fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap(), month.join("IMG_0001 (2).HEIC"));
+    assert_eq!(
+        fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap(),
+        month.join("IMG_0001 (2).HEIC")
+    );
 }
 
 #[test]
@@ -180,12 +227,17 @@ fn a_live_video_never_lands_on_another_assets_file() {
     serve_originals(&t, &cat);
     let month = targets.library.join("2025/09");
     // Another asset already owns IMG_0001.MOV (say, a video of that name).
-    cat.set_path("ASSET-003", PathKind::Original, Some(&month.join("IMG_0001.MOV"))).unwrap();
+    cat.set_path("ASSET-003", PathKind::Original, Some(&month.join("IMG_0001.MOV")))
+        .unwrap();
     fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap();
     let photo = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
     let row = cat.asset("ASSET-001").unwrap().unwrap();
     assert_eq!(photo, month.join("IMG_0001 (2).HEIC"));
-    assert_eq!(row.live_path, Some(month.join("IMG_0001 (2).MOV")), "the video shares the photo's unique stem");
+    assert_eq!(
+        row.live_path,
+        Some(month.join("IMG_0001 (2).MOV")),
+        "the video shares the photo's unique stem"
+    );
 }
 
 /// Holds every download long enough for concurrent jobs to overlap.
@@ -235,7 +287,10 @@ fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
     let root = temp_dir("live-retry");
     let t = FixtureTransport::new(library);
     let (cat, targets) = synced(&t, &root);
-    let (orig, live) = (url(&cat, "ASSET-001", |r| r.orig_url.clone()), url(&cat, "ASSET-001", |r| r.live_url.clone()));
+    let (orig, live) = (
+        url(&cat, "ASSET-001", |r| r.orig_url.clone()),
+        url(&cat, "ASSET-001", |r| r.live_url.clone()),
+    );
     t.serve(&orig, b"heic");
 
     let first = fetch_detailed(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
@@ -249,8 +304,15 @@ fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
     let second = fetch_detailed(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
     assert!(second.live_error.is_none());
     assert_eq!(second.path, first.path);
-    assert_eq!(t.downloads.lock().unwrap()[n..], [live], "only the video is fetched again");
-    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().live_path, Some(first.path.with_extension("MOV")));
+    assert_eq!(
+        t.downloads.lock().unwrap()[n..],
+        [live],
+        "only the video is fetched again"
+    );
+    assert_eq!(
+        cat.asset("ASSET-001").unwrap().unwrap().live_path,
+        Some(first.path.with_extension("MOV"))
+    );
 }
 
 #[test]
@@ -259,7 +321,10 @@ fn rename_noreplace_refuses_to_replace() {
     let (a, b) = (dir.join("a"), dir.join("b"));
     std::fs::write(&a, b"new").unwrap();
     std::fs::write(&b, b"old").unwrap();
-    assert_eq!(rename_noreplace(&a, &b).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        rename_noreplace(&a, &b).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
     assert_eq!(std::fs::read(&b).unwrap(), b"old");
     std::fs::remove_file(&b).unwrap();
     rename_noreplace(&a, &b).unwrap();
@@ -281,7 +346,8 @@ fn prune_drops_removed_assets_and_the_oldest_mediums() {
     let medium = |id: &str| root.join(format!("cache/medium/{id}.jpg"));
     let age = |id: &str, secs: u64| {
         let f = std::fs::File::options().write(true).open(medium(id)).unwrap();
-        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs)).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs))
+            .unwrap();
     };
     age("ASSET-002", 300);
     age("ASSET-004", 100);
@@ -296,6 +362,9 @@ fn prune_drops_removed_assets_and_the_oldest_mediums() {
     assert!(!root.join("cache/thumbs/ASSET-001.jpg").exists() && !medium("ASSET-001").exists());
     assert!(!medium("ASSET-002").exists());
     assert_eq!(cat.asset("ASSET-002").unwrap().unwrap().medium_path, None);
-    assert!(root.join("cache/thumbs/ASSET-002.jpg").exists(), "thumbs of live assets stay");
+    assert!(
+        root.join("cache/thumbs/ASSET-002.jpg").exists(),
+        "thumbs of live assets stay"
+    );
     assert!(medium("ASSET-004").exists());
 }

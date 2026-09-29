@@ -32,7 +32,10 @@ fn full_sync_fills_the_catalog() {
     assert_eq!(report.assets, 4);
     assert_eq!(report.albums, 2);
     // Newest first.
-    assert_eq!(ids(&cat, None), vec!["ASSET-003", "ASSET-002", "ASSET-004", "ASSET-001"]);
+    assert_eq!(
+        ids(&cat, None),
+        vec!["ASSET-003", "ASSET-002", "ASSET-004", "ASSET-001"]
+    );
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-FULL"));
     // ASSET-003 was split from its master across pages and joined without a lookup.
     assert!(!t.ops().contains(&"records/lookup".to_string()));
@@ -64,7 +67,11 @@ fn incremental_sync_applies_changes_and_advances_the_token() {
     assert_eq!(report.mode, Mode::Incremental);
     assert!(report.fell_back.is_none());
     let ops: Vec<String> = t.ops()[before..].to_vec();
-    assert_eq!(ops, vec!["changes/zone", "changes/zone", "records/lookup"], "two pages, then one master lookup for ASSET-006");
+    assert_eq!(
+        ops,
+        vec!["changes/zone", "changes/zone", "records/lookup"],
+        "two pages, then one master lookup for ASSET-006"
+    );
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-NEW"));
 
     // ASSET-005 arrived with its master; ASSET-006 needed a lookup;
@@ -79,7 +86,10 @@ fn incremental_sync_applies_changes_and_advances_the_token() {
     let family = cat.albums().unwrap().into_iter().find(|a| a.id == "A-FAMILY").unwrap();
     assert_eq!(family.name, "Family & friends");
     assert_eq!(ids(&cat, Some("A-FAMILY")), vec!["ASSET-005", "ASSET-001"]);
-    assert!(ids(&cat, Some("A-ITALY")).is_empty(), "the hidden ASSET-004 leaves its album too");
+    assert!(
+        ids(&cat, Some("A-ITALY")).is_empty(),
+        "the hidden ASSET-004 leaves its album too"
+    );
 }
 
 #[test]
@@ -96,9 +106,20 @@ fn changes_request_is_hidden_and_hidden_assets_leave_the_library() {
     let before = t.calls().len();
 
     sync(&ck, &mut cat, &|_| {}).unwrap();
-    let changes: Vec<_> = t.calls()[before..].iter().filter(|c| c.op == "changes/zone").cloned().collect();
-    let keys = changes[0].body.pointer("/zones/0/desiredKeys").and_then(Value::as_array).unwrap();
-    assert!(keys.iter().any(|k| k == "isHidden"), "changes/zone must ask for isHidden");
+    let changes: Vec<_> = t.calls()[before..]
+        .iter()
+        .filter(|c| c.op == "changes/zone")
+        .cloned()
+        .collect();
+    let keys = changes[0]
+        .body
+        .pointer("/zones/0/desiredKeys")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert!(
+        keys.iter().any(|k| k == "isHidden"),
+        "changes/zone must ask for isHidden"
+    );
     let hidden = cat.asset("ASSET-004").unwrap().unwrap();
     assert!(hidden.deleted, "hidden assets are out of All Photos");
     assert!(!ids(&cat, None).contains(&"ASSET-004".to_string()));
@@ -123,7 +144,10 @@ fn incremental_failure_falls_back_to_a_full_listing() {
 fn http_error_on_changes_endpoint_also_falls_back() {
     let t = FixtureTransport::new(|call| {
         if call.op == "changes/zone" {
-            return Err(Error::Http { status: 400, body: "BAD_REQUEST".into() });
+            return Err(Error::Http {
+                status: 400,
+                body: "BAD_REQUEST".into(),
+            });
         }
         library(call)
     });
@@ -136,13 +160,23 @@ fn http_error_on_changes_endpoint_also_falls_back() {
 
 #[test]
 fn sign_in_required_does_not_fall_back() {
-    let t = FixtureTransport::new(|call| if call.op == "changes/zone" { Err(Error::SignInRequired) } else { library(call) });
+    let t = FixtureTransport::new(|call| {
+        if call.op == "changes/zone" {
+            Err(Error::SignInRequired)
+        } else {
+            library(call)
+        }
+    });
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
     cat.set_meta(SYNC_TOKEN_KEY, Some("TOKEN-FULL")).unwrap();
     assert!(sync(&ck, &mut cat, &|_| {}).unwrap_err().is_sign_in());
     assert_eq!(t.ops(), vec!["changes/zone"]);
-    assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-FULL"), "token untouched");
+    assert_eq!(
+        cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(),
+        Some("TOKEN-FULL"),
+        "token untouched"
+    );
 }
 
 #[test]
@@ -183,7 +217,10 @@ fn full_sync_marks_assets_gone_from_icloud() {
 fn a_failed_full_sync_writes_nothing() {
     let t = FixtureTransport::new(|call| {
         if call.record_type() == Some("CPLContainerRelationLiveByAssetDate") {
-            return Err(Error::Http { status: 503, body: "try later".into() });
+            return Err(Error::Http {
+                status: 503,
+                body: "try later".into(),
+            });
         }
         library(call)
     });

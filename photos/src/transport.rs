@@ -79,14 +79,20 @@ impl MockTransport {
 
     pub fn new(base: &str) -> Self {
         let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
-        Self { base: base.trim_end_matches('/').to_owned(), agent }
+        Self {
+            base: base.trim_end_matches('/').to_owned(),
+            agent,
+        }
     }
 
     fn map(result: std::result::Result<ureq::Response, ureq::Error>) -> Result<ureq::Response> {
         match result {
             Ok(r) => Ok(r),
             Err(ureq::Error::Status(401 | 421, _)) => Err(Error::SignInRequired),
-            Err(ureq::Error::Status(status, r)) => Err(Error::Http { status, body: r.into_string().unwrap_or_default() }),
+            Err(ureq::Error::Status(status, r)) => Err(Error::Http {
+                status,
+                body: r.into_string().unwrap_or_default(),
+            }),
             Err(e) => Err(Error::Other(format!("network: {e}"))),
         }
     }
@@ -103,7 +109,11 @@ impl MockTransport {
 
     /// The mock sign-in: tells the fake server the "user" signed in again.
     pub fn reauthenticate(&self) -> Result<()> {
-        Self::map(self.agent.post(&format!("{}/mock/reauthenticate", self.base)).send_string(""))?;
+        Self::map(
+            self.agent
+                .post(&format!("{}/mock/reauthenticate", self.base))
+                .send_string(""),
+        )?;
         Ok(())
     }
 }
@@ -114,7 +124,12 @@ impl Transport for MockTransport {
     }
 
     fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        Self::json(Self::map(self.agent.post(url).set("Content-Type", "application/json").send_string(&body.to_string()))?)
+        Self::json(Self::map(
+            self.agent
+                .post(url)
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string()),
+        )?)
     }
 
     fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Value> {
@@ -181,8 +196,14 @@ pub fn sign_in_state() -> Result<SignInState> {
         let t = MockTransport::from_env();
         let url = format!("{}{}/zones/list", t.base, crate::cloudkit::DB_PATH);
         return match t.post_json(&url, &Value::Object(Default::default())) {
-            Ok(_) => Ok(SignInState { signed_in: true, signing_in: false }),
-            Err(Error::SignInRequired) => Ok(SignInState { signed_in: false, signing_in: false }),
+            Ok(_) => Ok(SignInState {
+                signed_in: true,
+                signing_in: false,
+            }),
+            Err(Error::SignInRequired) => Ok(SignInState {
+                signed_in: false,
+                signing_in: false,
+            }),
             Err(e) => Err(e),
         };
     }
@@ -195,7 +216,10 @@ pub fn sign_in_state() -> Result<SignInState> {
 pub fn start_sign_in(notify: &dyn Fn(SignInState)) -> Result<()> {
     if MockTransport::active() {
         MockTransport::from_env().reauthenticate()?;
-        notify(SignInState { signed_in: true, signing_in: false });
+        notify(SignInState {
+            signed_in: true,
+            signing_in: false,
+        });
         return Ok(());
     }
     crate::session::start_sign_in()

@@ -28,14 +28,42 @@ const ALBUM_TYPE_FOLDER: i64 = 3;
 
 /// Fields we read. CloudKit returns only these when `desiredKeys` is set.
 pub const DESIRED_KEYS: &[&str] = &[
-    "recordName", "recordType", "recordChangeTag", "masterRef", "isDeleted", "isExpunged", "isHidden",
-    "assetDate", "addedDate", "filenameEnc", "itemType",
-    "resOriginalRes", "resOriginalFileType", "resOriginalWidth", "resOriginalHeight",
-    "resJPEGThumbRes", "resJPEGThumbFileType", "resJPEGThumbWidth", "resJPEGThumbHeight",
-    "resJPEGMedRes", "resJPEGMedFileType", "resJPEGMedWidth", "resJPEGMedHeight",
-    "resOriginalVidComplRes", "resOriginalVidComplFileType",
-    "resVidSmallRes", "resVidSmallFileType", "resVidMedRes", "resVidMedFileType",
-    "duration", "albumNameEnc", "albumType", "position", "parentId", "containerId", "itemId",
+    "recordName",
+    "recordType",
+    "recordChangeTag",
+    "masterRef",
+    "isDeleted",
+    "isExpunged",
+    "isHidden",
+    "assetDate",
+    "addedDate",
+    "filenameEnc",
+    "itemType",
+    "resOriginalRes",
+    "resOriginalFileType",
+    "resOriginalWidth",
+    "resOriginalHeight",
+    "resJPEGThumbRes",
+    "resJPEGThumbFileType",
+    "resJPEGThumbWidth",
+    "resJPEGThumbHeight",
+    "resJPEGMedRes",
+    "resJPEGMedFileType",
+    "resJPEGMedWidth",
+    "resJPEGMedHeight",
+    "resOriginalVidComplRes",
+    "resOriginalVidComplFileType",
+    "resVidSmallRes",
+    "resVidSmallFileType",
+    "resVidMedRes",
+    "resVidMedFileType",
+    "duration",
+    "albumNameEnc",
+    "albumType",
+    "position",
+    "parentId",
+    "containerId",
+    "itemId",
 ];
 
 /// One raw CloudKit record (or tombstone, when `record_type` is `None`).
@@ -158,12 +186,17 @@ pub struct MasterInfo {
 impl MasterInfo {
     pub fn from_record(m: &Record) -> MasterInfo {
         let original = m.resource("resOriginal");
-        let item_type = m.str("itemType").or(original.as_ref().and_then(|r| r.file_type.as_deref())).unwrap_or("");
+        let item_type = m
+            .str("itemType")
+            .or(original.as_ref().and_then(|r| r.file_type.as_deref()))
+            .unwrap_or("");
         // A Live Photo's master carries the resVid* renditions of its video
         // half too, so only the UTI decides; a paired video means a photo.
         let live = m.resource("resOriginalVidCompl");
         let is_video = live.is_none() && is_video_uti(item_type);
-        let filename = m.decoded("filenameEnc").unwrap_or_else(|| format!("{}{}", sanitize(&m.name), extension_for(item_type)));
+        let filename = m
+            .decoded("filenameEnc")
+            .unwrap_or_else(|| format!("{}{}", sanitize(&m.name), extension_for(item_type)));
         MasterInfo {
             master_id: m.name.clone(),
             filename,
@@ -209,7 +242,11 @@ pub struct AssetPart {
 
 impl AssetPart {
     pub fn from_record(a: &Record) -> Option<AssetPart> {
-        let ms = a.int("assetDate").or_else(|| a.int("addedDate")).or(a.created_ms).unwrap_or(0);
+        let ms = a
+            .int("assetDate")
+            .or_else(|| a.int("addedDate"))
+            .or(a.created_ms)
+            .unwrap_or(0);
         Some(AssetPart {
             id: a.name.clone(),
             master_id: a.reference("masterRef")?.to_owned(),
@@ -222,7 +259,13 @@ impl AssetPart {
     }
 
     pub fn with_master(self, master: MasterInfo) -> Asset {
-        Asset { id: self.id, change_tag: self.change_tag, created: self.created, deleted: self.deleted, master }
+        Asset {
+            id: self.id,
+            change_tag: self.change_tag,
+            created: self.created,
+            deleted: self.deleted,
+            master,
+        }
     }
 }
 
@@ -289,7 +332,9 @@ pub fn pair_assets(records: &[Record]) -> Paired {
     let mut out = Paired::default();
     let mut used = std::collections::HashSet::new();
     for rec in records.iter().filter(|r| r.is_type("CPLAsset")) {
-        let Some(part) = AssetPart::from_record(rec) else { continue };
+        let Some(part) = AssetPart::from_record(rec) else {
+            continue;
+        };
         match masters.get(part.master_id.as_str()) {
             Some(m) => {
                 used.insert(m.name.as_str());
@@ -342,7 +387,10 @@ impl<'t> CloudKit<'t> {
     }
 
     pub fn with_root(t: &'t dyn Transport, ckdatabasews: &str) -> Self {
-        Self { t, base: format!("{}{}", ckdatabasews.trim_end_matches('/'), DB_PATH) }
+        Self {
+            t,
+            base: format!("{}{}", ckdatabasews.trim_end_matches('/'), DB_PATH),
+        }
     }
 
     pub fn transport(&self) -> &'t dyn Transport {
@@ -363,7 +411,10 @@ impl<'t> CloudKit<'t> {
         let v = self.t.post_json(&self.url(op), body)?;
         if let Some(code) = v.get("serverErrorCode").and_then(Value::as_str) {
             let reason = v.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-            return Err(Error::CloudKit { code: code.to_owned(), reason });
+            return Err(Error::CloudKit {
+                code: code.to_owned(),
+                reason,
+            });
         }
         Ok(v)
     }
@@ -392,7 +443,10 @@ impl<'t> CloudKit<'t> {
 
     /// Apple indexes a library before the web can list it.
     pub fn indexing_finished(&self) -> Result<bool> {
-        let v = self.post("records/query", &json!({ "query": { "recordType": "CheckIndexingState" }, "zoneID": Self::zone() }))?;
+        let v = self.post(
+            "records/query",
+            &json!({ "query": { "recordType": "CheckIndexingState" }, "zoneID": Self::zone() }),
+        )?;
         let state = v.pointer("/records/0/fields/state/value").and_then(Value::as_str);
         Ok(state.is_none_or(|s| s == "FINISHED"))
     }
@@ -480,7 +534,12 @@ impl<'t> CloudKit<'t> {
                         out.push(rel);
                     }
                 } else if r.is_type("CPLAsset") && !out.iter().any(|o| o.asset_id == r.name) {
-                    out.push(Relation { id: String::new(), album_id: album_id.to_owned(), asset_id: r.name.clone(), deleted: false });
+                    out.push(Relation {
+                        id: String::new(),
+                        album_id: album_id.to_owned(),
+                        asset_id: r.name.clone(),
+                        deleted: false,
+                    });
                 }
             }
             Ok(())
@@ -515,10 +574,17 @@ impl<'t> CloudKit<'t> {
             .ok_or_else(|| Error::Other("changes/zone returned no zone".into()))?;
         if let Some(code) = z.get("serverErrorCode").and_then(Value::as_str) {
             let reason = z.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-            return Err(Error::CloudKit { code: code.to_owned(), reason });
+            return Err(Error::CloudKit {
+                code: code.to_owned(),
+                reason,
+            });
         }
         Ok(ZoneChanges {
-            records: z.get("records").and_then(Value::as_array).map(|a| a.iter().filter_map(Record::parse).collect()).unwrap_or_default(),
+            records: z
+                .get("records")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Record::parse).collect())
+                .unwrap_or_default(),
             sync_token: z
                 .get("syncToken")
                 .and_then(Value::as_str)
@@ -531,8 +597,15 @@ impl<'t> CloudKit<'t> {
     /// Fresh CPLMaster records (download URLs expire) by recordName.
     pub fn lookup_masters(&self, master_ids: &[&str]) -> Result<Vec<MasterInfo>> {
         let records: Vec<Value> = master_ids.iter().map(|id| json!({ "recordName": id })).collect();
-        let v = self.post("records/lookup", &json!({ "records": records, "zoneID": Self::zone(), "desiredKeys": DESIRED_KEYS }))?;
-        Ok(records_of(&v).iter().filter(|r| r.is_type("CPLMaster")).map(MasterInfo::from_record).collect())
+        let v = self.post(
+            "records/lookup",
+            &json!({ "records": records, "zoneID": Self::zone(), "desiredKeys": DESIRED_KEYS }),
+        )?;
+        Ok(records_of(&v)
+            .iter()
+            .filter(|r| r.is_type("CPLMaster"))
+            .map(MasterInfo::from_record)
+            .collect())
     }
 
     /// Move an asset to Recently Deleted: update the CPLAsset with isDeleted=1.
@@ -561,10 +634,17 @@ impl<'t> CloudKit<'t> {
             .ok_or_else(|| Error::Other("records/modify returned no record".into()))?;
         if let Some(code) = rec.get("serverErrorCode").and_then(Value::as_str) {
             let reason = rec.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-            return Err(Error::CloudKit { code: code.to_owned(), reason });
+            return Err(Error::CloudKit {
+                code: code.to_owned(),
+                reason,
+            });
         }
         Ok(Modified {
-            name: rec.get("recordName").and_then(Value::as_str).unwrap_or(asset_id).to_owned(),
+            name: rec
+                .get("recordName")
+                .and_then(Value::as_str)
+                .unwrap_or(asset_id)
+                .to_owned(),
             change_tag: rec.get("recordChangeTag").and_then(Value::as_str).map(str::to_owned),
         })
     }
@@ -590,12 +670,23 @@ impl<'t> CloudKit<'t> {
                 } })
             })
             .collect();
-        let v = self.post("records/modify", &json!({ "atomic": true, "operations": operations, "zoneID": Self::zone() }))?;
+        let v = self.post(
+            "records/modify",
+            &json!({ "atomic": true, "operations": operations, "zoneID": Self::zone() }),
+        )?;
         let mut out = Vec::new();
-        for rec in v.get("records").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
+        for rec in v
+            .get("records")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
             if let Some(code) = rec.get("serverErrorCode").and_then(Value::as_str) {
                 let reason = rec.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-                return Err(Error::CloudKit { code: code.to_owned(), reason });
+                return Err(Error::CloudKit {
+                    code: code.to_owned(),
+                    reason,
+                });
             }
             out.extend(Record::parse(rec).as_ref().and_then(Relation::from_record));
         }
@@ -604,7 +695,10 @@ impl<'t> CloudKit<'t> {
 }
 
 fn records_of(v: &Value) -> Vec<Record> {
-    v.get("records").and_then(Value::as_array).map(|a| a.iter().filter_map(Record::parse).collect()).unwrap_or_default()
+    v.get("records")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Record::parse).collect())
+        .unwrap_or_default()
 }
 
 pub fn string_filter(field: &str, value: &str) -> Value {
@@ -617,7 +711,15 @@ pub fn int_filter(field: &str, value: i64) -> Value {
 
 /// Record names can contain `/` and `+` (master ids are base64-ish).
 pub fn sanitize(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Movie UTIs (`itemType` / `resOriginalFileType`); images, HEIC and JPEG
@@ -625,8 +727,16 @@ pub fn sanitize(name: &str) -> String {
 pub fn is_video_uti(uti: &str) -> bool {
     matches!(
         uti,
-        "com.apple.quicktime-movie" | "public.mpeg-4" | "public.movie" | "public.video" | "public.avi" | "public.3gpp"
-            | "public.3gpp2" | "com.apple.m4v-video" | "public.mpeg" | "public.mpeg-2-video"
+        "com.apple.quicktime-movie"
+            | "public.mpeg-4"
+            | "public.movie"
+            | "public.video"
+            | "public.avi"
+            | "public.3gpp"
+            | "public.3gpp2"
+            | "com.apple.m4v-video"
+            | "public.mpeg"
+            | "public.mpeg-2-video"
     ) || uti.ends_with("-movie")
         || uti.ends_with("-video")
 }

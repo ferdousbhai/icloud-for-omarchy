@@ -8,9 +8,22 @@ pub struct Albums {
 }
 
 fn row(id: Option<&str>, name: &str, count: i64, icon: &str) -> gtk::ListBoxRow {
-    let b = gtk::Box::builder().spacing(12).margin_top(6).margin_bottom(6).margin_start(6).margin_end(6).build();
+    let b = gtk::Box::builder()
+        .spacing(12)
+        .margin_top(6)
+        .margin_bottom(6)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
     b.append(&gtk::Image::from_icon_name(icon));
-    b.append(&gtk::Label::builder().label(name).xalign(0.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).build());
+    b.append(
+        &gtk::Label::builder()
+            .label(name)
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build(),
+    );
     let n = gtk::Label::new(Some(&count.to_string()));
     n.add_css_class("dim-label");
     n.add_css_class("numeric");
@@ -22,7 +35,9 @@ fn row(id: Option<&str>, name: &str, count: i64, icon: &str) -> gtk::ListBoxRow 
 
 impl Albums {
     pub fn new() -> Albums {
-        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::Single).build();
+        let list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .build();
         list.add_css_class("navigation-sidebar");
         Albums { list }
     }

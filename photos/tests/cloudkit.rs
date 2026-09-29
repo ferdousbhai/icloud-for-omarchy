@@ -6,7 +6,12 @@ use serde_json::{Value, json};
 use support::{CK_ROOT, FixtureTransport, fixture, library};
 
 fn records(name: &str) -> Vec<Record> {
-    fixture(name)["records"].as_array().unwrap().iter().filter_map(Record::parse).collect()
+    fixture(name)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Record::parse)
+        .collect()
 }
 
 #[test]
@@ -22,7 +27,10 @@ fn pairs_assets_with_masters_and_decodes_fields() {
     assert_eq!(live.master.master_id, "AX/m001+aaa");
     assert_eq!(live.master.filename, "IMG_0001.HEIC", "filenameEnc is base64");
     assert_eq!(live.created, 1_757_000_000, "assetDate ms -> s");
-    assert_eq!((live.master.width, live.master.height, live.master.size), (4032, 3024, 3_456_789));
+    assert_eq!(
+        (live.master.width, live.master.height, live.master.size),
+        (4032, 3024, 3_456_789)
+    );
     assert_eq!(live.master.kind, Kind::Photo);
     assert!(live.is_live(), "resOriginalVidComplRes marks a Live Photo");
     assert_eq!(live.change_tag.as_deref(), Some("t001"));
@@ -40,17 +48,40 @@ fn pairs_assets_with_masters_and_decodes_fields() {
 fn query_request_has_pyicloud_shape() {
     let t = FixtureTransport::new(library);
     let ck = CloudKit::connect(&t).unwrap();
-    ck.query(LIST_ALL, vec![icloud_photos::cloudkit::int_filter("startRank", 0)], None).unwrap();
+    ck.query(
+        LIST_ALL,
+        vec![icloud_photos::cloudkit::int_filter("startRank", 0)],
+        None,
+    )
+    .unwrap();
     let call = &t.calls()[0];
     assert_eq!(
         call.url,
-        format!("{CK_ROOT}/database/1/com.apple.photos.cloud/production/private/records/query?remapEnums=true&getCurrentSyncToken=true")
+        format!(
+            "{CK_ROOT}/database/1/com.apple.photos.cloud/production/private/records/query?remapEnums=true&getCurrentSyncToken=true"
+        )
     );
     assert_eq!(call.body["zoneID"], json!({ "zoneName": "PrimarySync" }));
     assert_eq!(call.body["query"]["recordType"], LIST_ALL);
-    assert_eq!(call.body["query"]["filterBy"][0], json!({ "fieldName": "startRank", "comparator": "EQUALS", "fieldValue": { "type": "INT64", "value": 0 } }));
-    let keys: Vec<&str> = call.body["desiredKeys"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    for k in ["filenameEnc", "resOriginalRes", "resJPEGThumbRes", "resJPEGMedRes", "resOriginalVidComplRes", "masterRef", "assetDate"] {
+    assert_eq!(
+        call.body["query"]["filterBy"][0],
+        json!({ "fieldName": "startRank", "comparator": "EQUALS", "fieldValue": { "type": "INT64", "value": 0 } })
+    );
+    let keys: Vec<&str> = call.body["desiredKeys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    for k in [
+        "filenameEnc",
+        "resOriginalRes",
+        "resJPEGThumbRes",
+        "resJPEGMedRes",
+        "resOriginalVidComplRes",
+        "masterRef",
+        "assetDate",
+    ] {
         assert!(keys.contains(&k), "desiredKeys lacks {k}");
     }
     assert!(call.body.get("continuationMarker").is_none());
@@ -67,24 +98,34 @@ fn list_assets_pages_by_start_rank_until_empty() {
     })
     .unwrap();
     assert_eq!(pages, 3);
-    let ranks: Vec<i64> = t.calls().iter().filter_map(|c| c.filter("startRank").and_then(Value::as_i64)).collect();
+    let ranks: Vec<i64> = t
+        .calls()
+        .iter()
+        .filter_map(|c| c.filter("startRank").and_then(Value::as_i64))
+        .collect();
     assert_eq!(ranks, vec![0, 2, 4], "rank advances by the masters on each page");
-    assert!(t.calls().iter().all(|c| c.filter("direction") == Some(&json!("ASCENDING"))));
+    assert!(
+        t.calls()
+            .iter()
+            .all(|c| c.filter("direction") == Some(&json!("ASCENDING")))
+    );
 }
 
 #[test]
 fn list_assets_follows_continuation_marker() {
     let t = FixtureTransport::new(|call| {
         let rank = call.filter("startRank").and_then(Value::as_i64);
-        Ok(match (call.body.get("continuationMarker").and_then(Value::as_str), rank) {
-            (None, Some(0)) => {
-                let mut v = fixture("assets_page1.json");
-                v["continuationMarker"] = json!("CONT-1");
-                v
-            }
-            (Some("CONT-1"), _) => fixture("assets_page2.json"),
-            _ => fixture("assets_empty.json"),
-        })
+        Ok(
+            match (call.body.get("continuationMarker").and_then(Value::as_str), rank) {
+                (None, Some(0)) => {
+                    let mut v = fixture("assets_page1.json");
+                    v["continuationMarker"] = json!("CONT-1");
+                    v
+                }
+                (Some("CONT-1"), _) => fixture("assets_page2.json"),
+                _ => fixture("assets_empty.json"),
+            },
+        )
     });
     let ck = CloudKit::connect(&t).unwrap();
     let mut seen = 0;
@@ -95,11 +136,19 @@ fn list_assets_follows_continuation_marker() {
     .unwrap();
     let calls = t.calls();
     assert_eq!(calls[1].body["continuationMarker"], "CONT-1");
-    assert_eq!(calls[1].filter("startRank"), Some(&json!(0)), "the marker re-sends the same query");
+    assert_eq!(
+        calls[1].filter("startRank"),
+        Some(&json!(0)),
+        "the marker re-sends the same query"
+    );
     assert_eq!(seen, 5 + 3);
     // When the marker runs out, paging resumes by rank and ends on an empty page.
     assert_eq!(calls.len(), 3);
-    assert_eq!(calls[2].filter("startRank"), Some(&json!(4)), "rank counts every master already seen");
+    assert_eq!(
+        calls[2].filter("startRank"),
+        Some(&json!(4)),
+        "rank counts every master already seen"
+    );
 }
 
 #[test]
@@ -118,7 +167,10 @@ fn album_members_use_relations_or_assets() {
     let t = FixtureTransport::new(library);
     let ck = CloudKit::connect(&t).unwrap();
     let family = ck.album_members("A-FAMILY").unwrap();
-    assert_eq!(family.iter().map(|r| r.asset_id.as_str()).collect::<Vec<_>>(), vec!["ASSET-001", "ASSET-002"]);
+    assert_eq!(
+        family.iter().map(|r| r.asset_id.as_str()).collect::<Vec<_>>(),
+        vec!["ASSET-001", "ASSET-002"]
+    );
     assert_eq!(family[0].id, "ASSET-001-IN-A-FAMILY");
     let italy = ck.album_members("A-ITALY").unwrap();
     assert_eq!(italy.len(), 1);
@@ -133,7 +185,10 @@ fn zone_changes_parse_records_tombstones_and_token() {
     let ch = ck.zone_changes(Some("TOKEN-MID")).unwrap();
     assert_eq!(ch.sync_token, "TOKEN-NEW");
     assert!(!ch.more_coming);
-    assert!(ch.records[0].record_type.is_none() && ch.records[0].deleted, "tombstone");
+    assert!(
+        ch.records[0].record_type.is_none() && ch.records[0].deleted,
+        "tombstone"
+    );
     let body = &t.calls()[0].body;
     assert_eq!(body["zones"][0]["zoneID"]["zoneName"], "PrimarySync");
     assert_eq!(body["zones"][0]["syncToken"], "TOKEN-MID");
@@ -227,7 +282,9 @@ fn kind_comes_from_the_uti_not_from_video_renditions() {
         assert_eq!(m.kind, kind, "{uti}");
     }
     // resOriginalFileType decides when itemType is missing.
-    let mp4 = MasterInfo::from_record(&master(json!({ "resOriginalRes": res("https://x/o"), "resOriginalFileType": s("public.mpeg-4") })));
+    let mp4 = MasterInfo::from_record(&master(
+        json!({ "resOriginalRes": res("https://x/o"), "resOriginalFileType": s("public.mpeg-4") }),
+    ));
     assert_eq!(mp4.kind, Kind::Video);
 }
 

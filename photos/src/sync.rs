@@ -69,7 +69,11 @@ pub fn sync_full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) 
 pub fn run(t: &dyn Transport, dirs: &Dirs, force_full: bool, progress: &dyn Fn(Progress)) -> Result<Report> {
     let mut cat = Catalog::open(&dirs.catalog())?;
     let ck = CloudKit::connect(t)?;
-    let report = if force_full { sync_full(&ck, &mut cat, progress)? } else { sync(&ck, &mut cat, progress)? };
+    let report = if force_full {
+        sync_full(&ck, &mut cat, progress)?
+    } else {
+        sync(&ck, &mut cat, progress)?
+    };
     if let Err(e) = thumbs::prune_cache(&cat, dirs, thumbs::MEDIUM_CACHE_CAP) {
         eprintln!("icloud-photos: pruning the cache: {e}");
     }
@@ -77,7 +81,10 @@ pub fn run(t: &dyn Transport, dirs: &Dirs, force_full: bool, progress: &dyn Fn(P
 }
 
 fn finish(cat: &Catalog, report: Report) -> Result<Report> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     cat.set_meta(LAST_SYNC_KEY, Some(&now.to_string()))?;
     Ok(report)
 }
@@ -91,7 +98,9 @@ pub fn full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Re
         Err(_) => None,
     };
     if !ck.indexing_finished()? {
-        return Err(Error::Other("iCloud Photos is still indexing this library; try again in a few minutes".into()));
+        return Err(Error::Other(
+            "iCloud Photos is still indexing this library; try again in a few minutes".into(),
+        ));
     }
 
     progress(Progress::Albums);
@@ -110,7 +119,11 @@ pub fn full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Re
     })?;
     // A page boundary can split an asset from its master: join across pages,
     // and look up whatever is still missing.
-    let missing: Vec<&str> = orphans.iter().map(|o| o.master_id.as_str()).filter(|id| !spare.contains_key(*id)).collect();
+    let missing: Vec<&str> = orphans
+        .iter()
+        .map(|o| o.master_id.as_str())
+        .filter(|id| !spare.contains_key(*id))
+        .collect();
     if !missing.is_empty() {
         spare.extend(lookup(ck, missing.into_iter())?);
     }
@@ -123,7 +136,10 @@ pub fn full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Re
 
     let mut members = Vec::with_capacity(albums.len());
     for (i, album) in albums.iter().enumerate() {
-        progress(Progress::AlbumMembers { done: i, total: albums.len() });
+        progress(Progress::AlbumMembers {
+            done: i,
+            total: albums.len(),
+        });
         members.push(ck.album_members(&album.id)?);
     }
 
@@ -139,7 +155,13 @@ pub fn full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Re
             cat.set_album_members(&album.id, rels)?;
         }
         cat.set_meta(SYNC_TOKEN_KEY, token.as_deref())?;
-        Ok(Report { mode: Mode::Full, assets: assets.len(), removed, albums: albums.len(), fell_back: None })
+        Ok(Report {
+            mode: Mode::Full,
+            assets: assets.len(),
+            removed,
+            albums: albums.len(),
+            fell_back: None,
+        })
     })
 }
 
@@ -184,24 +206,49 @@ pub fn apply_changes(ck: &CloudKit, cat: &mut Catalog, records: &[Record], new_t
     }
     let records: Vec<Record> = order.iter().map(|n| latest[n].clone()).collect();
 
-    let Paired { assets: paired, orphans, lone_masters } = pair_assets(&records);
+    let Paired {
+        assets: paired,
+        orphans,
+        lone_masters,
+    } = pair_assets(&records);
 
     // Orphan assets we have never seen need their master from the server.
-    let unknown: Vec<&AssetPart> = orphans.iter().filter(|o| !o.deleted && cat.asset(&o.id).ok().flatten().is_none()).collect();
-    let fetched = if unknown.is_empty() { HashMap::new() } else { lookup(ck, unknown.iter().map(|o| o.master_id.as_str()))? };
+    let unknown: Vec<&AssetPart> = orphans
+        .iter()
+        .filter(|o| !o.deleted && cat.asset(&o.id).ok().flatten().is_none())
+        .collect();
+    let fetched = if unknown.is_empty() {
+        HashMap::new()
+    } else {
+        lookup(ck, unknown.iter().map(|o| o.master_id.as_str()))?
+    };
 
     cat.transaction(|cat| {
-        let mut report = Report { mode: Mode::Incremental, assets: 0, removed: 0, albums: 0, fell_back: None };
+        let mut report = Report {
+            mode: Mode::Incremental,
+            assets: 0,
+            removed: 0,
+            albums: 0,
+            fell_back: None,
+        };
         for a in &paired {
             cat.upsert_asset(a)?;
-            if a.deleted { report.removed += 1 } else { report.assets += 1 }
+            if a.deleted {
+                report.removed += 1
+            } else {
+                report.assets += 1
+            }
         }
         for m in &lone_masters {
             cat.update_master(m)?;
         }
         for o in &orphans {
             if cat.update_asset_part(o)? {
-                if o.deleted { report.removed += 1 } else { report.assets += 1 }
+                if o.deleted {
+                    report.removed += 1
+                } else {
+                    report.assets += 1
+                }
             } else if let Some(m) = fetched.get(&o.master_id) {
                 cat.upsert_asset(&o.clone().with_master(m.clone()))?;
                 report.assets += 1;
