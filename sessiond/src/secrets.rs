@@ -74,7 +74,12 @@ impl Keyring {
 impl SecretStore for Keyring {
     fn get(&self, apple_id: &str) -> Result<Option<Password>, String> {
         self.run(async |service| {
-            for item in service.default_collection().await?.search_items(&attributes(apple_id)).await? {
+            for item in service
+                .default_collection()
+                .await?
+                .search_items(&attributes(apple_id))
+                .await?
+            {
                 if item.is_locked().await? {
                     // Normally unlocked at login; otherwise the keyring asks.
                     item.unlock(None).await?;

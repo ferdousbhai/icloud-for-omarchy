@@ -321,9 +321,10 @@ fn interactive(manager: &Manager, args: &[&str]) -> Result<Secret, String> {
         // The manager is installed (it ran), so the usual cause is a
         // mistyped master password; its own error is already on screen.
         return Err(format!(
-            "`{} {}` did not unlock the vault (usually a mistyped master password); run the command again",
+            "`{} {}` did not unlock the vault, usually a mistyped master password: run the command again. If it keeps failing: {}",
             manager.bin,
             args.join(" "),
+            manager.help
         ));
     }
     Ok(key)
@@ -381,7 +382,11 @@ fn relock(manager: &Manager, unlock: &Unlock) {
     } else {
         cmd.args(["signout", "--session", key.as_str()]);
     }
-    let _ = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit()).status();
+    let _ = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status();
 }
 
 /// The password from `manager`: ITEM, or the first of the default names
@@ -418,7 +423,10 @@ fn find_item(manager: &Manager, item: Option<&str>, apple_id: &str, unlock: &Unl
     for candidate in &candidates {
         match lookup(manager, candidate, unlock)? {
             Lookup::Found(p) => {
-                eprintln!("icloud-session: read the password of \"{candidate}\" from {}", manager.name);
+                eprintln!(
+                    "icloud-session: read the password of \"{candidate}\" from {}",
+                    manager.name
+                );
                 return Ok(p);
             }
             Lookup::NotFound => continue,
@@ -435,7 +443,11 @@ fn find_item(manager: &Manager, item: Option<&str>, apple_id: &str, unlock: &Unl
             Lookup::Failed(m) => return Err(format!("{}: {m}", manager.name)),
         }
     }
-    let tried = candidates.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+    let tried = candidates
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     Err(format!(
         "no {} item with a password found (tried {tried}); pass ITEM",
         manager.name
@@ -468,11 +480,18 @@ fn lookup(manager: &Manager, item: &str, unlock: &Unlock) -> Result<Lookup, Stri
     if output.status.success() {
         let text = std::str::from_utf8(&stdout).map_err(|_| format!("{} printed a non-UTF-8 password", manager.bin))?;
         let password = strip_newline(Zeroizing::new(text.to_string()));
-        return Ok(if password.is_empty() { Lookup::NotFound } else { Lookup::Found(password) });
+        return Ok(if password.is_empty() {
+            Lookup::NotFound
+        } else {
+            Lookup::Found(password)
+        });
     }
     Ok(if said.contains("more than one") {
         Lookup::Ambiguous
-    } else if ["not found", "isn't an item", "no item"].iter().any(|s| said.contains(s)) {
+    } else if ["not found", "isn't an item", "no item"]
+        .iter()
+        .any(|s| said.contains(s))
+    {
         Lookup::NotFound
     } else if [
         "locked",

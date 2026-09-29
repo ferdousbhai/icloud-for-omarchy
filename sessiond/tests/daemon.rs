@@ -1844,7 +1844,9 @@ fn apple_server(apple: Arc<Apple>) -> Server {
                     json!({"dsInfo": {"dsid": DSID, "appleId": "someone@example.com"}, "hsaChallengeRequired": true}),
                 )
                 .cookie("X-APPLE-WEBAUTH-TOKEN=onefactor-auto; Domain=.icloud.com; Path=/; Secure; HttpOnly")
-                .cookie(&format!("X-APPLE-WEBAUTH-FMIP=auto{n}; Domain=.icloud.com; Path=/; Secure; HttpOnly"))
+                .cookie(&format!(
+                    "X-APPLE-WEBAUTH-FMIP=auto{n}; Domain=.icloud.com; Path=/; Secure; HttpOnly"
+                ))
                 .cookie("X-APPLE-WEBAUTH-USER=\"v=1:s=1:d=12345\"; Domain=.icloud.com; Path=/; Secure")
             }
             INIT_CLIENT => {
@@ -1920,8 +1922,20 @@ fn a_450_signs_in_with_the_stored_password_and_retries_once() {
     assert_eq!(server.count(ACCOUNT_LOGIN), 1, "one sign-in for both");
     let inits = server.requests(INIT_CLIENT);
     assert_eq!(inits.len(), 4, "each request sent twice: stale, then retried once");
-    assert!(inits.iter().filter(|r| r.header("Cookie").unwrap().contains("FMIP=stale")).count() == 2);
-    assert!(inits.iter().filter(|r| r.header("Cookie").unwrap().contains("FMIP=auto1")).count() == 2);
+    assert!(
+        inits
+            .iter()
+            .filter(|r| r.header("Cookie").unwrap().contains("FMIP=stale"))
+            .count()
+            == 2
+    );
+    assert!(
+        inits
+            .iter()
+            .filter(|r| r.header("Cookie").unwrap().contains("FMIP=auto1"))
+            .count()
+            == 2
+    );
 
     // The sign-in: a fresh jar (no cookies sent), JSON body, client params
     // with a clientId of its own, as the web client sends them.
@@ -2213,12 +2227,20 @@ fn set_password_from_bitwarden_and_1password() {
     // Signed out of Bitwarden: bw login instead.
     let (code, err, log) = run(
         &["set-password", "--from-bitwarden"],
-        &[("FAKE_FOUND", "someone@example.com"), ("FAKE_BW_STATUS", "unauthenticated")],
+        &[
+            ("FAKE_FOUND", "someone@example.com"),
+            ("FAKE_BW_STATUS", "unauthenticated"),
+        ],
     );
     assert_eq!(code, Some(0), "{err}");
     assert_eq!(
         log,
-        ["bw status".to_string(), "bw login --raw".into(), get("someone@example.com"), "bw lock".into()]
+        [
+            "bw status".to_string(),
+            "bw login --raw".into(),
+            get("someone@example.com"),
+            "bw lock".into()
+        ]
     );
     run(&["forget-password"], &[]);
 
@@ -2232,10 +2254,13 @@ fn set_password_from_bitwarden_and_1password() {
     run(&["forget-password"], &[]);
 
     let logins = server.count(ACCOUNT_LOGIN);
-    // The unlock fails: said how to fix it, locked anyway.
+    // The unlock fails: blamed on the master password, locked anyway.
     let (code, err, log) = run(&["set-password", "--from-bitwarden"], &[("FAKE_UNLOCK_FAIL", "1")]);
     assert_eq!(code, Some(1));
-    assert!(err.contains("bw login") && err.contains("pacman -S bitwarden-cli"), "{err}");
+    assert!(
+        err.contains("mistyped master password") && err.contains("bw login"),
+        "{err}"
+    );
     assert_eq!(log, ["bw status", "bw unlock --raw", "bw lock"]);
     // A BW_SESSION that does not unlock it.
     let (code, err, log) = run(&["set-password", "--from-bitwarden"], &[("BW_SESSION", "stale")]);
@@ -2265,7 +2290,10 @@ fn set_password_from_bitwarden_and_1password() {
     assert_eq!(env.secrets()[0]["secret"], PASSWORD, "op's trailing newline dropped");
     run(&["forget-password"], &[]);
     let reference = "op://Private/Apple/password";
-    let (code, err, log) = run(&["set-password", "--from-1password", reference], &[("FAKE_FOUND", reference)]);
+    let (code, err, log) = run(
+        &["set-password", "--from-1password", reference],
+        &[("FAKE_FOUND", reference)],
+    );
     assert_eq!(code, Some(0), "{err}");
     assert_eq!(log, ["op whoami".to_string(), format!("op read {reference}")]);
     run(&["forget-password"], &[]);
@@ -2296,7 +2324,10 @@ fn set_password_from_bitwarden_and_1password() {
         err.contains("omarchy-install-service-1password") && err.contains("Integrate with 1Password CLI"),
         "{err}"
     );
-    let (code, err, log) = run(&["set-password", "--from-1password"], &[("FAKE_AMBIGUOUS", "someone@example.com")]);
+    let (code, err, log) = run(
+        &["set-password", "--from-1password"],
+        &[("FAKE_AMBIGUOUS", "someone@example.com")],
+    );
     assert_eq!(code, Some(1));
     assert!(err.contains("more than one") && err.contains("vault Work"), "{err}");
     assert_eq!(log.len(), 2);

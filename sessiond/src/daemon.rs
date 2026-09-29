@@ -679,13 +679,20 @@ impl Daemon {
         password: &str,
     ) -> Result<(), LoginError> {
         let fingerprint = self.fingerprint(apple_id, password);
-        let result = apple::find_my_login(&self.agent, &self.cfg.setup_url, apple_id, password, &params, Some(dsid))
-            .and_then(|login| match login.dsid {
-                Some(other) if other != dsid => Err(LoginError::Failed(format!(
-                    "Find My signed in as another account (dsid {other}, signed in as {dsid}); not kept"
-                ))),
-                _ => Ok(login.cookies),
-            });
+        let result = apple::find_my_login(
+            &self.agent,
+            &self.cfg.setup_url,
+            apple_id,
+            password,
+            &params,
+            Some(dsid),
+        )
+        .and_then(|login| match login.dsid {
+            Some(other) if other != dsid => Err(LoginError::Failed(format!(
+                "Find My signed in as another account (dsid {other}, signed in as {dsid}); not kept"
+            ))),
+            _ => Ok(login.cookies),
+        });
         let mut st = lock(&self.state);
         let finished = Instant::now();
         st.find_my_last_login = Some(LoginAttempt {
@@ -698,7 +705,9 @@ impl Daemon {
                 st.find_my_last_ok = Some((finished, fingerprint));
             }
             Err(LoginError::Rejected) => st.find_my_block = Some(LoginBlock::Password(fingerprint)),
-            Err(LoginError::Failed(_)) => st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry)),
+            Err(LoginError::Failed(_)) => {
+                st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry))
+            }
         }
         let jar = result?;
         let same = st.generation == generation;
@@ -755,7 +764,12 @@ impl Daemon {
                 }
             }
             let a = st.account.as_ref().expect("checked above");
-            let found = (a.apple_id.clone(), a.dsid.clone(), Daemon::login_params(a), st.generation);
+            let found = (
+                a.apple_id.clone(),
+                a.dsid.clone(),
+                Daemon::login_params(a),
+                st.generation,
+            );
             let waiting = matches!(st.find_my_block, Some(LoginBlock::Until(t)) if Instant::now() < t);
             if !st.password_stored || waiting {
                 drop(st);
@@ -810,7 +824,12 @@ impl Daemon {
         let (apple_id, dsid, params, generation) = {
             let st = lock(&self.state);
             let a = st.account.as_ref().ok_or_else(sign_in_required)?;
-            (a.apple_id.clone(), a.dsid.clone(), Daemon::login_params(a), st.generation)
+            (
+                a.apple_id.clone(),
+                a.dsid.clone(),
+                Daemon::login_params(a),
+                st.generation,
+            )
         };
         let result = self.find_my_login(generation, &apple_id, &dsid, params, &password);
         self.publish();
