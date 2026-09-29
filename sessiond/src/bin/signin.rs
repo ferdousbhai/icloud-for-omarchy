@@ -61,6 +61,119 @@ const KEEP_SIGNED_IN_JS: &str = r#"
 })();
 "#;
 
+/// The script message handler the page scripts below report to.
+const TRACE_HANDLER: &str = "icloudSessionTrace";
+
+/// `ICLOUD_SESSION_SIGNIN_TRACE=1`: reports each frame's form (field ids,
+/// types and names, button ids and labels; never values) and the page's
+/// own requests (method, host and path; no query), to see Apple's sign-in
+/// without screen access.
+const TRACE_JS: &str = r##"
+(() => {
+  const post = (m) => { try { window.webkit.messageHandlers.icloudSessionTrace.postMessage(location.host + location.pathname + ": " + m); } catch (_) {} };
+  const where = (u) => { try { const x = new URL(u, location.href); return x.host + x.pathname; } catch (_) { return "?"; } };
+  const f = window.fetch;
+  if (f) window.fetch = async (...a) => {
+    const url = typeof a[0] === "string" ? a[0] : (a[0] && a[0].url) || "";
+    const r = await f(...a);
+    post("fetch " + ((a[1] && a[1].method) || "GET") + " " + where(url) + " -> " + r.status);
+    return r;
+  };
+  const open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u, ...rest) {
+    this.addEventListener("loadend", () => post("xhr " + m + " " + where(u) + " -> " + this.status));
+    return open.call(this, m, u, ...rest);
+  };
+  let last = "";
+  setInterval(() => {
+    const shown = (e) => e.offsetParent !== null;
+    const inputs = [...document.querySelectorAll("input")].filter(shown)
+      .map((e) => `${e.id || "-"}/${e.type}/${e.name || "-"}/${e.autocomplete || "-"}`);
+    const buttons = [...document.querySelectorAll("button, [role=button]")].filter(shown)
+      .map((e) => `${e.id || "-"}:${(e.textContent || "").trim().slice(0, 24)}`);
+    const alerts = [...document.querySelectorAll("[role=alert], [aria-live], .form-message, .error, .si-error-message, h1, h2")]
+      .filter(shown).map((e) => (e.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80)).filter(Boolean);
+    const filled = [...document.querySelectorAll("input")].filter(shown).map((e) => `${e.id || e.type}=${e.value ? "set" : "empty"}`);
+    const now = `inputs [${inputs.join(" ")}] buttons [${buttons.join(" | ")}] text [${alerts.join(" / ")}] values [${filled.join(" ")}]`;
+    if (now !== last && (inputs.length || buttons.length)) { last = now; post(now); }
+  }, 1000);
+})();
+"##;
+
+/// Fills Apple's sign-in form, as a password manager would: the Apple ID
+/// if asked, then the password, submitting each; at most twice, so a
+/// refused password can't be retried into a lockout. `__ID__` and `__PW__`
+/// are replaced with JSON strings. Reports steps (never values).
+const AUTOFILL_JS: &str = r##"
+(() => {
+  const ID = __ID__, PW = __PW__;
+  const post = (m) => { try { window.webkit.messageHandlers.icloudSessionTrace.postMessage("autofill: " + m); } catch (_) {} };
+  const shown = (e) => e && e.offsetParent !== null && !e.disabled;
+  const set = (el, v) => {
+    el.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const submit = (el) => {
+    for (const sel of ["#sign-in", "#continue", "button[type=submit]"]) {
+      const b = document.querySelector(sel);
+      if (shown(b)) { b.click(); return sel; }
+    }
+    const k = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true };
+    el.dispatchEvent(new KeyboardEvent("keydown", k));
+    el.dispatchEvent(new KeyboardEvent("keyup", k));
+    return "Enter";
+  };
+  let accountTries = 0, passwordTries = 0, signInClicks = 0, lastClick = 0;
+  setInterval(() => {
+    const account = document.querySelector("#account_name_text_field, input[autocomplete=username], input[type=email]");
+    const password = document.querySelector("#password_text_field, input[type=password]");
+    const said = [...document.querySelectorAll("[role=alert], [aria-live], .form-message, .si-error-message")]
+      .map((e) => e.textContent || "").join(" ");
+    if (passwordTries > 0 && /incorrect|not correct|wrong|locked/i.test(said)) {
+      post("password rejected");
+      return;
+    }
+    if (shown(password) && !password.value && passwordTries < 2) {
+      passwordTries++;
+      if (shown(account) && !account.value) set(account, ID);
+      set(password, PW);
+      post("password filled, submitted with " + submit(password));
+    } else if (shown(password) && password.value && signInClicks < 2 && Date.now() - lastClick > 3000) {
+      // The password step kept the value filled before "Continue": press
+      // its "Sign In" (the Continue click above already counted once).
+      const button = document.querySelector("#sign-in");
+      if (shown(button) && /sign in/i.test(button.textContent || "")) {
+        signInClicks++;
+        lastClick = Date.now();
+        button.click();
+        post("pressed Sign In");
+      }
+    } else if (shown(account) && !account.value && !shown(password) && accountTries < 2) {
+      accountTries++;
+      set(account, ID);
+      post("Apple ID filled, submitted with " + submit(account));
+    }
+  }, 700);
+})();
+"##;
+
+/// With `--autofill`, on www.icloud.com: clicks the landing page's
+/// "Sign In", which is what loads Apple's sign-in frame. At most twice.
+const OPEN_SIGN_IN_JS: &str = r##"
+(() => {
+  const post = (m) => { try { window.webkit.messageHandlers.icloudSessionTrace.postMessage("autofill: " + m); } catch (_) {} };
+  let clicks = 0;
+  const timer = setInterval(() => {
+    if (clicks >= 2 || document.querySelector("iframe[src*='idmsa.apple.com']")) { clearInterval(timer); return; }
+    const button = [...document.querySelectorAll("button, [role=button]")]
+      .find((b) => b.offsetParent !== null && /^sign in$/i.test((b.textContent || "").trim()));
+    if (button) { clicks++; button.click(); post("clicked Sign In"); }
+  }, 1000);
+})();
+"##;
+
 fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
     std::env::var_os(var)
         .filter(|v| !v.is_empty())
@@ -325,20 +438,37 @@ impl Capture {
 const APP_ID: &str = "io.github.ferdousbhai.ICloudSession";
 
 fn main() -> ExitCode {
-    let mut find = false;
-    if let Some(arg) = std::env::args().nth(1) {
-        if arg == "--find" {
-            find = true;
-        } else {
-            return if arg == "-V" || arg == "--version" {
+    let (mut find, mut autofill) = (false, false);
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--find" => find = true,
+            "--autofill" => autofill = true,
+            "-V" | "--version" => {
                 println!("icloud-session-signin {}", env!("CARGO_PKG_VERSION"));
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("usage: icloud-session-signin [--find]   (prints the captured session as JSON)");
-                ExitCode::from(64)
-            };
+                return ExitCode::SUCCESS;
+            }
+            _ => {
+                eprintln!(
+                    "usage: icloud-session-signin [--find] [--autofill]   (prints the captured session as JSON)\n\
+                     --autofill reads the Apple ID and the password, one per line, from stdin"
+                );
+                return ExitCode::from(64);
+            }
         }
     }
+    // Read before any window opens; kept only in the page script below.
+    let credentials = if autofill {
+        let mut lines = std::io::stdin().lines();
+        match (lines.next(), lines.next()) {
+            (Some(Ok(id)), Some(Ok(pw))) if !id.is_empty() && !pw.is_empty() => Some((id, pw)),
+            _ => {
+                eprintln!("icloud-session-signin: --autofill needs the Apple ID and the password on stdin");
+                return ExitCode::from(64);
+            }
+        }
+    } else {
+        None
+    };
     // No GtkApplication here, so the Wayland app_id is the program name: make
     // it ours, matching the desktop entry, not "GTK Application".
     glib::set_prgname(Some(APP_ID));
@@ -369,6 +499,53 @@ fn main() -> ExitCode {
     cookies.set_accept_policy(webkit6::CookieAcceptPolicy::Always);
 
     let content = webkit6::UserContentManager::new();
+    content.register_script_message_handler(TRACE_HANDLER, None);
+    // Set once the Capture exists: Apple saying the password is wrong ends
+    // the window with exit code 3, so the daemon stops trying it.
+    let rejected: Rc<RefCell<Option<Rc<Capture>>>> = Rc::new(RefCell::new(None));
+    {
+        let rejected = rejected.clone();
+        content.connect_script_message_received(Some(TRACE_HANDLER), move |_, value| {
+            let text = value.to_str();
+            eprintln!("icloud-session-signin: {text}");
+            if text.as_str() == "autofill: password rejected"
+                && let Some(capture) = rejected.borrow().as_ref()
+                && !capture.done.replace(true)
+            {
+                capture.exit.set(3);
+                capture.main_loop.quit();
+            }
+        });
+    }
+    let apple_frames = ["https://*.apple.com/*", "https://*.icloud.com/*"];
+    if std::env::var("ICLOUD_SESSION_SIGNIN_TRACE").is_ok_and(|v| !v.is_empty() && v != "0") {
+        content.add_script(&webkit6::UserScript::new(
+            TRACE_JS,
+            webkit6::UserContentInjectedFrames::AllFrames,
+            webkit6::UserScriptInjectionTime::Start,
+            &apple_frames,
+            &[],
+        ));
+    }
+    if let Some((id, pw)) = &credentials {
+        let script = AUTOFILL_JS
+            .replace("__ID__", &Value::String(id.clone()).to_string())
+            .replace("__PW__", &Value::String(pw.clone()).to_string());
+        content.add_script(&webkit6::UserScript::new(
+            &script,
+            webkit6::UserContentInjectedFrames::AllFrames,
+            webkit6::UserScriptInjectionTime::End,
+            &["https://idmsa.apple.com/*"],
+            &[],
+        ));
+        content.add_script(&webkit6::UserScript::new(
+            OPEN_SIGN_IN_JS,
+            webkit6::UserContentInjectedFrames::TopFrame,
+            webkit6::UserScriptInjectionTime::End,
+            &["https://www.icloud.com/*"],
+            &[],
+        ));
+    }
     content.add_script(&webkit6::UserScript::new(
         KEEP_SIGNED_IN_JS,
         webkit6::UserContentInjectedFrames::AllFrames,
@@ -400,6 +577,7 @@ fn main() -> ExitCode {
         last_find: Cell::new(None),
         dsid: RefCell::new(None),
     });
+    *rejected.borrow_mut() = Some(capture.clone());
 
     // Signed in yet? Checked on a timer and after each page load.
     {
@@ -478,7 +656,20 @@ fn main() -> ExitCode {
         });
     }
     view.load_uri(if find { FIND } else { HOME });
-    window.present();
+    if autofill {
+        // Filled in unseen; shown only if Apple wants more than the password
+        // (a 2FA code, a new-terms page) and it hasn't finished by then.
+        let window = window.clone();
+        let capture = capture.clone();
+        glib::timeout_add_local_once(Duration::from_secs(40), move || {
+            if !capture.done.get() {
+                eprintln!("icloud-session-signin: not finished by itself; showing the window");
+                window.present();
+            }
+        });
+    } else {
+        window.present();
+    }
     capture.main_loop.run();
     window.destroy();
     ExitCode::from(capture.exit.get())

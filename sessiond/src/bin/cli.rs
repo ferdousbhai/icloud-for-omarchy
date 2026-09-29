@@ -415,6 +415,9 @@ fn from_manager(manager: &Manager, item: Option<&str>, apple_id: &str) -> Result
 }
 
 fn find_item(manager: &Manager, item: Option<&str>, apple_id: &str, unlock: &Unlock) -> Result<Secret, String> {
+    if item.is_none() {
+        return find_apple_login(manager, apple_id, unlock);
+    }
     let defaults = [apple_id, "Apple ID", "Apple", "iCloud"];
     let candidates: Vec<&str> = match item {
         Some(item) => vec![item],
@@ -452,6 +455,165 @@ fn find_item(manager: &Manager, item: Option<&str>, apple_id: &str, unlock: &Unl
         "no {} item with a password found (tried {tried}); pass ITEM",
         manager.name
     ))
+}
+
+/// One login a password manager holds for an Apple site.
+struct AppleLogin {
+    /// What to fetch the password by (`bw`/`op` item id).
+    id: String,
+    name: String,
+    username: String,
+    site: String,
+}
+
+/// Whether a saved URL is one of Apple's sign-in sites.
+fn is_apple_site(uri: &str) -> bool {
+    let with_scheme = if uri.contains("://") {
+        uri.to_string()
+    } else {
+        format!("https://{uri}")
+    };
+    url::Url::parse(&with_scheme)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|h| {
+            ["apple.com", "icloud.com"]
+                .iter()
+                .any(|d| h == *d || h.ends_with(&format!(".{d}")))
+        })
+}
+
+/// With no ITEM: the login saved for apple.com or icloud.com, as a browser
+/// extension would pick it. Several: those for the Apple ID first; still
+/// several, the user picks one by number (names and sites only are shown).
+fn find_apple_login(manager: &Manager, apple_id: &str, unlock: &Unlock) -> Result<Secret, String> {
+    let mut logins = list_apple_logins(manager, unlock)?;
+    if logins.is_empty() {
+        return Err(format!(
+            "no {} login saved for apple.com or icloud.com; pass the item to use as ITEM",
+            manager.name
+        ));
+    }
+    let mine: Vec<usize> = (0..logins.len())
+        .filter(|&i| logins[i].username.eq_ignore_ascii_case(apple_id))
+        .collect();
+    if !mine.is_empty() {
+        let mut i = 0;
+        logins.retain(|_| {
+            let keep = mine.contains(&i);
+            i += 1;
+            keep
+        });
+    }
+    let chosen = if logins.len() == 1 {
+        logins.remove(0)
+    } else {
+        eprintln!("icloud-session: {} has several Apple logins:", manager.name);
+        for (n, l) in logins.iter().enumerate() {
+            eprintln!("  {}) {} — {} — {}", n + 1, l.name, l.username, l.site);
+        }
+        if !std::io::stdin().is_terminal() {
+            return Err("several Apple logins match; pass the one to use as ITEM".into());
+        }
+        eprint!("Use which one? [1-{}] ", logins.len());
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+        let n: usize = answer.trim().parse().map_err(|_| "no login chosen".to_string())?;
+        if n == 0 || n > logins.len() {
+            return Err("no login chosen".into());
+        }
+        logins.remove(n - 1)
+    };
+    eprintln!(
+        "icloud-session: using {}'s \"{}\" ({})",
+        manager.name, chosen.name, chosen.username
+    );
+    match lookup(manager, &chosen.id, unlock)? {
+        Lookup::Found(p) => Ok(p),
+        Lookup::Locked => Err(format!("{} is locked or not signed in; {}", manager.name, manager.help)),
+        _ => Err(format!("{} gave no password for \"{}\"", manager.name, chosen.name)),
+    }
+}
+
+/// Every login the manager holds for an Apple site: names, usernames and
+/// sites only; passwords are fetched for the chosen one alone.
+fn list_apple_logins(manager: &Manager, unlock: &Unlock) -> Result<Vec<AppleLogin>, String> {
+    let bitwarden = manager.bin == BITWARDEN.bin;
+    let mut found: Vec<AppleLogin> = Vec::new();
+    let searches: &[&[&str]] = if bitwarden {
+        &[
+            &["--nointeraction", "list", "items", "--search", "apple.com"],
+            &["--nointeraction", "list", "items", "--search", "icloud.com"],
+        ]
+    } else {
+        &[&["item", "list", "--categories", "Login", "--format", "json"]]
+    };
+    for args in searches {
+        let mut cmd = Command::new(manager.bin);
+        cmd.args(*args);
+        if let Unlock::Key(key) = unlock {
+            if bitwarden {
+                cmd.env("BW_SESSION", key.as_str());
+            } else {
+                cmd.args(["--session", key.as_str()]);
+            }
+        }
+        let output = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| not_installed(manager, e))?;
+        // bw's list output carries passwords: keep it zeroized, parse, drop.
+        let stdout = Zeroizing::new(output.stdout);
+        if !output.status.success() {
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            return Err(format!("{} could not list logins; {}", manager.name, manager.help));
+        }
+        let items: Vec<serde_json::Value> =
+            serde_json::from_slice(&stdout).map_err(|e| format!("{} printed unexpected JSON: {e}", manager.bin))?;
+        for item in &items {
+            let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
+            let (id, name, username, uris): (String, String, String, Vec<String>) = if bitwarden {
+                if item["type"].as_i64() != Some(1) {
+                    continue;
+                }
+                let uris = item["login"]["uris"]
+                    .as_array()
+                    .map(|a| a.iter().map(|u| text(&u["uri"])).collect())
+                    .unwrap_or_default();
+                (
+                    text(&item["id"]),
+                    text(&item["name"]),
+                    text(&item["login"]["username"]),
+                    uris,
+                )
+            } else {
+                let uris = item["urls"]
+                    .as_array()
+                    .map(|a| a.iter().map(|u| text(&u["href"])).collect())
+                    .unwrap_or_default();
+                (
+                    text(&item["id"]),
+                    text(&item["title"]),
+                    text(&item["additional_information"]),
+                    uris,
+                )
+            };
+            let Some(site) = uris.into_iter().find(|u| is_apple_site(u)) else {
+                continue;
+            };
+            if !id.is_empty() && !found.iter().any(|l| l.id == id) {
+                found.push(AppleLogin {
+                    id,
+                    name,
+                    username,
+                    site,
+                });
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Runs the manager's CLI for one item. The password comes back only on

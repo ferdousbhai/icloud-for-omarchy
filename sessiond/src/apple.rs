@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::cookies::{self, Cookie};
+use crate::cookies::Cookie;
 use crate::files::{CLIENT_BUILD_NUMBER, CLIENT_ID, CLIENT_MASTERING_NUMBER};
 
 /// Apple's setup host, where `/setup/ws/1/validate` lives.
@@ -165,80 +165,9 @@ pub struct FindMyLogin {
 
 #[derive(Debug)]
 pub enum LoginError {
-    /// 401/403: Apple refused the Apple ID or password. Not worth retrying
-    /// until the password changes.
+    /// Apple said the password is wrong (the autofill window exits 3). Not
+    /// worth retrying until the password changes.
     Rejected,
     /// No answer, another status, an answer without Find My's cookie.
     Failed(String),
-}
-
-/// Find My's one-factor sign-in, as www.icloud.com/find's password prompt
-/// (and pyicloud's `_authenticate_with_credentials_service("find")`) does it:
-/// `POST /setup/ws/1/accountLogin` with `{"appName": "find", "apple_id",
-/// "password"}` and no cookies at all, so it starts a session of its own
-/// and never touches the main one (a second holder of the main session's
-/// token gets that session ended). Apple answers with a jar that Find My
-/// accepts although `/validate` would still want 2FA
-/// (`hsaChallengeRequired`), which is expected here. If the login itself
-/// set no `X-APPLE-WEBAUTH-FMIP`, one `/validate` on the new jar (never
-/// judged by `hsaChallengeRequired`) collects it; it also names the dsid
-/// when the login's answer did not.
-///
-/// `params` are the client params to send (a fresh clientId); `dsid` the
-/// account's, sent as the web client does.
-pub fn find_my_login(
-    agent: &ureq::Agent,
-    setup_url: &str,
-    apple_id: &str,
-    password: &str,
-    params: &BTreeMap<String, String>,
-    dsid: Option<&str>,
-) -> Result<FindMyLogin, LoginError> {
-    let failed = |m: String| LoginError::Failed(m);
-    let url = setup_endpoint(setup_url, "accountLogin", params, dsid).map_err(failed)?;
-    let body = serde_json::json!({"appName": "find", "apple_id": apple_id, "password": password});
-    let result = agent
-        .post(url.as_str())
-        .set("Origin", "https://www.icloud.com")
-        .set("Referer", "https://www.icloud.com/")
-        .set("Accept", "application/json")
-        // Like pyicloud's `data=json.dumps(...)`: a JSON body, no Content-Type.
-        .send_bytes(body.to_string().as_bytes());
-    let reply = match result {
-        Ok(r) => read_reply(r, "accountLogin").map_err(failed)?,
-        Err(ureq::Error::Status(401 | 403, _)) => return Err(LoginError::Rejected),
-        Err(ureq::Error::Status(status, _)) => return Err(failed(format!("accountLogin answered HTTP {status}"))),
-        Err(e) => return Err(failed(format!("accountLogin: {e}"))),
-    };
-    let now = crate::daemon::now_unix();
-    let mut jar = Vec::new();
-    cookies::merge_set_cookies(&mut jar, &reply.set_cookies, now);
-    let mut found_dsid = body_dsid(&reply.body);
-    if !cookies::find_my_cookie(&jar, now) || found_dsid.is_none() {
-        match post_validate(agent, setup_url, &cookies::header(&jar, now), params, dsid) {
-            Ok(v) => {
-                cookies::merge_set_cookies(&mut jar, &v.set_cookies, now);
-                found_dsid = found_dsid.or_else(|| body_dsid(&v.body));
-            }
-            // Only read for cookies and the dsid; the login's own answer
-            // decides.
-            Err(ValidateError::SignedOut | ValidateError::Failed(_)) => {}
-        }
-    }
-    if !cookies::find_my_cookie(&jar, now) {
-        return Err(failed(format!("accountLogin set no {} cookie", cookies::FIND_MY)));
-    }
-    Ok(FindMyLogin {
-        dsid: found_dsid.or_else(|| cookies::user_dsid(&jar)),
-        cookies: jar,
-    })
-}
-
-/// `dsInfo.dsid` of a setup answer.
-fn body_dsid(body: &Value) -> Option<String> {
-    let dsid = body.get("dsInfo")?.get("dsid")?;
-    dsid.as_str()
-        .map(str::to_string)
-        .or_else(|| dsid.as_u64().map(|n| n.to_string()))
-        .filter(|d| !d.is_empty())
 }

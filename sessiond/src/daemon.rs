@@ -679,20 +679,17 @@ impl Daemon {
         password: &str,
     ) -> Result<(), LoginError> {
         let fingerprint = self.fingerprint(apple_id, password);
-        let result = apple::find_my_login(
-            &self.agent,
-            &self.cfg.setup_url,
-            apple_id,
-            password,
-            &params,
-            Some(dsid),
-        )
-        .and_then(|login| match login.dsid {
-            Some(other) if other != dsid => Err(LoginError::Failed(format!(
-                "Find My signed in as another account (dsid {other}, signed in as {dsid}); not kept"
-            ))),
-            _ => Ok(login.cookies),
-        });
+        // Apple's own sign-in page, filled in as a password manager would
+        // (a plain-password accountLogin answers 421 now). The page's Find
+        // My call answering is what completes it.
+        let result = self
+            .autofill_find_my(apple_id, password)
+            .and_then(|(login, window_params)| match login.dsid {
+                Some(other) if other != dsid => Err(LoginError::Failed(format!(
+                    "Find My signed in as another account (dsid {other}, signed in as {dsid}); not kept"
+                ))),
+                _ => Ok((login.cookies, window_params)),
+            });
         let mut st = lock(&self.state);
         let finished = Instant::now();
         st.find_my_last_login = Some(LoginAttempt {
@@ -709,7 +706,12 @@ impl Daemon {
                 st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry))
             }
         }
-        let jar = result?;
+        let (jar, window_params) = result?;
+        let params = if window_params.is_empty() {
+            params
+        } else {
+            window_params
+        };
         let same = st.generation == generation;
         let Some(account) = st.account.as_mut().filter(|_| same) else {
             return Err(LoginError::Failed("signed out meanwhile".into()));
@@ -833,22 +835,21 @@ impl Daemon {
         };
         let result = self.find_my_login(generation, &apple_id, &dsid, params, &password);
         self.publish();
-        match result {
-            Ok(()) => {}
+        // Only Apple refusing the password keeps it out of the keyring; any
+        // other failure (a changed or misread endpoint) says nothing about
+        // the password, which usually comes from the user's own vault.
+        let login_failure = match result {
+            Ok(()) => None,
             Err(LoginError::Rejected) => {
                 return Err(ServiceError::PasswordRejected(format!(
                     "Apple refused the password for {apple_id}; nothing stored"
                 )));
             }
-            Err(LoginError::Failed(m)) => {
-                return Err(ServiceError::Failed(format!("{m}; nothing stored")));
-            }
-        }
-        self.secrets.set(&apple_id, &password).map_err(|e| {
-            ServiceError::Failed(format!(
-                "Apple accepted the password and Find My is authorized, but storing it failed: {e}"
-            ))
-        })?;
+            Err(LoginError::Failed(m)) => Some(m),
+        };
+        self.secrets
+            .set(&apple_id, &password)
+            .map_err(|e| ServiceError::Failed(format!("storing the password in the keyring failed: {e}")))?;
         eprintln!("icloud-sessiond: stored the Find My password for {apple_id} in the keyring");
         let mut st = lock(&self.state);
         if st.generation == generation {
@@ -856,7 +857,12 @@ impl Daemon {
         }
         drop(st);
         self.publish();
-        Ok(())
+        match login_failure {
+            None => Ok(()),
+            Some(m) => Err(ServiceError::Failed(format!(
+                "stored the password, but the Find My sign-in with it failed: {m}"
+            ))),
+        }
     }
 
     /// `ForgetPassword()`: removes every icloud-session keyring item.
@@ -905,6 +911,67 @@ impl Daemon {
                 me.refresh_password_stored();
             }
         });
+    }
+
+    /// Runs the sign-in window hidden in `--find --autofill` mode: it signs
+    /// in on Apple's own page with the stored password (showing itself only
+    /// if Apple asks for more, like a 2FA code) and prints the jar once Find
+    /// My answers. The password reaches it only on its stdin.
+    fn autofill_find_my(
+        &self,
+        apple_id: &str,
+        password: &str,
+    ) -> Result<(apple::FindMyLogin, BTreeMap<String, String>), LoginError> {
+        use std::io::Write;
+        let bin = &self.cfg.signin_bin;
+        let failed = |m: String| LoginError::Failed(m);
+        let mut child = Command::new(bin)
+            .args(["--find", "--autofill"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| failed(format!("running {}: {e}", bin.display())))?;
+        {
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            let mut input = zeroize::Zeroizing::new(format!("{apple_id}\n{password}\n"));
+            stdin
+                .write_all(input.as_bytes())
+                .map_err(|e| failed(format!("giving the sign-in window the password: {e}")))?;
+            zeroize::Zeroize::zeroize(&mut *input);
+        }
+        let mut out = Vec::new();
+        let read = child.stdout.take().expect("stdout is piped").read_to_end(&mut out);
+        let status = child
+            .wait()
+            .map_err(|e| failed(format!("waiting for {}: {e}", bin.display())))?;
+        read.map_err(|e| failed(format!("reading the sign-in window's output: {e}")))?;
+        if status.code() == Some(3) {
+            return Err(LoginError::Rejected);
+        }
+        if !status.success() {
+            return Err(failed(format!(
+                "the Find My sign-in did not finish ({} exited with {status})",
+                bin.display()
+            )));
+        }
+        let capture: Capture =
+            serde_json::from_slice(&out).map_err(|e| failed(format!("reading the sign-in window's output: {e}")))?;
+        let dsid = capture.dsid.clone();
+        let (jar, params) = capture.into_parts();
+        if !cookies::find_my_cookie(&jar, now_unix()) {
+            return Err(failed(format!(
+                "the sign-in window captured no {} cookie",
+                cookies::FIND_MY
+            )));
+        }
+        Ok((
+            apple::FindMyLogin {
+                dsid: dsid.or_else(|| cookies::user_dsid(&jar)),
+                cookies: jar,
+            },
+            params,
+        ))
     }
 
     /// Runs the sign-in window, validates what it captured, stores it.
