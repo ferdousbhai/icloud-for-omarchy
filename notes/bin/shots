@@ -11,5 +11,5 @@ make -j"$(nproc)" > /dev/null
 # and the status line reads "Pull done." instead of an error.
 # A private session bus keeps the real icloud-session out of it too: the
 # sign-in reads as unknown, so no banner.
-PATH="$(cd ../../stubs && pwd):$PATH" dbus-run-session --config-file="$(cd ../.. && pwd)/session-bus.conf" -- \
+ICLOUD_NOTES_SYNC_BIN="$(cd ../../stubs && pwd)/icloud-notes-sync" dbus-run-session --config-file="$(cd ../.. && pwd)/session-bus.conf" -- \
   ./shots "${1:-/tmp/notes-shot.png}"

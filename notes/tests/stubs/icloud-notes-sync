@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Test double for the icloud-notes-sync CLI: canned answers, no Apple
-# account, no network. Used by backend_test to exercise the exact
+# account, no network. The tests name it with ICLOUD_NOTES_SYNC_BIN,
+# as the app finds the engine. Used by backend_test to exercise the exact
 # argv/stdout/stderr/exit-code path the app uses in production. Like the
 # real tool, --json results go to stdout alone and everything else
 # (progress, notices) to stderr; exit 3 means status has entries or diff
@@ -27,6 +28,8 @@ elif { [ "$1" = "--json" ] && [ "$2" = "push" ] && [ "$3" = "--dry-run" ]; } || 
     echo "Would update Notes/Alpha.md"
   fi
   exit 3
+elif [ "$1" = "history" ] && [ "$3" = "--records" ]; then
+  echo "r1  2026-09-01T00:00:00Z  $2"
 elif [ "$1" = "history" ]; then
   echo "e9  2026-09-01T00:00:00Z  changed: $2"
 elif [ "$1" = "restore" ] || { [ "$1" = "--json" ] && [ "$2" = "restore" ]; }; then

@@ -195,10 +195,12 @@ const QList<Spec> &specs()
           "icloud-session is signed in to. Never opens a sign-in window: signed out exits 2.\n"
           "JSON: as for sync",
           {}, 0, 0 },
-        { "history", "history NOTE",
-          "The note's past versions, newest first (icloud-notes-sync history).\n"
-          "JSON: icloud-notes-sync's {mode, epochs: [{id, timestamp, changed, carriedOver}]}",
-          {}, 1, 1 },
+        { "history", "history NOTE [--records]",
+          "The note's past versions, newest first (icloud-notes-sync history). --records lists every\n"
+          "snapshot record instead of the epoch timeline.\n"
+          "JSON: icloud-notes-sync's {mode, epochs: [{id, timestamp, changed, carriedOver}]}, or with\n"
+          "--records {mode: \"records\", records: [...]}",
+          { QStringLiteral("--records") }, 1, 1 },
         { "diff", "diff NOTE REF",
           "A past version (an id from history) against iCloud's copy, or FROM..TO; exits 3 when they\n"
           "differ (icloud-notes-sync diff).",
@@ -247,7 +249,8 @@ const QSet<QString> kValued{ QStringLiteral("--folder"), QStringLiteral("--flag"
 const QSet<QString> kSwitches{ QStringLiteral("--json"),    QStringLiteral("--yes"),    QStringLiteral("--push"),
                                QStringLiteral("--append"),  QStringLiteral("--force"),  QStringLiteral("--stdin"),
                                QStringLiteral("--raw"),     QStringLiteral("--dry-run"), QStringLiteral("--strip"),
-                               QStringLiteral("--synced"),  QStringLiteral("--help"),   QStringLiteral("--version") };
+                               QStringLiteral("--synced"),  QStringLiteral("--records"), QStringLiteral("--help"),
+                               QStringLiteral("--version") };
 
 struct Args {
     QString command;
@@ -562,8 +565,9 @@ std::optional<Failure> needSyncTool(NotesBackend &b)
 {
     if (b.syncToolAvailable())
         return std::nullopt;
-    return Failure{ QStringLiteral("sync_tool_missing"), QStringLiteral("icloud-notes-sync is not installed (not found on PATH)."),
-                    kExitError, QStringLiteral("sudo pacman -S icloud-notes-sync") };
+    return Failure{ QStringLiteral("sync_tool_missing"),
+                    QStringLiteral("the sync engine (icloud-notes-sync) is missing."), kExitError,
+                    QStringLiteral("Reinstall icloud-notes: sudo pacman -S icloud-notes") };
 }
 
 std::optional<Failure> needCloned()
@@ -650,7 +654,7 @@ int passThrough(NotesBackend &b, const Args &a, const QStringList &toolArgs)
     if (auto f = takeLock(b, a))
         return report(*f, a.json);
     QProcess tool;
-    tool.setProgram(QStringLiteral("icloud-notes-sync"));
+    tool.setProgram(NotesBackend::syncToolPath());
     tool.setArguments((a.json ? QStringList{ QStringLiteral("--json") } : QStringList()) + toolArgs);
     tool.setWorkingDirectory(NotesBackend::rootPath());
     tool.setProcessChannelMode(QProcess::ForwardedChannels);
@@ -786,7 +790,7 @@ Done status(NotesBackend &b, int &exitCode)
                  .arg(!b.signInKnown() ? QStringLiteral("unknown (icloud-session is not available)")
                       : b.signedIn()   ? QStringLiteral("yes, as %1").arg(b.appleId())
                                        : QStringLiteral("no (icloud-session sign-in)"));
-    lines << QStringLiteral("Sync tool:   %1").arg(b.syncToolAvailable() ? QStringLiteral("icloud-notes-sync") : QStringLiteral("not installed"));
+    lines << QStringLiteral("Sync tool:   %1").arg(b.syncToolAvailable() ? NotesBackend::syncToolPath() : QStringLiteral("missing"));
     lines << QStringLiteral("Lock:        %1").arg(holder.isEmpty() ? QStringLiteral("free") : holder);
     lines << QStringLiteral("Notes:       %1 in %2 folders").arg(count).arg(json.value(QStringLiteral("folders")).toInt());
     for (auto it = flagged.constBegin(); it != flagged.constEnd(); ++it)
@@ -1284,6 +1288,8 @@ int runCommand(const Args &a, const Spec &spec)
         QStringList args{ cmd, n.path() };
         if (cmd == u"diff")
             args << a.positional.at(1);
+        if (cmd == u"history" && a.has("--records"))
+            args << QStringLiteral("--records");
         return passThrough(b, a, args);
     }
 

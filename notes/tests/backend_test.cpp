@@ -132,6 +132,8 @@ int main(int argc, char *argv[])
     if (!scratch.isValid())
         return EXIT_FAILURE;
     qputenv("ICLOUD_NOTES_VAULT", (scratch.path() + QStringLiteral("/vault")).toUtf8());
+    // No engine until the stub is named below, whatever /usr/lib or PATH hold.
+    qputenv("ICLOUD_NOTES_SYNC_BIN", (scratch.path() + QStringLiteral("/no-such-engine")).toUtf8());
     // The sync locks go to the runtime directory: the scratch one, so the
     // tests never meet the real app's (or leave lock files behind).
     qputenv("XDG_RUNTIME_DIR", scratch.path().toUtf8());
@@ -528,9 +530,12 @@ int main(int argc, char *argv[])
     const QString stubs =
         QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../stubs")).canonicalPath();
     check(QFile::exists(stubs + QStringLiteral("/icloud-notes-sync")), "stub present");
-    const QByteArray systemPath = qgetenv("PATH");
-    qputenv("PATH", (stubs + QLatin1Char(':') + QString::fromLocal8Bit(systemPath)).toUtf8());
-    check(b.syncToolAvailable(), "stub on PATH");
+    // ICLOUD_NOTES_SYNC_BIN names the engine and nothing else is tried: a
+    // missing one is missing even with an engine in /usr/lib or on PATH.
+    check(!b.syncToolAvailable() && NotesBackend::syncToolPath().isEmpty(), "a named engine that is missing is missing");
+    qputenv("ICLOUD_NOTES_SYNC_BIN", (stubs + QStringLiteral("/icloud-notes-sync")).toUtf8());
+    check(b.syncToolAvailable() && NotesBackend::syncToolPath() == stubs + QStringLiteral("/icloud-notes-sync"),
+          "the stub is the engine");
 
     b.refreshPushPreview();
     waitForSync(b);

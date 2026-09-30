@@ -58,7 +58,7 @@ int runBackgroundSync(QTextStream &out)
         return 0;
     }
     if (!backend.syncToolAvailable()) {
-        out << "icloud-notes-sync is not installed (not found on PATH); install it with: sudo pacman -S icloud-notes-sync\n";
+        out << "The sync engine (icloud-notes-sync) is missing; reinstall icloud-notes: sudo pacman -S icloud-notes\n";
         return 1;
     }
 

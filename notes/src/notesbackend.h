@@ -102,7 +102,11 @@ public:
     // No sync running or waiting to run, and no icloud-session call or
     // read unanswered: what a background sync waits for before exiting.
     bool idle() const { return !m_syncRunning && m_sessionCalls == 0 && m_signInReads == 0; }
-    // icloud-notes-sync is on PATH.
+    // The sync engine to run: $ICLOUD_NOTES_SYNC_BIN when set (tests,
+    // development; nothing else is tried then), else the packaged
+    // /usr/lib/icloud-notes/icloud-notes-sync, else icloud-notes-sync on
+    // PATH (a development build). Empty when none is executable.
+    static QString syncToolPath();
     bool syncToolAvailable() const;
     QString vaultTitleMode() const;
     // The account's default folder ("Notes"), vault-relative; empty when

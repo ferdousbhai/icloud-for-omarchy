@@ -576,7 +576,7 @@ ApplicationWindow {
                     color: root.colTextDim
                     text: backend.syncToolAvailable
                           ? "This folder is not linked to iCloud yet. Clone to download your Apple Notes."
-                          : "icloud-notes-sync, the sync engine, is not installed. Install it (sudo pacman -S icloud-notes-sync) and restart to enable sync."
+                          : "The sync engine (icloud-notes-sync) is missing. Reinstall icloud-notes (sudo pacman -S icloud-notes) and restart to enable sync."
                 }
                 PrimaryButton {
                     visible: backend.syncToolAvailable
@@ -1615,7 +1615,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.colTextMuted
-                text: "Snapshots from past pulls and pushes, newest first. Read-only here; to discard a note's local edits, run `icloud-notes-sync restore <note>` in a terminal."
+                text: "Snapshots from past pulls and pushes, newest first. Read-only here; to discard a note's local edits, run `icloud-notes restore <note> --yes` in a terminal."
             }
             SplitView {
                 Layout.fillWidth: true

@@ -1,7 +1,7 @@
 // The command line (`icloud-notes <command>`), run as a separate process
 // the way an agent runs it: this binary starts itself with --as-cli, which
 // is cliMain, the same entry the app's main() hands commands to. A scratch
-// vault under a temporary directory, the icloud-notes-sync stub on PATH and
+// vault under a temporary directory, the icloud-notes-sync stub as the engine and
 // a fake icloud-session on the private bus bin/test starts: never the real
 // notes, account or daemon. Checks exit codes and the JSON shapes docs/CLI.md
 // documents.
@@ -171,8 +171,9 @@ int main(int argc, char *argv[])
     qputenv("XDG_DATA_HOME", (g_scratch + QStringLiteral("/xdg-data")).toUtf8());
     qputenv("ICLOUD_NOTES_SYNC_STUB_LOG", (g_scratch + QStringLiteral("/stub.log")).toUtf8());
     const QString stubs = QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../stubs")).canonicalPath();
-    qputenv("PATH", (stubs + QLatin1Char(':') + qEnvironmentVariable("PATH")).toUtf8());
-    check(QFile::exists(stubs + QStringLiteral("/icloud-notes-sync")), "cli stub on PATH");
+    // The engine the app runs, whatever /usr/lib or PATH hold.
+    qputenv("ICLOUD_NOTES_SYNC_BIN", (stubs + QStringLiteral("/icloud-notes-sync")).toUtf8());
+    check(QFile::exists(stubs + QStringLiteral("/icloud-notes-sync")), "cli stub is the engine");
 
     QDBusConnection fakeBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, QStringLiteral("fake-session"));
     FakeSession fake(fakeBus);
@@ -504,6 +505,9 @@ int main(int argc, char *argv[])
               "cli push --dry-run passes icloud-notes-sync's preview through, exit 3");
         check(cli({ QStringLiteral("history"), QStringLiteral("alpha") }).out.contains("changed: Notes/Alpha.md"),
               "cli history names the note by its vault path");
+        check(cli({ QStringLiteral("history"), QStringLiteral("alpha"), QStringLiteral("--records") })
+                  .out.contains("r1  2026-09-01T00:00:00Z  Notes/Alpha.md"),
+              "cli history --records passes --records through");
         check(cli({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") }).code == 3, "cli diff exit 3");
         check(cli({ QStringLiteral("restore"), QStringLiteral("alpha") }).code == 64
                   && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("restored")),

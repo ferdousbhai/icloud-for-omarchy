@@ -39,10 +39,12 @@ constexpr int kReportTimeoutMs = 60000;
 const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to resume.");
 
 // The sync engine: icloud-notes-sync, a Rust port of icloud-md that takes
-// the sign-in from icloud-session. A normal binary on PATH.
+// the sign-in from icloud-session. The icloud-notes package installs it
+// off PATH, in kSyncToolPath; see NotesBackend::syncToolPath.
 constexpr char kSyncTool[] = "icloud-notes-sync";
+constexpr char kSyncToolPath[] = "/usr/lib/icloud-notes/icloud-notes-sync";
 const QString kNotInstalledMessage =
-    QStringLiteral("icloud-notes-sync is not installed (not found on PATH). Install it to sync.");
+    QStringLiteral("The sync engine (icloud-notes-sync) is missing. Reinstall icloud-notes to sync.");
 
 // A note larger than this is not a note anymore; the guardrail scans
 // stop here so a stray huge file cannot stall the list.
@@ -203,7 +205,6 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
 
     // Separate channels: with --json, stdout carries only the JSON result
     // (parsed), and progress, warnings and errors go to stderr (logged).
-    m_syncProcess.setProgram(QString::fromLatin1(kSyncTool));
     connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this, [this] {
         const QByteArray out = m_syncProcess.readAllStandardOutput();
         m_captured += out;
@@ -392,9 +393,26 @@ QByteArray NotesBackend::stateJson() const
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
 }
 
+QString NotesBackend::syncToolPath()
+{
+    const auto executable = [](const QString &path) {
+        const QFileInfo info(path);
+        return info.isFile() && info.isExecutable() ? info.absoluteFilePath() : QString();
+    };
+    // Tests and development name the engine; then nothing else is tried.
+    const QString named = qEnvironmentVariable("ICLOUD_NOTES_SYNC_BIN");
+    if (!named.isEmpty())
+        return executable(named);
+    const QString packaged = executable(QString::fromLatin1(kSyncToolPath));
+    if (!packaged.isEmpty())
+        return packaged;
+    // A development build of the engine on PATH (cargo install, say).
+    return QStandardPaths::findExecutable(QString::fromLatin1(kSyncTool));
+}
+
 bool NotesBackend::syncToolAvailable() const
 {
-    return !QStandardPaths::findExecutable(QString::fromLatin1(kSyncTool)).isEmpty();
+    return !syncToolPath().isEmpty();
 }
 
 QString NotesBackend::vaultTitleMode() const
@@ -1239,11 +1257,13 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     emit syncRunningChanged();
     appendLog(QStringLiteral("$ %1 ").arg(QLatin1StringView(kSyncTool)) + args.join(u' '));
     setSyncMessage(label + QStringLiteral("…"));
-    if (!syncToolAvailable()) {
+    const QString tool = syncToolPath();
+    if (tool.isEmpty()) {
         appendLog(kNotInstalledMessage);
         finishSync(-1);
         return;
     }
+    m_syncProcess.setProgram(tool);
     m_syncProcess.setWorkingDirectory(rootPath());
     m_syncProcess.setArguments(args);
     startProcess();
