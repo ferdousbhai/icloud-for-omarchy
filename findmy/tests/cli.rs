@@ -5,7 +5,6 @@
 #[path = "../examples/fake_findme.rs"]
 mod fake;
 
-use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -388,26 +387,10 @@ fn usage_errors_exit_64() {
 fn answering(status: u16) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tiny_http::Server::from_listener(listener, None).unwrap();
     std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut len = 0;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
-                    break;
-                }
-                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    len = v.trim().parse().unwrap();
-                }
-            }
-            let mut body = vec![0; len];
-            let _ = reader.read_exact(&mut body);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status} \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
+        for request in server.incoming_requests() {
+            let _ = request.respond(tiny_http::Response::empty(status));
         }
     });
     base

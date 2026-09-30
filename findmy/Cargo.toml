@@ -37,3 +37,4 @@ async-channel = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+tiny_http.workspace = true

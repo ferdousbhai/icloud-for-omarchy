@@ -5,16 +5,13 @@
 //!
 //! Serves tests/fixtures/*.json on the Find My endpoints, stamps positions
 //! with the current time, and walks the iPhone a little on every
-//! refreshClient so the history trail has something to draw. Also answers
-//! `/setup/ws/1/validate` with a webservices map pointing `findme` here, in
-//! case the session crate's mock mode validates against the mock URL.
+//! refreshClient so the history trail has something to draw.
 //!
 //! Every `playSound` and `lostDevice` request is recorded (endpoint and
 //! JSON body): `GET /fake/actions` lists them, so a test or an agent can
 //! check what the app sent without a real device ringing.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -75,7 +72,7 @@ fn live(mut v: Value, step: u64) -> Value {
     v
 }
 
-fn route(state: &State, base: &str, path: &str, sent: &Value) -> (u16, Value) {
+fn route(state: &State, path: &str, sent: &Value) -> (u16, Value) {
     let path = path.split('?').next().unwrap_or(path);
     let record = |endpoint: &str| {
         state
@@ -85,13 +82,6 @@ fn route(state: &State, base: &str, path: &str, sent: &Value) -> (u16, Value) {
             .push(json!({"endpoint": endpoint, "body": sent}));
     };
     match path {
-        "/setup/ws/1/validate" => (
-            200,
-            json!({
-                "dsInfo": {"dsid": "12345678901", "appleId": "test@example.com", "fullName": "Test User"},
-                "webservices": {"findme": {"url": base, "status": "active"}},
-            }),
-        ),
         // A restarted app picks up where the walk left off.
         "/fmipservice/client/web/initClient" => match state.refreshes.load(Ordering::SeqCst) {
             0 => (200, live(fixture("initClient"), 0)),
@@ -116,62 +106,41 @@ fn route(state: &State, base: &str, path: &str, sent: &Value) -> (u16, Value) {
     }
 }
 
-fn handle(mut stream: TcpStream, state: &State, base: &str) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    let mut content_length = 0usize;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
-            break;
-        }
-        if let Some((k, v)) = line.split_once(':')
-            && k.eq_ignore_ascii_case("content-length")
-        {
-            content_length = v.trim().parse().unwrap_or(0);
-        }
-    }
-    let mut body = vec![0; content_length];
-    reader.read_exact(&mut body)?;
-
-    let mut parts = request_line.split_whitespace();
-    let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
+fn handle(mut request: tiny_http::Request, state: &State) -> std::io::Result<()> {
+    let mut body = Vec::new();
+    request.as_reader().read_to_end(&mut body)?;
     let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let (status, reply) = route(state, base, path, &sent);
+    let (status, reply) = route(state, request.url(), &sent);
     let device = sent.get("device").and_then(Value::as_str).unwrap_or("");
-    eprintln!("{method} {path} -> {status} {device}");
+    eprintln!(
+        "{} {} -> {status} {device}",
+        request.method(),
+        request.url()
+    );
 
-    let payload = serde_json::to_vec(&reply)?;
-    write!(
-        stream,
-        "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        if status == 200 { "OK" } else { "Not Found" },
-        payload.len()
-    )?;
-    stream.write_all(&payload)
+    let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("header");
+    request.respond(
+        tiny_http::Response::from_data(serde_json::to_vec(&reply)?)
+            .with_status_code(status)
+            .with_header(header),
+    )
 }
 
-/// Serves requests on `listener` forever, one thread per connection.
+/// Serves requests on `listener` forever, one thread per request.
 pub fn serve(listener: TcpListener) -> std::io::Result<()> {
     serve_with(listener, Arc::default())
 }
 
 /// [`serve`] with a state the caller keeps, to read the recorded actions.
 pub fn serve_with(listener: TcpListener, state: Arc<State>) -> std::io::Result<()> {
-    let base = format!("http://{}", listener.local_addr()?);
-    for stream in listener.incoming() {
-        let (base, state) = (base.clone(), state.clone());
-        match stream {
-            Ok(s) => {
-                std::thread::spawn(move || {
-                    if let Err(e) = handle(s, &state, &base) {
-                        eprintln!("request failed: {e}");
-                    }
-                });
+    let server = tiny_http::Server::from_listener(listener, None).map_err(std::io::Error::other)?;
+    for request in server.incoming_requests() {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = handle(request, &state) {
+                eprintln!("request failed: {e}");
             }
-            Err(e) => eprintln!("accept failed: {e}"),
-        }
+        });
     }
     Ok(())
 }
