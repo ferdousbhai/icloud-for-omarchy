@@ -62,8 +62,8 @@ Updates then arrive with `omarchy update`. The one-liner runs
 `install-notes.sh` from the latest release: [`install.sh`](../install.sh)
 at the root of this repository, set to install just this app. It also
 installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh pacman`
-keeps the repository, and replaces the per-app repositories earlier
-releases used. See the root [README](../README.md#install) for
+keeps the repository, and replaces the `[icloud-notes]` repository
+earlier releases used. See the root [README](../README.md#install) for
 uninstalling.
 
 Uninstalling (`omarchy pkg drop icloud-notes`, and `icloud-session` if

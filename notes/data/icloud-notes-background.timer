@@ -1,6 +1,6 @@
 [Unit]
 Description=Sync Notes (icloud-notes) with iCloud every 15 minutes
-Documentation=https://github.com/ferdousbhai/icloud-notes#background-sync
+Documentation=https://github.com/ferdousbhai/icloud-for-omarchy/tree/main/notes#background-sync
 
 [Timer]
 OnBootSec=2min

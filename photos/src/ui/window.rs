@@ -349,7 +349,7 @@ impl App {
                     .application_icon("com.ferdousbhai.IcloudPhotos")
                     .developer_name("Ferdous Bhai")
                     .version(env!("CARGO_PKG_VERSION"))
-                    .website("https://github.com/ferdousbhai/icloud-photos")
+                    .website("https://github.com/ferdousbhai/icloud-for-omarchy")
                     .license_type(gtk::License::MitX11)
                     .comments("Browse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.")
                     .build()

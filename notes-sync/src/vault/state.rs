@@ -21,7 +21,6 @@
 //! `key_order` (`None` = the read order). Serialization walks it, emitting
 //! the keys whose value is present, then any other present key (one
 //! assigned after construction, which JavaScript appends).
-#![allow(clippy::module_name_repetitions)]
 
 use std::path::{Path, PathBuf};
 

@@ -5,7 +5,7 @@ sound on one, or turn on Lost Mode. The app also keeps a local history of
 where each device has been, so the map can draw its trail.
 
 The iCloud sign-in comes from the
-[`icloud-session`](https://github.com/ferdousbhai/icloud-session) package,
+[`icloud-session`](../session/README.md) package,
 which every iCloud app on the machine shares: after the first sign-in from
 any of them (Notes, Find My, Photos), Find My opens with no prompt.
 
@@ -33,8 +33,7 @@ Updates then arrive with `omarchy update`. The one-liner runs
 `install-findmy.sh` from the latest release: [`install.sh`](../install.sh)
 at the root of this repository, set to install just this app. It also
 installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh pacman`
-keeps the repository, and replaces the per-app repositories earlier
-releases used. See the root [README](../README.md#install) for
+keeps the repository. See the root [README](../README.md#install) for
 uninstalling.
 
 ## Using it

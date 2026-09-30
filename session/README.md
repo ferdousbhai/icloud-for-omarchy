@@ -6,7 +6,7 @@ Photos use it instead of signing in themselves.
 
 | crate | binary | role |
 |---|---|---|
-| `icloud-session` (repo root) | – | client library the apps link |
+| `icloud-session` (`session/`) | – | client library the apps link |
 | `icloud-sessiond` (`sessiond/`) | `icloud-sessiond` | D-Bus user service, the only owner of the session |
 | | `icloud-session-signin` | GTK4 + WebKitGTK 6 sign-in window the daemon runs |
 | | `icloud-session` | CLI for scripts and debugging |

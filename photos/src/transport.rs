@@ -6,7 +6,7 @@
 //! crate, the D-Bus client of `icloud-sessiond` (which owns the cookie jar,
 //! `/validate`, rotation merge and the 421 confirmation). In that crate's
 //! mock mode the same transport talks to the dev fake server instead.
-//! `src/session.rs` is the only file that names that crate.
+//! `src/session.rs` is the only file that uses its session client.
 
 use std::path::Path;
 

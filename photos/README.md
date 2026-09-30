@@ -26,8 +26,7 @@ Updates then arrive with `omarchy update`. The one-liner runs
 `install-photos.sh` from the latest release: [`install.sh`](../install.sh)
 at the root of this repository, set to install just this app. It also
 installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh pacman`
-keeps the repository, and replaces the per-app repositories earlier
-releases used. See the root [README](../README.md#install) for
+keeps the repository. See the root [README](../README.md#install) for
 uninstalling.
 
 To build and run from source instead (needs gtk4, libadwaita and Rust, and
@@ -193,7 +192,7 @@ Layout:
 - `src/thumbs.rs` downloads (thumbnails, previews, originals) on a small pool
 - `src/upload.rs` upload (verified live, see above)
 - `src/transport.rs` the HTTP seam every module above goes through
-- `src/session.rs` the only file that uses the `icloud-session` crate
+- `src/session.rs` the only file that uses the `icloud-session` client
 - `src/ui/` the GTK 4 / libadwaita app
 - `src/cli.rs` the command line (no GTK), over the same library code
 

@@ -1,4 +1,4 @@
-//! The only code that talks to the `icloud-session` crate, the client of
+//! The only code that talks to the `icloud-session` client, the client of
 //! `icloud-sessiond` (the D-Bus user service that owns the Apple sign-in).
 //! In that crate's mock mode (`ICLOUD_SESSION_MOCK=1`) there is no D-Bus:
 //! every request goes to `ICLOUD_SESSION_MOCK_URL`, served by `cargo run
