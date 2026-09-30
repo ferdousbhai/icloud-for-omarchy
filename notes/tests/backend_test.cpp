@@ -21,43 +21,6 @@
 #include <functional>
 
 namespace {
-QString rootPath()
-{
-    return qEnvironmentVariable("ICLOUD_NOTES_VAULT");
-}
-
-void writeFile(const QString &rel, const QString &content)
-{
-    const QString path = rootPath() + QLatin1Char('/') + rel;
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile f(path);
-    if (f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
-        f.write(content.toUtf8());
-}
-
-QString readFile(const QString &rel)
-{
-    QFile f(rootPath() + QLatin1Char('/') + rel);
-    return f.open(QIODevice::ReadOnly | QIODevice::Text) ? QString::fromUtf8(f.readAll()) : QString();
-}
-
-// A state file as icloud-notes-sync writes it (layout 3), which vault-info
-// reads: the title mode, the default folder's directory (if any) and the
-// tracked notes, {id, file[, read-only reason]}.
-QString stateJson(const QString &mode, const QList<QStringList> &notes, const QString &defaultDir = {})
-{
-    QStringList entries;
-    for (const QStringList &n : notes)
-        entries << QStringLiteral(R"("%1":{"file":"%2","recordChangeTag":"t","modificationDate":0%3})")
-                       .arg(n.at(0), n.at(1),
-                            n.size() > 2 ? QStringLiteral(R"(,"unpublishableReason":"%1")").arg(n.at(2)) : QString());
-    const QString folders = defaultDir.isEmpty()
-        ? QString()
-        : QStringLiteral(R"("folders":{"DefaultFolder-CloudKit":{"name":"%1","dirName":"%1"}},)").arg(defaultDir);
-    return QStringLiteral(R"({"layoutVersion":3,"titleMode":"%1",%2"notes":{%3}})")
-        .arg(mode, folders, entries.join(u','));
-}
-
 bool hasFlag(const NotesBackend &b, const QString &note, const char *flag)
 {
     return b.noteStates().value(note).toStringList().contains(QString::fromLatin1(flag));
@@ -73,7 +36,7 @@ void emptyTestTrash()
         if (!f.open(QIODevice::ReadOnly))
             continue;
         const QString body = QString::fromUtf8(f.readAll());
-        if (!body.contains(rootPath()))
+        if (!body.contains(testVault()))
             continue;
         f.close();
         QDir(info.absolutePath() + QStringLiteral("/../files/") + entry.completeBaseName()).removeRecursively();
@@ -246,7 +209,7 @@ int main(int argc, char *argv[])
     writeFile(QStringLiteral("A copy.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nbody\n"));
     b.refresh();
     check(b.saveWarning(QStringLiteral("edited\n")).contains(QStringLiteral("A copy.md")), "backend duplicate id warns");
-    QFile::remove(rootPath() + QStringLiteral("/A copy.md"));
+    QFile::remove(testVault() + QStringLiteral("/A copy.md"));
     b.refresh();
 
     // Scans are cached per file by mtime and size: a later rewrite of the
@@ -254,7 +217,7 @@ int main(int argc, char *argv[])
     // this write can land in the same millisecond as the previous one.)
     writeFile(QStringLiteral("A.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nchangeZ\n"));
     {
-        QFile f(rootPath() + QStringLiteral("/A.md"));
+        QFile f(testVault() + QStringLiteral("/A.md"));
         if (f.open(QIODevice::ReadWrite))
             f.setFileTime(QDateTime::currentDateTime().addSecs(2), QFileDevice::FileModificationTime);
     }
@@ -283,7 +246,7 @@ int main(int argc, char *argv[])
     check(b.resolveConflicts({ QStringLiteral("remote") }).isEmpty(), "backend resolve ok");
     check(readFile(QStringLiteral("C.md")) == QStringLiteral("# C\nsame\ntheirs\nend\n"), "backend resolve writes the pick");
     check(b.noteConflicts().isEmpty() && !hasFlag(b, QStringLiteral("C.md"), "conflict"), "backend resolve clears the conflict");
-    QFile::remove(rootPath() + QStringLiteral("/C.md"));
+    QFile::remove(testVault() + QStringLiteral("/C.md"));
     b.refresh();
 
     // A note rewritten on disk after it was loaded is never saved over:
@@ -316,7 +279,7 @@ int main(int argc, char *argv[])
                   && b.noteConflicts().isEmpty() && changed,
               "backend clean merge written without markers, and synced");
     }
-    QFile::remove(rootPath() + QStringLiteral("/D.md"));
+    QFile::remove(testVault() + QStringLiteral("/D.md"));
     b.refresh();
 
     // A pull moves (and retitles) the note open with unsaved edits: it is
@@ -324,7 +287,7 @@ int main(int argc, char *argv[])
     writeFile(QStringLiteral("Moving.md"), QStringLiteral("---\napple-note-id: id-move\n---\n# Moving\none\n\ntwo\n"));
     b.refresh();
     b.openNote(QStringLiteral("Moving.md"));
-    QFile::remove(rootPath() + QStringLiteral("/Moving.md"));
+    QFile::remove(testVault() + QStringLiteral("/Moving.md"));
     writeFile(QStringLiteral("Elsewhere/Moved.md"), QStringLiteral("---\napple-note-id: id-move\n---\n# Moved\none\n\ntwo\n"));
     b.refresh();
     check(b.currentFolder() == QStringLiteral("Elsewhere") && b.currentNote() == QStringLiteral("Moved.md"),
@@ -333,7 +296,7 @@ int main(int argc, char *argv[])
               && readFile(QStringLiteral("Elsewhere/Moved.md"))
                      == QStringLiteral("---\napple-note-id: id-move\n---\n# Moved\none\n\ntwo, mine\n"),
           "backend edits merge into the moved note");
-    QDir(rootPath() + QStringLiteral("/Elsewhere")).removeRecursively();
+    QDir(testVault() + QStringLiteral("/Elsewhere")).removeRecursively();
     b.setCurrentFolder(QString());
     b.refresh();
 
@@ -342,7 +305,7 @@ int main(int argc, char *argv[])
     writeFile(QStringLiteral("Doomed.md"), QStringLiteral("---\napple-note-id: id-doomed\n---\n# Doomed\nkeep\u00a0me\n"));
     b.refresh();
     b.openNote(QStringLiteral("Doomed.md"));
-    QFile::remove(rootPath() + QStringLiteral("/Doomed.md"));
+    QFile::remove(testVault() + QStringLiteral("/Doomed.md"));
     b.refresh();
     check(b.currentNote().isEmpty(), "backend deleted note closes");
     check(!b.saveCurrentNote(QStringLiteral("# Doomed\nkeep me, edited\n")), "backend save with no note is refused");
@@ -356,7 +319,7 @@ int main(int argc, char *argv[])
                   && told.contains(QStringLiteral("Doomed (unsaved edits)")),
               "backend edits to a deleted note kept as a new note, and said so");
     }
-    QFile::remove(rootPath() + QStringLiteral("/Doomed (unsaved edits).md"));
+    QFile::remove(testVault() + QStringLiteral("/Doomed (unsaved edits).md"));
     b.refresh();
 
     // Unsaved edits on a note with an unresolved conflict are never merged
@@ -382,7 +345,7 @@ int main(int argc, char *argv[])
         check(readFile(QStringLiteral("Clash.md")) == changed, "backend conflicted note left as it is");
         check(told.contains(QStringLiteral("unresolved conflict")) && told.contains(QStringLiteral("Clash (unsaved edits)")),
               "backend says why the edits are in a new note");
-        QFile::remove(rootPath() + QStringLiteral("/Clash (unsaved edits).md"));
+        QFile::remove(testVault() + QStringLiteral("/Clash (unsaved edits).md"));
 
         // The note resolved elsewhere, but the editor still holds markers.
         writeFile(QStringLiteral("Clash.md"), block);
@@ -393,8 +356,8 @@ int main(int argc, char *argv[])
         check(b.keepEditsAsConflict(b.noteBody(), mine) && b.currentNote() == QStringLiteral("Clash (unsaved edits).md")
                   && readFile(QStringLiteral("Clash.md")) == resolved,
               "backend marker-bearing edits are not merged into a resolved note");
-        QFile::remove(rootPath() + QStringLiteral("/Clash (unsaved edits).md"));
-        QFile::remove(rootPath() + QStringLiteral("/Clash.md"));
+        QFile::remove(testVault() + QStringLiteral("/Clash (unsaved edits).md"));
+        QFile::remove(testVault() + QStringLiteral("/Clash.md"));
         b.refresh();
     }
 
@@ -406,7 +369,7 @@ int main(int argc, char *argv[])
                                               "- pears\n=======\n- plums\n>>>>>>> remote\n||||||| base\n- pears\n"
                                               "=======\n- grapes\n>>>>>>> remote\n- bread\n");
         const QString synced = QStringLiteral("# Shopping\n- pears\n- bread\n");
-        const QString backups = rootPath() + QStringLiteral("/.icloud-md/conflict-backups");
+        const QString backups = testVault() + QStringLiteral("/.icloud-md/conflict-backups");
         auto backupFiles = [&] { return QDir(backups).entryList({ QStringLiteral("*.md") }, QDir::Files, QDir::Name); };
         writeFile(QStringLiteral("Order.md"), envelope + nested);
         b.refresh();
@@ -435,7 +398,7 @@ int main(int argc, char *argv[])
                          == envelope + QStringLiteral("# Shopping\n- apples\n- pears\n- plums\n- pears\n- grapes\n- bread\n")
                   && !b.noteConflictsUnreadable() && !hasFlag(b, QStringLiteral("Order.md"), "conflict"),
               "backend strip keeps every line but the markers");
-        check(backup1.startsWith(backups + QLatin1Char('/')) && readFile(QDir(rootPath()).relativeFilePath(backup1)) == envelope + nested
+        check(backup1.startsWith(backups + QLatin1Char('/')) && readFile(QDir(testVault()).relativeFilePath(backup1)) == envelope + nested
                   && stripped.value(QStringLiteral("message")).toString().contains(QStringLiteral(".icloud-md/conflict-backups/")),
               "backend strip backed the note up first, and says where");
         check(!b.notes().contains(QFileInfo(backup1).fileName()), "backend backup is not a note");
@@ -449,13 +412,13 @@ int main(int argc, char *argv[])
         const QString backup2 = restored.value(QStringLiteral("backup")).toString();
         check(restored.value(QStringLiteral("ok")).toBool() && readFile(QStringLiteral("Order.md")) == envelope + synced,
               "backend synced version restored");
-        check(backup2 != backup1 && readFile(QDir(rootPath()).relativeFilePath(backup2)) == envelope + nested
+        check(backup2 != backup1 && readFile(QDir(testVault()).relativeFilePath(backup2)) == envelope + nested
                   && backupFiles().size() == 2,
               "backend synced restore backed the note up first");
         check(!b.recoverConflictedNote(QStringLiteral("strip")).value(QStringLiteral("ok")).toBool(),
               "backend recovery only for unreadable markers");
-        QFile::remove(rootPath() + QStringLiteral("/Order.md"));
-        QFile::remove(rootPath() + QStringLiteral("/.icloud-md/base/id-order.md"));
+        QFile::remove(testVault() + QStringLiteral("/Order.md"));
+        QFile::remove(testVault() + QStringLiteral("/.icloud-md/base/id-order.md"));
         QDir(backups).removeRecursively();
         b.refresh();
     }
@@ -475,7 +438,7 @@ int main(int argc, char *argv[])
     check(b.vaultTitleMode() == QStringLiteral("filename"), "backend mode filename");
     check(b.renameCurrentNote(QStringLiteral("Second")).isEmpty(), "backend file rename ok");
     check(b.currentNote() == QStringLiteral("Second.md"), "backend file rename updates note");
-    check(QFile::exists(rootPath() + QStringLiteral("/Second.md")), "backend file rename on disk");
+    check(QFile::exists(testVault() + QStringLiteral("/Second.md")), "backend file rename on disk");
     check(b.renameCurrentNote(QStringLiteral("Second")).isEmpty(), "backend same-name noop");
     check(!b.renameCurrentNote(QStringLiteral("")).isEmpty(), "backend empty title refused");
     b.newNote(QStringLiteral("Plain"));
@@ -504,11 +467,11 @@ int main(int argc, char *argv[])
     // delete trashes it and falls back to All Notes.
     b.setCurrentFolder(QStringLiteral("Sub"));
     check(b.renameCurrentFolder(QStringLiteral("Moved")).isEmpty(), "backend folder rename ok");
-    check(b.currentFolder() == QStringLiteral("Moved") && QFile::exists(rootPath() + QStringLiteral("/Moved/H.md")),
+    check(b.currentFolder() == QStringLiteral("Moved") && QFile::exists(testVault() + QStringLiteral("/Moved/H.md")),
           "backend folder rename moves notes");
     check(!b.renameCurrentFolder(QStringLiteral("")).isEmpty(), "backend folder rename refuses empty");
     check(b.deleteCurrentFolder().isEmpty(), "backend folder delete ok");
-    check(b.currentFolder().isEmpty() && !QDir(rootPath() + QStringLiteral("/Moved")).exists(),
+    check(b.currentFolder().isEmpty() && !QDir(testVault() + QStringLiteral("/Moved")).exists(),
           "backend folder delete");
     emptyTestTrash();
     b.setCurrentFolder(QString());
@@ -516,7 +479,7 @@ int main(int argc, char *argv[])
     // PDF export writes next to the note and never overwrites.
     b.openNote(QStringLiteral("Second.md"));
     check(b.exportPdf().isEmpty(), "backend pdf exports");
-    check(QFile::exists(rootPath() + QStringLiteral("/Second.pdf")), "backend pdf on disk");
+    check(QFile::exists(testVault() + QStringLiteral("/Second.pdf")), "backend pdf on disk");
     check(!b.exportPdf().isEmpty(), "backend pdf no overwrite");
 
     // No icloud-session on the bus: the sign-in is simply unknown, with no
@@ -657,7 +620,7 @@ int main(int argc, char *argv[])
               == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine again\n\ntwo from iCloud\n"),
           "seam waiting save written once the pull is done");
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
-    QFile::remove(rootPath() + QStringLiteral("/Q.md"));
+    QFile::remove(testVault() + QStringLiteral("/Q.md"));
     b.refresh();
 
     // icloud-notes-sync refused a copy of the session that icloud-session says still
@@ -849,7 +812,7 @@ int main(int argc, char *argv[])
 
     // Background sync (`icloud-notes --sync`), on a vault of its own so its
     // lock is not the one b holds.
-    const QString vaultPath = rootPath();
+    const QString vaultPath = testVault();
     const QString bgVault = scratch.path() + QStringLiteral("/background");
     qputenv("ICLOUD_NOTES_VAULT", bgVault.toUtf8());
     auto backgroundSync = [](QString &output) {

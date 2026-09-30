@@ -28,38 +28,6 @@ namespace {
 QString g_vault;
 QString g_scratch;
 
-void writeFile(const QString &rel, const QString &content, const QString &root = g_vault)
-{
-    const QString path = root + QLatin1Char('/') + rel;
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile f(path);
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(content.toUtf8());
-}
-
-QString readFile(const QString &rel, const QString &root = g_vault)
-{
-    QFile f(root + QLatin1Char('/') + rel);
-    return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
-}
-
-// A state file as icloud-notes-sync writes it (layout 3), which vault-info
-// reads: the title mode, the default folder's directory (if any) and the
-// tracked notes, {id, file[, read-only reason]}.
-QString stateJson(const QString &mode, const QList<QStringList> &notes, const QString &defaultDir = {})
-{
-    QStringList entries;
-    for (const QStringList &n : notes)
-        entries << QStringLiteral(R"("%1":{"file":"%2","recordChangeTag":"t","modificationDate":0%3})")
-                       .arg(n.at(0), n.at(1),
-                            n.size() > 2 ? QStringLiteral(R"(,"unpublishableReason":"%1")").arg(n.at(2)) : QString());
-    const QString folders = defaultDir.isEmpty()
-        ? QString()
-        : QStringLiteral(R"("folders":{"DefaultFolder-CloudKit":{"name":"%1","dirName":"%1"}},)").arg(defaultDir);
-    return QStringLiteral(R"({"layoutVersion":3,"titleMode":"%1",%2"notes":{%3}})")
-        .arg(mode, folders, entries.join(u','));
-}
-
 bool exists(const QString &rel)
 {
     return QFile::exists(g_vault + QLatin1Char('/') + rel);
