@@ -31,9 +31,10 @@ fn url(cat: &Catalog, id: &str, f: impl Fn(&icloud_photos::catalog::Row) -> Opti
 
 #[test]
 fn thumb_comes_from_apples_derivative_into_the_cache() {
-    let root = temp_dir("thumb");
+    let tmp = temp_dir("thumb");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     t.serve(&url(&cat, "ASSET-001", |r| r.thumb_url.clone()), b"\xFF\xD8thumb");
 
     let path = fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).unwrap();
@@ -48,9 +49,10 @@ fn thumb_comes_from_apples_derivative_into_the_cache() {
 
 #[test]
 fn original_of_a_live_photo_brings_its_video() {
-    let root = temp_dir("live");
+    let tmp = temp_dir("live");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     t.serve(&url(&cat, "ASSET-001", |r| r.orig_url.clone()), b"heic");
     t.serve(&url(&cat, "ASSET-001", |r| r.live_url.clone()), b"mov");
 
@@ -64,9 +66,10 @@ fn original_of_a_live_photo_brings_its_video() {
 
 #[test]
 fn same_filename_in_the_same_month_gets_a_suffix() {
-    let root = temp_dir("collide");
+    let tmp = temp_dir("collide");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     // ASSET-001 and ASSET-004 are both IMG_0001.HEIC from September 2025.
     t.serve(&url(&cat, "ASSET-001", |r| r.orig_url.clone()), b"one");
     t.serve(&url(&cat, "ASSET-001", |r| r.live_url.clone()), b"mov");
@@ -84,9 +87,10 @@ fn same_filename_in_the_same_month_gets_a_suffix() {
 
 #[test]
 fn an_expired_url_is_refreshed_once() {
-    let root = temp_dir("expired");
+    let tmp = temp_dir("expired");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     // Make the stored URL look expired; lookup_m002_fresh.json has /B2/ URLs.
     let row = cat.asset("ASSET-002").unwrap().unwrap();
     let mut m = icloud_photos::cloudkit::MasterInfo {
@@ -126,9 +130,10 @@ fn an_expired_url_is_refreshed_once() {
 
 #[test]
 fn missing_rendition_is_an_error_not_a_panic() {
-    let root = temp_dir("missing");
+    let tmp = temp_dir("missing");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     assert!(
         fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).is_err(),
         "404 from the content host"
@@ -151,9 +156,10 @@ fn serve_originals(t: &FixtureTransport, cat: &Catalog) {
 
 #[test]
 fn a_fresh_install_gets_its_directories() {
-    let root = temp_dir("fresh");
+    let tmp = temp_dir("fresh");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     // Like icloud-session, the fixture transport creates no directories.
     t.serve("https://x/probe", b"x");
     let err = t
@@ -189,9 +195,10 @@ fn a_fresh_install_gets_its_directories() {
 
 #[test]
 fn files_already_on_disk_are_never_overwritten() {
-    let root = temp_dir("disk");
+    let tmp = temp_dir("disk");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     serve_originals(&t, &cat);
     // A lost catalog, or the user's own files: neither is in the catalog.
     let month = targets.library.join("2025/09");
@@ -217,9 +224,10 @@ fn files_already_on_disk_are_never_overwritten() {
 
 #[test]
 fn a_live_video_never_lands_on_another_assets_file() {
-    let root = temp_dir("live-collide");
+    let tmp = temp_dir("live-collide");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     serve_originals(&t, &cat);
     let month = targets.library.join("2025/09");
     // Another asset already owns IMG_0001.MOV (say, a video of that name).
@@ -257,9 +265,10 @@ impl Transport for Slow<'_> {
 
 #[test]
 fn concurrent_downloads_of_the_same_name_get_different_files() {
-    let root = temp_dir("concurrent");
+    let tmp = temp_dir("concurrent");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     serve_originals(&t, &cat);
     let slow = Slow(&t);
     let (a, b) = std::thread::scope(|s| {
@@ -280,9 +289,10 @@ fn concurrent_downloads_of_the_same_name_get_different_files() {
 
 #[test]
 fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
-    let root = temp_dir("live-retry");
+    let tmp = temp_dir("live-retry");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     let (orig, live) = (
         url(&cat, "ASSET-001", |r| r.orig_url.clone()),
         url(&cat, "ASSET-001", |r| r.live_url.clone()),
@@ -313,7 +323,8 @@ fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
 
 #[test]
 fn rename_noreplace_refuses_to_replace() {
-    let dir = temp_dir("noreplace");
+    let tmp = temp_dir("noreplace");
+    let dir = tmp.path();
     let (a, b) = (dir.join("a"), dir.join("b"));
     std::fs::write(&a, b"new").unwrap();
     std::fs::write(&b, b"old").unwrap();
@@ -330,9 +341,10 @@ fn rename_noreplace_refuses_to_replace() {
 
 #[test]
 fn prune_drops_removed_assets_and_the_oldest_mediums() {
-    let root = temp_dir("prune");
+    let tmp = temp_dir("prune");
+    let root = tmp.path();
     let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, &root);
+    let (cat, targets) = synced(&t, root);
     for id in ["ASSET-001", "ASSET-002", "ASSET-004"] {
         t.serve(&url(&cat, id, |r| r.thumb_url.clone()), b"thumb");
         t.serve(&url(&cat, id, |r| r.medium_url.clone()), &[0u8; 100]);

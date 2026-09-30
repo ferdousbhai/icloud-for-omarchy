@@ -25,10 +25,25 @@ fn apple(put_asset: &'static str) -> FixtureTransport {
     })
 }
 
-fn photo(name: &str) -> std::path::PathBuf {
-    let p = temp_dir(name).join("IMG_9000.JPG");
-    std::fs::write(&p, vec![0xFFu8; 3105]).unwrap();
-    p
+/// A photo to upload, in a directory removed when it drops.
+struct Photo {
+    path: std::path::PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Photo {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+fn photo(name: &str) -> Photo {
+    let dir = temp_dir(name);
+    let path = dir.path().join("IMG_9000.JPG");
+    std::fs::write(&path, vec![0xFFu8; 3105]).unwrap();
+    Photo { path, _dir: dir }
 }
 
 #[test]

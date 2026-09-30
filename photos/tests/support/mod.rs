@@ -4,7 +4,7 @@
 pub mod fake_server;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use icloud_photos::cloudkit::DB_PATH;
@@ -179,9 +179,10 @@ pub fn library(call: &Call) -> Result<Value> {
     }
 }
 
-pub fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("icloud-photos-test-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// A fresh directory, removed when the returned guard drops.
+pub fn temp_dir(name: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("icloud-photos-test-{name}-"))
+        .tempdir()
+        .unwrap()
 }

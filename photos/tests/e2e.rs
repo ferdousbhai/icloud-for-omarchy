@@ -21,8 +21,9 @@ use support::temp_dir;
 fn browse_download_delete_upload_and_resync() {
     let server = FakeServer::start(0, 60);
     let t = SessionTransport::mock(&server.url);
-    let root = temp_dir("e2e");
-    let dirs = Dirs::under(&root);
+    let tmp = temp_dir("e2e");
+    let root = tmp.path();
+    let dirs = Dirs::under(root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();
     let ck = CloudKit::connect(&t).unwrap();
 
@@ -104,8 +105,9 @@ fn signed_out_is_sign_in_required_until_reauthenticated() {
 fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
     let server = FakeServer::start(0, 12);
     let t: Arc<dyn Transport> = Arc::new(SessionTransport::mock(&server.url));
-    let root = temp_dir("pool");
-    let dirs = Dirs::under(&root);
+    let tmp = temp_dir("pool");
+    let root = tmp.path();
+    let dirs = Dirs::under(root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();
     sync(&CloudKit::connect(&*t).unwrap(), &mut cat, &|_| {}).unwrap();
 

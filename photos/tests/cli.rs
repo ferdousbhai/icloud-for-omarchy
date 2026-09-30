@@ -15,6 +15,7 @@ use support::temp_dir;
 struct Env {
     server: FakeServer,
     root: PathBuf,
+    _tmp: tempfile::TempDir,
 }
 
 struct Run {
@@ -32,9 +33,11 @@ impl Run {
 
 impl Env {
     fn new(name: &str, count: usize) -> Env {
+        let tmp = temp_dir(&format!("cli-{name}"));
         Env {
             server: FakeServer::start(0, count),
-            root: temp_dir(&format!("cli-{name}")),
+            root: tmp.path().to_owned(),
+            _tmp: tmp,
         }
     }
 

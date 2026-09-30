@@ -1115,6 +1115,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tiny_http",
  "uuid",

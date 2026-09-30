@@ -99,7 +99,8 @@ fn changes_request_is_hidden_and_hidden_assets_leave_the_library() {
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
     sync(&ck, &mut cat, &|_| {}).unwrap();
-    let dir = support::temp_dir("hidden");
+    let tmp = support::temp_dir("hidden");
+    let dir = tmp.path();
     let local = dir.join("IMG_0001.HEIC");
     std::fs::write(&local, b"heic").unwrap();
     cat.set_path("ASSET-004", PathKind::Original, Some(&local)).unwrap();
