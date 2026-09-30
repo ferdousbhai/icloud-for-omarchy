@@ -74,7 +74,7 @@ no truncated-read retries and no status polling.
 
 ```toml
 [dependencies]
-icloud-session = "=0.2.1"
+icloud-session = "=0.3.0"
 ```
 
 ```rust

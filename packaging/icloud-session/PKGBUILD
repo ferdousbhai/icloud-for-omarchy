@@ -7,7 +7,7 @@
 # locally.
 
 pkgname=icloud-session
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='D-Bus service, sign-in window and CLI that own one iCloud web sign-in for all apps'
 arch=('x86_64')

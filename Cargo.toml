@@ -11,7 +11,7 @@ repository = "https://github.com/ferdousbhai/icloud-for-omarchy"
 # top (`serde_json = { workspace = true, features = ["preserve_order"] }`).
 [workspace.dependencies]
 # bin/release keeps this version equal to session/Cargo.toml's.
-icloud-session = { version = "0.2.1", path = "session" }
+icloud-session = { version = "0.3.0", path = "session" }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_9"] }
 async-channel = "2"
 clap = { version = "4", features = ["derive"] }

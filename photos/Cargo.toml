@@ -1,6 +1,6 @@
 [package]
 name = "icloud-photos"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 description = "iCloud Photos for Omarchy: browse, download, upload and delete, over the shared icloud-session sign-in"
 license.workspace = true

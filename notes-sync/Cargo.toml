@@ -1,6 +1,6 @@
 [package]
 name = "icloud-notes-sync"
-version = "0.1.2"
+version = "0.2.0"
 edition.workspace = true
 description = "Sync iCloud Notes with a folder of Markdown files (a Rust port of icloud-md)"
 license.workspace = true

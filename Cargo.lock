@@ -1118,7 +1118,7 @@ checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
 
 [[package]]
 name = "icloud-findmy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel",
  "dirs",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-notes-sync"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-photos"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel",
  "base64 0.22.1",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-session"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "futures-lite",
  "serde",
@@ -1195,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-sessiond"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blocking",
  "futures-lite",

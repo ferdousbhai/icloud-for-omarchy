@@ -7,7 +7,7 @@
 # locally.
 
 pkgname=icloud-findmy
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Find My devices on Omarchy: locate, play a sound, Lost Mode, history trail'
 arch=('x86_64')
