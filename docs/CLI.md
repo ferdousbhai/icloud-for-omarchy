@@ -2,14 +2,14 @@
 
 Every iCloud app here can be driven from a terminal or by an agent, with no
 window and no display. This page maps each thing a person can do in a window
-to the command that does it, then fixes the conventions all five tools share.
+to the command that does it, then fixes the conventions all the tools share.
 [AGENTS.md](AGENTS.md) is the short version for an agent.
 
 | Tool | Package | What it drives |
 |---|---|---|
 | `icloud-session` | icloud-session | the one Apple sign-in every app uses (D-Bus daemon, sign-in window) |
 | `icloud-notes <command>` | icloud-notes | the Notes app: the vault `~/Documents/icloud-notes`, its rules and its lock |
-| `icloud-notes-sync` | icloud-notes-sync | the sync engine under Notes (a folder of Markdown files and iCloud Notes) |
+| (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
 
@@ -50,10 +50,10 @@ timer's sync). All of it is new, in the app binary: see
 | Conflict: Edit as text | `read --raw`, then `write --force` | added |
 | Unreadable markers: Remove the markers / Use the last synced version | `icloud-notes recover NOTE --strip` / `--synced` | added |
 | Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull) | added |
-| Pull | `icloud-notes pull` | added (`icloud-notes-sync pull` existed, without the lock) |
+| Pull | `icloud-notes pull` | added (the engine's `pull` existed, without the lock) |
 | Push… preview, then Push now; Status preview | `icloud-notes push --dry-run`, then `icloud-notes push` | added |
-| Note history, diffs | `icloud-notes history NOTE`, `icloud-notes diff NOTE REF` | added (`icloud-notes-sync` existed) |
-| Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (`icloud-notes-sync restore` existed) |
+| Note history, diffs | `icloud-notes history NOTE [--records]`, `icloud-notes diff NOTE REF` | added (the engine's existed) |
+| Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (the engine's `restore` existed) |
 | Link your Apple Notes: Clone my notes | `icloud-notes clone` | added |
 | Sign-in banner, days left, Sign in | `icloud-notes status` (`signed_in`, `sign_in_days_left`), then `icloud-session sign-in` | added |
 | Sync log | each command's output; `sync --json` carries `log` | added |
@@ -124,7 +124,7 @@ timer's sync). All of it is new, in the app binary: see
 
 ## Why Notes' commands live in `icloud-notes`
 
-They could have gone into `icloud-notes-sync` instead. They did not,
+They could have gone into the sync engine, `icloud-notes-sync`, instead. They did not,
 because everything that makes an edit safe is the app's: which notes are
 read-only, the save checks, how a title maps to a file in each vault shape,
 how the conflict picker rewrites a note, the backups `recover` makes, and the
@@ -134,9 +134,19 @@ has none of its own, and the window runs it only while holding one.
 `icloud-notes <command>` runs that code headless (a `QCoreApplication`; a
 `QGuiApplication` on the offscreen platform only for `export-pdf`), the same
 way `icloud-photos` and `icloud-findmy` put their commands in the app
-binary. `icloud-notes-sync` stays the engine, and `icloud-notes` passes
-`push --dry-run`, `history`, `diff` and `restore` through to it, under the
-lock.
+binary. `icloud-notes-sync` stays the engine, shipped inside the
+icloud-notes package and off PATH, and `icloud-notes` is the one command
+for notes: it runs the engine for `sync`, `pull`, `push` and `clone`, and
+passes `push --dry-run` (the engine's `status`), `history [--records]`,
+`diff` and `restore` through to it, under the lock, with `--json` passed
+on. The engine's other flags are the app's to choose: `clone
+--filename-as-title` (the app clones with titles in the first line) and
+`pull --defer-renames` (icloud-md compatibility) are not exposed.
+
+The app runs the engine at `$ICLOUD_NOTES_SYNC_BIN` when set (tests,
+development; nothing else is tried then), else
+`/usr/lib/icloud-notes/icloud-notes-sync`, else `icloud-notes-sync` on
+PATH (a development build).
 
 ## Conventions every tool follows
 
@@ -165,7 +175,7 @@ lock.
 
 ### Exit codes
 
-| Code | Meaning | session | notes | notes-sync | photos | findmy |
+| Code | Meaning | session | notes | notes-sync (engine) | photos | findmy |
 |---|---|---|---|---|---|---|
 | 0 | ok | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 1 | error (the JSON `code` says which) | ✓ | ✓ | ✓ | ✓ (also: some items of a batch failed) | ✓ |
@@ -173,7 +183,7 @@ lock.
 | 3 | has changes / differences (not an error) | | `push --dry-run`, `diff` | `status`, `push --dry-run`, `diff` | | |
 | 4 | Find My needs the Apple password: `icloud-session authorize-find-my` | ✓ (also: authorization not completed) | | | | ✓ |
 | 64 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 70 | internal error, a bug | | (passed through from notes-sync) | ✓ | | |
+| 70 | internal error, a bug | | (passed through from the engine) | ✓ | | |
 
 Changed to get here: icloud-notes-sync used 2 for usage and 4 for a sign-in
 (it now uses 64 and 2; the Notes app accepts both 2 and the old 4), and
@@ -229,17 +239,18 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |
 | `new-folder`, `rename-folder`, `delete-folder` | `{action, folder, from?, sync?}` |
 | `sync`, `pull`, `push`, `clone` (and `sync` under `--push`) | `{ok, runs:[{command, ok, exit_code, result}], log}`; `result` is icloud-notes-sync's own JSON for that run |
-| `push --dry-run`, `history`, `diff`, `restore` | icloud-notes-sync's own output |
+| `push --dry-run`, `history [--records]`, `diff`, `restore` | icloud-notes-sync's own output |
 
 `flags`: `new` (not synced yet), `conflict`, `read-only`, `missing-id`,
 `foreign-id`, `tables`. `modified` is UTC ISO 8601.
 
-### icloud-notes-sync
+### icloud-notes-sync (the engine, inside icloud-notes)
 
 `--json` results are icloud-md's shapes: `status`/`push --dry-run`
 `{entries:[{kind, file, resolution, reason?, ...}], unchanged, notices}`,
-`history` `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`,
-`pull`/`clone` summaries; see `icloud-notes-sync COMMAND --help`.
+`history` `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`
+(with `--records`, `{mode:"records", records:[...]}`), `pull`/`clone`
+summaries; see `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`.
 
 ### icloud-photos
 

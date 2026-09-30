@@ -10,7 +10,7 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
   On failure, the last line of stderr is
   `{"error":{"code":"...","message":"...","exit_code":N,"hint":"..."}}`;
   branch on `code` and the exit status, show `message`/`hint` to the user.
-- Exit codes, the same in all five tools:
+- Exit codes, the same in every tool:
 
   | Exit | Meaning | What to do |
   |---|---|---|
@@ -58,8 +58,9 @@ few days ahead.
 
 Notes are Markdown files in `~/Documents/icloud-notes`, one folder per
 Notes folder, synced with iCloud. Always go through `icloud-notes`, never
-edit the files or run `icloud-notes-sync` yourself: it applies the app's
-rules and takes the vault's lock.
+edit the files or run the sync engine (`icloud-notes-sync`, inside the
+icloud-notes package, off PATH) yourself: `icloud-notes` applies the app's
+rules, takes the vault's lock, and reaches every engine command you need.
 
 - **NOTE** is a path in the vault (`Notes/Groceries.md`, `.md` optional),
   an apple-note-id, or a title exactly one note has (`ambiguous` otherwise:
@@ -102,7 +103,7 @@ $ icloud-notes --json new "Packing" --body "- [ ] passport" --push
 | `recover NOTE --strip \| --synced` | unreadable conflict markers (`conflicts_unreadable`): keep every line, or the last synced text; backs up first |
 | `new-folder NAME [--in F]`, `rename-folder F NAME`, `delete-folder F --yes` | folders |
 | `sync`, `pull`, `push [--dry-run]`, `clone` | talk to iCloud (exit 2: sign-in) |
-| `history NOTE`, `diff NOTE REF`, `restore NOTE --yes`, `export-pdf NOTE` | versions, discard local edits, PDF next to the note |
+| `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`, `export-pdf NOTE` | versions, discard local edits, PDF next to the note |
 
 `write` refuses (`guardrail`) text that adds conflict markers or another
 note's id; `--force` overrides, but prefer `resolve`. Conflicts: `read

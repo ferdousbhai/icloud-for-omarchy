@@ -5,10 +5,9 @@ one Apple sign-in, published as one signed pacman repository.
 
 | Directory | Package | What it is |
 |---|---|---|
-| [notes/](notes/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app, synced with iCloud through icloud-notes-sync. |
+| [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app and the `icloud-notes` command, synced with iCloud by its engine, icloud-notes-sync (notes-sync/, a Rust port of icloud-md), which the package installs off PATH. |
 | [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4/libadwaita: browse, download, upload and delete. |
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4/libadwaita: locate, play a sound, Lost Mode, history trail. |
-| [notes-sync/](notes-sync/README.md) | `icloud-notes-sync` | Command-line sync between iCloud Notes and a folder of Markdown files (a Rust port of icloud-md). |
 | [session/](session/README.md), [sessiond/](sessiond/) | `icloud-session` | The shared sign-in: a D-Bus daemon, a sign-in window and a CLI (sessiond/), plus the Rust client crate every app links (session/). |
 
 [docs/BRIEF.md](docs/BRIEF.md) is the design brief the apps were built from.
@@ -38,8 +37,7 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 ```
 
 installs all three apps (icloud-notes, icloud-photos, icloud-findmy), which
-pull in icloud-session and icloud-notes-sync. To install only some, name
-them:
+pull in icloud-session. To install only some, name them:
 
 ```bash
 curl -fsSL .../install.sh | sudo bash -s -- icloud-photos icloud-findmy
@@ -58,6 +56,9 @@ Machines set up from the earlier one-repository-per-app releases (the
 `[icloud-photos]`, `[icloud-findmy]` had they existed) are migrated: once
 `[icloud-for-omarchy]` is added, the script removes each old
 `/etc/pacman.d/<name>.conf`, its `Include` line and its Omarchy hook.
+The icloud-notes-sync package of earlier releases needs nothing from the
+script: icloud-notes now carries the engine and `replaces` it, so the next
+`omarchy update` swaps it out.
 
 Every release also carries one installer per app, `install-notes.sh`,
 `install-photos.sh` and `install-findmy.sh`: install.sh with its default
@@ -79,9 +80,9 @@ To uninstall: `omarchy pkg drop <packages>`, then remove
 ```
 Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, photos, findmy
 session/  sessiond/      icloud-session: client crate / daemon, sign-in window, CLI
-notes-sync/              icloud-notes-sync
-photos/  findmy/         icloud-photos, icloud-findmy
 notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
+notes-sync/              icloud-notes-sync, the sync engine the icloud-notes package ships
+photos/  findmy/         icloud-photos, icloud-findmy
 packaging/<package>/     one PKGBUILD per package
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, test, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
@@ -132,14 +133,14 @@ Releases are cut from a checkout with the package-signing key in its
 keyring, no CI involved:
 
 ```bash
-bin/release --initial                                       # the first release: all five
+bin/release --initial                                  # the first release: all four
 bin/release icloud-notes 0.4.1
-bin/release icloud-session 0.3.0 icloud-notes-sync 0.2.0   # several at once
+bin/release icloud-session 0.3.0 icloud-notes 0.6.0   # several at once
 ```
 
 Versions are per package and so are the tags: `<name>-v<version>`, where
-`<name>` is the package name without `icloud-` (`session`, `notes-sync`,
-`photos`, `findmy`, `notes`), e.g. `notes-v0.4.1`. Each PKGBUILD takes its
+`<name>` is the package name without `icloud-` (`session`, `photos`,
+`findmy`, `notes`), e.g. `notes-v0.4.1`. Each PKGBUILD takes its
 `pkgver` from its own newest tag: at the tag it is the plain version, and a
 later commit builds `<version>.r<count>.<sha>` (`0.0.0.r<count>` for a package
 never tagged).
@@ -150,14 +151,24 @@ those packages with `makepkg` from `packaging/`, each from the committed
 HEAD via `git archive`. Every other package is downloaded from the latest
 release, its signature checked against the pinned key, and carried forward
 unchanged, so the new repository database, `icloud-for-omarchy.db`, always
-lists all five. It signs the database with the key whose fingerprint
+lists all four. It signs the database with the key whose fingerprint
 `install.sh` pins and publishes it, the packages, the public key,
 `install.sh` and the per-app installers as one GitHub release on the first
 tag named; `releases/latest/download` resolves to it.
 
+The Notes sync engine (notes-sync/) is not released on its own: it ships
+inside icloud-notes, built from the same commit, so releasing icloud-notes
+releases it, and its Cargo.toml version only names the engine
+(`icloud-notes-sync --version`). The `notes-sync-v*` tags are historical,
+from when it was the separate icloud-notes-sync package (last
+`notes-sync-v0.2.0`); the first icloud-notes that carries it must be
+released before any other package, and `bin/release` refuses to carry
+forward an icloud-notes that still depends on the old package.
+
 `bin/release --initial` is for the first release, when there is nothing to
-carry forward: it tags and builds all five at their current versions
-(icloud-session 0.2.0, icloud-notes-sync 0.1.0, icloud-photos 0.1.0,
+carry forward: it tags and builds every package at its current version
+(it made the first one, then five packages: icloud-session 0.2.0,
+icloud-notes-sync 0.1.0, icloud-photos 0.1.0,
 icloud-findmy 0.1.0 from their Cargo.toml files, and icloud-notes 0.4.0, the
 minor version after its last tag, `notes-v0.3.8`, since its sync engine
 changed).

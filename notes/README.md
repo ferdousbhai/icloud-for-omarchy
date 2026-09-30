@@ -12,10 +12,6 @@ both ways with iCloud.
   your name → iCloud → Advanced Data Protection (same path in macOS
   System Settings). Without this, nothing outside Apple's own apps can
   read your notes.
-- The sync engine, `icloud-notes-sync`: a command-line tool that syncs
-  a folder of Markdown files with iCloud Notes (a Rust port of
-  [icloud-md](https://github.com/coddingtonbear/icloud-md); see
-  [Credits](#credits)).
 - `icloud-session`, which owns the iCloud sign-in for Notes and the other
   iCloud apps. It is a small D-Bus service
   (`io.github.ferdousbhai.ICloudSession`, started on demand) with Apple's
@@ -23,8 +19,21 @@ both ways with iCloud.
   icloud-notes-sync takes the session it syncs with from it.
   Without it Notes cannot sign in, and shows no sign-in warnings.
 
-The package depends on both, and the installer adds their signed
-repositories; when building from source, install them too.
+The package depends on icloud-session, and the installer adds its signed
+repository; when building from source, install it too.
+
+The sync engine comes in the package: `icloud-notes-sync`
+([notes-sync/](../notes-sync/README.md)), a Rust port of
+[icloud-md](https://github.com/coddingtonbear/icloud-md) (see
+[Credits](#credits)) that syncs the folder of Markdown files with iCloud
+Notes. It is installed off PATH, at
+`/usr/lib/icloud-notes/icloud-notes-sync`, and run for you by the window,
+the background sync and `icloud-notes`; up to icloud-notes 0.5.0 it was a
+separate package, which this one now replaces. A build from source finds it
+through `ICLOUD_NOTES_SYNC_BIN` (e.g.
+`ICLOUD_NOTES_SYNC_BIN=$PWD/../target/debug/icloud-notes-sync` after
+`cargo build -p icloud-notes-sync`), else in `/usr/lib/icloud-notes`, else
+on PATH.
 
 ## Sign-in
 
@@ -57,9 +66,9 @@ keeps the repository, and replaces the per-app repositories earlier
 releases used. See the root [README](../README.md#install) for
 uninstalling.
 
-Uninstalling (`omarchy pkg drop icloud-notes`, and `icloud-notes-sync`
-and `icloud-session` if nothing else uses them) also removes the
-background-sync timer.
+Uninstalling (`omarchy pkg drop icloud-notes`, and `icloud-session` if
+nothing else uses it) also removes the sync engine and the background-sync
+timer.
 
 To build and run from source instead (from `notes/`):
 
@@ -78,8 +87,8 @@ and password rather than the iPhone QR code, tick **Keep me signed in**,
 and click **Trust** when asked: that sign-in lasts about 30 days, while a
 QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/icloud-notes`,
 one Markdown file per note with the title as its first line, just like
-in Notes (icloud-notes-sync clones icloud-session's account,
-`icloud-notes-sync clone --account <dsid>`). If the vault is ever missing while the computer is
+in Notes (the sync engine clones icloud-session's account; from a
+terminal, `icloud-notes clone`). If the vault is ever missing while the computer is
 signed in (a reinstall, say), the app downloads it again on its own,
 without asking.
 
@@ -99,7 +108,7 @@ without asking.
   note) are in the toolbar. The window follows the active Omarchy theme.
 - **History** shows past versions of the current note with diffs,
   read-only. Throwing away a note's local edits is a deliberate terminal
-  step (`icloud-notes-sync restore`, see
+  step (`icloud-notes restore`, see
   [If something looks wrong](#if-something-looks-wrong)), never a click.
 
 ## Syncing
@@ -270,18 +279,17 @@ Open **Sync log** to see exactly what the last operation did. To throw
 away local edits on one note and go back to the last synced copy:
 
 ```bash
-cd ~/Documents/icloud-notes
-icloud-notes-sync restore "<note file>"
+icloud-notes restore "<note>" --yes
 ```
 
-With Notes closed, `icloud-notes restore "<note>" --yes` does the same
-under the vault's lock.
+It takes the vault's lock, which the Notes window holds while it is open:
+close Notes first.
 
 ## Credits
 
 The sync engine started as [icloud-md](https://github.com/coddingtonbear/icloud-md)
 by Adam Coddington, which Notes ran directly until icloud-notes-sync, its
-Rust port, took over. Vaults are icloud-md vaults (the `.icloud-md/` state
+Rust port, took over (and moved into this package). Vaults are icloud-md vaults (the `.icloud-md/` state
 directory is unchanged), so a vault cloned with either tool works with the
 other.
 
@@ -290,4 +298,6 @@ other.
 Released with the other packages from the repository root; see the root
 [README](../README.md#releasing), which also covers the package-signing
 key. Its tags are `notes-v<version>` (`notes-v0.3.8` was `v0.3.8` before
-the move into this repository).
+the move into this repository). Releasing icloud-notes releases the sync
+engine too; the `notes-sync-v*` tags are from when it was a package of its
+own.

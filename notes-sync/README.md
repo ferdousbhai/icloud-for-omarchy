@@ -1,7 +1,7 @@
 # icloud-notes-sync
 
-Your iCloud Notes as a folder of Markdown files, synced both ways from the
-command line. A Rust port of [icloud-md](https://github.com/coddingtonbear/icloud-md)
+The sync engine inside the [icloud-notes](../notes/README.md) package: your
+iCloud Notes as a folder of Markdown files, synced both ways. A Rust port of [icloud-md](https://github.com/coddingtonbear/icloud-md)
 0.6.2 by Adam Coddington, using [icloud-session](../session) for the
 Apple sign-in instead of a browser of its own.
 
@@ -17,6 +17,18 @@ output, requests and vault files. A live write test runs against a real
 account on request only (see below). How the port was planned and where it
 deliberately differs from icloud-md 0.6.2 is in
 [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
+
+It is not a command of its own. The package installs it off PATH, at
+`/usr/lib/icloud-notes/icloud-notes-sync`, and the Notes window, its
+background sync and the `icloud-notes` command run it (`icloud-notes sync`,
+`pull`, `push [--dry-run]`, `clone`, `history [--records]`, `diff`,
+`restore`; see [docs/CLI.md](../docs/CLI.md)). Up to notes-sync-v0.2.0 it
+was a package of its own, `icloud-notes-sync`; icloud-notes now replaces
+it, and the engine is released with icloud-notes, not on its own.
+
+Run directly, for development or debugging, it takes these commands (from a
+checkout, `cargo run -q -p icloud-notes-sync -- <command>`, or the
+installed `/usr/lib/icloud-notes/icloud-notes-sync <command>`):
 
 ```console
 $ icloud-notes-sync clone --account <dsid> ~/Notes
@@ -37,9 +49,17 @@ on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hin
 `not_cloned_directory`, `usage`, `internal`, …). icloud-md used 2 for usage,
 1 for a sign-in and `{"error":"<Class>Error","exitCode":…}`.
 
-The Notes app runs this tool only while it holds the vault's lock; in the
-vault Notes syncs (`~/Documents/icloud-notes`), `icloud-notes pull|push|sync`
-takes that lock for you (see [docs/AGENTS.md](../docs/AGENTS.md)).
+The Notes app runs the engine only while it holds the vault's lock, which
+the engine itself does not take: in the vault Notes syncs
+(`~/Documents/icloud-notes`), use `icloud-notes`, which takes that lock for
+you (see [docs/AGENTS.md](../docs/AGENTS.md)), and run the engine directly
+only on a vault of your own.
+
+The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the
+Qt tests point it at a stub; point it at `target/debug/icloud-notes-sync`
+to run the app against a development build), else at
+`/usr/lib/icloud-notes/icloud-notes-sync`, else as `icloud-notes-sync` on
+PATH.
 
 Vaults are icloud-md vaults (`.icloud-md/state.json`, layout version 3) and
 stay readable by icloud-md.

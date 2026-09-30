@@ -31,7 +31,8 @@ asking. Never try to sign in yourself.
 
 ## Notes: `icloud-notes` (vault `~/Documents/icloud-notes`)
 
-Go through `icloud-notes`, not the files or `icloud-notes-sync`. NOTE = vault
+Go through `icloud-notes`, not the files or its sync engine (`icloud-notes-sync`,
+off PATH). NOTE = vault
 path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 
 - Read: `status`, `folders`, `list [--folder F] [--flag conflict]`,
@@ -45,7 +46,7 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   `recover NOTE --strip|--synced` (backs up first).
 - Sync: changes stay local until `sync` (push then pull) or `--push` on the
   change. Preview first: `push --dry-run` (exit 3 = something to push).
-  `pull`, `clone`, `history NOTE`, `diff NOTE REF`, `restore NOTE --yes`.
+  `pull`, `clone`, `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`.
 - `vault_busy` = the Notes window is open and owns the vault: ask the user
   to make the change there or quit Notes. Reads always work.
 - `read_only` notes cannot be changed here; `guardrail` = the text would add
