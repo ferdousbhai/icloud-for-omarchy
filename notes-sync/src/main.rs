@@ -1,6 +1,10 @@
 //! The `icloud-notes-sync` CLI. Ports icloud-md `src/cli.ts` for the verbs
 //! kept by the port: clone, pull, push, status, restore, history, diff.
 //!
+//! clone, pull, push and restore take the vault lock the Notes app holds
+//! (`cmd::lock`); status, history, diff, push --dry-run and vault-info only
+//! read, and don't.
+//!
 //! Exit codes: 0 ok, 1 known error, 2 sign-in required, 3 `status`/`push
 //! --dry-run` has entries or `diff` found differences, 64 usage, 70 internal
 //! (the table every iCloud tool shares; docs/CLI.md). `--json` is global
@@ -12,10 +16,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use icloud_notes_sync::cmd::errors::{EXIT_HAS_ENTRIES, EXIT_OK};
+use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::OutputContext;
 use icloud_notes_sync::cmd::plan::{RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
     self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status,
+    vault_info,
 };
 use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 
@@ -27,8 +33,8 @@ use icloud_notes_sync::vault::local::{display_path, find_vault_root};
                   has entries or diff found differences, 64 usage, 70 internal error.\n\
                   With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
                   {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}.\n\
-                  In the vault Notes (icloud-notes) syncs, prefer `icloud-notes` for pull/push/sync: it takes the \
-                  vault lock the app holds, which this tool does not.",
+                  clone, pull, push and restore take the vault's lock, shared with the Notes app (icloud-notes); \
+                  a busy lock is the error vault_busy (exit 1).",
     disable_version_flag = true
 )]
 struct Cli {
@@ -39,6 +45,11 @@ struct Cli {
     /// Print the version
     #[arg(short = 'V', long)]
     version: bool,
+
+    /// How long clone/pull/push/restore wait for the vault's lock: default 30 when another run or a
+    /// background sync holds it, none while the Notes window does
+    #[arg(long, global = true, value_name = "SECS")]
+    wait: Option<u64>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -85,6 +96,8 @@ enum Command {
         #[arg(long)]
         records: bool,
     },
+    /// What the Notes app reads from the vault's state: title mode, default folder, tracked notes (JSON only)
+    VaultInfo { directory: Option<PathBuf> },
     /// Diff two snapshots, or one snapshot against the current remote copy
     #[command(
         after_help = "<ref> is a snapshot id (diffed against the current remote copy) or <from>..<to> (two \
@@ -162,7 +175,8 @@ fn main() -> ExitCode {
         return ExitCode::from(ctx.emit_usage_error("no command given") as u8);
     };
 
-    match run(command, ctx) {
+    let wait = cli.wait.map(std::time::Duration::from_secs);
+    match run(command, ctx, wait) {
         Ok(code) => ExitCode::from(code as u8),
         Err(error) => ExitCode::from(ctx.emit_error(&error) as u8),
     }
@@ -186,7 +200,7 @@ fn print_notices(notices: &[SyncNotice]) {
     }
 }
 
-fn run(command: Command, ctx: OutputContext) -> Result<i32, cmd::Error> {
+fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) -> Result<i32, cmd::Error> {
     let mut on_status = |message: &str| ctx.status(message);
     let mut machine = MachineProgress { processed: 0, total: 0 };
     let mut quiet = NoProgress;
@@ -204,6 +218,7 @@ fn run(command: Command, ctx: OutputContext) -> Result<i32, cmd::Error> {
                 account,
                 non_interactive,
             };
+            let _lock = lock_vault(&directory, wait)?;
             let summary = clone::run_clone(&directory, progress, &mut on_status, &options)?;
             ctx.emit_result(&summary, |s| {
                 println!(
@@ -232,6 +247,7 @@ fn run(command: Command, ctx: OutputContext) -> Result<i32, cmd::Error> {
             defer_renames,
         } => {
             let target = resolve_target_dir(directory)?;
+            let _lock = lock_vault(&target, wait)?;
             let summary = pull::run_pull(&target, progress, &mut on_status, &pull::PullOptions { defer_renames })?;
             ctx.emit_result(&summary, |s| {
                 for line in pull::render_pull_report(s, &|file| display_path(&target, file)) {
@@ -255,6 +271,11 @@ fn run(command: Command, ctx: OutputContext) -> Result<i32, cmd::Error> {
         }
         Command::Push { directory, dry_run } => {
             let target = resolve_target_dir(directory)?;
+            let _lock = if dry_run {
+                None
+            } else {
+                Some(lock_vault(&target, wait)?)
+            };
             let result = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
             ctx.emit_result(&result, |r| {
                 print_notices(&r.notices);
@@ -306,10 +327,17 @@ fn run(command: Command, ctx: OutputContext) -> Result<i32, cmd::Error> {
         }
         Command::Restore { file, directory } => {
             let target = resolve_target_dir(directory)?;
+            let _lock = lock_vault(&target, wait)?;
             let result = restore::run_restore(&target, &file)?;
             ctx.emit_result(&result, |r| {
                 println!("Restored {} to match the last synced copy.", r.file)
             });
+            Ok(EXIT_OK)
+        }
+        Command::VaultInfo { directory } => {
+            let target = resolve_target_dir(directory)?;
+            let info = vault_info::run_vault_info(&target)?;
+            ctx.emit_result(&info, |i| println!("{}", serde_json::to_string_pretty(i).unwrap()));
             Ok(EXIT_OK)
         }
         Command::History {

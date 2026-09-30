@@ -219,6 +219,7 @@ fn run_scenario_against(scenario: &Scenario, expected_name: &str) -> (Vec<String
         .env("ICLOUD_NOTES_SYNC_ASSET_BODIES", asset_bodies)
         .current_dir(&cwd)
         .env("HOME", out.join("home"))
+        .env("XDG_RUNTIME_DIR", out.join("home")) // the vault lock, outside the compared tree
         .env("ICLOUD_NOTES_SYNC_CASSETTE", &cassette)
         .env("ICLOUD_NOTES_SYNC_REQUEST_LOG", &log_path)
         .env("ICLOUD_NOTES_SYNC_NOW", scenario.now.to_string())

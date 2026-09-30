@@ -67,6 +67,12 @@ pub enum Error {
     /// Sign-in required: exit 2.
     #[error("Not signed in to iCloud.")]
     SignInRequired,
+    /// The vault's lock is held (by the Notes window when `app`).
+    #[error("{}", if *app { format!("{holder} is open and owns the notes vault while it is open.") } else { format!("{holder} holds the notes vault.") })]
+    VaultBusy { holder: String, app: bool },
+    /// The vault's lock file can't be opened or locked.
+    #[error("could not open the vault's lock {path}: {reason}")]
+    VaultLock { path: String, reason: String },
     #[error(transparent)]
     CloudKit(CkError),
     #[error("{0}")]
@@ -117,6 +123,8 @@ impl Error {
             Error::UnknownVersionSnapshot { .. } => "UnknownVersionSnapshotError",
             Error::VersionContentUnavailable(_) => "VersionContentUnavailableError",
             Error::SignInRequired => "SignInRequiredError",
+            Error::VaultBusy { .. } => "VaultBusyError",
+            Error::VaultLock { .. } => "VaultLockError",
             Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "CloudKitZoneFetchFailedError",
             Error::CloudKit(CkError::RequestFailed(_)) => "CloudKitRequestFailedError",
             Error::CloudKit(_) | Error::Internal(_) | Error::Io(_) => "InternalError",
@@ -179,6 +187,12 @@ impl Error {
                 "Sign in to iCloud again with icloud-session, then retry (what \"icloud-md reauthenticate\" did for icloud-md)."
                     .into(),
             ),
+            Error::VaultBusy { app: true, .. } => Some(
+                "Notes syncs this vault itself while it is open. Quit it and retry, or pass --wait SECS to wait for it to close."
+                    .into(),
+            ),
+            Error::VaultBusy { app: false, .. } => Some("Retry later, or pass --wait SECS.".into()),
+            Error::VaultLock { .. } => None,
             Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. }) if server_error_code == "ZONE_NOT_FOUND" => {
                 Some(
                     "The server no longer has this zone - most likely a share that was revoked or deleted. Retrying won't \

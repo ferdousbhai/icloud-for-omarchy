@@ -37,6 +37,7 @@ $ icloud-notes-sync push
 $ icloud-notes-sync history <file>
 $ icloud-notes-sync diff <file> <id>|<from>..<to>
 $ icloud-notes-sync restore <file>
+$ icloud-notes-sync --json vault-info
 ```
 
 Exit codes: 0 ok, 1 error, 2 iCloud sign-in required, 3 `status`/`push
@@ -48,11 +49,12 @@ on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hin
 `not_cloned_directory`, `usage`, `internal`, …). icloud-md used 2 for usage,
 1 for a sign-in and `{"error":"<Class>Error","exitCode":…}`.
 
-The Notes app runs the engine only while it holds the vault's lock, which
-the engine itself does not take: in the vault Notes syncs
-(`~/Documents/icloud-notes`), use `icloud-notes`, which takes that lock for
-you (see [docs/AGENTS.md](../docs/AGENTS.md)), and run the engine directly
-only on a vault of your own.
+clone, pull, push and restore take the vault's lock, the one the Notes app
+holds while it is open (`--wait SECS` to wait for it; busy is the error
+`vault_busy`, exit 1); status, history, diff and push --dry-run only read and
+take none. `vault-info` prints what the app reads from the vault's state
+(docs/PORT_PLAN.md §7). In the vault Notes syncs (`~/Documents/icloud-notes`),
+use `icloud-notes` (see [docs/AGENTS.md](../docs/AGENTS.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the
 Qt tests point it at a stub; point it at `target/debug/icloud-notes-sync`

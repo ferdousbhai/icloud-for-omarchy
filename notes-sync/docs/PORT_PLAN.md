@@ -150,8 +150,9 @@ Every push refusal (push.ts, pushPlan.ts; ~31 sites) becomes an enumerated
 Same verbs/flags; `--account` checked against `Session::dsid()`;
 `--non-interactive` accepted, no-op. notesbackend.cpp: program
 `icloud-notes-sync`, rename messages/log prefix; stop MergedChannels (stdout =
-JSON, stderr = log); exit 3 = success for preview and diff; sign-in via new exit
-code 4, keep matching `icloud-md reauthenticate` during transition.
+JSON, stderr = log); exit 3 = success for preview and diff; sign-in is exit 2
+(the shared table; the app no longer matches exit 4 or the
+`icloud-md reauthenticate` text, though the engine still prints it).
 backgroundsync.cpp: drop the nvm/volta/npm PATH search. PKGBUILD: depends
 icloud-notes-sync, drop nodejs; own PKGBUILD for the new crate. README: rename
 restore/revert mentions. Later: remove the ~/.config/icloud-md mirror and its
@@ -172,6 +173,25 @@ first, differentially tested; (3) history, diff, restore; (4) status and push
 (6) Notes switch-over, then remove the icloud-session mirror.
 
 ## 7. Deliberate differences from icloud-md 0.6.2 (after parity)
+
+### The vault lock, and vault-info (not in icloud-md)
+
+icloud-md has no lock. The port takes the one icloud-notes holds
+(`src/cmd/lock.rs`): clone, pull, push and restore take an exclusive flock on
+`$XDG_RUNTIME_DIR/icloud-notes-<FNV-1a 64 of the vault's canonical path>.lock`
+(beside the vault without a runtime directory), the path icloud-notes'
+`NotesBackend::lockPath()` computes too. Non-blocking: another run or a
+background sync is waited for (`--wait SECS`, 30 by default), the Notes
+window, which holds it while open, not at all; busy is `vault_busy`, exit 1.
+status, history, diff, push --dry-run and vault-info only read and take no
+lock (a layout 2 → 3 migration, the one write they can make, is idempotent).
+A caller already holding the lock (the app) hands its locked descriptor down
+as `ICLOUD_NOTES_LOCK_FD`; it is used only if it is open on this vault's lock
+file and holds the lock.
+
+`vault-info` (JSON: title mode, default folder, tracked notes with their
+read-only reasons and base copies, the state and lock files) is what the app
+reads instead of parsing state.json.
 
 Upstream PR #29 (ferdousbhai, "Fetch the text of notes too large to store it
 inline", open and unmerged as of 2026-09-29; fork branch

@@ -6,6 +6,7 @@ pub mod clone;
 pub mod diff;
 pub mod errors;
 pub mod history;
+pub mod lock;
 pub mod output;
 pub mod plan;
 pub mod pull;
@@ -14,6 +15,7 @@ pub mod remote;
 pub mod report;
 pub mod restore;
 pub mod status;
+pub mod vault_info;
 
 use std::collections::{HashMap, HashSet};
 

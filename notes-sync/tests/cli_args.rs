@@ -7,10 +7,12 @@ use std::process::{Command, Output};
 use serde_json::Value;
 
 fn run(args: &[&str], cwd: &Path) -> Output {
+    let runtime = tempfile::tempdir().unwrap(); // vault locks land here, not in the real runtime dir
     Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
         .args(args)
         .current_dir(cwd)
         .env_remove("ICLOUD_NOTES_SYNC_CASSETTE")
+        .env("XDG_RUNTIME_DIR", runtime.path())
         .output()
         .expect("binary runs")
 }
