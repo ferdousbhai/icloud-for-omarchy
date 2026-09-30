@@ -39,34 +39,18 @@ fn env_dir(name: &str) -> Option<PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
-pub fn home() -> PathBuf {
-    env_dir("HOME").unwrap_or_else(|| PathBuf::from("/"))
-}
-
-pub fn state_dir() -> PathBuf {
-    env_dir("XDG_STATE_HOME")
-        .unwrap_or_else(|| home().join(".local/state"))
-        .join("icloud-session")
-}
-
-pub fn data_dir() -> PathBuf {
-    env_dir("XDG_DATA_HOME")
-        .unwrap_or_else(|| home().join(".local/share"))
-        .join("icloud-session")
-}
-
-pub fn cache_dir() -> PathBuf {
-    env_dir("XDG_CACHE_HOME")
-        .unwrap_or_else(|| home().join(".cache"))
-        .join("icloud-session")
-}
-
 impl Paths {
     pub fn from_env() -> Paths {
+        let home = env_dir("HOME").unwrap_or_else(|| PathBuf::from("/"));
+        let xdg = |name: &str, fallback: &str| {
+            env_dir(name)
+                .unwrap_or_else(|| home.join(fallback))
+                .join("icloud-session")
+        };
         Paths {
-            account: state_dir().join("account.json"),
-            webkit_data: data_dir().join("webkit"),
-            webkit_cache: cache_dir().join("webkit"),
+            account: xdg("XDG_STATE_HOME", ".local/state").join("account.json"),
+            webkit_data: xdg("XDG_DATA_HOME", ".local/share").join("webkit"),
+            webkit_cache: xdg("XDG_CACHE_HOME", ".cache").join("webkit"),
         }
     }
 }

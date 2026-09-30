@@ -229,6 +229,7 @@ trait Daemon {
     fn session(&self) -> zbus::Result<SessionReply>;
     fn merge_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
     fn report_sign_in_required(&self) -> zbus::Result<bool>;
+    fn report_find_my_auth_required(&self) -> zbus::Result<bool>;
     #[zbus(name = "FindMySession")]
     fn find_my_session(&self) -> zbus::Result<(String, HashMap<String, String>)>;
     fn merge_find_my_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
@@ -845,23 +846,15 @@ impl Session {
     }
 
     /// `ReportFindMyAuthRequired()`: true when the daemon holds a new Find
-    /// My jar (it signed in again with the stored password). False from a
-    /// daemon that answers nothing (it predates the answer), in mock mode,
-    /// or when the report fails.
+    /// My jar (it signed in again with the stored password). False in mock
+    /// mode or when the report fails.
     fn report_find_my_auth_required(&self) -> bool {
         let Some(conn) = &self.inner.conn else {
             return false;
         };
-        conn.call_method(
-            Some(BUS_NAME),
-            OBJECT_PATH,
-            Some(INTERFACE),
-            "ReportFindMyAuthRequired",
-            &(),
-        )
-        .ok()
-        .and_then(|reply| reply.body().deserialize::<bool>().ok())
-        .unwrap_or(false)
+        proxy(conn)
+            .and_then(|p| Ok(p.report_find_my_auth_required()?))
+            .unwrap_or(false)
     }
 
     /// `ReportSignInRequired()`: true when the daemon still has a session.
