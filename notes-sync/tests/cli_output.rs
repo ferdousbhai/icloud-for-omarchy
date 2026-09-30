@@ -51,93 +51,74 @@ fn status_goes_to_stdout_for_humans_and_stderr_in_json_mode() {
     assert_eq!(text(&err), "json status\n");
 }
 
-#[test]
-fn known_error_prints_message_and_hint_and_returns_1() {
-    let mut err = Vec::new();
-    assert_eq!(HUMAN.emit_error_to(&known_error(), &mut err), 1);
-    let printed = text(&err);
-    let lines: Vec<&str> = printed.lines().collect();
-    assert_eq!(lines.len(), 2);
-    assert!(lines[0].contains("\"missing-note.md\" isn't a tracked note in /some/dir."));
-    assert!(lines[1].contains("Check the file name"));
-}
+// Errors are printed by icloud-session's shared `cli::report` (its tests
+// cover the line itself); here, what notes-sync hands it.
 
 #[test]
-fn known_error_is_structured_json_in_json_mode() {
-    let mut err = Vec::new();
-    assert_eq!(JSON.emit_error_to(&known_error(), &mut err), 1);
-    let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert_eq!(payload["error"]["code"], "untracked_file");
+fn known_error_has_its_message_hint_code_and_exit_1() {
+    let error = known_error();
+    assert_eq!(error.exit_code(), 1);
+    assert_eq!(error.code(), "untracked_file");
     assert_eq!(
-        payload["error"]["message"],
+        error.to_string(),
         "\"missing-note.md\" isn't a tracked note in /some/dir."
     );
     assert_eq!(
-        payload["error"]["hint"],
-        "Check the file name (it's case-sensitive) and try again."
+        error.hint().as_deref(),
+        Some("Check the file name (it's case-sensitive) and try again.")
     );
-    assert_eq!(payload["error"]["exit_code"], 1);
-    assert_eq!(text(&err).lines().count(), 1, "one line, for agents reading stderr");
 }
 
 #[test]
-fn json_payload_omits_hint_when_there_is_none() {
-    let mut err = Vec::new();
+fn an_error_without_a_hint_has_none() {
     let error = Error::RequestedAccountMismatch {
         requested: "a@example.com".into(),
         actual: "b@example.com".into(),
     };
-    JSON.emit_error_to(&error, &mut err);
-    let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert!(payload["error"].get("hint").is_none());
+    assert!(error.hint().is_none());
 }
 
 #[test]
-fn internal_error_returns_70() {
-    let mut err = Vec::new();
-    assert_eq!(
-        HUMAN.emit_error_to(&Error::Internal("a genuine bug".into()), &mut err),
-        70
-    );
-    let printed = text(&err);
-    assert_eq!(printed.lines().count(), 1);
-    assert!(printed.contains("a genuine bug"));
-}
-
-#[test]
-fn internal_error_is_structured_json_with_exit_70() {
-    let mut err = Vec::new();
-    assert_eq!(
-        JSON.emit_error_to(&Error::Internal("a genuine bug".into()), &mut err),
-        70
-    );
-    let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert_eq!(payload["error"]["code"], "internal");
-    assert_eq!(payload["error"]["message"], "a genuine bug");
-    assert_eq!(payload["error"]["exit_code"], 70);
-}
-
-#[test]
-fn usage_error_prints_nothing_for_humans_but_returns_64() {
-    let mut err = Vec::new();
-    assert_eq!(HUMAN.emit_usage_error_to("unknown option '--nope'", &mut err), 64);
-    assert!(err.is_empty());
-}
-
-#[test]
-fn usage_error_is_structured_json_in_json_mode() {
-    let mut err = Vec::new();
-    assert_eq!(JSON.emit_usage_error_to("unknown option '--nope'", &mut err), 64);
-    let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert_eq!(
-        payload,
-        serde_json::json!({"error": {"code": "usage", "message": "unknown option '--nope'", "exit_code": 64}})
-    );
+fn internal_error_is_code_internal_exit_70() {
+    let error = Error::Internal("a genuine bug".into());
+    assert_eq!((error.code().as_str(), error.exit_code()), ("internal", 70));
+    assert_eq!(error.to_string(), "a genuine bug");
 }
 
 #[test]
 fn sign_in_required_exits_2_and_keeps_the_sign_in_marker() {
-    let mut err = Vec::new();
-    assert_eq!(HUMAN.emit_error_to(&Error::SignInRequired, &mut err), 2);
-    assert!(text(&err).contains("icloud-md reauthenticate"));
+    assert_eq!(Error::SignInRequired.exit_code(), 2);
+    assert!(
+        Error::SignInRequired
+            .hint()
+            .unwrap()
+            .contains("icloud-md reauthenticate")
+    );
+}
+
+/// The one-line JSON error, in its key order, through the binary.
+#[test]
+fn the_json_error_line_is_the_shared_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
+        .args(["--json", "history", "missing-note.md"])
+        .arg(tmp.path())
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let dir = tmp.path().display();
+    assert_eq!(
+        String::from_utf8_lossy(&o.stderr),
+        format!(
+            "{{\"error\":{{\"code\":\"not_cloned_directory\",\"message\":\"{dir} doesn't look like a cloned notes directory \
+             (no .icloud-md/state.json).\",\"exit_code\":1,\"hint\":\"Run \\\"icloud-notes-sync clone <directory>\\\" first.\"}}}}\n"
+        )
+    );
+    let human = std::process::Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
+        .args(["history", "missing-note.md"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&human.stderr).starts_with("icloud-notes-sync: "));
 }

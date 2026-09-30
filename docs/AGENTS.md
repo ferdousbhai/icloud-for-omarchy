@@ -71,7 +71,8 @@ rules, takes the vault's lock, and reaches every engine command you need.
   Notes window holds while it is open. If Notes is open they fail at once
   with `vault_busy` (exit 1): tell the user to make the change in Notes or
   quit it. A background sync holding it is waited for (30 s; `--wait SECS`).
-  Reading (`status`, `folders`, `list`, `read`, `search`) never needs it.
+  Reading (`status`, `folders`, `list`, `read`, `search`, and `history`,
+  `diff`, `push --dry-run`) never needs it.
 - **Changes stay local until a sync.** Add `--push` to a change to sync
   right after it (push, then pull), or run `icloud-notes sync`. Before a
   sync you did not make yourself, preview with `icloud-notes push --dry-run`

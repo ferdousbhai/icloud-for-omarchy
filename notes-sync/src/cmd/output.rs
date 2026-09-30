@@ -10,6 +10,9 @@ use serde::Serialize;
 
 use super::errors::{EXIT_USAGE, Error};
 
+/// The name errors are reported under.
+pub const TOOL: &str = "icloud-notes-sync";
+
 /// `OutputContext`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OutputContext {
@@ -50,52 +53,23 @@ impl OutputContext {
         };
     }
 
-    /// `emitError`: report on stderr, return the exit code. With `--json`
-    /// the report is one line, the error object every iCloud tool prints:
-    /// `{"error":{"code","message","exit_code","hint"?}}`.
-    pub fn emit_error(&self, error: &Error) -> i32 {
-        self.emit_error_to(error, &mut std::io::stderr())
+    /// `emitError`: report on stderr (icloud-session's shared form: with
+    /// `--json` one line, `{"error":{"code","message","exit_code","hint"?}}`),
+    /// return the exit code.
+    pub fn emit_error(&self, error: &Error) -> u8 {
+        icloud_session::cli::report(
+            TOOL,
+            self.json,
+            &error.code(),
+            error.exit_code(),
+            &error.to_string(),
+            error.hint().as_deref(),
+        )
     }
 
-    pub fn emit_error_to(&self, error: &Error, stderr: &mut dyn Write) -> i32 {
-        let code = error.exit_code();
-        if self.json {
-            let _ = writeln!(
-                stderr,
-                "{}",
-                error_json(&error.code(), &error.to_string(), code, error.hint())
-            );
-        } else {
-            let _ = writeln!(stderr, "{error}");
-            if let Some(hint) = error.hint() {
-                let _ = writeln!(stderr, "{hint}");
-            }
-        }
-        code
+    /// A usage error found after parsing (clap's own go through
+    /// `icloud_session::cli::parse`). Always 64.
+    pub fn emit_usage_error(&self, message: &str) -> u8 {
+        icloud_session::cli::report(TOOL, self.json, "usage", EXIT_USAGE, message, None)
     }
-
-    /// `emitUsageError`: clap already printed the human form; `--json` gets a
-    /// structured one. Always 64.
-    pub fn emit_usage_error(&self, message: &str) -> i32 {
-        self.emit_usage_error_to(message, &mut std::io::stderr())
-    }
-
-    pub fn emit_usage_error_to(&self, message: &str, stderr: &mut dyn Write) -> i32 {
-        if self.json {
-            let _ = writeln!(stderr, "{}", error_json("usage", message, EXIT_USAGE, None));
-        }
-        EXIT_USAGE
-    }
-}
-
-/// The one-line `--json` error object.
-pub fn error_json(code: &str, message: &str, exit_code: i32, hint: Option<String>) -> String {
-    let mut error = serde_json::Map::new();
-    error.insert("code".into(), code.into());
-    error.insert("message".into(), message.into());
-    error.insert("exit_code".into(), exit_code.into());
-    if let Some(hint) = hint {
-        error.insert("hint".into(), hint.into());
-    }
-    serde_json::json!({ "error": error }).to_string()
 }

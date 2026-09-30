@@ -232,7 +232,9 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
   the window and the background sync do. While the window is open it holds
   that lock, so they are refused at once (`vault_busy`): make the change in
   the window, or quit it. A background sync is waited for (30 s, or
-  `--wait SECS`). Reading never needs the lock.
+  `--wait SECS`). Reading never needs the lock; `history`, `diff` and
+  `push --dry-run` only read too. icloud-notes-sync takes the same lock
+  itself, so running it directly obeys it as well.
 - A change stays on this computer until the next sync (the window's, the
   background timer's, or `icloud-notes sync`); `--push` on any change runs
   one right after it.

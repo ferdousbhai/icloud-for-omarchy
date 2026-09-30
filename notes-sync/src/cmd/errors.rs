@@ -15,12 +15,9 @@
 
 use crate::cloudkit::CkError;
 
-pub const EXIT_OK: i32 = 0;
-pub const EXIT_ERROR: i32 = 1;
-pub const EXIT_SIGN_IN: i32 = 2;
-pub const EXIT_HAS_ENTRIES: i32 = 3;
-pub const EXIT_USAGE: i32 = 64;
-pub const EXIT_INTERNAL: i32 = 70;
+/// `status`/`push --dry-run` has entries, `diff` found differences.
+pub use icloud_session::cli::EXIT_CHANGES as EXIT_HAS_ENTRIES;
+pub use icloud_session::cli::{EXIT_ERROR, EXIT_INTERNAL, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -95,7 +92,7 @@ impl From<CkError> for Error {
 }
 
 impl Error {
-    pub fn exit_code(&self) -> i32 {
+    pub fn exit_code(&self) -> u8 {
         match self {
             Error::SignInRequired => EXIT_SIGN_IN,
             Error::Usage(_) => EXIT_USAGE,

@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use icloud_notes_sync::cmd::errors::{EXIT_HAS_ENTRIES, EXIT_OK};
 use icloud_notes_sync::cmd::lock::lock_vault;
-use icloud_notes_sync::cmd::output::OutputContext;
+use icloud_notes_sync::cmd::output::{OutputContext, TOOL};
 use icloud_notes_sync::cmd::plan::{RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
     self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status,
@@ -136,24 +136,9 @@ impl SyncProgress for MachineProgress {
 }
 
 fn main() -> ExitCode {
-    // Scanned from argv so a usage error knows which mode to report in.
-    let pre_parsed_json = std::env::args().any(|a| a == "--json");
-    let cli = match Cli::try_parse() {
+    let cli = match icloud_session::cli::parse::<Cli>(TOOL) {
         Ok(cli) => cli,
-        Err(e) => {
-            use clap::error::ErrorKind;
-            if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
-                let _ = e.print();
-                return ExitCode::from(EXIT_OK as u8);
-            }
-            let ctx = OutputContext { json: pre_parsed_json };
-            if !ctx.json {
-                let _ = e.print();
-            }
-            let rendered = e.render().to_string();
-            let message = rendered.lines().next().unwrap_or_default().to_owned();
-            return ExitCode::from(ctx.emit_usage_error(&message) as u8);
-        }
+        Err(code) => return ExitCode::from(code),
     };
     let ctx = OutputContext { json: cli.json };
 
@@ -167,18 +152,18 @@ fn main() -> ExitCode {
         } else {
             println!("{version}");
         }
-        return ExitCode::from(EXIT_OK as u8);
+        return ExitCode::from(EXIT_OK);
     }
     let Some(command) = cli.command else {
         use clap::CommandFactory;
         eprintln!("{}", Cli::command().render_help());
-        return ExitCode::from(ctx.emit_usage_error("no command given") as u8);
+        return ExitCode::from(ctx.emit_usage_error("no command given"));
     };
 
     let wait = cli.wait.map(std::time::Duration::from_secs);
     match run(command, ctx, wait) {
-        Ok(code) => ExitCode::from(code as u8),
-        Err(error) => ExitCode::from(ctx.emit_error(&error) as u8),
+        Ok(code) => ExitCode::from(code),
+        Err(error) => ExitCode::from(ctx.emit_error(&error)),
     }
 }
 
@@ -200,7 +185,7 @@ fn print_notices(notices: &[SyncNotice]) {
     }
 }
 
-fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) -> Result<i32, cmd::Error> {
+fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) -> Result<u8, cmd::Error> {
     let mut on_status = |message: &str| ctx.status(message);
     let mut machine = MachineProgress { processed: 0, total: 0 };
     let mut quiet = NoProgress;
@@ -361,9 +346,6 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
                 [from, to] if !from.is_empty() && !to.is_empty() => (*from, Some(*to)),
                 _ => {
                     let message = format!("Invalid ref \"{reference}\" - expected a snapshot id or <from>..<to>.");
-                    if !ctx.json {
-                        eprintln!("error: {message}");
-                    }
                     return Ok(ctx.emit_usage_error(&message));
                 }
             };

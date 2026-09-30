@@ -50,7 +50,8 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   change. Preview first: `push --dry-run` (exit 3 = something to push).
   `pull`, `clone`, `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`.
 - `vault_busy` = the Notes window is open and owns the vault: ask the user
-  to make the change there or quit Notes. Reads always work.
+  to make the change there or quit Notes. Reads (`history`, `diff` and
+  `push --dry-run` too) always work.
 - `read_only` notes cannot be changed here; `guardrail` = the text would add
   conflict markers (don't `--force`; use `resolve`).
 

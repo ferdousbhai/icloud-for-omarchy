@@ -50,7 +50,7 @@ timer's sync). All of it is new, in the app binary: see
 | Conflict: Edit as text | `read --raw`, then `write --force` | added |
 | Unreadable markers: Remove the markers / Use the last synced version | `icloud-notes recover NOTE --strip` / `--synced` | added |
 | Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull) | added |
-| Pull | `icloud-notes pull` | added (the engine's `pull` existed, without the lock) |
+| Pull | `icloud-notes pull` | added (the engine's `pull` existed) |
 | Push… preview, then Push now; Status preview | `icloud-notes push --dry-run`, then `icloud-notes push` | added |
 | Note history, diffs | `icloud-notes history NOTE [--records]`, `icloud-notes diff NOTE REF` | added (the engine's existed) |
 | Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (the engine's `restore` existed) |
@@ -129,17 +129,19 @@ because everything that makes an edit safe is the app's: which notes are
 read-only, the save checks, how a title maps to a file in each vault shape,
 how the conflict picker rewrites a note, the backups `recover` makes, and the
 vault's lock. That is C++ in `notes/src` (`NotesBackend`, `SyncModel`); a
-Rust copy would drift. And the lock is the app's to share: icloud-notes-sync
-has none of its own, and the window runs it only while holding one.
+Rust copy would drift. The engine takes the same lock itself for clone,
+pull, push and restore (the app hands it the one it holds), and tells the
+app what it needs of the vault's state through `vault-info`.
 `icloud-notes <command>` runs that code headless (a `QCoreApplication`; a
 `QGuiApplication` on the offscreen platform only for `export-pdf`), the same
 way `icloud-photos` and `icloud-findmy` put their commands in the app
 binary. `icloud-notes-sync` stays the engine, shipped inside the
 icloud-notes package and off PATH, and `icloud-notes` is the one command
-for notes: it runs the engine for `sync`, `pull`, `push` and `clone`, and
-passes `push --dry-run` (the engine's `status`), `history [--records]`,
-`diff` and `restore` through to it, under the lock, with `--json` passed
-on. The engine's other flags are the app's to choose: `clone
+for notes: it runs the engine for `sync`, `pull`, `push` and `clone` the
+way the window does (a refused sign-in is reported to icloud-session), and
+for `push --dry-run`, `history [--records]`, `diff` and `restore` becomes
+the engine (exec), with `--json` and `--wait` passed on: the first three
+only read and take no lock, so they work while the window is open. The engine's other flags are the app's to choose: `clone
 --filename-as-title` (the app clones with titles in the first line) and
 `pull --defer-renames` (icloud-md compatibility) are not exposed.
 
