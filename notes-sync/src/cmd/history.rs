@@ -8,7 +8,7 @@ use super::Error;
 use crate::js;
 use crate::vault::epoch::{NoteEpoch, list_epochs};
 use crate::vault::history::{VersionSnapshot, history_record_names, list_versions, resolve_tracked_note};
-use crate::vault::migrate::open_vault;
+use crate::vault::migrate::require_vault;
 
 /// `HistoryOptions`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -48,11 +48,7 @@ pub enum HistoryResult {
 /// `runHistory`: the epoch timeline (or, with `records`, the flat
 /// per-record snapshot list), newest first.
 pub fn run_history(target_dir: &Path, file: &str, options: &HistoryOptions) -> Result<HistoryResult, Error> {
-    let Some(state) = open_vault(target_dir, &mut |_| {})? else {
-        return Err(Error::NotClonedDirectory {
-            target_dir: target_dir.display().to_string(),
-        });
-    };
+    let state = require_vault(target_dir, &mut |_| {})?;
     let record_name = resolve_tracked_note(&state, file, target_dir)?.record_name;
     if options.records {
         return Ok(HistoryResult::Records {

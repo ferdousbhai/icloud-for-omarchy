@@ -59,7 +59,7 @@ use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
     read_local_note, read_text, split_options,
 };
-use crate::vault::migrate::open_vault;
+use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{UntrackedFile, pending_rename_target, resolve_note_ids, settle_pending_renames};
 use crate::vault::rt;
 use crate::vault::state::{
@@ -281,10 +281,6 @@ struct CreateCandidate {
     shared_zone_owner: Option<String>,
 }
 
-fn b64(bytes: &[u8]) -> String {
-    js::base64_encode(bytes)
-}
-
 /// `listUntrackedMarkdownFiles`: untracked `.md` files anywhere in the vault
 /// (dot-directories and `attachments/` skipped), sorted.
 fn list_untracked_markdown_files(target_dir: &Path, state: &CloneState) -> Result<Vec<String>, Error> {
@@ -368,11 +364,7 @@ pub fn build_push_plan(
     target_dir: &Path,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<BuildPushPlanResult, Error> {
-    let Some(mut state) = open_vault(target_dir, on_status)? else {
-        return Err(Error::NotClonedDirectory {
-            target_dir: target_dir.display().to_string(),
-        });
-    };
+    let mut state = require_vault(target_dir, on_status)?;
     let title_mode = state.mode();
     let mut planning_mutated_state = settle_pending_renames(target_dir, &mut state.notes, false, title_mode)?.changed;
 
@@ -819,7 +811,7 @@ pub fn build_push_plan(
 
     let replica_id = match &state.replica_id {
         Some(id) => id.clone(),
-        None => b64(&rt::random_bytes(16)),
+        None => js::base64_encode(&rt::random_bytes(16)),
     };
     state.replica_id = Some(replica_id.clone());
     let replica_bytes: [u8; 16] = js::base64_decode(&replica_id).try_into().map_err(|_| {
@@ -1120,7 +1112,7 @@ fn build_create_payload(
     if !verified {
         return Err(Refusal::CreateVerificationFailed);
     }
-    Ok((b64(&compressed), desired.text))
+    Ok((js::base64_encode(&compressed), desired.text))
 }
 
 /// `planRemoteChangedMerge`: diff3 the remote text into the local edit
@@ -1542,7 +1534,7 @@ pub fn prepare_note_text_update(
         Ok(format) if formats_round_trip_equal(&format, &desired.paragraphs) => {}
         _ => return Ok(Err(TextUpdateRefusal::RebuiltFormatFailed)),
     }
-    Ok(Ok(Some(b64(&compressed))))
+    Ok(Ok(Some(js::base64_encode(&compressed))))
 }
 
 // --- execution --------------------------------------------------------------------

@@ -126,3 +126,11 @@ pub fn open_vault(target_dir: &Path, on_status: &mut dyn FnMut(&str)) -> Result<
     }
     read_clone_state(target_dir)
 }
+
+/// [`open_vault`] for a command that needs a clone: none is
+/// `NotClonedDirectory`.
+pub fn require_vault(target_dir: &Path, on_status: &mut dyn FnMut(&str)) -> Result<CloneState, Error> {
+    open_vault(target_dir, on_status)?.ok_or_else(|| Error::NotClonedDirectory {
+        target_dir: target_dir.display().to_string(),
+    })
+}

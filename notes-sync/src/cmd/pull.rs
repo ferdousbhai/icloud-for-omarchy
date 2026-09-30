@@ -33,7 +33,7 @@ use crate::vault::layout::{
 use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
 };
-use crate::vault::migrate::open_vault;
+use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
     AttachmentEntry, CloneState, FolderEntry, NOTE_ADD_ORDER, NoteEntry, PULL_WRITE_ORDER, TableAttachmentEntry,
@@ -167,11 +167,7 @@ pub fn run_pull_with(
     on_status: &mut dyn FnMut(&str),
     options: &PullOptions,
 ) -> Result<PullSummary, Error> {
-    let Some(state) = open_vault(target_dir, on_status)? else {
-        return Err(Error::NotClonedDirectory {
-            target_dir: target_dir.display().to_string(),
-        });
-    };
+    let state = require_vault(target_dir, on_status)?;
     let title_mode = state.mode();
     let defer_renames = options.defer_renames;
 

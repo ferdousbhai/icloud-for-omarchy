@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::Result;
 use super::proto::{Message, topotext};
 use super::text::{decompress_note_document, parse_versioned_document};
-use crate::js::{from_utf16, utf16};
+use crate::js::{from_utf16, posix, utf16};
 use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
 /// U+FFFC, one per embed in a note's visible text.
@@ -237,15 +237,9 @@ pub fn encode_uri_component(s: &str) -> String {
     out
 }
 
-/// POSIX `path.basename`.
-fn basename(p: &str) -> &str {
-    let trimmed = p.trim_end_matches('/');
-    trimmed.rsplit('/').next().unwrap_or(trimmed)
-}
-
 /// `formatAttachmentMarkdown`.
 pub fn format_attachment_markdown(reference: &AttachmentReference, relative_file: &str) -> String {
-    let display_name = basename(relative_file);
+    let display_name = posix::basename(relative_file);
     let href = relative_file
         .split('/')
         .map(encode_uri_component)

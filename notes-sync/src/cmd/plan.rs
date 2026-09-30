@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::js::posix;
 use crate::md::frontmatter::NOTE_ID_KEY;
 use crate::md::frontmatter::NOTE_TITLE_KEY;
 
@@ -127,12 +128,6 @@ impl FolderRefusal {
             }
         }
     }
-}
-
-/// `path.posix.basename`.
-fn posix_basename(path: &str) -> &str {
-    let trimmed = path.trim_end_matches('/');
-    trimmed.rsplit('/').next().unwrap_or(trimmed)
 }
 
 /// `restore <file>` advice suffix shared by several refusals.
@@ -311,7 +306,7 @@ impl RetitleRefusal {
         format!(
             "{} - rename the file back to {}, or retitle the note in Notes instead",
             self.inner(),
-            posix_basename(previous_file)
+            posix::basename(previous_file)
         )
     }
 }

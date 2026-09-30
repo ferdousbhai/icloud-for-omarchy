@@ -17,7 +17,7 @@ use crate::vault::epoch::{NoteEpoch, find_epoch_by_id};
 use crate::vault::history::{
     VersionSnapshot, find_snapshot_by_id, history_record_names, list_versions, resolve_tracked_note,
 };
-use crate::vault::migrate::open_vault;
+use crate::vault::migrate::require_vault;
 use crate::vault::state::CloneState;
 
 /// `DiffEpochSection`.
@@ -92,11 +92,7 @@ pub fn run_diff_with(
     to_id: Option<&str>,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<DiffResult, Error> {
-    let Some(state) = open_vault(target_dir, on_status)? else {
-        return Err(Error::NotClonedDirectory {
-            target_dir: target_dir.display().to_string(),
-        });
-    };
+    let state = require_vault(target_dir, on_status)?;
     let tracked = resolve_tracked_note(&state, file, target_dir)?;
     let record_names = history_record_names(&state, &tracked.record_name);
     let zone = note_zone(tracked.entry.shared_zone_owner.as_deref());
