@@ -20,11 +20,12 @@
 //!   any other value is used verbatim; unset keeps WebKitGTK's default.
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
 
+use icloud_sessiond::cookies::is_icloud_domain;
+use icloud_sessiond::files::Paths;
 use serde_json::{Value, json};
 use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
@@ -174,19 +175,6 @@ const OPEN_SIGN_IN_JS: &str = r##"
 })();
 "##;
 
-fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
-    std::env::var_os(var)
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| {
-            let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-            home.join(fallback)
-        })
-        .join("icloud-session")
-        .join("webkit")
-}
-
 /// A completed sign-in: account info present and no 2FA still pending
 /// (icloud-md's `isFullySignedInBody`).
 fn is_fully_signed_in(body: &Value) -> bool {
@@ -273,11 +261,6 @@ fn stays_in_window(uri: &str) -> bool {
         }),
         _ => false,
     }
-}
-
-fn is_icloud_domain(domain: &str) -> bool {
-    let host = domain.trim_start_matches('.');
-    host == "icloud.com" || host.ends_with(".icloud.com")
 }
 
 fn cookies_json(cookies: Vec<soup::Cookie>) -> Vec<Value> {
@@ -478,8 +461,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let data_dir = xdg_dir("XDG_DATA_HOME", ".local/share");
-    let cache_dir = xdg_dir("XDG_CACHE_HOME", ".cache");
+    let Paths {
+        webkit_data: data_dir,
+        webkit_cache: cache_dir,
+        ..
+    } = Paths::from_env();
     for dir in [&data_dir, &cache_dir] {
         use std::os::unix::fs::DirBuilderExt;
         let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);

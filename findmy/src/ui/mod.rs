@@ -1,11 +1,8 @@
-//! GTK4 + libadwaita front end. `banner` and `devices` need only GTK;
-//! `map` and `window` need libshumate (the `ui` feature).
+//! GTK4 + libadwaita + libshumate front end (the `ui` feature).
 
 pub mod banner;
 pub mod devices;
-#[cfg(feature = "ui")]
 pub mod map;
-#[cfg(feature = "ui")]
 pub mod window;
 
 use gtk::{gio, glib};
@@ -28,7 +25,6 @@ where
     });
 }
 
-#[cfg(feature = "ui")]
 pub fn run() -> glib::ExitCode {
     use adw::prelude::*;
 

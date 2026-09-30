@@ -1,13 +1,9 @@
 //! `icloud-sessiond`: the D-Bus user service that owns the iCloud session.
 //! Started by D-Bus activation; exits when idle.
 
-mod apple;
-mod cookies;
-mod daemon;
-mod files;
-mod secrets;
-
 use std::process::ExitCode;
+
+use icloud_sessiond::daemon;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

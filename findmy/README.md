@@ -165,8 +165,7 @@ runs the full Rust test suite (the root `bin/test` runs every crate's). The core
 (`findme.rs`, `history.rs`, `models.rs`) and the command line (`cli.rs`)
 have no GTK dependency, so `cargo test --no-default-features` tests them
 on a machine without the GTK stack (the binary is then the command line
-only); `--features gtk` builds the widgets that need only GTK and
-libadwaita.
+only).
 
 ## How it works
 

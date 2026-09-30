@@ -15,14 +15,12 @@ name = "icloud-findmy"
 path = "src/main.rs"
 
 # The core (findme, history, models) needs no GTK, so `cargo test
-# --no-default-features` runs on a machine without the GTK stack.
-# `gtk` builds the widgets that need only gtk4 + libadwaita; `ui` adds
-# libshumate for the map and the app. Without `ui` the binary is the
-# command line only.
+# --no-default-features` runs on a machine without the GTK stack. `ui`
+# (gtk4, libadwaita, libshumate) builds the app; without it the binary is
+# the command line only.
 [features]
 default = ["ui"]
-gtk = ["dep:gtk", "dep:adw", "dep:async-channel"]
-ui = ["gtk", "dep:shumate"]
+ui = ["dep:gtk", "dep:adw", "dep:async-channel", "dep:shumate"]
 
 [dependencies]
 # The workspace's session/ crate.
@@ -31,7 +29,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
-dirs = "7"
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
 shumate = { package = "libshumate", version = "0.8", optional = true }
