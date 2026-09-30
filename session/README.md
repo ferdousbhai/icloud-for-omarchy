@@ -96,6 +96,7 @@ icloud_session::sign_in()?;            // SignIn(), returns at once
 icloud_session::authorize_find_my()?;  // AuthorizeFindMy(), returns at once
 icloud_session::status()?;             // Status { signed_in, apple_id, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored }
 for status in icloud_session::watch()? { /* on its own thread: one Status per change */ }
+icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconnecting; false stops it
 ```
 
 | item | what it does |
@@ -109,6 +110,7 @@ for status in icloud_session::watch()? { /* on its own thread: one Status per ch
 | `authorize_find_my()` | `AuthorizeFindMy()`, returns at once: `signing_in` while its window is open, then `find_my_authorized`. No-op in mock mode. |
 | `status()` | `Status { signed_in, apple_id, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored }`, one `GetAll`. `expires_at` is unix seconds or `None`; `find_my_authorized` is false from a daemon without the property. Mock mode reports it true. |
 | `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`, and after the daemon dies or restarts (re-read from the new instance). |
+| `watch_forever(f)` | What a sign-in banner wants: calls `f` with the current `Status` on every (re)connect and after each change, until `f` returns false. When the watch ends (the daemon idle-exited or restarted) or cannot start, it reconnects after 2 s, doubling up to 60 s; an outage is reported once on stderr. Returns at once in mock mode. |
 | `Session::connect_on(&conn)`, `status_on`, `watch_on`, `sign_in_on`, `authorize_find_my_on`, `sign_out_on` | The same on a given `zbus::blocking::Connection` (tests, tools). |
 | `Session::mock(base_url)` | What mock mode gives `Session::connect()`. |
 
@@ -283,8 +285,8 @@ every `webservices` URL is `ICLOUD_SESSION_MOCK_URL` (default
 path and query unchanged, so an app's mock server can serve fixtures for
 CloudKit, Find My and download URLs alike. `sign_in` posts to the mock
 server's `/mock/reauthenticate` (a fake that plays a signed-out account
-signs it back in); `authorize_find_my`/`sign_out` do nothing and `watch`
-never yields.
+signs it back in); `authorize_find_my`/`sign_out` do nothing, `watch`
+never yields and `watch_forever` returns at once.
 
 ## Environment
 

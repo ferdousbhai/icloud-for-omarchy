@@ -1,5 +1,5 @@
 //! The "sign in" banner. It follows `icloud-sessiond`'s status through
-//! `icloud_session::watch()` on one background thread: shown while signed
+//! `icloud_session::watch_forever()` on one background thread: shown while signed
 //! out, "Signing in…" while the daemon's sign-in window is open, hidden (and
 //! the window refreshed) once the account is signed in. Its button calls
 //! `icloud_session::sign_in()`, which only asks the daemon to open the window.
@@ -13,7 +13,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
 
 use gtk::glib;
 
@@ -26,10 +25,6 @@ const FIND_MY_TITLE_HINT: &str =
     "Find My needs your Apple password (to stop being asked: icloud-session set-password)";
 const FIND_MY_WAITING: &str = "Finish in the Apple window…";
 const FIND_MY_BUTTON: &str = "Enter Password";
-
-/// How long the watcher waits before reconnecting when the watch ended or
-/// could not start (the daemon idle-exited, or the bus was unreachable).
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 /// What the banner's button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,7 +160,8 @@ impl SignInBanner {
         let (tx, rx) = async_channel::unbounded();
         std::thread::Builder::new()
             .name("icloud-session-watch".into())
-            .spawn(move || watch_status(&tx))
+            // The daemon's status, then every change, until the window is gone.
+            .spawn(move || icloud_session::watch_forever(|status| tx.send_blocking(status).is_ok()))
             .expect("spawn the sign-in status thread");
         let this = Self { widget, state };
         let (banner, state) = (this.widget.clone(), this.state.clone());
@@ -215,38 +211,6 @@ fn render(banner: &adw::Banner, state: &State) {
             banner.set_revealed(true);
         }
         None => banner.set_revealed(false),
-    }
-}
-
-/// Sends the daemon's status, then every change, until the window is gone.
-/// The watch ends or fails when the daemon cannot be reached; it is then
-/// opened again after a short delay, which also reactivates the daemon.
-fn watch_status(tx: &async_channel::Sender<icloud_session::Status>) {
-    let mut reported = false;
-    loop {
-        match icloud_session::watch() {
-            // Mock mode: no daemon, and the watch never yields.
-            Ok(watch) if watch.current().is_none() => return,
-            Ok(mut watch) => {
-                reported = false;
-                let first = watch.current().cloned();
-                for status in first.into_iter().chain(&mut watch) {
-                    if tx.send_blocking(status).is_err() {
-                        return;
-                    }
-                }
-            }
-            // Report an outage once, not on every retry.
-            Err(e) if !reported => {
-                reported = true;
-                eprintln!("icloud-findmy: sign-in status unavailable: {e}");
-            }
-            Err(_) => {}
-        }
-        if tx.is_closed() {
-            return;
-        }
-        std::thread::sleep(RECONNECT_DELAY);
     }
 }
 

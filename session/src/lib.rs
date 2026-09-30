@@ -349,6 +349,48 @@ pub fn watch() -> Result<Watch> {
     watch_on(&session_bus()?)
 }
 
+/// How long [`watch_forever`] waits before reconnecting at first, and at most.
+const WATCH_RETRY_MIN: Duration = Duration::from_secs(2);
+const WATCH_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Calls `f` with the status on every (re)connect to the daemon, then after
+/// every change, until `f` returns false. A [`watch`] ends when
+/// icloud-sessiond goes away (it exits when idle, or is restarted); this
+/// opens it again, which D-Bus-activates the daemon, after 2 s, doubling up
+/// to 60 s while it cannot be reached. An outage is reported once on
+/// stderr. Blocks: run it on its own thread. In mock mode it returns at once.
+pub fn watch_forever(mut f: impl FnMut(Status) -> bool) {
+    if mock_url().is_some() {
+        return;
+    }
+    let (mut retry, mut reported) = (WATCH_RETRY_MIN, false);
+    loop {
+        let started = Instant::now();
+        match watch() {
+            Ok(mut watch) => {
+                reported = false;
+                let first = watch.current().cloned();
+                for status in first.into_iter().chain(&mut watch) {
+                    if !f(status) {
+                        return;
+                    }
+                }
+            }
+            Err(e) if !reported => {
+                reported = true;
+                eprintln!("icloud-session: sign-in status unavailable: {e}");
+            }
+            Err(_) => {}
+        }
+        // A watch that lasted a while ended normally: reconnect promptly.
+        if started.elapsed() > WATCH_RETRY_MAX {
+            retry = WATCH_RETRY_MIN;
+        }
+        std::thread::sleep(retry);
+        retry = (retry * 2).min(WATCH_RETRY_MAX);
+    }
+}
+
 /// [`watch`] on a given bus connection.
 pub fn watch_on(conn: &Connection) -> Result<Watch> {
     // Subscribe before reading, so no change falls between the two.

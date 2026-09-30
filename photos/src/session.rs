@@ -6,7 +6,6 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -121,50 +120,20 @@ pub fn start_sign_in(notify: &dyn Fn(SignInState)) -> Result<()> {
     Ok(())
 }
 
-/// Reconnect delays when the daemon cannot be reached or the watch ends.
-const RETRY_MIN: Duration = Duration::from_secs(2);
-const RETRY_MAX: Duration = Duration::from_secs(60);
-
 /// Reports the sign-in state on a long-lived background thread: once on
-/// connecting to icloud-sessiond, then after every change. Nothing in mock
-/// mode, where [`start_sign_in`] reports for itself.
+/// connecting to icloud-sessiond (and on every reconnect), then after every
+/// change. Nothing in mock mode, where [`start_sign_in`] reports for itself.
 pub fn watch_sign_in(notify: Box<dyn Fn(SignInState) + Send>) {
-    if is_mock() {
-        return;
-    }
     std::thread::Builder::new()
         .name("sign-in watch".into())
-        .spawn(move || watch_forever(&*notify))
+        .spawn(move || {
+            icloud_session::watch_forever(|s| {
+                notify(SignInState {
+                    signed_in: s.signed_in,
+                    signing_in: s.signing_in,
+                });
+                true
+            })
+        })
         .expect("spawn the sign-in watch thread");
-}
-
-/// Never returns: reports the current state on every (re)connect, then each
-/// change. The watch ends when icloud-sessiond goes away (it exits when idle
-/// or is restarted); reconnecting D-Bus-activates it again.
-fn watch_forever(notify: &dyn Fn(SignInState)) {
-    let state = |s: &icloud_session::Status| SignInState {
-        signed_in: s.signed_in,
-        signing_in: s.signing_in,
-    };
-    let mut retry = RETRY_MIN;
-    loop {
-        let started = Instant::now();
-        match icloud_session::watch() {
-            Ok(mut watch) => {
-                if let Some(s) = watch.current() {
-                    notify(state(s));
-                }
-                for s in watch.by_ref() {
-                    notify(state(&s));
-                }
-            }
-            Err(e) => eprintln!("icloud-photos: watching the iCloud sign-in: {e}"),
-        }
-        // A watch that lasted a while ended normally: reconnect promptly.
-        if started.elapsed() > RETRY_MAX {
-            retry = RETRY_MIN;
-        }
-        std::thread::sleep(retry);
-        retry = (retry * 2).min(RETRY_MAX);
-    }
 }

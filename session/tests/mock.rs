@@ -54,6 +54,7 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
     icloud_session::authorize_find_my().unwrap();
     icloud_session::sign_out().unwrap();
     assert_eq!(icloud_session::watch().unwrap().next(), None);
+    icloud_session::watch_forever(|_| panic!("mock mode never reports a change"));
 
     let s = Session::connect().unwrap();
     assert_eq!(s.apple_id(), MOCK_APPLE_ID);
