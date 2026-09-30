@@ -1,5 +1,5 @@
 //! Mock mode: no D-Bus, a fake signed-in session, every request sent to
-//! the mock URL. One test, because it sets process environment.
+//! the mock URL (sign-in too, as `/mock/reauthenticate`). One test, because it sets process environment.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -46,7 +46,11 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
     let status = icloud_session::status().unwrap();
     assert!(status.signed_in && !status.signing_in && status.find_my_authorized);
     assert_eq!(status.dsid.as_deref(), Some(MOCK_DSID));
+    // Signing in tells the fake server, which plays the account.
     icloud_session::sign_in().unwrap();
+    let reauth = seen.lock().unwrap().drain(..).map(|(url, _)| url).collect::<Vec<_>>();
+    assert_eq!(reauth.len(), 1);
+    assert!(reauth[0].starts_with("/mock/reauthenticate?"), "{reauth:?}");
     icloud_session::authorize_find_my().unwrap();
     icloud_session::sign_out().unwrap();
     assert_eq!(icloud_session::watch().unwrap().next(), None);

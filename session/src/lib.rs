@@ -24,9 +24,10 @@
 //! ```
 //!
 //! Environment:
-//! - `ICLOUD_SESSION_MOCK=1`: no D-Bus. A fake signed-in session whose
-//!   webservices, and every request, go to `ICLOUD_SESSION_MOCK_URL`
-//!   (default `http://127.0.0.1:8765`) keeping path and query.
+//! - `ICLOUD_SESSION_MOCK` set to anything but empty or `0`: no D-Bus. A
+//!   fake signed-in session whose webservices, and every request, go to
+//!   `ICLOUD_SESSION_MOCK_URL` (default `http://127.0.0.1:8765`) keeping
+//!   path and query; [`sign_in`] posts to the fake's `/mock/reauthenticate`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -181,7 +182,9 @@ pub struct Status {
     pub find_my_password_stored: bool,
 }
 
-fn mock_url() -> Option<String> {
+/// The mock base URL when mock mode is on (`ICLOUD_SESSION_MOCK` set to
+/// anything but empty or `0`), without a trailing slash.
+pub fn mock_url() -> Option<String> {
     let on = std::env::var("ICLOUD_SESSION_MOCK").is_ok_and(|v| !v.is_empty() && v != "0");
     on.then(|| {
         std::env::var("ICLOUD_SESSION_MOCK_URL")
@@ -275,8 +278,11 @@ fn status_from(all: &HashMap<String, OwnedValue>) -> Status {
 
 /// Asks the daemon to open its sign-in window (no-op if already open).
 /// Returns at once; the outcome arrives as [`Status`] changes ([`watch`]).
+/// In mock mode it tells the fake server instead
+/// (`POST {mock url}/mock/reauthenticate`), which signs its account back in.
 pub fn sign_in() -> Result<()> {
-    if mock_url().is_some() {
+    if let Some(base) = mock_url() {
+        Session::mock(&base).post_json(&format!("{base}/mock/reauthenticate"), &serde_json::json!({}))?;
         return Ok(());
     }
     sign_in_on(&session_bus()?)
@@ -515,7 +521,7 @@ enum Body<'a> {
 impl Session {
     /// Connects to `icloud-sessiond` on the session bus (D-Bus activates it)
     /// and fetches the session. `SignInRequired` when signed out.
-    /// With `ICLOUD_SESSION_MOCK=1`, a fake session and no D-Bus.
+    /// In mock mode ([`mock_url`]), a fake session and no D-Bus.
     pub fn connect() -> Result<Session> {
         match mock_url() {
             Some(base) => Ok(Session::mock(&base)),

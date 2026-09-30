@@ -19,9 +19,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use icloud_photos::catalog::{Catalog, LAST_SYNC_KEY, Row, SYNC_TOKEN_KEY};
 use icloud_photos::cloudkit::{CloudKit, Kind, sanitize};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
+use icloud_photos::session;
 use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Job, Targets};
-use icloud_photos::transport::{self, Error, MockTransport, Transport};
+use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
 use serde_json::{Value, json};
 
@@ -265,7 +266,7 @@ impl Ctx {
     }
 
     fn transport(&self) -> Res<Arc<dyn Transport>> {
-        Ok(transport::from_env()?)
+        Ok(session::connect()?)
     }
 
     fn targets(&self, library: Option<&Path>) -> Targets {
@@ -336,7 +337,7 @@ fn run(cli: Cli) -> Res<u8> {
 // ---- status, sync, sign-in, config --------------------------------------
 
 fn status(ctx: &Ctx) -> Res<u8> {
-    let (signed_in, sign_in_error) = match transport::sign_in_state() {
+    let (signed_in, sign_in_error) = match session::sign_in_state() {
         Ok(s) => (Some(s.signed_in), None),
         Err(e) => (None, Some(e.to_string())),
     };
@@ -367,7 +368,7 @@ fn status(ctx: &Ctx) -> Res<u8> {
     let v = json!({
         "signed_in": signed_in,
         "sign_in_error": sign_in_error,
-        "mock": MockTransport::active(),
+        "mock": session::is_mock(),
         "catalog": catalog,
         "catalog_exists": catalog.exists(),
         "assets": assets,
@@ -390,7 +391,7 @@ fn status(ctx: &Ctx) -> Res<u8> {
         [
             format!(
                 "Signed in:     {signed}{}",
-                if MockTransport::active() { " [mock]" } else { "" }
+                if session::is_mock() { " [mock]" } else { "" }
             ),
             format!(
                 "Catalog:       {}{}",
@@ -464,8 +465,8 @@ fn sync_cmd(ctx: &Ctx, full: bool) -> Res<u8> {
 }
 
 fn sign_in(ctx: &Ctx) -> Res<u8> {
-    transport::start_sign_in(&|_| {})?;
-    let mock = MockTransport::active();
+    session::start_sign_in(&|_| {})?;
+    let mock = session::is_mock();
     ctx.out(&json!({ "started": true, "mock": mock }), || {
         if mock {
             "Signed the fake server back in.".to_owned()

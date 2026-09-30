@@ -275,13 +275,16 @@ password. Skip this if that is not acceptable; the manual path stays.
 
 ## Mock mode
 
-`ICLOUD_SESSION_MOCK=1` makes the client library use no D-Bus at all: a
+`ICLOUD_SESSION_MOCK=1` (any value but empty or `0`) makes the client
+library use no D-Bus at all: a
 signed-in fake session (dsid `mock`, Apple ID `mock@example.com`) whose
 every `webservices` URL is `ICLOUD_SESSION_MOCK_URL` (default
 `http://127.0.0.1:8765`). A request to any other host is sent there with its
 path and query unchanged, so an app's mock server can serve fixtures for
-CloudKit, Find My and download URLs alike. `sign_in`/`sign_out` do nothing
-and `watch` never yields.
+CloudKit, Find My and download URLs alike. `sign_in` posts to the mock
+server's `/mock/reauthenticate` (a fake that plays a signed-out account
+signs it back in); `authorize_find_my`/`sign_out` do nothing and `watch`
+never yields.
 
 ## Environment
 

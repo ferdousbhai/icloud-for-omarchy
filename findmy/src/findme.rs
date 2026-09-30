@@ -69,6 +69,13 @@ pub struct SessionTransport {
 }
 
 impl SessionTransport {
+    /// Over a session already made, e.g. `icloud_session::Session::mock`.
+    pub fn new(session: icloud_session::Session) -> Self {
+        Self {
+            session: Some(session),
+        }
+    }
+
     fn session(&mut self) -> Result<&icloud_session::Session> {
         if self.session.is_none() {
             self.session = Some(icloud_session::Session::connect()?);

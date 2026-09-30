@@ -1,6 +1,6 @@
 //! The sign-in banner, driven by icloud-sessiond's state.
 //!
-//! A long-lived thread (`transport::watch_sign_in`) reports every change:
+//! A long-lived thread (`session::watch_sign_in`) reports every change:
 //! signed out shows the banner, an open sign-in window shows "Signing in…",
 //! and signing back in hides it and syncs. A call that returns
 //! `SignInRequired` also shows it. The button asks the daemon to open
@@ -8,7 +8,8 @@
 
 use std::rc::Rc;
 
-use icloud_photos::transport::{self, Error, SignInState};
+use icloud_photos::session;
+use icloud_photos::transport::{Error, SignInState};
 
 use super::window::{App, Msg};
 
@@ -16,7 +17,7 @@ impl App {
     /// Starts the watch thread; call once.
     pub(super) fn watch_sign_in(&self) {
         let tx = self.tx.clone();
-        transport::watch_sign_in(Box::new(move |s| {
+        session::watch_sign_in(Box::new(move |s| {
             let _ = tx.send_blocking(Msg::SignIn(s));
         }));
     }
@@ -48,7 +49,7 @@ impl App {
             let notify = |s| {
                 let _ = tx.send_blocking(Msg::SignIn(s));
             };
-            if let Err(e) = transport::start_sign_in(&notify) {
+            if let Err(e) = session::start_sign_in(&notify) {
                 let _ = tx.send_blocking(Msg::SignInFailed(e));
             }
         });

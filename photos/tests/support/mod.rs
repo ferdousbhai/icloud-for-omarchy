@@ -49,7 +49,6 @@ pub struct FixtureTransport {
     /// Download URL → bytes; anything else is a 404. URLs containing
     /// `/expired/` answer 403 like an expired signed URL.
     pub files: Mutex<HashMap<String, Vec<u8>>>,
-    pub mock: bool,
 }
 
 impl FixtureTransport {
@@ -59,7 +58,6 @@ impl FixtureTransport {
             downloads: Mutex::default(),
             handler: Box::new(handler),
             files: Mutex::default(),
-            mock: false,
         }
     }
 
@@ -124,13 +122,12 @@ impl Transport for FixtureTransport {
             status: 404,
             body: url.into(),
         })?;
-        // Exactly what icloud-session does: a temp file next to `dest`, then
-        // a rename over it; no directory is created.
-        icloud_photos::transport::write_atomically(dest, &mut bytes.as_slice())
-    }
-
-    fn is_mock(&self) -> bool {
-        self.mock
+        // Like icloud-session: a temp file next to `dest`, then a rename
+        // over it. No directory is created, so a missing one shows.
+        let tmp = dest.with_extension(format!("part-{}", std::process::id()));
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, dest)?;
+        Ok(bytes.len() as u64)
     }
 }
 

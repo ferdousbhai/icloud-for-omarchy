@@ -110,6 +110,8 @@ fn route(state: &State, base: &str, path: &str, sent: &Value) -> (u16, Value) {
             (200, fixture("lostDevice"))
         }
         "/fake/actions" => (200, json!(state.actions())),
+        // icloud_session::sign_in() in mock mode; this account never signs out.
+        "/mock/reauthenticate" => (200, json!({"ok": true})),
         _ => (404, json!({"error": "not found"})),
     }
 }

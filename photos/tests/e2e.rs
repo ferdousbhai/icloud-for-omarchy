@@ -1,5 +1,5 @@
 //! The whole non-UI app against the dev fake server over real HTTP, through
-//! the same `MockTransport` that `ICLOUD_SESSION_MOCK=1` selects.
+//! the same icloud-session mock that `ICLOUD_SESSION_MOCK=1` selects.
 
 mod support;
 
@@ -9,9 +9,10 @@ use std::time::Duration;
 use icloud_photos::catalog::{Catalog, SYNC_TOKEN_KEY};
 use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
+use icloud_photos::session::SessionTransport;
 use icloud_photos::sync::{Mode, sync};
 use icloud_photos::thumbs::{Downloader, Job, Priority, Targets, fetch};
-use icloud_photos::transport::{MockTransport, Transport};
+use icloud_photos::transport::Transport;
 use icloud_photos::upload::Uploader;
 use support::fake_server::FakeServer;
 use support::temp_dir;
@@ -19,7 +20,7 @@ use support::temp_dir;
 #[test]
 fn browse_download_delete_upload_and_resync() {
     let server = FakeServer::start(0, 60);
-    let t = MockTransport::new(&server.url);
+    let t = SessionTransport::mock(&server.url);
     let root = temp_dir("e2e");
     let dirs = Dirs::under(&root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();
@@ -88,19 +89,21 @@ fn browse_download_delete_upload_and_resync() {
 #[test]
 fn signed_out_is_sign_in_required_until_reauthenticated() {
     let server = FakeServer::start(0, 3);
-    let t = MockTransport::new(&server.url);
+    let t = SessionTransport::mock(&server.url);
     let mut cat = Catalog::open_in_memory().unwrap();
     let ck = CloudKit::connect(&t).unwrap();
     server.sign_out();
     assert!(sync(&ck, &mut cat, &|_| {}).unwrap_err().is_sign_in());
-    t.reauthenticate().unwrap();
+    // What icloud_session::sign_in() does in mock mode.
+    t.post_json(&format!("{}/mock/reauthenticate", server.url), &serde_json::json!({}))
+        .unwrap();
     assert_eq!(sync(&ck, &mut cat, &|_| {}).unwrap().assets, 3);
 }
 
 #[test]
 fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
     let server = FakeServer::start(0, 12);
-    let t: Arc<dyn Transport> = Arc::new(MockTransport::new(&server.url));
+    let t: Arc<dyn Transport> = Arc::new(SessionTransport::mock(&server.url));
     let root = temp_dir("pool");
     let dirs = Dirs::under(&root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();

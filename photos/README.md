@@ -180,9 +180,9 @@ cargo run -- --data-dir /tmp/photos-dev sync
 cargo run -- --data-dir /tmp/photos-dev --json list --limit 3
 ```
 
-`ICLOUD_SESSION_MOCK=1` swaps the session for a plain local HTTP client
-(`MockTransport` in `src/transport.rs`); every web service resolves to
-`ICLOUD_SESSION_MOCK_URL`. Point `HOME` (or the `XDG_*` variables)
+`ICLOUD_SESSION_MOCK=1` is icloud-session's mock mode: no D-Bus, and every
+web service resolves to `ICLOUD_SESSION_MOCK_URL`. The banner's Sign In
+(and `icloud-photos sign-in`) posts to the fake's `/mock/reauthenticate`. Point `HOME` (or the `XDG_*` variables)
 somewhere else to keep the dev catalog and downloads out of your own.
 
 Layout:
@@ -192,7 +192,7 @@ Layout:
 - `src/catalog.rs` the SQLite catalog
 - `src/thumbs.rs` downloads (thumbnails, previews, originals) on a small pool
 - `src/upload.rs` upload (verified live, see above)
-- `src/transport.rs` the HTTP seam every module above goes through, and the mock
+- `src/transport.rs` the HTTP seam every module above goes through
 - `src/session.rs` the only file that uses the `icloud-session` crate
 - `src/ui/` the GTK 4 / libadwaita app
 - `src/cli.rs` the command line (no GTK), over the same library code

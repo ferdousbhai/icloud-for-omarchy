@@ -1,7 +1,11 @@
 //! The only code that talks to the `icloud-session` crate, the client of
 //! `icloud-sessiond` (the D-Bus user service that owns the Apple sign-in).
+//! In that crate's mock mode (`ICLOUD_SESSION_MOCK=1`) there is no D-Bus:
+//! every request goes to `ICLOUD_SESSION_MOCK_URL`, served by `cargo run
+//! --example fake_cloudkit`, which plays the account (and can sign it out).
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -32,6 +36,23 @@ impl SessionTransport {
             session: icloud_session::Session::connect()?,
         })
     }
+
+    /// A mock session sending everything to `base_url` (the fake server).
+    pub fn mock(base_url: &str) -> Self {
+        Self {
+            session: icloud_session::Session::mock(base_url),
+        }
+    }
+}
+
+/// The transport the app and the command line use.
+pub fn connect() -> Result<Arc<dyn Transport>> {
+    Ok(Arc::new(SessionTransport::connect()?))
+}
+
+/// icloud-session's mock mode is on.
+pub fn is_mock() -> bool {
+    icloud_session::mock_url().is_some()
 }
 
 impl Transport for SessionTransport {
@@ -55,8 +76,29 @@ impl Transport for SessionTransport {
     }
 }
 
-/// The daemon's current `SignedIn` / `SigningIn` properties.
+/// The daemon's current `SignedIn` / `SigningIn` properties (one D-Bus
+/// round trip, no request to Apple). In mock mode the fake server is asked,
+/// since it is what plays the signed-out account.
 pub fn sign_in_state() -> Result<SignInState> {
+    if is_mock() {
+        let t = SessionTransport::connect()?;
+        let url = format!(
+            "{}{}/zones/list",
+            t.service_url("ckdatabasews")?,
+            crate::cloudkit::DB_PATH
+        );
+        return match t.post_json(&url, &Value::Object(Default::default())) {
+            Ok(_) => Ok(SignInState {
+                signed_in: true,
+                signing_in: false,
+            }),
+            Err(Error::SignInRequired) => Ok(SignInState {
+                signed_in: false,
+                signing_in: false,
+            }),
+            Err(e) => Err(e),
+        };
+    }
     let s = icloud_session::status()?;
     Ok(SignInState {
         signed_in: s.signed_in,
@@ -64,19 +106,42 @@ pub fn sign_in_state() -> Result<SignInState> {
     })
 }
 
-/// Asks the daemon to open its sign-in window; returns at once.
-pub fn start_sign_in() -> Result<()> {
-    Ok(icloud_session::sign_in()?)
+/// Asks the daemon to open its sign-in window and returns at once; the
+/// outcome arrives through [`watch_sign_in`]. In mock mode the fake server
+/// is signed back in and `notify` hears so straight away. Call it off the
+/// main loop.
+pub fn start_sign_in(notify: &dyn Fn(SignInState)) -> Result<()> {
+    icloud_session::sign_in()?;
+    if is_mock() {
+        notify(SignInState {
+            signed_in: true,
+            signing_in: false,
+        });
+    }
+    Ok(())
 }
 
 /// Reconnect delays when the daemon cannot be reached or the watch ends.
 const RETRY_MIN: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(60);
 
+/// Reports the sign-in state on a long-lived background thread: once on
+/// connecting to icloud-sessiond, then after every change. Nothing in mock
+/// mode, where [`start_sign_in`] reports for itself.
+pub fn watch_sign_in(notify: Box<dyn Fn(SignInState) + Send>) {
+    if is_mock() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("sign-in watch".into())
+        .spawn(move || watch_forever(&*notify))
+        .expect("spawn the sign-in watch thread");
+}
+
 /// Never returns: reports the current state on every (re)connect, then each
 /// change. The watch ends when icloud-sessiond goes away (it exits when idle
 /// or is restarted); reconnecting D-Bus-activates it again.
-pub fn watch_sign_in(notify: &dyn Fn(SignInState)) {
+fn watch_forever(notify: &dyn Fn(SignInState)) {
     let state = |s: &icloud_session::Status| SignInState {
         signed_in: s.signed_in,
         signing_in: s.signing_in,

@@ -17,7 +17,7 @@ use icloud_photos::cloudkit::{CloudKit, Modified};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
 use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority};
-use icloud_photos::transport::{self, Error, Result, SignInState, Transport};
+use icloud_photos::transport::{Error, Result, SignInState, Transport};
 
 use super::albums::Albums;
 use super::grid::Grid;
@@ -428,7 +428,7 @@ impl App {
         let tx = self.tx.clone();
         self.set_busy(true, "Connecting to iCloud…");
         std::thread::spawn(move || {
-            let _ = tx.send_blocking(Msg::TransportReady(transport::from_env()));
+            let _ = tx.send_blocking(Msg::TransportReady(icloud_photos::session::connect()));
         });
     }
 

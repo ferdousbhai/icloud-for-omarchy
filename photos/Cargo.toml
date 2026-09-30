@@ -30,8 +30,6 @@ thiserror.workspace = true
 uuid.workspace = true
 # renameat2(RENAME_NOREPLACE): originals never replace a file on disk.
 libc = "0.2"
-# Only for ICLOUD_SESSION_MOCK=1: plain HTTP to a local fake server, no TLS.
-ureq.workspace = true
 
 [dev-dependencies]
 tiny_http.workspace = true

@@ -191,10 +191,11 @@ impl<'t> Uploader<'t> {
     }
 
     /// The reserved URL carries a token; never send it or the file in the
-    /// clear. Plain http is allowed only to loopback under the mock transport.
+    /// clear. Plain http is allowed only to loopback, and only when the
+    /// upload service itself is there (the fake server in mock mode).
     fn check_target(&self, url: &str) -> Result<()> {
-        let loopback = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-        if url.starts_with("https://") || (self.t.is_mock() && loopback) {
+        let loopback = |u: &str| u.starts_with("http://127.0.0.1") || u.starts_with("http://localhost");
+        if url.starts_with("https://") || (loopback(url) && loopback(&self.base)) {
             Ok(())
         } else {
             Err(Error::Other(
