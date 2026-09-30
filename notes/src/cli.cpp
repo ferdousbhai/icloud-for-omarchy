@@ -345,6 +345,16 @@ void printJson(const QJsonValue &value)
     out().flush();
 }
 
+// A command's result: `json` under --json, else `text` (if any) on a line of its own.
+void print(bool asJson, const QJsonValue &json, const QString &text)
+{
+    if (asJson)
+        printJson(json);
+    else if (!text.isEmpty())
+        out() << text << (text.endsWith(u'\n') ? "" : "\n");
+    out().flush();
+}
+
 int report(const Failure &f, bool json)
 {
     QTextStream err(stderr);
@@ -725,7 +735,7 @@ std::optional<Failure> confirm(const Args &a, const QString &question)
 // ---- the commands -----------------------------------------------------------
 
 struct Done {
-    QJsonObject json;
+    QJsonValue json;
     QString text;
 };
 
@@ -739,18 +749,16 @@ int finish(NotesBackend &b, const Args &a, Result result)
     std::optional<Failure> syncFailure;
     if (a.has("--push")) {
         SyncOutcome sync = runSync(b, QStringLiteral("sync"), a.json);
-        done.json.insert(QStringLiteral("sync"), sync.failure && sync.json.isEmpty() ? QJsonValue() : QJsonValue(sync.json));
+        QJsonObject json = done.json.toObject();
+        json.insert(QStringLiteral("sync"), sync.failure && sync.json.isEmpty() ? QJsonValue() : QJsonValue(sync.json));
+        done.json = json;
         if (!sync.text.isEmpty())
             done.text += u'\n' + sync.text;
         syncFailure = sync.failure;
         if (syncFailure)
             syncFailure->message = QStringLiteral("%1 done here, but not synced: %2").arg(a.command, syncFailure->message);
     }
-    if (a.json)
-        printJson(done.json);
-    else if (!done.text.isEmpty())
-        out() << done.text << (done.text.endsWith(u'\n') ? "" : "\n");
-    out().flush();
+    print(a.json, done.json, done.text);
     return syncFailure ? report(*syncFailure, a.json) : kExitOk;
 }
 
@@ -826,9 +834,7 @@ Result folders(NotesBackend &b)
                                  { QStringLiteral("default"), !f.isEmpty() && f == def } });
         lines << QStringLiteral("%1\t%2").arg(n).arg(f.isEmpty() ? QStringLiteral("(All Notes)") : f);
     }
-    Done d{ {}, lines.join(u'\n') };
-    d.json.insert(QStringLiteral("_array"), list);
-    return d;
+    return Done{ list, lines.join(u'\n') };
 }
 
 Result list(NotesBackend &b, const Args &a)
@@ -849,9 +855,7 @@ Result list(NotesBackend &b, const Args &a)
         arr.append(noteJson(n));
         lines << QStringLiteral("%1\t%2\t%3\t%4").arg(n.path(), n.title, iso(n.modifiedMs), n.flags.join(u','));
     }
-    Done d{ {}, lines.join(u'\n') };
-    d.json.insert(QStringLiteral("_array"), arr);
-    return d;
+    return Done{ arr, lines.join(u'\n') };
 }
 
 Result read(NotesBackend &b, const Args &a)
@@ -915,9 +919,7 @@ Result search(NotesBackend &b, const Args &a)
         lines << QStringLiteral("%1\t%2\t%3").arg(path, m.value(QStringLiteral("title")).toString(),
                                                   m.value(QStringLiteral("snippet")).toString());
     }
-    Done d{ {}, lines.join(u'\n') };
-    d.json.insert(QStringLiteral("_array"), arr);
-    return d;
+    return Done{ arr, lines.join(u'\n') };
 }
 
 QString relPath(NotesBackend &b)
@@ -1256,11 +1258,7 @@ int syncCommand(NotesBackend &b, const Args &a, const QString &what)
     const SyncOutcome sync = runSync(b, what, a.json);
     if (sync.json.isEmpty() && sync.failure)
         return report(*sync.failure, a.json);
-    if (a.json)
-        printJson(sync.json);
-    else
-        out() << sync.text << '\n';
-    out().flush();
+    print(a.json, sync.json, sync.text);
     return sync.failure ? report(*sync.failure, a.json) : kExitOk;
 }
 
@@ -1276,12 +1274,8 @@ int runCommand(const Args &a, const Spec &spec)
 
     if (cmd == u"status") {
         int code = kExitOk;
-        Done d = status(b, code);
-        if (a.json)
-            printJson(d.json);
-        else
-            out() << d.text << '\n';
-        out().flush();
+        const Done d = status(b, code);
+        print(a.json, d.json, d.text);
         return code;
     }
     if (cmd == u"sync" || cmd == u"pull" || cmd == u"clone" || (cmd == u"push" && !a.has("--dry-run")))
@@ -1312,11 +1306,7 @@ int runCommand(const Args &a, const Spec &spec)
         if (std::holds_alternative<Failure>(r))
             return report(std::get<Failure>(r), a.json);
         const Done &d = std::get<Done>(r);
-        if (a.json)
-            printJson(d.json.contains(QStringLiteral("_array")) ? d.json.value(QStringLiteral("_array")) : QJsonValue(d.json));
-        else if (!d.text.isEmpty())
-            out() << d.text << (d.text.endsWith(u'\n') ? "" : "\n");
-        out().flush();
+        print(a.json, d.json, d.text);
         return kExitOk;
     };
     if (cmd == u"folders")
