@@ -29,9 +29,11 @@ pkgver() {
 }
 
 prepare() {
-  # Only committed files: a release build never picks up local leftovers.
+  # Only committed files, into a fresh directory: a release build never
+  # picks up local leftovers or files an earlier build extracted.
   # The whole tree, because Cargo needs every workspace member to load the
   # workspace; only this package is built.
+  rm -rf "$srcdir/$pkgname"
   mkdir -p "$srcdir/$pkgname"
   git -C "$startdir/../.." archive HEAD | tar -x -C "$srcdir/$pkgname"
   cd "$srcdir/$pkgname"
