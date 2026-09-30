@@ -978,6 +978,18 @@ fn cli_status_validate_sign_in_and_sign_out() {
 
     let out = env.cli(&["validate"]);
     assert_eq!(out.status.code(), Some(2));
+    // --json: the error is one JSON line on stderr, as in every iCloud tool.
+    let out = env.cli(&["validate", "--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "sign_in_required");
+    assert_eq!(err["error"]["exit_code"], 2);
+    assert!(
+        err["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("icloud-session sign-in")
+    );
 
     let out = env.cli(&["sign-in"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -991,12 +1003,58 @@ fn cli_status_validate_sign_in_and_sign_out() {
     assert_eq!(v["dsid"], DSID);
     assert_eq!(v["webservices"]["findme"], findme_url(&server.url));
 
+    // A window that closes without Find My's session: exit 4, the Find My
+    // code every iCloud tool uses, with the status still printed.
+    let out = env.cli(&["authorize-find-my", "--json"]);
+    assert_eq!(out.status.code(), Some(4), "{}", String::from_utf8_lossy(&out.stderr));
+    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(status["find_my_authorized"], false);
+    let err: Value = serde_json::from_str(String::from_utf8_lossy(&out.stderr).lines().last().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], "find_my_auth_not_completed");
+
     let out = env.cli(&["sign-out"]);
     assert!(out.status.success());
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(status["signed_in"], false);
 
+    // --no-wait opens the window and answers at once; status shows the rest.
+    let out = env.cli(&["sign-in", "--no-wait"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let _: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let status: Value = serde_json::from_slice(&env.cli(&["status"]).stdout).unwrap();
+        if status["signed_in"] == true && status["signing_in"] == false {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the window's sign-in never arrived: {status}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
     assert_eq!(env.cli(&["bogus"]).status.code(), Some(64));
+    let out = env.cli(&["--json", "sign-in", "--later"]);
+    assert_eq!(out.status.code(), Some(64));
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "usage");
+    // Every command has its own --help.
+    for cmd in [
+        "status",
+        "sign-in",
+        "authorize-find-my",
+        "set-password",
+        "forget-password",
+        "sign-out",
+        "validate",
+    ] {
+        let out = env.cli(&[cmd, "--help"]);
+        assert!(out.status.success(), "{cmd} --help");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.starts_with(&format!("usage: icloud-session {cmd}")), "{text}");
+        assert!(text.contains("Exit codes"), "{text}");
+    }
 }
 
 #[test]

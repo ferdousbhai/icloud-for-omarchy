@@ -179,17 +179,23 @@ JSON on stdout, errors on stderr.
 
 ```console
 $ icloud-session status
-{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":false}
+{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":false,"find_my_password_stored":false}
 $ icloud-session sign-in     # opens the window, waits for it to close, prints status
-$ icloud-session authorize-find-my   # the same on Find My's password page
+$ icloud-session sign-in --no-wait   # opens it and prints status at once
+$ icloud-session authorize-find-my   # the same on Find My's password page (also --no-wait)
 $ icloud-session set-password        # store the Apple ID password (see below)
 $ icloud-session forget-password
 $ icloud-session validate    # {"dsid":…,"apple_id":…,"webservices":{…}}
 $ icloud-session sign-out
+$ icloud-session <command> --help
 ```
 
 Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed),
-3 Find My not authorized (or its authorization not completed), 64 usage.
+4 Find My not authorized (or its authorization not completed; 3 in
+0.2.1 and older), 64 usage: the table every iCloud tool shares
+([docs/CLI.md](../docs/CLI.md)). With `--json` (accepted anywhere; the
+output is JSON anyway) an error is one line on stderr,
+`{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hint":…}}`.
 
 ## Files
 
