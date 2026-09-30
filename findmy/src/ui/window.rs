@@ -504,19 +504,28 @@ impl Window {
                 this.end_action();
                 match result {
                     Ok(Ok(())) => this.toast(&format!("Playing a sound on {name}")),
-                    Ok(Err(findme::Error::SignInRequired)) if !this.sign_in_is_current(sign_in_gen) => {
-                        this.toast("Signed in again: try once more");
-                    }
-                    Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
-                    Ok(Err(findme::Error::FindMyAuthRequired)) if !this.sign_in_is_current(sign_in_gen) => {
-                        this.toast("Find My was authorized again: try once more");
-                    }
-                    Ok(Err(findme::Error::FindMyAuthRequired)) => this.banner.show_find_my(),
-                    Ok(Err(e)) => this.toast(&e.to_string()),
+                    Ok(Err(e)) => this.action_failed(e, sign_in_gen),
                     Err(e) => this.toast(&e),
                 }
             },
         );
+    }
+
+    /// A device action (Play Sound, Lost Mode) failed: a lapsed sign-in or
+    /// Find My authorization shows its banner, unless it was renewed since
+    /// the request started; anything else is a toast.
+    fn action_failed(&self, e: findme::Error, sign_in_gen: u64) {
+        match e {
+            findme::Error::SignInRequired if !self.sign_in_is_current(sign_in_gen) => {
+                self.toast("Signed in again: try once more");
+            }
+            findme::Error::SignInRequired => self.banner.show(),
+            findme::Error::FindMyAuthRequired if !self.sign_in_is_current(sign_in_gen) => {
+                self.toast("Find My was authorized again: try once more");
+            }
+            findme::Error::FindMyAuthRequired => self.banner.show_find_my(),
+            e => self.toast(&e.to_string()),
+        }
     }
 
     fn ask_lost_mode(self: &Rc<Self>) {
@@ -575,15 +584,7 @@ impl Window {
                         this.lost_mode_sent(&id);
                         this.refresh(false);
                     }
-                    Ok(Err(findme::Error::SignInRequired)) if !this.sign_in_is_current(sign_in_gen) => {
-                        this.toast("Signed in again: try once more");
-                    }
-                    Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
-                    Ok(Err(findme::Error::FindMyAuthRequired)) if !this.sign_in_is_current(sign_in_gen) => {
-                        this.toast("Find My was authorized again: try once more");
-                    }
-                    Ok(Err(findme::Error::FindMyAuthRequired)) => this.banner.show_find_my(),
-                    Ok(Err(e)) => this.toast(&e.to_string()),
+                    Ok(Err(e)) => this.action_failed(e, sign_in_gen),
                     Err(e) => this.toast(&e),
                 }
                 this.update_actions();

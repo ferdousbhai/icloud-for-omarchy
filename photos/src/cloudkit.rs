@@ -409,13 +409,7 @@ impl<'t> CloudKit<'t> {
 
     fn post(&self, op: &str, body: &Value) -> Result<Value> {
         let v = self.t.post_json(&self.url(op), body)?;
-        if let Some(code) = v.get("serverErrorCode").and_then(Value::as_str) {
-            let reason = v.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-            return Err(Error::CloudKit {
-                code: code.to_owned(),
-                reason,
-            });
-        }
+        server_error(&v)?;
         Ok(v)
     }
 
@@ -572,13 +566,7 @@ impl<'t> CloudKit<'t> {
             .and_then(Value::as_array)
             .and_then(|zs| zs.first())
             .ok_or_else(|| Error::Other("changes/zone returned no zone".into()))?;
-        if let Some(code) = z.get("serverErrorCode").and_then(Value::as_str) {
-            let reason = z.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-            return Err(Error::CloudKit {
-                code: code.to_owned(),
-                reason,
-            });
-        }
+        server_error(z)?;
         Ok(ZoneChanges {
             records: z
                 .get("records")
@@ -632,13 +620,7 @@ impl<'t> CloudKit<'t> {
             .and_then(Value::as_array)
             .and_then(|a| a.first())
             .ok_or_else(|| Error::Other("records/modify returned no record".into()))?;
-        if let Some(code) = rec.get("serverErrorCode").and_then(Value::as_str) {
-            let reason = rec.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-            return Err(Error::CloudKit {
-                code: code.to_owned(),
-                reason,
-            });
-        }
+        server_error(rec)?;
         Ok(Modified {
             name: rec
                 .get("recordName")
@@ -681,16 +663,21 @@ impl<'t> CloudKit<'t> {
             .map(Vec::as_slice)
             .unwrap_or_default()
         {
-            if let Some(code) = rec.get("serverErrorCode").and_then(Value::as_str) {
-                let reason = rec.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-                return Err(Error::CloudKit {
-                    code: code.to_owned(),
-                    reason,
-                });
-            }
+            server_error(rec)?;
             out.extend(Record::parse(rec).as_ref().and_then(Relation::from_record));
         }
         Ok(out)
+    }
+}
+
+/// A `serverErrorCode` on a reply, zone or record, as `Error::CloudKit`.
+fn server_error(v: &Value) -> Result<()> {
+    match v.get("serverErrorCode").and_then(Value::as_str) {
+        Some(code) => Err(Error::CloudKit {
+            code: code.to_owned(),
+            reason: v.get("reason").and_then(Value::as_str).unwrap_or("").to_owned(),
+        }),
+        None => Ok(()),
     }
 }
 

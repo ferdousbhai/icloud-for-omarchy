@@ -9,28 +9,13 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use icloud_photos::transport::Error;
-use icloud_photos::upload::{BatchEvent, BatchSummary, Step, Uploaded, is_supported, upload_batch};
+use icloud_photos::upload::{BatchEvent, BatchSummary, Step, is_supported, upload_batch};
 
 use super::window::{App, Msg};
 
 pub enum UploadMsg {
-    Step {
-        index: usize,
-        total: usize,
-        name: String,
-        step: Step,
-    },
-    FileDone {
-        name: String,
-        result: Result<Uploaded, Error>,
-    },
-    Finished {
-        uploaded: usize,
-        duplicates: usize,
-        failed: usize,
-        stopped: bool,
-    },
+    Event(BatchEvent),
+    Finished(BatchSummary),
 }
 
 pub struct UploadUi {
@@ -166,33 +151,9 @@ fn start(app: &Rc<App>, paths: Vec<PathBuf>) {
             &paths,
             Duration::from_secs(60),
             &|| stop.load(Ordering::Relaxed),
-            &|event| match event {
-                BatchEvent::Step {
-                    index,
-                    total,
-                    name,
-                    step,
-                } => send(UploadMsg::Step {
-                    index,
-                    total,
-                    name,
-                    step,
-                }),
-                BatchEvent::FileDone { name, result, .. } => send(UploadMsg::FileDone { name, result }),
-            },
+            &|event| send(UploadMsg::Event(event)),
         );
-        let BatchSummary {
-            uploaded,
-            duplicates,
-            failed,
-            stopped,
-        } = summary;
-        send(UploadMsg::Finished {
-            uploaded,
-            duplicates,
-            failed,
-            stopped,
-        });
+        send(UploadMsg::Finished(summary));
     });
 }
 
@@ -200,12 +161,12 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
     let mut guard = app.upload.borrow_mut();
     let Some(ui) = guard.as_mut() else { return };
     match msg {
-        UploadMsg::Step {
+        UploadMsg::Event(BatchEvent::Step {
             index,
             total,
             name,
             step,
-        } => {
+        }) => {
             let (frac_in_file, text) = match step {
                 Step::Reserving => (0.05, format!("Preparing {name}…")),
                 Step::Sending { bytes } => (0.2, format!("Sending {name} ({})…", glib::format_size(bytes))),
@@ -218,7 +179,9 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
                 .set_text(Some(&format!("{} of {total}", (index + 1).min(total))));
             ui.detail.set_label(&text);
         }
-        UploadMsg::FileDone { name, result: Err(e) } => {
+        UploadMsg::Event(BatchEvent::FileDone {
+            name, result: Err(e), ..
+        }) => {
             if e.is_sign_in() {
                 drop(guard);
                 app.fail("Upload failed", &e);
@@ -230,13 +193,13 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
                 format!("{name}: {e}")
             });
         }
-        UploadMsg::FileDone { .. } => {}
-        UploadMsg::Finished {
+        UploadMsg::Event(BatchEvent::FileDone { .. }) => {}
+        UploadMsg::Finished(BatchSummary {
             uploaded,
             duplicates,
             failed,
             stopped,
-        } => {
+        }) => {
             ui.progress.set_fraction(1.0);
             let mut lines = vec![match uploaded {
                 1 => "1 item uploaded.".to_owned(),
