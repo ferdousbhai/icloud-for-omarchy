@@ -720,21 +720,9 @@ impl Session {
         })
     }
 
-    /// POST raw bytes with a content type (uploads), same behaviour as [`Session::get`].
-    pub fn post_bytes(&self, url: &str, content_type: &str, body: Vec<u8>) -> Result<Response> {
-        self.request(Request {
-            method: "POST",
-            url,
-            content_type: Some(content_type),
-            body: Body::Bytes(&body),
-            client_params: true,
-            accept: "application/json",
-        })
-    }
-
     /// POST a file's contents with a content type, streamed from disk
     /// rather than read into memory (large uploads). Same behaviour as
-    /// [`Session::post_bytes`], including the one retry after a 421/401,
+    /// [`Session::get`], including the one retry after a 421/401,
     /// which reads the file again from the start.
     pub fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Response> {
         self.request(Request {

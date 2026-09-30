@@ -103,7 +103,7 @@ icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconne
 |---|---|
 | `Session::connect()` | Reads the daemon's properties (D-Bus activates it) and fetches `Session()`. `SignInRequired` when signed out. |
 | `s.webservices()` | The `webservices` map (`ckdatabasews`, `findme`, ...) from the daemon's last `/validate`. |
-| `s.get(url)`, `post_json(url, &value)`, `post_bytes(url, content_type, bytes)`, `post_file(url, content_type, &path)` | Straight to Apple with the cookie header from `Session()`, `Origin`/`Referer: https://www.icloud.com`, and `clientBuildNumber`, `clientMasteringNumber`, `clientId`, `dsid` appended to the query (a parameter already in the URL is left alone). `post_file` streams the file with its `Content-Length` instead of reading it into memory. |
+| `s.get(url)`, `post_json(url, &value)`, `post_file(url, content_type, &path)` | Straight to Apple with the cookie header from `Session()`, `Origin`/`Referer: https://www.icloud.com`, and `clientBuildNumber`, `clientMasteringNumber`, `clientId`, `dsid` appended to the query (a parameter already in the URL is left alone). `post_file` streams the file with its `Content-Length` instead of reading it into memory. |
 | `s.download(url, dest)` | Streams to a temp file beside `dest` (parent directories created), renamed on success. Cookies attached, no client params. |
 | `s.apple_id()`, `s.dsid()` | The account the session belongs to. If the daemon later holds another account, the session's calls return `SignInRequired`; connect again. |
 | `sign_in()`, `sign_out()` | `SignIn()` / `SignOut()`; both return at once. |

@@ -831,15 +831,8 @@ fn client_lib_against_the_daemon() {
     assert!(seen.header("Cookie").unwrap().contains("DATA=d1"));
     assert_eq!(seen.header("Content-Type"), Some("application/json"));
 
-    s.post_bytes(&format!("{base}/data"), "image/jpeg", vec![1, 2, 3])
-        .unwrap();
-    assert_eq!(
-        server.requests("/data").pop().unwrap().header("Content-Type"),
-        Some("image/jpeg")
-    );
-
-    // A file, streamed: the body arrives whole with its length, and it
-    // carries the jar and params like post_bytes.
+    // A file, streamed: the body arrives whole with its length and its
+    // content type, and it carries the jar and params like post_json.
     let out = tempfile::tempdir().unwrap();
     let upload = out.path().join("upload.bin");
     let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
@@ -870,7 +863,7 @@ fn client_lib_against_the_daemon() {
     // Content hosts: no cookies or params out, no Set-Cookie in.
     let asset = out.path().join("asset.json");
     s.download(&format!("{}/B/asset?sig=1", content.url), &asset).unwrap();
-    s.post_bytes(&format!("{}/upload?sig=2", content.url), "image/jpeg", vec![1])
+    s.post_file(&format!("{}/upload?sig=2", content.url), "image/jpeg", &dest)
         .unwrap();
     for seen in content.requests("/B/asset").iter().chain(&content.requests("/upload")) {
         assert_eq!(seen.header("Cookie"), None, "no jar to a content host");
