@@ -27,7 +27,9 @@ describes any command and its JSON.
 `icloud-session sign-in` (Apple's page in a window: password + 2FA; tick
 "Keep me signed in"). Exit 4 from Find My → `icloud-session
 authorize-find-my`, or once `icloud-session set-password` so it stops
-asking. Never try to sign in yourself.
+asking (it prompts on a terminal, or reads stdin: `bw get password "Apple
+ID" | icloud-session set-password`, or `op read "op://…/password" |
+icloud-session set-password`). Never try to sign in yourself.
 
 ## Notes: `icloud-notes` (vault `~/Documents/icloud-notes`)
 

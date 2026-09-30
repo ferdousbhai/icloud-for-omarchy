@@ -221,10 +221,16 @@ the daemon does that step itself:
 
 ```console
 $ icloud-session set-password                       # asks without echo (or reads stdin)
-$ icloud-session set-password --from-bitwarden [ITEM]
-$ icloud-session set-password --from-1password [ITEM]
+$ bw get password "Apple ID" | icloud-session set-password           # from Bitwarden
+$ op read "op://Private/Apple ID/password" | icloud-session set-password  # from 1Password
 $ icloud-session forget-password                    # undo
 ```
+
+When stdin is not a terminal, `set-password` reads the password from it
+(one trailing newline dropped), so any password manager's CLI can pipe it
+in: the password never goes through argv, env or disk. `bw` needs an
+unlocked vault (`export BW_SESSION=$(bw unlock --raw)` first); `op`
+unlocks through the 1Password app's CLI integration.
 
 `set-password` checks the password with one Find My sign-in and stores it
 unless Apple refuses it; if the sign-in fails for another reason (Apple
@@ -232,8 +238,7 @@ unreachable, the page changed) the password is stored anyway and the
 failure reported, since it says nothing about the password. It lives in the Secret Service's default
 collection (GNOME Keyring, unlocked at login) as `iCloud (icloud-session):
 <apple id>` with the attributes `application=icloud-session`,
-`apple-id=<apple id>`; nothing else is written to disk, and the daemon
-never reads a password manager. `sign-out` keeps it (it is yours);
+`apple-id=<apple id>`; nothing else is written to disk. `sign-out` keeps it (it is yours);
 `forget-password` removes it, as does deleting the item in Seahorse
 (the daemon notices at its next start).
 
@@ -267,34 +272,6 @@ the keyring is unlocked (as with every Secret Service secret), so a
 program that can do that can read your Apple ID password. The password
 alone does not pass 2FA for a new sign-in, but it is still your Apple ID
 password. Skip this if that is not acceptable; the manual path stays.
-
-### From Bitwarden
-
-`--from-bitwarden` reads the password from `bw`'s stdout (never argv,
-env, logs or disk). Without ITEM it lists the logins saved for Apple's
-sites (`bw list items --search apple.com` and `--search icloud.com`),
-keeps those whose URL host is apple.com, icloud.com or a subdomain, and
-prefers the ones whose username is the Apple ID. One left: its password
-is fetched with `bw get password <id>`. Several: on a terminal it lists
-their names, usernames and sites and asks for a number; without one it
-stops ("several Apple logins match; pass the one to use as ITEM"). With
-ITEM it runs `bw get password ITEM`; several matches stop it with bw's
-list. With `BW_SESSION` exported it uses that session. Otherwise it runs
-`bw unlock --raw` (or `bw login --raw` when signed out) on the terminal,
-passes the key only in the listings' and lookups' environment, and runs
-`bw lock` afterwards. A failed unlock is usually a mistyped master
-password. Needs `sudo pacman -S bitwarden-cli` and `bw login` once.
-
-### From 1Password
-
-`--from-1password` picks a login the same way from `op item list
---categories Login --format json` and fetches it with `op item get <id>
---fields label=password --reveal`. With ITEM it runs `op item get ITEM
-…`, or `op read ITEM` for an `op://` reference. With the 1Password app's CLI integration on (Settings →
-Developer → "Integrate with 1Password CLI"), `op` unlocks through the
-app. Otherwise it runs `op signin --raw` on the terminal, passes that
-session to the lookups, and signs out afterwards. Omarchy installs both
-with `omarchy-install-service-1password`.
 
 ## Mock mode
 

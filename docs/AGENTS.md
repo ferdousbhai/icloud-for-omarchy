@@ -48,8 +48,10 @@ Needs a human, always:
 - **Find My's password page** (exit 4 from `icloud-findmy`):
   `icloud-session authorize-find-my`, the same way. Once the user has run
   `icloud-session set-password` (it reads the password from the terminal,
-  stdin, Bitwarden or 1Password and stores it in the keyring), the daemon
-  answers that page itself and exit 4 stops happening.
+  or from stdin: `bw get password "Apple ID" | icloud-session set-password`,
+  `op read "op://Private/Apple ID/password" | icloud-session set-password`,
+  and stores it in the keyring), the daemon answers that page itself and
+  exit 4 stops happening.
 
 `expires_at` (Unix seconds) says when the sign-in lapses; warn the user a
 few days ahead.

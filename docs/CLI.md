@@ -104,7 +104,7 @@ timer's sync). All of it is new, in the app binary: see
 | State, expiry | `icloud-session status` | existed |
 | Sign in (Apple's page) | `icloud-session sign-in [--no-wait]` | `--no-wait` added |
 | Find My's password page | `icloud-session authorize-find-my [--no-wait]` | `--no-wait` added |
-| Remember the password for Find My | `icloud-session set-password [--from-bitwarden\|--from-1password]` | existed |
+| Remember the password for Find My | `icloud-session set-password` (a no-echo prompt, or stdin: `bw get password "Apple ID" \| icloud-session set-password`, `op read "op://…/password" \| icloud-session set-password`) | existed |
 | Forget it | `icloud-session forget-password` | existed |
 | Sign out | `icloud-session sign-out` | existed |
 | Check the session with Apple | `icloud-session validate` | existed |
@@ -118,9 +118,9 @@ timer's sync). All of it is new, in the app binary: see
 - **Find My's password page**, the same way, unless the password was stored
   once with `icloud-session set-password`; after that the daemon answers
   it by itself.
-- **Unlocking a password manager** for `set-password --from-bitwarden`:
-  `bw unlock` asks on the terminal unless `BW_SESSION` is exported
-  (1Password unlocks through its app).
+- **Unlocking a password manager** to pipe the password into
+  `set-password`: `bw unlock` asks on the terminal unless `BW_SESSION` is
+  exported (1Password's `op` unlocks through its app).
 
 ## Why Notes' commands live in `icloud-notes`
 

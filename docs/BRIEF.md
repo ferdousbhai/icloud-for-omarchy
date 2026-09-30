@@ -145,12 +145,11 @@ the `findme` host use `FindMySession()` instead of `Session()` and
 only if the Find My jar changed meanwhile or the report answered true.
 
 Automatic Find My re-authorization (opt-in, 2026-09-28): `icloud-session
-set-password [--from-bitwarden|--from-1password [ITEM]]` stores the Apple
+set-password` (no-echo prompt on a TTY, else stdin, so `bw get password
+… |` or `op read … |` pipes it in) stores the Apple
 ID password in GNOME Keyring (Secret Service, `application=icloud-session`,
 `apple-id=…`) after one verifying sign-in (stored unless Apple refuses it;
-another failure is reported but the password kept). Without ITEM the
-manager options pick the login saved for apple.com/icloud.com (preferring
-the Apple ID's; asks on a TTY if several). On a 450, or `FindMySession()`
+another failure is reported but the password kept). On a 450, or `FindMySession()`
 with no jar, the daemon runs `icloud-session-signin --find --autofill`
 hidden, writes "<apple id>\n<password>\n" to its stdin, and the window
 fills Apple's own sign-in form like a password manager (a plain
