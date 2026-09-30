@@ -214,11 +214,7 @@ impl Window {
     }
 
     fn set_action_enabled(&self, name: &str, enabled: bool) {
-        if let Some(action) = self
-            .window
-            .lookup_action(name)
-            .and_downcast::<gio::SimpleAction>()
-        {
+        if let Some(action) = self.window.lookup_action(name).and_downcast::<gio::SimpleAction>() {
             action.set_enabled(enabled);
         }
     }
@@ -228,8 +224,7 @@ impl Window {
         self.set_action_enabled("play-sound", d.as_ref().is_some_and(|d| d.can_play_sound));
         self.set_action_enabled(
             "lost-mode",
-            d.as_ref()
-                .is_some_and(|d| d.can_lost_mode && !d.lost_mode_enabled),
+            d.as_ref().is_some_and(|d| d.can_lost_mode && !d.lost_mode_enabled),
         );
         self.set_action_enabled("refresh", !self.busy.get());
     }
@@ -298,19 +293,15 @@ impl Window {
                     Ok(Ok(devices)) => this.show_devices(devices),
                     // Started before the latest sign-in; the refresh queued
                     // by the sign-in answers for the new session.
-                    Ok(Err(findme::Error::SignInRequired))
-                        if !this.sign_in_is_current(sign_in_gen) => {}
+                    Ok(Err(findme::Error::SignInRequired)) if !this.sign_in_is_current(sign_in_gen) => {}
                     Ok(Err(findme::Error::SignInRequired)) => {
                         this.banner.show();
                         if this.devices.borrow().is_empty() {
-                            this.list.set_placeholder(
-                                "Sign in required",
-                                Some("Sign in to iCloud with the button above."),
-                            );
+                            this.list
+                                .set_placeholder("Sign in required", Some("Sign in to iCloud with the button above."));
                         }
                     }
-                    Ok(Err(findme::Error::FindMyAuthRequired))
-                        if !this.sign_in_is_current(sign_in_gen) => {}
+                    Ok(Err(findme::Error::FindMyAuthRequired)) if !this.sign_in_is_current(sign_in_gen) => {}
                     Ok(Err(findme::Error::FindMyAuthRequired)) => {
                         this.banner.show_find_my();
                         if this.devices.borrow().is_empty() {
@@ -334,8 +325,7 @@ impl Window {
     /// Toasts an error once, not on every 60 s tick while it persists.
     fn show_error(&self, msg: &str) {
         if self.devices.borrow().is_empty() {
-            self.list
-                .set_placeholder("Could not load devices", Some(msg));
+            self.list.set_placeholder("Could not load devices", Some(msg));
         }
         if self.last_error.borrow().as_deref() != Some(msg) {
             self.toast(msg);
@@ -359,25 +349,17 @@ impl Window {
         }
         *self.last_error.borrow_mut() = None;
         if devices.is_empty() {
-            self.list.set_placeholder(
-                "No devices",
-                Some("Find My has no devices for this Apple ID."),
-            );
+            self.list
+                .set_placeholder("No devices", Some("Find My has no devices for this Apple ID."));
         }
         // Keep the selection even if the device left the list (it shows as
         // unavailable, and comes back if the device does); with nothing
         // selected yet, pick the first located device.
         let kept = self.selected.borrow().clone();
         let vanished = kept.as_ref().is_some_and(|id| {
-            self.devices.borrow().iter().any(|d| &d.id == id)
-                && !devices.iter().any(|d| &d.id == id)
+            self.devices.borrow().iter().any(|d| &d.id == id) && !devices.iter().any(|d| &d.id == id)
         });
-        let selected = kept.or_else(|| {
-            devices
-                .iter()
-                .find(|d| d.location.is_some())
-                .map(|d| d.id.clone())
-        });
+        let selected = kept.or_else(|| devices.iter().find(|d| d.location.is_some()).map(|d| d.id.clone()));
         *self.selected.borrow_mut() = selected.clone();
         self.list.set_devices(&devices, selected.as_deref());
         self.map.set_devices(&devices, selected.as_deref());
@@ -522,15 +504,11 @@ impl Window {
                 this.end_action();
                 match result {
                     Ok(Ok(())) => this.toast(&format!("Playing a sound on {name}")),
-                    Ok(Err(findme::Error::SignInRequired))
-                        if !this.sign_in_is_current(sign_in_gen) =>
-                    {
+                    Ok(Err(findme::Error::SignInRequired)) if !this.sign_in_is_current(sign_in_gen) => {
                         this.toast("Signed in again: try once more");
                     }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
-                    Ok(Err(findme::Error::FindMyAuthRequired))
-                        if !this.sign_in_is_current(sign_in_gen) =>
-                    {
+                    Ok(Err(findme::Error::FindMyAuthRequired)) if !this.sign_in_is_current(sign_in_gen) => {
                         this.toast("Find My was authorized again: try once more");
                     }
                     Ok(Err(findme::Error::FindMyAuthRequired)) => this.banner.show_find_my(),
@@ -550,9 +528,7 @@ impl Window {
         }
         let dialog = adw::AlertDialog::new(
             Some(&format!("Turn On Lost Mode for {}?", device.name)),
-            Some(
-                "The device locks and shows your message, with a button to call the number you give.",
-            ),
+            Some("The device locks and shows your message, with a button to call the number you give."),
         );
         let fields = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -562,10 +538,7 @@ impl Window {
             .title("Phone number")
             .input_purpose(gtk::InputPurpose::Phone)
             .build();
-        let message = adw::EntryRow::builder()
-            .title("Message")
-            .text(LOST_MESSAGE)
-            .build();
+        let message = adw::EntryRow::builder().title("Message").text(LOST_MESSAGE).build();
         fields.append(&phone);
         fields.append(&message);
         dialog.set_extra_child(Some(&fields));
@@ -592,11 +565,7 @@ impl Window {
         let weak = Rc::downgrade(self);
         let (id, name) = (device.id.clone(), device.name.clone());
         background(
-            move || {
-                client
-                    .lock()
-                    .lost_mode(&device, phone.trim(), message.trim())
-            },
+            move || client.lock().lost_mode(&device, phone.trim(), message.trim()),
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
                 this.acting.set(false);
@@ -606,15 +575,11 @@ impl Window {
                         this.lost_mode_sent(&id);
                         this.refresh(false);
                     }
-                    Ok(Err(findme::Error::SignInRequired))
-                        if !this.sign_in_is_current(sign_in_gen) =>
-                    {
+                    Ok(Err(findme::Error::SignInRequired)) if !this.sign_in_is_current(sign_in_gen) => {
                         this.toast("Signed in again: try once more");
                     }
                     Ok(Err(findme::Error::SignInRequired)) => this.banner.show(),
-                    Ok(Err(findme::Error::FindMyAuthRequired))
-                        if !this.sign_in_is_current(sign_in_gen) =>
-                    {
+                    Ok(Err(findme::Error::FindMyAuthRequired)) if !this.sign_in_is_current(sign_in_gen) => {
                         this.toast("Find My was authorized again: try once more");
                     }
                     Ok(Err(findme::Error::FindMyAuthRequired)) => this.banner.show_find_my(),
@@ -642,12 +607,7 @@ impl Window {
     }
 }
 
-fn build(
-    app: &adw::Application,
-    list: Rc<DeviceList>,
-    map: Rc<DeviceMap>,
-    banner: SignInBanner,
-) -> Window {
+fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banner: SignInBanner) -> Window {
     let title = adw::WindowTitle::new("Find My", "");
     let header = adw::HeaderBar::builder().title_widget(&title).build();
 
@@ -703,9 +663,7 @@ fn build(
         .height_request(320)
         .content(&toasts)
         .build();
-    let narrow = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 640sp").expect("valid condition"),
-    );
+    let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 640sp").expect("valid condition"));
     narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
     window.add_breakpoint(narrow);
 

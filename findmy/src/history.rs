@@ -45,30 +45,22 @@ pub struct History {
 /// `~/.local/share/icloud-findmy/history.db` (honours an absolute
 /// `XDG_DATA_HOME`); `None` without either.
 pub fn default_path() -> Option<PathBuf> {
-    let absolute = |var| {
-        std::env::var_os(var)
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-    };
-    let data =
-        absolute("XDG_DATA_HOME").or_else(|| Some(absolute("HOME")?.join(".local/share")))?;
+    let absolute = |var| std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute());
+    let data = absolute("XDG_DATA_HOME").or_else(|| Some(absolute("HOME")?.join(".local/share")))?;
     Some(data.join("icloud-findmy").join("history.db"))
 }
 
 impl History {
     pub fn open_default() -> rusqlite::Result<History> {
-        let path = default_path().ok_or_else(|| {
-            rusqlite::Error::InvalidPath(PathBuf::from("~/.local/share/icloud-findmy/history.db"))
-        })?;
+        let path = default_path()
+            .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from("~/.local/share/icloud-findmy/history.db")))?;
         Self::open(&path)
     }
 
     /// Opens (creating if needed) the database at `path`, tightening the
     /// permissions of its directory and files and pruning old rows.
     pub fn open(path: &Path) -> rusqlite::Result<History> {
-        let io = |e: std::io::Error| {
-            rusqlite::Error::InvalidPath(PathBuf::from(format!("{}: {e}", path.display())))
-        };
+        let io = |e: std::io::Error| rusqlite::Error::InvalidPath(PathBuf::from(format!("{}: {e}", path.display())));
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             DirBuilder::new()
                 .recursive(true)
@@ -119,10 +111,8 @@ impl History {
     /// Deletes rows older than [`RETENTION_SECS`] before `now` (Unix
     /// seconds). Returns rows deleted.
     pub fn prune(&self, now: i64) -> rusqlite::Result<usize> {
-        self.conn.execute(
-            "DELETE FROM history WHERE ts < ?1",
-            params![now - RETENTION_SECS],
-        )
+        self.conn
+            .execute("DELETE FROM history WHERE ts < ?1", params![now - RETENTION_SECS])
     }
 
     /// Rows the prune on open deleted.
@@ -151,12 +141,7 @@ impl History {
 
     /// Stores `fix` if the device moved since the last stored point.
     /// Returns whether a row was written.
-    pub fn record(
-        &self,
-        device_id: &str,
-        fix: &Fix,
-        battery: Option<f64>,
-    ) -> rusqlite::Result<bool> {
+    pub fn record(&self, device_id: &str, fix: &Fix, battery: Option<f64>) -> rusqlite::Result<bool> {
         let ts = fix.ts_ms / 1000;
         if let Some(last) = self.last(device_id)? {
             if ts <= last.ts {
@@ -196,8 +181,7 @@ impl History {
             "SELECT ts, lat, lon, accuracy, battery FROM history
              WHERE device_id = ?1 AND ts >= ?2 ORDER BY ts, rowid",
         )?;
-        stmt.query_map(params![device_id, since], row_to_point)?
-            .collect()
+        stmt.query_map(params![device_id, since], row_to_point)?.collect()
     }
 }
 

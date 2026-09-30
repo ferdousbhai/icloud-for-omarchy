@@ -22,10 +22,7 @@ fn app_client_runs_against_fake_server() {
     let (a, b) = (first[0].location.unwrap(), second[0].location.unwrap());
     assert!(b.lat > a.lat, "the fake walks the phone on each refresh");
     let age = icloud_findmy::models::now_ms() - b.ts_ms;
-    assert!(
-        (0..120_000).contains(&age),
-        "fixes are stamped with the current time"
-    );
+    assert!((0..120_000).contains(&age), "fixes are stamped with the current time");
     fm.play_sound(&second[0]).unwrap();
     fm.lost_mode(&second[0], "+1555", "lost").unwrap();
 }

@@ -71,9 +71,7 @@ pub struct SessionTransport {
 impl SessionTransport {
     /// Over a session already made, e.g. `icloud_session::Session::mock`.
     pub fn new(session: icloud_session::Session) -> Self {
-        Self {
-            session: Some(session),
-        }
+        Self { session: Some(session) }
     }
 
     fn session(&mut self) -> Result<&icloud_session::Session> {
@@ -178,10 +176,7 @@ pub fn parse_response(resp: &Value) -> Result<Snapshot> {
         Some(Value::Array(items)) => items.iter().filter_map(Device::from_json).collect(),
         Some(_) => return Err(Error::Parse("content is not a list".into())),
     };
-    Ok(Snapshot {
-        server_ctx,
-        devices,
-    })
+    Ok(Snapshot { server_ctx, devices })
 }
 
 pub fn play_sound_body(device_id: &str, subject: &str) -> Value {
@@ -262,10 +257,7 @@ impl<T: Transport> FindMe<T> {
             self.reset();
             result = self.refresh_inner(locate);
         }
-        if matches!(
-            result,
-            Err(Error::SignInRequired | Error::FindMyAuthRequired)
-        ) {
+        if matches!(result, Err(Error::SignInRequired | Error::FindMyAuthRequired)) {
             self.reset();
         }
         result
@@ -301,9 +293,7 @@ impl<T: Transport> FindMe<T> {
     /// button to call `phone`.
     pub fn lost_mode(&mut self, device: &Device, phone: &str, message: &str) -> Result<()> {
         if !device.can_lost_mode {
-            return Err(Error::Unsupported(
-                "This device does not support Lost Mode.",
-            ));
+            return Err(Error::Unsupported("This device does not support Lost Mode."));
         }
         let url = self.url("lostDevice")?;
         self.transport

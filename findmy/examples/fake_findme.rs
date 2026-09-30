@@ -49,9 +49,7 @@ fn now_ms() -> i64 {
 /// the first device `step` × ~80 m north-east.
 fn live(mut v: Value, step: u64) -> Value {
     let now = now_ms();
-    let base = v["serverContext"]["serverTimestamp"]
-        .as_i64()
-        .unwrap_or(now);
+    let base = v["serverContext"]["serverTimestamp"].as_i64().unwrap_or(now);
     if let Some(devices) = v["content"].as_array_mut() {
         for (i, d) in devices.iter_mut().enumerate() {
             let loc = &mut d["location"];
@@ -112,11 +110,7 @@ fn handle(mut request: tiny_http::Request, state: &State) -> std::io::Result<()>
     let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let (status, reply) = route(state, request.url(), &sent);
     let device = sent.get("device").and_then(Value::as_str).unwrap_or("");
-    eprintln!(
-        "{} {} -> {status} {device}",
-        request.method(),
-        request.url()
-    );
+    eprintln!("{} {} -> {status} {device}", request.method(), request.url());
 
     let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("header");
     request.respond(
@@ -147,9 +141,7 @@ pub fn serve_with(listener: TcpListener, state: Arc<State>) -> std::io::Result<(
 
 #[allow(dead_code)] // tests/fake_server.rs includes this file for `serve`.
 fn main() -> std::io::Result<()> {
-    let addr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:8765".into());
+    let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8765".into());
     let listener = TcpListener::bind(&addr)?;
     let base = format!("http://{}", listener.local_addr()?);
     eprintln!("Fake Find My on {base}");

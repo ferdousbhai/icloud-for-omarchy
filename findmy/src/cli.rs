@@ -194,8 +194,7 @@ impl Failure {
         match self {
             Failure::Usage(m) | Failure::Other(m) | Failure::Coded(_, m) => m.clone(),
             Failure::Find(findme::Error::SignInRequired) => {
-                "sign in to iCloud required: run `icloud-session sign-in` (or Sign In in the app)"
-                    .into()
+                "sign in to iCloud required: run `icloud-session sign-in` (or Sign In in the app)".into()
             }
             Failure::Find(findme::Error::FindMyAuthRequired) => {
                 "Find My needs your Apple password: run `icloud-session authorize-find-my` \
@@ -231,10 +230,7 @@ fn parse_duration(s: &str) -> Result<i64, String> {
             _ => return Err(bad()),
         };
         let n: i64 = num.parse().map_err(|_| bad())?;
-        total = n
-            .checked_mul(unit)
-            .and_then(|v| total.checked_add(v))
-            .ok_or_else(bad)?;
+        total = n.checked_mul(unit).and_then(|v| total.checked_add(v)).ok_or_else(bad)?;
         num.clear();
     }
     if !num.is_empty() || total == 0 {
@@ -286,16 +282,14 @@ impl<T: Transport> Cli<T> {
     fn history_path(&self) -> Result<PathBuf, Failure> {
         match &self.data_dir {
             Some(dir) => Ok(dir.join("history.db")),
-            None => history::default_path()
-                .ok_or_else(|| Failure::Other("no data directory: pass --data-dir".into())),
+            None => history::default_path().ok_or_else(|| Failure::Other("no data directory: pass --data-dir".into())),
         }
     }
 
     fn open_history(&mut self) -> Result<&History, Failure> {
         if self.history.is_none() {
             let path = self.history_path()?;
-            let h = History::open(&path)
-                .map_err(|e| Failure::Other(format!("cannot open {}: {e}", path.display())))?;
+            let h = History::open(&path).map_err(|e| Failure::Other(format!("cannot open {}: {e}", path.display())))?;
             self.history = Some(h);
         }
         Ok(self.history.as_ref().expect("just opened"))
@@ -330,10 +324,7 @@ impl<T: Transport> Cli<T> {
         let devices = self.fetch(locate)?;
         let now = models::now_ms();
         if self.json {
-            let list: Vec<Value> = devices
-                .iter()
-                .map(|d| device_json(d, coords, now))
-                .collect();
+            let list: Vec<Value> = devices.iter().map(|d| device_json(d, coords, now)).collect();
             println!("{}", pretty(&json!(list)));
         } else if devices.is_empty() {
             println!("No devices.");
@@ -357,10 +348,7 @@ impl<T: Transport> Cli<T> {
         loop {
             self.record(&devices);
             let Some(now) = devices.iter().find(|d| d.id == device.id) else {
-                return Err(Failure::Other(format!(
-                    "{} is no longer on this Apple ID",
-                    device.name
-                )));
+                return Err(Failure::Other(format!("{} is no longer on this Apple ID", device.name)));
             };
             // Newer than before, and not one Apple itself marks as old.
             if let Some(fix) = now.location.filter(|f| f.ts_ms > before && !f.is_old) {
@@ -378,11 +366,7 @@ impl<T: Transport> Cli<T> {
                 };
                 return Err(Failure::Coded(
                     "no_fix",
-                    format!(
-                        "{} sent no fresh fix within {} s; {last}",
-                        now.name,
-                        wait.as_secs()
-                    ),
+                    format!("{} sent no fresh fix within {} s; {last}", now.name, wait.as_secs()),
                 ));
             }
             std::thread::sleep(POLL.min(left));
@@ -413,17 +397,9 @@ impl<T: Transport> Cli<T> {
         if !device.can_play_sound {
             return Err(findme::Error::Unsupported("This device cannot play a sound.").into());
         }
-        confirm(
-            "play-sound",
-            yes,
-            &format!("Play a sound on {}?", device.name),
-        )?;
+        confirm("play-sound", yes, &format!("Play a sound on {}?", device.name))?;
         self.fm.play_sound(&device)?;
-        self.done(
-            "play_sound",
-            &device,
-            &format!("Playing a sound on {}", device.name),
-        )
+        self.done("play_sound", &device, &format!("Playing a sound on {}", device.name))
     }
 
     fn lost_mode(&mut self, query: &str, phone: &str, message: &str, yes: bool) -> Outcome {
@@ -433,15 +409,10 @@ impl<T: Transport> Cli<T> {
         let devices = self.fetch(false)?;
         let device = resolve(&devices, query)?.clone();
         if !device.can_lost_mode {
-            return Err(
-                findme::Error::Unsupported("This device does not support Lost Mode.").into(),
-            );
+            return Err(findme::Error::Unsupported("This device does not support Lost Mode.").into());
         }
         if device.lost_mode_enabled {
-            return Err(Failure::Other(format!(
-                "Lost Mode is already on for {}",
-                device.name
-            )));
+            return Err(Failure::Other(format!("Lost Mode is already on for {}", device.name)));
         }
         confirm(
             "lost-mode",
@@ -454,20 +425,14 @@ impl<T: Transport> Cli<T> {
             ),
         )?;
         self.fm.lost_mode(&device, phone.trim(), message.trim())?;
-        self.done(
-            "lost_mode",
-            &device,
-            &format!("Lost Mode is on for {}", device.name),
-        )
+        self.done("lost_mode", &device, &format!("Lost Mode is on for {}", device.name))
     }
 
     fn done(&self, action: &str, d: &Device, text: &str) -> Outcome {
         if self.json {
             println!(
                 "{}",
-                pretty(
-                    &json!({"ok": true, "action": action, "device": {"id": d.id, "name": d.name}})
-                )
+                pretty(&json!({"ok": true, "action": action, "device": {"id": d.id, "name": d.name}}))
             );
         } else {
             println!("{text}");
@@ -507,10 +472,7 @@ impl<T: Transport> Cli<T> {
         }
         println!("{who}: {} positions since {}", points.len(), utc(since));
         for p in &points {
-            let battery = p
-                .battery
-                .map(|b| format!("  {:.0}%", b * 100.0))
-                .unwrap_or_default();
+            let battery = p.battery.map(|b| format!("  {:.0}%", b * 100.0)).unwrap_or_default();
             println!(
                 "{}  {:.6}, {:.6}  ±{:.0} m{battery}",
                 utc(p.ts),
@@ -531,9 +493,7 @@ impl<T: Transport> Cli<T> {
         if self.json {
             println!(
                 "{}",
-                pretty(
-                    &json!({"deleted": deleted, "remaining": remaining, "retention_days": days})
-                )
+                pretty(&json!({"deleted": deleted, "remaining": remaining, "retention_days": days}))
             );
         } else {
             println!("Deleted {deleted} positions older than {days} days; {remaining} remain.");
@@ -585,10 +545,7 @@ fn resolve<'a>(devices: &'a [Device], query: &str) -> Result<&'a Device, Failure
     let q = fold(query.trim());
     let exact: Vec<&Device> = devices.iter().filter(|d| fold(&d.name) == q).collect();
     let matches = if exact.is_empty() && !q.is_empty() {
-        devices
-            .iter()
-            .filter(|d| fold(&d.name).contains(&q))
-            .collect()
+        devices.iter().filter(|d| fold(&d.name).contains(&q)).collect()
     } else {
         exact
     };

@@ -34,11 +34,7 @@ pub fn run() -> glib::ExitCode {
         let css = gtk::CssProvider::new();
         css.load_from_string(map::CSS);
         if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &css,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
+            gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
     });
     app.connect_activate(|app| {

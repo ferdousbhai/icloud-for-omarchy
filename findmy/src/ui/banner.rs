@@ -21,8 +21,7 @@ const SIGNING_IN: &str = "Signing in…";
 const BUTTON: &str = "Sign In";
 const FIND_MY_TITLE: &str = "Find My needs your Apple password";
 /// The same when no password is stored for the daemon to use by itself.
-const FIND_MY_TITLE_HINT: &str =
-    "Find My needs your Apple password (to stop being asked: icloud-session set-password)";
+const FIND_MY_TITLE_HINT: &str = "Find My needs your Apple password (to stop being asked: icloud-session set-password)";
 const FIND_MY_WAITING: &str = "Finish in the Apple window…";
 const FIND_MY_BUTTON: &str = "Enter Password";
 
@@ -58,10 +57,7 @@ impl State {
         let find_my = self.find_my_needed && signed_in != Some(false);
         if signing_in {
             let title = if find_my { FIND_MY_WAITING } else { SIGNING_IN };
-            return Some(View {
-                title,
-                button: None,
-            });
+            return Some(View { title, button: None });
         }
         if signed_in == Some(false) || self.sign_in_needed {
             return Some(View {
@@ -69,16 +65,9 @@ impl State {
                 button: Some((BUTTON, Action::SignIn)),
             });
         }
-        let stored = self
-            .status
-            .as_ref()
-            .is_some_and(|s| s.find_my_password_stored);
+        let stored = self.status.as_ref().is_some_and(|s| s.find_my_password_stored);
         find_my.then_some(View {
-            title: if stored {
-                FIND_MY_TITLE
-            } else {
-                FIND_MY_TITLE_HINT
-            },
+            title: if stored { FIND_MY_TITLE } else { FIND_MY_TITLE_HINT },
             button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
         })
     }
@@ -92,9 +81,7 @@ impl State {
         // Signed in anew (a request had said so while the status still
         // read signed in, if the window just closed): a new session, so
         // whether Find My wants its password is for the next refresh to say.
-        if status.signed_in
-            && (was_signed_in == Some(false) || (self.sign_in_needed && window_closed))
-        {
+        if status.signed_in && (was_signed_in == Some(false) || (self.sign_in_needed && window_closed)) {
             self.sign_in_needed = false;
             self.find_my_needed = false;
             return Change::SignedIn;
@@ -134,11 +121,7 @@ impl SignInBanner {
         let on_error = Rc::new(on_error);
         let clicked = state.clone();
         widget.connect_button_clicked(move |_| {
-            let action = clicked
-                .borrow()
-                .view()
-                .and_then(|v| v.button)
-                .map(|(_, a)| a);
+            let action = clicked.borrow().view().and_then(|v| v.button).map(|(_, a)| a);
             let on_error = on_error.clone();
             let (open, what): (fn() -> icloud_session::Result<()>, _) = match action {
                 Some(Action::AuthorizeFindMy) => (
@@ -218,11 +201,7 @@ fn render(banner: &adw::Banner, state: &State) {
 mod tests {
     use super::*;
 
-    fn status(
-        signed_in: bool,
-        signing_in: bool,
-        find_my_authorized: bool,
-    ) -> icloud_session::Status {
+    fn status(signed_in: bool, signing_in: bool, find_my_authorized: bool) -> icloud_session::Status {
         icloud_session::Status {
             signed_in,
             apple_id: None,
@@ -263,10 +242,7 @@ mod tests {
         assert_eq!(state.view().unwrap().title, FIND_MY_TITLE);
         state.update(status(true, true, false));
         // Authorized: hidden, and the window refreshes.
-        assert_eq!(
-            state.update(status(true, false, true)),
-            Change::FindMyAuthorized
-        );
+        assert_eq!(state.update(status(true, false, true)), Change::FindMyAuthorized);
         assert_eq!(state.view(), None);
     }
 

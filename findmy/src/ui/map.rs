@@ -28,9 +28,7 @@ impl DeviceMap {
         let registry = shumate::MapSourceRegistry::with_defaults();
         let source = registry.by_id(shumate::MAP_SOURCE_OSM_MAPNIK);
         widget.set_map_source(source.as_ref());
-        let viewport = widget
-            .viewport()
-            .expect("a SimpleMap always has a viewport");
+        let viewport = widget.viewport().expect("a SimpleMap always has a viewport");
         viewport.set_min_zoom_level(2);
 
         let trail = shumate::PathLayer::new(&viewport);
@@ -95,14 +93,12 @@ impl DeviceMap {
     pub fn set_trail(&self, points: &[Point], current: Option<&Fix>) {
         self.trail.remove_all();
         for p in points {
-            self.trail
-                .add_node(&shumate::Coordinate::new_full(p.lat, p.lon));
+            self.trail.add_node(&shumate::Coordinate::new_full(p.lat, p.lon));
         }
         if let (Some(fix), Some(last)) = (current, points.last())
             && fix.ts_ms / 1000 > last.ts
         {
-            self.trail
-                .add_node(&shumate::Coordinate::new_full(fix.lat, fix.lon));
+            self.trail.add_node(&shumate::Coordinate::new_full(fix.lat, fix.lon));
         }
     }
 
@@ -123,11 +119,7 @@ fn marker_content(d: &Device, selected: bool) -> gtk::Image {
     if d.location.is_some_and(|f| f.is_old) || !d.online {
         badge.add_css_class("stale");
     }
-    badge.set_tooltip_text(Some(&format!(
-        "{}\n{}",
-        d.name,
-        d.summary(crate::models::now_ms())
-    )));
+    badge.set_tooltip_text(Some(&format!("{}\n{}", d.name, d.summary(crate::models::now_ms()))));
     badge.set_cursor_from_name(Some("pointer"));
     badge
 }

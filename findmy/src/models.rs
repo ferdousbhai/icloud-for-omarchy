@@ -51,9 +51,7 @@ impl DeviceClass {
         match class {
             "iPhone" | "iPod" => Self::IPhone,
             "iPad" => Self::IPad,
-            "MacBookPro" | "MacBookAir" | "MacBook" | "iMac" | "Mac" | "MacPro" | "MacMini" => {
-                Self::Mac
-            }
+            "MacBookPro" | "MacBookAir" | "MacBook" | "iMac" | "Mac" | "MacPro" | "MacMini" => Self::Mac,
             "Watch" => Self::Watch,
             "Accessory" | "AirPods" => Self::AirPods,
             c if c.starts_with("Mac") || c.starts_with("iMac") => Self::Mac,
@@ -153,10 +151,7 @@ impl Device {
         });
         let model_name = raw.device_display_name.unwrap_or_default();
         Some(Device {
-            name: raw
-                .name
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| model_name.clone()),
+            name: raw.name.filter(|n| !n.is_empty()).unwrap_or_else(|| model_name.clone()),
             class: DeviceClass::parse(raw.device_class.as_deref().unwrap_or("")),
             model_name,
             battery,
@@ -230,14 +225,8 @@ mod tests {
     #[test]
     fn battery_icons() {
         assert_eq!(battery_icon_name(0.82, false), "battery-level-80-symbolic");
-        assert_eq!(
-            battery_icon_name(0.04, true),
-            "battery-level-0-charging-symbolic"
-        );
-        assert_eq!(
-            battery_icon_name(1.0, true),
-            "battery-level-100-charged-symbolic"
-        );
+        assert_eq!(battery_icon_name(0.04, true), "battery-level-0-charging-symbolic");
+        assert_eq!(battery_icon_name(1.0, true), "battery-level-100-charged-symbolic");
         assert_eq!(battery_icon_name(1.7, false), "battery-level-100-symbolic");
     }
 

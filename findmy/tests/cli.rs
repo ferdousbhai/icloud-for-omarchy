@@ -160,11 +160,7 @@ fn locate_gives_up_on_a_device_with_only_an_old_fix() {
     let env = start();
     let out = env.run(&["locate", "watch", "--wait", "1"]);
     assert_eq!(code(&out), 1);
-    assert!(
-        stderr(&out).contains("no fresh fix within 1 s"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("no fresh fix within 1 s"), "{}", stderr(&out));
 }
 
 #[test]
@@ -195,59 +191,29 @@ fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
     let out = env.run(&["play-sound", "test's", "--yes"]);
     assert_eq!(code(&out), 1);
     let err = stderr(&out);
-    assert!(
-        err.contains("matches 4 devices") && err.contains(IPHONE),
-        "{err}"
-    );
+    assert!(err.contains("matches 4 devices") && err.contains(IPHONE), "{err}");
 
     let out = env.run(&["play-sound", "nokia", "--yes"]);
     assert_eq!(code(&out), 1);
-    assert!(
-        stderr(&out).contains("no device matches"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("no device matches"), "{}", stderr(&out));
     // The same as machine-readable codes.
     for (name, want) in [("nokia", "not_found"), ("test's", "ambiguous")] {
         let out = env.run(&["play-sound", name, "--yes", "--json"]);
         let err: Value = serde_json::from_slice(&out.stderr).unwrap();
-        assert_eq!(
-            (code(&out), err["error"]["code"].as_str()),
-            (1, Some(want)),
-            "{name}"
-        );
+        assert_eq!((code(&out), err["error"]["code"].as_str()), (1, Some(want)), "{name}");
     }
 
     // The AirPods cannot do Lost Mode in the fixture.
-    let out = env.run(&[
-        "lost-mode",
-        "airpods",
-        "--phone",
-        "1",
-        "--message",
-        "m",
-        "--yes",
-    ]);
+    let out = env.run(&["lost-mode", "airpods", "--phone", "1", "--message", "m", "--yes"]);
     assert_eq!(code(&out), 1);
-    assert!(
-        stderr(&out).contains("does not support Lost Mode"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("does not support Lost Mode"), "{}", stderr(&out));
     assert!(env.actions().is_empty());
 }
 
 #[test]
 fn lost_mode_sends_phone_and_message() {
     let env = start();
-    let out = env.run(&[
-        "lost-mode",
-        "macbook",
-        "--phone",
-        "+1555",
-        "--message",
-        "Lost",
-    ]);
+    let out = env.run(&["lost-mode", "macbook", "--phone", "+1555", "--message", "Lost"]);
     assert_eq!(code(&out), 64, "refused without --yes on a non-terminal");
     let out = env.run(&["lost-mode", "macbook", "--phone", "+1555", "--yes"]);
     assert_eq!(code(&out), 64, "--message is required");
@@ -309,8 +275,7 @@ fn prune_history_deletes_rows_past_retention() {
     };
     {
         let h = History::open(&env.data().join("history.db")).unwrap();
-        h.record("old", &fix(10.0, now - RETENTION_SECS - 60), None)
-            .unwrap();
+        h.record("old", &fix(10.0, now - RETENTION_SECS - 60), None).unwrap();
         h.record("new", &fix(20.0, now - 60), None).unwrap();
     }
     let out = env.json(&["prune-history", "--json"]);
@@ -318,10 +283,7 @@ fn prune_history_deletes_rows_past_retention() {
     assert_eq!(out["remaining"], 1);
     assert_eq!(out["retention_days"], 30);
     let out = env.run(&["prune-history"]);
-    assert_eq!(
-        stdout(&out).trim(),
-        "Deleted 0 positions older than 30 days; 1 remain."
-    );
+    assert_eq!(stdout(&out).trim(), "Deleted 0 positions older than 30 days; 1 remain.");
 }
 
 #[test]
@@ -401,11 +363,7 @@ fn find_my_password_needed_exits_4() {
     let tmp = tempfile::tempdir().unwrap();
     let out = run_at(&answering(450), tmp.path(), &["devices"]);
     assert_eq!(code(&out), 4, "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains("authorize-find-my"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("authorize-find-my"), "{}", stderr(&out));
 
     let out = run_at(&answering(450), tmp.path(), &["devices", "--json"]);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
@@ -426,9 +384,5 @@ fn signed_out_exits_2() {
     let tmp = tempfile::tempdir().unwrap();
     let out = run_at(&answering(421), tmp.path(), &["devices"]);
     assert_eq!(code(&out), 2, "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains("icloud-session sign-in"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("icloud-session sign-in"), "{}", stderr(&out));
 }

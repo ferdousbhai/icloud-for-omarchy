@@ -32,29 +32,16 @@ fn haversine_is_sane() {
 #[test]
 fn stores_first_fix_then_only_moves_past_threshold() {
     let h = History::open_in_memory().unwrap();
-    assert!(
-        h.record("a", &fix(60.0, 25.0, 5.0, 100), Some(0.5))
-            .unwrap()
-    );
+    assert!(h.record("a", &fix(60.0, 25.0, 5.0, 100), Some(0.5)).unwrap());
     // 10 m: inside the threshold.
-    assert!(
-        !h.record("a", &fix(north(10.0), 25.0, 5.0, 160), None)
-            .unwrap()
-    );
+    assert!(!h.record("a", &fix(north(10.0), 25.0, 5.0, 160), None).unwrap());
     // Exactly at the threshold still counts as not moved.
     assert!(
-        !h.record(
-            "a",
-            &fix(north(MOVE_THRESHOLD_M - 0.01), 25.0, 5.0, 170),
-            None
-        )
-        .unwrap()
-    );
-    // 40 m: moved.
-    assert!(
-        h.record("a", &fix(north(40.0), 25.0, 5.0, 220), Some(0.4))
+        !h.record("a", &fix(north(MOVE_THRESHOLD_M - 0.01), 25.0, 5.0, 170), None)
             .unwrap()
     );
+    // 40 m: moved.
+    assert!(h.record("a", &fix(north(40.0), 25.0, 5.0, 220), Some(0.4)).unwrap());
     let trail = h.trail("a", 0).unwrap();
     assert_eq!(trail.len(), 2);
     assert_eq!(trail[0].ts, 100);
@@ -66,20 +53,11 @@ fn inaccurate_wobble_is_not_movement() {
     let h = History::open_in_memory().unwrap();
     h.record("a", &fix(60.0, 25.0, 100.0, 100), None).unwrap();
     // 60 m apart, but both fixes are only good to 100 m.
-    assert!(
-        !h.record("a", &fix(north(60.0), 25.0, 100.0, 200), None)
-            .unwrap()
-    );
+    assert!(!h.record("a", &fix(north(60.0), 25.0, 100.0, 200), None).unwrap());
     // A precise fix 60 m away still sits inside the old fix's 100 m radius.
-    assert!(
-        !h.record("a", &fix(north(60.0), 25.0, 5.0, 300), None)
-            .unwrap()
-    );
+    assert!(!h.record("a", &fix(north(60.0), 25.0, 5.0, 300), None).unwrap());
     // 150 m is past both radii: moved.
-    assert!(
-        h.record("a", &fix(north(150.0), 25.0, 5.0, 400), None)
-            .unwrap()
-    );
+    assert!(h.record("a", &fix(north(150.0), 25.0, 5.0, 400), None).unwrap());
 }
 
 #[test]
@@ -101,14 +79,8 @@ fn gps_wifi_wobble_on_a_desk_is_not_movement() {
 fn ignores_stale_or_repeated_timestamps() {
     let h = History::open_in_memory().unwrap();
     h.record("a", &fix(60.0, 25.0, 5.0, 100), None).unwrap();
-    assert!(
-        !h.record("a", &fix(north(500.0), 25.0, 5.0, 100), None)
-            .unwrap()
-    );
-    assert!(
-        !h.record("a", &fix(north(500.0), 25.0, 5.0, 50), None)
-            .unwrap()
-    );
+    assert!(!h.record("a", &fix(north(500.0), 25.0, 5.0, 100), None).unwrap());
+    assert!(!h.record("a", &fix(north(500.0), 25.0, 5.0, 50), None).unwrap());
 }
 
 #[test]
@@ -196,14 +168,9 @@ fn prune_drops_rows_past_retention() {
     let now = 10 * RETENTION_SECS;
     let old = now - RETENTION_SECS - 1;
     h.record("a", &fix(60.0, 25.0, 5.0, old), None).unwrap();
-    h.record(
-        "a",
-        &fix(north(100.0), 25.0, 5.0, now - RETENTION_SECS),
-        None,
-    )
-    .unwrap();
-    h.record("a", &fix(north(200.0), 25.0, 5.0, now), None)
+    h.record("a", &fix(north(100.0), 25.0, 5.0, now - RETENTION_SECS), None)
         .unwrap();
+    h.record("a", &fix(north(200.0), 25.0, 5.0, now), None).unwrap();
     assert_eq!(h.prune(now).unwrap(), 1);
     let trail = h.trail("a", 0).unwrap();
     assert_eq!(trail.len(), 2);
@@ -219,8 +186,7 @@ fn open_and_record_devices_prune() {
     {
         let h = History::open(&path).unwrap();
         h.record("old", &fix(10.0, 10.0, 5.0, stale), None).unwrap();
-        h.record("new", &fix(20.0, 20.0, 5.0, now - 60), None)
-            .unwrap();
+        h.record("new", &fix(20.0, 20.0, 5.0, now - 60), None).unwrap();
     }
     // Opening drops the stale row, and says so.
     let h = History::open(&path).unwrap();

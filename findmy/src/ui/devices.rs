@@ -21,10 +21,7 @@ pub struct DeviceList {
 impl DeviceList {
     /// `on_select` runs whenever the user moves the selection (click or
     /// keyboard); `on_activate` when they click a row or press Enter on it.
-    pub fn new(
-        on_select: impl Fn(&str) + 'static,
-        on_activate: impl Fn(&str) + 'static,
-    ) -> Rc<Self> {
+    pub fn new(on_select: impl Fn(&str) + 'static, on_activate: impl Fn(&str) + 'static) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["navigation-sidebar"])
@@ -72,10 +69,7 @@ impl DeviceList {
         if self.rebuilding.get() {
             return None;
         }
-        self.ids
-            .borrow()
-            .get(usize::try_from(row.index()).ok()?)
-            .cloned()
+        self.ids.borrow().get(usize::try_from(row.index()).ok()?).cloned()
     }
 
     /// Shows an empty-state message (e.g. "Sign in required").

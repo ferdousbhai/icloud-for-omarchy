@@ -29,10 +29,7 @@ impl Transport for Fake {
         Ok(ROOT.into())
     }
     fn post_json(&mut self, url: &str, body: &Value) -> findme::Result<Value> {
-        self.log
-            .lock()
-            .unwrap()
-            .push((url.to_string(), body.clone()));
+        self.log.lock().unwrap().push((url.to_string(), body.clone()));
         self.replies.pop_front().expect("unexpected request")
     }
 }
@@ -48,10 +45,7 @@ fn client(replies: Vec<findme::Result<Value>>) -> (FindMe<Fake>, Log) {
 
 #[test]
 fn init_then_refresh_carries_server_context() {
-    let (mut fm, log) = client(vec![
-        Ok(fixture("initClient")),
-        Ok(fixture("refreshClient")),
-    ]);
+    let (mut fm, log) = client(vec![Ok(fixture("initClient")), Ok(fixture("refreshClient"))]);
 
     let devices = fm.refresh(true).unwrap();
     assert_eq!(devices.len(), 4);
@@ -59,14 +53,8 @@ fn init_then_refresh_carries_server_context() {
     assert_eq!(devices2.len(), 4);
 
     let log = log.lock().unwrap();
-    assert_eq!(
-        log[0].0,
-        format!("{ROOT}/fmipservice/client/web/initClient")
-    );
-    assert_eq!(
-        log[1].0,
-        format!("{ROOT}/fmipservice/client/web/refreshClient")
-    );
+    assert_eq!(log[0].0, format!("{ROOT}/fmipservice/client/web/initClient"));
+    assert_eq!(log[1].0, format!("{ROOT}/fmipservice/client/web/refreshClient"));
 
     let init = &log[0].1;
     assert_eq!(init["clientContext"]["appName"], "iCloud Find (Web)");
@@ -113,10 +101,7 @@ fn parses_devices() {
     assert!(watch.location.unwrap().is_old);
 
     assert_eq!(pods.class, DeviceClass::AirPods);
-    assert_eq!(
-        pods.battery, None,
-        "batteryStatus Unknown hides the 0.0 level"
-    );
+    assert_eq!(pods.battery, None, "batteryStatus Unknown hides the 0.0 level");
     assert_eq!(pods.location, None);
     assert!(!pods.can_lost_mode);
 
@@ -139,8 +124,7 @@ fn play_sound_and_lost_mode_payloads() {
     let (mut fm, log) = client(vec![Ok(fixture("playSound")), Ok(fixture("lostDevice"))]);
 
     fm.play_sound(phone).unwrap();
-    fm.lost_mode(phone, "+358401234567", "Lost, please call")
-        .unwrap();
+    fm.lost_mode(phone, "+358401234567", "Lost, please call").unwrap();
 
     let log = log.lock().unwrap();
     assert_eq!(log[0].0, format!("{ROOT}/fmipservice/client/web/playSound"));
@@ -148,10 +132,7 @@ fn play_sound_and_lost_mode_payloads() {
     assert_eq!(log[0].1["subject"], "Find My iPhone Alert");
     assert_eq!(log[0].1["clientContext"]["fmly"], true);
 
-    assert_eq!(
-        log[1].0,
-        format!("{ROOT}/fmipservice/client/web/lostDevice")
-    );
+    assert_eq!(log[1].0, format!("{ROOT}/fmipservice/client/web/lostDevice"));
     let b = &log[1].1;
     assert_eq!(b["device"], phone.id.as_str());
     assert_eq!(b["ownerNbr"], "+358401234567");
@@ -167,10 +148,7 @@ fn unsupported_actions_send_nothing() {
     let snap = findme::parse_response(&fixture("initClient")).unwrap();
     let pods = &snap.devices[3];
     let (mut fm, log) = client(vec![]);
-    assert!(matches!(
-        fm.lost_mode(pods, "1", "x"),
-        Err(Error::Unsupported(_))
-    ));
+    assert!(matches!(fm.lost_mode(pods, "1", "x"), Err(Error::Unsupported(_))));
     let mut mute = pods.clone();
     mute.can_play_sound = false;
     assert!(matches!(fm.play_sound(&mute), Err(Error::Unsupported(_))));
@@ -213,10 +191,7 @@ fn http_500_reinitialises_once() {
     ]);
     fm.refresh(true).unwrap();
     assert_eq!(fm.refresh(true).unwrap().len(), 4);
-    assert_eq!(
-        endpoints(&log),
-        ["initClient", "refreshClient", "initClient"]
-    );
+    assert_eq!(endpoints(&log), ["initClient", "refreshClient", "initClient"]);
 }
 
 /// A 450 is Find My asking for the password again: surfaced at once, with
@@ -234,10 +209,7 @@ fn find_my_auth_required_surfaces_without_retrying() {
     assert_eq!(endpoints(&log), ["initClient"]);
     fm.refresh(true).unwrap();
     assert!(matches!(fm.refresh(false), Err(Error::FindMyAuthRequired)));
-    assert_eq!(
-        endpoints(&log),
-        ["initClient", "initClient", "refreshClient"]
-    );
+    assert_eq!(endpoints(&log), ["initClient", "initClient", "refreshClient"]);
     fm.refresh(true).unwrap();
     assert_eq!(
         endpoints(&log),
@@ -266,10 +238,7 @@ fn session_errors_map_to_find_my_errors() {
 
 #[test]
 fn refreshes_feed_history_only_when_moved() {
-    let (mut fm, _log) = client(vec![
-        Ok(fixture("initClient")),
-        Ok(fixture("refreshClient")),
-    ]);
+    let (mut fm, _log) = client(vec![Ok(fixture("initClient")), Ok(fixture("refreshClient"))]);
     let history = History::open_in_memory().unwrap();
 
     let first = fm.refresh(true).unwrap();
@@ -335,9 +304,7 @@ impl Transport for Resettable {
 #[test]
 fn reset_forgets_the_transport_session() {
     let resets = Arc::new(Mutex::new(0));
-    let mut fm = FindMe::new(Resettable {
-        resets: resets.clone(),
-    });
+    let mut fm = FindMe::new(Resettable { resets: resets.clone() });
     fm.refresh(true).unwrap();
     assert_eq!(*resets.lock().unwrap(), 0);
     fm.reset();

@@ -38,8 +38,7 @@ fn http_450_is_find_my_auth_required_without_a_retry() {
                 .lock()
                 .unwrap()
                 .push(line.split_whitespace().nth(1).unwrap().to_string());
-            let _ = stream
-                .write_all(b"HTTP/1.1 450 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(b"HTTP/1.1 450 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         }
     });
     // SAFETY: the only test in this binary; no other thread reads the environment.
@@ -53,10 +52,7 @@ fn http_450_is_find_my_auth_required_without_a_retry() {
     assert!(matches!(fm.refresh(true), Err(Error::FindMyAuthRequired)));
     let seen = seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1, "{seen:?}");
-    assert!(
-        seen[0].starts_with("/fmipservice/client/web/initClient?"),
-        "{seen:?}"
-    );
+    assert!(seen[0].starts_with("/fmipservice/client/web/initClient?"), "{seen:?}");
     assert_eq!(
         Error::FindMyAuthRequired.to_string(),
         "Find My needs your Apple password"
