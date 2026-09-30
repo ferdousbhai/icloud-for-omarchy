@@ -13,6 +13,24 @@ one Apple sign-in, published as one signed pacman repository.
 
 [docs/BRIEF.md](docs/BRIEF.md) is the design brief the apps were built from.
 
+## Command line and agents
+
+Everything the windows do can be done from a terminal, or by an AI agent:
+`icloud-notes`, `icloud-photos` and `icloud-findmy` take commands
+(`icloud-notes list`, `icloud-photos download`, `icloud-findmy locate`, ...)
+and run them without a window, and `icloud-session` owns the sign-in. They
+share `--json` output, one JSON error shape and one table of exit codes.
+
+- [docs/AGENTS.md](docs/AGENTS.md): the reference to give an agent (auth,
+  commands with example JSON, safety rules, recipes).
+- [docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md): the same as a
+  Claude Code skill; copy `docs/skills/icloud` into `~/.claude/skills/`.
+- [docs/CLI.md](docs/CLI.md): every GUI feature mapped to its command, the
+  exit and error codes, the JSON shapes.
+
+Signing in is the one thing a person must do: Apple's page (password, 2FA)
+opens in a window from `icloud-session sign-in`.
+
 ## Install
 
 ```bash
@@ -68,7 +86,7 @@ packaging/<package>/     one PKGBUILD per package
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, test, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh, the installers against stubbed pacman
-docs/                    the design brief
+docs/                    the design brief; the command-line reference (CLI.md, AGENTS.md, skills/)
 ```
 
 Each directory kept its history: the five former repositories
