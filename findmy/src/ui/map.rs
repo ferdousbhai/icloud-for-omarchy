@@ -119,7 +119,11 @@ fn marker_content(d: &Device, selected: bool) -> gtk::Image {
     if d.location.is_some_and(|f| f.is_old) || !d.online {
         badge.add_css_class("stale");
     }
-    badge.set_tooltip_text(Some(&format!("{}\n{}", d.name, d.summary(crate::models::now_ms()))));
+    badge.set_tooltip_text(Some(&format!(
+        "{}\n{}",
+        d.name,
+        d.summary(icloud_session::time::now_ms())
+    )));
     badge.set_cursor_from_name(Some("pointer"));
     badge
 }

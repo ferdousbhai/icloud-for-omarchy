@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 
 use icloud_findmy::history::{History, RETENTION_SECS};
-use icloud_findmy::models::{self, Fix};
+use icloud_findmy::models::Fix;
 use serde_json::Value;
 
 const IPHONE: &str = "aVBob25lMTUtZml4dHVyZS1kZXZpY2UtaWQ=";
@@ -265,7 +265,7 @@ fn history_shows_the_trail_by_name_or_offline_by_id() {
 #[test]
 fn prune_history_deletes_rows_past_retention() {
     let env = start();
-    let now = models::now_ms() / 1000;
+    let now = icloud_session::time::now_ms() / 1000;
     let fix = |lat, ts: i64| Fix {
         lat,
         lon: 25.0,

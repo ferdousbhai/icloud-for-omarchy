@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::models::{self, Device, Fix};
+use crate::models::{Device, Fix};
 
 /// Minimum movement in metres before a new point is stored.
 pub const MOVE_THRESHOLD_M: f64 = 25.0;
@@ -104,7 +104,7 @@ impl History {
             conn,
             pruned_on_open: 0,
         };
-        history.pruned_on_open = history.prune(models::now_ms() / 1000)?;
+        history.pruned_on_open = history.prune(icloud_session::time::now_ms() / 1000)?;
         Ok(history)
     }
 

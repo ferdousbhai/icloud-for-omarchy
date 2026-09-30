@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use futures_lite::{Stream, StreamExt};
 use zbus::blocking::Connection;
@@ -204,15 +204,11 @@ fn mock_status() -> Status {
         signed_in: true,
         apple_id: Some(MOCK_APPLE_ID.to_string()),
         dsid: Some(MOCK_DSID.to_string()),
-        expires_at: Some(unix_now() + 30 * 24 * 3600),
+        expires_at: Some(time::now_secs() + 30 * 24 * 3600),
         signing_in: false,
         find_my_authorized: true,
         find_my_password_stored: false,
     }
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 // ------------------------------------------------------------------ D-Bus

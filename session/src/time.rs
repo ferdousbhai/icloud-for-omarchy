@@ -1,6 +1,20 @@
 //! UTC calendar dates without a date crate: Howard Hinnant's
 //! `days_from_civil` / `civil_from_days` over the proleptic Gregorian
-//! calendar, and RFC 3339 formatting on top.
+//! calendar, RFC 3339 formatting on top, and the current Unix time.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Seconds since the Unix epoch now (0 if the clock is before it).
+pub fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Milliseconds since the Unix epoch now (0 if the clock is before it).
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
 
 /// Days since 1970-01-01 of year `y`, month `m` (1-12), day `d` (1-31).
 pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {

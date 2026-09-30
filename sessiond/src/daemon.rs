@@ -9,9 +9,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use icloud_session::{INTERFACE, OBJECT_PATH, SessionReply};
+use icloud_session::{INTERFACE, OBJECT_PATH, SessionReply, time};
 use serde::Deserialize;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
@@ -74,18 +74,6 @@ fn signin_bin() -> PathBuf {
         .and_then(|exe| Some(exe.parent()?.join("icloud-session-signin")))
         .filter(|p| p.exists())
         .unwrap_or_else(|| "icloud-session-signin".into())
-}
-
-pub fn now_unix() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
-}
-
-/// Now as `YYYY-MM-DDTHH:MM:SS.mmmZ` (a jar's `captured_at`).
-fn now_rfc3339_millis() -> String {
-    let ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    icloud_session::time::rfc3339_millis(ms as i64)
 }
 
 #[derive(Debug, zbus::DBusError)]
@@ -205,7 +193,7 @@ impl State {
             dsid: account.map(|a| a.dsid.clone()).unwrap_or_default(),
             expires_at: account.map_or(0, |a| cookies::token_expiry(&a.cookies)),
             signing_in: self.signing_in,
-            find_my_authorized: account.is_some_and(|a| a.find_my_ready(now_unix())),
+            find_my_authorized: account.is_some_and(|a| a.find_my_ready(time::now_secs())),
             find_my_password_stored: account.is_some() && self.password_stored,
         }
     }
@@ -276,7 +264,7 @@ impl Daemon {
         Arc::new(Daemon {
             cfg,
             agent: apple::agent(),
-            started_at: now_unix(),
+            started_at: time::now_secs(),
             state: Mutex::new(state),
             validate_lock: Mutex::new(()),
             published: Mutex::new(props),
@@ -429,7 +417,7 @@ impl Daemon {
                 }
             }
             (
-                a.cookie_header(now_unix()),
+                a.cookie_header(time::now_secs()),
                 a.client_params.clone(),
                 a.dsid.clone(),
                 generation,
@@ -450,10 +438,10 @@ impl Daemon {
         let outcome = match result {
             Ok(v) => {
                 if let Some(a) = st.account.as_mut().filter(|_| same) {
-                    cookies::merge_set_cookies(&mut a.cookies, &v.set_cookies, now_unix());
+                    cookies::merge_set_cookies(&mut a.cookies, &v.set_cookies, time::now_secs());
                     a.webservices = v.webservices;
                     a.apple_id = v.apple_id;
-                    a.validated_at = now_unix();
+                    a.validated_at = time::now_secs();
                     self.save_account(&st);
                 }
                 Ok(())
@@ -480,7 +468,7 @@ impl Daemon {
     /// Validated within `validate_max_age`.
     fn fresh_enough(&self) -> Fresh {
         let max_age = self.cfg.validate_max_age.as_secs_f64().ceil() as u64;
-        Fresh::Since(now_unix().saturating_sub(max_age))
+        Fresh::Since(time::now_secs().saturating_sub(max_age))
     }
 
     fn session(&self) -> Result<SessionReply, ServiceError> {
@@ -493,13 +481,17 @@ impl Daemon {
         let st = lock(&self.state);
         let a = st.account.as_ref().ok_or_else(sign_in_required)?;
         let map = |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        Ok((a.cookie_header(now_unix()), map(&a.client_params), map(&a.webservices)))
+        Ok((
+            a.cookie_header(time::now_secs()),
+            map(&a.client_params),
+            map(&a.webservices),
+        ))
     }
 
     fn merge_cookies(&self, set_cookies: &[String]) {
         let mut st = lock(&self.state);
         if let Some(a) = st.account.as_mut()
-            && cookies::merge_set_cookies(&mut a.cookies, set_cookies, now_unix())
+            && cookies::merge_set_cookies(&mut a.cookies, set_cookies, time::now_secs())
         {
             self.save_account(&st);
         }
@@ -536,7 +528,7 @@ impl Daemon {
             let a = st.account.as_ref().ok_or_else(sign_in_required)?;
             Ok(a.find_my.as_ref().map(|f| {
                 let params = f.client_params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                (cookies::header(&f.cookies, now_unix()), params)
+                (cookies::header(&f.cookies, time::now_secs()), params)
             }))
         };
         if let Some(jar) = held(&lock(&self.state))? {
@@ -550,7 +542,7 @@ impl Daemon {
     fn merge_find_my_cookies(&self, set_cookies: &[String]) {
         let mut st = lock(&self.state);
         if let Some(f) = st.account.as_mut().and_then(|a| a.find_my.as_mut())
-            && cookies::merge_set_cookies(&mut f.cookies, set_cookies, now_unix())
+            && cookies::merge_set_cookies(&mut f.cookies, set_cookies, time::now_secs())
         {
             self.save_account(&st);
         }
@@ -641,7 +633,7 @@ impl Daemon {
         account.find_my = Some(FindMyJar {
             cookies: jar,
             client_params: params,
-            captured_at: now_rfc3339_millis(),
+            captured_at: time::rfc3339_millis(time::now_ms()),
         });
         self.save_account(&st);
         Ok(())
@@ -917,7 +909,7 @@ impl Daemon {
         if jar.is_empty() {
             return Err("the sign-in window captured no icloud.com cookies".into());
         }
-        let now = now_unix();
+        let now = time::now_secs();
         let v = apple::validate(
             &self.agent,
             &self.cfg.setup_url,
@@ -937,7 +929,7 @@ impl Daemon {
             client_params: params,
             webservices: v.webservices,
             validated_at: now,
-            captured_at: now_rfc3339_millis(),
+            captured_at: time::rfc3339_millis(time::now_ms()),
             find_my: None,
         };
         let mut st = lock(&self.state);
@@ -972,7 +964,7 @@ impl Daemon {
         account.find_my = Some(FindMyJar {
             cookies: jar,
             client_params: params,
-            captured_at: now_rfc3339_millis(),
+            captured_at: time::rfc3339_millis(time::now_ms()),
         });
         self.save_account(&st);
         Ok(())
@@ -1104,7 +1096,7 @@ fn find_my_capture(out: &[u8]) -> Result<FindMyCapture, String> {
     let capture = parse_capture(out)?;
     let window_dsid = capture.dsid.clone().filter(|d| !d.is_empty());
     let (jar, params) = capture.into_parts();
-    if !cookies::find_my_cookie(&jar, now_unix()) {
+    if !cookies::find_my_cookie(&jar, time::now_secs()) {
         return Err(format!("the Find My window captured no {} cookie", cookies::FIND_MY));
     }
     let dsid = window_dsid.or_else(|| cookies::user_dsid(&jar).filter(|d| !d.is_empty()));

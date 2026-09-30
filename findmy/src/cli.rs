@@ -300,7 +300,7 @@ impl<T: Transport> Cli<T> {
     /// history that cannot be written is a warning, not a failure.
     fn record(&mut self, devices: &[Device]) {
         let result = self.open_history().and_then(|h| {
-            h.record_devices(devices, models::now_ms() / 1000)
+            h.record_devices(devices, icloud_session::time::now_ms() / 1000)
                 .map_err(|e| Failure::Other(e.to_string()))
         });
         if let Err(e) = result {
@@ -323,7 +323,7 @@ impl<T: Transport> Cli<T> {
 
     fn devices(&mut self, locate: bool, coords: bool) -> Outcome {
         let devices = self.fetch(locate)?;
-        let now = models::now_ms();
+        let now = icloud_session::time::now_ms();
         if self.json {
             let list: Vec<Value> = devices.iter().map(|d| device_json(d, coords, now)).collect();
             println!("{}", pretty(&json!(list)));
@@ -361,7 +361,7 @@ impl<T: Transport> Cli<T> {
                     Some(f) if f.ts_ms > 0 => format!(
                         "last fix {} ({})",
                         rfc3339(f.ts_ms / 1000),
-                        models::last_seen(models::now_ms(), f.ts_ms)
+                        models::last_seen(icloud_session::time::now_ms(), f.ts_ms)
                     ),
                     _ => "no fix at all".into(),
                 };
@@ -376,7 +376,7 @@ impl<T: Transport> Cli<T> {
     }
 
     fn print_fix(&self, d: &Device, fix: &Fix) -> Outcome {
-        let now = models::now_ms();
+        let now = icloud_session::time::now_ms();
         if self.json {
             println!("{}", pretty(&device_json(d, true, now)));
         } else {
@@ -443,7 +443,7 @@ impl<T: Transport> Cli<T> {
 
     fn history(&mut self, query: &str, since_secs: i64) -> Outcome {
         let query = query.to_string();
-        let since = models::now_ms() / 1000 - since_secs;
+        let since = icloud_session::time::now_ms() / 1000 - since_secs;
         // A device ID already in the history needs no network; a NAME is
         // resolved against the live list (which is recorded first).
         let (id, name) = if self.open_history()?.last(&query).map_err(db)?.is_some() {
@@ -488,7 +488,7 @@ impl<T: Transport> Cli<T> {
     fn prune_history(&mut self) -> Outcome {
         let h = self.open_history()?;
         // Opening prunes already; prune again in case the clock moved on.
-        let deleted = h.pruned_on_open() + h.prune(models::now_ms() / 1000).map_err(db)?;
+        let deleted = h.pruned_on_open() + h.prune(icloud_session::time::now_ms() / 1000).map_err(db)?;
         let remaining = h.count().map_err(db)?;
         let days = history::RETENTION_SECS / 86_400;
         if self.json {

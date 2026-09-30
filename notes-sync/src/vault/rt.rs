@@ -15,7 +15,6 @@
 //! uuids) draws from here too.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const NOW_ENV: &str = "ICLOUD_NOTES_SYNC_NOW";
 pub const DETERMINISTIC_ENV: &str = "ICLOUD_NOTES_SYNC_DETERMINISTIC";
@@ -28,10 +27,7 @@ pub fn now_ms() -> i64 {
     if let Some(ms) = std::env::var(NOW_ENV).ok().and_then(|v| v.trim().parse::<i64>().ok()) {
         return ms;
     }
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    icloud_session::time::now_ms()
 }
 
 fn deterministic() -> bool {

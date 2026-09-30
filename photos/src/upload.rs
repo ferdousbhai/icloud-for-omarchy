@@ -26,7 +26,7 @@
 //! an incremental sync after `wait_for_ingest`.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -110,8 +110,7 @@ impl<'t> Uploader<'t> {
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default())
-            .as_millis() as i64;
+            .map_or_else(icloud_session::time::now_ms, |d| d.as_millis() as i64);
 
         progress(Step::Reserving);
         let reserved = self.t.post_json(

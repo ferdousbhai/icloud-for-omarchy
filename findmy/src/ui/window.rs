@@ -18,7 +18,7 @@ use super::devices::DeviceList;
 use super::map::DeviceMap;
 use crate::findme::{self, FindMe, SessionTransport};
 use crate::history::{History, Point};
-use crate::models::{self, Device};
+use crate::models::Device;
 
 pub const REFRESH_SECS: u32 = 60;
 /// How much history the trail shows.
@@ -279,7 +279,7 @@ impl Window {
                     *history = History::open_default().ok();
                 }
                 if let Some(h) = history.as_ref()
-                    && let Err(e) = h.record_devices(&devices, models::now_ms() / 1000)
+                    && let Err(e) = h.record_devices(&devices, icloud_session::time::now_ms() / 1000)
                 {
                     eprintln!("icloud-findmy: could not save history: {e}");
                 }
@@ -438,7 +438,7 @@ impl Window {
 
     fn load_trail(self: &Rc<Self>, device: &Device) {
         let (history, id) = (self.history.clone(), device.id.clone());
-        let since = models::now_ms() / 1000 - TRAIL_SECS;
+        let since = icloud_session::time::now_ms() / 1000 - TRAIL_SECS;
         let weak = Rc::downgrade(self);
         let for_id = id.clone();
         background(

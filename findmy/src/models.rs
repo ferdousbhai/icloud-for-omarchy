@@ -210,14 +210,6 @@ pub fn last_seen(now_ms: i64, ts_ms: i64) -> String {
     }
 }
 
-/// Unix milliseconds now.
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

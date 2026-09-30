@@ -81,10 +81,7 @@ pub fn run(t: &dyn Transport, dirs: &Dirs, force_full: bool, progress: &dyn Fn(P
 }
 
 fn finish(cat: &Catalog, report: Report) -> Result<Report> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = icloud_session::time::now_secs();
     cat.set_meta(LAST_SYNC_KEY, Some(&now.to_string()))?;
     Ok(report)
 }

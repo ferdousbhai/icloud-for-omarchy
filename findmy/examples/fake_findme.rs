@@ -15,7 +15,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use icloud_findmy::models::now_ms;
+use icloud_session::time::now_ms;
 use serde_json::{Value, json};
 
 /// One server's state: how far the iPhone has walked, and the actions sent.

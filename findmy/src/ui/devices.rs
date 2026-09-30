@@ -81,7 +81,7 @@ impl DeviceList {
     pub fn set_devices(&self, devices: &[Device], selected: Option<&str>) {
         self.rebuilding.set(true);
         self.list.remove_all();
-        let now = models::now_ms();
+        let now = icloud_session::time::now_ms();
         let mut ids = Vec::with_capacity(devices.len());
         for d in devices {
             let row = device_row(d, now);
