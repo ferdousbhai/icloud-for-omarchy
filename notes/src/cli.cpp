@@ -1425,3 +1425,40 @@ int cliMain(int argc, char *argv[])
         return report(*f, a.json);
     return runCommand(a, *spec);
 }
+
+int runBackgroundSync(QTextStream &log)
+{
+    const QString vault = NotesBackend::rootPath();
+    if (!NotesBackend::vaultCloned()) {
+        log << "No notes cloned at " << vault << "; nothing to sync.\n";
+        return kExitOk;
+    }
+    // Never waits for the lock: whoever holds it syncs this vault already.
+    NotesBackend b(nullptr, NotesBackend::Role::Background);
+    switch (b.lockVault()) {
+    case VaultLock::Locked:
+        break;
+    case VaultLock::Busy:
+        log << "Notes is open (it syncs on its own) or another sync is running (" << b.lockHolder() << "); skipped.\n";
+        return kExitOk;
+    case VaultLock::Failed:
+        log << "Could not open the sync lock " << NotesBackend::lockPath() << "; not syncing.\n";
+        return kExitError;
+    }
+    const SyncOutcome sync = runSync(b, QStringLiteral("sync"), false);
+    // Nothing ran: signed out or the sign-in unknown is a skip (the timer
+    // tries again), a missing engine an error.
+    if (sync.failure && sync.json.isEmpty()) {
+        const Failure &f = *sync.failure;
+        const bool skip = f.code == u"sign_in_required" || f.code == u"session_unavailable";
+        log << f.message << (skip ? QStringLiteral(" Skipped.") : u' ' + f.hint) << '\n';
+        return skip ? kExitOk : kExitError;
+    }
+    log << sync.text << '\n';
+    if (sync.failure && sync.failure->code == u"sign_in_required") {
+        log << "iCloud refused the sign-in; icloud-session was told. Sync paused until you sign in.\n";
+        return kExitError;
+    }
+    log << (sync.failure ? "Sync failed for " : "Synced ") << vault << ".\n";
+    return sync.failure ? kExitError : kExitOk;
+}

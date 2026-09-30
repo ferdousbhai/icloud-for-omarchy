@@ -6,7 +6,6 @@
 
 #include <QTextStream>
 
-#include "src/backgroundsync.h"
 #include "src/cli.h"
 #include "src/notesbackend.h"
 #include "src/singleinstance.h"

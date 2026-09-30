@@ -22,4 +22,17 @@ bool isCliInvocation(const char *arg);
 // lays out text). Returns the exit code.
 int cliMain(int argc, char *argv[]);
 
+class QTextStream;
+
+// `icloud-notes --sync`: the app's sync (push, then pull) with no window,
+// for the systemd user timer that keeps the vault current while Notes is
+// closed. The `sync` command's path through NotesBackend (conflict
+// handling, reporting a refused session to icloud-session, the one retry),
+// but it never waits for the lock and skips (0) when there is no vault,
+// nobody is signed in to icloud-session (or it is unknown), or the app or
+// another sync holds the vault's lock. Returns 0 once both halves worked,
+// non-zero when either failed or the engine is missing. What it did is
+// written to `log`. Needs a Q(Core|Gui)Application.
+int runBackgroundSync(QTextStream &log);
+
 #endif

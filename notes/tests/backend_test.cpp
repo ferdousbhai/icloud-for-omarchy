@@ -1,7 +1,7 @@
 // Backend tests: note classification, save warnings, mode-aware rename and
 // the icloud-notes-sync CLI seam — against a scratch vault under a temporary
 // directory, never the real one. Run with bin/test.
-#include "../src/backgroundsync.h"
+#include "../src/cli.h"
 #include "../src/notesbackend.h"
 #include "../src/singleinstance.h"
 #include "../src/vaultlock.h"
