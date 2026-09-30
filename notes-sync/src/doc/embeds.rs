@@ -120,21 +120,6 @@ fn decode_string(compressed: &[u8]) -> Result<topotext::String> {
     Ok(topotext::String::decode(&versioned.data)?)
 }
 
-/// `decodeNoteAttachmentRefs`.
-pub fn decode_note_attachment_refs(compressed: &[u8]) -> Result<Vec<AttachmentReference>> {
-    let s = decode_string(compressed)?;
-    Ok(s.attribute_run
-        .iter()
-        .filter_map(|run| {
-            let info = run.attachment_info.as_ref()?;
-            Some(AttachmentReference {
-                attachment_identifier: info.attachment_identifier.clone()?,
-                type_uti: info.type_uti.clone()?,
-            })
-        })
-        .collect())
-}
-
 /// `decodeNoteEmbedSlots`: `Ok(None)` when the embed structure defies the
 /// model (the note then gets the banner and stays read-only).
 pub fn decode_note_embed_slots(compressed: &[u8]) -> Result<Option<Vec<EmbedSlot>>> {
@@ -273,27 +258,6 @@ pub fn render_placeholders(body_text: &str, replacements: &[Option<String>]) -> 
     out
 }
 
-/// `renderAttachmentPlaceholders`.
-pub fn render_attachment_placeholders(
-    body_text: &str,
-    refs: &[AttachmentReference],
-    relative_files: &[String],
-) -> std::result::Result<String, String> {
-    if refs.len() != relative_files.len() {
-        return Err(format!(
-            "attachment ref count ({}) doesn't match resolved file count ({})",
-            refs.len(),
-            relative_files.len()
-        ));
-    }
-    let replacements: Vec<Option<String>> = refs
-        .iter()
-        .zip(relative_files)
-        .map(|(r, f)| Some(format_attachment_markdown(r, f)))
-        .collect();
-    Ok(render_placeholders(body_text, &replacements))
-}
-
 /// `hasUnknownContentMarker`.
 pub fn has_unknown_content_marker(text: &str) -> bool {
     text.contains(ADMONITION_HEADER)
@@ -406,12 +370,6 @@ pub fn has_embed_marker(text: &str) -> bool {
     (0..units.len()).any(|i| {
         starts_with_at(&units, i, "<apple-embed") && !units.get(i + open_len).is_some_and(|&u| is_word_unit(u))
     })
-}
-
-/// `combineUnpublishableReasons`.
-pub fn combine_unpublishable_reasons(a: Option<&str>, b: Option<&str>) -> Option<String> {
-    let joined = [a, b].into_iter().flatten().collect::<Vec<_>>().join("; ");
-    if joined.is_empty() { None } else { Some(joined) }
 }
 
 struct LocalRepresentation {

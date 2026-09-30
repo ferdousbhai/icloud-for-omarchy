@@ -103,12 +103,7 @@ fn echo(fields: &mut UpdateFields, current: &CloudKitRecord, name: &str) {
     }
 }
 
-fn build_note_relocation_fields(
-    current: &CloudKitRecord,
-    folder_record_name: &str,
-    now_ms: i64,
-    mark_deleted: bool,
-) -> UpdateFields {
+fn build_note_relocation_fields(current: &CloudKitRecord, folder_record_name: &str, now_ms: i64) -> UpdateFields {
     let mut fields = UpdateFields::new();
     echo(&mut fields, current, "CreationDate");
     fields.insert("ModificationDate".into(), UpdateFieldValue::new(json!(now_ms)));
@@ -123,9 +118,6 @@ fn build_note_relocation_fields(
         UpdateFieldValue::new(folder_reference(folder_record_name, None)),
     );
     echo(&mut fields, current, "SnippetEncrypted");
-    if mark_deleted {
-        fields.insert("Deleted".into(), UpdateFieldValue::new(json!(1)));
-    }
     for name in DELETION_EMPTY_FIELDS {
         fields.insert(name.into(), UpdateFieldValue::EMPTY);
     }
@@ -135,17 +127,12 @@ fn build_note_relocation_fields(
 
 /// `buildNoteTrashFields`.
 pub fn build_note_trash_fields(current: &CloudKitRecord, now_ms: i64) -> UpdateFields {
-    build_note_relocation_fields(current, TRASH_FOLDER_RECORD_NAME, now_ms, false)
+    build_note_relocation_fields(current, TRASH_FOLDER_RECORD_NAME, now_ms)
 }
 
 /// `buildNoteMoveFields`.
 pub fn build_note_move_fields(current: &CloudKitRecord, folder_record_name: &str, now_ms: i64) -> UpdateFields {
-    build_note_relocation_fields(current, folder_record_name, now_ms, false)
-}
-
-/// `buildNotePurgeFields`.
-pub fn build_note_purge_fields(current: &CloudKitRecord, now_ms: i64) -> UpdateFields {
-    build_note_relocation_fields(current, TRASH_FOLDER_RECORD_NAME, now_ms, true)
+    build_note_relocation_fields(current, folder_record_name, now_ms)
 }
 
 /// `buildNoteCreateFields`. `folder_record_name` defaults to

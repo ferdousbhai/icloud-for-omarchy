@@ -7,10 +7,10 @@ use common::reference;
 
 use icloud_notes_sync::cloudkit::FieldValue;
 use icloud_notes_sync::doc::embeds::{
-    AttachmentAsset, EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER, combine_unpublishable_reasons,
-    decode_attachment_filename, decode_note_attachment_refs, decode_note_embed_slots, format_attachment_markdown,
-    format_embed_marker, has_attachment_reference, has_embed_marker, has_unknown_content_marker, is_image_uti,
-    is_table_uti, parse_asset_field, parse_embed_markers, render_attachment_placeholders, render_placeholders,
+    AttachmentAsset, EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER, decode_attachment_filename,
+    decode_note_embed_slots, format_attachment_markdown, format_embed_marker, has_attachment_reference,
+    has_embed_marker, has_unknown_content_marker, is_image_uti, is_table_uti, parse_asset_field, parse_embed_markers,
+    render_placeholders,
 };
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
@@ -51,18 +51,14 @@ const AUDIO_ATTACHMENT_TEXT_DATA: &str = "H4sIAAAAAAAAE+NgEPrMyMEgwCD1hlFI2jkxJ0
 const IMAGE_ATTACHMENT_TEXT_DATA: &str = "H4sIAAAAAAAAE23STWgTQRQH8GzSNJupNZNNmrabCENRWQIbQkybopd+2IBFDEoR6sWYZGvSxmzY7LZdP2oRoQehogeh4qGCFoWCH6AglHoRpQoitRRPPYgnlfZQetKiL9tn8NBllxl+M++/j2F4m/DDxduoTfzmEswBpaKzE6qukIF8ocLgPcf0qpXA2JCqMaOisLGCnmfpQraoGjm5ulKRK2Ypm2a6ykYVrTBkMj2vME01SjlZ1wplNqZqIxWWVTVNyepFM0JIj6KUWUZVy4RsvF4gIiV11S6gD2uUOEs4kA7RGiU7SoJyKA6UI7QBpU4ULEnS0I4wTnKiKdRZs3qr0gHpQdEaJRdmDdeyeKzLULslbqhzo+X+9QBG0DpxHw/WgHb4v3170Dpq/TdKHuuvdVSnBMxO3dJeS5zQGYcSQtFrQq0kJzVQgpDuRRtFE8EEtDG0VjAf2jhaC5gfzURrBmtCu4gWAAugXUJrAmtGu4zmB2tBu4LmA2tFm0ATwES0q2hesKDoJU6YT3LWcdppCA4gQHi4FH/g8cAFqc3bpjkiEnrgVOPgy+171+0Hj009plvdgp034CMkSGj6+PKrZ1KXPHkjNRicTW0JDv4aB4v7qoV3cm2f1+bNpffvfv1cWHSs1gph7e6o2+g64/N8XR3vebv0fA58Aj6uGvqkeGv8xf1+89PM90cfNn+vQOhkNdQdbuGJ4Odt/ZStrc/NzKYuTD/c2P4YcLvCAX5EEPrp081e282VVOT22fUHoanTzvBJntvNM4fI/kTf0c5oLBGX4/FoVI73RmNyZ6KvW062x2PJaHtHMhmNCQ1lI1MsZCPDZeV8/s38l+X6cGj3yJ3Vvzm/RsfwAwAA";
 
 #[test]
-fn decode_note_attachment_refs_finds_the_embedded_audio_attachment_reference() {
+fn decode_note_embed_slots_localizes_the_real_image_attachment() {
+    let slots = decode_note_embed_slots(&base64_decode(IMAGE_ATTACHMENT_TEXT_DATA)).unwrap();
     assert_eq!(
-        decode_note_attachment_refs(&base64_decode(AUDIO_ATTACHMENT_TEXT_DATA)).unwrap(),
-        vec![reference("7DAFDA6F-4AC4-41D8-9958-049373B80824", "com.apple.m4a-audio")]
-    );
-}
-
-#[test]
-fn decode_note_attachment_refs_finds_the_embedded_image_attachment_reference() {
-    assert_eq!(
-        decode_note_attachment_refs(&base64_decode(IMAGE_ATTACHMENT_TEXT_DATA)).unwrap(),
-        vec![reference("7ED80274-4400-4C02-87EA-F542F056FF02", "public.jpeg")]
+        slots,
+        Some(vec![EmbedSlot::Attachment(reference(
+            "7ED80274-4400-4C02-87EA-F542F056FF02",
+            "public.jpeg"
+        ))])
     );
 }
 
@@ -165,46 +161,26 @@ fn is_image_uti_recognizes_known_image_utis_and_rejects_others() {
 }
 
 #[test]
-fn render_attachment_placeholders_embeds_images_and_links_everything_else() {
-    let refs = [reference("A", "public.jpeg"), reference("B", "com.apple.m4a-audio")];
-    let result = render_attachment_placeholders(
-        "Title\n\u{fffc}\n\u{fffc}\n",
-        &refs,
-        &["attachments/photo.jpeg".into(), "attachments/call.m4a".into()],
-    )
-    .unwrap();
+fn format_attachment_markdown_embeds_images_and_links_everything_else() {
     assert_eq!(
-        result,
-        "Title\n![photo.jpeg](attachments/photo.jpeg)\n[call.m4a](attachments/call.m4a)\n"
+        format_attachment_markdown(&reference("A", "public.jpeg"), "attachments/photo.jpeg"),
+        "![photo.jpeg](attachments/photo.jpeg)"
+    );
+    assert_eq!(
+        format_attachment_markdown(&reference("B", "com.apple.m4a-audio"), "attachments/call.m4a"),
+        "[call.m4a](attachments/call.m4a)"
     );
 }
 
 #[test]
-fn render_attachment_placeholders_percent_encodes_path_segments_with_spaces() {
-    let result = render_attachment_placeholders(
-        "\u{fffc}",
-        &[reference("A", "com.apple.m4a-audio")],
-        &["attachments/Call with Janice Elkins.m4a".into()],
-    )
-    .unwrap();
+fn format_attachment_markdown_percent_encodes_path_segments_with_spaces() {
     assert_eq!(
-        result,
+        format_attachment_markdown(
+            &reference("A", "com.apple.m4a-audio"),
+            "attachments/Call with Janice Elkins.m4a"
+        ),
         "[Call with Janice Elkins.m4a](attachments/Call%20with%20Janice%20Elkins.m4a)"
     );
-}
-
-#[test]
-fn render_attachment_placeholders_is_a_no_op_with_no_attachments() {
-    assert_eq!(
-        render_attachment_placeholders("Plain text", &[], &[]).unwrap(),
-        "Plain text"
-    );
-}
-
-#[test]
-fn render_attachment_placeholders_errors_on_a_ref_file_count_mismatch() {
-    let err = render_attachment_placeholders("\u{fffc}", &[reference("A", "public.jpeg")], &[]).unwrap_err();
-    assert!(err.contains("doesn't match"), "{err}");
 }
 
 fn filename_field(value: serde_json::Value) -> FieldValue {
@@ -274,14 +250,6 @@ fn is_table_uti_recognizes_the_table_uti_and_rejects_file_utis() {
     assert!(is_table_uti("com.apple.notes.table"));
     assert!(!is_table_uti("public.jpeg"));
     assert!(!is_table_uti("com.apple.m4a-audio"));
-}
-
-#[test]
-fn format_attachment_markdown_matches_render_attachment_placeholders_per_ref() {
-    assert_eq!(
-        format_attachment_markdown(&reference("A", "public.jpeg"), "attachments/photo.jpeg"),
-        "![photo.jpeg](attachments/photo.jpeg)"
-    );
 }
 
 #[test]
@@ -429,21 +397,4 @@ fn has_embed_marker_detects_even_a_truncated_marker_opening() {
     assert!(has_embed_marker("pasted <apple-embed type=... junk"));
     assert!(!has_embed_marker("plain text"));
     assert!(!has_embed_marker("<apple-embedded"));
-}
-
-#[test]
-fn combine_unpublishable_reasons_cases() {
-    assert_eq!(combine_unpublishable_reasons(None, None), None);
-    assert_eq!(
-        combine_unpublishable_reasons(Some("reason A"), None),
-        Some("reason A".into())
-    );
-    assert_eq!(
-        combine_unpublishable_reasons(None, Some("reason B")),
-        Some("reason B".into())
-    );
-    assert_eq!(
-        combine_unpublishable_reasons(Some("reason A"), Some("reason B")),
-        Some("reason A; reason B".into())
-    );
 }

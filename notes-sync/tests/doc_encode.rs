@@ -4,15 +4,14 @@
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue, UpdateFields};
 use icloud_notes_sync::doc::encode::{
-    build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_purge_fields,
-    build_note_trash_fields, build_note_update_fields, derive_note_snippet, derive_note_title,
+    build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_trash_fields,
+    build_note_update_fields, derive_note_snippet, derive_note_title,
 };
 use icloud_notes_sync::js::{base64_decode, len16};
 use serde_json::{Value, json};
 
 const UPDATE: &str = r#"{"ModificationDate":{"value":222},"TitleEncrypted":{"value":"VGl0bGUgbGluZSDwn5iA"},"MinimumSupportedNotesVersion":{"value":0},"Folders":{"value":[{"recordName":"DefaultFolder-CloudKit"}]},"Deleted":{"value":0},"Folder":{"value":{"recordName":"DefaultFolder-CloudKit"}},"CreationDate":{"value":100},"PaperStyleType":{"value":1},"SnippetEncrypted":{"value":"Qm9keSBsaW5l"},"FirstAttachmentThumbnail":{"value":null},"FirstAttachmentUTIEncrypted":{"value":null},"TextDataAsset":{"value":null},"TextDataEncrypted":{"value":"TkVXX0RPQw=="}}"#;
 const TRASH: &str = r#"{"CreationDate":{"value":100},"ModificationDate":{"value":999},"TitleEncrypted":{"value":"b2xk"},"Folders":{"value":[{"recordName":"TrashFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"FoldersModificationDate":{"value":999},"Folder":{"value":{"recordName":"TrashFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"SnippetEncrypted":{"value":"c25pcHBldA=="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"aWdub3JlZA=="}}"#;
-const PURGE: &str = r#"{"CreationDate":{"value":100},"ModificationDate":{"value":999},"TitleEncrypted":{"value":"b2xk"},"Folders":{"value":[{"recordName":"TrashFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"FoldersModificationDate":{"value":999},"Folder":{"value":{"recordName":"TrashFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"SnippetEncrypted":{"value":"c25pcHBldA=="},"Deleted":{"value":1},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"aWdub3JlZA=="}}"#;
 const MOVE: &str = r#"{"CreationDate":{"value":100},"ModificationDate":{"value":999},"TitleEncrypted":{"value":"b2xk"},"Folders":{"value":[{"recordName":"F1","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"FoldersModificationDate":{"value":999},"Folder":{"value":{"recordName":"F1","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"SnippetEncrypted":{"value":"c25pcHBldA=="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"aWdub3JlZA=="}}"#;
 const CREATE_SHARED: &str = r#"{"CreationDate":{"value":555},"Folders":{"value":[{"recordName":"F-SHARED","action":"VALIDATE","zoneID":{"zoneName":"Notes","ownerRecordName":"_owner1"}}]},"Folder":{"value":{"recordName":"F-SHARED","action":"VALIDATE","zoneID":{"zoneName":"Notes","ownerRecordName":"_owner1"}}},"ModificationDate":{"value":555},"TitleEncrypted":{"value":"U2Nod2FydHogd3JvdGUgdXAgaGlzIGV4cGVyaW1lbnQgc3VwZXJ2aXNpbmcgQ2xhdWRlIHRocm91Z2ggYSByZWFs"},"SnippetEncrypted":{"value":"dGhlb3JldGljYWwgcGh5c2ljcyBjYWxjdWxhdGlvbiwgcHJvZHVjaW5nIGEgcGFwZXIg8J+YgPCfmIA="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"RE9D"}}"#;
 const CREATE_SPLIT_SURROGATE: &str = r#"{"CreationDate":{"value":555},"Folders":{"value":[{"recordName":"DefaultFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"Folder":{"value":{"recordName":"DefaultFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"ModificationDate":{"value":555},"TitleEncrypted":{"value":"eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh477+9"},"SnippetEncrypted":{"value":"77+9dGFpbA=="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"RE9D"}}"#;
@@ -156,20 +155,8 @@ fn build_note_trash_fields_repoints_the_folder_references_at_trash() {
 }
 
 #[test]
-fn build_note_purge_fields_additionally_sets_deleted() {
-    let record = make_record(&[
-        ("CreationDate", json!(100), "TIMESTAMP"),
-        ("TextDataEncrypted", json!("RE9D"), "ENCRYPTED_BYTES"),
-    ]);
-    let fields = build_note_purge_fields(&record, 999);
-    assert_eq!(serde_json::to_string(&fields["Deleted"]).unwrap(), r#"{"value":1}"#);
-    assert!(fields.contains_key("Folder"));
-    assert_eq!(fields["TextDataEncrypted"].value, Some(json!("RE9D")));
-}
-
-#[test]
 fn deletion_field_builders_tolerate_a_broken_record() {
-    let fields = build_note_purge_fields(&make_record(&[]), 999);
+    let fields = build_note_trash_fields(&make_record(&[]), 999);
     for name in [
         "TitleEncrypted",
         "SnippetEncrypted",
@@ -178,7 +165,7 @@ fn deletion_field_builders_tolerate_a_broken_record() {
     ] {
         assert!(!fields.contains_key(name), "{name}");
     }
-    assert_eq!(fields["Deleted"].value, Some(json!(1)));
+    assert!(!fields.contains_key("Deleted"));
     assert_eq!(fields["ModificationDate"].value, Some(json!(999)));
 }
 
@@ -278,7 +265,6 @@ fn field_sets_serialize_exactly_like_icloud_md() {
         UPDATE
     );
     assert_eq!(json_of(&build_note_trash_fields(&record, 999)), TRASH);
-    assert_eq!(json_of(&build_note_purge_fields(&record, 999)), PURGE);
     assert_eq!(json_of(&build_note_move_fields(&record, "F1", 999)), MOVE);
     let long = "Schwartz wrote up his experiment supervising Claude through a real theoretical physics calculation, producing a paper \u{1f600}\u{1f600}";
     assert_eq!(
