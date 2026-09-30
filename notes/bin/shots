@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Render the real UI offscreen and grab a PNG for styling review.
-# Usage: bin/shots [out.png]   (NOTES_SHOT=bare for the unlinked-vault view)
+# Usage: bin/shots [out.png]   (NOTES_SHOT=bare|readonly|conflict|unreadable)
 set -euo pipefail
 cd "$(dirname "$0")/../tests/shots"
 mkdir -p build

@@ -1163,7 +1163,7 @@ ApplicationWindow {
                                         wrapMode: Text.Wrap
                                         color: root.colTextDim
                                         font.pixelSize: root.pt(12)
-                                        text: "\"Keep this computer's text\" removes only the marker lines and keeps every other line for you to read over. "
+                                        text: "\"Remove the markers\" keeps every line from both versions and drops only the marker lines, for you to read over. "
                                             + (backend.noteHasSyncedCopy ? "\"Use the last synced version\" goes back to the text last synced with iCloud. " : "")
                                             + "Before either, the note as it is now is copied to .icloud-md/conflict-backups in your notes folder, so nothing is lost."
                                     }
@@ -1182,7 +1182,7 @@ ApplicationWindow {
                                 }
                                 PrimaryButton {
                                     enabled: !backend.syncRunning && !root.dirty
-                                    text: "Keep this computer's text"
+                                    text: "Remove the markers"
                                     onClicked: root.recoverConflictedNote("strip")
                                 }
                             }

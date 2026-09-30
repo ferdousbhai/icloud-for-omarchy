@@ -4,6 +4,7 @@
 // NOTES_SHOT=bare seeds an empty, unlinked vault instead.
 // NOTES_SHOT=readonly shows the open note as one the sync tool will not push.
 // NOTES_SHOT=conflict opens it on a merge conflict, for the version picker.
+// NOTES_SHOT=unreadable opens it on nested markers the picker can't read.
 #include "../src/notesbackend.h"
 
 #include <QDir>
@@ -60,7 +61,12 @@ int main(int argc, char *argv[])
                                : QString()),
                   9);
         writeFile(root, QStringLiteral("Notes/Groceries.md"),
-                  qgetenv("NOTES_SHOT") == "conflict"
+                  qgetenv("NOTES_SHOT") == "unreadable"
+                      // Markers merged twice (nested), as a real vault once had them.
+                      ? QStringLiteral("---\napple-note-id: a\n---\n\n<<<<<<< local\n# Groceries\nmilk, eggs\n||||||| base\n# Groceries\n=======\n>>>>>>> remote\n\n"
+                                       "<<<<<<< local\n<<<<<<< local\n- [ ] oat milk\n||||||| base\n- [ ] coffee\n=======\n- [ ] coffee\n- [ ] maple syrup\n>>>>>>> remote\n"
+                                       "||||||| base\n- [ ] coffee\n=======\n>>>>>>> remote\n")
+                  : qgetenv("NOTES_SHOT") == "conflict"
                       ? QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"
                                        "## Weekend\n<<<<<<< local\n- [ ] oat milk\n- [x] coffee\n- [ ] blueberries\n||||||| base\n"
                                        "- [ ] oat milk\n- [ ] coffee\n=======\n- [ ] oat milk\n- [ ] coffee, the *dark* roast\n"

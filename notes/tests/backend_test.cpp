@@ -405,7 +405,7 @@ int main(int argc, char *argv[])
         writeFile(QStringLiteral("Order.md"), envelope + nested);
         b.refresh();
 
-        // Keep this computer's text: every line but the markers.
+        // Remove the markers: every line but the markers.
         const QVariantMap stripped = b.recoverConflictedNote(QStringLiteral("strip"));
         const QString backup1 = stripped.value(QStringLiteral("backup")).toString();
         check(stripped.value(QStringLiteral("ok")).toBool()
