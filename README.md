@@ -10,7 +10,8 @@ one Apple sign-in, published as one signed pacman repository.
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4/libadwaita: locate, play a sound, Lost Mode, history trail. |
 | [session/](session/README.md), [sessiond/](sessiond/) | `icloud-session` | The shared sign-in: a D-Bus daemon, a sign-in window and a CLI (sessiond/), plus the Rust client crate every app links (session/). |
 
-[docs/BRIEF.md](docs/BRIEF.md) is the design brief the apps were built from.
+The shared sign-in's design (the daemon, its D-Bus interface, the session
+files) is in [session/README.md](session/README.md#design).
 
 ## Command line and agents
 
@@ -87,7 +88,7 @@ packaging/<package>/     one PKGBUILD per package
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, test, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh, the installers against stubbed pacman
-docs/                    the design brief; the command-line reference (CLI.md, AGENTS.md, skills/)
+docs/                    the command-line reference (CLI.md, AGENTS.md, skills/)
 ```
 
 Each directory kept its history: the five former repositories
