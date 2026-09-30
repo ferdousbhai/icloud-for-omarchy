@@ -6,7 +6,7 @@ use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
 use icloud_photos::thumbs::{
-    Job, Targets, fetch, fetch_detailed, live_ext, original_dest, prune_cache, rename_noreplace, year_month,
+    Job, Targets, fetch, fetch_detailed, live_ext, original_dest, prune_cache, rename_noreplace,
 };
 use icloud_photos::transport::{Result, Transport};
 use serde_json::Value;
@@ -137,11 +137,7 @@ fn missing_rendition_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn dates_and_live_names() {
-    assert_eq!(year_month(0), (1970, 1));
-    assert_eq!(year_month(1_757_000_000), (2025, 9));
-    assert_eq!(year_month(951_782_400), (2000, 2), "leap day 2000-02-29");
-    assert_eq!(year_month(-1), (1969, 12));
+fn live_names() {
     assert_eq!(live_ext(Some("com.apple.quicktime-movie")), ".MOV");
     assert_eq!(live_ext(Some("public.mpeg-4")), ".MP4");
     assert_eq!(live_ext(None), ".MOV");

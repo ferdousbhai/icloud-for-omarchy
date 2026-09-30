@@ -200,13 +200,7 @@ fn parse_cookie_date(value: &str) -> Option<u64> {
     if !(1..=31).contains(&day) || year < 1601 || h > 23 || m > 59 || s > 59 {
         return None;
     }
-    // Days from 1970-01-01 to the date (Howard Hinnant's days_from_civil).
-    let (y, mo) = (year as i64 - i64::from(month <= 2), month as i64);
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (mo + if mo > 2 { -3 } else { 9 }) + 2) / 5 + day as i64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    let days = icloud_session::time::days_from_civil(year as i64, month as u32, day as u32);
     let secs = days * 86_400 + (h * 3600 + m * 60 + s) as i64;
     u64::try_from(secs).ok()
 }

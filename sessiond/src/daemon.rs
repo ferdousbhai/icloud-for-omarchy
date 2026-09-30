@@ -80,6 +80,14 @@ pub fn now_unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// Now as `YYYY-MM-DDTHH:MM:SS.mmmZ` (a jar's `captured_at`).
+fn now_rfc3339_millis() -> String {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    icloud_session::time::rfc3339_millis(ms as i64)
+}
+
 #[derive(Debug, zbus::DBusError)]
 #[zbus(prefix = "io.github.ferdousbhai.ICloudSession.Error")]
 pub enum ServiceError {
@@ -650,7 +658,7 @@ impl Daemon {
         account.find_my = Some(FindMyJar {
             cookies: jar,
             client_params: params,
-            captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            captured_at: now_rfc3339_millis(),
         });
         self.save_account(&st);
         Ok(())
@@ -979,7 +987,7 @@ impl Daemon {
             client_params: params,
             webservices: v.webservices,
             validated_at: now,
-            captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            captured_at: now_rfc3339_millis(),
             find_my: None,
         };
         let mut st = lock(&self.state);
@@ -1034,7 +1042,7 @@ impl Daemon {
         account.find_my = Some(FindMyJar {
             cookies: jar,
             client_params: params,
-            captured_at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            captured_at: now_rfc3339_millis(),
         });
         self.save_account(&st);
         Ok(())

@@ -311,7 +311,7 @@ fn plan_original(
     row: &Row,
     taken: &BTreeSet<PathBuf>,
 ) -> Result<(PathBuf, Option<PathBuf>)> {
-    let (y, m) = year_month(row.created);
+    let (y, m, _) = icloud_session::time::civil_from_days(row.created.div_euclid(86_400));
     let dir = library.join(format!("{y:04}")).join(format!("{m:02}"));
     let filename = safe_filename(&row.filename);
     let (stem, ext) = split_name(&filename);
@@ -438,19 +438,6 @@ pub fn prune_cache(cat: &Catalog, dirs: &Dirs, medium_cap: u64) -> Result<usize>
         }
     }
     Ok(removed)
-}
-
-/// UTC year and month of a Unix time (Howard Hinnant's civil_from_days).
-pub fn year_month(unix: i64) -> (i64, u32) {
-    let z = unix.div_euclid(86_400) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    (y, m)
 }
 
 #[derive(Debug)]

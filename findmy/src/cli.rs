@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
 
 use crate::findme::{self, FindMe, SessionTransport, Transport};
@@ -359,7 +360,7 @@ impl<T: Transport> Cli<T> {
                 let last = match now.location {
                     Some(f) if f.ts_ms > 0 => format!(
                         "last fix {} ({})",
-                        utc(f.ts_ms / 1000),
+                        rfc3339(f.ts_ms / 1000),
                         models::last_seen(models::now_ms(), f.ts_ms)
                     ),
                     _ => "no fix at all".into(),
@@ -382,7 +383,7 @@ impl<T: Transport> Cli<T> {
             println!("{}", d.name);
             println!(
                 "  fix:      {} ({}), ±{:.0} m",
-                utc(fix.ts_ms / 1000),
+                rfc3339(fix.ts_ms / 1000),
                 models::last_seen(now, fix.ts_ms),
                 fix.accuracy
             );
@@ -459,7 +460,7 @@ impl<T: Transport> Cli<T> {
                 "{}",
                 pretty(&json!({
                     "device": {"id": id, "name": name},
-                    "since": utc(since),
+                    "since": rfc3339(since),
                     "points": rows,
                 }))
             );
@@ -467,15 +468,15 @@ impl<T: Transport> Cli<T> {
         }
         let who = name.as_deref().unwrap_or(&id);
         if points.is_empty() {
-            println!("No positions for {who} since {}.", utc(since));
+            println!("No positions for {who} since {}.", rfc3339(since));
             return Ok(());
         }
-        println!("{who}: {} positions since {}", points.len(), utc(since));
+        println!("{who}: {} positions since {}", points.len(), rfc3339(since));
         for p in &points {
             let battery = p.battery.map(|b| format!("  {:.0}%", b * 100.0)).unwrap_or_default();
             println!(
                 "{}  {:.6}, {:.6}  ±{:.0} m{battery}",
-                utc(p.ts),
+                rfc3339(p.ts),
                 p.lat,
                 p.lon,
                 p.accuracy
@@ -577,7 +578,7 @@ fn resolve<'a>(devices: &'a [Device], query: &str) -> Result<&'a Device, Failure
 fn device_json(d: &Device, coords: bool, now_ms: i64) -> Value {
     let fix = d.location.filter(|f| f.ts_ms > 0).map(|f| {
         let mut v = json!({
-            "time": utc(f.ts_ms / 1000),
+            "time": rfc3339(f.ts_ms / 1000),
             "timestamp_ms": f.ts_ms,
             "age_secs": (now_ms - f.ts_ms).max(0) / 1000,
             "accuracy_m": f.accuracy,
@@ -629,7 +630,7 @@ fn device_text(d: &Device, coords: bool, now_ms: i64) -> String {
             let old = if f.is_old { ", old" } else { "" };
             out += &format!(
                 "  last fix: {} ({}), ±{:.0} m{old}\n",
-                utc(f.ts_ms / 1000),
+                rfc3339(f.ts_ms / 1000),
                 models::last_seen(now_ms, f.ts_ms),
                 f.accuracy
             );
@@ -644,34 +645,13 @@ fn device_text(d: &Device, coords: bool, now_ms: i64) -> String {
 
 fn point_json(p: &Point) -> Value {
     json!({
-        "time": utc(p.ts),
+        "time": rfc3339(p.ts),
         "timestamp": p.ts,
         "lat": p.lat,
         "lon": p.lon,
         "accuracy_m": p.accuracy,
         "battery_percent": p.battery.map(|b| (b * 100.0).round() as i64),
     })
-}
-
-/// Unix seconds as `2026-09-29T12:34:56Z`.
-pub fn utc(secs: i64) -> String {
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's civil_from_days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
 }
 
 #[cfg(test)]
@@ -682,14 +662,6 @@ mod tests {
     fn the_cli_definition_is_consistent() {
         use clap::CommandFactory;
         Args::command().debug_assert();
-    }
-
-    #[test]
-    fn utc_formats() {
-        assert_eq!(utc(0), "1970-01-01T00:00:00Z");
-        assert_eq!(utc(951_782_400), "2000-02-29T00:00:00Z");
-        assert_eq!(utc(1_790_000_000), "2026-09-21T14:13:20Z");
-        assert_eq!(utc(-1), "1969-12-31T23:59:59Z");
     }
 
     #[test]

@@ -25,6 +25,7 @@ use icloud_photos::thumbs::{self, Job, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
 
 const TOOL: &str = "icloud-photos";
@@ -346,7 +347,7 @@ fn status(ctx: &Ctx) -> Res<u8> {
         "assets": assets,
         "albums": albums,
         "downloaded": downloaded,
-        "last_sync": last_sync.map(iso),
+        "last_sync": last_sync.map(rfc3339),
         "last_sync_unix": last_sync,
         "incremental_sync_ready": token,
         "library_dir": ctx.settings.library_dir,
@@ -372,7 +373,10 @@ fn status(ctx: &Ctx) -> Res<u8> {
             ),
             format!("Items:         {assets} ({downloaded} downloaded)"),
             format!("Albums:        {albums}"),
-            format!("Last sync:     {}", last_sync.map_or_else(|| "never".to_owned(), iso)),
+            format!(
+                "Last sync:     {}",
+                last_sync.map_or_else(|| "never".to_owned(), rfc3339)
+            ),
             format!("Library:       {}", ctx.settings.library_dir.display()),
             format!("Cache:         {}", ctx.dirs.cache.display()),
             format!("Download mode: {mode}"),
@@ -495,7 +499,7 @@ fn row_json(r: &Row) -> Value {
     json!({
         "id": r.id,
         "filename": r.filename,
-        "created": iso(r.created),
+        "created": rfc3339(r.created),
         "created_unix": r.created,
         "kind": kind_of(r),
         "size": r.size,
@@ -551,7 +555,7 @@ fn list(ctx: &Ctx, album: Option<&str>, since: Option<i64>, limit: Option<usize>
                 format!(
                     "{}\t{}\t{}\t{}\t{}\t{}",
                     r.id,
-                    iso(r.created),
+                    rfc3339(r.created),
                     kind_of(r),
                     r.size,
                     r.filename,
@@ -593,7 +597,7 @@ fn info(ctx: &Ctx, id: &str) -> Res<u8> {
         [
             format!("ID:        {}", r.id),
             format!("File:      {}", r.filename),
-            format!("Taken:     {}", iso(r.created)),
+            format!("Taken:     {}", rfc3339(r.created)),
             format!("Kind:      {}", kind_of(&r)),
             format!("Size:      {} bytes, {}x{}", r.size, r.w, r.h),
             format!(
@@ -984,35 +988,6 @@ fn prune(ctx: &Ctx) -> Res<u8> {
 
 // ---- dates --------------------------------------------------------------
 
-/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
-/// Unix seconds as `YYYY-MM-DDTHH:MM:SSZ`.
-fn iso(unix: i64) -> String {
-    let (y, m, d) = civil_from_days(unix.div_euclid(86_400));
-    let s = unix.rem_euclid(86_400);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", s / 3600, s / 60 % 60, s % 60)
-}
-
 /// `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM[:SS][Z]` (UTC), or Unix seconds.
 fn parse_date(s: &str) -> std::result::Result<i64, String> {
     let bad = || format!("{s:?} is not YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS or Unix seconds");
@@ -1040,7 +1015,7 @@ fn parse_date(s: &str) -> std::result::Result<i64, String> {
         }
         secs = h * 3600 + mi * 60 + se;
     }
-    Ok(days_from_civil(y, m, d) * 86_400 + secs)
+    Ok(days_from_civil(y, m as u32, d as u32) * 86_400 + secs)
 }
 
 #[cfg(test)]
@@ -1051,15 +1026,11 @@ mod tests {
     fn dates_round_trip() {
         assert_eq!(parse_date("1970-01-01"), Ok(0));
         assert_eq!(parse_date("2024-02-29T12:30:05Z"), Ok(1_709_209_805));
-        assert_eq!(iso(1_709_209_805), "2024-02-29T12:30:05Z");
+        assert_eq!(rfc3339(1_709_209_805), "2024-02-29T12:30:05Z");
         assert_eq!(parse_date("1709209805"), Ok(1_709_209_805));
-        assert_eq!(iso(-1), "1969-12-31T23:59:59Z");
+        assert_eq!(rfc3339(-1), "1969-12-31T23:59:59Z");
         assert!(parse_date("2024-13-01").is_err());
         assert!(parse_date("yesterday").is_err());
-        for day in [-800_000, -1, 0, 59, 11_016, 19_782, 2_000_000] {
-            let (y, m, d) = civil_from_days(day);
-            assert_eq!(days_from_civil(y, m, d), day);
-        }
     }
 
     #[test]
