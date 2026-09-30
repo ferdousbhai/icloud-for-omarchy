@@ -34,6 +34,56 @@ fn wait_until(what: &str, timeout: Duration, mut cond: impl FnMut() -> bool) {
     }
 }
 
+// ----------------------------------------------------------------- watch
+
+/// A [`icloud_session::Watch`] read on its own thread, so every wait on it
+/// is bounded.
+struct Changes {
+    first: icloud_session::Status,
+    rx: std::sync::mpsc::Receiver<icloud_session::Status>,
+}
+
+fn changes(conn: &Connection) -> Changes {
+    let watch = icloud_session::watch_on(conn).unwrap();
+    let first = watch.current().unwrap().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for status in watch {
+            if tx.send(status).is_err() {
+                break;
+            }
+        }
+    });
+    Changes { first, rx }
+}
+
+impl Changes {
+    /// The first change that satisfies `cond`, skipping the others. The
+    /// change a test causes need not be the next one announced: the
+    /// start-up `/validate` (rotating `ExpiresAt`) or the keyring look can
+    /// land between subscribing and the test's call.
+    fn until(&self, what: &str, cond: impl Fn(&icloud_session::Status) -> bool) -> icloud_session::Status {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self.rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(status) if cond(&status) => return status,
+                Ok(_) => {}
+                Err(e) => panic!("no change to {what}: {e}"),
+            }
+        }
+    }
+
+    /// Waits for the sign-in window to open.
+    fn window_opened(&self) -> icloud_session::Status {
+        self.until("SigningIn true", |s| s.signing_in)
+    }
+
+    /// Waits for the sign-in window to close, returning the status then.
+    fn window_closed(&self) -> icloud_session::Status {
+        self.until("SigningIn false", |s| !s.signing_in)
+    }
+}
+
 // ---------------------------------------------------------------- server
 
 #[derive(Debug, Clone)]
@@ -586,11 +636,11 @@ fn report_sign_in_required_confirms_with_validate() {
     assert_eq!(env.account_cookie("X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("rotated2"));
 
     // Now Apple answers 421: signed out, announced, account forgotten.
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     expired.store(true, Ordering::SeqCst);
     let still: bool = call(&conn, "ReportSignInRequired").unwrap();
     assert!(!still);
-    let change = watch.next().unwrap();
+    let change = watch.until("SignedIn false", |s| !s.signed_in);
     assert!(!change.signed_in);
     assert_eq!(change.apple_id, None);
     assert_eq!(change.dsid, None);
@@ -632,10 +682,10 @@ fn sign_in_with_a_fake_window_stores_the_account() {
         ..Default::default()
     });
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     assert_eq!(
-        watch.current().unwrap(),
-        &icloud_session::Status {
+        watch.first,
+        icloud_session::Status {
             signed_in: false,
             apple_id: None,
             dsid: None,
@@ -653,14 +703,11 @@ fn sign_in_with_a_fake_window_stores_the_account() {
     }
 
     icloud_session::sign_in_on(&conn).unwrap();
-    let opened = watch.next().unwrap();
-    assert!(opened.signing_in && !opened.signed_in);
+    let opened = watch.window_opened();
+    assert!(!opened.signed_in, "{opened:?}");
     // A second SignIn while the window is open does not open another.
     icloud_session::sign_in_on(&conn).unwrap();
-    let mut done = watch.next().unwrap();
-    if done.signing_in {
-        done = watch.next().unwrap();
-    }
+    let done = watch.window_closed();
     assert!(done.signed_in && !done.signing_in, "{done:?}");
     assert_eq!(done.apple_id.as_deref(), Some("someone@example.com"));
     assert_eq!(done.dsid.as_deref(), Some(DSID));
@@ -720,17 +767,17 @@ fn sign_in_closed_or_without_params() {
         ..Default::default()
     });
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::sign_in_on(&conn).unwrap();
-    assert!(watch.next().unwrap().signing_in);
-    let closed = watch.next().unwrap();
-    assert!(!closed.signing_in && !closed.signed_in);
+    watch.window_opened();
+    let closed = watch.window_closed();
+    assert!(!closed.signed_in, "{closed:?}");
     assert_eq!(server.count(VALIDATE), 0);
 
     icloud_session::sign_in_on(&conn).unwrap();
-    assert!(watch.next().unwrap().signing_in);
-    let done = watch.next().unwrap();
-    assert!(done.signed_in && !done.signing_in);
+    watch.window_opened();
+    let done = watch.window_closed();
+    assert!(done.signed_in, "{done:?}");
     let q = server.requests(VALIDATE)[0].query();
     assert_eq!(q["clientBuildNumber"], "2624Build27");
     assert_eq!(q["clientMasteringNumber"], "2624Build27");
@@ -755,10 +802,9 @@ fn sign_out_forgets_account_and_profile() {
 
     let conn = env.conn();
     session(&conn).unwrap();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::sign_out_on(&conn).unwrap();
-    let change = watch.next().unwrap();
-    assert!(!change.signed_in);
+    watch.until("SignedIn false", |s| !s.signed_in);
     assert!(env.account().is_none());
     assert!(!webkit_data.exists());
     assert!(!webkit_cache.exists());
@@ -1236,9 +1282,10 @@ fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
         ..Default::default()
     });
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::sign_in_on(&conn).unwrap();
-    while watch.next().unwrap().signing_in {}
+    watch.window_opened();
+    watch.window_closed();
     wait_until("the old jar's validate", Duration::from_secs(5), || {
         server
             .requests(VALIDATE)
@@ -1277,9 +1324,9 @@ fn sign_out_closes_an_open_sign_in_window() {
     let webkit_data = env.root().join("data/icloud-session/webkit");
     fs::create_dir_all(&webkit_data).unwrap();
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::sign_in_on(&conn).unwrap();
-    assert!(watch.next().unwrap().signing_in);
+    watch.window_opened();
     wait_until("the window to start", Duration::from_secs(5), || {
         fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
     });
@@ -1401,14 +1448,10 @@ fn a_session_refuses_to_serve_another_account() {
     s.get(&format!("{base}/data")).unwrap(); // drops the in-process cache
 
     icloud_session::sign_out_on(&conn).unwrap();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::sign_in_on(&conn).unwrap();
-    let done = loop {
-        let status = watch.next().unwrap();
-        if !status.signing_in {
-            break status;
-        }
-    };
+    watch.window_opened();
+    let done = watch.window_closed();
     assert_eq!(done.dsid.as_deref(), Some("67890"));
 
     let sent = server.count("/data");
@@ -1473,16 +1516,6 @@ fn cookie_named<'a>(cookies: &'a Value, name: &str) -> Option<&'a Value> {
     cookies.as_array().unwrap().iter().find(|c| c["name"] == name)
 }
 
-/// Waits for the window to close, returning the status then.
-fn window_closed(watch: &mut icloud_session::Watch) -> icloud_session::Status {
-    loop {
-        let status = watch.next().unwrap();
-        if !status.signing_in {
-            return status;
-        }
-    }
-}
-
 /// Apple's side: `/validate` refuses the one-factor token; Find My answers
 /// the FMIP value in `accepted` (after `slow_ms` for any other) and 450
 /// otherwise.
@@ -1537,10 +1570,10 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     let validates = server.count(VALIDATE);
     let before = env.account().unwrap();
 
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::authorize_find_my_on(&conn).unwrap();
-    assert!(watch.next().unwrap().signing_in);
-    let done = window_closed(&mut watch);
+    watch.window_opened();
+    let done = watch.window_closed();
     assert!(done.signed_in && done.find_my_authorized, "{done:?}");
     assert_eq!(done.dsid.as_deref(), Some(DSID));
     assert_eq!(fs::read_to_string(dir.path().join("args")).unwrap().trim(), "--find");
@@ -1595,8 +1628,8 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     let sent = server.count(INIT_CLIENT);
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), sent + 1, "no retry with the same jar");
-    let changed = watch.next().unwrap();
-    assert!(changed.signed_in && !changed.find_my_authorized, "{changed:?}");
+    let changed = watch.until("FindMyAuthorized false", |s| !s.find_my_authorized);
+    assert!(changed.signed_in, "{changed:?}");
     assert!(env.account().unwrap().get("find_my").is_none());
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), sent + 1, "nothing sent without a jar");
@@ -1635,9 +1668,10 @@ fn a_450_with_a_jar_replaced_meanwhile_retries_once() {
         ..Default::default()
     });
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::authorize_find_my_on(&conn).unwrap();
-    assert!(window_closed(&mut watch).find_my_authorized);
+    watch.window_opened();
+    assert!(watch.window_closed().find_my_authorized);
     let s = Session::connect_on(&conn).unwrap();
     let init = init_client_url(&s);
 
@@ -1665,9 +1699,10 @@ fn a_find_my_jar_of_another_apple_id_is_not_kept() {
         ..Default::default()
     });
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::authorize_find_my_on(&conn).unwrap();
-    let done = window_closed(&mut watch);
+    watch.window_opened();
+    let done = watch.window_closed();
     assert!(done.signed_in && !done.find_my_authorized, "{done:?}");
     assert_eq!(done.dsid.as_deref(), Some(DSID));
     let account = env.account().unwrap();
@@ -1686,9 +1721,9 @@ fn sign_out_during_authorize_find_my_drops_its_result() {
         ..Default::default()
     });
     let conn = env.conn();
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     icloud_session::authorize_find_my_on(&conn).unwrap();
-    assert!(watch.next().unwrap().signing_in);
+    watch.window_opened();
     // A SignIn while the Find My window is open opens no second window.
     icloud_session::sign_in_on(&conn).unwrap();
     let pid_file = dir.path().join("pid");
@@ -2044,10 +2079,10 @@ fn sign_out_keeps_the_stored_password_and_forget_password_removes_it() {
 fn forget_password_while_signed_in_stops_automatic_sign_in() {
     let (_accepted, server) = accepting("auto1");
     let (env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
-    let mut watch = icloud_session::watch_on(&conn).unwrap();
+    let watch = changes(&conn);
     let out = env.cli(&["forget-password"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(!watch.next().unwrap().find_my_password_stored);
+    watch.until("FindMyPasswordStored false", |s| !s.find_my_password_stored);
     let s = Session::connect_on(&conn).unwrap();
     let init = init_client_url(&s);
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));

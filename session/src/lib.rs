@@ -408,7 +408,11 @@ pub fn watch_on(conn: &Connection) -> Result<Watch> {
         let changes = props.receive_properties_changed().await?;
         let dbus = zbus::fdo::DBusProxy::new(conn.inner()).await?;
         let owners = dbus.receive_name_owner_changed_with_args(&[(0, BUS_NAME)]).await?;
-        Ok::<_, zbus::Error>(changes.map(Event::Changed).or(owners.map(|_| Event::OwnerChanged)))
+        let owners = owners.map(|signal| match signal.args() {
+            Ok(args) if args.new_owner().is_some() => Event::OwnerAppeared,
+            _ => Event::OwnerGone,
+        });
+        Ok::<_, zbus::Error>(changes.map(Event::Changed).or(owners))
     })?;
     let last = read_status(conn)?;
     Ok(Watch {
@@ -427,8 +431,13 @@ pub struct Watch {
 
 enum Event {
     Changed(zbus::fdo::PropertiesChanged),
-    /// The daemon left the bus, or a new one took the name.
-    OwnerChanged,
+    /// The daemon left the bus.
+    OwnerGone,
+    /// A daemon took the name. It announces every property right after,
+    /// so nothing is read here: a read now would see the state as of now,
+    /// and the older changes still queued behind this event would then be
+    /// replayed on top of it (a closed window reported open again).
+    OwnerAppeared,
 }
 
 struct WatchInner {
@@ -451,7 +460,8 @@ impl Iterator for Watch {
         let w = self.inner.as_mut()?;
         loop {
             let next = match futures_lite::future::block_on(w.events.next())? {
-                Event::OwnerChanged => read_status(&w.conn).unwrap_or_else(|_| Status {
+                Event::OwnerAppeared => continue,
+                Event::OwnerGone => read_status(&w.conn).unwrap_or_else(|_| Status {
                     signing_in: false,
                     ..w.last.clone()
                 }),
