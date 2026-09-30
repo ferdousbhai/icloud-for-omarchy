@@ -1,6 +1,6 @@
 [package]
 name = "icloud-findmy"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 description = "Find My devices on Omarchy: locate, play a sound, lost mode, history trail"
 license.workspace = true

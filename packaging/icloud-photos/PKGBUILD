@@ -7,7 +7,7 @@
 # locally.
 
 pkgname=icloud-photos
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='iCloud Photos on Omarchy: browse, download, upload and delete'
 arch=('x86_64')

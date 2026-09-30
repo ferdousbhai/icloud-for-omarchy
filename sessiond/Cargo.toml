@@ -1,6 +1,6 @@
 [package]
 name = "icloud-sessiond"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 description = "D-Bus service, sign-in window and CLI that own one iCloud web sign-in"
 license.workspace = true
