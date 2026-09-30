@@ -8,7 +8,7 @@
 //! with a stored password failed), 64 usage. With `--json` an error is one
 //! JSON line on stderr, `{"error":{"code","message","exit_code"}}`.
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -508,19 +508,15 @@ fn confirm(cmd: &str, yes: bool, question: &str) -> Outcome {
     if yes {
         return Ok(());
     }
-    let stdin = io::stdin();
-    if !stdin.is_terminal() {
+    if !io::stdin().is_terminal() {
         return Err(usage(format!(
             "{cmd} asks before it acts: pass --yes when stdin is not a terminal"
         )));
     }
-    eprint!("{question} [y/N] ");
-    io::stderr().flush().ok();
-    let mut answer = String::new();
-    stdin.lock().read_line(&mut answer).ok();
-    match answer.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Ok(()),
-        _ => Err(Failure::Coded("cancelled", "cancelled".into())),
+    if cli::confirm(question) {
+        Ok(())
+    } else {
+        Err(Failure::Coded("cancelled", "cancelled".into()))
     }
 }
 

@@ -9,7 +9,7 @@
 //! `{"error":{"code","message","exit_code"}}`.
 
 use std::cell::RefCell;
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -901,16 +901,6 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
 
 // ---- delete, prune ------------------------------------------------------
 
-fn confirm(n: usize) -> Res<bool> {
-    eprint!(
-        "Move {n} item(s) to Recently Deleted in iCloud, on all your devices? They can be recovered there for about 30 days. [y/N] "
-    );
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    Ok(matches!(line.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
-}
-
 fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
     let mut cat = ctx.catalog()?;
     let mut rows = Vec::new();
@@ -932,7 +922,11 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
                 eprintln!("  {}\t{}", r.id, r.filename);
             }
         }
-        if !confirm(rows.len())? {
+        if !cli::confirm(&format!(
+            "Move {} item(s) to Recently Deleted in iCloud, on all your devices? \
+             They can be recovered there for about 30 days.",
+            rows.len()
+        )) {
             return Err(Fail::Cancelled("nothing deleted".into()));
         }
     }
