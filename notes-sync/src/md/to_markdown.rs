@@ -465,10 +465,9 @@ fn classify(code: Option<u16>) -> u8 {
 
 /// `/\p{P}|\p{S}/u`.
 pub(crate) fn is_unicode_punctuation(c: char) -> bool {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"^[\p{P}\p{S}]$").unwrap());
-    let mut buf = [0u8; 4];
-    re.is_match(c.encode_utf8(&mut buf))
+    use icu_properties::props::{GeneralCategory, GeneralCategoryGroup};
+    let gc = icu_properties::CodePointMapData::<GeneralCategory>::new().get(c);
+    GeneralCategoryGroup::Punctuation.contains(gc) || GeneralCategoryGroup::Symbol.contains(gc)
 }
 
 /// `encodeInfo(outside, inside, marker)` → `(inside, outside)`, for `*`.
