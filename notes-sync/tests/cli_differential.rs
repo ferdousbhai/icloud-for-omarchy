@@ -16,7 +16,7 @@
 //! Scenarios with a `portDeviation` key cover a deliberate difference from
 //! icloud-md 0.6.2 (docs/PORT_PLAN.md §7): their expectations still come from
 //! 0.6.2, but instead of a byte comparison a dedicated test asserts how the
-//! two differ (`dup_clone_*`, `bodyless_pull_*`).
+//! two differ (`dup_clone_*`, `bodyless_pull_*`, `bodyless_clone_*`).
 //!
 //! `ICLOUD_NOTES_SYNC_DIFF_ONLY=name[,name]` limits the run.
 
@@ -525,7 +525,7 @@ fn read_json(path: &Path) -> Value {
 const LOOKUP: &str = "/database/1/com.apple.notes/production/private/records/lookup";
 const FRESH: &str = "5f1d0c3a-7b2e-4c9a-9e61-2b8d4a6c0f17";
 
-/// Runs a `bodyless-pull*` scenario (portDeviation
+/// Runs a `bodyless-pull*` or `bodyless-clone*` scenario (portDeviation
 /// `look-up-new-bodyless-notes`) with nothing compared, after checking what
 /// icloud-md 0.6.2 did: skipped the new note listed without its text, never
 /// looked it up, and saved the new sync token past it - so it would never be
@@ -536,11 +536,18 @@ fn run_bodyless(name: &str) -> tempfile::TempDir {
     assert_eq!(scenario.raw["portDeviation"], "look-up-new-bodyless-notes");
     let expected = here().join("expected").join(name);
     let node_stdout = read_json(&expected.join("stdout.json"));
-    assert_eq!(node_stdout["skippedNewUnsyncable"], 1);
-    assert_eq!(node_stdout["added"], 0);
+    let token = if name.starts_with("bodyless-clone") {
+        assert_eq!(node_stdout["skippedUndecodable"], 1);
+        assert_eq!(node_stdout["written"], 1, "only Test Note");
+        "AQAAAAAAAAAB"
+    } else {
+        assert_eq!(node_stdout["skippedNewUnsyncable"], 1);
+        assert_eq!(node_stdout["added"], 0);
+        "AQAAAAAAAAAD"
+    };
     assert!(node_requests(name).iter().all(|r| r["path"] != LOOKUP));
     let node_state = read_json(&expected.join("vault/.icloud-md/state.json"));
-    assert_eq!(node_state["syncToken"], "AQAAAAAAAAAD", "icloud-md moved past the note");
+    assert_eq!(node_state["syncToken"], token, "icloud-md moved past the note");
     assert!(node_state["notes"].get(FRESH).is_none());
 
     let mut raw = scenario.raw.clone();
@@ -636,6 +643,74 @@ fn bodyless_pull_unfilled_keeps_the_previous_sync_token() {
             let mut node_state: Value = serde_json::from_slice(&normalize_generator(bytes)).unwrap();
             node_state["syncToken"] = before["syncToken"].clone();
             let ours: Value = serde_json::from_slice(&normalize_generator(&got[name])).unwrap();
+            assert_eq!(ours, node_state);
+        } else {
+            assert_eq!(&got[name], bytes, "{name}");
+        }
+    }
+}
+
+/// Clone, the lookup returning the note's text: the port writes it beside
+/// Test Note and saves the private sync token, as if the listing had
+/// carried the text.
+#[test]
+fn bodyless_clone_looks_the_new_note_up_and_writes_it() {
+    let tmp = run_bodyless("bodyless-clone");
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    let stdout = read_json(&out.join("stdout.json"));
+    assert_eq!(stdout["written"], 2);
+    assert_eq!(stdout["skippedUndecodable"], 0);
+    assert_eq!(stdout["notices"], serde_json::json!([]));
+    assert_eq!(
+        std::fs::read_to_string(vault.join("Notes/Fresh.md")).unwrap(),
+        format!("---\napple-note-id: {FRESH}\n---\n\n# Fresh\nA note made locally.")
+    );
+    let state = read_json(&vault.join(".icloud-md/state.json"));
+    assert_eq!(state["syncToken"], "AQAAAAAAAAAB");
+    assert_eq!(state["notes"][FRESH]["file"], "Notes/Fresh.md");
+    assert_eq!(state["notes"][FRESH]["recordChangeTag"], "27a");
+    let node_vault = here().join("expected/bodyless-clone/vault");
+    assert_eq!(
+        std::fs::read(vault.join("Notes/Test Note.md")).unwrap(),
+        std::fs::read(node_vault.join("Notes/Test Note.md")).unwrap()
+    );
+}
+
+/// Clone, the lookup still without the text: the note is skipped as in
+/// icloud-md, but no private sync token is saved (so the first pull walks
+/// from scratch and sees the note again) and a warning says so. Otherwise
+/// the vault is icloud-md's.
+#[test]
+fn bodyless_clone_unfilled_saves_no_private_sync_token() {
+    let tmp = run_bodyless("bodyless-clone-unfilled");
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    let mut stdout = read_json(&out.join("stdout.json"));
+    let notices = stdout["notices"].as_array().unwrap().clone();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["level"], "warn");
+    let message = notices[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("1 note(s)") && message.contains("first pull"),
+        "{message}"
+    );
+    stdout["notices"] = serde_json::json!([]);
+    assert_eq!(
+        stdout,
+        read_json(&here().join("expected/bodyless-clone-unfilled/stdout.json")),
+        "otherwise icloud-md's summary: skippedUndecodable 1"
+    );
+
+    let node_vault = here().join("expected/bodyless-clone-unfilled/vault");
+    let (want, got) = (all_files(&node_vault), all_files(&vault));
+    assert_eq!(want.keys().collect::<Vec<_>>(), got.keys().collect::<Vec<_>>());
+    for (name, bytes) in &want {
+        if name == &format!("{STATE_DIR}/state.json") {
+            let mut node_state: Value = serde_json::from_slice(&normalize_generator(bytes)).unwrap();
+            node_state.as_object_mut().unwrap().remove("syncToken");
+            let ours: Value = serde_json::from_slice(&normalize_generator(&got[name])).unwrap();
+            assert!(ours.get("syncToken").is_none(), "{ours}");
             assert_eq!(ours, node_state);
         } else {
             assert_eq!(&got[name], bytes, "{name}");

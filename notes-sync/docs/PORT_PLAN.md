@@ -259,8 +259,25 @@ hold back the whole zone, carrying its old token.) The port deviates in
 - Tracked notes listed without text keep 0.6.2's behaviour (a warning, the
   file left alone).
 
-`clone` still skips such a note as 0.6.2 does (`skippedUndecodable`); a
-later `pull` does not see it unless it changes.
+`clone` has the same gap in 0.6.2 (`src/commands/clone.ts`): such a note is
+counted in `skippedUndecodable` and the listing's `syncToken` is saved past
+it, so a later `pull` does not see it unless it changes. Since 0.1.2 the port
+closes it the same way, with the same helper (nothing is tracked yet, so
+every live private Note without text is looked up):
+
+- A note the lookup fills is written like any other.
+- If any still has no text, it is skipped and counted in
+  `skippedUndecodable` as before, a warning says so ("Skipped N note(s) that
+  came through without their text, even when looked up - no sync token was
+  saved for your own notes, so the first pull will look for them again (and
+  re-read the rest)"), and `state.json` gets no `syncToken` - there is no
+  previous one to keep. The first pull then walks the private zone from
+  scratch, as clone did: every note is delivered again and re-applied (the
+  cost the pull case accepts), and the note goes through pull's lookup
+  above.
+- Shared zones already behaved: the fetch looks such notes up, and a zone
+  still missing text is skipped with its own warning and no token, so the
+  first pull fetches it from scratch.
 
 Tests: tests/cli_differential.rs `bodyless_pull_*` with the scenarios
 `bodyless-pull` and `bodyless-pull-unfilled` (`portDeviation:
@@ -269,3 +286,9 @@ the note, send no lookup and save the new token; the port is asserted to
 send the same requests plus one lookup, and then either to add the note
 (lookup has the text) or to keep the previous token with otherwise
 icloud-md's summary and vault (lookup still without text).
+For clone, `bodyless_clone_*` with the scenarios `bodyless-clone` and
+`bodyless-clone-unfilled` (same `portDeviation`) assert the same way: the
+note written and the token saved, or no `syncToken` with otherwise
+icloud-md's summary and vault. tests/cmd_clone.rs covers the clone followed
+by a pull that walks from scratch and adds the note, and a shared zone still
+without text.

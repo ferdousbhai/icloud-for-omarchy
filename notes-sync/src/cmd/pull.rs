@@ -707,10 +707,11 @@ pub fn run_pull_with(
 /// new to this vault that the private `changes/zone` walk listed without its
 /// text is looked up by id (`records/lookup`, then the asset-body inlining)
 /// instead of being skipped while the new sync token moves past it. Returns
-/// the recordNames that still have no text; the caller keeps the previous
-/// private sync token for them. (Shared zones are covered by the fetch, which
+/// the recordNames that still have no text; the caller (pull, or clone with
+/// nothing tracked) then doesn't save the new private sync token, so the
+/// next pull sees them again. (Shared zones are covered by the fetch, which
 /// already looks such notes up and holds back the zone.)
-fn backfill_new_note_bodies<T: Transport>(
+pub(super) fn backfill_new_note_bodies<T: Transport>(
     db: &Database<T>,
     tracked: &IndexMap<String, NoteEntry>,
     records: &mut [CloudKitRecord],

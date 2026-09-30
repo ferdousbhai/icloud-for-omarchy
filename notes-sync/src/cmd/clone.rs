@@ -6,6 +6,7 @@ use std::path::Path;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{Error, NoticeLevel, SyncNotice, SyncProgress, skipped_zone_owner, used_names_for, zone_for_owner};
 use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
@@ -80,7 +81,7 @@ pub fn run_clone_with(
 
     progress.on_fetch_start();
     let mut fetched = 0usize;
-    let changes = {
+    let mut changes = {
         let mut on_page = |n: usize| {
             fetched += n;
             progress.on_fetch_page(fetched);
@@ -94,6 +95,7 @@ pub fn run_clone_with(
         };
         db.fetch_shared_note_records(&IndexMap::new(), &mut on_page)?
     };
+    let held_back = backfill_new_note_bodies(db, &IndexMap::new(), &mut changes.records)?;
 
     let mut summary = CloneSummary::default();
     for skipped in &shared.skipped_zones {
@@ -114,6 +116,17 @@ pub fn run_clone_with(
         summary.notices.push(SyncNotice {
             level: NoticeLevel::Warn,
             message,
+        });
+    }
+
+    if !held_back.is_empty() {
+        summary.notices.push(SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!(
+                "Skipped {} note(s) that came through without their text, even when looked up - no sync token was \
+                 saved for your own notes, so the first pull will look for them again (and re-read the rest)",
+                held_back.len()
+            ),
         });
     }
 
@@ -239,7 +252,12 @@ pub fn run_clone_with(
             dsid: remote.account.dsid.clone(),
         }),
         title_mode: Some(title_mode),
-        sync_token: changes.sync_token.clone(),
+        // Held back: no token, so the first pull walks from scratch and sees them.
+        sync_token: if held_back.is_empty() {
+            changes.sync_token.clone()
+        } else {
+            None
+        },
         shared_zone_sync_tokens: Some(shared_zone_sync_tokens),
         notes,
         folders: Some(layout.state_folders),

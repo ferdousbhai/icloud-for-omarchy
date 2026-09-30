@@ -24,6 +24,18 @@
       "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
     },
     {
+      "name": "bodyless-clone",
+      "cassette": "bodyless-clone.json",
+      "portDeviation": "look-up-new-bodyless-notes",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "bodyless-clone-unfilled",
+      "cassette": "bodyless-clone-unfilled.json",
+      "portDeviation": "look-up-new-bodyless-notes",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
       "name": "tiny-status-clean",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",
