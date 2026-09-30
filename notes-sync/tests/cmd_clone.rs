@@ -36,7 +36,7 @@ fn refuses_an_already_cloned_folder_without_authenticating() {
     assert!(err.to_string().contains("is already a cloned notes directory"));
 }
 
-// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7, "New
+// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1, "New
 // notes listed without their text"): clone looks such notes up and, if they
 // still have no text, saves no private sync token so the first pull sees them.
 

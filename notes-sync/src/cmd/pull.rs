@@ -698,7 +698,7 @@ pub fn run_pull_with(
     Ok(summary)
 }
 
-/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7): a note
+/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1): a note
 /// new to this vault that the private `changes/zone` walk listed without its
 /// text is looked up by id (`records/lookup`, then the asset-body inlining)
 /// instead of being skipped while the new sync token moves past it. Returns

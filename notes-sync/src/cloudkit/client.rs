@@ -234,7 +234,7 @@ impl<T: Transport> Database<T> {
             }
             more_coming = page.more_coming;
         }
-        // Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7):
+        // Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1):
         // a zone listed on two pages is fetched - and its notes cloned - once.
         let mut seen = std::collections::HashSet::new();
         zone_ids.retain(|z| seen.insert((z.zone_name.clone(), z.owner_record_name.clone())));
@@ -760,7 +760,7 @@ pub fn parse_note_update_response(body: &Value) -> Result<RecordUpdateResult, Ck
 
 /// Collapses repeated occurrences of a record in one zone's `changes/zone`
 /// listing. Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md
-/// §7): CloudKit occasionally returns the same record on two pages of one
+/// §1): CloudKit occasionally returns the same record on two pages of one
 /// walk (and could within a page); 0.6.2 keeps every occurrence, so `clone`
 /// writes the note twice - the second copy under a uniquified name, one of
 /// the two left untracked - and the next `push` would create it as a new

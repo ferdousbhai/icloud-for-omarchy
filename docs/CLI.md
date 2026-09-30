@@ -187,16 +187,6 @@ PATH (a development build).
 | 64 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 70 | internal error, a bug | | (passed through from the engine) | ✓ | | |
 
-Changed to get here: icloud-notes-sync used 2 for usage and 4 for a sign-in
-(it now uses 64 and 2; the Notes app accepts both 2 and the old 4), and
-icloud-session used 3 for Find My (now 4). The JSON error objects were
-`{"error","kind","exit_code"}` (photos), `{"error":{"kind","message","exit"}}`
-(findmy) and `{"error","message","exitCode","hint"}` (notes-sync); all are
-now the one shape above. `icloud-session`, `icloud-photos` and
-`icloud-findmy` parse their arguments with clap and take these codes, the
-error line and the JSON form of a usage error from one module,
-`icloud_session::cli` (session/src/cli.rs).
-
 ### Error codes
 
 | Tool | `error.code` values |

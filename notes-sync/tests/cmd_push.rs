@@ -658,7 +658,7 @@ fn envelope_stripped_falls_back_to_delete_plus_create() {
     assert_unbound(dir.path());
 }
 
-/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §7): 0.6.2
+/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1): 0.6.2
 /// plans a copy that keeps the original's `apple-note-id` (original still in
 /// place) as a create; the port refuses it, naming the tracked note.
 #[test]

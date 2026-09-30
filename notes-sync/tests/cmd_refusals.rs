@@ -7,7 +7,7 @@
 //! added without a row here, and `sites_match_icloud_md_source` (when the
 //! icloud-md clone is present) checks each row's line in push.ts still says
 //! what the row claims. Rows with line 0 are port-only refusals (deliberate
-//! differences from 0.6.2, docs/PORT_PLAN.md §7) with no push.ts site.
+//! differences from 0.6.2, docs/PORT_PLAN.md §1) with no push.ts site.
 
 use icloud_notes_sync::cmd::plan::{
     FolderRefusal, PlanEntry, PlanEntryKind, PlanResolution, PrepareRefusal, Refusal, RetitleRefusal,
@@ -253,7 +253,7 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first.".into(),
         ),
         (
-            // Port only (docs/PORT_PLAN.md §7): no push.ts site.
+            // Port only (docs/PORT_PLAN.md §1): no push.ts site.
             0,
             "",
             Refusal::CreateDuplicatesTrackedNote {

@@ -376,7 +376,7 @@ pub enum Refusal {
     /// file is still present. 0.6.2 pushes such a file as a brand-new note;
     /// the port refuses, so a stray duplicate (e.g. one written by a clone
     /// that saw a record twice) never becomes a second note on the account.
-    /// See docs/PORT_PLAN.md §7.
+    /// See docs/PORT_PLAN.md §1.
     CreateDuplicatesTrackedNote { tracked_file: String },
 
     // --- after the live lookup ---

@@ -36,7 +36,7 @@ A fresh icloud-md 0.6.2 clone can (intermittently, when CloudKit lists a
 record twice) write one note twice, once as an untracked byte-identical copy,
 which its next push would then create as a new note. The port dedupes the
 listing and never writes the copy, and its push refuses such a file anyway
-(docs/PORT_PLAN.md §7). `guard.py dedupe` still deletes such copies from
+(docs/PORT_PLAN.md §1). `guard.py dedupe` still deletes such copies from
 every scratch vault before any plan is made; with the port it should always
 report 0.
 

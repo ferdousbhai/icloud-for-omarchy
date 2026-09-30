@@ -13,9 +13,8 @@ tests are icloud-md's own test suites ported to Rust, golden outputs from
 icloud-md's code, recorded CloudKit sessions replayed end to end, and a
 differential suite that replays icloud-md's recorded results for the same
 inputs and requires the same exit codes, output, requests and vault files. A live write test runs against a real
-account on request only (see below). How the port was planned and where it
-deliberately differs from icloud-md 0.6.2 is in
-[docs/PORT_PLAN.md](docs/PORT_PLAN.md).
+account on request only (see below). Where it deliberately differs from
+icloud-md 0.6.2 is in [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 
 It is not a command of its own. The package installs it off PATH, at
 `/usr/lib/icloud-notes/icloud-notes-sync`, and the Notes window, its
@@ -53,7 +52,7 @@ clone, pull, push and restore take the vault's lock, the one the Notes app
 holds while it is open (`--wait SECS` to wait for it; busy is the error
 `vault_busy`, exit 1); status, history, diff and push --dry-run only read and
 take none. `vault-info` prints what the app reads from the vault's state
-(docs/PORT_PLAN.md §7). In the vault Notes syncs (`~/Documents/icloud-notes`),
+(docs/PORT_PLAN.md §1). In the vault Notes syncs (`~/Documents/icloud-notes`),
 use `icloud-notes` (see [docs/AGENTS.md](../docs/AGENTS.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the

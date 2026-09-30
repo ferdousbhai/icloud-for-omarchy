@@ -206,7 +206,7 @@ result.
 | `now` | frozen clock, ms (default in `defaults`) |
 | `setupMtimeMs` | after the edits, every file outside `.icloud-md/` gets this mtime (push reads file mtimes into request bodies) |
 | `compare` | subset of `exit`, `stdout`, `requests`, `vault`, `mtimes` (default all) |
-| `portDeviation` | a deliberate difference from 0.6.2 (docs/PORT_PLAN.md §7): the expectation is still 0.6.2's, but `differential_scenarios` skips the byte comparison and a dedicated test in `tests/cli_differential.rs` asserts the difference |
+| `portDeviation` | a deliberate difference from 0.6.2 (docs/PORT_PLAN.md §1): the expectation is still 0.6.2's, but `differential_scenarios` skips the byte comparison and a dedicated test in `tests/cli_differential.rs` asserts the difference |
 
 The Rust side is `tests/cli_differential.rs`: it prepares each scenario the
 same way, runs the `icloud-notes-sync` binary with
@@ -244,10 +244,6 @@ Randomness in icloud-md that the Rust side must mirror through
 names, push's create record name and replica id, and formatReconcile's
 per-paragraph `uuidBytes()` (drawn for every planned paragraph, used or
 not - the codec draws the same way).
-
-Planned (PORT_PLAN §4.2): cassettes recorded from read-only live sessions,
-hand-mutated copies for push, and runs of pull/status/push --dry-run on a
-`cp -a` copy of the real vault.
 
 ## Fixtures
 

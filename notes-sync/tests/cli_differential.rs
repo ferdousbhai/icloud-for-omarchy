@@ -14,7 +14,7 @@
 //! have expectations from the PR #29 fork branch and run with it on.
 //!
 //! Scenarios with a `portDeviation` key cover a deliberate difference from
-//! icloud-md 0.6.2 (docs/PORT_PLAN.md §7): their expectations still come from
+//! icloud-md 0.6.2 (docs/PORT_PLAN.md §1): their expectations still come from
 //! 0.6.2, but instead of a byte comparison a dedicated test asserts how the
 //! two differ (`dup_clone_*`, `bodyless_pull_*`, `bodyless_clone_*`).
 //!
