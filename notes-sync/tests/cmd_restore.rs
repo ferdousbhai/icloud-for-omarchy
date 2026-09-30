@@ -26,7 +26,6 @@ fn note(dir: &Path) -> String {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn overwrites_a_locally_edited_note_with_its_base_copy() {
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());
@@ -44,7 +43,6 @@ fn refuses_a_file_that_isnt_tracked() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn accepts_a_path_with_directory_components() {
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());
@@ -62,7 +60,6 @@ fn refuses_when_theres_no_cloned_state() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn preserves_local_only_frontmatter() {
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());
@@ -73,7 +70,6 @@ fn preserves_local_only_frontmatter() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn recreates_a_missing_file_from_the_base_copy() {
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());
@@ -82,7 +78,6 @@ fn recreates_a_missing_file_from_the_base_copy() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn leaves_a_frontmatter_only_file_as_envelope_plus_base_copy() {
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());

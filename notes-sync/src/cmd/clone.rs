@@ -1,4 +1,4 @@
-//! `clone`. Ports icloud-md `src/commands/clone.ts`. Owner: workstream D.
+//! `clone`. Ports icloud-md `src/commands/clone.ts`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -11,11 +11,11 @@ use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{Error, NoticeLevel, SyncNotice, SyncProgress, skipped_zone_owner, used_names_for, zone_for_owner};
 use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
+use crate::js::posix;
 use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_file_name};
 use crate::md::frontmatter::compose_note_file;
 use crate::vault::attachments::resolve_note_attachments;
 use crate::vault::base::write_base_copy;
-use crate::vault::js::posix;
 use crate::vault::layout::{PreviousLayout, SharedZoneRecords, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
 use crate::vault::state::{

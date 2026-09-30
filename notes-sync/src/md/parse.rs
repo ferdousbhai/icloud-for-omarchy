@@ -1,13 +1,12 @@
 //! Markdown → format model. Ports icloud-md `src/notes/parseNoteMarkdown.ts`
 //! (remark-parse + remark-gfm; here `markdown` (markdown-rs, a port of the
-//! same micromark tokenizer) to mdast with GFM and positions). Owner:
-//! workstream C.
+//! same micromark tokenizer) to mdast with GFM and positions).
 
 use markdown::mdast;
 
-use super::js;
 use super::projection::trim_trailing_whitespace;
 use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};
+use crate::js;
 
 /// `{status: "ok", paragraphs, text}`.
 #[derive(Debug, Clone, PartialEq, Eq)]

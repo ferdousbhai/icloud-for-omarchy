@@ -1,6 +1,5 @@
 //! Folder reconciliation on pull and folder creation on push. Ports
 //! icloud-md `src/notes/folderReconcile.ts` and `folderCreate.ts`.
-//! Owner: workstream D.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -8,7 +7,6 @@ use std::path::Path;
 use indexmap::{IndexMap, IndexSet};
 
 use super::base::{read_base_copy, write_base_copy};
-use super::js::{self, posix};
 use super::layout::{
     RESERVED_SIBLING_DIR_NAMES, RESERVED_TOP_LEVEL_DIR_NAMES, StateDirInfo, VaultLayout, expected_note_dir, note_dir_of,
 };
@@ -16,6 +14,7 @@ use super::local::read_text;
 use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
 use crate::cmd::plan::FolderRefusal;
+use crate::js::{self, posix};
 use crate::md::filename::unique_file_name;
 
 // --- folderReconcile.ts ----------------------------------------------------------

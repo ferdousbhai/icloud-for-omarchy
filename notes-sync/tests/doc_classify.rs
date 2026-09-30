@@ -1,6 +1,4 @@
-//! Ports icloud-md `src/notes/decodeNoteRecord.test.ts`. Cases that reach the
-//! Markdown round-trip gate need workstream C's renderer/parser and are
-//! ignored until it lands; the skip/decode classifications run now.
+//! Ports icloud-md `src/notes/decodeNoteRecord.test.ts`.
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::doc::decode::{
@@ -8,10 +6,10 @@ use icloud_notes_sync::doc::decode::{
 };
 use icloud_notes_sync::doc::embeds::{AttachmentReference, EmbedSlot, UNKNOWN_CONTENT_BANNER};
 use icloud_notes_sync::doc::format::ParagraphKind;
-use icloud_notes_sync::doc::js::{base64_encode, slice16, utf16_len};
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun, ParagraphStyle};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
 use icloud_notes_sync::doc::text::compress_note_document;
+use icloud_notes_sync::js::{base64_encode, len16, slice16};
 use icloud_notes_sync::vault::state::TitleMode;
 use serde_json::{Value, json};
 
@@ -176,10 +174,9 @@ fn a_note_in_the_trash_folder_is_treated_as_deleted() {
     assert_eq!(classify(&tombstone, TitleMode::InBody), NoteDecodeResult::Deleted);
 }
 
-// --- cases through the Markdown round-trip gate (workstream C) --------------
+// --- cases through the Markdown round-trip gate ------------------------------
 
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn a_plain_text_note_decodes_as_ok_with_no_attachments() {
     let record = make_record(vec![encode_text_field("Grocery list\nEggs\nMilk", vec![])]);
     let result = ok(classify(&record, TitleMode::InBody));
@@ -195,7 +192,6 @@ fn a_plain_text_note_decodes_as_ok_with_no_attachments() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn a_real_audio_attachment_note_decodes_as_ok_surfacing_the_attachment_reference() {
     let record = make_record(vec![(
         "TextDataEncrypted",
@@ -212,7 +208,6 @@ fn a_real_audio_attachment_note_decodes_as_ok_surfacing_the_attachment_reference
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn a_real_image_attachment_note_decodes_as_ok_surfacing_the_attachment_reference() {
     let record = make_record(vec![
         (
@@ -231,7 +226,6 @@ fn a_real_image_attachment_note_decodes_as_ok_surfacing_the_attachment_reference
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn a_placeholder_with_no_matching_attachment_run_becomes_an_unknown_slot() {
     let record = make_record(vec![encode_text_field("Some note\n\u{fffc}", vec![])]);
     let result = ok(classify(&record, TitleMode::InBody));
@@ -243,7 +237,6 @@ fn a_placeholder_with_no_matching_attachment_run_becomes_an_unknown_slot() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn a_partially_identified_attachment_run_yields_an_unknown_slot_carrying_its_uti() {
     let record = make_record(vec![encode_text_field(
         "Title\n\u{fffc}",
@@ -261,7 +254,6 @@ fn a_partially_identified_attachment_run_yields_an_unknown_slot_carrying_its_uti
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn a_note_with_trailing_spaces_stays_publishable_and_the_rendering_trims_them() {
     let record = make_record(vec![encode_text_field("Title \nFried Egg \nplain", vec![])]);
     let result = ok(classify(&record, TitleMode::InBody));
@@ -275,7 +267,6 @@ fn titled(text: &str, runs: Vec<AttributeRun>) -> CloudKitRecord {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn filename_mode_leaves_the_title_paragraph_out_of_the_markdown() {
     let record = titled("My Note\n\nBody text", vec![styled(8, 0), styled(10, 3)]);
     let in_body = ok(classify(&record, TitleMode::InBody));
@@ -287,7 +278,6 @@ fn filename_mode_leaves_the_title_paragraph_out_of_the_markdown() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn the_whole_formatting_model_survives_stripping() {
     let record = titled("My Note\nBody text", vec![styled(8, 0), styled(9, 3)]);
     let result = ok(classify(&record, TitleMode::Filename));
@@ -298,13 +288,9 @@ fn the_whole_formatting_model_survives_stripping() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn title_line_is_the_notes_real_first_line_not_apples_truncated_title() {
     let long = "A first line that runs well past the seventy-six characters Apple truncates its title metadata at";
-    let mut record = titled(
-        &format!("{long}\nBody"),
-        vec![styled(utf16_len(long) + 1, 0), styled(4, 3)],
-    );
+    let mut record = titled(&format!("{long}\nBody"), vec![styled(len16(long) + 1, 0), styled(4, 3)]);
     record.fields.insert(
         "TitleEncrypted".into(),
         FieldValue {
@@ -318,7 +304,6 @@ fn title_line_is_the_notes_real_first_line_not_apples_truncated_title() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn a_monospaced_first_paragraph_strips_without_corrupting_the_fence() {
     let record = titled("code one\ncode two", vec![styled(9, 4), styled(8, 4)]);
     let result = ok(classify(&record, TitleMode::Filename));
@@ -331,7 +316,6 @@ fn a_monospaced_first_paragraph_strips_without_corrupting_the_fence() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn a_title_paragraph_holding_an_embed_placeholder_is_never_stripped() {
     let record = titled(
         "\u{fffc}\nBody text",
@@ -343,7 +327,6 @@ fn a_title_paragraph_holding_an_embed_placeholder_is_never_stripped() {
 }
 
 #[test]
-#[ignore = "needs md::title (workstream C)"]
 fn a_single_line_note_strips_to_an_empty_body() {
     let record = titled("Just a title", vec![styled(12, 0)]);
     let result = ok(classify(&record, TitleMode::Filename));
@@ -353,7 +336,6 @@ fn a_single_line_note_strips_to_an_empty_body() {
 }
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn body_text_is_the_notes_raw_text_in_both_modes() {
     let record = titled("My Note\n\nBody text", vec![styled(8, 0), styled(10, 3)]);
     let in_body = ok(classify(&record, TitleMode::InBody));
@@ -365,7 +347,6 @@ fn body_text_is_the_notes_raw_text_in_both_modes() {
 /// Every real fixture note classifies exactly as icloud-md does (goldens'
 /// markdown from the exporter).
 #[test]
-#[ignore = "needs md::render / md::parse (workstream C)"]
 fn real_fixture_notes_classify_to_their_golden_markdown() {
     for file in [
         "real_plain_note.json",

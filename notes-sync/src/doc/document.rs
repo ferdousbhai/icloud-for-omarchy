@@ -5,12 +5,12 @@
 
 use std::collections::HashMap;
 
-use super::js::{from_utf16, utf16, utf16_len};
 use super::proto::topotext::vector_timestamp::{Clock, clock::ReplicaClock};
 use super::proto::topotext::{self, AttributeRun, CharID, Substring};
 use super::proto::{Message, versioned_document};
 use super::text::parse_versioned_document;
 use super::{DocError, Result};
+use crate::js::{from_utf16, len16, utf16};
 
 pub(crate) const SENTINEL_CLOCK: u32 = 0xffff_ffff;
 
@@ -160,7 +160,7 @@ pub fn apply_text_edit(doc: &mut NoteDocument, new_text: &str, options: &ApplyTe
     let mut delta: i64 = 0;
     for splice in &splices {
         let start = (splice.start as i64 + delta) as usize;
-        let insert_len = utf16_len(&splice.insert_text);
+        let insert_len = len16(&splice.insert_text);
         if splice.delete_length > 0 {
             let assigned = tombstone_visible_range(doc, start, splice.delete_length, replica_index, style_clock_floor)?;
             max_assigned_style_clock = max_assigned_style_clock.max(assigned);
@@ -905,7 +905,7 @@ pub(crate) fn adjust_attribute_runs(
 /// `validateDocumentInvariants`: `Err` with icloud-md's message when the runs
 /// don't describe the text.
 pub fn validate_document_invariants(doc: &NoteDocument) -> Result<()> {
-    let text_length = utf16_len(&doc.text) as u64;
+    let text_length = len16(&doc.text) as u64;
     let visible = visible_length(&doc.runs);
     if visible != text_length {
         return Err(invalid(format!(

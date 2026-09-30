@@ -3,7 +3,6 @@
 
 mod common;
 
-use icloud_notes_sync::doc::js::base64_decode;
 use icloud_notes_sync::doc::proto::crdt::VectorTimestamp;
 use icloud_notes_sync::doc::proto::crdt::vector_timestamp::Element;
 use icloud_notes_sync::doc::proto::topotext::{self, Substring};
@@ -14,6 +13,7 @@ use icloud_notes_sync::doc::tables::{
     TableDocument, encode_table_document, grid_from_table_document, key_index_of, parse_ordered_set,
     parse_table_document, resolve_ref, resolve_table, table_document_round_trips, uuid_index_of_ref,
 };
+use icloud_notes_sync::js::base64_decode;
 use serde_json::Value;
 
 fn our_replica() -> [u8; 16] {

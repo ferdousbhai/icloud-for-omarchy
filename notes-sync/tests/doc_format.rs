@@ -4,8 +4,8 @@ use icloud_notes_sync::doc::format::{
     FormatParagraph, InlineSpan, InlineStyle, ParagraphKind, decode_note_format, formats_round_trip_equal,
     normalize_spans,
 };
-use icloud_notes_sync::doc::js::utf16_len;
 use icloud_notes_sync::doc::proto::topotext::{AttributeRun, ParagraphStyle, Todo};
+use icloud_notes_sync::js::len16;
 
 fn styled(length: u32, style: u32) -> AttributeRun {
     AttributeRun {
@@ -27,7 +27,7 @@ fn plain(length: usize) -> InlineSpan {
 }
 
 fn paragraph(text: &str) -> FormatParagraph {
-    let len = utf16_len(text);
+    let len = len16(text);
     FormatParagraph {
         kind: ParagraphKind::Body,
         indent: 0,
@@ -200,7 +200,7 @@ fn linked(link: &str) -> InlineStyle {
 #[test]
 fn normalize_spans_collapses_a_bare_url_link_to_plain_text() {
     let url = "https://example.com/x";
-    let len = utf16_len(url);
+    let len = len16(url);
     let mut p = paragraph(url);
     p.spans = vec![span(linked(url), len)];
     assert_eq!(normalize_spans(&p), vec![plain(len)]);

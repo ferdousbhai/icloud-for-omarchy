@@ -1,6 +1,6 @@
 //! `push` (and the plan `status` shares). Ports icloud-md
-//! `src/commands/push.ts` (plus the bits of `delete.ts` push uses). Owner:
-//! workstream D. Refusal strings live in `plan.rs`.
+//! `src/commands/push.ts` (plus the bits of `delete.ts` push uses).
+//! Refusal strings live in `plan.rs`.
 //!
 //! icloud-md's plan entries carry an `execute` closure; here they carry an
 //! [`Action`] that [`execute`] interprets, over the same state.
@@ -8,7 +8,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use base64::Engine;
 use indexmap::IndexMap;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
@@ -41,6 +40,7 @@ use crate::doc::format::{FormatParagraph, decode_note_format, formats_round_trip
 use crate::doc::reconcile::reconcile_note_format;
 use crate::doc::table_edit::prepare_table_attachment_update;
 use crate::doc::text::{compress_note_document, decode_note_body_text, decode_note_string, decompress_note_document};
+use crate::js::{self, posix};
 use crate::md::frontmatter::{
     NOTE_TITLE_KEY, join_frontmatter, read_note_id, read_note_title, set_note_id, split_frontmatter,
 };
@@ -54,8 +54,7 @@ use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{PlannedFolder, plan_folder_creates};
 use crate::vault::history::{VersionSnapshotInput, history_record_names, record_version};
-use crate::vault::js::{self, posix};
-use crate::vault::layout::{PreviousLayout, StateDirInfo, base64_decode_lenient, note_dir_of, state_dir_index};
+use crate::vault::layout::{PreviousLayout, StateDirInfo, note_dir_of, state_dir_index};
 use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
     read_local_note, read_text, split_options,
@@ -283,7 +282,7 @@ struct CreateCandidate {
 }
 
 fn b64(bytes: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(bytes)
+    js::base64_encode(bytes)
 }
 
 /// `listUntrackedMarkdownFiles`: untracked `.md` files anywhere in the vault
@@ -823,7 +822,7 @@ pub fn build_push_plan(
         None => b64(&rt::random_bytes(16)),
     };
     state.replica_id = Some(replica_id.clone());
-    let replica_bytes: [u8; 16] = base64_decode_lenient(&replica_id).try_into().map_err(|_| {
+    let replica_bytes: [u8; 16] = js::base64_decode(&replica_id).try_into().map_err(|_| {
         Error::CorruptStateFile("state.json has a malformed replicaId (expected 16 bytes, base64-encoded)".into())
     })?;
 
@@ -1479,17 +1478,13 @@ pub fn prepare_note_text_update(
     if record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) {
         return Ok(Err(TextUpdateRefusal::TextAsAsset));
     }
-    let raw = decompress_note_document(&base64_decode_lenient(text_b64)).map_err(|e| Error::Internal(e.to_string()))?;
+    let raw = decompress_note_document(&js::base64_decode(text_b64)).map_err(|e| Error::Internal(e.to_string()))?;
     if !note_document_round_trips(&raw) {
         return Ok(Err(TextUpdateRefusal::NotRoundTrip));
     }
     let touches_placeholder = compute_splices(current_body_text, &desired.text).iter().any(|splice| {
-        js::slice16(
-            current_body_text,
-            splice.start,
-            Some(splice.start + splice.delete_length),
-        )
-        .contains(OBJECT_REPLACEMENT_CHARACTER)
+        js::slice16(current_body_text, splice.start, splice.start + splice.delete_length)
+            .contains(OBJECT_REPLACEMENT_CHARACTER)
             || splice.insert_text.contains(OBJECT_REPLACEMENT_CHARACTER)
     });
     if touches_placeholder {

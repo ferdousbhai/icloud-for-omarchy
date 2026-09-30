@@ -1,4 +1,4 @@
-//! Commands. Owner: workstream D. Ports icloud-md `src/commands/{clone,pull,
+//! Commands. Ports icloud-md `src/commands/{clone,pull,
 //! push,status,history,diff,restore}.ts`, `src/cli/{output,pullReport,
 //! reportStyle}.ts`, `src/progress.ts` and `src/errors.ts`.
 

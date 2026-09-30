@@ -7,7 +7,7 @@ use icloud_notes_sync::doc::encode::{
     build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_purge_fields,
     build_note_trash_fields, build_note_update_fields, derive_note_snippet, derive_note_title,
 };
-use icloud_notes_sync::doc::js::{base64_decode, utf16_len};
+use icloud_notes_sync::js::{base64_decode, len16};
 use serde_json::{Value, json};
 
 const UPDATE: &str = r#"{"ModificationDate":{"value":222},"TitleEncrypted":{"value":"VGl0bGUgbGluZSDwn5iA"},"MinimumSupportedNotesVersion":{"value":0},"Folders":{"value":[{"recordName":"DefaultFolder-CloudKit"}]},"Deleted":{"value":0},"Folder":{"value":{"recordName":"DefaultFolder-CloudKit"}},"CreationDate":{"value":100},"PaperStyleType":{"value":1},"SnippetEncrypted":{"value":"Qm9keSBsaW5l"},"FirstAttachmentThumbnail":{"value":null},"FirstAttachmentUTIEncrypted":{"value":null},"TextDataAsset":{"value":null},"TextDataEncrypted":{"value":"TkVXX0RPQw=="}}"#;
@@ -64,7 +64,7 @@ fn long_first_lines_are_cut_at_a_word_boundary() {
 
 #[test]
 fn a_long_first_word_is_hard_cut_rather_than_dropped() {
-    assert_eq!(utf16_len(&derive_note_title(&"x".repeat(100))), 76);
+    assert_eq!(len16(&derive_note_title(&"x".repeat(100))), 76);
 }
 
 #[test]

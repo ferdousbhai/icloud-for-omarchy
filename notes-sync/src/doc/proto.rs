@@ -3,7 +3,7 @@
 //! reproduces protobuf-es 2.12 (what icloud-md decodes and encodes with)
 //! byte for byte - the round-trip gates depend on it.
 //!
-//! Why not the rust-protobuf bindings `build.rs` generates: rust-protobuf keeps
+//! Why not a protobuf crate: prost drops unknown fields; rust-protobuf keeps
 //! unknown fields in a `HashMap` keyed by field number (grouped by wire type),
 //! so several unknown fields - or interleaved values of one - re-emit in a
 //! different order than they arrived; it refuses to parse a message missing a

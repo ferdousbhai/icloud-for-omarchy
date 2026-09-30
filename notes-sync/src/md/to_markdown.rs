@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use super::js;
+use crate::js;
 
 /// A UTF-16 string.
 pub type W = Vec<u16>;
@@ -454,7 +454,7 @@ fn escape_backslashes(value: &[u16], after: &[u16]) -> W {
 fn classify(code: Option<u16>) -> u8 {
     let Some(code) = code else { return 0 };
     let Some(c) = char::from_u32(code as u32) else { return 0 };
-    if code == 32 || js::is_js_whitespace(c) {
+    if code == 32 || js::is_whitespace(c) {
         return 1;
     }
     if is_unicode_punctuation(c) {

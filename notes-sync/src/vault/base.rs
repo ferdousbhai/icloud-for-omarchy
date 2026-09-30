@@ -1,6 +1,6 @@
 //! Base copies: `.icloud-md/base/<recordName>.md`, the body-only
 //! last-synced text - the merge ancestor for pull's diff3. Ports icloud-md
-//! `src/notes/baseCopy.ts`. Owner: workstream D.
+//! `src/notes/baseCopy.ts`.
 
 use std::path::{Path, PathBuf};
 

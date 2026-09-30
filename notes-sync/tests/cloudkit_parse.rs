@@ -1,11 +1,11 @@
 //! Port of icloud-md `src/cloudkit/databaseClient.test.ts`.
 
 use icloud_notes_sync::cloudkit::client::{
-    first_zone, merge_looked_up_records, parse_note_delete_response, parse_note_update_response,
-    parse_record_update_response, parse_shared_zone_list,
+    first_zone, merge_looked_up_records, parse_note_update_response, parse_record_update_response,
+    parse_shared_zone_list,
 };
 use icloud_notes_sync::cloudkit::{
-    CkError, CloudKitRecord, DeleteResult, FieldValue, RecordUpdateResult, SharedZoneListPage, ZoneId,
+    CkError, CloudKitRecord, FieldValue, RecordUpdateResult, SharedZoneListPage, ZoneId,
 };
 use indexmap::IndexMap;
 use serde_json::json;
@@ -249,31 +249,6 @@ fn parse_note_update_response_surfaces_per_record_errors_as_refusals() {
 #[test]
 fn parse_note_update_response_rejects_bodies_without_records() {
     let err = unexpected(parse_note_update_response(&json!({})).unwrap_err());
-    assert!(err.contains("missing records array"), "{err}");
-}
-
-#[test]
-fn parse_note_delete_response_succeeds_on_a_real_force_delete_response() {
-    let body = json!({ "records": [{ "recordName": "1341629E-A0AA-46BC-A9B7-E7FF64DF5CAA", "deleted": true }] });
-    assert_eq!(parse_note_delete_response(&body).unwrap(), DeleteResult::Ok);
-}
-
-#[test]
-fn parse_note_delete_response_surfaces_per_record_errors_as_refusals() {
-    let DeleteResult::Rejected {
-        server_error_code,
-        reason,
-    } = parse_note_delete_response(&conflict_body()).unwrap()
-    else {
-        panic!("expected a refusal")
-    };
-    assert_eq!(server_error_code, "CONFLICT");
-    assert!(reason.unwrap_or_default().contains("change tag"));
-}
-
-#[test]
-fn parse_note_delete_response_rejects_bodies_without_records() {
-    let err = unexpected(parse_note_delete_response(&json!({})).unwrap_err());
     assert!(err.contains("missing records array"), "{err}");
 }
 

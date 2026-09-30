@@ -1,13 +1,13 @@
 //! Ports icloud-md `src/notes/tableCellEdit.test.ts`.
 
 use icloud_notes_sync::doc::document::{RunCoord, TextRun};
-use icloud_notes_sync::doc::js::base64_decode;
 use icloud_notes_sync::doc::proto::Message;
 use icloud_notes_sync::doc::proto::topotext::{self, AttributeRun};
 use icloud_notes_sync::doc::table_edit::{
     TableCellDocument, TopotextClockSource, apply_cell_text_edit, encode_cell_document, new_cell_document,
     parse_cell_document, validate_cell_invariants,
 };
+use icloud_notes_sync::js::base64_decode;
 
 const REAL_MULTI_TOMBSTONE_A1_CELL: &str = "EgJBMRoQCgQIABAAEAAaBAgAEAAoARoQCgQIARAuEAEaBAgBEAAoAhoSCgQIARAvEAEaBAgBEAAgASgDGhIKBAgBEAIQAhoECAEQCSABKAQaEgoECAEQMBADGgQIARAAIAEoBRoQCgQIARAzEAEaBAgBEAAoBhoWCggIABD/////DxAAGggIABD/////DyoCCAI=";
 

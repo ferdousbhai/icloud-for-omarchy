@@ -1,7 +1,7 @@
 //! Ports icloud-md `src/notes/formatReconcile.test.ts`. The desired
 //! paragraphs are icloud-md's own `parseNoteMarkdown` output for each test's
 //! markdown (`tests/doc_node/parsed_markdown.json`), so this doesn't depend
-//! on the Markdown workstream.
+//! on the Markdown parser.
 
 mod common;
 
@@ -9,9 +9,9 @@ use icloud_notes_sync::doc::document::{
     ApplyTextEditOptions, NoteDocument, ReplicaEntry, RunCoord, TextRun, apply_text_edit, build_initial_note_document,
 };
 use icloud_notes_sync::doc::format::{FormatParagraph, ParagraphKind, decode_note_format};
-use icloud_notes_sync::doc::js::utf16_len;
 use icloud_notes_sync::doc::proto::topotext::{AttachmentInfo, AttributeRun, Color, ParagraphStyle, Todo};
 use icloud_notes_sync::doc::reconcile::{ReconcileResult, reconcile_note_format_with};
+use icloud_notes_sync::js::len16;
 
 const REPLICA_A: [u8; 16] = [0xaa; 16];
 const REPLICA_B: [u8; 16] = [0xbb; 16];
@@ -31,7 +31,7 @@ fn run(replica: u32, clock: u32, length: u32, sequence: &[u32]) -> TextRun {
 }
 
 fn doc_with(text: &str, attribute_runs: Vec<AttributeRun>) -> NoteDocument {
-    let len = utf16_len(text) as u32;
+    let len = len16(text) as u32;
     NoteDocument {
         root_serialization_version: 0,
         version_serialization_version: 0,

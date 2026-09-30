@@ -1,7 +1,7 @@
 //! The shared shape of the human changelists (`status`, `push`, `pull`).
 //! Ports icloud-md `src/cli/reportStyle.ts` without the colours: human text
 //! is not part of the compatibility contract, and plain text is what
-//! icloud-md prints when stdout isn't a terminal. Owner: workstream D.
+//! icloud-md prints when stdout isn't a terminal.
 
 /// `LISTING_INDENT`.
 pub const LISTING_INDENT: &str = "        ";

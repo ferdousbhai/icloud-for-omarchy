@@ -129,7 +129,7 @@ fn table_revisions_decode_to_their_recorded_grids() {
             if revision.get("grid").is_none() {
                 continue;
             }
-            let compressed = icloud_notes_sync::doc::js::base64_decode(revision["base64"].as_str().unwrap());
+            let compressed = icloud_notes_sync::js::base64_decode(revision["base64"].as_str().unwrap());
             let doc = parse_table_document(&compressed).unwrap();
             assert_eq!(grid_from_table_document(&doc).unwrap(), common::grid(&revision["grid"]));
         }

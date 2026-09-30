@@ -1,5 +1,5 @@
 //! The frontmatter envelope and the keys this tool owns in it. Ports icloud-md
-//! `src/notes/frontmatter.ts` and `noteIdFrontmatter.ts`. Owner: workstream C.
+//! `src/notes/frontmatter.ts` and `noteIdFrontmatter.ts`.
 //!
 //! Plan deviation: the plan's `with_note_id(body, id)` is icloud-md's
 //! `composeNoteFile(frontmatter, body, recordName, unrepresentableTitle)`;
@@ -13,8 +13,8 @@
 //! the one `key: value` line, which is where the output can differ from
 //! icloud-md's (never in what the keys read back as).
 
-use super::js;
 use super::yaml::{self, Document, Parsed, Scalar, Style, Value};
+use crate::js;
 
 pub const FENCE: &str = "---";
 pub const NOTE_ID_KEY: &str = "apple-note-id";

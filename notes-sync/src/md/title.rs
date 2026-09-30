@@ -1,9 +1,8 @@
 //! Title paragraphs and title-carrying file names. Ports icloud-md
-//! `src/notes/noteTitleParagraph.ts` and `titleFilename.ts`. Owner:
-//! workstream C.
+//! `src/notes/noteTitleParagraph.ts` and `titleFilename.ts`.
 
-use super::js;
 use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};
+use crate::js;
 
 /// `MAX_TITLE_LENGTH` (UTF-16 units, like JS `.length`).
 pub const MAX_TITLE_LENGTH: usize = 60;
@@ -57,7 +56,7 @@ pub fn restore_title_paragraph_text(title: &FormatParagraph, body: &[FormatParag
 
 /// `titleFromNoteFileName`.
 pub fn title_from_note_file_name(file: &str) -> String {
-    decode_title_stem(&js::basename(file, ".md"))
+    decode_title_stem(&js::posix::basename_suffix(file, ".md"))
 }
 
 /// `titleParagraphFromFilename`: plain Title-style paragraph.

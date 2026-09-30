@@ -1,14 +1,14 @@
 //! Format model → Markdown. Ports icloud-md `src/notes/renderNoteMarkdown.ts`
 //! (remark-stringify + remark-gfm, `unsafe` escaping, `tablePipeAlign:false`;
-//! the serializer itself is `to_markdown`). Owner: workstream C.
+//! the serializer itself is `to_markdown`).
 //!
 //! Offsets and slices are UTF-16 code units, as in the JS.
 
-use super::js;
 use super::parse::parse_note_markdown;
 use super::projection::{formats_round_trip_equal, normalize_spans, trim_trailing_whitespace};
 use super::to_markdown::{Node, Serializer, W, unw, w};
 use crate::doc::format::{FormatParagraph, InlineSpan, ParagraphKind};
+use crate::js;
 
 /// `RawSpelling`: optional escaping relaxations tried nicest-first.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -278,7 +278,7 @@ fn is_raw_token(u: u16) -> bool {
 }
 
 fn is_ws_unit(u: u16) -> bool {
-    char::from_u32(u as u32).is_some_and(js::is_js_whitespace)
+    js::is_whitespace16(u)
 }
 
 /// `ENTITY_SHAPED`: `/&(?:#|[A-Za-z][A-Za-z0-9]*;)/`.

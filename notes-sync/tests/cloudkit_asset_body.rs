@@ -11,7 +11,6 @@ mod cloudkit_common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use base64::Engine;
 use cloudkit_common::{MockTransport, no_pages};
 use icloud_notes_sync::cloudkit::client::TEXT_DATA_ASSET_KEY;
 use icloud_notes_sync::cloudkit::{CkError, Database};
@@ -41,7 +40,7 @@ fn asset_body_record() -> Value {
         "recordType": "Note",
         "recordChangeTag": "tag-big",
         "fields": {
-            "TitleEncrypted": { "value": base64::engine::general_purpose::STANDARD.encode("Today"), "type": "ENCRYPTED_BYTES" },
+            "TitleEncrypted": { "value": icloud_notes_sync::js::base64_encode(b"Today"), "type": "ENCRYPTED_BYTES" },
             "TextDataAsset": {
                 "value": { "fileChecksum": "sum", "size": 123, "wrappingKey": "key", "downloadURL": ASSET_URL },
                 "type": "ASSETID",
@@ -88,7 +87,7 @@ fn fetch_all_note_records_asks_for_text_data_asset_and_inlines_a_large_notes_tex
     let record = &result.records[0];
     assert_eq!(
         record.fields["TextDataEncrypted"].value,
-        json!(base64::engine::general_purpose::STANDARD.encode(&bytes))
+        json!(icloud_notes_sync::js::base64_encode(bytes.as_ref()))
     );
     assert_eq!(record.fields["TextDataEncrypted"].type_, "ENCRYPTED_BYTES");
     let NoteDecodeResult::Ok(decoded) = classify_note_record(record, &ClassifyOptions::default()) else {
@@ -169,7 +168,7 @@ fn a_shared_notes_asset_body_is_inlined_after_the_lookup_backfill() {
     let record = &result.zones[0].records[0];
     assert_eq!(
         record.fields["TextDataEncrypted"].value,
-        json!(base64::engine::general_purpose::STANDARD.encode(&bytes))
+        json!(icloud_notes_sync::js::base64_encode(bytes.as_ref()))
     );
     assert_eq!(database.transport.downloads.borrow().as_slice(), [ASSET_URL]);
 }

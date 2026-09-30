@@ -13,7 +13,7 @@ sent to CloudKit.
   No browser, no network.
 - Rust side: `cloudkit::transport::ReplayTransport` reads the same cassette
   and writes the same request log (`ICLOUD_NOTES_SYNC_CASSETTE`,
-  `ICLOUD_NOTES_SYNC_REQUEST_LOG`); stubbed until workstream A fills it in.
+  `ICLOUD_NOTES_SYNC_REQUEST_LOG`).
 
 ## Stock 0.6.2 and upstream PR #29
 
@@ -213,12 +213,13 @@ same way, runs the `icloud-notes-sync` binary with
 `ICLOUD_NOTES_SYNC_CASSETTE`, `ICLOUD_NOTES_SYNC_REQUEST_LOG`,
 `ICLOUD_NOTES_SYNC_NOW` and `ICLOUD_NOTES_SYNC_DETERMINISTIC=1`, and compares
 exit code, stdout, the request log (icloud-md's minus `setup` entries), the
-vault tree (`generator` normalized) and `mtimes.json`. The full run is
-`#[ignore]`d until the codec, Markdown and CloudKit workstreams land:
+vault tree (`generator` normalized) and `mtimes.json`. It needs neither node
+nor the icloud-md clone (the expectations are committed), so it runs with the
+rest of `cargo test`:
 
 ```bash
-cargo test --test cli_differential -- --ignored
-ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test --test cli_differential -- --ignored
+cargo test -p icloud-notes-sync --test cli_differential
+ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test -p icloud-notes-sync --test cli_differential
 ```
 
 ## Cassettes
@@ -243,7 +244,7 @@ Randomness in icloud-md that the Rust side must mirror through
 `vault::rt`: `recordVersion`/`recordEpoch` ids, `planFolderCreates` record
 names, push's create record name and replica id, and formatReconcile's
 per-paragraph `uuidBytes()` (drawn for every planned paragraph, used or
-not - workstream B has to draw the same way).
+not - the codec draws the same way).
 
 Planned (PORT_PLAN §4.2): cassettes recorded from read-only live sessions,
 hand-mutated copies for push, and runs of pull/status/push --dry-run on a

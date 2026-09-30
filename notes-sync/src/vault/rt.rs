@@ -10,9 +10,9 @@
 //!
 //! Every random draw icloud-md makes goes through `randomUUID` or
 //! `randomBytes`, and the Rust side must draw from these two functions in
-//! the same order for request bodies and ids to compare equal. Workstream B
+//! the same order for request bodies and ids to compare equal. The codec
 //! (formatReconcile's todo uuids, mergeableDataPool/tableEdit's replica
-//! uuids) draws from here too. Owner: workstream D.
+//! uuids) draws from here too.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -1,16 +1,16 @@
 //! Per-record version snapshots (`.icloud-md/history/<recordName>/*.json`)
 //! and tracked-file resolution. Ports icloud-md `src/notes/versionHistory.ts`
-//! and `trackedFile.ts`. Owner: workstream D.
+//! and `trackedFile.ts`.
 
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::js::{self, posix};
 use super::rt;
 use super::state::{CloneState, NoteEntry, STATE_DIR_NAME, to_js_json};
 use crate::cmd::errors::Error;
+use crate::js::{self, posix};
 
 /// `VersionSnapshot`, in the key order `recordVersion` writes it
 /// (`{...input, id, timestamp}`).

@@ -384,7 +384,6 @@ fn generator_normalization() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn differential_scenarios() {
     let only: Option<Vec<String>> = std::env::var("ICLOUD_NOTES_SYNC_DIFF_ONLY")
         .ok()
@@ -396,23 +395,6 @@ fn differential_scenarios() {
         }
         if scenario.raw.contains_key("portDeviation") {
             continue; // asserted by its own test below, not byte-compared
-        }
-        let failures = run_scenario(&scenario);
-        if !failures.is_empty() {
-            report.push(format!("## {}\n{}", scenario.name, failures.join("\n\n")));
-        }
-    }
-    assert!(report.is_empty(), "differential mismatches:\n\n{}", report.join("\n\n"));
-}
-
-/// Scenarios that stop before any CloudKit parsing, codec or Markdown code
-/// runs, so they already pass against the stubs.
-#[test]
-fn differential_scenarios_before_the_codec() {
-    let mut report = Vec::new();
-    for scenario in scenarios() {
-        if !["tiny-clone-wrong-account", "tiny-newer-layout"].contains(&scenario.name.as_str()) {
-            continue;
         }
         let failures = run_scenario(&scenario);
         if !failures.is_empty() {

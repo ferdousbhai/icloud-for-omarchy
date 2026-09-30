@@ -1,12 +1,12 @@
 //! Markdown tables for table attachments. Ports icloud-md
-//! `src/notes/markdownTable.ts`. Owner: workstream C.
+//! `src/notes/markdownTable.ts`.
 
 use markdown::mdast;
 
-use super::js;
 use super::parse::to_mdast;
 use super::render::{CONSERVATIVE_SPELLING, RawSpelling, spelling_candidates, text_phrasing};
 use super::to_markdown::{Node, Serializer, unw, w};
+use crate::js;
 
 /// `MarkdownTableBlock` (line indexes are 0-based, `end_line` exclusive).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,7 +174,7 @@ fn is_br_tag(value: &str) -> bool {
     let Some(rest) = lower.strip_prefix("<br") else {
         return false;
     };
-    let rest = rest.trim_start_matches(js::is_js_whitespace);
+    let rest = rest.trim_start_matches(js::is_whitespace);
     rest == ">" || rest == "/>"
 }
 

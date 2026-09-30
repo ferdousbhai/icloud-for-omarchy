@@ -17,24 +17,18 @@ name = "icloud-notes-sync"
 path = "src/main.rs"
 
 [dependencies]
-base64 = "0.23"
 clap.workspace = true
 flate2 = "1"
 icloud-session.workspace = true
 icu_collator = "2"
 indexmap = { version = "2", features = ["serde"] }
 markdown = "1.0.0"
-protobuf = "=3.7.2"
 regex = "1"
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
-unicode-normalization = "0.1"
 url.workspace = true
 uuid.workspace = true
-
-[build-dependencies]
-protobuf-codegen = "=3.7.2"
 
 [dev-dependencies]
 tempfile.workspace = true

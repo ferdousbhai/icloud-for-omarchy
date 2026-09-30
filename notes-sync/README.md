@@ -11,9 +11,8 @@ codec (protobuf, the Notes document model, tables, attachments), the
 Markdown renderer and parser, diff3 merging and the CloudKit client. The
 tests are icloud-md's own test suites ported to Rust, golden outputs from
 icloud-md's code, recorded CloudKit sessions replayed end to end, and a
-differential suite (`cargo test -p icloud-notes-sync -- --ignored`) that runs
-icloud-md itself on the same inputs and requires the same exit codes,
-output, requests and vault files. A live write test runs against a real
+differential suite that replays icloud-md's recorded results for the same
+inputs and requires the same exit codes, output, requests and vault files. A live write test runs against a real
 account on request only (see below). How the port was planned and where it
 deliberately differs from icloud-md 0.6.2 is in
 [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
@@ -70,7 +69,6 @@ stay readable by icloud-md.
 cargo build -p icloud-notes-sync
 cargo clippy -p icloud-notes-sync --all-targets
 cargo test -p icloud-notes-sync
-cargo test -p icloud-notes-sync -- --ignored   # needs the icloud-md clone and node
 ```
 
 The differential harness that runs icloud-md itself against the same

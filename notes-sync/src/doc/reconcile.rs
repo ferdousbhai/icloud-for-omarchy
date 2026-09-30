@@ -141,7 +141,7 @@ struct ParagraphPlan<'a> {
 }
 
 fn text_len(p: &FormatParagraph) -> usize {
-    super::js::utf16_len(&p.text)
+    crate::js::len16(&p.text)
 }
 
 fn build_paragraph_plan<'a>(

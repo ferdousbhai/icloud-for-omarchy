@@ -10,8 +10,9 @@ cargo build --release -p icloud-notes-sync
 ICLOUD_NOTES_SYNC_LIVE=1 ICLOUD_NOTES_SYNC_ITEST_ACCOUNT=<dsid> notes-sync/tests/live/push_itest.sh
 ```
 
-Sign-in comes from icloud-session, which also mirrors the session into
-`~/.config/icloud-md` for the oracle. A run takes a few minutes.
+The port signs in through icloud-session. The oracle `icloud-md` keeps its
+own session under `~/.config/icloud-md`, so sign it in to the same account
+first. A run takes a few minutes.
 
 ## Containment
 

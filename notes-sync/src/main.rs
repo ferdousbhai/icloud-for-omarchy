@@ -1,6 +1,5 @@
 //! The `icloud-notes-sync` CLI. Ports icloud-md `src/cli.ts` for the verbs
 //! kept by the port: clone, pull, push, status, restore, history, diff.
-//! Owner: workstream D.
 //!
 //! Exit codes: 0 ok, 1 known error, 2 sign-in required, 3 `status`/`push
 //! --dry-run` has entries or `diff` found differences, 64 usage, 70 internal

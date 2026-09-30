@@ -2,7 +2,7 @@
 //! Garnock-Jones, LShift Ltd., Bryan Housel - see NOTICE) - `LCS`,
 //! `diffIndices`, `diff3MergeRegions`, `diff3Merge`, `mergeDiff3`, `diffComm` -
 //! plus icloud-md's `src/notes/mergeConflict.ts`. Myers-based crates align
-//! differently, so this is a port, not a dependency. Owner: workstream C.
+//! differently, so this is a port, not a dependency.
 
 use std::collections::HashMap;
 

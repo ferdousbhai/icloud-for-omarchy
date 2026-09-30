@@ -1,7 +1,7 @@
 //! The push plan: entries, their `--json` projection, and every refusal and
 //! conflict push can plan, enumerated. Ports icloud-md
 //! `src/notes/pushPlan.ts` and the reason strings of `src/commands/push.ts`
-//! (plus `folderCreate.ts`'s folder refusals). Owner: workstream D.
+//! (plus `folderCreate.ts`'s folder refusals).
 //!
 //! Every `resolution: "refused" | "conflict"` site in push.ts is one
 //! [`Refusal`] variant (the push.ts line numbers at v0.6.2 are in each doc

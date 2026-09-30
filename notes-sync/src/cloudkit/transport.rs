@@ -1,4 +1,4 @@
-//! Transports under [`super::Database`]. Owner: workstream A.
+//! Transports under [`super::Database`].
 //!
 //! The cassette and request-log types below are the Rust side of the format
 //! documented in `tests/differential/README.md`; the Node driver
@@ -12,7 +12,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -182,18 +181,6 @@ impl ReplayTransport {
         })
     }
 
-    /// Environment hook for CLI-level differential runs:
-    /// `ICLOUD_NOTES_SYNC_CASSETTE=<cassette.json>` (and optionally
-    /// `ICLOUD_NOTES_SYNC_REQUEST_LOG=<out.json>`) makes the binary use a
-    /// ReplayTransport instead of icloud-session. `None` when unset.
-    pub fn from_env() -> Option<Result<ReplayTransport, CkError>> {
-        let cassette = std::env::var_os("ICLOUD_NOTES_SYNC_CASSETTE").filter(|v| !v.is_empty())?;
-        let record = std::env::var_os("ICLOUD_NOTES_SYNC_REQUEST_LOG")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
-        Some(ReplayTransport::open(Path::new(&cassette), record))
-    }
-
     /// The cassette's account (what `--account` must match).
     pub fn account(&self) -> &CassetteAccount {
         &self.cassette.account
@@ -273,14 +260,7 @@ impl ReplayTransport {
             });
         };
         let response = &self.cassette.interactions[index].response;
-        let bytes = match &response.body_base64 {
-            Some(b64) => Some(
-                base64::engine::general_purpose::STANDARD
-                    .decode(b64)
-                    .map_err(|e| CkError::Other(format!("cassette interaction {index}: bad bodyBase64: {e}")))?,
-            ),
-            None => None,
-        };
+        let bytes = response.body_base64.as_deref().map(crate::js::base64_decode);
         if !(200..300).contains(&response.status) {
             let body = match &bytes {
                 Some(b) => String::from_utf8_lossy(b).into_owned(),

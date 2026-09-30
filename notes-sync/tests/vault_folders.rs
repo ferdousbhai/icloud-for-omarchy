@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use base64::Engine;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::folders::{
@@ -22,7 +21,7 @@ fn folder_record(record_name: &str, title: &str) -> CloudKitRecord {
     fields.insert(
         "TitleEncrypted".to_owned(),
         FieldValue {
-            value: json!(base64::engine::general_purpose::STANDARD.encode(title)),
+            value: json!(icloud_notes_sync::js::base64_encode(title.as_ref())),
             type_: "ENCRYPTED_BYTES".into(),
         },
     );
@@ -72,7 +71,6 @@ fn alpha_beta_layout() -> icloud_notes_sync::vault::layout::VaultLayout {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn remote_folder_rename_moves_note_and_empties_old_dir() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
@@ -118,7 +116,6 @@ fn remote_folder_rename_moves_note_and_empties_old_dir() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn remote_note_move_relocates_file_and_attachment() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
@@ -145,7 +142,6 @@ fn remote_note_move_relocates_file_and_attachment() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn basename_collision_in_target_uniquifies() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
@@ -163,7 +159,6 @@ fn basename_collision_in_target_uniquifies() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn attachment_collision_rewrites_body_and_base_copy_identically() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
@@ -200,7 +195,6 @@ fn attachment_collision_rewrites_body_and_base_copy_identically() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn locally_missing_file_left_tracked_at_old_path() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();

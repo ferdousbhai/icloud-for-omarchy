@@ -1,6 +1,5 @@
 //! Working-file state, file times and vault-root discovery. Ports icloud-md
 //! `src/notes/localFileState.ts`, `noteTimestamps.ts` and `src/vaultRoot.ts`.
-//! Owner: workstream D.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -172,7 +171,7 @@ pub fn display_path(target_dir: &Path, file: &str) -> String {
 
 /// `displayPath` with an explicit cwd.
 pub fn display_path_from(target_dir: &Path, file: &str, cwd: &Path) -> String {
-    use super::js::posix;
+    use crate::js::posix;
     let abs = |p: &Path| -> String {
         let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
         posix::normalize(&p.to_string_lossy())

@@ -1,7 +1,5 @@
-//! Ports icloud-md `src/notes/embedPushEdit.test.ts`. Every case runs
-//! `find_markdown_table_blocks` (workstream C's `md::table`), so they are
-//! ignored until that lands; table markdown below is icloud-md's
-//! `renderMarkdownTable` output, spelled out.
+//! Ports icloud-md `src/notes/embedPushEdit.test.ts`. Table markdown below is
+//! icloud-md's `renderMarkdownTable` output, spelled out.
 
 use std::collections::HashSet;
 
@@ -50,7 +48,6 @@ fn none() -> HashSet<String> {
 const O: &str = "\u{fffc}";
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_verbatim_marker_maps_back_to_its_placeholder() {
     let (g, m) = gallery();
     let plan = ok(plan_embed_representations(
@@ -66,7 +63,6 @@ fn a_verbatim_marker_maps_back_to_its_placeholder() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn an_unknown_slots_marker_round_trips_the_same_way() {
     let plan = ok(plan_embed_representations(
         &format!("Note\n{}\n", marker(None, None)),
@@ -77,7 +73,6 @@ fn an_unknown_slots_marker_round_trips_the_same_way() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn markers_and_table_blocks_interleave_in_document_order() {
     let (g, m) = gallery();
     let table = "| A | B |\n| - | - |";
@@ -93,7 +88,6 @@ fn markers_and_table_blocks_interleave_in_document_order() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_table_pull_couldnt_decode_is_marker_represented() {
     let m = marker(Some("TABLE-1"), Some("com.apple.notes.table"));
     let plan = ok(plan_embed_representations(
@@ -106,7 +100,6 @@ fn a_table_pull_couldnt_decode_is_marker_represented() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_deleted_marker_refuses_the_push() {
     let (g, _) = gallery();
     let reason = refusal(plan_embed_representations("Just prose, marker gone", &[g], &none()));
@@ -117,7 +110,6 @@ fn a_deleted_marker_refuses_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn an_edited_marker_refuses_the_push() {
     let (g, m) = gallery();
     let edited = m.replace(">gallery<", ">my gallery<");
@@ -126,7 +118,6 @@ fn an_edited_marker_refuses_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_duplicated_marker_refuses_the_push() {
     let (g, m) = gallery();
     let reason = refusal(plan_embed_representations(&format!("A\n{m}\nB\n{m}"), &[g], &none()));
@@ -134,7 +125,6 @@ fn a_duplicated_marker_refuses_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn reordered_markers_refuse_the_push() {
     let (g, m) = gallery();
     let other = slot("GALLERY-2", "com.apple.notes.gallery");
@@ -148,7 +138,6 @@ fn reordered_markers_refuse_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_hand_added_marker_with_nothing_behind_it_refuses_the_push() {
     let reason = refusal(plan_embed_representations(
         &format!("Only prose\n{}", marker(None, None)),
@@ -159,7 +148,6 @@ fn a_hand_added_marker_with_nothing_behind_it_refuses_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_file_attachment_tracked_from_pull_keeps_the_read_only_refusal() {
     let tracked: HashSet<String> = ["FILE-1".to_string()].into();
     let reason = refusal(plan_embed_representations(
@@ -174,7 +162,6 @@ fn a_file_attachment_tracked_from_pull_keeps_the_read_only_refusal() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn an_identified_non_table_slot_with_no_marker_refuses_with_the_missing_marker_reason() {
     let reason = refusal(plan_embed_representations(
         "prose only",
@@ -185,7 +172,6 @@ fn an_identified_non_table_slot_with_no_marker_refuses_with_the_missing_marker_r
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn an_extra_hand_typed_table_block_refuses_the_push() {
     let reason = refusal(plan_embed_representations(
         "| A |\n| - |\nprose\n| B |\n| - |",
@@ -199,7 +185,6 @@ fn an_extra_hand_typed_table_block_refuses_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_missing_table_block_refuses_the_push() {
     let reason = refusal(plan_embed_representations("prose only", &[table_slot()], &none()));
     assert_eq!(
@@ -209,7 +194,6 @@ fn a_missing_table_block_refuses_the_push() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn a_table_only_note_reconstructs_exactly_like_the_old_table_path_did() {
     let plan = ok(plan_embed_representations(
         "| Only | Content |\n| - | - |",
@@ -220,7 +204,6 @@ fn a_table_only_note_reconstructs_exactly_like_the_old_table_path_did() {
 }
 
 #[test]
-#[ignore = "needs md::table::find_markdown_table_blocks (workstream C)"]
 fn two_tables_reconstruct_in_document_order() {
     let second = slot("TABLE-2", "com.apple.notes.table");
     let text = "Intro\n| First |\n| - |\nMiddle\n| Second | Table |\n| - | - |\nOutro";

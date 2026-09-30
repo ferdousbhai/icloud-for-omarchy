@@ -1,4 +1,4 @@
-// Golden corpora for workstream C (src/md/**, src/diff3.rs): runs icloud-md
+// Golden corpora for the Markdown port (src/md/**, src/diff3.rs): runs icloud-md
 // 0.6.2's own (unmodified) code and node-diff3 over the real fixtures, a
 // hand-picked edge-case list, and seeded fuzz inputs, and writes what they
 // return to tests/golden/*.json.gz. The Rust tests (tests/md_*.rs,

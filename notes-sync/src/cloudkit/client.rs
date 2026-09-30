@@ -1,5 +1,5 @@
 //! `Database<T>`: icloud-md's `databaseClient.ts` functions as methods over a
-//! [`Transport`]. Owner: workstream A.
+//! [`Transport`].
 //!
 //! Request bodies are built as `serde_json` objects in the exact key order
 //! icloud-md builds them (the crate enables `preserve_order`), so a request
@@ -438,27 +438,6 @@ impl<T: Transport> Database<T> {
         self.create_zone_record("Folder", zone, record_name, fields, extras)
     }
 
-    /// `forceDeleteRecord`: CloudKit's `forceDelete` in the private zone.
-    /// Not how notes are deleted (that is two ordinary updates); only for
-    /// record-level plumbing.
-    pub fn force_delete_record(
-        &self,
-        zone_id: &ZoneId,
-        record_name: &str,
-        record_type: &str,
-        record_change_tag: &str,
-    ) -> Result<DeleteResult, CkError> {
-        let body = json!({
-            "operations": [{
-                "operationType": "forceDelete",
-                "record": { "recordName": record_name, "recordType": record_type, "recordChangeTag": record_change_tag },
-            }],
-            "zoneID": zone_id_json(zone_id),
-        });
-        let body = self.post_database(DatabaseScope::Private, "records/modify", &body)?;
-        parse_note_delete_response(&body)
-    }
-
     /// `fetchAssetBytes`, streamed to `dest`: a plain signed GET; non-2xx is
     /// `RequestFailed("Attachment download failed: HTTP {status}")`. Returns
     /// the byte count.
@@ -495,7 +474,6 @@ impl<T: Transport> Database<T> {
     /// propagates rather than leaving the note body-less: that would read as
     /// a clean sync while the syncToken moved past the note.
     pub fn inline_asset_bodies(&self, records: &mut [CloudKitRecord]) -> Result<(), CkError> {
-        use base64::Engine;
         for record in records.iter_mut() {
             if !needs_body_lookup(record) {
                 continue;
@@ -514,7 +492,7 @@ impl<T: Transport> Database<T> {
             record.fields.insert(
                 "TextDataEncrypted".into(),
                 FieldValue {
-                    value: Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    value: Value::String(crate::js::base64_encode(&bytes)),
                     type_: "ENCRYPTED_BYTES".into(),
                 },
             );
@@ -810,27 +788,6 @@ fn first_modify_entry(body: &Value) -> Result<&Value, CkError> {
 /// `parseNoteUpdateResponse`: the first entry only.
 pub fn parse_note_update_response(body: &Value) -> Result<RecordUpdateResult, CkError> {
     parse_update_entry(first_modify_entry(body)?)
-}
-
-/// `parseNoteDeleteResponse`: a successful `forceDelete` echoes only
-/// `{recordName, deleted: true}`.
-pub fn parse_note_delete_response(body: &Value) -> Result<DeleteResult, CkError> {
-    let entry = first_modify_entry(body)?;
-    if !is_record(entry) {
-        return Err(CkError::UnexpectedResponse(MODIFY_ENTRY_NOT_OBJECT.into()));
-    }
-    if let Some(code) = get_str(entry, "serverErrorCode") {
-        return Ok(DeleteResult::Rejected {
-            server_error_code: code.to_owned(),
-            reason: get_str(entry, "reason").map(str::to_owned),
-        });
-    }
-    if get_str(entry, "recordName").is_none() {
-        return Err(CkError::UnexpectedResponse(
-            "Unexpected response shape from records/modify (record entry has no recordName)".into(),
-        ));
-    }
-    Ok(DeleteResult::Ok)
 }
 
 /// Collapses repeated occurrences of a record in one zone's `changes/zone`

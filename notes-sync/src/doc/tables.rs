@@ -35,11 +35,6 @@ impl TableDocument {
         &self.document.object
     }
 
-    /// `pool.keyNames`.
-    pub fn key_names(&self) -> &[String] {
-        &self.document.key_item
-    }
-
     /// `pool.uuidTable`.
     pub fn uuid_table(&self) -> &[Vec<u8>] {
         &self.document.uuid_item

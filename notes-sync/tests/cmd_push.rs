@@ -122,7 +122,6 @@ fn refuses_when_theres_no_cloned_state() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn untracked_md_in_known_folder_is_a_create_candidate_reaching_network() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &state()).unwrap();
@@ -131,7 +130,6 @@ fn untracked_md_in_known_folder_is_a_create_candidate_reaching_network() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_loose_top_level_md_locally() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -144,7 +142,6 @@ fn refuses_loose_top_level_md_locally() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn md_in_unknown_directory_is_a_real_change() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -153,7 +150,6 @@ fn md_in_unknown_directory_is_a_real_change() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_md_loose_at_top_of_sharer_home() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -166,7 +162,6 @@ fn refuses_md_loose_at_top_of_sharer_home() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn new_md_inside_shared_folder_is_a_create_candidate() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -175,7 +170,6 @@ fn new_md_inside_shared_folder_is_a_create_candidate() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_new_md_in_read_only_shared_folder() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state_with_shared_permission("READ_ONLY")).unwrap();
@@ -187,7 +181,6 @@ fn refuses_new_md_in_read_only_shared_folder() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_edit_in_read_only_shared_folder() {
     let dir = tempfile::tempdir().unwrap();
     let s = with_notes(
@@ -205,7 +198,6 @@ fn refuses_edit_in_read_only_shared_folder() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn edit_in_writable_shared_folder_reaches_network() {
     let dir = tempfile::tempdir().unwrap();
     let s = with_notes(
@@ -219,7 +211,6 @@ fn edit_in_writable_shared_folder_reaches_network() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_edit_to_individually_shared_note() {
     let dir = tempfile::tempdir().unwrap();
     let s = with_notes(empty_state(), vec![("LOOSE1", shared_note("Pat/Travel List.md", None))]);
@@ -241,7 +232,6 @@ fn keyed_loose_state(frontmatter_title: Option<&str>) -> CloneState {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn recorded_apple_note_title_reads_as_synced() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &keyed_loose_state(Some("Restaurants "))).unwrap();
@@ -255,7 +245,6 @@ fn recorded_apple_note_title_reads_as_synced() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_genuine_retitle_via_key_of_individually_shared_note() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &keyed_loose_state(Some("Restaurants "))).unwrap();
@@ -272,7 +261,6 @@ fn refuses_genuine_retitle_via_key_of_individually_shared_note() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn defers_title_only_refusal_to_live_record_when_state_predates_frontmatter_title() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &keyed_loose_state(None)).unwrap();
@@ -302,7 +290,6 @@ fn refuses_locally_deleted_shared_note_without_network() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn pairs_renamed_shared_note_into_refused_move() {
     let dir = tempfile::tempdir().unwrap();
     let s = with_notes(
@@ -324,7 +311,6 @@ fn pairs_renamed_shared_note_into_refused_move() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_empty_untracked_file_locally() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -338,7 +324,6 @@ fn refuses_empty_untracked_file_locally() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_untracked_file_with_conflict_markers() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -355,7 +340,6 @@ fn refuses_untracked_file_with_conflict_markers() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_untracked_file_referencing_attachments() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -371,7 +355,6 @@ fn refuses_untracked_file_referencing_attachments() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn ignores_a_file_already_tracked() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -381,7 +364,6 @@ fn ignores_a_file_already_tracked() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn ignores_md_files_inside_attachments_directories() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -400,7 +382,6 @@ fn missing_tracked_file_needs_a_live_check() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn pairs_missing_file_with_identical_untracked_one_as_move() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -410,7 +391,6 @@ fn pairs_missing_file_with_identical_untracked_one_as_move() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_local_move_into_sharer_area_as_a_move() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -426,7 +406,6 @@ fn refuses_local_move_into_sharer_area_as_a_move() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn pairs_moved_and_edited_note_by_unique_basename() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -448,7 +427,6 @@ fn attachment(file: &str) -> AttachmentEntry {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_moving_a_note_with_tracked_attachments() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
@@ -503,7 +481,6 @@ fn deleting_a_note_with_a_tracked_table_attachment_reaches_network() {
 // --- planRemoteChangedMerge -----------------------------------------------------
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn plan_remote_changed_merge_keeps_merged_file_modified() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
@@ -539,7 +516,6 @@ fn plan_remote_changed_merge_keeps_merged_file_modified() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn plan_remote_changed_merge_with_tag_only_bump_leaves_edit_uploadable() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
@@ -570,7 +546,6 @@ fn plan_remote_changed_merge_with_tag_only_bump_leaves_edit_uploadable() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn plan_remote_changed_merge_preserves_frontmatter() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
@@ -594,7 +569,6 @@ fn plan_remote_changed_merge_preserves_frontmatter() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn plan_remote_changed_merge_conflict_writes_markers_and_keeps_base() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
@@ -625,7 +599,6 @@ fn plan_remote_changed_merge_conflict_writes_markers_and_keeps_base() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn never_re_merges_a_file_that_still_carries_conflict_markers() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "shared line\n").unwrap();
@@ -643,7 +616,6 @@ fn never_re_merges_a_file_that_still_carries_conflict_markers() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn run_push_returns_no_entries_and_zero_pushed_when_plan_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -672,7 +644,6 @@ fn with_id(id: &str, body: &str) -> String {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn id_pairs_a_note_renamed_moved_and_edited_at_once() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -690,7 +661,6 @@ fn id_pairs_a_note_renamed_moved_and_edited_at_once() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn envelope_stripped_falls_back_to_delete_plus_create() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -703,7 +673,6 @@ fn envelope_stripped_falls_back_to_delete_plus_create() {
 /// plans a copy that keeps the original's `apple-note-id` (original still in
 /// place) as a create; the port refuses it, naming the tracked note.
 #[test]
-#[ignore = "needs A/B/C"]
 fn copy_with_original_in_place_is_refused_as_a_duplicate() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -727,7 +696,6 @@ fn copy_with_original_in_place_is_refused_as_a_duplicate() {
 /// twin of the tracked file under a uniquified name. Push refuses it (no
 /// network needed) and leaves the tracked note alone.
 #[test]
-#[ignore = "needs A/B/C"]
 fn byte_identical_twin_from_a_double_clone_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let file = with_id(NOTE_ID, "Synced text");
@@ -745,7 +713,6 @@ fn byte_identical_twin_from_a_double_clone_is_refused() {
 
 /// Without the id line the same copy is an ordinary new note.
 #[test]
-#[ignore = "needs A/B/C"]
 fn copy_without_the_id_line_is_still_a_create() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -756,7 +723,6 @@ fn copy_without_the_id_line_is_still_a_create() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn duplicate_id_claims_without_original_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -775,7 +741,6 @@ fn duplicate_id_claims_without_original_are_refused() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn id_from_another_vault_plans_as_new_note_with_notice() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -798,7 +763,6 @@ fn id_from_another_vault_plans_as_new_note_with_notice() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn tracked_file_with_stripped_frontmatter_is_still_that_note() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -808,7 +772,6 @@ fn tracked_file_with_stripped_frontmatter_is_still_that_note() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn malformed_id_is_ignored() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
@@ -835,7 +798,6 @@ fn title_mode_state() -> CloneState {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn empty_file_is_a_title_only_note_in_filename_vault() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &with_notes(title_mode_state(), vec![])).unwrap();
@@ -844,7 +806,6 @@ fn empty_file_is_a_title_only_note_in_filename_vault() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn empty_file_in_in_body_vault_is_nothing_to_create() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
@@ -855,7 +816,6 @@ fn empty_file_in_in_body_vault_is_nothing_to_create() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn emptying_body_in_filename_vault_is_an_ordinary_edit() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -865,7 +825,6 @@ fn emptying_body_in_filename_vault_is_an_ordinary_edit() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn renaming_a_note_with_attachments_in_place_is_allowed() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = title_mode_state();
@@ -883,7 +842,6 @@ fn renaming_a_note_with_attachments_in_place_is_allowed() {
 // --- apple-note-title as a retitle request ----------------------------------------
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn clean_files_apple_note_title_goes_to_the_network() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -897,7 +855,6 @@ fn clean_files_apple_note_title_goes_to_the_network() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn in_body_vault_ignores_apple_note_title() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
@@ -911,7 +868,6 @@ fn in_body_vault_ignores_apple_note_title() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn still_ignores_ordinary_frontmatter_on_a_clean_file() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();

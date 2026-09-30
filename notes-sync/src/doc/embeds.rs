@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::Result;
-use super::js::{from_utf16, utf16};
 use super::proto::{Message, topotext};
 use super::text::{decompress_note_document, parse_versioned_document};
+use crate::js::{from_utf16, utf16};
 use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
 /// U+FFFC, one per embed in a note's visible text.
@@ -113,11 +113,6 @@ const ADMONITION_HEADER: &str = "> [!danger] Unparsed content";
 pub const UNKNOWN_CONTENT_BANNER: &str = "> [!danger] Unparsed content\n\
 > This note contains content this tool can't parse or place precisely. \
 It stays read-only here until that's resolved (e.g. by editing the note in Notes directly).\n\n";
-
-/// `UNKNOWN_CONTENT_BANNER` (kept as a function for the seam).
-pub fn unknown_content_banner() -> &'static str {
-    UNKNOWN_CONTENT_BANNER
-}
 
 fn decode_string(compressed: &[u8]) -> Result<topotext::String> {
     let raw = decompress_note_document(compressed)?;
@@ -582,7 +577,7 @@ pub fn decode_attachment_filename(
     type_uti: &str,
 ) -> String {
     if let Some(serde_json::Value::String(value)) = field.map(|f| &f.value) {
-        let name = super::js::buffer_to_utf8(&super::js::base64_decode(value));
+        let name = crate::js::buffer_to_utf8(&crate::js::base64_decode(value));
         if !name.is_empty() {
             return name;
         }

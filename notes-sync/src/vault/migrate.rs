@@ -1,5 +1,5 @@
 //! Forward vault migrations (layout 2 → 3). Ports icloud-md
-//! `src/notes/vaultMigrations.ts`. Owner: workstream D.
+//! `src/notes/vaultMigrations.ts`.
 //!
 //! A vault is migrated up to [`CURRENT_LAYOUT_VERSION`] the moment a command
 //! touches it; layout 1 (no `layoutVersion`) is refused, and anything newer

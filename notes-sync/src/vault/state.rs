@@ -1,5 +1,4 @@
 //! `.icloud-md/state.json`. Ports icloud-md `src/notes/cloneState.ts`.
-//! Owner: workstream D.
 //!
 //! Byte-exactness: 2-space JSON, trailing newline, `undefined` keys omitted,
 //! and key order. JavaScript objects serialize in insertion order, and
@@ -421,7 +420,7 @@ pub fn state_file_path(target_dir: &Path) -> PathBuf {
 /// `targetDir` as Node's `path.join` would print it (normalized), for
 /// error messages.
 pub fn node_display(path: &Path) -> String {
-    crate::vault::js::posix::normalize(&path.to_string_lossy())
+    crate::js::posix::normalize(&path.to_string_lossy())
 }
 
 /// `JSON.stringify(value, null, 2) + "\n"`.

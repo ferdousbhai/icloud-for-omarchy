@@ -1,6 +1,6 @@
 //! Known failures and their exit codes. Ports icloud-md `src/errors.ts` (the
 //! classes that survive the port; auth/session/browser/object/revert/delete
-//! ones are gone). Owner: workstream D.
+//! ones are gone).
 //!
 //! Exit codes, shared with the other iCloud tools (icloud-session,
 //! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md): 0 ok, 1 known

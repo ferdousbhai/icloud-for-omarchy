@@ -1,4 +1,4 @@
-//! `diff`. Ports icloud-md `src/commands/diff.ts`. Owner: workstream D.
+//! `diff`. Ports icloud-md `src/commands/diff.ts`.
 
 use std::path::Path;
 
@@ -11,12 +11,12 @@ use crate::diff3::{CommHunk, diff_comm};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::doc::tables::decode_table_markdown;
 use crate::doc::text::decode_note_body_text;
+use crate::js::base64_decode;
 use crate::vault::attachments::decode_table_attachment;
 use crate::vault::epoch::{NoteEpoch, find_epoch_by_id};
 use crate::vault::history::{
     VersionSnapshot, find_snapshot_by_id, history_record_names, list_versions, resolve_tracked_note,
 };
-use crate::vault::layout::base64_decode_lenient;
 use crate::vault::migrate::open_vault;
 use crate::vault::state::CloneState;
 
@@ -149,7 +149,7 @@ pub fn run_diff_with(
 
 /// `decodeSnapshotText`.
 pub fn decode_snapshot_text(snapshot: &VersionSnapshot) -> Result<String, Error> {
-    let bytes = base64_decode_lenient(&snapshot.value_base64);
+    let bytes = base64_decode(&snapshot.value_base64);
     let decoded = if snapshot.field == "TextDataEncrypted" {
         decode_note_body_text(&bytes)
     } else {

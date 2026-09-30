@@ -1,5 +1,4 @@
 //! `pull`. Ports icloud-md `src/commands/pull.ts` and `src/cli/pullReport.ts`.
-//! Owner: workstream D.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -17,6 +16,7 @@ use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges
 use crate::cloudkit::{Database, SkippedSharedZone};
 use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
+use crate::js::posix;
 use crate::md::filename::{file_name_carries_title, note_file_name_for, title_needing_frontmatter, unique_file_name};
 use crate::md::frontmatter::{NOTE_TITLE_KEY, compose_note_file, join_frontmatter, split_frontmatter};
 use crate::md::title::representability_problem;
@@ -27,7 +27,6 @@ use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{reconcile_note_placements, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
-use crate::vault::js::posix;
 use crate::vault::layout::{
     PreviousLayout, SharedZoneRecords, build_vault_layout, note_dir_of, place_note, previous_layout_dirs,
 };

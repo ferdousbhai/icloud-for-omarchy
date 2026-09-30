@@ -1,7 +1,7 @@
 //! Attachment download and table-attachment rendering. Ports icloud-md
 //! `src/notes/attachmentSync.ts` (plus `noteAttachments.ts`'s
 //! `decodeAttachmentFilename` and `parseAssetField`, which only this module
-//! uses). Owner: workstream D.
+//! uses).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,8 +9,6 @@ use std::path::Path;
 use indexmap::IndexMap;
 use serde_json::Value;
 
-use super::js::posix;
-use super::layout::base64_decode_lenient;
 use super::state::{AttachmentEntry, TableAttachmentEntry};
 use crate::cloudkit::{CloudKitRecord, Database, FieldValue, NoteZone, Transport};
 use crate::cmd::errors::Error;
@@ -19,6 +17,8 @@ use crate::doc::embeds::{
     render_placeholders,
 };
 use crate::doc::tables::decode_table_markdown;
+use crate::js::base64_decode;
+use crate::js::posix;
 use crate::md::filename::unique_file_name;
 
 const ATTACHMENTS_DIR: &str = "attachments";
@@ -61,7 +61,7 @@ fn extension_for_uti(type_uti: &str) -> &'static str {
 /// `<recordName><ext for the UTI>`.
 pub fn decode_attachment_filename(field: Option<&FieldValue>, record_name: &str, type_uti: &str) -> String {
     if let Some(Value::String(b64)) = field.map(|f| &f.value) {
-        let name = String::from_utf8_lossy(&base64_decode_lenient(b64)).into_owned();
+        let name = String::from_utf8_lossy(&base64_decode(b64)).into_owned();
         if !name.is_empty() {
             return name;
         }
@@ -200,7 +200,7 @@ pub fn decode_table_attachment(record: Option<&CloudKitRecord>) -> Option<String
     let Value::String(b64) = &record.fields.get("MergeableDataEncrypted")?.value else {
         return None;
     };
-    decode_table_markdown(&base64_decode_lenient(b64)).ok()
+    decode_table_markdown(&base64_decode(b64)).ok()
 }
 
 /// `resolveNoteAttachments`: download file attachments, render tables

@@ -1,5 +1,5 @@
 //! `--json` vs human output and error reporting. Ports icloud-md
-//! `src/cli/output.ts`. Owner: workstream D.
+//! `src/cli/output.ts`.
 //!
 //! Every emitter has a `*_to` form writing to explicit streams (tests) and a
 //! plain form writing to stdout/stderr.

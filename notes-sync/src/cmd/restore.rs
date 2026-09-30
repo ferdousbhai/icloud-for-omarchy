@@ -1,4 +1,4 @@
-//! `restore`. Ports icloud-md `src/commands/restore.ts`. Owner: workstream D.
+//! `restore`. Ports icloud-md `src/commands/restore.ts`.
 
 use std::path::Path;
 

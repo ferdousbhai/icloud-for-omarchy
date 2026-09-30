@@ -22,7 +22,6 @@ fn no_network() -> FnConnector<impl Fn() -> Result<Remote, Error>> {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn decode_snapshot_text_decodes_a_note_snapshot() {
     let snapshot = VersionSnapshot {
         id: "id-1".into(),
@@ -41,7 +40,6 @@ fn decode_snapshot_text_decodes_a_note_snapshot() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn decode_snapshot_text_decodes_a_table_snapshot_as_markdown() {
     let snapshot = VersionSnapshot {
         id: "id-2".into(),
@@ -60,7 +58,6 @@ fn decode_snapshot_text_decodes_a_table_snapshot_as_markdown() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn render_diff_shows_no_differences_for_identical_text() {
     let rendered = render_diff("a\nb\nc", "a\nb\nc", "old", "new");
     assert_eq!(rendered.text, "--- old\n+++ new\n  a\n  b\n  c\n(no differences)");
@@ -68,7 +65,6 @@ fn render_diff_shows_no_differences_for_identical_text() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn render_diff_shows_added_and_removed_lines() {
     let rendered = render_diff("a\nb\nc", "a\nx\nc", "old", "new");
     let lines: Vec<&str> = rendered.text.split('\n').collect();
@@ -81,7 +77,6 @@ fn render_diff_shows_added_and_removed_lines() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn render_diff_treats_empty_from_as_everything_added() {
     let rendered = render_diff("", "new line", "old", "new");
     assert!(rendered.text.split('\n').any(|l| l == "+ new line"));

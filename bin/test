@@ -2,9 +2,8 @@
 # Run the maintained tests: clippy and the Rust workspace suite, the Qt
 # app's tests (notes/bin/test), the installer's shared add_signed_repo hash
 # check, then install.sh and the per-app installers against stubbed pacman
-# (tests/install_test.sh). The notes-sync differential suite against icloud-md is
-# separate: cargo test -p icloud-notes-sync -- --ignored (see
-# notes-sync/tests/differential/README.md).
+# (tests/install_test.sh). The notes-sync differential suite against icloud-md
+# runs with the rest (see notes-sync/tests/differential/README.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

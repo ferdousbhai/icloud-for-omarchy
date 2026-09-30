@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use base64::Engine;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::doc::embeds::AttachmentReference;
 use icloud_notes_sync::vault::attachments::{
@@ -278,7 +277,6 @@ fn extract_media_record_names_unresolved_is_none() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn match_attachment_records_new_audio() {
     let refs = vec![aref("7DAFDA6F-4AC4-41D8-9958-049373B80824", "com.apple.m4a-audio")];
     let mut used = HashSet::new();
@@ -311,7 +309,6 @@ fn match_attachment_records_new_audio() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn match_attachment_records_new_image() {
     let matched = match_image(&IndexMap::new(), &mut HashSet::new(), "");
     let m = matched[0].as_ref().unwrap();
@@ -357,7 +354,6 @@ fn match_attachment_records_none_without_asset() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn match_attachment_records_nested_note() {
     let matched = match_image(&IndexMap::new(), &mut HashSet::new(), "Recipes/Desserts");
     let m = matched[0].as_ref().unwrap();
@@ -377,7 +373,6 @@ fn match_attachment_records_keeps_tracked_path() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn match_attachment_records_disambiguates_collision() {
     let mut used: HashSet<String> = ["_7130093.jpeg".to_owned()].into_iter().collect();
     let matched = match_image(&IndexMap::new(), &mut used, "");
@@ -388,7 +383,6 @@ fn match_attachment_records_disambiguates_collision() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn decode_table_attachment_renders_real_table() {
     assert_eq!(
         decode_table_attachment(Some(&table_attachment_record())).as_deref(),
@@ -414,14 +408,13 @@ fn decode_table_attachment_none_without_mergeable_data() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn decode_table_attachment_none_for_malformed_data() {
     let broken = record(
         "R1",
         "Attachment",
         &[(
             "MergeableDataEncrypted",
-            json!(base64::engine::general_purpose::STANDARD.encode("not a table")),
+            json!(icloud_notes_sync::js::base64_encode(b"not a table")),
             "ENCRYPTED_BYTES",
         )],
     );

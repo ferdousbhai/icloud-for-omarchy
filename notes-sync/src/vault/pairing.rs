@@ -1,16 +1,16 @@
 //! Note-id pairing of moved files and deferred renames. Ports icloud-md
-//! `src/notes/noteIdPairing.ts` and `pendingRename.ts`. Owner: workstream D.
+//! `src/notes/noteIdPairing.ts` and `pendingRename.ts`.
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use indexmap::IndexMap;
 
-use super::js::posix;
 use super::layout::note_dir_of;
 use super::local::{read_text, split_options};
 use super::state::{NoteEntry, TitleMode};
 use crate::cmd::errors::Error;
+use crate::js::posix;
 use crate::md::frontmatter::{read_note_id, split_frontmatter};
 
 // --- noteIdPairing.ts ----------------------------------------------------------

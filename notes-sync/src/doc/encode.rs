@@ -1,6 +1,5 @@
 //! Request field sets for note and folder writes. Ports icloud-md
 //! `src/notes/encodeNoteRecord.ts` and `encodeFolderRecord.ts`.
-//! Owner: workstream B.
 //!
 //! Field order matters (it is the request JSON's key order, matched to
 //! captured web-client requests), hence `UpdateFields` (an `IndexMap`), not
@@ -8,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use super::js::{base64_encode, from_utf16, is_js_whitespace, utf16};
+use crate::js::{base64_encode, from_utf16, is_whitespace16, utf16};
 
 pub use crate::cloudkit::UpdateFieldValue;
 use crate::cloudkit::{CloudKitRecord, UpdateFields};
@@ -59,7 +58,7 @@ fn title16(text: &[u16]) -> &[u16] {
 
 fn snippet16(text: &[u16]) -> Vec<u16> {
     let after_title = &text[title16(text).len()..];
-    let skip = after_title.iter().take_while(|&&u| is_js_whitespace(u)).count();
+    let skip = after_title.iter().take_while(|&&u| is_whitespace16(u)).count();
     let after_title = &after_title[skip..];
     let line_end = after_title
         .iter()

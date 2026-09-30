@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use base64::Engine;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue, Participant};
 use icloud_notes_sync::vault::layout::{
     FolderInfo, FolderTree, NotePlacement, PreviousLayout, SharedZoneRecords, build_folder_tree, build_vault_layout,
@@ -24,7 +23,7 @@ fn folder_record(record_name: &str, title: &str, parent: Option<&str>) -> CloudK
     fields.insert(
         "TitleEncrypted".to_owned(),
         field(
-            json!(base64::engine::general_purpose::STANDARD.encode(title)),
+            json!(icloud_notes_sync::js::base64_encode(title.as_ref())),
             "ENCRYPTED_BYTES",
         ),
     );

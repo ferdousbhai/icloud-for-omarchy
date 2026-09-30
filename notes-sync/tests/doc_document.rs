@@ -5,10 +5,10 @@ use icloud_notes_sync::doc::document::{
     build_initial_note_document, compute_splice, compute_splices, encode_note_document, note_document_round_trips,
     parse_note_document, run_is_sentinel, validate_document_invariants,
 };
-use icloud_notes_sync::doc::js::{slice16, utf16_len};
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun, ParagraphStyle};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
 use icloud_notes_sync::doc::text::{compress_note_document, decode_note_body_text};
+use icloud_notes_sync::js::{len16, slice16};
 
 const REPLICA_A: [u8; 16] = [0xaa; 16];
 const REPLICA_B: [u8; 16] = [0xbb; 16];
@@ -55,12 +55,12 @@ fn make_document(text: &str, runs: Vec<TextRun>, replica_clocks: &[u32]) -> Note
         text: text.into(),
         runs: all,
         replicas,
-        attribute_runs: vec![AttributeRun::with_length(utf16_len(text) as u32)],
+        attribute_runs: vec![AttributeRun::with_length(len16(text) as u32)],
     }
 }
 
 fn simple_document(text: &str) -> NoteDocument {
-    let len = utf16_len(text) as u32;
+    let len = len16(text) as u32;
     make_document(text, vec![run(1, 0, len, (1, 0), &[2])], &[len])
 }
 
@@ -413,7 +413,7 @@ fn compute_splices_mid_document_insert_plus_trailing_newline_stays_two_small_hun
     let local = "p2 bravo EDIT-E1 dev-E1\n\np3 charlie\ntyped-on-device tail\n";
     assert_eq!(
         compute_splices(remote, local),
-        vec![splice(9, 0, "EDIT-E1 "), splice(utf16_len(remote), 0, "\n")]
+        vec![splice(9, 0, "EDIT-E1 "), splice(len16(remote), 0, "\n")]
     );
 }
 
@@ -495,10 +495,10 @@ fn build_initial_note_document_builds_a_first_save_document() {
     validate_document_invariants(&doc).unwrap();
     assert_eq!(doc.text, "Grocery list\nEggs\nMilk\n");
     assert_eq!(doc.replicas.len(), 1);
-    assert_eq!(doc.replicas[0].counters, vec![utf16_len(&doc.text) as u32, 1]);
+    assert_eq!(doc.replicas[0].counters, vec![len16(&doc.text) as u32, 1]);
     assert_eq!(doc.runs.len(), 3);
     assert_eq!(doc.runs[1].coord.replica, 1);
-    assert_eq!(doc.runs[1].length as usize, utf16_len(&doc.text));
+    assert_eq!(doc.runs[1].length as usize, len16(&doc.text));
     assert!(run_is_sentinel(&doc.runs[2]));
     let reparsed = parse_note_document(&encode_note_document(&doc).unwrap()).unwrap();
     assert_eq!(reparsed.text, "Grocery list\nEggs\nMilk\n");

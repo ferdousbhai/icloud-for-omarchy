@@ -1,5 +1,5 @@
 //! CloudKit wire types, ported from icloud-md `src/cloudkit/databaseClient.ts`
-//! (the interfaces at the top of that file). Owner: workstream A.
+//! (the interfaces at the top of that file).
 //!
 //! Field maps are `IndexMap`, not `BTreeMap`: icloud-md builds request field
 //! objects in a deliberate order (`encodeNoteRecord.ts` matches captured
@@ -290,14 +290,4 @@ impl RecordUpdateResult {
     pub fn is_ok(&self) -> bool {
         matches!(self, RecordUpdateResult::Ok(_))
     }
-}
-
-/// `NoteDeleteResult`: the outcome of a `forceDelete`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DeleteResult {
-    Ok,
-    Rejected {
-        server_error_code: String,
-        reason: Option<String>,
-    },
 }

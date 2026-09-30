@@ -239,7 +239,6 @@ fn a_filename_as_title_vault_keeps_its_mode_through_migration() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn the_version_2_migration_stamps_every_tracked_note_file_with_its_id() {
     let dir = tempfile::tempdir().unwrap();
     let id_a = "089D915D-C76E-4F44-AB80-2190073281A3";
@@ -263,7 +262,6 @@ fn the_version_2_migration_stamps_every_tracked_note_file_with_its_id() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn stamping_ids_does_not_make_a_clean_file_read_as_modified() {
     let dir = tempfile::tempdir().unwrap();
     let id = "089D915D-C76E-4F44-AB80-2190073281A3";
@@ -297,7 +295,6 @@ fn the_migration_skips_a_tracked_file_that_is_not_on_disk() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn re_running_the_migration_rewrites_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let id = "089D915D-C76E-4F44-AB80-2190073281A3";

@@ -33,7 +33,6 @@ fn state_of(dir: &Path, mode: TitleMode) -> LocalFileState {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn a_file_matching_the_base_copy_is_clean() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), BODY);
@@ -41,7 +40,6 @@ fn a_file_matching_the_base_copy_is_clean() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn local_only_frontmatter_leaves_the_note_clean() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), &format!("---\ntags: [personal]\n---\n{BODY}"));
@@ -49,7 +47,6 @@ fn local_only_frontmatter_leaves_the_note_clean() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn frontmatter_with_a_blank_line_separator_is_still_clean() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), &format!("---\ntags: [personal]\n---\n\n{BODY}"));
@@ -57,7 +54,6 @@ fn frontmatter_with_a_blank_line_separator_is_still_clean() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn editing_the_body_under_frontmatter_is_modified() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), "---\ntags: [personal]\n---\n# Title\nan edited body line");
@@ -65,7 +61,6 @@ fn editing_the_body_under_frontmatter_is_modified() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn editing_the_body_without_frontmatter_is_modified() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), "# Title\nan edited body line");
@@ -80,7 +75,6 @@ fn a_missing_file_is_missing() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn a_filename_as_title_note_whose_body_starts_blank_is_clean() {
     let dir = tempfile::tempdir().unwrap();
     let body = "\n**Yield:** 8 servings";
@@ -90,7 +84,6 @@ fn a_filename_as_title_note_whose_body_starts_blank_is_clean() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn trimming_the_leading_blank_line_is_a_real_edit() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -103,7 +96,6 @@ fn trimming_the_leading_blank_line_is_a_real_edit() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn read_local_note_hands_back_the_frontmatter_of_a_clean_file() {
     let dir = tempfile::tempdir().unwrap();
     seed(
@@ -124,7 +116,6 @@ fn read_local_note_hands_back_the_frontmatter_of_a_clean_file() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn read_local_note_splits_with_the_vault_shape() {
     let dir = tempfile::tempdir().unwrap();
     let body_text = "\n**Yield:** 8 servings";

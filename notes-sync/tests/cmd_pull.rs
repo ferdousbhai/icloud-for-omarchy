@@ -36,7 +36,6 @@ fn merge(dir: &Path, record: &str, file: &str, remote: &str) -> MergeStatus {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn clean_merge_keeps_local_half_uploadable() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -61,7 +60,6 @@ fn clean_merge_keeps_local_half_uploadable() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn tag_only_remote_change_leaves_local_edit_uploadable() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -80,7 +78,6 @@ fn tag_only_remote_change_leaves_local_edit_uploadable() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn merge_preserves_local_only_frontmatter() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -93,7 +90,6 @@ fn merge_preserves_local_only_frontmatter() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn genuine_conflict_writes_markers_and_keeps_base() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -110,7 +106,6 @@ fn genuine_conflict_writes_markers_and_keeps_base() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn refuses_to_merge_a_file_with_markers() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -128,7 +123,6 @@ fn refuses_to_merge_a_file_with_markers() {
 const MERGE_NOTE_ID: &str = "089D915D-C76E-4F44-AB80-2190073281A3";
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn merge_stamps_id_into_a_file_that_lost_its_envelope() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -153,7 +147,6 @@ fn merge_stamps_id_into_a_file_that_lost_its_envelope() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn merge_keeps_an_existing_id_byte_identical() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -167,7 +160,6 @@ fn merge_keeps_an_existing_id_byte_identical() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn merge_preserves_user_keys_alongside_the_id() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -217,7 +209,6 @@ fn resync(
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn clean_absent_note_is_removed_like_a_tombstone() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -248,7 +239,6 @@ fn clean_absent_note_is_removed_like_a_tombstone() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn absent_note_with_local_edits_becomes_a_conflict() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -265,7 +255,6 @@ fn absent_note_with_local_edits_becomes_a_conflict() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn reconciliation_is_scoped_to_one_zone() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -328,7 +317,6 @@ fn present_under_another_record_type_is_not_deleted() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn reconciled_deletion_drops_attachment_tracking_and_files() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -391,7 +379,6 @@ fn rename(
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn remote_retitle_renames_the_file() {
     let tmp = vault();
     let dir = tmp.path();
@@ -411,7 +398,6 @@ fn remote_retitle_renames_the_file() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn file_already_carrying_title_is_left_alone() {
     let tmp = vault();
     let dir = tmp.path();
@@ -429,7 +415,6 @@ fn file_already_carrying_title_is_left_alone() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn uniquified_name_is_not_walked_up() {
     let tmp = vault();
     let dir = tmp.path();
@@ -448,7 +433,6 @@ fn uniquified_name_is_not_walked_up() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn rename_never_lands_on_an_untracked_file() {
     let tmp = vault();
     let dir = tmp.path();
@@ -469,7 +453,6 @@ fn rename_never_lands_on_an_untracked_file() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn homoglyph_spelling_is_used() {
     let tmp = vault();
     let dir = tmp.path();
@@ -488,7 +471,6 @@ fn homoglyph_spelling_is_used() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn missing_file_placed_at_new_name_without_rename() {
     let tmp = vault();
     let dir = tmp.path();
@@ -524,7 +506,6 @@ fn in_body_vault_never_renames() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn defer_records_the_rename_instead() {
     let tmp = vault();
     let dir = tmp.path();
@@ -546,7 +527,6 @@ fn defer_records_the_rename_instead() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn deferred_rename_holds_both_names() {
     let tmp = vault();
     let dir = tmp.path();
@@ -561,7 +541,6 @@ fn deferred_rename_holds_both_names() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn missing_file_is_never_deferred() {
     let tmp = vault();
     let dir = tmp.path();
@@ -578,7 +557,6 @@ fn missing_file_is_never_deferred() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn freed_name_is_available_to_the_next_note() {
     let tmp = vault();
     let dir = tmp.path();

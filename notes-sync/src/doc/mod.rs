@@ -1,4 +1,4 @@
-//! The Apple Notes document codec. Owner: workstream B (`src/doc/**`).
+//! The Apple Notes document codec.
 //!
 //! Ports icloud-md's noteDocument, noteFormat, formatReconcile,
 //! decode/encodeNoteRecord, encodeFolderRecord, noteText, versionedDocument,
@@ -15,7 +15,6 @@ pub mod document;
 pub mod embeds;
 pub mod encode;
 pub mod format;
-pub mod js;
 pub mod proto;
 pub mod reconcile;
 pub mod table_edit;

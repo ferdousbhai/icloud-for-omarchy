@@ -1,5 +1,5 @@
 //! `status`: the push plan, rendered. Ports icloud-md
-//! `src/commands/status.ts`. Owner: workstream D.
+//! `src/commands/status.ts`.
 
 use std::path::Path;
 

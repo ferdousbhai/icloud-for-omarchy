@@ -11,7 +11,6 @@ use super::document::{
     RunCoord, TextRun, adjust_attribute_runs, compare_bytes, compute_splice16, encode_text_run, find_insert_index,
     for_each_visible_piece, initial_runs, insert_run_at, parse_text_run, validate_child_edges,
 };
-use super::js::{base64_decode, base64_encode, utf16, utf16_len};
 use super::proto::crdt::document::custom_object::MapEntry;
 use super::proto::crdt::document::{CustomObject, DocObject};
 use super::proto::crdt::string_array::ArrayAttachment;
@@ -25,6 +24,7 @@ use super::tables::{
     table_document_round_trips, uuid_index_of_ref,
 };
 use crate::cloudkit::CloudKitRecord;
+use crate::js::{base64_decode, base64_encode, len16, utf16};
 
 const IDENTITY_TYPE_NAME: &str = "com.apple.CRDT.NSUUID";
 const TOMBSTONE_STYLE_CLOCK_BIAS: u64 = 8;
@@ -440,7 +440,7 @@ pub fn cell_insert_visible_text(
 
 /// `validateCellInvariants`.
 pub fn validate_cell_invariants(cell: &TableCellDocument) -> Result<()> {
-    let text_length = utf16_len(&cell.text) as u64;
+    let text_length = len16(&cell.text) as u64;
     let visible = visible_length(&cell.runs);
     if visible != text_length {
         return fail(format!(
@@ -694,15 +694,6 @@ fn shift_identity_uuid_indexes(doc: &mut TableDocument, inserted_at: u64) -> Res
 }
 
 // --- applying a plan -------------------------------------------------------------
-
-/// `applyTableEdit`, minting identity UUIDs with `randomBytes`.
-pub fn apply_table_edit(
-    doc: &mut TableDocument,
-    desired_grid: &[Vec<String>],
-    replica_uuid: &[u8; 16],
-) -> Result<bool> {
-    apply_table_edit_with(doc, desired_grid, replica_uuid, &mut random_uuid_bytes)
-}
 
 /// `applyTableEdit` with an injectable random source (called twice per
 /// inserted row/column: content identity, then ordering identity).

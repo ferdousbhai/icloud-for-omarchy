@@ -1,5 +1,4 @@
-//! CloudKit database client and transports. Owner: workstream A
-//! (`src/cloudkit/**`, `build.rs`, `proto/`).
+//! CloudKit database client and transports.
 //!
 //! Ports icloud-md `src/cloudkit/databaseClient.ts` (request shapes, paging,
 //! response parsing). Authentication and `/validate` are icloud-session's job:

@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use icloud_notes_sync::doc::js::base64_decode;
+use icloud_notes_sync::js::base64_decode;
 
 pub fn fixture(file: &str) -> Value {
     let path = format!("{}/tests/fixtures/real/{file}", env!("CARGO_MANIFEST_DIR"));

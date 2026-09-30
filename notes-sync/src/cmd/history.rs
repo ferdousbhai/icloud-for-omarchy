@@ -1,13 +1,13 @@
-//! `history`. Ports icloud-md `src/commands/history.ts`. Owner: workstream D.
+//! `history`. Ports icloud-md `src/commands/history.ts`.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use super::Error;
+use crate::js;
 use crate::vault::epoch::{NoteEpoch, list_epochs};
 use crate::vault::history::{VersionSnapshot, history_record_names, list_versions, resolve_tracked_note};
-use crate::vault::js;
 use crate::vault::migrate::open_vault;
 
 /// `HistoryOptions`.

@@ -53,8 +53,8 @@ lastError.ts, debugLog.ts (small log under ~/.local/state/icloud-notes-sync).
 ## 2. Layout and dependencies
 
 ```
-proto/ (from icloud-md)  build.rs
-src/lib.rs  src/main.rs (clap)
+proto/ (from icloud-md; reference for the wire format, not compiled)
+src/lib.rs  src/main.rs (clap)  src/js.rs (JS/Node semantics)
 src/cloudkit/{mod,types,client,transport}.rs
 src/doc/{proto,document,format,reconcile,text,tables,table_edit,embeds,decode,encode}.rs
 src/md/{render,parse,frontmatter,title,filename,table}.rs  src/diff3.rs
@@ -63,10 +63,14 @@ src/cmd/{clone,pull,push,plan,status,history,diff,restore,output,errors}.rs
 tests/
 ```
 
-- Protobuf: `protobuf` 3.x + `protobuf-codegen` (pure). proto2 with field
-  presence; unknown fields must survive decode→encode (prost drops them: unsafe).
-- flate2, base64, serde/serde_json (preserve_order), clap, thiserror, uuid,
-  unicode-normalization, tempfile (dev), icloud-session (path).
+- Protobuf: a hand-written codec (`src/doc/proto.rs`) that reproduces
+  protobuf-es byte for byte: proto2 field presence, unknown fields kept in
+  arrival order. Neither prost (drops unknown fields) nor rust-protobuf
+  (reorders them, rejects missing `required`) round-trips exactly, so there is
+  no protobuf crate or codegen.
+- Base64 is Node's lenient `Buffer` codec in `src/js.rs` (no crate).
+- flate2, serde/serde_json (preserve_order), clap, thiserror, uuid,
+  icu_collator, regex, url, tempfile (dev), icloud-session (path).
 - Markdown: `markdown` (markdown-rs) to mdast with GFM + positions. Serializer:
   try `mdast_util_to_markdown`; where it differs, port the needed parts of
   mdast-util-to-markdown + mdast-util-gfm (node types used, `unsafe` escaping,

@@ -1,6 +1,5 @@
-//! The semantic formatting model: the B↔C contract. Ports icloud-md
-//! `src/notes/noteFormat.ts`. Owner: workstream B (types are frozen here so
-//! workstream C's renderer/parser can be written against them).
+//! The semantic formatting model: the contract between the codec and the
+//! Markdown renderer/parser. Ports icloud-md `src/notes/noteFormat.ts`.
 //!
 //! Units: every `length`, `start` and offset is in UTF-16 code units, exactly
 //! as in icloud-md (JS string indices) and on the wire (attribute-run
@@ -20,8 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::js::{from_utf16, is_js_whitespace, utf16};
 use super::proto::topotext::{AttributeRun, ParagraphStyle};
+use crate::js::{from_utf16, is_whitespace16, utf16};
 
 /// `ParagraphKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -311,7 +310,7 @@ fn trim_delimiter_styles_off_whitespace(text: &[u16], spans: Vec<InlineSpan>) ->
             styles.push(span.style.clone());
         }
     }
-    let is_whitespace = |index: usize| text.get(index).is_some_and(|&u| is_js_whitespace(u));
+    let is_whitespace = |index: usize| text.get(index).is_some_and(|&u| is_whitespace16(u));
     type Dim = fn(&mut InlineStyle) -> &mut bool;
     let dimensions: [Dim; 3] = [|s| &mut s.bold, |s| &mut s.italic, |s| &mut s.strikethrough];
     for dim in dimensions {

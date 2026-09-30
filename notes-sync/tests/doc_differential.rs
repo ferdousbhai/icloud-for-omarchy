@@ -9,10 +9,10 @@ mod common;
 use icloud_notes_sync::doc::document::{
     ApplyTextEditOptions, apply_text_edit, build_initial_note_document, encode_note_document, parse_note_document,
 };
-use icloud_notes_sync::doc::js::{base64_decode, base64_encode};
 use icloud_notes_sync::doc::proto::{Message, ProtoResult, crdt, topotext, versioned_document};
 use icloud_notes_sync::doc::reconcile::reconcile_note_format_with;
 use icloud_notes_sync::doc::text::{compress_note_document, decompress_note_document, parse_versioned_document};
+use icloud_notes_sync::js::{base64_decode, base64_encode};
 use serde_json::{Value, json};
 
 fn xorshift(seed: u64) -> impl FnMut() -> u64 {
@@ -601,10 +601,9 @@ fn table_edits_match_icloud_md_byte_for_byte() {
     }
 }
 
-// --- classifyNoteRecord vs icloud-md (needs workstream C's Markdown) ------------
+// --- classifyNoteRecord vs icloud-md --------------------------------------------
 
 #[test]
-#[ignore = "needs md::render / md::parse / md::title (workstream C)"]
 fn classify_note_record_matches_icloud_md() {
     use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
     use icloud_notes_sync::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};

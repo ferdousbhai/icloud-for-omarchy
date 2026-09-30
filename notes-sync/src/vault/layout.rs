@@ -1,15 +1,15 @@
 //! Folder tree and note placement. Ports icloud-md `src/notes/folderTree.ts`
-//! and `folderLayout.ts`. Owner: workstream D.
+//! and `folderLayout.ts`.
 
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use serde_json::Value;
 
-use super::js::{self, posix};
 use super::state::{CloneState, FolderEntry, NoteEntry, SharerHomeEntry};
 use crate::cloudkit::CloudKitRecord;
 use crate::doc::encode::{DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME};
+use crate::js::{self, posix};
 
 /// Directory names the clone reserves at the top level.
 pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[".icloud-md"];
@@ -57,34 +57,6 @@ impl FolderTree {
     }
 }
 
-/// Node's lenient `Buffer.from(s, "base64")`: both alphabets, whitespace and
-/// junk skipped, stops at `=`, a trailing partial group decoded as far as it
-/// goes.
-pub fn base64_decode_lenient(s: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for c in s.bytes() {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            b'=' => break,
-            _ => continue,
-        };
-        acc = (acc << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-            acc &= (1 << bits) - 1;
-        }
-    }
-    out
-}
-
 fn reference_record_name(value: Option<&Value>) -> Option<String> {
     value?.as_object()?.get("recordName")?.as_str().map(str::to_owned)
 }
@@ -95,7 +67,7 @@ pub fn decode_folder_record(record: &CloudKitRecord) -> Option<FolderInfo> {
         return None;
     }
     let title = match record.fields.get("TitleEncrypted").map(|f| &f.value) {
-        Some(Value::String(b64)) => String::from_utf8_lossy(&base64_decode_lenient(b64)).into_owned(),
+        Some(Value::String(b64)) => String::from_utf8_lossy(&js::base64_decode(b64)).into_owned(),
         _ => String::new(),
     };
     Some(FolderInfo {
@@ -128,7 +100,7 @@ pub fn sanitize_folder_dir_name(title: &str) -> String {
             in_ws = false;
         }
     }
-    let sliced = js::slice16(js::trim(&collapsed), 0, Some(80));
+    let sliced = js::slice16(js::trim(&collapsed), 0, 80);
     let slug = sliced.trim_end_matches(['.', ' ']);
     if slug.is_empty() {
         "Untitled Folder".into()

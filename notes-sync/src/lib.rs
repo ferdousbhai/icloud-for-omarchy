@@ -1,20 +1,19 @@
 //! icloud-notes-sync: iCloud Notes ⇄ a folder of Markdown files. A Rust
 //! port of icloud-md 0.6.2 (MIT, Adam Coddington); see `docs/PORT_PLAN.md`.
 //!
-//! | module | owner | ports |
-//! |---|---|---|
-//! | `cloudkit` | A | `cloudkit/databaseClient.ts` (+ icloud-session transport) |
-//! | `doc` | B | the note/table codec (`notes/noteDocument.ts` & co.) |
-//! | `md`, `diff3` | C | Markdown, frontmatter, names, node-diff3 |
-//! | `vault`, `cmd` | D | vault state and the commands |
-//!
-//! The `#![allow(dead_code, unused_*)]`s in stub modules go away as their
-//! owners fill them in.
+//! | module | ports |
+//! |---|---|
+//! | `cloudkit` | `cloudkit/databaseClient.ts` (+ icloud-session transport) |
+//! | `doc` | the note/table codec (`notes/noteDocument.ts` & co.) |
+//! | `md`, `diff3` | Markdown, frontmatter, names, node-diff3 |
+//! | `vault`, `cmd` | vault state and the commands |
+//! | `js` | the JavaScript/Node semantics the ports rely on |
 
 pub mod cloudkit;
 pub mod cmd;
 pub mod diff3;
 pub mod doc;
+pub mod js;
 pub mod md;
 pub mod vault;
 

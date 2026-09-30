@@ -2,20 +2,19 @@
 //! `noteFormat.ts`'s `normalizeSpans`, `trimTrailingWhitespace`,
 //! `paragraphProjectionsEqual` and `formatsRoundTripEqual`.
 //!
-//! These are workstream B's (`doc::format` declares them); the renderer
-//! needs them to choose between spellings (`projectionSurvives`) and the
-//! parser trims with them, so C carries this port and `doc::format` can
-//! delegate here. Offsets are UTF-16 units throughout.
+//! `doc::format` declares them; the renderer needs them to choose between
+//! spellings (`projectionSurvives`) and the parser trims with them, so the
+//! port lives here and `doc::format` delegates. Offsets are UTF-16 units throughout.
 
-use super::js;
 use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};
+use crate::js;
 
 fn units(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
 }
 
 fn unit_is_whitespace(unit: u16) -> bool {
-    char::from_u32(unit as u32).is_some_and(js::is_js_whitespace)
+    js::is_whitespace16(unit)
 }
 
 fn push_merged(out: &mut Vec<InlineSpan>, span: InlineSpan) {

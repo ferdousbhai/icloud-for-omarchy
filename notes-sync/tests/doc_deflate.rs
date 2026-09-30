@@ -73,17 +73,14 @@ fn fixture_payloads() -> Vec<Vec<u8>> {
             &mut encoded,
         );
     }
-    use base64::Engine;
     encoded
         .iter()
-        .map(|b| decompress_note_document(&base64::engine::general_purpose::STANDARD.decode(b).unwrap()).unwrap())
+        .map(|b| decompress_note_document(&icloud_notes_sync::js::base64_decode(b)).unwrap())
         .collect()
 }
 
 /// Runs every input through `node -e zlib.deflateSync`; `None` without node.
 fn node_deflate(inputs: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD;
     let script = r#"
         const zlib = require("zlib");
         const lines = require("fs").readFileSync(0, "utf8").split("\n").filter((l, i, a) => i < a.length - 1);
@@ -96,7 +93,10 @@ fn node_deflate(inputs: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
         .spawn()
         .ok()?;
     let mut stdin = child.stdin.take().unwrap();
-    let payload: String = inputs.iter().map(|i| b64.encode(i) + "\n").collect();
+    let payload: String = inputs
+        .iter()
+        .map(|i| icloud_notes_sync::js::base64_encode(i) + "\n")
+        .collect();
     let writer = std::thread::spawn(move || stdin.write_all(payload.as_bytes()).unwrap());
     let output = child.wait_with_output().ok()?;
     writer.join().unwrap();
@@ -105,7 +105,7 @@ fn node_deflate(inputs: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
         String::from_utf8(output.stdout)
             .unwrap()
             .lines()
-            .map(|l| b64.decode(l).unwrap())
+            .map(icloud_notes_sync::js::base64_decode)
             .collect(),
     )
 }

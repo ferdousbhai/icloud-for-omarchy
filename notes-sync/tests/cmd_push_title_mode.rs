@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 
-use base64::Engine;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::cmd::plan::PrepareRefusal;
 use icloud_notes_sync::cmd::push::{Retitle, prepare_retitle, restore_stripped_title, title_expressed_by_file};
@@ -18,7 +17,7 @@ use icloud_notes_sync::vault::state::{NoteEntry, TitleMode};
 const REPLICA: [u8; 16] = [7; 16];
 
 fn b64(bytes: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(bytes)
+    icloud_notes_sync::js::base64_encode(bytes)
 }
 
 fn record_with(text: &str, compressed: &[u8]) -> CloudKitRecord {
@@ -79,9 +78,7 @@ fn parsed_body(markdown: &str) -> ParsedNoteMarkdown {
 }
 
 fn decode_payload(payload_base64: &str) -> (String, Option<ParagraphKind>) {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload_base64)
-        .unwrap();
+    let bytes = icloud_notes_sync::js::base64_decode(payload_base64);
     let decoded = decode_note_string(&bytes).unwrap();
     let kind = decode_note_format(decoded.string(), &decoded.attribute_run)
         .ok()
@@ -103,7 +100,6 @@ fn retitle(record: &CloudKitRecord, from: &str, to_file: &str, new_title: &str) 
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn edited_body_only_file_is_made_whole_with_the_notes_own_title() {
     let classified = classify_ok(&note_record("# Shopping list\n\nMilk\nEggs"), TitleMode::Filename);
     assert!(classified.title_stripped);
@@ -117,7 +113,6 @@ fn edited_body_only_file_is_made_whole_with_the_notes_own_title() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn unrenamed_note_keeps_the_records_title() {
     let classified = classify_ok(&note_record("Shopping list\n\nMilk"), TitleMode::Filename);
     let restored = restore_stripped_title(&classified, parsed_body("\nMilk\nEggs"), None).unwrap();
@@ -125,7 +120,6 @@ fn unrenamed_note_keeps_the_records_title() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn in_body_vault_prepends_nothing() {
     let classified = classify_ok(&note_record("Shopping list\n\nMilk"), TitleMode::InBody);
     let parsed = parsed_body("Shopping list\n\nMilk\nEggs");
@@ -136,7 +130,6 @@ fn in_body_vault_prepends_nothing() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn renamed_file_pushes_new_title_and_leaves_body() {
     let record = note_record("# Shopping list\n\nMilk\nEggs");
     let r = retitle(&record, "Notes/Shopping list.md", "Notes/Groceries.md", "Groceries")
@@ -149,7 +142,6 @@ fn renamed_file_pushes_new_title_and_leaves_body() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn homoglyph_title_comes_back_as_the_character() {
     let record = note_record("Shopping list\n\nMilk");
     let r = retitle(
@@ -163,7 +155,6 @@ fn homoglyph_title_comes_back_as_the_character() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn renaming_to_the_title_the_note_already_has_sends_nothing() {
     let record = note_record("Shopping list\n\nMilk");
     let r = retitle(
@@ -177,7 +168,6 @@ fn renaming_to_the_title_the_note_already_has_sends_nothing() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn trimmed_spelling_of_trailing_whitespace_title_sends_nothing() {
     let record = raw_note_record("Shopping list \n\nMilk");
     assert_eq!(
@@ -195,7 +185,6 @@ fn trimmed_spelling_of_trailing_whitespace_title_sends_nothing() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn genuinely_different_name_retitles_trailing_whitespace_note() {
     let record = raw_note_record("Shopping list \n\nMilk");
     let r = retitle(&record, "Notes/Shopping list.md", "Notes/Groceries.md", "Groceries").unwrap();
@@ -203,7 +192,6 @@ fn genuinely_different_name_retitles_trailing_whitespace_note() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn rename_is_refused_when_the_note_cant_be_safely_edited() {
     let mut record = note_record("Shopping list\n\nMilk");
     record.fields.insert(
@@ -219,7 +207,6 @@ fn rename_is_refused_when_the_note_cant_be_safely_edited() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn genuine_retitle_normalizes_title_paragraph_to_title_style() {
     let record = note_record("Shopping list\n\nMilk");
     assert_eq!(
@@ -233,7 +220,6 @@ fn genuine_retitle_normalizes_title_paragraph_to_title_style() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn recorded_title_outranks_the_file_name() {
     let long = "A title far too long for any file name to hold, ".repeat(3);
     let recorded: HashMap<String, String> = [("Notes/Untitled.md".to_owned(), long.clone())].into_iter().collect();
@@ -246,7 +232,6 @@ fn recorded_title_outranks_the_file_name() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn title_only_a_name_can_hold_is_taken_from_the_name_homoglyphs_decoded() {
     assert_eq!(
         title_expressed_by_file("Notes/Pat\u{2044}Alex.md", &HashMap::new()),
@@ -255,7 +240,6 @@ fn title_only_a_name_can_hold_is_taken_from_the_name_homoglyphs_decoded() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn frontmatter_title_the_note_doesnt_have_is_pushed_as_new_title() {
     let classified = classify_ok(&note_record("# Shopping list\n\nMilk\nEggs"), TitleMode::Filename);
     let long = "A title far too long for any file name to hold, "
@@ -273,7 +257,6 @@ fn frontmatter_title_the_note_doesnt_have_is_pushed_as_new_title() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn frontmatter_title_equal_to_the_notes_own_is_left_alone() {
     let classified = classify_ok(&note_record("Shopping list\n\nMilk"), TitleMode::Filename);
     assert_eq!(classified.format.as_ref().unwrap()[0].kind, ParagraphKind::Body);
@@ -283,7 +266,6 @@ fn frontmatter_title_equal_to_the_notes_own_is_left_alone() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn in_body_vault_ignores_the_key() {
     let classified = classify_ok(&note_record("Shopping list\n\nMilk"), TitleMode::InBody);
     let parsed = parsed_body("Shopping list\n\nMilk");
@@ -294,7 +276,6 @@ fn in_body_vault_ignores_the_key() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn title_holding_an_embed_refuses_the_retitle() {
     let classified = classify_ok(&note_record("Shopping list\n\nMilk"), TitleMode::InBody);
     assert!(!classified.title_stripped);

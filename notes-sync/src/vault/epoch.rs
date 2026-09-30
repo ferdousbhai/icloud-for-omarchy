@@ -1,6 +1,6 @@
 //! Whole-note epochs (`.icloud-md/history/<note>/epochs/`): one per pull/push
 //! run that changed a note, indexing which snapshot was current for each of
-//! its records. Ports icloud-md `src/notes/noteEpoch.ts`. Owner: workstream D.
+//! its records. Ports icloud-md `src/notes/noteEpoch.ts`.
 
 use std::path::{Path, PathBuf};
 
@@ -8,9 +8,10 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::history::{capture_file_name, history_dir, list_versions, read_json_dir};
+use super::rt;
 use super::state::to_js_json;
-use super::{js, rt};
 use crate::cmd::errors::Error;
+use crate::js;
 
 /// `NoteEpoch`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

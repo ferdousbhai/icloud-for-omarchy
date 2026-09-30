@@ -1,6 +1,5 @@
 //! Record classification: the shared skip/decode rules `clone`, `pull` and
 //! `push` use. Ports icloud-md `src/notes/decodeNoteRecord.ts`.
-//! Owner: workstream B.
 
 use serde_json::Value;
 
@@ -9,9 +8,9 @@ use super::embeds::{
 };
 use super::encode::TRASH_FOLDER_RECORD_NAME;
 use super::format::{FormatParagraph, decode_note_format, formats_round_trip_equal, trim_trailing_whitespace};
-use super::js::{base64_decode, buffer_to_utf8};
 use super::text::decode_note_string;
 use crate::cloudkit::{CloudKitRecord, FieldValue};
+use crate::js::{base64_decode, buffer_to_utf8};
 use crate::md::parse::parse_note_markdown;
 use crate::md::render::render_note_markdown;
 use crate::md::title::split_title_paragraph;

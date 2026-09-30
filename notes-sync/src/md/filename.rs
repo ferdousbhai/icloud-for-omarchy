@@ -1,5 +1,4 @@
-//! Note file names. Ports icloud-md `src/notes/filename.ts`. Owner:
-//! workstream C.
+//! Note file names. Ports icloud-md `src/notes/filename.ts`.
 //!
 //! Plan deviation: the plan's `note_filename(title, taken)` is two calls in
 //! icloud-md - `noteFileNameFor(titleLine, titleMode)` then
@@ -8,8 +7,8 @@
 
 use std::collections::HashSet;
 
-use super::js;
 use super::title::{carried_title_spelling, encode_title_stem, title_is_representable};
+use crate::js;
 use crate::vault::state::TitleMode;
 
 fn first_line(text: &str) -> &str {
@@ -51,7 +50,7 @@ pub fn file_name_carries_title(file_name: &str, title_line: &str) -> bool {
     if file_name == wanted {
         return true;
     }
-    let extension = js::extname(&wanted);
+    let extension = js::posix::extname(&wanted);
     let stem = &wanted[..wanted.len() - extension.len()];
     let Some(actual) = file_name.strip_suffix(extension.as_str()) else {
         return false;
@@ -81,7 +80,7 @@ pub fn note_file_name(title: &str) -> String {
     let mut collapsed = String::with_capacity(stripped.len());
     let mut in_space = false;
     for c in stripped.chars() {
-        if js::is_js_whitespace(c) {
+        if js::is_whitespace(c) {
             if !in_space {
                 collapsed.push(' ');
             }
@@ -101,7 +100,7 @@ pub fn unique_file_name(file_name: &str, used_file_names: &HashSet<String>) -> S
     if !used_file_names.contains(file_name) {
         return file_name.to_string();
     }
-    let ext = js::extname(file_name);
+    let ext = js::posix::extname(file_name);
     let stem = &file_name[..file_name.len() - ext.len()];
     let mut n = 2u64;
     loop {

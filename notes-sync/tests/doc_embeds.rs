@@ -9,10 +9,10 @@ use icloud_notes_sync::doc::embeds::{
     has_unknown_content_marker, is_image_uti, is_table_uti, parse_asset_field, parse_embed_markers,
     render_attachment_placeholders, render_placeholders,
 };
-use icloud_notes_sync::doc::js::{base64_decode, base64_encode, slice16};
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
 use icloud_notes_sync::doc::text::compress_note_document;
+use icloud_notes_sync::js::{base64_decode, base64_encode, slice16};
 use serde_json::json;
 
 fn encode_note_body(text: &str, runs: Vec<AttributeRun>) -> Vec<u8> {

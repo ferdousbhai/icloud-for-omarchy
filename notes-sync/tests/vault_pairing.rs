@@ -185,7 +185,6 @@ fn pending_rename_target_is_nothing_when_file_has_the_name() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn performed_rename_is_adopted() {
     let dir = vault();
     write_note(dir.path(), "Notes/Groceries.md", NOTE_ID, "Milk");
@@ -198,7 +197,6 @@ fn performed_rename_is_adopted() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn right_name_wrong_id_is_never_adopted() {
     let dir = vault();
     write_note(dir.path(), "Notes/Groceries.md", OTHER_ID, "Not ours");

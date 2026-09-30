@@ -20,7 +20,7 @@
 //! double-quoted), `foldFlowLines`, `stringifyNumber`, `stringifyPair`,
 //! `stringifyCollection` and `stringifyDocument` with the default options.
 
-use super::js;
+use crate::js;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Style {

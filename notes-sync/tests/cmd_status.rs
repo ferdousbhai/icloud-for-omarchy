@@ -45,7 +45,6 @@ fn no_entries_for_a_clean_untracked_file_free_directory() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn reports_an_untracked_files_local_refusal_without_a_bound_account() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &notes_folder_state()).unwrap();
@@ -66,7 +65,6 @@ fn reports_an_untracked_files_local_refusal_without_a_bound_account() {
 }
 
 #[test]
-#[ignore = "needs A/B/C"]
 fn creatable_untracked_file_needs_the_live_check() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &notes_folder_state()).unwrap();

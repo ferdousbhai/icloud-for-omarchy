@@ -32,7 +32,7 @@ enum Class {
 fn classify(c: Option<char>, utf16: bool) -> Class {
     match c {
         None => Class::Whitespace,
-        Some(c) if c.is_whitespace() || super::js::is_js_whitespace(c) => Class::Whitespace,
+        Some(c) if c.is_whitespace() || crate::js::is_whitespace(c) => Class::Whitespace,
         Some(c) if utf16 && (c as u32) > 0xFFFF => Class::Other,
         Some(c) if super::to_markdown::is_unicode_punctuation(c) => Class::Punctuation,
         Some(_) => Class::Other,

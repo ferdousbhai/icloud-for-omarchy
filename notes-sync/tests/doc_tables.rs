@@ -3,7 +3,6 @@
 mod common;
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
-use icloud_notes_sync::doc::js::{base64_decode, base64_encode};
 use icloud_notes_sync::doc::proto::crdt::VectorTimestamp;
 use icloud_notes_sync::doc::proto::crdt::vector_timestamp::Element;
 use icloud_notes_sync::doc::table_edit::{
@@ -13,6 +12,7 @@ use icloud_notes_sync::doc::tables::{
     TableDocument, decode_table_markdown, encode_table_document, grid_from_table_document, parse_table_document,
     table_document_round_trips,
 };
+use icloud_notes_sync::js::{base64_decode, base64_encode};
 use serde_json::json;
 
 fn parse(file: &str) -> TableDocument {
@@ -36,7 +36,6 @@ fn revisions(file: &str) -> Vec<(String, String)> {
 // --- decodeTableRecord.test.ts --------------------------------------------------
 
 #[test]
-#[ignore = "needs md::table::render_markdown_table (workstream C)"]
 fn decode_table_markdown_renders_a_real_captured_2x2_grid() {
     assert_eq!(
         decode_table_markdown(&common::payload("table_first_revision.json")).unwrap(),
@@ -45,7 +44,6 @@ fn decode_table_markdown_renders_a_real_captured_2x2_grid() {
 }
 
 #[test]
-#[ignore = "needs md::table::render_markdown_table (workstream C)"]
 fn decode_table_markdown_renders_a_real_captured_5x4_grid() {
     assert_eq!(
         decode_table_markdown(&common::payload("table_final_revision.json")).unwrap(),
