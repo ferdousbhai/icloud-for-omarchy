@@ -36,9 +36,5 @@ pub fn write_base_copy(target_dir: &Path, record_name: &str, content: &str) -> R
 
 /// `removeBaseCopy`: a missing copy is fine.
 pub fn remove_base_copy(target_dir: &Path, record_name: &str) -> Result<(), Error> {
-    match std::fs::remove_file(base_copy_path(target_dir, record_name)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    super::attachments::safe_unlink(&base_copy_path(target_dir, record_name))
 }

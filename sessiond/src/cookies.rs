@@ -98,7 +98,7 @@ pub fn user_dsid(cookies: &[Cookie]) -> Option<String> {
 
 /// One parsed `Set-Cookie` header.
 #[derive(Debug, PartialEq, Eq)]
-pub struct SetCookie {
+struct SetCookie {
     pub name: String,
     pub value: String,
     pub domain: Option<String>,
@@ -107,7 +107,7 @@ pub struct SetCookie {
     pub expires: Option<u64>,
 }
 
-pub fn parse_set_cookie(header: &str, now: u64) -> Option<SetCookie> {
+fn parse_set_cookie(header: &str, now: u64) -> Option<SetCookie> {
     let mut parts = header.split(';');
     let first = parts.next()?.trim();
     let eq = first.find('=')?;

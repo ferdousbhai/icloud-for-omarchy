@@ -20,7 +20,7 @@ pub struct OutputContext {
 }
 
 /// `JSON.stringify(value, null, 2)`.
-pub fn to_json_pretty<T: Serialize>(value: &T) -> String {
+fn to_json_pretty<T: Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).expect("result serializes")
 }
 

@@ -24,7 +24,7 @@ use crate::models::{self, Device, Fix};
 const TOOL: &str = "icloud-findmy";
 
 /// How long `locate` waits for a fresh fix unless `--wait` says otherwise.
-pub const DEFAULT_WAIT_SECS: u64 = 30;
+const DEFAULT_WAIT_SECS: u64 = 30;
 /// How often `locate` asks again while it waits.
 const POLL: Duration = Duration::from_secs(3);
 

@@ -178,7 +178,7 @@ done
   done
   gpg --batch --armor --export "$fingerprint" >"$repo-signing-key.asc"
   # The installers ship with the release they were verified against; the
-  # ferdousbhai.com/<app>/install.sh one-liners redirect to install-<app>.sh.
+  # ferdousbhai.com/icloud-<app>/install.sh one-liners redirect to install-<app>.sh.
   cp ../install.sh install.sh
 )
 bin/make-installers dist

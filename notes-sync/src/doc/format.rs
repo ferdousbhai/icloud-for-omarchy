@@ -40,7 +40,7 @@ pub enum ParagraphKind {
 impl ParagraphKind {
     /// `STYLE_TO_KIND`: the wire `ParagraphStyle.style` value → kind;
     /// `None` for a style icloud-md doesn't understand.
-    pub fn from_style(style: u32) -> Option<ParagraphKind> {
+    fn from_style(style: u32) -> Option<ParagraphKind> {
         Some(match style {
             0 => ParagraphKind::Title,
             1 => ParagraphKind::Heading,
@@ -143,10 +143,10 @@ pub struct FormatParagraph {
 }
 
 /// `DecodeNoteFormatResult`: `Err(reason)` is `{status: "unsupported", reason}`.
-pub type DecodeNoteFormatResult = Result<Vec<FormatParagraph>, String>;
+type DecodeNoteFormatResult = Result<Vec<FormatParagraph>, String>;
 
 /// `inlineStyleOfRun`.
-pub fn inline_style_of_run(run: &AttributeRun) -> InlineStyle {
+fn inline_style_of_run(run: &AttributeRun) -> InlineStyle {
     let hints = run.font_hints.unwrap_or(0);
     InlineStyle {
         bold: hints & 1 != 0,

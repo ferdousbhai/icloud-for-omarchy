@@ -18,13 +18,13 @@ use super::CkError;
 use super::transport::Transport;
 use super::types::*;
 
-pub const CKJS_BUILD_VERSION: &str = "2310ProjectDev27";
-pub const CKJS_VERSION: &str = "2.6.4";
+const CKJS_BUILD_VERSION: &str = "2310ProjectDev27";
+const CKJS_VERSION: &str = "2.6.4";
 /// CloudKit web services cap a `records/lookup` at 200 records per request.
-pub const LOOKUP_BATCH_SIZE: usize = 200;
+const LOOKUP_BATCH_SIZE: usize = 200;
 
 /// Wider than we strictly need; matches what the real web client requests.
-pub const NOTE_DESIRED_KEYS: &[&str] = &[
+const NOTE_DESIRED_KEYS: &[&str] = &[
     "TitleEncrypted",
     "SnippetEncrypted",
     "FirstAttachmentUTIEncrypted",
@@ -98,7 +98,7 @@ const MODIFY_ENTRY_NOT_OBJECT: &str = "Unexpected response shape from records/mo
 
 /// The ckdatabasews path (with icloud-md's own query parameters) for
 /// `operation` in `database`.
-pub fn database_path(database: DatabaseScope, operation: &str) -> String {
+fn database_path(database: DatabaseScope, operation: &str) -> String {
     format!(
         "/database/1/com.apple.notes/production/{}/{operation}?ckjsBuildVersion={CKJS_BUILD_VERSION}&ckjsVersion={CKJS_VERSION}",
         database.as_str()
@@ -117,7 +117,7 @@ impl<T: Transport> Database<T> {
     /// `postDatabase`: POST `body` to `operation` (e.g. `changes/zone`) in
     /// `database`; a non-2xx becomes `RequestFailed("{operation} request
     /// failed ({database} db): HTTP {status}")`.
-    pub fn post_database(&self, database: DatabaseScope, operation: &str, body: &Value) -> Result<Value, CkError> {
+    fn post_database(&self, database: DatabaseScope, operation: &str, body: &Value) -> Result<Value, CkError> {
         match self.transport.post_json(&database_path(database, operation), body) {
             Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
                 "{operation} request failed ({} db): HTTP {status}",
@@ -172,7 +172,7 @@ impl<T: Transport> Database<T> {
     /// (`reverse: true` on the private database only). A rejected
     /// `since_sync_token` (zone-level BAD_REQUEST) refetches from scratch and
     /// sets `resynced_from_scratch`.
-    pub fn fetch_zone_note_records(
+    fn fetch_zone_note_records(
         &self,
         database: DatabaseScope,
         zone_id: &ZoneId,
@@ -366,7 +366,7 @@ impl<T: Transport> Database<T> {
     }
 
     /// `createZoneRecord`: one `create` op of `record_type`.
-    pub fn create_zone_record(
+    fn create_zone_record(
         &self,
         record_type: &str,
         zone: &NoteZone,
@@ -419,7 +419,7 @@ impl<T: Transport> Database<T> {
     }
 
     /// `fetchAssetBytes`: [`Database::fetch_asset`] into memory.
-    pub fn fetch_asset_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+    fn fetch_asset_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         match self.transport.download_bytes(url) {
             Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
                 "Attachment download failed: HTTP {status}"
@@ -491,7 +491,7 @@ pub fn needs_body_lookup(record: &CloudKitRecord) -> bool {
 
 /// The `records/modify` request body for `ops` in `zone`:
 /// `{"operations":[{"operationType":..,"record":{..}}],"zoneID":{..}}`.
-pub fn modify_body(ops: &[RecordOp], zone_id: &ZoneId) -> Value {
+fn modify_body(ops: &[RecordOp], zone_id: &ZoneId) -> Value {
     let operations: Vec<Value> = ops
         .iter()
         .map(|op| {
@@ -645,7 +645,7 @@ fn parse_record_stamp(value: Option<&Value>) -> Option<Stamp> {
 /// `parseZoneRecord`: a `{recordName, deleted: true}` tombstone becomes a
 /// fieldless `Note` record with `deleted: Some(true)`; anything else
 /// `parse_record`.
-pub fn parse_zone_record(value: &Value) -> Result<CloudKitRecord, CkError> {
+fn parse_zone_record(value: &Value) -> Result<CloudKitRecord, CkError> {
     if let Some(record_name) = get_str(value, "recordName")
         && get(value, "deleted") == Some(&Value::Bool(true))
         && !get(value, "fields").is_some_and(is_record)

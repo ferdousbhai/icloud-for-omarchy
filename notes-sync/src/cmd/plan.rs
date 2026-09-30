@@ -223,7 +223,7 @@ pub enum PrepareRefusal {
 }
 
 impl PrepareRefusal {
-    pub fn is_conflict(&self) -> bool {
+    fn is_conflict(&self) -> bool {
         matches!(self, PrepareRefusal::TableGoneRemotely)
     }
 

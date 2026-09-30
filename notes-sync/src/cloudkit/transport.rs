@@ -135,7 +135,7 @@ const QUERY_NOISE: &[&str] = &[
     "requestId",
 ];
 
-pub const DEFAULT_CKDATABASEWS_URL: &str = "https://p00-ckdatabasews.icloud.com:443";
+const DEFAULT_CKDATABASEWS_URL: &str = "https://p00-ckdatabasews.icloud.com:443";
 
 enum Answer {
     Json(Value),

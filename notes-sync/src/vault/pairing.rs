@@ -137,7 +137,7 @@ pub struct PendingRenameSettlement {
     pub blocked: Vec<BlockedRename>,
 }
 
-fn file_exists(path: &Path) -> Result<bool, Error> {
+pub(crate) fn file_exists(path: &Path) -> Result<bool, Error> {
     match std::fs::metadata(path) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),

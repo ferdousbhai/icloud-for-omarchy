@@ -57,7 +57,7 @@ impl FolderTree {
     }
 }
 
-fn reference_record_name(value: Option<&Value>) -> Option<String> {
+pub(crate) fn reference_record_name(value: Option<&Value>) -> Option<String> {
     value?.as_object()?.get("recordName")?.as_str().map(str::to_owned)
 }
 
@@ -118,7 +118,7 @@ fn reserved_names(top_level: bool) -> HashSet<String> {
 }
 
 /// JS `<` on strings: UTF-16 code unit order.
-pub fn js_str_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+fn js_str_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 

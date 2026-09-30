@@ -94,7 +94,7 @@ pub struct App {
     pub toasts: adw::ToastOverlay,
     pub banner: adw::Banner,
     pub nav: adw::NavigationView,
-    pub grid_page: adw::NavigationPage,
+    grid_page: adw::NavigationPage,
     pub split: adw::NavigationSplitView,
     pub status: gtk::Label,
     pub spinner: adw::Spinner,
@@ -107,17 +107,17 @@ pub struct App {
     pub tx: async_channel::Sender<Msg>,
     pub transport: RefCell<Option<Arc<dyn Transport>>>,
     pub downloader: RefCell<Option<Downloader>>,
-    pub syncing: Cell<bool>,
-    pub sync_again: Cell<bool>,
+    syncing: Cell<bool>,
+    sync_again: Cell<bool>,
     pub last_sync: Cell<Option<Instant>>,
     pub album: RefCell<Option<String>>,
     pub textures: RefCell<Textures>,
     /// Originals to open, or to announce, once downloaded.
-    pub want_open: RefCell<HashSet<String>>,
-    pub want_toast: RefCell<HashSet<String>>,
-    pub reloading: Cell<bool>,
+    want_open: RefCell<HashSet<String>>,
+    want_toast: RefCell<HashSet<String>>,
+    reloading: Cell<bool>,
     /// Bumped per reload; only the newest reload's snapshot is shown.
-    pub reload_gen: Cell<u64>,
+    reload_gen: Cell<u64>,
     /// The sign-in window is open (or was just asked for).
     pub signing_in: Cell<bool>,
     pub upload: RefCell<Option<super::upload::UploadUi>>,
@@ -577,7 +577,7 @@ impl App {
     }
 
     /// Re-read albums and the current grid from the catalog.
-    pub fn reload(self: &Rc<Self>) {
+    fn reload(self: &Rc<Self>) {
         self.load_snapshot(true);
     }
 
@@ -721,7 +721,7 @@ impl App {
         }
     }
 
-    pub fn launch(&self, path: &Path) {
+    fn launch(&self, path: &Path) {
         let win = self.window.clone();
         gtk::FileLauncher::new(Some(&gio::File::for_path(path))).launch(Some(&win), gio::Cancellable::NONE, |r| {
             if let Err(e) = r {
@@ -803,7 +803,7 @@ impl App {
         }
     }
 
-    pub fn open_viewer(self: &Rc<Self>, id: &str) {
+    fn open_viewer(self: &Rc<Self>, id: &str) {
         let ids = self.grid.ids();
         if let Some(i) = ids.iter().position(|x| x == id) {
             self.viewer.show(self, ids, i);

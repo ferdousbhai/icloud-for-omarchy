@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::files::{CLIENT_BUILD_NUMBER, CLIENT_ID, CLIENT_MASTERING_NUMBER};
 
 /// Apple's setup host, where `/setup/ws/1/validate` lives.
-pub const SETUP_URL: &str = "https://setup.icloud.com";
+const SETUP_URL: &str = "https://setup.icloud.com";
 
 pub fn setup_url() -> String {
     std::env::var("ICLOUD_SESSION_SETUP_URL")

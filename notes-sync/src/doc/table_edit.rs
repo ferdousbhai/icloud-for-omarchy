@@ -31,7 +31,7 @@ const TOMBSTONE_STYLE_CLOCK_BIAS: u64 = 8;
 const ORC: &str = "\u{FFFC}";
 
 /// A 16-byte random source (`randomBytes(16)`), injectable for tests.
-pub type RandomSource<'a> = &'a mut dyn FnMut() -> [u8; 16];
+type RandomSource<'a> = &'a mut dyn FnMut() -> [u8; 16];
 
 /// `randomBytes(16)`, through `vault::rt` (the differential harness's
 /// deterministic sequence).
@@ -384,7 +384,7 @@ pub fn apply_cell_text_edit(
 }
 
 /// `tombstoneVisibleRange` (cells and ordering mirrors).
-pub fn cell_tombstone_visible_range(
+fn cell_tombstone_visible_range(
     cell: &mut TableCellDocument,
     start: usize,
     length: usize,
@@ -407,7 +407,7 @@ pub fn cell_tombstone_visible_range(
 
 /// `insertVisibleText` (cells and ordering mirrors): a new run under the
 /// caller's replica at visible position `start`.
-pub fn cell_insert_visible_text(
+fn cell_insert_visible_text(
     cell: &mut TableCellDocument,
     start: usize,
     length: usize,
@@ -1221,7 +1221,7 @@ fn remap_required(reference: u32, remap: &HashMap<u32, u32>) -> Result<u32> {
 
 /// `compactPool`: physically removes `removed_refs` and remaps every
 /// remaining `objectIndex` (and the cached refs).
-pub fn compact_pool(doc: &mut TableDocument, removed_refs: &[u32]) -> Result<()> {
+fn compact_pool(doc: &mut TableDocument, removed_refs: &[u32]) -> Result<()> {
     if removed_refs.is_empty() {
         return Ok(());
     }

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use zeroize::Zeroizing;
 
-pub const APPLICATION: &str = "icloud-session";
+const APPLICATION: &str = "icloud-session";
 
 pub type Password = Zeroizing<String>;
 

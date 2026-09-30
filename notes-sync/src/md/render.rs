@@ -10,6 +10,7 @@ use crate::doc::format::{
     FormatParagraph, InlineSpan, ParagraphKind, formats_round_trip_equal, normalize_spans, trim_trailing_whitespace,
 };
 use crate::js;
+use crate::js::starts_with_at;
 
 /// `RawSpelling`: optional escaping relaxations tried nicest-first.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -313,11 +314,6 @@ fn raw_ranges_for(text: &[u16], matches: Vec<RawRange>) -> Vec<RawRange> {
             before_ok && after_ok && !entity_shaped(&text[m.start..m.end])
         })
         .collect()
-}
-
-fn starts_with_at(text: &[u16], at: usize, needle: &str) -> bool {
-    let needle = w(needle);
-    text.len() >= at + needle.len() && text[at..at + needle.len()] == needle[..]
 }
 
 /// Matches of `RAW_URL_PATTERN` (`/https?:\/\/[CLASS]+/g`).

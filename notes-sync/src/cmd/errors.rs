@@ -207,7 +207,7 @@ impl Error {
 
 /// `UntrackedFileError` → `untracked_file`; `CloudKitZoneFetchFailedError` →
 /// `cloudkit_zone_fetch_failed`.
-pub fn snake_code(name: &str) -> String {
+fn snake_code(name: &str) -> String {
     let base = name
         .strip_suffix("Error")
         .unwrap_or(name)

@@ -42,7 +42,7 @@ pub(crate) fn to_mdast(source: &str) -> Option<mdast::Node> {
 }
 
 /// The mdast `type` of a markdown-rs node.
-pub(crate) fn node_type(node: &mdast::Node) -> &'static str {
+fn node_type(node: &mdast::Node) -> &'static str {
     use mdast::Node as N;
     match node {
         N::Root(_) => "root",
@@ -83,7 +83,7 @@ pub(crate) fn node_type(node: &mdast::Node) -> &'static str {
 }
 
 /// `nodeLines`: 1-based inclusive source lines.
-pub(crate) fn node_lines(node: &mdast::Node) -> (usize, usize) {
+fn node_lines(node: &mdast::Node) -> (usize, usize) {
     let position = node
         .position()
         .unwrap_or_else(|| panic!("markdown {} node is missing its source position", node_type(node)));

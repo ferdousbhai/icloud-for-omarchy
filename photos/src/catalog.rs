@@ -454,7 +454,7 @@ impl Catalog {
     }
 }
 
-pub type CachedRenditions = (String, Option<PathBuf>, Option<PathBuf>);
+type CachedRenditions = (String, Option<PathBuf>, Option<PathBuf>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathKind {

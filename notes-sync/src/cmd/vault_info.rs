@@ -19,13 +19,13 @@ pub struct VaultInfo {
     /// Whether it holds a clone (`.icloud-md/state.json`).
     pub cloned: bool,
     /// The tool's own directory in the vault (`.icloud-md`), absolute.
-    pub state_dir: String,
+    state_dir: String,
     /// The state file: vault-info's answer changes only when it does.
     pub state_file: String,
     /// `"in-body"` or `"filename"`.
     pub title_mode: &'static str,
     /// The directory of the account's default folder, when known.
-    pub default_folder_dir: Option<String>,
+    default_folder_dir: Option<String>,
     /// Every tracked note.
     pub notes: Vec<TrackedNote>,
     /// The vault's lock file (shared with the app; see `cmd::lock`).
@@ -41,10 +41,10 @@ pub struct TrackedNote {
     pub file: String,
     /// Why push will never send it (it follows "this note"), when read-only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_only_reason: Option<String>,
+    read_only_reason: Option<String>,
     /// Where its last-synced body (the merge base) is kept, vault-relative;
     /// there is none until the note has synced.
-    pub base_file: String,
+    base_file: String,
 }
 
 pub fn run_vault_info(target_dir: &Path) -> Result<VaultInfo, Error> {

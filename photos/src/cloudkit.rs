@@ -19,10 +19,10 @@ pub const DB_PATH: &str = "/database/1/com.apple.photos.cloud/production/private
 /// All photos, hidden and deleted excluded. Paged `ASCENDING` from rank 0:
 /// `DESCENDING` would need the item count first to start from the end.
 pub const LIST_ALL: &str = "CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted";
-pub const LIST_ALBUMS: &str = "CPLAlbumByPositionLive";
-pub const LIST_ALBUM_MEMBERS: &str = "CPLContainerRelationLiveByAssetDate";
+const LIST_ALBUMS: &str = "CPLAlbumByPositionLive";
+const LIST_ALBUM_MEMBERS: &str = "CPLContainerRelationLiveByAssetDate";
 /// CPLAsset + CPLMaster records per page (pyicloud asks for 2x its page size).
-pub const PAGE_LIMIT: usize = 200;
+const PAGE_LIMIT: usize = 200;
 const ROOT_FOLDER: &str = "----Root-Folder----";
 const ALBUM_TYPE_FOLDER: i64 = 3;
 
@@ -74,7 +74,7 @@ pub struct Record {
     pub change_tag: Option<String>,
     pub deleted: bool,
     pub fields: serde_json::Map<String, Value>,
-    pub created_ms: Option<i64>,
+    created_ms: Option<i64>,
 }
 
 impl Record {
@@ -124,7 +124,7 @@ impl Record {
         })
     }
 
-    pub fn is_type(&self, t: &str) -> bool {
+    fn is_type(&self, t: &str) -> bool {
         self.record_type.as_deref() == Some(t)
     }
 
@@ -386,7 +386,7 @@ impl<'t> CloudKit<'t> {
         Ok(Self::with_root(t, &root))
     }
 
-    pub fn with_root(t: &'t dyn Transport, ckdatabasews: &str) -> Self {
+    fn with_root(t: &'t dyn Transport, ckdatabasews: &str) -> Self {
         Self {
             t,
             base: format!("{}{}", ckdatabasews.trim_end_matches('/'), DB_PATH),
@@ -701,7 +701,7 @@ fn records_of(v: &Value) -> Vec<Record> {
         .unwrap_or_default()
 }
 
-pub fn string_filter(field: &str, value: &str) -> Value {
+fn string_filter(field: &str, value: &str) -> Value {
     json!({ "fieldName": field, "comparator": "EQUALS", "fieldValue": { "type": "STRING", "value": value } })
 }
 
@@ -724,7 +724,7 @@ pub fn sanitize(name: &str) -> String {
 
 /// Movie UTIs (`itemType` / `resOriginalFileType`); images, HEIC and JPEG
 /// included, are photos.
-pub fn is_video_uti(uti: &str) -> bool {
+fn is_video_uti(uti: &str) -> bool {
     matches!(
         uti,
         "com.apple.quicktime-movie"

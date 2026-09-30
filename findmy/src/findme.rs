@@ -112,11 +112,11 @@ impl Transport for SessionTransport {
     }
 }
 
-pub const APP_NAME: &str = "iCloud Find (Web)";
-pub const TIMEZONE: &str = "US/Pacific";
+const APP_NAME: &str = "iCloud Find (Web)";
+const TIMEZONE: &str = "US/Pacific";
 
 /// The body for `initClient` (no server context yet) or `refreshClient`.
-pub fn refresh_body(server_ctx: Option<&Value>, locate: bool) -> Value {
+fn refresh_body(server_ctx: Option<&Value>, locate: bool) -> Value {
     let mut body = json!({
         "clientContext": {
             "appName": APP_NAME,
@@ -143,7 +143,7 @@ pub fn refresh_body(server_ctx: Option<&Value>, locate: bool) -> Value {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     /// To send back on the next refresh, `theftLoss` already nulled.
-    pub server_ctx: Option<Value>,
+    server_ctx: Option<Value>,
     pub devices: Vec<Device>,
 }
 
@@ -171,7 +171,7 @@ pub fn parse_response(resp: &Value) -> Result<Snapshot> {
     Ok(Snapshot { server_ctx, devices })
 }
 
-pub fn play_sound_body(device_id: &str, subject: &str) -> Value {
+fn play_sound_body(device_id: &str, subject: &str) -> Value {
     json!({
         "device": device_id,
         "subject": subject,
@@ -179,7 +179,7 @@ pub fn play_sound_body(device_id: &str, subject: &str) -> Value {
     })
 }
 
-pub fn lost_mode_body(device_id: &str, phone: &str, message: &str, passcode: &str) -> Value {
+fn lost_mode_body(device_id: &str, phone: &str, message: &str, passcode: &str) -> Value {
     json!({
         "text": message,
         "userText": true,

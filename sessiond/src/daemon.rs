@@ -32,14 +32,14 @@ const KEYRING_LOOK_WAIT: Duration = Duration::from_secs(3);
 pub struct Config {
     pub paths: Paths,
     pub setup_url: String,
-    pub signin_bin: PathBuf,
+    signin_bin: PathBuf,
     /// Exit after this long with no clients and no sign-in (5 minutes).
     pub idle: Duration,
     /// Revalidate when the last `/validate` is older than this (10 minutes).
-    pub validate_max_age: Duration,
+    validate_max_age: Duration,
     /// After a `/validate` that got no answer, hand out the session as it is
     /// for this long before trying Apple again (1 minute).
-    pub validate_retry: Duration,
+    validate_retry: Duration,
 }
 
 fn env_secs(name: &str, default: u64) -> Duration {
@@ -78,7 +78,7 @@ fn signin_bin() -> PathBuf {
 
 #[derive(Debug, zbus::DBusError)]
 #[zbus(prefix = "io.github.ferdousbhai.ICloudSession.Error")]
-pub enum ServiceError {
+enum ServiceError {
     #[zbus(error)]
     ZBus(zbus::Error),
     /// Signed out: the apps show a sign-in banner.
@@ -1187,7 +1187,6 @@ impl Service {
     /// the last `/validate` is older than 10 minutes.
     #[zbus(name = "Session", out_args("cookie_header", "client_params", "webservices"))]
     // The literal tuple (not `SessionReply`) lets the macro see three out args.
-    #[allow(clippy::type_complexity)]
     async fn session(&self) -> Result<(String, HashMap<String, String>, HashMap<String, String>), ServiceError> {
         let d = self.0.clone();
         blocking::unblock(move || d.session()).await

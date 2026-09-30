@@ -7,15 +7,15 @@ use common::reference;
 
 use icloud_notes_sync::cloudkit::FieldValue;
 use icloud_notes_sync::doc::embeds::{
-    AttachmentAsset, EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER, decode_attachment_filename,
-    decode_note_embed_slots, format_attachment_markdown, format_embed_marker, has_attachment_reference,
-    has_embed_marker, has_unknown_content_marker, is_image_uti, is_table_uti, parse_asset_field, parse_embed_markers,
-    render_placeholders,
+    EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER, decode_note_embed_slots, format_attachment_markdown,
+    format_embed_marker, has_attachment_reference, has_embed_marker, has_unknown_content_marker, is_image_uti,
+    is_table_uti, parse_embed_markers, render_placeholders,
 };
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
 use icloud_notes_sync::doc::text::compress_note_document;
 use icloud_notes_sync::js::{base64_decode, base64_encode, slice16};
+use icloud_notes_sync::vault::attachments::{AttachmentAsset, decode_attachment_filename, parse_asset_field};
 use serde_json::json;
 
 fn encode_note_body(text: &str, runs: Vec<AttributeRun>) -> Vec<u8> {

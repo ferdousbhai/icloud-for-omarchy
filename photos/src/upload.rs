@@ -33,9 +33,9 @@ use serde_json::{Value, json};
 use crate::cloudkit::ZONE;
 use crate::transport::{Error, Result, Transport};
 
-pub const CREATE_UPLOAD_URL: &str = "/photosupload/createUploadUrl";
-pub const PUT_ASSET: &str = "/photosupload/putAsset";
-pub const UPLOAD_STATUS: &str = "/photosupload/uploadStatus";
+const CREATE_UPLOAD_URL: &str = "/photosupload/createUploadUrl";
+const PUT_ASSET: &str = "/photosupload/putAsset";
+const UPLOAD_STATUS: &str = "/photosupload/uploadStatus";
 const DUPLICATE: i64 = 409;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +86,7 @@ impl<'t> Uploader<'t> {
         Ok(Self::with_base(t, &base))
     }
 
-    pub fn with_base(t: &'t dyn Transport, base: &str) -> Self {
+    fn with_base(t: &'t dyn Transport, base: &str) -> Self {
         Self {
             t,
             base: base.trim_end_matches('/').to_owned(),

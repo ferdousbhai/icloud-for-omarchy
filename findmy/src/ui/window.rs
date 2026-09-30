@@ -20,7 +20,7 @@ use crate::findme::{self, FindMe, SessionTransport};
 use crate::history::{History, Point};
 use crate::models::Device;
 
-pub const REFRESH_SECS: u32 = 60;
+const REFRESH_SECS: u32 = 60;
 /// How much history the trail shows.
 const TRAIL_SECS: i64 = 24 * 3600;
 const LOST_MESSAGE: &str = "This device has been lost. Please call me.";

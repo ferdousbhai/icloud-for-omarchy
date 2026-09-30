@@ -28,7 +28,6 @@ pub struct State {
 impl State {
     /// The recorded `playSound` / `lostDevice` requests, oldest first, each
     /// `{"endpoint": ..., "body": ...}`.
-    #[allow(dead_code)] // used by tests/cli.rs, not by the example itself.
     pub fn actions(&self) -> Vec<Value> {
         self.actions.lock().unwrap().clone()
     }

@@ -9,6 +9,7 @@ use std::path::Path;
 use indexmap::IndexMap;
 use serde_json::Value;
 
+use super::layout::reference_record_name;
 use super::state::{AttachmentEntry, TableAttachmentEntry};
 use crate::cloudkit::{CloudKitRecord, Database, FieldValue, NoteZone, Transport};
 use crate::cmd::errors::Error;
@@ -69,10 +70,6 @@ pub fn decode_attachment_filename(field: Option<&FieldValue>, record_name: &str,
     format!("{record_name}{}", extension_for_uti(type_uti))
 }
 
-fn record_ref_name(value: Option<&Value>) -> Option<String> {
-    value?.as_object()?.get("recordName")?.as_str().map(str::to_owned)
-}
-
 /// `MatchedAttachment`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchedAttachment {
@@ -98,7 +95,7 @@ pub fn extract_media_record_names(
             if record.record_type != "Attachment" {
                 return None;
             }
-            record_ref_name(record.fields.get("Media").map(|f| &f.value))
+            reference_record_name(record.fields.get("Media").map(|f| &f.value))
         })
         .collect()
 }

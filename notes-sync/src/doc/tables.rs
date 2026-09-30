@@ -53,7 +53,7 @@ impl TableDocument {
 /// `TableRowColumn`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableRowColumn {
-    pub identity_ref: usize,
+    identity_ref: usize,
     pub uuid_index: u64,
 }
 
@@ -229,7 +229,7 @@ pub(crate) fn identity_uuid_index(entry: &DocObject, key: i64) -> Option<u64> {
 }
 
 /// `identityOf`.
-pub fn identity_of(pool: &crdt::Document, uuid_index: u64) -> Result<TableRowColumn> {
+fn identity_of(pool: &crdt::Document, uuid_index: u64) -> Result<TableRowColumn> {
     let key = key_index(pool, "UUIDIndex");
     for (identity_ref, entry) in pool.object.iter().enumerate() {
         if identity_uuid_index(entry, key) == Some(uuid_index) {
@@ -273,7 +273,7 @@ fn assert_left_to_right(pool: &crdt::Document) -> Result<()> {
 }
 
 /// `parseDictByName`: a custom object's key-name → ObjectID pairs.
-pub fn parse_dict_by_name<'a>(
+fn parse_dict_by_name<'a>(
     pool: &'a crdt::Document,
     entry: &'a DocObject,
     label: &str,
@@ -293,7 +293,7 @@ pub fn parse_dict_by_name<'a>(
 }
 
 /// `requireEntry`.
-pub fn require_entry<'a>(dict: &IndexMap<&str, &'a ObjectID>, key: &str) -> Result<&'a ObjectID> {
+fn require_entry<'a>(dict: &IndexMap<&str, &'a ObjectID>, key: &str) -> Result<&'a ObjectID> {
     match dict.get(key) {
         Some(value) => Ok(value),
         None => fail(format!("Table object is missing expected key \"{key}\"")),
@@ -404,7 +404,7 @@ pub fn parse_ref_pair_list(pool: &crdt::Document, pool_ref: u32, label: &str) ->
 }
 
 /// `resolveCellText`.
-pub fn resolve_cell_text(pool: &crdt::Document, pool_ref: u32) -> Result<String> {
+fn resolve_cell_text(pool: &crdt::Document, pool_ref: u32) -> Result<String> {
     let entry = object_at(pool, pool_ref)?;
     match &entry.string {
         Some(s) => Ok(s.string.clone().unwrap_or_default()),

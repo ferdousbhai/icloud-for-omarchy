@@ -30,12 +30,12 @@ use std::time::{Duration, Instant};
 use super::errors::Error;
 
 /// The environment variable naming an inherited, already locked descriptor.
-pub const LOCK_FD_ENV: &str = "ICLOUD_NOTES_LOCK_FD";
+const LOCK_FD_ENV: &str = "ICLOUD_NOTES_LOCK_FD";
 
 /// How long a run waits for another run or a background sync by default.
 /// The Notes window holds the lock for as long as it is open, so it is
 /// never waited for unless `--wait` asks.
-pub const DEFAULT_WAIT: Duration = Duration::from_secs(30);
+const DEFAULT_WAIT: Duration = Duration::from_secs(30);
 
 /// How the Notes window describes itself in the lock file.
 const APP_HOLDER_PREFIX: &str = "Notes (pid";

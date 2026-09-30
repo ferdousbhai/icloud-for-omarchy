@@ -37,7 +37,7 @@ pub const STATE_FILE_NAME: &str = "state.json";
 pub const CURRENT_LAYOUT_VERSION: u32 = 3;
 
 /// `CloneState` keys as `readCloneState` builds them.
-pub const READ_ORDER: &[&str] = &[
+const READ_ORDER: &[&str] = &[
     "layoutVersion",
     "generator",
     "titleMode",
@@ -82,7 +82,7 @@ pub const PULL_WRITE_ORDER: &[&str] = &[
 ];
 
 /// `CloneStateNoteEntry` keys as `readCloneState` builds them.
-pub const NOTE_READ_ORDER: &[&str] = &[
+const NOTE_READ_ORDER: &[&str] = &[
     "file",
     "recordChangeTag",
     "modificationDate",
@@ -115,7 +115,7 @@ pub const NOTE_CREATE_ORDER: &[&str] = &[
 
 /// `CloneStateFolderEntry` keys as `readCloneState` (and `buildVaultLayout`)
 /// build them.
-pub const FOLDER_READ_ORDER: &[&str] = &["name", "parentRecordName", "dirName", "sharedZoneOwner", "permission"];
+const FOLDER_READ_ORDER: &[&str] = &["name", "parentRecordName", "dirName", "sharedZoneOwner", "permission"];
 
 /// A folder entry built by push's folder create.
 pub const FOLDER_CREATE_ORDER: &[&str] = &["name", "dirName", "parentRecordName"];

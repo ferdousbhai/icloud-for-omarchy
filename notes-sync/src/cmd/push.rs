@@ -143,7 +143,7 @@ impl Serialize for PushResult {
 }
 
 /// `sharedNoteWriteRefusal`.
-pub fn shared_note_write_refusal(state: &CloneState, entry: &NoteEntry) -> Option<SharedWriteRefusal> {
+fn shared_note_write_refusal(state: &CloneState, entry: &NoteEntry) -> Option<SharedWriteRefusal> {
     let owner = entry.shared_zone_owner.as_ref()?;
     let folder = entry
         .folder_record_name
@@ -1155,10 +1155,10 @@ pub fn plan_remote_changed_merge(
 
 /// `PreparedCandidate`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PreparedCandidate {
+struct PreparedCandidate {
     pub updates: Vec<RecordUpdate>,
-    pub note_text_updated: bool,
-    pub retitled_to: Option<String>,
+    note_text_updated: bool,
+    retitled_to: Option<String>,
 }
 
 fn classify_for_edit(record: &CloudKitRecord, title_mode: TitleMode) -> Result<Box<DecodedNote>, String> {
@@ -1456,7 +1456,7 @@ fn note_record_update(record: &CloudKitRecord, entry: &NoteEntry, fields: Update
 /// `prepareNoteTextUpdate`: `Ok(Ok(Some(payload)))`, `Ok(Ok(None))` for
 /// "unchanged", or the refusal. `file` is the entry's file as the caller
 /// sees it (the move target for a retitle).
-pub fn prepare_note_text_update(
+fn prepare_note_text_update(
     record: &CloudKitRecord,
     current_body_text: &str,
     desired: &NoteText,

@@ -58,7 +58,7 @@ pub fn sync(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Re
 }
 
 /// A full listing even when a sync token is stored (`icloud-photos sync --full`).
-pub fn sync_full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Result<Report> {
+fn sync_full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Result<Report> {
     let report = full(ck, cat, progress)?;
     finish(cat, report)
 }
@@ -192,7 +192,7 @@ pub fn incremental(ck: &CloudKit, cat: &mut Catalog, token: &str, progress: &dyn
 }
 
 /// Apply one batch of changed records and store the new token, atomically.
-pub fn apply_changes(ck: &CloudKit, cat: &mut Catalog, records: &[Record], new_token: &str) -> Result<Report> {
+fn apply_changes(ck: &CloudKit, cat: &mut Catalog, records: &[Record], new_token: &str) -> Result<Report> {
     // Later changes to the same record win.
     let mut latest: HashMap<&str, &Record> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();

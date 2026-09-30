@@ -89,7 +89,7 @@ fn utf8_base64(units: &[u16]) -> String {
 
 /// `folderReference(folderRecordName, zoneOwnerRecordName?)`:
 /// `{recordName, action: "VALIDATE", zoneID}`.
-pub fn folder_reference(folder_record_name: &str, zone_owner_record_name: Option<&str>) -> Value {
+fn folder_reference(folder_record_name: &str, zone_owner_record_name: Option<&str>) -> Value {
     let zone_id = match zone_owner_record_name {
         Some(owner) => json!({"zoneName": "Notes", "ownerRecordName": owner}),
         None => json!({"zoneName": "Notes"}),

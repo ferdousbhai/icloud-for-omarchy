@@ -16,7 +16,7 @@
 use super::yaml::{self, Document, Parsed, Scalar, Style, Value};
 use crate::js;
 
-pub const FENCE: &str = "---";
+const FENCE: &str = "---";
 pub const NOTE_ID_KEY: &str = "apple-note-id";
 pub const NOTE_TITLE_KEY: &str = "apple-note-title";
 

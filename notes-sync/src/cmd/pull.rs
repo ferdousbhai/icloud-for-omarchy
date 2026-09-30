@@ -34,7 +34,7 @@ use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
 };
 use crate::vault::migrate::require_vault;
-use crate::vault::pairing::{pending_rename_target, settle_pending_renames};
+use crate::vault::pairing::{file_exists, pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
     AttachmentEntry, CloneState, FolderEntry, NOTE_ADD_ORDER, NoteEntry, PULL_WRITE_ORDER, TableAttachmentEntry,
     TitleMode, write_clone_state,
@@ -771,14 +771,6 @@ fn backfill_share_permissions<T: Transport>(
         zone.records.extend(share_records);
     }
     Ok(())
-}
-
-fn file_exists(path: &Path) -> Result<bool, Error> {
-    match std::fs::metadata(path) {
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e.into()),
-    }
 }
 
 /// `renameForRemoteTitle`: in a filename-as-title vault, rename a tracked

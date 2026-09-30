@@ -259,7 +259,7 @@ summaries; see `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`.
 | `thumb` | `{id, path, cache_path}` |
 | `download` | `[{id, path, live_path?, live_error?} \| {id, error}]` |
 | `open` | `{id, path, opened}` |
-| `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, not_in_catalog}` |
+| `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, not_in_catalog}`; only `{files}` (exit 1) when every file was skipped |
 | `delete` | `[{id, deleted, error?}]` |
 | `prune-cache` | `{removed}` |
 | `sign-in` | `{started, mock}` |
@@ -269,7 +269,7 @@ summaries; see `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`.
 
 | Command | stdout JSON |
 |---|---|
-| `devices`, `locate` | `[{id, name, model, class, battery_percent, charging, online, lost_mode, can_play_sound, can_lost_mode, last_fix:{time, timestamp_ms, age_secs, accuracy_m, is_old, lat?, lon?}}]` (`locate`: one object, with coordinates) |
+| `devices`, `locate` | `[{id, name, model, class, battery_percent, charging, online, lost_mode, can_play_sound, can_lost_mode, last_fix:{time, timestamp_ms, age_secs, accuracy_m, is_old, lat?, lon?} \| null}]` (`last_fix` is `null` for a device with no fix; `locate`: one object, with coordinates) |
 | `play-sound`, `lost-mode` | `{ok:true, action:"play_sound"\|"lost_mode", device:{id, name}}` |
 | `history` | `{device:{id, name}, since, points:[{time, timestamp, lat, lon, accuracy_m, battery_percent}]}` |
 | `prune-history` | `{deleted, remaining, retention_days}` |

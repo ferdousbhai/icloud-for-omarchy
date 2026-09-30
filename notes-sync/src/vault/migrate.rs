@@ -17,7 +17,7 @@ use crate::cmd::errors::Error;
 use crate::md::frontmatter::{SplitOptions, join_frontmatter, set_note_id, split_frontmatter};
 
 /// `OLDEST_MIGRATABLE_LAYOUT_VERSION`.
-pub const OLDEST_MIGRATABLE_LAYOUT_VERSION: u64 = 2;
+const OLDEST_MIGRATABLE_LAYOUT_VERSION: u64 = 2;
 
 /// `VaultMigration`: `run` performs the on-disk work and returns the updated
 /// state; the runner stamps `to` and writes it.
@@ -70,7 +70,7 @@ pub fn vault_migrations() -> Vec<VaultMigration<'static>> {
 }
 
 /// `migrationReporter`'s line for one migration.
-pub fn migration_status(migration: &VaultMigration<'_>) -> String {
+fn migration_status(migration: &VaultMigration<'_>) -> String {
     format!("Updating this vault's layout: {}...", migration.describe)
 }
 

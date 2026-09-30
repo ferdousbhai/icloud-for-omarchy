@@ -205,7 +205,7 @@ pub fn diff_indices(buffer1: &[&str], buffer2: &[&str]) -> Vec<IndexHunk> {
 
 /// Which side a region's content comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
+enum Side {
     A,
     O,
     B,
@@ -213,7 +213,7 @@ pub enum Side {
 
 /// `diff3MergeRegions` output.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MergeRegion {
+enum MergeRegion {
     Stable {
         buffer: Side,
         start: usize,
@@ -238,7 +238,7 @@ struct Hunk {
 }
 
 /// node-diff3 `diff3MergeRegions(a, o, b)`.
-pub fn diff3_merge_regions(a: &[&str], o: &[&str], b: &[&str]) -> Vec<MergeRegion> {
+fn diff3_merge_regions(a: &[&str], o: &[&str], b: &[&str]) -> Vec<MergeRegion> {
     let mut hunks: Vec<Hunk> = Vec::new();
     for (side, other) in [(Side::A, a), (Side::B, b)] {
         for item in diff_indices(o, other) {
@@ -334,7 +334,7 @@ pub fn diff3_merge_regions(a: &[&str], o: &[&str], b: &[&str]) -> Vec<MergeRegio
 
 /// `diff3Merge` output block.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MergeBlock {
+enum MergeBlock {
     Ok(Vec<String>),
     Conflict {
         a: Vec<String>,
@@ -354,7 +354,7 @@ fn slice(buffer: &[&str], start: usize, length: usize) -> Vec<String> {
 }
 
 /// node-diff3 `diff3Merge(a, o, b, {excludeFalseConflicts})` on line arrays.
-pub fn diff3_merge(a: &[&str], o: &[&str], b: &[&str], exclude_false_conflicts: bool) -> Vec<MergeBlock> {
+fn diff3_merge(a: &[&str], o: &[&str], b: &[&str], exclude_false_conflicts: bool) -> Vec<MergeBlock> {
     let mut results = Vec::new();
     let mut ok: Vec<String> = Vec::new();
     for region in diff3_merge_regions(a, o, b) {

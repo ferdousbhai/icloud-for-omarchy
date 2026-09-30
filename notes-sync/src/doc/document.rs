@@ -12,7 +12,7 @@ use super::text::parse_versioned_document;
 use super::{DocError, Result};
 use crate::js::{from_utf16, len16, utf16};
 
-pub(crate) const SENTINEL_CLOCK: u32 = 0xffff_ffff;
+const SENTINEL_CLOCK: u32 = 0xffff_ffff;
 
 /// `RunCoord`: a topotext `CharID`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -267,7 +267,7 @@ fn shift_child_edges(runs: &mut [TextRun], threshold: u32, delta: u32) {
 
 /// `splitRunAt`: splits `runs[index]` at `offset` into head and tail; the
 /// tail lands at `index + 1`.
-pub fn split_run_at(runs: &mut Vec<TextRun>, index: usize, offset: u32) -> Result<()> {
+fn split_run_at(runs: &mut Vec<TextRun>, index: usize, offset: u32) -> Result<()> {
     let ok = runs.get(index).is_some_and(|run| offset > 0 && offset < run.length);
     if !ok {
         return Err(invalid(format!(
@@ -771,7 +771,7 @@ fn insert_visible_text(doc: &mut NoteDocument, start: usize, length: usize, repl
 
 /// `ensureReplica`: the 1-based replica-table index for `replica_id`, adding
 /// an entry (both clocks at the table's maxima) on first contact.
-pub(crate) fn ensure_replica(doc: &mut NoteDocument, replica_id: &[u8; 16]) -> u32 {
+fn ensure_replica(doc: &mut NoteDocument, replica_id: &[u8; 16]) -> u32 {
     if let Some(existing) = doc.replicas.iter().position(|r| r.id == replica_id) {
         return existing as u32 + 1;
     }

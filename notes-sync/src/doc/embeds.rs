@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::Result;
 use super::proto::{Message, topotext};
 use super::text::{decompress_note_document, parse_versioned_document};
-use crate::js::{from_utf16, posix, utf16};
+use crate::js::{encode_uri_component, from_utf16, posix, starts_with_at, utf16};
 use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
 /// U+FFFC, one per embed in a note's visible text.
@@ -18,7 +18,7 @@ pub const OBJECT_REPLACEMENT_CHARACTER: char = '\u{FFFC}';
 const ORC: u16 = 0xfffc;
 
 /// UTI marking an `Attachment` record as a table sub-document.
-pub const TABLE_UTI: &str = "com.apple.notes.table";
+const TABLE_UTI: &str = "com.apple.notes.table";
 
 /// `AttachmentReference`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -209,19 +209,6 @@ pub fn has_attachment_reference(text: &str) -> bool {
     false
 }
 
-/// `encodeURIComponent`.
-pub fn encode_uri_component(s: &str) -> String {
-    let mut out = String::new();
-    for byte in s.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 /// `formatAttachmentMarkdown`.
 pub fn format_attachment_markdown(reference: &AttachmentReference, relative_file: &str) -> String {
     let display_name = posix::basename(relative_file);
@@ -294,11 +281,6 @@ pub fn format_embed_marker(content: &EmbedMarkerContent) -> String {
 
 fn is_word_unit(unit: u16) -> bool {
     unit < 0x80 && (unit as u8).is_ascii_alphanumeric() || unit == u16::from(b'_')
-}
-
-fn starts_with_at(haystack: &[u16], at: usize, needle: &str) -> bool {
-    let needle = utf16(needle);
-    haystack.len() >= at + needle.len() && haystack[at..at + needle.len()] == needle[..]
 }
 
 /// `/\b<name>="([^"]*)"/.exec(attributes)?.[1]`.
@@ -518,52 +500,5 @@ pub fn plan_embed_representations(
     Ok(EmbedRepresentation {
         reconstructed_body_text: from_utf16(&reconstructed),
         tables: representations.into_iter().filter_map(|r| r.table).collect(),
-    })
-}
-
-/// `decodeAttachmentFilename`: a Media record's `FilenameEncrypted`, or
-/// `recordName` + an extension guessed from the UTI.
-pub fn decode_attachment_filename(
-    field: Option<&crate::cloudkit::FieldValue>,
-    record_name: &str,
-    type_uti: &str,
-) -> String {
-    if let Some(serde_json::Value::String(value)) = field.map(|f| &f.value) {
-        let name = crate::js::buffer_to_utf8(&crate::js::base64_decode(value));
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    let extension = match type_uti {
-        "public.jpeg" => ".jpeg",
-        "public.png" => ".png",
-        "public.heic" => ".heic",
-        "public.tiff" => ".tiff",
-        "public.gif" => ".gif",
-        "public.webp" => ".webp",
-        "com.apple.m4a-audio" => ".m4a",
-        "com.adobe.pdf" => ".pdf",
-        _ => "",
-    };
-    format!("{record_name}{extension}")
-}
-
-/// `AttachmentAsset`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachmentAsset {
-    pub download_url: String,
-    pub file_checksum: String,
-}
-
-/// `parseAssetField`: the download URL + checksum of an `ASSETID` field.
-pub fn parse_asset_field(field: Option<&crate::cloudkit::FieldValue>) -> Option<AttachmentAsset> {
-    let field = field?;
-    if field.type_ != "ASSETID" {
-        return None;
-    }
-    let value = field.value.as_object()?;
-    Some(AttachmentAsset {
-        download_url: value.get("downloadURL")?.as_str()?.to_string(),
-        file_checksum: value.get("fileChecksum")?.as_str()?.to_string(),
     })
 }

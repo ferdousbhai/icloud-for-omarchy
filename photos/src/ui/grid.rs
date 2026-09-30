@@ -13,9 +13,9 @@ use icloud_photos::catalog::Row;
 use icloud_photos::cloudkit::Kind;
 
 /// Smallest tile edge; tiles grow to fill the width.
-pub const TILE: i32 = 140;
-pub const GAP: i32 = 3;
-pub const PAD: i32 = 12;
+const TILE: i32 = 140;
+const GAP: i32 = 3;
+const PAD: i32 = 12;
 
 #[derive(Debug, Clone)]
 pub struct Tile {
@@ -35,7 +35,7 @@ pub struct RowItem {
 }
 
 /// Called when a tile is bound: (asset id, its thumb file if downloaded, the picture).
-pub type BindTile = Box<dyn Fn(&str, Option<&PathBuf>, &gtk::Picture)>;
+type BindTile = Box<dyn Fn(&str, Option<&PathBuf>, &gtk::Picture)>;
 
 pub struct Grid {
     pub root: gtk::Stack,
@@ -48,7 +48,7 @@ pub struct Grid {
     pub on_bind: Rc<RefCell<Option<BindTile>>>,
 }
 
-pub fn month_of(unix: i64) -> (i64, String) {
+fn month_of(unix: i64) -> (i64, String) {
     match glib::DateTime::from_unix_local(unix) {
         Ok(dt) => {
             let key = i64::from(dt.year()) * 12 + i64::from(dt.month());

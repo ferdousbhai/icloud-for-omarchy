@@ -42,6 +42,12 @@ pub fn utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+/// Whether `needle` (as UTF-16) occurs in `haystack` at unit `at`.
+pub(crate) fn starts_with_at(haystack: &[u16], at: usize, needle: &str) -> bool {
+    let needle = utf16(needle);
+    haystack.len() >= at + needle.len() && haystack[at..at + needle.len()] == needle[..]
+}
+
 /// `.length`: UTF-16 code units.
 pub fn len16(s: &str) -> usize {
     s.chars().map(char::len_utf16).sum()
