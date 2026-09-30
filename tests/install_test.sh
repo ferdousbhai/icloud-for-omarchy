@@ -4,7 +4,7 @@
 # namespace where /etc/pacman.conf, /etc/pacman.d and /root are scratch
 # copies: nothing on this machine changes. Covers the default package
 # lists, named packages, an unknown name, re-running, the migration from
-# the old per-app repositories, and the add_signed_repo hash of every
+# the old [icloud-notes] repository, and the add_signed_repo hash of every
 # generated installer. Skips (exit 0) where unprivileged namespaces are off.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -119,20 +119,16 @@ bash install.sh icloud-nope >/dev/null 2>&1 || status=$?
 check "an unknown package exits 64" [ "$status" = 64 ]
 check "an unknown package changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
 
-# Migration: the released [icloud-notes] (conf, Include, hook), plus
-# partial leftovers of the others.
+# Migration: the released [icloud-notes] (conf, Include, hook).
 setup
 printf '[icloud-notes]\nServer = x\n' >/etc/pacman.d/icloud-notes.conf
-printf '[icloud-session]\nServer = x\n' >/etc/pacman.d/icloud-session.conf
-printf '\nInclude = /etc/pacman.d/icloud-notes.conf\n\nInclude = /etc/pacman.d/icloud-session.conf\n\nInclude = /etc/pacman.d/icloud-notes-sync.conf\n' >>/etc/pacman.conf
-touch "$hooks/icloud-notes" "$hooks/icloud-photos" "$hooks/unrelated"
+printf '\nInclude = /etc/pacman.d/icloud-notes.conf\n' >>/etc/pacman.conf
+touch "$hooks/icloud-notes" "$hooks/unrelated"
 touch /etc/pacman.d/unrelated.conf
 bash install.sh icloud-notes >"$work/out" 2>&1
-for name in icloud-notes icloud-session icloud-notes-sync icloud-photos icloud-findmy; do
-  check "migration: no [$name] Include left" [ "$(count_include "$name")" = 0 ]
-  check "migration: no $name.conf left" [ ! -e "/etc/pacman.d/$name.conf" ]
-  check "migration: no $name hook left" [ ! -e "$hooks/$name" ]
-done
+check "migration: no [icloud-notes] Include left" [ "$(count_include icloud-notes)" = 0 ]
+check "migration: no icloud-notes.conf left" [ ! -e /etc/pacman.d/icloud-notes.conf ]
+check "migration: no icloud-notes hook left" [ ! -e "$hooks/icloud-notes" ]
 check "migration: [icloud-for-omarchy] is in place" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "migration: the new hook is in place" [ -x "$hooks/icloud-for-omarchy" ]
 check "migration: other repositories and hooks are kept" grep -qxF 'Include = /etc/pacman.d/mirrorlist' /etc/pacman.conf

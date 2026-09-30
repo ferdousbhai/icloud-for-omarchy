@@ -27,8 +27,8 @@ PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy)
 # What a run with no arguments installs. bin/make-installers rewrites this
 # one line for the per-app installers.
 DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy)
-# The one-repository-per-app layout of earlier releases.
-OLD_REPOS=(icloud-notes icloud-session icloud-notes-sync icloud-photos icloud-findmy)
+# Repositories of earlier releases: Notes had one of its own.
+OLD_REPOS=(icloud-notes)
 
 # --- add_signed_repo (shared) ---
 # Trust a project's package-signing key (checked against the pinned
@@ -96,9 +96,9 @@ done
 echo "Adding the [$REPO] repository"
 add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
-# Earlier releases came from one repository per app ([icloud-notes], ...),
-# each with its own /etc/pacman.d/<name>.conf, Include line and Omarchy
-# hook. Their packages now come from [icloud-for-omarchy], so the old
+# Earlier releases of Notes came from a repository of its own,
+# [icloud-notes], with its own /etc/pacman.d/<name>.conf, Include line and
+# Omarchy hook. Its packages now come from [icloud-for-omarchy], so the old
 # entries go: pacman would otherwise keep syncing them, and a repository
 # listed first wins for a package in both.
 remove_old_repos() {
