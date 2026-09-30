@@ -4,7 +4,9 @@
 //!
 //! Exit codes: [`EXIT_OK`], [`EXIT_ERROR`], [`EXIT_SIGN_IN`],
 //! [`EXIT_FIND_MY_AUTH`] (after `icloud-session`'s own re-authorization with
-//! a stored password failed), [`EXIT_USAGE`].
+//! a stored password failed), [`EXIT_USAGE`]: the table every iCloud tool
+//! shares (docs/CLI.md). With `--json` an error is one JSON line on stderr,
+//! `{"error":{"code","message","exit_code","hint"?}}`.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -41,7 +43,7 @@ Commands:
                                      turn on Lost Mode (locks the device)
   history NAME|ID [--since DURATION] stored positions, oldest first (default 24h)
   prune-history                      delete positions older than 30 days
-  help                               show this help
+  help [COMMAND]                     show this help, or one command's
 
 Options:
   --json             machine-readable output on stdout (errors as JSON on stderr)
@@ -59,14 +61,90 @@ Options:
 NAME matches a device name case-insensitively (a unique part of it is
 enough); an ambiguous NAME lists the matches, use the ID then.
 
+`icloud-findmy COMMAND --help` shows one command.
+
+With --json, stdout is only the JSON result and an error is one JSON line on
+stderr: {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}; codes: usage,
+sign_in_required, find_my_auth_required, not_found, ambiguous, cancelled,
+unsupported, no_fix, error.
+
 Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in),
 4 Find My needs the Apple password (icloud-session authorize-find-my),
 64 usage.
 ";
 
+/// One command's `--help`: its synopsis and what it does and prints.
+const COMMAND_HELP: &[(&str, &str)] = &[
+    (
+        "devices",
+        "Usage: icloud-findmy devices [--locate] [--coords] [--json]
+
+Every device on the Apple ID, as Apple last heard from it: name, model,
+battery, online, Lost Mode, what it can do, and the last fix (time, age,
+accuracy; coordinates only with --coords). --locate asks every device to
+report first (it wakes them, like Refresh in the app). Moved positions are
+stored in the history.
+JSON: [{id, name, model, class, battery_percent, charging, online, lost_mode,
+can_play_sound, can_lost_mode, last_fix: {time, timestamp_ms, age_secs,
+accuracy_m, is_old, lat?, lon?} | null}]",
+    ),
+    (
+        "locate",
+        "Usage: icloud-findmy locate NAME|ID [--wait SECS] [--json]
+
+Ask one device for a fresh fix and wait (30 s unless --wait) for one newer
+than the last; print it with its coordinates. No fresh fix in time is an
+error (code no_fix).
+JSON: the device, as in `devices --coords`.",
+    ),
+    (
+        "play-sound",
+        "Usage: icloud-findmy play-sound NAME|ID [--yes] [--json]
+
+Play a sound on a device. Asks on a terminal; without one, --yes is
+required (a usage error otherwise).
+JSON: {ok: true, action: \"play_sound\", device: {id, name}}",
+    ),
+    (
+        "lost-mode",
+        "Usage: icloud-findmy lost-mode NAME|ID --phone P --message M [--yes] [--json]
+
+Turn on Lost Mode: the device locks and shows the message with a button to
+call the number. Asks on a terminal; without one, --yes is required.
+JSON: {ok: true, action: \"lost_mode\", device: {id, name}}",
+    ),
+    (
+        "history",
+        "Usage: icloud-findmy history NAME|ID [--since DURATION] [--json]
+
+The stored positions of one device, oldest first: the app's map trail.
+--since: 90m, 24h (the default), 7d, 1w2d. A device ID already in the
+history needs no network.
+JSON: {device: {id, name}, since, points: [{time, timestamp, lat, lon,
+accuracy_m, battery_percent}]}",
+    ),
+    (
+        "prune-history",
+        "Usage: icloud-findmy prune-history [--json]
+
+Delete stored positions older than 30 days (opening the history does too).
+JSON: {deleted, remaining, retention_days}",
+    ),
+];
+
+const COMMAND_FOOTER: &str = "
+Options for every command: --json, --data-dir DIR (history.db there instead
+of ~/.local/share/icloud-findmy).
+Exit codes: 0 ok, 1 error, 2 sign-in required, 4 Find My needs the Apple
+password, 64 usage.
+";
+
 enum Failure {
     Usage(String),
     Find(findme::Error),
+    /// A machine-readable code (`not_found`, `ambiguous`, `no_fix`,
+    /// `cancelled`, ...) and its message.
+    Coded(&'static str, String),
     Other(String),
 }
 
@@ -91,13 +169,15 @@ impl Failure {
             Failure::Usage(_) => "usage",
             Failure::Find(findme::Error::SignInRequired) => "sign_in_required",
             Failure::Find(findme::Error::FindMyAuthRequired) => "find_my_auth_required",
+            Failure::Find(findme::Error::Unsupported(_)) => "unsupported",
+            Failure::Coded(code, _) => code,
             _ => "error",
         }
     }
 
     fn message(&self) -> String {
         match self {
-            Failure::Usage(m) | Failure::Other(m) => m.clone(),
+            Failure::Usage(m) | Failure::Other(m) | Failure::Coded(_, m) => m.clone(),
             Failure::Find(findme::Error::SignInRequired) => {
                 "sign in to iCloud required: run `icloud-session sign-in` (or Sign In in the app)"
                     .into()
@@ -283,7 +363,7 @@ pub fn run(args: &[String]) -> i32 {
             if json {
                 eprintln!(
                     "{}",
-                    json!({"error": {"kind": f.kind(), "message": f.message(), "exit": f.code()}})
+                    json!({"error": {"code": f.kind(), "message": f.message(), "exit_code": f.code()}})
                 );
             } else {
                 eprintln!("icloud-findmy: {}", f.message());
@@ -296,15 +376,48 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// The command line with global options given before the command (`--json
+/// devices`, `--data-dir DIR history ...`) moved after it.
+fn command_first(args: &[String]) -> Vec<String> {
+    let mut globals = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => globals.push(args[i].clone()),
+            "--data-dir" if i + 1 < args.len() => {
+                globals.extend_from_slice(&args[i..i + 2]);
+                i += 1;
+            }
+            a if a.starts_with("--data-dir=") => globals.push(args[i].clone()),
+            _ => break,
+        }
+        i += 1;
+    }
+    let mut out = args[i..].to_vec();
+    if out.is_empty() {
+        return out;
+    }
+    out.splice(1..1, globals);
+    out
+}
+
 fn dispatch(args: &[String]) -> Outcome {
+    let args = command_first(args);
     let Some((cmd, rest)) = args.split_first() else {
         return Err(usage("no command"));
     };
+    let wants_help = rest.iter().any(|a| a == "-h" || a == "--help");
     match cmd.as_str() {
         "help" | "-h" | "--help" => {
-            print!("{USAGE}");
-            return Ok(());
+            return match Opts::parse(rest)?.args.first() {
+                Some(name) => command_help(name),
+                None => {
+                    print!("{USAGE}");
+                    Ok(())
+                }
+            };
         }
+        name if wants_help => return command_help(name),
         "-V" | "--version" => {
             println!("icloud-findmy {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
@@ -321,6 +434,16 @@ fn dispatch(args: &[String]) -> Outcome {
         "history" => cli.history(),
         "prune-history" => cli.prune_history(),
         other => Err(usage(format!("unknown command \"{other}\""))),
+    }
+}
+
+fn command_help(name: &str) -> Outcome {
+    match COMMAND_HELP.iter().find(|(n, _)| *n == name) {
+        Some((_, text)) => {
+            println!("{text}\n{COMMAND_FOOTER}");
+            Ok(())
+        }
+        None => Err(usage(format!("unknown command \"{name}\""))),
     }
 }
 
@@ -427,11 +550,14 @@ impl<T: Transport> Cli<T> {
                     ),
                     _ => "no fix at all".into(),
                 };
-                return Err(Failure::Other(format!(
-                    "{} sent no fresh fix within {} s; {last}",
-                    now.name,
-                    wait.as_secs()
-                )));
+                return Err(Failure::Coded(
+                    "no_fix",
+                    format!(
+                        "{} sent no fresh fix within {} s; {last}",
+                        now.name,
+                        wait.as_secs()
+                    ),
+                ));
             }
             std::thread::sleep(POLL.min(left));
             devices = self.fm.refresh(false)?;
@@ -526,7 +652,7 @@ impl<T: Transport> Cli<T> {
         stdin.lock().read_line(&mut answer).ok();
         match answer.trim().to_ascii_lowercase().as_str() {
             "y" | "yes" => Ok(()),
-            _ => Err(Failure::Other("cancelled".into())),
+            _ => Err(Failure::Coded("cancelled", "cancelled".into())),
         }
     }
 
@@ -650,15 +776,21 @@ fn resolve<'a>(devices: &'a [Device], query: &str) -> Result<&'a Device, Failure
     };
     match matches.as_slice() {
         [d] => Ok(d),
-        [] => Err(Failure::Other(format!(
-            "no device matches \"{query}\"; devices:{}",
-            list(&devices.iter().collect::<Vec<_>>())
-        ))),
-        many => Err(Failure::Other(format!(
-            "\"{query}\" matches {} devices; name one exactly or use its ID:{}",
-            many.len(),
-            list(many)
-        ))),
+        [] => Err(Failure::Coded(
+            "not_found",
+            format!(
+                "no device matches \"{query}\"; devices:{}",
+                list(&devices.iter().collect::<Vec<_>>())
+            ),
+        )),
+        many => Err(Failure::Coded(
+            "ambiguous",
+            format!(
+                "\"{query}\" matches {} devices; name one exactly or use its ID:{}",
+                many.len(),
+                list(many)
+            ),
+        )),
     }
 }
 
@@ -811,7 +943,7 @@ mod tests {
         assert_eq!(resolve(&ds, "IPHONE").ok().unwrap().id, "c3");
         assert_eq!(resolve(&ds, "dous's iphone").ok().unwrap().id, "a1");
         assert_eq!(resolve(&ds, "ipad").ok().unwrap().id, "b2");
-        let Err(Failure::Other(msg)) = resolve(&ds, "dous") else {
+        let Err(Failure::Coded("ambiguous", msg)) = resolve(&ds, "dous") else {
             panic!("ambiguous")
         };
         assert!(msg.contains("a1") && msg.contains("b2"), "{msg}");

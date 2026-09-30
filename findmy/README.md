@@ -104,14 +104,20 @@ $ icloud-findmy help
   of the name is enough); an ambiguous name lists the matching devices.
 - `history` prints the stored trail (24 h unless `--since`, e.g. `90m`,
   `7d`); a device ID already in the history needs no network.
-- `--json` prints JSON on stdout (errors as JSON on stderr) for scripts
-  and agents; `--data-dir DIR` keeps `history.db` in `DIR` instead of
-  `~/.local/share/icloud-findmy`.
+- `--json` prints JSON on stdout, and an error as one JSON line on
+  stderr, `{"error":{"code":"not_found","message":…,"exit_code":1}}`
+  (codes: `usage`, `sign_in_required`, `find_my_auth_required`,
+  `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`,
+  `error`); `--data-dir DIR` keeps `history.db` in `DIR` instead of
+  `~/.local/share/icloud-findmy`. Both may come before the command.
+- `icloud-findmy COMMAND --help` (or `help COMMAND`) describes one
+  command and its JSON.
 
 Exit codes: 0 ok, 1 error, 2 sign-in required (`icloud-session
 sign-in`), 4 Find My needs the Apple password after `icloud-session`
 could not re-authorize with a stored one (`icloud-session
-authorize-find-my`), 64 usage.
+authorize-find-my`), 64 usage: the table every iCloud tool shares
+([docs/CLI.md](../docs/CLI.md)).
 
 ## Building from source
 

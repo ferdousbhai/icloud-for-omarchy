@@ -208,6 +208,16 @@ fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
         "{}",
         stderr(&out)
     );
+    // The same as machine-readable codes.
+    for (name, want) in [("nokia", "not_found"), ("test's", "ambiguous")] {
+        let out = env.run(&["play-sound", name, "--yes", "--json"]);
+        let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+        assert_eq!(
+            (code(&out), err["error"]["code"].as_str()),
+            (1, Some(want)),
+            "{name}"
+        );
+    }
 
     // The AirPods cannot do Lost Mode in the fixture.
     let out = env.run(&[
@@ -331,6 +341,37 @@ fn usage_errors_exit_64() {
     let out = env.run(&["help"]);
     assert_eq!(code(&out), 0);
     assert!(stdout(&out).contains("play-sound NAME|ID"));
+    // Every command has its own --help (and `help COMMAND`), which never
+    // touches the network or the history.
+    for cmd in [
+        "devices",
+        "locate",
+        "play-sound",
+        "lost-mode",
+        "history",
+        "prune-history",
+    ] {
+        for args in [&[cmd, "--help"][..], &["help", cmd]] {
+            let out = env.run(args);
+            assert_eq!(code(&out), 0, "{args:?}");
+            assert!(
+                stdout(&out).starts_with(&format!("Usage: icloud-findmy {cmd}"))
+                    && stdout(&out).contains("Exit codes"),
+                "{}",
+                stdout(&out)
+            );
+        }
+    }
+    assert!(env.actions().is_empty());
+    // A usage error with --json is the JSON error object; --json may come
+    // before the command.
+    let out = env.run(&["--json", "locate"]);
+    assert_eq!(code(&out), 64);
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "usage");
+    assert_eq!(err["error"]["exit_code"], 64);
+    let listed: Value = serde_json::from_slice(&env.run(&["--json", "devices"]).stdout).unwrap();
+    assert!(listed.as_array().is_some_and(|a| !a.is_empty()));
 }
 
 /// A server answering every request with `status`.
@@ -375,8 +416,8 @@ fn find_my_password_needed_exits_4() {
 
     let out = run_at(&answering(450), tmp.path(), &["devices", "--json"]);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
-    assert_eq!(err["error"]["kind"], "find_my_auth_required");
-    assert_eq!(err["error"]["exit"], 4);
+    assert_eq!(err["error"]["code"], "find_my_auth_required");
+    assert_eq!(err["error"]["exit_code"], 4);
 }
 
 #[test]
