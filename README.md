@@ -131,7 +131,6 @@ Releases are cut from a checkout with the package-signing key in its
 keyring, no CI involved:
 
 ```bash
-bin/release --initial                                  # the first release: all four
 bin/release icloud-notes 0.4.1
 bin/release icloud-session 0.3.0 icloud-notes 0.6.0   # several at once
 ```
@@ -162,14 +161,6 @@ from when it was the separate icloud-notes-sync package (last
 `notes-sync-v0.2.0`); the first icloud-notes that carries it must be
 released before any other package, and `bin/release` refuses to carry
 forward an icloud-notes that still depends on the old package.
-
-`bin/release --initial` is for the first release, when there is nothing to
-carry forward: it tags and builds every package at its current version
-(it made the first one, then five packages: icloud-session 0.2.0,
-icloud-notes-sync 0.1.0, icloud-photos 0.1.0,
-icloud-findmy 0.1.0 from their Cargo.toml files, and icloud-notes 0.4.0, the
-minor version after its last tag, `notes-v0.3.8`, since its sync engine
-changed).
 
 A release counts as shipped only once `bin/verify-release` has installed
 each named package in a clean Arch container, the apps through their
