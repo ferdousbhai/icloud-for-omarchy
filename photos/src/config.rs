@@ -36,7 +36,8 @@ impl Dirs {
         }
     }
 
-    /// Everything under one directory (tests).
+    /// Everything under one directory: `--data-dir` (data/, cache/,
+    /// config/ beneath it), which the tests use too.
     pub fn under(root: &Path) -> Dirs {
         Dirs {
             data: root.join("data"),

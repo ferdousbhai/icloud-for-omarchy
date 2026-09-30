@@ -63,12 +63,6 @@ no truncated-read retries and no status polling.
   on a data endpoint only triggers `ReportSignInRequired()`, which runs a
   `/validate` to confirm first, so one stray 401 does not sign every app out.
   Reports that arrive while a `/validate` is running share its answer.
-- **No icloud-md mirror.** Up to 0.2.0 the daemon also wrote the session
-  to `~/.config/icloud-md/accounts/<dsid>/` for icloud-md and adopted
-  icloud-md's rotations from it. That was retired on 2026-09-29, when
-  Notes moved to icloud-notes-sync, which asks the daemon over D-Bus; the
-  daemon no longer reads, writes or deletes anything under
-  `~/.config/icloud-md`.
 
 ## Library
 
@@ -211,8 +205,6 @@ output is JSON anyway) an error is one line on stderr,
 `~/.local/share`, `$XDG_CACHE_HOME` to `~/.cache`. Every daemon
 write is atomic: temp file in the same directory, mode 0600, fsync, rename.
 One account at a time; signing in with another Apple ID replaces it.
-The earlier layout, where this crate read icloud-md's accounts directory
-as its source of truth, is gone: after upgrading, sign in once more.
 
 ## Automatic Find My re-authorization
 
@@ -382,9 +374,10 @@ keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`).
 Released with the other packages from the repository root; see the root
 [README](../README.md#releasing). Its tags are `session-v<version>`.
 Releasing icloud-session also sets the version in both crates, the
-workspace's `icloud-session` dependency and the snippet above, and, once
-the release is verified, publishes the client crate to crates.io (so it
-needs a crates.io token).
+workspace's `icloud-session` dependency and the snippet above. With
+`PUBLISH_CRATE=1` it also publishes the client crate to crates.io once the
+release is verified (so it then needs a crates.io token); by default the
+crate is not published.
 
 ## License
 

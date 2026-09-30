@@ -52,11 +52,10 @@ with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 `omarchy refresh pacman`, and installs the packages in one `pacman -Syu`.
 Re-running it is safe. Updates then arrive with `omarchy update`.
 
-Machines set up from the earlier one-repository-per-app releases (the
-`[icloud-notes]` repository, and `[icloud-session]`, `[icloud-notes-sync]`,
-`[icloud-photos]`, `[icloud-findmy]` had they existed) are migrated: once
-`[icloud-for-omarchy]` is added, the script removes each old
-`/etc/pacman.d/<name>.conf`, its `Include` line and its Omarchy hook.
+Machines set up from earlier Notes releases, which had a repository of
+their own (`[icloud-notes]`), are migrated: once `[icloud-for-omarchy]` is
+added, the script removes `/etc/pacman.d/icloud-notes.conf`, its `Include`
+line and its Omarchy hook.
 The icloud-notes-sync package of earlier releases needs nothing from the
 script: icloud-notes now carries the engine and `replaces` it, so the next
 `omarchy update` swaps it out.

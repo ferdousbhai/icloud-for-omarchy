@@ -1,8 +1,7 @@
 # Fixtures
 
-None of these were captured from icloud.com by this project yet (brief, phase
-2 and 4: "capture real CloudKit fixtures"). They are hand-built in the shapes
-pyicloud documents, with placeholder ids and URLs:
+None of these were captured from icloud.com by this project yet. They are
+hand-built in the shapes pyicloud documents, with placeholder ids and URLs:
 
 - Read side (`*.json` here): CloudKit `records/query`, `records/lookup`,
   `zones/list` and `changes/zone` responses for the private database

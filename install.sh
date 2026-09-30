@@ -16,8 +16,8 @@
 # package-signing key (checked against the fingerprint pinned below), adds
 # the one [icloud-for-omarchy] repository that holds all four packages,
 # installs an Omarchy hook that restores it after `omarchy refresh pacman`
-# rewrites /etc/pacman.conf, removes the per-app repositories earlier
-# releases used, and installs the packages.
+# rewrites /etc/pacman.conf, removes the [icloud-notes] repository earlier
+# Notes releases used, and installs the packages.
 set -euo pipefail
 
 REPO=icloud-for-omarchy
