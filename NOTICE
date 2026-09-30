@@ -1,13 +1,14 @@
 icloud-for-omarchy
 Copyright (c) 2026 Ferdous Bhai. MIT License, see LICENSE.
 
-This repository holds icloud-session (session/, sessiond/),
-icloud-notes-sync (notes-sync/), icloud-photos (photos/), icloud-findmy
-(findmy/) and icloud-notes (notes/). The third-party credits below apply
-to the parts named; everything else is the author's own work.
+This repository holds icloud-session (session/, sessiond/), icloud-notes
+(notes/, and its sync engine icloud-notes-sync in notes-sync/),
+icloud-photos (photos/) and icloud-findmy (findmy/). The third-party
+credits below apply to the parts named; everything else is the author's
+own work.
 
 ============================================================================
-notes-sync/ (icloud-notes-sync)
+notes-sync/ (icloud-notes-sync, shipped in the icloud-notes package)
 ============================================================================
 
 icloud-notes-sync is a Rust port of icloud-md 0.6.2

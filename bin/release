@@ -7,19 +7,24 @@
 #
 # Usage: bin/release <package> <version> [<package> <version>...]
 #          e.g. bin/release icloud-notes 0.4.1
-#               bin/release icloud-session 0.3.0 icloud-notes-sync 0.2.0
+#               bin/release icloud-session 0.3.0 icloud-notes 0.6.0
 #        bin/release --initial
 #
 # Tags are per package: <name>-v<version>, where <name> is the package name
-# without "icloud-" (session, notes-sync, photos, findmy, notes), e.g.
-# notes-v0.4.1. Each PKGBUILD takes its version from its newest tag.
+# without "icloud-" (session, photos, findmy, notes), e.g. notes-v0.4.1.
+# Each PKGBUILD takes its version from its newest tag. The Notes sync engine
+# (notes-sync/) ships inside icloud-notes and is not released on its own;
+# the notes-sync-v* tags are from when it was a package.
 #
 # Only the named packages are built. The others are downloaded from the
 # latest release, their signatures checked against the pinned key, and
 # added to the new repository database unchanged, so it always lists all
-# five. --initial is the first release of this repository: it tags and
-# builds all five at their current versions (the Cargo.toml versions; Notes
-# at the minor version after its last notes-v tag) and downloads nothing.
+# four. The database is built afresh from them each time, so a package
+# dropped from this list (icloud-notes-sync, now inside icloud-notes)
+# leaves it, and pacman's replaces= swaps it out on the next update.
+# --initial is the first release of this repository: it tags and builds
+# all four at their current versions (the Cargo.toml versions; Notes at the
+# minor version after its last notes-v tag) and downloads nothing.
 #
 # The GitHub release hangs on the first tag named. Its assets are the
 # packages, the repository database, the signing key, install.sh and the
@@ -31,7 +36,7 @@ cd "$(dirname "$0")/.."
 
 repo=icloud-for-omarchy
 gh_repo=ferdousbhai/$repo
-all=(icloud-session icloud-notes-sync icloud-photos icloud-findmy icloud-notes)
+all=(icloud-session icloud-photos icloud-findmy icloud-notes)
 usage() {
   echo "Usage: bin/release <package> <major.minor.patch> [<package> <version>...] | bin/release --initial" >&2
   echo "Packages: ${all[*]}" >&2
@@ -51,7 +56,6 @@ if [[ ${1:-} == --initial ]]; then
   pkgs=("${all[@]}")
   versions=(
     "$(cargo_version session)"
-    "$(cargo_version notes-sync)"
     "$(cargo_version photos)"
     "$(cargo_version findmy)"
     "${BASH_REMATCH[1]}.$((BASH_REMATCH[2] + 1)).0"
@@ -114,6 +118,12 @@ if (( ${#carried[@]} )); then
     (( ${#found[@]} == 1 )) || { echo "The latest release has ${#found[@]} $pkg packages, not one." >&2; exit 1; }
     gpg --batch --status-fd 1 --verify "${found[0]}.sig" "${found[0]}" 2>/dev/null | grep -q "^\[GNUPG:\] VALIDSIG .*$fingerprint" \
       || { echo "$(basename "${found[0]}") is not signed by $fingerprint; not releasing." >&2; exit 1; }
+    # An icloud-notes from before the sync engine moved into it depends on
+    # the icloud-notes-sync package, which the new database no longer lists.
+    if [[ $pkg == icloud-notes ]] && ! bsdtar -xOf "${found[0]}" .PKGINFO | grep -qx 'provides = icloud-notes-sync'; then
+      echo "The latest icloud-notes still needs the separate icloud-notes-sync package; release icloud-notes too." >&2
+      exit 1
+    fi
     echo "Carrying forward $(basename "${found[0]}")"
   done
 fi
@@ -175,7 +185,7 @@ undo_tags() {
 
 rm -rf dist
 mkdir dist
-# --nodeps: packages here depend on each other (icloud-notes-sync on
+# --nodeps: packages here depend on each other (icloud-notes on
 # icloud-session, ...), and those are built in this same run, not installed;
 # --syncdeps would try to install them with sudo. The build tools themselves
 # (rust, cargo, qt6) are this machine's, and a missing one fails the build.

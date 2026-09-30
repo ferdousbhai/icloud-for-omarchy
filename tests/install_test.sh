@@ -87,8 +87,14 @@ done
 check "install-findmy.sh does not start Notes' sync" not grep -q 'Background sync' "$work/out"
 
 setup
-bash "$work/dist/install-photos.sh" icloud-session icloud-notes-sync >/dev/null 2>&1
-check "named packages override the default" [ "$(installed)" = "icloud-session icloud-notes-sync" ]
+bash "$work/dist/install-photos.sh" icloud-session icloud-notes >/dev/null 2>&1
+check "named packages override the default" [ "$(installed)" = "icloud-session icloud-notes" ]
+
+# The sync engine is inside icloud-notes now, not a package to name.
+setup
+status=0
+bash install.sh icloud-notes-sync >/dev/null 2>&1 || status=$?
+check "icloud-notes-sync is no longer a package" [ "$status" = 64 ]
 
 setup
 status=0

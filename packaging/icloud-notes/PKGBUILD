@@ -9,13 +9,20 @@
 pkgname=icloud-notes
 pkgver=0.5.0
 pkgrel=1
-pkgdesc='Apple Notes on Omarchy, synced with iCloud via icloud-notes-sync'
+pkgdesc='Apple Notes on Omarchy, synced with iCloud'
 arch=('x86_64')
 url='https://github.com/ferdousbhai/icloud-for-omarchy'
 license=('MIT')
-options=('!debug')
-depends=('hicolor-icon-theme' 'icloud-notes-sync' 'icloud-session' 'qt6-base' 'qt6-declarative')
-makedepends=('gcc' 'git' 'make')
+options=('!debug' '!lto')
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'icloud-session' 'qt6-base' 'qt6-declarative')
+makedepends=('cargo' 'gcc' 'git' 'make' 'rust')
+# The sync engine, icloud-notes-sync, was a package of its own up to
+# notes-sync-v0.2.0; it now ships inside this one, off PATH in
+# /usr/lib/icloud-notes. replaces lets `omarchy update` (pacman -Syu) swap
+# the old package out for this one.
+provides=('icloud-notes-sync')
+replaces=('icloud-notes-sync')
+conflicts=('icloud-notes-sync')
 
 # The version is this package's newest tag, notes-v<version>: notes-v0.3.8
 # builds 0.3.8, and a commit past it builds 0.3.8.r<count>.<sha> so
@@ -30,19 +37,49 @@ pkgver() {
 
 prepare() {
   # Only committed files: a release build never picks up local leftovers.
-  # The Qt app needs nothing outside notes/ but the license files.
+  # The whole tree, because Cargo needs every workspace member to load the
+  # workspace; only the sync engine (notes-sync/) and the Qt app (notes/)
+  # are built.
   mkdir -p "$srcdir/$pkgname"
-  git -C "$startdir/../.." archive HEAD notes LICENSE NOTICE | tar -x -C "$srcdir/$pkgname"
+  git -C "$startdir/../.." archive HEAD | tar -x -C "$srcdir/$pkgname"
+  cd "$srcdir/$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+# Keep build paths out of the engine (makepkg's "reference to $srcdir";
+# panic locations name source files).
+_cargo_env() {
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build --remap-path-prefix=$HOME/.cargo=/cargo"
 }
 
 build() {
-  cd "$srcdir/$pkgname/notes"
+  cd "$srcdir/$pkgname"
+  (
+    _cargo_env
+    cargo build --frozen --release -p icloud-notes-sync --bin icloud-notes-sync
+  )
+  cd notes
   # `icloud-notes --version` prints it.
   ICLOUD_NOTES_VERSION="$pkgver" ./bin/build
 }
 
+check() {
+  cd "$srcdir/$pkgname"
+  _cargo_env
+  # The engine's suite: recorded CloudKit answers and scratch vaults only,
+  # no network, no Apple account, nothing of the build user's touched.
+  # The Qt app's tests need a D-Bus session; the root bin/test runs them.
+  cargo test --frozen -p icloud-notes-sync
+}
+
 package() {
-  cd "$srcdir/$pkgname/notes"
+  cd "$srcdir/$pkgname"
+  # The engine, run by the app and by `icloud-notes`; not a command of its own.
+  install -Dm755 target/release/icloud-notes-sync "$pkgdir/usr/lib/icloud-notes/icloud-notes-sync"
+  install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
+  cd notes
   install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
   install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
   install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"

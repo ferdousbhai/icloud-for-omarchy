@@ -7,15 +7,14 @@
 #
 # With no arguments it installs DEFAULT_PACKAGES below: every app
 # (icloud-notes, icloud-photos, icloud-findmy). Name packages to install
-# only those; icloud-session (the Apple sign-in every app shares) and
-# icloud-notes-sync (the Notes sync engine) can be named too, and come in
-# as dependencies anyway. Each release also carries install-notes.sh,
+# only those; icloud-session (the Apple sign-in every app shares) can be
+# named too, and comes in as a dependency anyway. Each release also carries install-notes.sh,
 # install-photos.sh and install-findmy.sh: this script with
 # DEFAULT_PACKAGES set to that one app (bin/make-installers writes them).
 #
 # Every step is idempotent, so re-running is safe. It trusts the
 # package-signing key (checked against the fingerprint pinned below), adds
-# the one [icloud-for-omarchy] repository that holds all five packages,
+# the one [icloud-for-omarchy] repository that holds all four packages,
 # installs an Omarchy hook that restores it after `omarchy refresh pacman`
 # rewrites /etc/pacman.conf, removes the per-app repositories earlier
 # releases used, and installs the packages.
@@ -24,7 +23,7 @@ set -euo pipefail
 REPO=icloud-for-omarchy
 RELEASES=https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download
 SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
-PACKAGES=(icloud-session icloud-notes-sync icloud-notes icloud-photos icloud-findmy)
+PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy)
 # What a run with no arguments installs. bin/make-installers rewrites this
 # one line for the per-app installers.
 DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy)
@@ -169,7 +168,6 @@ for pkg in "${wanted[@]}"; do
     icloud-notes) echo 'Launch "Notes (iCloud)" from the app launcher (Super + Space).' ;;
     icloud-photos) echo 'Launch "Photos (iCloud)" from the app launcher (Super + Space).' ;;
     icloud-findmy) echo 'Launch "Find My (iCloud)" from the app launcher (Super + Space).' ;;
-    icloud-notes-sync) echo 'Sync a notes folder from the terminal: icloud-notes-sync --help' ;;
   esac
 done
 cat <<EOT
