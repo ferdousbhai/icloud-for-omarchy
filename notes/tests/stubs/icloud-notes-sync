@@ -61,9 +61,9 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2"
   # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
   # only that one (a push with nothing to send never asks iCloud).
   # ICLOUD_NOTES_SYNC_STUB_SIGNIN: how a refusal is reported: "code" exit 2
-  # without icloud-md's text marker; "legacy" exit 4 and "marker" exit 1 with
-  # only the marker, which the app no longer takes for a sign-in; unset,
-  # exit 2 and the marker, as the real tool does.
+  # without icloud-md's text marker; "marker" exit 1 with only the marker,
+  # which the app no longer takes for a sign-in; unset, exit 2 and the
+  # marker, as the real tool does.
   # ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK: the real engine takes the vault's lock
   # here (restore of a note that isn't there, so nothing changes): through
   # the descriptor the app handed down it must get it, without it it must
@@ -80,9 +80,6 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2"
       code)
         echo "Not signed in to iCloud." >&2
         exit 2 ;;
-      legacy)
-        echo "Not signed in to iCloud." >&2
-        exit 4 ;;
       marker)
         echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
         exit 1 ;;

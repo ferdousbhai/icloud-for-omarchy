@@ -24,8 +24,8 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
 
-use icloud_sessiond::cookies::is_icloud_domain;
-use icloud_sessiond::files::Paths;
+use icloud_sessiond::cookies::{TOKEN, is_icloud_domain};
+use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER, Paths};
 use serde_json::{Value, json};
 use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
@@ -35,10 +35,6 @@ const HOME: &str = "https://www.icloud.com/";
 /// answers (HTTP 450 until then), as icloud.com does for Find Devices.
 const FIND: &str = "https://www.icloud.com/find";
 const VALIDATE: &str = "https://setup.icloud.com/setup/ws/1/validate";
-/// icloud-md's defaults, which icloud-sessiond also falls back to.
-const CLIENT_BUILD_NUMBER: &str = "2624Build27";
-const CLIENT_MASTERING_NUMBER: &str = "2624Build27";
-const TOKEN: &str = "X-APPLE-WEBAUTH-TOKEN";
 /// How often the jar is checked for a sign-in.
 const POLL: Duration = Duration::from_secs(2);
 /// How often Find My is asked while waiting for its password (`--find`).
@@ -186,21 +182,25 @@ fn is_fully_signed_in(body: &Value) -> bool {
 fn client_params(client_id: &str) -> Value {
     json!({
         "clientId": client_id,
-        "clientBuildNumber": CLIENT_BUILD_NUMBER,
-        "clientMasteringNumber": CLIENT_MASTERING_NUMBER,
+        "clientBuildNumber": DEFAULT_CLIENT_BUILD_NUMBER,
+        "clientMasteringNumber": DEFAULT_CLIENT_MASTERING_NUMBER,
     })
+}
+
+/// [`client_params`] as a URL query.
+fn client_query(client_id: &str) -> String {
+    url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("clientBuildNumber", DEFAULT_CLIENT_BUILD_NUMBER)
+        .append_pair("clientMasteringNumber", DEFAULT_CLIENT_MASTERING_NUMBER)
+        .append_pair("clientId", client_id)
+        .finish()
 }
 
 /// A /validate call made from the page itself, so it carries the browser's
 /// own cookies (and rotates the token in the jar, as the page's heartbeat
 /// does). Answers `{"status": n, "body": "..."}` as a JSON string.
 fn validate_js(client_id: &str) -> String {
-    let mut url = url::Url::parse(VALIDATE).expect("VALIDATE is a URL");
-    url.query_pairs_mut()
-        .append_pair("clientBuildNumber", CLIENT_BUILD_NUMBER)
-        .append_pair("clientMasteringNumber", CLIENT_MASTERING_NUMBER)
-        .append_pair("clientId", client_id);
-    let url = Value::String(url.into());
+    let url = Value::String(format!("{VALIDATE}?{}", client_query(client_id)));
     format!(
         r#"const r = await fetch({url}, {{method: "POST", credentials: "include",
   headers: {{"Content-Type": "text/plain;charset=UTF-8"}}, body: ""}});
@@ -212,10 +212,7 @@ return JSON.stringify({{status: r.status, body: r.ok ? await r.text() : ""}});"#
 /// same cookies: 450 until the password has been entered for Find My.
 /// Answers the validate body only once Find My answers 2xx.
 fn find_js(client_id: &str) -> String {
-    let query = format!(
-        "clientBuildNumber={CLIENT_BUILD_NUMBER}&clientMasteringNumber={CLIENT_MASTERING_NUMBER}&clientId={client_id}"
-    );
-    let query = Value::String(query);
+    let query = Value::String(client_query(client_id));
     let validate = Value::String(VALIDATE.to_owned());
     format!(
         r#"const q = {query};
@@ -709,7 +706,7 @@ mod tests {
         // A client id cannot break out of its string.
         let js = find_js(r#"a"; alert(1); ""#);
         assert!(js.contains(
-            r#""clientBuildNumber=2624Build27&clientMasteringNumber=2624Build27&clientId=a\"; alert(1); \"""#
+            r#""clientBuildNumber=2624Build27&clientMasteringNumber=2624Build27&clientId=a%22%3B+alert%281%29%3B+%22""#
         ));
     }
 

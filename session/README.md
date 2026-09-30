@@ -375,7 +375,7 @@ daemon (requests, rotation, retry, sign-out), the CLI, idle exit, a second
 daemon refusing to start, mock mode without D-Bus, and automatic Find My
 re-authorization through a fake `--find --autofill` window (which checks
 the password reaches it on stdin only) with a file standing in for the
-keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`) and fake `bw`/`op` scripts.
+keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`).
 
 ## Releasing
 

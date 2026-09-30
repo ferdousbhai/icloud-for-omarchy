@@ -59,7 +59,6 @@ public:
         m_fd = -1;
     }
 
-    bool held() const { return m_fd >= 0; }
     // The locked descriptor, or -1.
     int fd() const { return m_fd; }
     QString path() const { return m_path; }

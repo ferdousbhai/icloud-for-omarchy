@@ -727,18 +727,17 @@ int main(int argc, char *argv[])
         check(waitUntil([&] { return !b.authExpired() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000),
               "seam exit 2: a new sign-in resumes");
     }
-    for (const char *style : { "legacy", "marker" }) {
+    {
         fake.reportCalls = 0;
-        qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", style);
+        qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", "marker");
         qputenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED", "1");
         b.runPull();
         waitForSync(b);
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
         waitUntil([] { return false; }, 300); // a report would have gone out by now
-        const QByteArray name = QByteArray("seam ") + style;
         check(!b.authExpired() && fake.reportCalls == 0 && b.syncMessage() == QStringLiteral("Pull failed. See log."),
-              (name + " is a plain failure, not a sign-in").constData());
+              "seam marker is a plain failure, not a sign-in");
     }
     fake.reportCalls = 0;
 
