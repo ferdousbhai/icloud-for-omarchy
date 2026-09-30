@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 use super::CkError;
 use super::transport::Transport;
 use super::types::*;
+use crate::js::is_record;
 
 const CKJS_BUILD_VERSION: &str = "2310ProjectDev27";
 const CKJS_VERSION: &str = "2.6.4";
@@ -533,11 +534,6 @@ fn modify_body(ops: &[RecordOp], zone_id: &ZoneId) -> Value {
 
 fn fields_json(fields: &UpdateFields) -> Value {
     serde_json::to_value(fields).expect("update fields serialize")
-}
-
-/// `isRecord`: `typeof v === "object" && v !== null` (arrays included).
-fn is_record(v: &Value) -> bool {
-    v.is_object() || v.is_array()
 }
 
 /// Property access as JS does it: only objects have named properties here.

@@ -544,11 +544,6 @@ impl Downloader {
             q.pending.remove(&k);
         }
     }
-
-    pub fn queued(&self) -> usize {
-        let q = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
-        q.pending.len()
-    }
 }
 
 fn worker(inner: Arc<Inner>) {

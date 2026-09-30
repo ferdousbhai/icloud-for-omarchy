@@ -39,7 +39,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use icloud_sessiond::cookies::{TOKEN, is_icloud_domain};
-use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER, Paths};
+use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER, Paths, create_private_dir};
 use serde_json::{Value, json};
 use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
@@ -478,8 +478,7 @@ fn main() -> ExitCode {
         ..
     } = Paths::from_env();
     for dir in [&data_dir, &cache_dir] {
-        use std::os::unix::fs::DirBuilderExt;
-        let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+        let _ = create_private_dir(dir);
     }
     let session = webkit6::NetworkSession::new(data_dir.to_str(), cache_dir.to_str());
     let Some(cookies) = session.cookie_manager() else {

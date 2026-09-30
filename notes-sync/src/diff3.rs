@@ -5,6 +5,7 @@
 //! differently, so this is a port, not a dependency.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 
 /// `MergeOutcome` (mergeConflict.ts).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,8 +54,8 @@ struct Candidate {
 
 /// `LCS`: Hunt-McIlroy. Returns the candidate arena and the index of the
 /// chain head (`candidates[candidates.length - 1]`).
-fn lcs(buffer1: &[&str], buffer2: &[&str]) -> (Vec<Candidate>, usize) {
-    let mut equivalence_classes: HashMap<&str, Vec<usize>> = HashMap::new();
+fn lcs<T: Eq + Hash>(buffer1: &[T], buffer2: &[T]) -> (Vec<Candidate>, usize) {
+    let mut equivalence_classes: HashMap<&T, Vec<usize>> = HashMap::new();
     for (j, item) in buffer2.iter().enumerate() {
         equivalence_classes.entry(item).or_default().push(j);
     }
@@ -175,9 +176,9 @@ pub struct IndexHunk {
     pub buffer2: (usize, usize),
 }
 
-/// node-diff3 `diffIndices(buffer1, buffer2)` (the `*Content` slices are
-/// left to the caller).
-pub fn diff_indices(buffer1: &[&str], buffer2: &[&str]) -> Vec<IndexHunk> {
+/// node-diff3 `diffIndices(buffer1, buffer2)` over any comparable items (the
+/// `*Content` slices are left to the caller).
+pub fn diff_indices<T: Eq + Hash>(buffer1: &[T], buffer2: &[T]) -> Vec<IndexHunk> {
     let (arena, head) = lcs(buffer1, buffer2);
     let mut result = Vec::new();
     let mut tail1 = buffer1.len() as isize;

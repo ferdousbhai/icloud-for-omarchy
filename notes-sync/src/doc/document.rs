@@ -3,13 +3,12 @@
 //! Offsets, lengths and clocks count UTF-16 code units, as in icloud-md and
 //! on the wire; `text` is held as a `String` and converted where needed.
 
-use std::collections::HashMap;
-
 use super::proto::topotext::vector_timestamp::{Clock, clock::ReplicaClock};
 use super::proto::topotext::{self, AttributeRun, CharID, Substring};
 use super::proto::{Message, versioned_document};
 use super::text::parse_versioned_document;
 use super::{DocError, Result};
+use crate::diff3::diff_indices;
 use crate::js::{from_utf16, len16, utf16};
 
 const SENTINEL_CLOCK: u32 = 0xffff_ffff;
@@ -496,103 +495,12 @@ fn line_start_offsets(lines: &[Vec<u16>]) -> Vec<usize> {
     offsets
 }
 
-/// One node-diff3 `diffIndices` hunk: `(start, length)` on each side.
-pub(crate) struct DiffHunk {
-    pub buffer1: (usize, usize),
-    pub buffer2: (usize, usize),
-}
-
-/// node-diff3 3.2.1 `LCS` + `diffIndices` (the Hunt-McIlroy candidate
-/// chain, same tie-breaking), over any comparable items.
-pub(crate) fn diff_indices<T: Eq + std::hash::Hash>(buffer1: &[T], buffer2: &[T]) -> Vec<DiffHunk> {
-    struct Candidate {
-        buffer1index: isize,
-        buffer2index: isize,
-        chain: Option<usize>,
-    }
-    let mut equivalence: HashMap<&T, Vec<usize>> = HashMap::new();
-    for (j, item) in buffer2.iter().enumerate() {
-        equivalence.entry(item).or_default().push(j);
-    }
-    let mut arena = vec![Candidate {
-        buffer1index: -1,
-        buffer2index: -1,
-        chain: None,
-    }];
-    let mut candidates: Vec<usize> = vec![0];
-    for (i, item) in buffer1.iter().enumerate() {
-        let empty = Vec::new();
-        let buffer2indices = equivalence.get(item).unwrap_or(&empty);
-        let mut r = 0usize;
-        let mut c = candidates[0];
-        for &j in buffer2indices {
-            let j = j as isize;
-            let mut s = r;
-            while s < candidates.len() {
-                if arena[candidates[s]].buffer2index < j
-                    && (s == candidates.len() - 1 || arena[candidates[s + 1]].buffer2index > j)
-                {
-                    break;
-                }
-                s += 1;
-            }
-            if s < candidates.len() {
-                arena.push(Candidate {
-                    buffer1index: i as isize,
-                    buffer2index: j,
-                    chain: Some(candidates[s]),
-                });
-                let new_candidate = arena.len() - 1;
-                if r == candidates.len() {
-                    candidates.push(c);
-                } else {
-                    candidates[r] = c;
-                }
-                r = s + 1;
-                c = new_candidate;
-                if r == candidates.len() {
-                    break;
-                }
-            }
-        }
-        if r == candidates.len() {
-            candidates.push(c);
-        } else {
-            candidates[r] = c;
-        }
-    }
-    let mut result = Vec::new();
-    let mut tail1 = buffer1.len() as isize;
-    let mut tail2 = buffer2.len() as isize;
-    let mut candidate = Some(candidates[candidates.len() - 1]);
-    while let Some(index) = candidate {
-        let node = &arena[index];
-        let mismatch1 = tail1 - node.buffer1index - 1;
-        let mismatch2 = tail2 - node.buffer2index - 1;
-        tail1 = node.buffer1index;
-        tail2 = node.buffer2index;
-        if mismatch1 != 0 || mismatch2 != 0 {
-            result.push(DiffHunk {
-                buffer1: ((tail1 + 1) as usize, mismatch1 as usize),
-                buffer2: ((tail2 + 1) as usize, mismatch2 as usize),
-            });
-        }
-        candidate = node.chain;
-    }
-    result.reverse();
-    result
-}
-
-fn is_sentinel(run: &TextRun) -> bool {
+/// `isSentinel`.
+pub fn run_is_sentinel(run: &TextRun) -> bool {
     run.coord.clock == SENTINEL_CLOCK
 }
 
-/// `isSentinel`.
-pub fn run_is_sentinel(run: &TextRun) -> bool {
-    is_sentinel(run)
-}
-
-fn visible_length(runs: &[TextRun]) -> u64 {
+pub(crate) fn visible_length(runs: &[TextRun]) -> u64 {
     runs.iter().filter(|r| !r.tombstone).map(|r| u64::from(r.length)).sum()
 }
 
@@ -609,7 +517,7 @@ pub(crate) fn for_each_visible_piece(
     let mut i = 0usize;
     while i < runs.len() && visible < end {
         let run = &runs[i];
-        if run.tombstone || run.length == 0 || is_sentinel(run) {
+        if run.tombstone || run.length == 0 || run_is_sentinel(run) {
             i += 1;
             continue;
         }
@@ -694,7 +602,7 @@ pub(crate) fn find_insert_index(runs: &mut Vec<TextRun>, start: usize) -> Result
     let mut i = 0;
     while i < runs.len() {
         let run = &runs[i];
-        if is_sentinel(run) {
+        if run_is_sentinel(run) {
             insert_index = i;
             break;
         }
@@ -738,7 +646,7 @@ fn insert_visible_text(doc: &mut NoteDocument, start: usize, length: usize, repl
     if insert_index > 0 {
         let previous = &mut doc.runs[insert_index - 1];
         if !previous.tombstone
-            && !is_sentinel(previous)
+            && !run_is_sentinel(previous)
             && previous.coord.replica == replica_index
             && u64::from(previous.coord.clock) + u64::from(previous.length) == u64::from(clock)
         {
@@ -919,7 +827,7 @@ pub fn validate_document_invariants(doc: &NoteDocument) -> Result<()> {
         )));
     }
     for run in &doc.runs {
-        if is_sentinel(run) {
+        if run_is_sentinel(run) {
             continue;
         }
         if run.coord.replica as usize > doc.replicas.len() {
@@ -948,7 +856,7 @@ pub fn validate_document_invariants(doc: &NoteDocument) -> Result<()> {
 /// `validateChildEdges`.
 pub fn validate_child_edges(runs: &[TextRun], what: &str) -> Result<()> {
     for (index, run) in runs.iter().enumerate() {
-        if is_sentinel(run) {
+        if run_is_sentinel(run) {
             continue;
         }
         if run.sequence.is_empty() {

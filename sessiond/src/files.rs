@@ -192,7 +192,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-fn create_private_dir(dir: &Path) -> io::Result<()> {
+/// Creates `dir` and any missing parents with mode 0700.
+pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
 }
 

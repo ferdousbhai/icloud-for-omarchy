@@ -2,14 +2,15 @@
 //! where icloud-md's TypeScript says `.trim()` and mean exactly that: the
 //! ECMAScript whitespace set, UTF-16 lengths and slices, Node's `Buffer`
 //! base64 and UTF-8, `String.prototype.localeCompare` (ICU root collation,
-//! what Node uses), `Date.prototype.toISOString`, `encodeURIComponent`, and
-//! `path.posix`.
+//! what Node uses), `Date.prototype.toISOString`, `encodeURIComponent`, `typeof`
+//! object checks, and `path.posix`.
 
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
 use icu_collator::CollatorBorrowed;
 use icu_collator::options::CollatorOptions;
+use serde_json::Value;
 
 /// ECMAScript `WhiteSpace` + `LineTerminator` (what `\s`, `trim()` and
 /// friends match): TAB, VT, FF, ZWNBSP, every `Zs`, LF, CR, LS, PS. Differs
@@ -25,6 +26,11 @@ pub fn is_whitespace(c: char) -> bool {
 /// `is_whitespace` for one UTF-16 code unit (a lone surrogate is not).
 pub fn is_whitespace16(unit: u16) -> bool {
     char::from_u32(u32::from(unit)).is_some_and(is_whitespace)
+}
+
+/// `isRecord`: `typeof v === "object" && v !== null` (arrays included).
+pub(crate) fn is_record(v: &Value) -> bool {
+    v.is_object() || v.is_array()
 }
 
 /// `String.prototype.trim`.

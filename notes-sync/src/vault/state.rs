@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::cmd::errors::Error;
+use crate::js::is_record;
 
 pub const STATE_DIR_NAME: &str = ".icloud-md";
 pub const STATE_FILE_NAME: &str = "state.json";
@@ -431,7 +432,7 @@ pub fn to_js_json(value: &Value) -> String {
 
 /// Write `contents` to `path` atomically: a temp file beside it, then a
 /// rename. (icloud-md writes in place; the bytes are the same.)
-pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
@@ -509,10 +510,6 @@ pub fn read_clone_state(target_dir: &Path) -> Result<Option<CloneState>, Error> 
         None => Ok(None),
         Some(value) => assert_clone_state(&value, &path, target_dir).map(Some),
     }
-}
-
-fn is_record(v: &Value) -> bool {
-    v.is_object() || v.is_array()
 }
 
 fn obj(v: &Value) -> Option<Map<String, Value>> {

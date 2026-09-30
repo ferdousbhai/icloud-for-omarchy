@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::Result;
 use super::document::{
     RunCoord, TextRun, adjust_attribute_runs, compare_bytes, compute_splice16, encode_text_run, find_insert_index,
-    for_each_visible_piece, initial_runs, insert_run_at, parse_text_run, validate_child_edges,
+    for_each_visible_piece, initial_runs, insert_run_at, parse_text_run, validate_child_edges, visible_length,
 };
 use super::proto::crdt::document::custom_object::MapEntry;
 use super::proto::crdt::document::{CustomObject, DocObject};
@@ -347,10 +347,6 @@ pub fn new_cell_document() -> TableCellDocument {
         runs: initial_runs(),
         attribute_runs: Vec::new(),
     }
-}
-
-fn visible_length(runs: &[TextRun]) -> u64 {
-    runs.iter().filter(|r| !r.tombstone).map(|r| u64::from(r.length)).sum()
 }
 
 /// `applyCellTextEdit`: one splice (`computeSplice`), clocks from `clock`.
