@@ -60,7 +60,11 @@ impl OutputContext {
     pub fn emit_error_to(&self, error: &Error, stderr: &mut dyn Write) -> i32 {
         let code = error.exit_code();
         if self.json {
-            let _ = writeln!(stderr, "{}", error_json(&error.code(), &error.to_string(), code, error.hint()));
+            let _ = writeln!(
+                stderr,
+                "{}",
+                error_json(&error.code(), &error.to_string(), code, error.hint())
+            );
         } else {
             let _ = writeln!(stderr, "{error}");
             if let Some(hint) = error.hint() {

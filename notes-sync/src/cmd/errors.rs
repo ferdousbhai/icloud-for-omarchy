@@ -197,7 +197,10 @@ impl Error {
 /// `UntrackedFileError` → `untracked_file`; `CloudKitZoneFetchFailedError` →
 /// `cloudkit_zone_fetch_failed`.
 pub fn snake_code(name: &str) -> String {
-    let base = name.strip_suffix("Error").unwrap_or(name).replace("CloudKit", "Cloudkit");
+    let base = name
+        .strip_suffix("Error")
+        .unwrap_or(name)
+        .replace("CloudKit", "Cloudkit");
     let mut out = String::new();
     for (i, c) in base.chars().enumerate() {
         if c.is_ascii_uppercase() {
