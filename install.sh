@@ -129,14 +129,21 @@ remove_old_repos() {
 remove_old_repos
 
 echo "Installing ${wanted[*]}"
-# Upgrade and install in one transaction. add_signed_repo has just synced
-# every repository's database, and installing from those without upgrading
-# is Arch's unsupported partial upgrade: a new dependency can need newer
-# libraries than the ones installed. (omarchy-pkg-add only runs pacman -S.)
-if (( EUID == 0 )); then
-  pacman -Syu --needed --noconfirm "${wanted[@]}"
+if command -v omarchy-pkg-add >/dev/null; then
+  # Omarchy's pacman hook aborts a direct `pacman -Syu` (system upgrades go
+  # through `omarchy update`), so install the way Omarchy installs its own
+  # apps; the next `omarchy update` brings everything current.
+  omarchy-pkg-add "${wanted[@]}"
 else
-  sudo pacman -Syu --needed --noconfirm "${wanted[@]}"
+  # Upgrade and install in one transaction. add_signed_repo has just synced
+  # every repository's database, and installing from those without upgrading
+  # is Arch's unsupported partial upgrade: a new dependency can need newer
+  # libraries than the ones installed.
+  if (( EUID == 0 )); then
+    pacman -Syu --needed --noconfirm "${wanted[@]}"
+  else
+    sudo pacman -Syu --needed --noconfirm "${wanted[@]}"
+  fi
 fi
 
 # Notes' background sync: a systemd user timer syncs every 15 minutes while

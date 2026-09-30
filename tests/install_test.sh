@@ -35,6 +35,10 @@ cat >"$work/bin/pacman" <<'STUB'
 #!/bin/sh
 echo "pacman $*" >>"$PACMAN_LOG"
 STUB
+cat >"$work/bin/omarchy-pkg-add" <<'STUB'
+#!/bin/sh
+echo "omarchy-pkg-add $*" >>"$PACMAN_LOG"
+STUB
 cat >"$work/bin/pacman-key" <<'STUB'
 #!/bin/sh
 exit 0
@@ -66,7 +70,8 @@ setup() {
   mount --bind "$s/root" /root
 }
 hooks=/root/.config/omarchy/hooks/pre-refresh-pacman.d
-installed() { grep '^pacman -Syu' "$PACMAN_LOG" | tail -1 | sed 's/^pacman -Syu --needed --noconfirm //'; }
+# What the last install asked for, whichever way it installed (omarchy-pkg-add on Omarchy).
+installed() { grep -E '^(pacman -Syu|omarchy-pkg-add) ' "$PACMAN_LOG" | tail -1 | sed -E 's/^(pacman -Syu --needed --noconfirm|omarchy-pkg-add) //'; }
 count_include() { grep -cxF "Include = /etc/pacman.d/$1.conf" /etc/pacman.conf || true; }
 
 setup
@@ -78,6 +83,18 @@ check "the Omarchy hook is installed" [ -x "$hooks/icloud-for-omarchy" ]
 check "Notes' background sync is mentioned" grep -q 'Background sync' "$work/out"
 bash install.sh >/dev/null 2>&1
 check "re-running keeps one Include line" [ "$(count_include icloud-for-omarchy)" = 1 ]
+check "on Omarchy it installs with omarchy-pkg-add" grep -q '^omarchy-pkg-add icloud-notes' "$PACMAN_LOG"
+check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" not grep -q '^pacman -Syu' "$PACMAN_LOG"
+
+# Plain Arch: no Omarchy commands anywhere on PATH, so one pacman -Syu transaction.
+setup
+mkdir -p "$work/plain"
+cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/plain/"
+for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail; do
+  ln -sf "$(command -v "$tool")" "$work/plain/$tool"
+done
+PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
+check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy' "$PACMAN_LOG"
 
 for app in notes photos findmy; do
   setup
