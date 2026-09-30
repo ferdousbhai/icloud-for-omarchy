@@ -338,11 +338,20 @@ fn usage_errors_exit_64() {
         let out = env.run(args);
         assert_eq!(code(&out), 64, "{args:?}: {}", stderr(&out));
     }
-    let out = env.run(&["help"]);
+    // Help never touches the network or the history.
+    let help = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_icloud-findmy"))
+            .args(args)
+            .env("ICLOUD_SESSION_MOCK", "1")
+            .env("ICLOUD_SESSION_MOCK_URL", "http://127.0.0.1:9")
+            .output()
+            .unwrap()
+    };
+    let out = help(&["help"]);
     assert_eq!(code(&out), 0);
-    assert!(stdout(&out).contains("play-sound NAME|ID"));
-    // Every command has its own --help (and `help COMMAND`), which never
-    // touches the network or the history.
+    assert!(stdout(&out).contains("play-sound"), "{}", stdout(&out));
+    // Every command has its own --help (and `help COMMAND`), with its JSON
+    // shape and the exit codes.
     for cmd in [
         "devices",
         "locate",
@@ -352,13 +361,14 @@ fn usage_errors_exit_64() {
         "prune-history",
     ] {
         for args in [&[cmd, "--help"][..], &["help", cmd]] {
-            let out = env.run(args);
+            let out = help(args);
             assert_eq!(code(&out), 0, "{args:?}");
+            let text = stdout(&out);
             assert!(
-                stdout(&out).starts_with(&format!("Usage: icloud-findmy {cmd}"))
-                    && stdout(&out).contains("Exit codes"),
-                "{}",
-                stdout(&out)
+                text.contains(&format!("Usage: icloud-findmy {cmd}"))
+                    && text.contains("JSON:")
+                    && text.contains("Exit codes"),
+                "{text}"
             );
         }
     }

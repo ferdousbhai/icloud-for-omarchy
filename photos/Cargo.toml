@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
-icloud-session.workspace = true
+icloud-session = { workspace = true, features = ["clap"] }
 gtk.workspace = true
 adw.workspace = true
 async-channel.workspace = true

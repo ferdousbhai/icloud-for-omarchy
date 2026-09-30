@@ -12,7 +12,12 @@ categories = ["api-bindings"]
 [lib]
 name = "icloud_session"
 
+[features]
+# `cli::parse`, for the tools' clap command lines.
+clap = ["dep:clap"]
+
 [dependencies]
+clap = { workspace = true, optional = true }
 futures-lite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

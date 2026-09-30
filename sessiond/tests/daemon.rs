@@ -1039,6 +1039,8 @@ fn cli_status_validate_sign_in_and_sign_out() {
     assert_eq!(out.status.code(), Some(64));
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(err["error"]["code"], "usage");
+    // The password managers' own CLIs pipe into set-password instead.
+    assert_eq!(env.cli(&["set-password", "--from-bitwarden"]).status.code(), Some(64));
     // Every command has its own --help.
     for cmd in [
         "status",
@@ -1052,7 +1054,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
         let out = env.cli(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd} --help");
         let text = String::from_utf8_lossy(&out.stdout);
-        assert!(text.starts_with(&format!("usage: icloud-session {cmd}")), "{text}");
+        assert!(text.contains(&format!("Usage: icloud-session {cmd}")), "{text}");
         assert!(text.contains("Exit codes"), "{text}");
     }
 }

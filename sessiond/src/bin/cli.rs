@@ -3,189 +3,152 @@
 //!
 //! Talks to icloud-sessiond over D-Bus. JSON on stdout; errors on stderr
 //! with a non-zero exit, in the table every iCloud tool shares: 1 error,
-//! 2 sign-in required, 4 Find My not authorized, 64 usage. With `--json`
-//! an error is one JSON line on stderr:
+//! 2 sign-in required, 4 Find My not authorized, 64 usage
+//! (`icloud_session::cli`). With `--json` an error is one JSON line on stderr:
 //! `{"error":{"code","message","exit_code","hint"?}}`.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use clap::{Parser, Subcommand};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN};
 use icloud_session::{BUS_NAME, Error, INTERFACE, OBJECT_PATH, Session, Status};
 use serde_json::json;
 use zeroize::Zeroizing;
 
-const EXIT_ERROR: u8 = 1;
-const EXIT_SIGN_IN: u8 = 2;
-const EXIT_FIND_MY_AUTH: u8 = 4;
-const EXIT_USAGE: u8 = 64;
+const TOOL: &str = "icloud-session";
 
-/// `--json` anywhere on the command line: errors as JSON (the output
-/// already is).
+/// `--json`: errors as JSON (the output already is).
 static JSON: AtomicBool = AtomicBool::new(false);
 
-/// Each command's name, its synopsis and what it does (`<command> --help`).
-const COMMANDS: &[(&str, &str, &str)] = &[
-    (
-        "status",
-        "status",
-        "The daemon's properties: signed_in, apple_id, dsid, expires_at (Unix seconds; null for a\n\
-         sign-in without \"Keep me signed in\"), signing_in, find_my_authorized, find_my_password_stored.",
-    ),
-    (
-        "sign-in",
-        "sign-in [--no-wait]",
-        "Open the sign-in window (Apple's page: password and 2FA, typed by a person) and wait until it\n\
-         closes, then print status. Exits 2 when the window closed without a sign-in. --no-wait prints\n\
-         status at once instead; poll `status` until signing_in is false.",
-    ),
-    (
-        "authorize-find-my",
-        "authorize-find-my [--no-wait]",
-        "Open the sign-in window on Find My, where Apple asks for the password again, and wait until it\n\
-         closes, then print status. Exits 4 when Find My is still not authorized. --no-wait as for sign-in.",
-    ),
-    (
-        "set-password",
-        "set-password",
-        "Store the Apple ID password in the keyring (GNOME Keyring), so the daemon re-authorizes Find My\n\
-         by itself when it asks for the password again. The password is checked with a Find My sign-in\n\
-         first and stored only if Apple accepts it. It is read from the terminal without echo, or from\n\
-         stdin when that is not a terminal, e.g. from a password manager:\n\
-         bw get password \"Apple ID\" | icloud-session set-password\n\
-         op read \"op://Private/Apple ID/password\" | icloud-session set-password",
-    ),
-    (
-        "forget-password",
-        "forget-password",
-        "Remove the stored password from the keyring, then print status.",
-    ),
-    (
-        "sign-out",
-        "sign-out",
-        "Forget the account and the sign-in window's profile, then print status (a stored password stays\n\
-         until forget-password). Every iCloud app is signed out.",
-    ),
-    (
-        "validate",
-        "validate",
-        "The session's webservices: {dsid, apple_id, webservices} (the daemon revalidates when older than\n\
-         10 minutes). Exits 2 when Apple no longer accepts the sign-in.",
-    ),
-];
-
-const FOOTER: &str = "--json: errors as one JSON line on stderr, {\"error\":{\"code\",\"message\",\"exit_code\"}} (output is JSON anyway).
+const AFTER_HELP: &str = "\
+--json: errors as one JSON line on stderr, {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"?}}
+(output is JSON anyway).
 Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed), 4 Find My not authorized
 (or its authorization not completed), 64 usage.";
 
-fn usage_text() -> String {
-    let mut out = String::from("usage: icloud-session <command> [--json]\n\ncommands:\n");
-    for (_, synopsis, help) in COMMANDS {
-        out.push_str(&format!("  {synopsis}\n"));
-        for line in help.lines() {
-            out.push_str(&format!("      {}\n", line.trim_start()));
-        }
-    }
-    out.push_str("\n`icloud-session <command> --help` shows one command.\n");
-    out.push_str(FOOTER);
-    out
+#[derive(Parser)]
+#[command(
+    name = "icloud-session",
+    version,
+    about = "The one iCloud sign-in every app uses, through icloud-sessiond. JSON on stdout.",
+    after_help = AFTER_HELP
+)]
+struct Args {
+    /// Errors as one JSON line on stderr (the output is JSON anyway).
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    command: Command,
 }
 
-fn command_help(name: &str) -> Option<String> {
-    let (_, synopsis, help) = COMMANDS.iter().find(|(n, ..)| *n == name)?;
-    let body: Vec<&str> = help.lines().map(str::trim_start).collect();
-    Some(format!(
-        "usage: icloud-session {synopsis} [--json]\n\n{}\n\n{FOOTER}",
-        body.join("\n")
-    ))
+#[derive(Subcommand)]
+enum Command {
+    /// The daemon's properties.
+    ///
+    /// The daemon's properties: signed_in, apple_id, dsid, expires_at (Unix
+    /// seconds; null for a sign-in without "Keep me signed in"), signing_in,
+    /// find_my_authorized, find_my_password_stored.
+    #[command(after_help = AFTER_HELP)]
+    Status,
+    /// Open the sign-in window and wait for it, then print status.
+    ///
+    /// Opens the sign-in window (Apple's page: password and 2FA, typed by a
+    /// person) and waits until it closes, then prints status. Exits 2 when
+    /// the window closed without a sign-in.
+    #[command(after_help = AFTER_HELP)]
+    SignIn {
+        /// Print status at once instead; poll `status` until signing_in is false.
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Open the sign-in window on Find My's password page, then print status.
+    ///
+    /// Opens the sign-in window on Find My, where Apple asks for the password
+    /// again, and waits until it closes, then prints status. Exits 4 when
+    /// Find My is still not authorized.
+    #[command(after_help = AFTER_HELP)]
+    AuthorizeFindMy {
+        /// Print status at once instead; poll `status` until signing_in is false.
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Store the Apple ID password so Find My re-authorizes by itself.
+    ///
+    /// Stores the Apple ID password in the keyring (GNOME Keyring), so the
+    /// daemon re-authorizes Find My by itself when it asks for the password
+    /// again. The password is checked with a Find My sign-in first and stored
+    /// only if Apple accepts it. It is read from the terminal without echo,
+    /// or from stdin when that is not a terminal, e.g. from a password
+    /// manager:
+    ///
+    ///     bw get password "Apple ID" | icloud-session set-password
+    ///     op read "op://Private/Apple ID/password" | icloud-session set-password
+    #[command(after_help = AFTER_HELP, verbatim_doc_comment)]
+    SetPassword,
+    /// Remove the stored password from the keyring, then print status.
+    #[command(after_help = AFTER_HELP)]
+    ForgetPassword,
+    /// Forget the account and the sign-in window's profile, then print status.
+    ///
+    /// Forgets the account and the sign-in window's profile, then prints
+    /// status (a stored password stays until forget-password). Every iCloud
+    /// app is signed out.
+    #[command(after_help = AFTER_HELP)]
+    SignOut,
+    /// The session's webservices: {dsid, apple_id, webservices}.
+    ///
+    /// The session's webservices: {dsid, apple_id, webservices} (the daemon
+    /// revalidates when older than 10 minutes). Exits 2 when Apple no longer
+    /// accepts the sign-in.
+    #[command(after_help = AFTER_HELP)]
+    Validate,
 }
 
 fn main() -> ExitCode {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    JSON.store(raw.iter().any(|a| a == "--json"), Ordering::Relaxed);
-    let args: Vec<&str> = raw.iter().map(String::as_str).filter(|a| *a != "--json").collect();
-    let wants_help = args.iter().any(|a| matches!(*a, "-h" | "--help"));
-    match args.as_slice() {
-        ["-h" | "--help" | "help"] => {
-            println!("{}", usage_text());
-            return ExitCode::SUCCESS;
-        }
-        ["help", name] | [name, ..] if wants_help || args.first() == Some(&"help") => {
-            return match command_help(name) {
-                Some(text) => {
-                    println!("{text}");
-                    ExitCode::SUCCESS
-                }
-                None => usage(&format!("unknown command \"{name}\"")),
-            };
-        }
-        _ => {}
-    }
-    match args.as_slice() {
-        ["status"] => run(icloud_session::status().map(|s| status_json(&s))),
-        ["sign-in", rest @ ..] => match no_wait(rest) {
-            Some(true) => run(open_now(icloud_session::sign_in)),
-            Some(false) => match open_window(icloud_session::sign_in) {
-                Ok(s) if s.signed_in => print(&status_json(&s)),
-                Ok(s) => {
-                    println!("{}", status_json(&s));
-                    fail_with("sign_in_not_completed", EXIT_SIGN_IN, "sign-in did not complete", None)
-                }
-                Err(e) => fail(e),
-            },
-            None => usage("sign-in takes only --no-wait"),
+    let args = match cli::parse::<Args>(TOOL) {
+        Ok(args) => args,
+        Err(code) => return ExitCode::from(code),
+    };
+    JSON.store(args.json, Ordering::Relaxed);
+    match args.command {
+        Command::Status => run(icloud_session::status().map(|s| status_json(&s))),
+        Command::SignIn { no_wait: true } => run(open_now(icloud_session::sign_in)),
+        Command::SignIn { no_wait: false } => match open_window(icloud_session::sign_in) {
+            Ok(s) if s.signed_in => print(&status_json(&s)),
+            Ok(s) => {
+                println!("{}", status_json(&s));
+                fail_with("sign_in_not_completed", EXIT_SIGN_IN, "sign-in did not complete", None)
+            }
+            Err(e) => fail(e),
         },
-        ["authorize-find-my", rest @ ..] => match no_wait(rest) {
-            Some(true) => run(open_now(icloud_session::authorize_find_my)),
-            Some(false) => match open_window(icloud_session::authorize_find_my) {
-                Ok(s) if s.find_my_authorized => print(&status_json(&s)),
-                Ok(s) => {
-                    println!("{}", status_json(&s));
-                    fail_with(
-                        "find_my_auth_not_completed",
-                        EXIT_FIND_MY_AUTH,
-                        "Find My authorization did not complete",
-                        None,
-                    )
-                }
-                Err(e) => fail(e),
-            },
-            None => usage("authorize-find-my takes only --no-wait"),
+        Command::AuthorizeFindMy { no_wait: true } => run(open_now(icloud_session::authorize_find_my)),
+        Command::AuthorizeFindMy { no_wait: false } => match open_window(icloud_session::authorize_find_my) {
+            Ok(s) if s.find_my_authorized => print(&status_json(&s)),
+            Ok(s) => {
+                println!("{}", status_json(&s));
+                fail_with(
+                    "find_my_auth_not_completed",
+                    EXIT_FIND_MY_AUTH,
+                    "Find My authorization did not complete",
+                    None,
+                )
+            }
+            Err(e) => fail(e),
         },
-        ["set-password"] => set_password(),
-        ["forget-password"] => match call_daemon("ForgetPassword", &()) {
+        Command::SetPassword => set_password(),
+        Command::ForgetPassword => match call_daemon("ForgetPassword", &()) {
             Ok(()) => {
                 eprintln!("icloud-session: removed the stored password from the keyring");
                 run(icloud_session::status().map(|s| status_json(&s)))
             }
             Err(code) => code,
         },
-        ["sign-out"] => run(icloud_session::sign_out()
+        Command::SignOut => run(icloud_session::sign_out()
             .and_then(|()| icloud_session::status())
             .map(|s| status_json(&s))),
-        ["validate"] => run(validate()),
-        ["-V" | "--version"] => {
-            if JSON.load(Ordering::Relaxed) {
-                println!("{}", json!({ "version": env!("CARGO_PKG_VERSION") }));
-            } else {
-                println!("icloud-session {}", env!("CARGO_PKG_VERSION"));
-            }
-            ExitCode::SUCCESS
-        }
-        [] => usage("no command given"),
-        [name, ..] if COMMANDS.iter().any(|(n, ..)| n == name) => usage(&format!(
-            "{name}: unexpected arguments (see icloud-session {name} --help)"
-        )),
-        [name, ..] => usage(&format!("unknown command \"{name}\"")),
-    }
-}
-
-/// `--no-wait` or nothing; None for anything else.
-fn no_wait(rest: &[&str]) -> Option<bool> {
-    match rest {
-        [] => Some(false),
-        ["--no-wait"] => Some(true),
-        _ => None,
+        Command::Validate => run(validate()),
     }
 }
 
@@ -198,30 +161,17 @@ fn open_now(open: fn() -> Result<(), Error>) -> Result<serde_json::Value, Error>
     icloud_session::status().map(|s| status_json(&s))
 }
 
-/// A usage error: the usage on stderr for a person, or the JSON error.
-fn usage(message: &str) -> ExitCode {
-    if !JSON.load(Ordering::Relaxed) {
-        eprintln!("{}\n", usage_text());
-    }
-    fail_with("usage", EXIT_USAGE, message, None)
-}
-
 /// Reports an error on stderr (one JSON line with `--json`) and returns its
 /// exit code.
 fn fail_with(code: &str, exit: u8, message: &str, hint: Option<&str>) -> ExitCode {
-    if JSON.load(Ordering::Relaxed) {
-        let mut error = json!({ "code": code, "message": message, "exit_code": exit });
-        if let Some(hint) = hint {
-            error["hint"] = json!(hint);
-        }
-        eprintln!("{}", json!({ "error": error }));
-    } else {
-        eprintln!("icloud-session: {message}");
-        if let Some(hint) = hint {
-            eprintln!("{hint}");
-        }
-    }
-    ExitCode::from(exit)
+    ExitCode::from(cli::report(
+        TOOL,
+        JSON.load(Ordering::Relaxed),
+        code,
+        exit,
+        message,
+        hint,
+    ))
 }
 
 fn status_json(s: &Status) -> serde_json::Value {
@@ -384,5 +334,14 @@ where
             })
         }
         Err(e) => Err(fail(Error::from(e))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_cli_definition_is_consistent() {
+        use clap::CommandFactory;
+        super::Args::command().debug_assert();
     }
 }

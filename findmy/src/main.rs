@@ -2,11 +2,10 @@
 //! line (see `icloud_findmy::cli`) without initializing GTK.
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() {
+    if std::env::args_os().len() <= 1 {
         std::process::exit(gui());
     }
-    std::process::exit(icloud_findmy::cli::run(&args));
+    std::process::exit(icloud_findmy::cli::run().into());
 }
 
 #[cfg(feature = "ui")]
@@ -17,5 +16,5 @@ fn gui() -> i32 {
 #[cfg(not(feature = "ui"))]
 fn gui() -> i32 {
     eprintln!("icloud-findmy: built without the app (the `ui` feature); run `icloud-findmy help`");
-    icloud_findmy::cli::EXIT_USAGE
+    icloud_session::cli::EXIT_USAGE.into()
 }

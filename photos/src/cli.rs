@@ -24,11 +24,10 @@ use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Job, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_SIGN_IN, EXIT_USAGE};
 use serde_json::{Value, json};
 
-const EXIT_ERROR: u8 = 1;
-const EXIT_SIGN_IN: u8 = 2;
-const EXIT_USAGE: u8 = 64;
+const TOOL: &str = "icloud-photos";
 
 const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 64 usage.\n\
 With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
@@ -201,25 +200,11 @@ fn other(msg: impl Into<String>) -> Fail {
 
 /// Run the CLI on the process arguments.
 pub fn main() -> ExitCode {
-    // Scanned from argv so a usage error knows whether to answer in JSON.
-    let json = std::env::args().skip(1).any(|a| a == "--json");
-    let cli = match Cli::try_parse() {
+    let cli = match cli::parse::<Cli>(TOOL) {
         Ok(c) => c,
-        Err(e) if !e.use_stderr() => {
-            let _ = e.print();
-            return ExitCode::SUCCESS;
-        }
-        Err(e) => {
-            if json {
-                let rendered = e.render().to_string();
-                let first = rendered.lines().next().unwrap_or_default();
-                let message = first.strip_prefix("error: ").unwrap_or(first);
-                return ExitCode::from(report(true, "usage", EXIT_USAGE, message));
-            }
-            let _ = e.print();
-            return ExitCode::from(EXIT_USAGE);
-        }
+        Err(code) => return ExitCode::from(code),
     };
+    let json = cli.json;
     match run(cli) {
         Ok(code) => ExitCode::from(code),
         Err(fail) => {
@@ -236,22 +221,9 @@ pub fn main() -> ExitCode {
                 ),
                 Fail::Err(e) => (EXIT_ERROR, "error", e.to_string()),
             };
-            ExitCode::from(report(json, kind, code, &msg))
+            ExitCode::from(cli::report(TOOL, json, kind, code, &msg, None))
         }
     }
-}
-
-/// An error on stderr: one JSON line with `--json`, else a sentence.
-fn report(json: bool, code: &str, exit_code: u8, message: &str) -> u8 {
-    if json {
-        eprintln!(
-            "{}",
-            json!({ "error": { "code": code, "message": message, "exit_code": exit_code } })
-        );
-    } else {
-        eprintln!("icloud-photos: {message}");
-    }
-    exit_code
 }
 
 struct Ctx {

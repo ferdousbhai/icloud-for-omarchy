@@ -24,7 +24,8 @@ ui = ["dep:gtk", "dep:adw", "dep:async-channel", "dep:shumate"]
 
 [dependencies]
 # The workspace's session/ crate.
-icloud-session.workspace = true
+icloud-session = { workspace = true, features = ["clap"] }
+clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

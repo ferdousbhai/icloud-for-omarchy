@@ -29,6 +29,8 @@
 //!   `ICLOUD_SESSION_MOCK_URL` (default `http://127.0.0.1:8765`) keeping
 //!   path and query; [`sign_in`] posts to the fake's `/mock/reauthenticate`.
 
+pub mod cli;
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};

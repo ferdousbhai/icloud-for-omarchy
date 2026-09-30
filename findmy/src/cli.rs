@@ -2,142 +2,157 @@
 //! without GTK, through the same [`FindMe`] client and [`History`] the app
 //! uses. Human-readable output by default, `--json` for machines.
 //!
-//! Exit codes: [`EXIT_OK`], [`EXIT_ERROR`], [`EXIT_SIGN_IN`],
-//! [`EXIT_FIND_MY_AUTH`] (after `icloud-session`'s own re-authorization with
-//! a stored password failed), [`EXIT_USAGE`]: the table every iCloud tool
-//! shares (docs/CLI.md). With `--json` an error is one JSON line on stderr,
-//! `{"error":{"code","message","exit_code","hint"?}}`.
+//! Exit codes are the table every iCloud tool shares (docs/CLI.md,
+//! `icloud_session::cli`): 0 ok, 1 error, 2 sign-in required, 4 Find My
+//! needs the Apple password (after `icloud-session`'s own re-authorization
+//! with a stored password failed), 64 usage. With `--json` an error is one
+//! JSON line on stderr, `{"error":{"code","message","exit_code"}}`.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use clap::{Parser, Subcommand};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
 use serde_json::{Value, json};
 
 use crate::findme::{self, FindMe, SessionTransport, Transport};
 use crate::history::{self, History, Point};
 use crate::models::{self, Device, Fix};
 
-pub const EXIT_OK: i32 = 0;
-pub const EXIT_ERROR: i32 = 1;
-pub const EXIT_SIGN_IN: i32 = 2;
-pub const EXIT_FIND_MY_AUTH: i32 = 4;
-pub const EXIT_USAGE: i32 = 64;
+const TOOL: &str = "icloud-findmy";
 
 /// How long `locate` waits for a fresh fix unless `--wait` says otherwise.
 pub const DEFAULT_WAIT_SECS: u64 = 30;
 /// How often `locate` asks again while it waits.
 const POLL: Duration = Duration::from_secs(3);
-/// The trail `history` shows unless `--since` says otherwise (the map's).
-pub const DEFAULT_SINCE_SECS: i64 = 24 * 3600;
 
-pub const USAGE: &str = "\
-Usage: icloud-findmy                 open the app
-       icloud-findmy <command> [options]
-
-Commands:
-  devices [--locate] [--coords]      list devices: model, battery, online, last fix
-  locate NAME|ID [--wait SECS]       ask one device for a fresh fix and print it
-  play-sound NAME|ID [--yes]         play a sound on a device
-  lost-mode NAME|ID --phone P --message M [--yes]
-                                     turn on Lost Mode (locks the device)
-  history NAME|ID [--since DURATION] stored positions, oldest first (default 24h)
-  prune-history                      delete positions older than 30 days
-  help [COMMAND]                     show this help, or one command's
-
-Options:
-  --json             machine-readable output on stdout (errors as JSON on stderr)
-  --data-dir DIR     keep history.db in DIR (default ~/.local/share/icloud-findmy)
-  --locate           devices: ask every device for a fresh fix (wakes them)
-  --coords           devices: include coordinates
-  --wait SECS        locate: how long to wait for the fix (default 30)
-  --since DURATION   history: e.g. 90m, 24h, 7d, 1w2d (default 24h)
-  --phone P, --message M
-                     lost-mode: the number to call and the text shown
-  --yes              play-sound, lost-mode: do not ask; required when stdin
-                     is not a terminal
-  -V, --version      print the version
-
-NAME matches a device name case-insensitively (a unique part of it is
+const AFTER_HELP: &str = "\
+NAME|ID matches a device name case-insensitively (a unique part of it is
 enough); an ambiguous NAME lists the matches, use the ID then.
 
-`icloud-findmy COMMAND --help` shows one command.
-
 With --json, stdout is only the JSON result and an error is one JSON line on
-stderr: {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}; codes: usage,
+stderr: {\"error\":{\"code\",\"message\",\"exit_code\"}}; codes: usage,
 sign_in_required, find_my_auth_required, not_found, ambiguous, cancelled,
 unsupported, no_fix, error.
 
 Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in),
 4 Find My needs the Apple password (icloud-session authorize-find-my),
-64 usage.
-";
+64 usage.";
 
-/// One command's `--help`: its synopsis and what it does and prints.
-const COMMAND_HELP: &[(&str, &str)] = &[
-    (
-        "devices",
-        "Usage: icloud-findmy devices [--locate] [--coords] [--json]
+#[derive(Parser)]
+#[command(
+    name = "icloud-findmy",
+    version,
+    about = "Find My from the command line. With no command, opens the app.",
+    after_help = AFTER_HELP
+)]
+struct Args {
+    /// Machine-readable output on stdout (errors as JSON on stderr).
+    #[arg(long, global = true)]
+    json: bool,
+    /// Keep history.db in DIR (default ~/.local/share/icloud-findmy).
+    #[arg(long, global = true, value_name = "DIR")]
+    data_dir: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Command,
+}
 
-Every device on the Apple ID, as Apple last heard from it: name, model,
-battery, online, Lost Mode, what it can do, and the last fix (time, age,
-accuracy; coordinates only with --coords). --locate asks every device to
-report first (it wakes them, like Refresh in the app). Moved positions are
-stored in the history.
-JSON: [{id, name, model, class, battery_percent, charging, online, lost_mode,
-can_play_sound, can_lost_mode, last_fix: {time, timestamp_ms, age_secs,
-accuracy_m, is_old, lat?, lon?} | null}]",
-    ),
-    (
-        "locate",
-        "Usage: icloud-findmy locate NAME|ID [--wait SECS] [--json]
-
-Ask one device for a fresh fix and wait (30 s unless --wait) for one newer
-than the last; print it with its coordinates. No fresh fix in time is an
-error (code no_fix).
-JSON: the device, as in `devices --coords`.",
-    ),
-    (
-        "play-sound",
-        "Usage: icloud-findmy play-sound NAME|ID [--yes] [--json]
-
-Play a sound on a device. Asks on a terminal; without one, --yes is
-required (a usage error otherwise).
-JSON: {ok: true, action: \"play_sound\", device: {id, name}}",
-    ),
-    (
-        "lost-mode",
-        "Usage: icloud-findmy lost-mode NAME|ID --phone P --message M [--yes] [--json]
-
-Turn on Lost Mode: the device locks and shows the message with a button to
-call the number. Asks on a terminal; without one, --yes is required.
-JSON: {ok: true, action: \"lost_mode\", device: {id, name}}",
-    ),
-    (
-        "history",
-        "Usage: icloud-findmy history NAME|ID [--since DURATION] [--json]
-
-The stored positions of one device, oldest first: the app's map trail.
---since: 90m, 24h (the default), 7d, 1w2d. A device ID already in the
-history needs no network.
-JSON: {device: {id, name}, since, points: [{time, timestamp, lat, lon,
-accuracy_m, battery_percent}]}",
-    ),
-    (
-        "prune-history",
-        "Usage: icloud-findmy prune-history [--json]
-
-Delete stored positions older than 30 days (opening the history does too).
-JSON: {deleted, remaining, retention_days}",
-    ),
-];
-
-const COMMAND_FOOTER: &str = "
-Options for every command: --json, --data-dir DIR (history.db there instead
-of ~/.local/share/icloud-findmy).
-Exit codes: 0 ok, 1 error, 2 sign-in required, 4 Find My needs the Apple
-password, 64 usage.
-";
+#[derive(Subcommand)]
+enum Command {
+    /// List devices: model, battery, online, last fix.
+    ///
+    /// Every device on the Apple ID, as Apple last heard from it: name,
+    /// model, battery, online, Lost Mode, what it can do, and the last fix
+    /// (time, age, accuracy; coordinates only with --coords). Moved
+    /// positions are stored in the history.
+    ///
+    /// JSON: [{id, name, model, class, battery_percent, charging, online,
+    /// lost_mode, can_play_sound, can_lost_mode, last_fix: {time,
+    /// timestamp_ms, age_secs, accuracy_m, is_old, lat?, lon?} | null}]
+    #[command(after_help = AFTER_HELP)]
+    Devices {
+        /// Ask every device for a fresh fix first (wakes them, like Refresh in the app).
+        #[arg(long)]
+        locate: bool,
+        /// Include coordinates.
+        #[arg(long)]
+        coords: bool,
+    },
+    /// Ask one device for a fresh fix and print it.
+    ///
+    /// Asks one device for a fresh fix and waits for one newer than the
+    /// last; prints it with its coordinates. No fresh fix in time is an
+    /// error (code no_fix).
+    ///
+    /// JSON: the device, as in `devices --coords`.
+    #[command(after_help = AFTER_HELP)]
+    Locate {
+        #[arg(value_name = "NAME|ID")]
+        device: String,
+        /// How long to wait for the fix, in seconds.
+        #[arg(long, value_name = "SECS", default_value_t = DEFAULT_WAIT_SECS)]
+        wait: u64,
+    },
+    /// Play a sound on a device.
+    ///
+    /// Plays a sound on a device. Asks on a terminal; without one, --yes is
+    /// required (a usage error otherwise).
+    ///
+    /// JSON: {ok: true, action: "play_sound", device: {id, name}}
+    #[command(after_help = AFTER_HELP)]
+    PlaySound {
+        #[arg(value_name = "NAME|ID")]
+        device: String,
+        /// Do not ask; required when stdin is not a terminal.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Turn on Lost Mode (locks the device).
+    ///
+    /// Turns on Lost Mode: the device locks and shows the message with a
+    /// button to call the number. Asks on a terminal; without one, --yes is
+    /// required.
+    ///
+    /// JSON: {ok: true, action: "lost_mode", device: {id, name}}
+    #[command(after_help = AFTER_HELP)]
+    LostMode {
+        #[arg(value_name = "NAME|ID")]
+        device: String,
+        /// The number to call.
+        #[arg(long, value_name = "P")]
+        phone: String,
+        /// The text shown.
+        #[arg(long, value_name = "M")]
+        message: String,
+        /// Do not ask; required when stdin is not a terminal.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Stored positions of one device, oldest first.
+    ///
+    /// The stored positions of one device, oldest first: the app's map
+    /// trail. A device ID already in the history needs no network.
+    ///
+    /// JSON: {device: {id, name}, since, points: [{time, timestamp, lat,
+    /// lon, accuracy_m, battery_percent}]}
+    #[command(after_help = AFTER_HELP)]
+    History {
+        #[arg(value_name = "NAME|ID")]
+        device: String,
+        /// How far back: e.g. 90m, 24h (the map's), 7d, 1w2d.
+        #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "24h")]
+        since: i64,
+    },
+    /// Delete positions older than 30 days.
+    ///
+    /// Deletes stored positions older than 30 days (opening the history
+    /// does too).
+    ///
+    /// JSON: {deleted, remaining, retention_days}
+    #[command(after_help = AFTER_HELP)]
+    PruneHistory,
+}
 
 enum Failure {
     Usage(String),
@@ -155,7 +170,7 @@ impl From<findme::Error> for Failure {
 }
 
 impl Failure {
-    fn code(&self) -> i32 {
+    fn code(&self) -> u8 {
         match self {
             Failure::Usage(_) => EXIT_USAGE,
             Failure::Find(findme::Error::SignInRequired) => EXIT_SIGN_IN,
@@ -198,134 +213,9 @@ fn usage(msg: impl Into<String>) -> Failure {
     Failure::Usage(msg.into())
 }
 
-/// Options for every command; each command says which it accepts.
-#[derive(Default)]
-struct Opts {
-    json: bool,
-    coords: bool,
-    locate: bool,
-    yes: bool,
-    data_dir: Option<PathBuf>,
-    wait: Option<u64>,
-    since: Option<i64>,
-    phone: Option<String>,
-    message: Option<String>,
-    /// Flags given, as spelled in [`USAGE`], to reject ones a command ignores.
-    given: Vec<&'static str>,
-    args: Vec<String>,
-}
-
-const GLOBAL: &[&str] = &["--json", "--data-dir"];
-
-impl Opts {
-    fn parse(args: &[String]) -> Result<Opts, Failure> {
-        let mut o = Opts::default();
-        let mut it = args.iter();
-        while let Some(arg) = it.next() {
-            if arg == "--" {
-                o.args.extend(it.by_ref().cloned());
-                break;
-            }
-            if !arg.starts_with("--") || arg.len() == 2 {
-                if arg.starts_with('-') && arg.len() > 1 {
-                    return Err(usage(format!("unknown option {arg}")));
-                }
-                o.args.push(arg.clone());
-                continue;
-            }
-            let (name, inline) = match arg.split_once('=') {
-                Some((n, v)) => (n, Some(v.to_string())),
-                None => (arg.as_str(), None),
-            };
-            let flag: &'static str = match name {
-                "--json" => "--json",
-                "--coords" => "--coords",
-                "--locate" => "--locate",
-                "--yes" => "--yes",
-                "--data-dir" => "--data-dir",
-                "--wait" => "--wait",
-                "--since" => "--since",
-                "--phone" => "--phone",
-                "--message" => "--message",
-                _ => return Err(usage(format!("unknown option {name}"))),
-            };
-            let takes_value = matches!(
-                flag,
-                "--data-dir" | "--wait" | "--since" | "--phone" | "--message"
-            );
-            let value = if takes_value {
-                match inline {
-                    Some(v) => Some(v),
-                    None => Some(
-                        it.next()
-                            .cloned()
-                            .ok_or_else(|| usage(format!("{flag} needs a value")))?,
-                    ),
-                }
-            } else if inline.is_some() {
-                return Err(usage(format!("{flag} takes no value")));
-            } else {
-                None
-            };
-            match (flag, value) {
-                ("--json", _) => o.json = true,
-                ("--coords", _) => o.coords = true,
-                ("--locate", _) => o.locate = true,
-                ("--yes", _) => o.yes = true,
-                ("--data-dir", Some(v)) => o.data_dir = Some(PathBuf::from(v)),
-                ("--wait", Some(v)) => {
-                    o.wait =
-                        Some(v.parse().map_err(|_| {
-                            usage(format!("--wait wants whole seconds, not \"{v}\""))
-                        })?)
-                }
-                ("--since", Some(v)) => o.since = Some(parse_duration(&v)?),
-                ("--phone", Some(v)) => o.phone = Some(v),
-                ("--message", Some(v)) => o.message = Some(v),
-                _ => unreachable!("every flag is matched above"),
-            }
-            if !o.given.contains(&flag) {
-                o.given.push(flag);
-            }
-        }
-        Ok(o)
-    }
-
-    /// Rejects flags `cmd` does not take, and the wrong number of arguments.
-    fn check(&self, cmd: &str, allowed: &[&str], args: usize) -> Result<(), Failure> {
-        if let Some(flag) = self
-            .given
-            .iter()
-            .find(|f| !GLOBAL.contains(f) && !allowed.contains(f))
-        {
-            return Err(usage(format!("{cmd} does not take {flag}")));
-        }
-        match self.args.len() {
-            n if n == args => Ok(()),
-            0 => Err(usage(format!("{cmd} needs a device NAME or ID"))),
-            _ => Err(usage(format!(
-                "{cmd}: unexpected argument \"{}\" (quote a NAME with spaces)",
-                self.args[args.min(self.args.len() - 1)]
-            ))),
-        }
-    }
-
-    fn history_path(&self) -> Result<PathBuf, Failure> {
-        match &self.data_dir {
-            Some(dir) => Ok(dir.join("history.db")),
-            None => history::default_path()
-                .ok_or_else(|| Failure::Other("no data directory: pass --data-dir".into())),
-        }
-    }
-}
-
 /// "90m", "24h", "7d", "1w2d", "30s": whole units, summed. Seconds.
-fn parse_duration(s: &str) -> Result<i64, Failure> {
-    let bad = || {
-        usage(format!(
-            "--since wants a duration like 30m, 24h or 7d, not \"{s}\""
-        ))
-    };
+fn parse_duration(s: &str) -> Result<i64, String> {
+    let bad = || format!("wants a duration like 30m, 24h or 7d, not \"{s}\"");
     let (mut total, mut num) = (0i64, String::new());
     for c in s.trim().chars() {
         if c.is_ascii_digit() {
@@ -353,118 +243,57 @@ fn parse_duration(s: &str) -> Result<i64, Failure> {
     Ok(total)
 }
 
-/// Runs the command line in `args` (without the program name) and returns
-/// the exit code.
-pub fn run(args: &[String]) -> i32 {
-    let json = args.iter().any(|a| a == "--json");
-    match dispatch(args) {
-        Ok(()) => EXIT_OK,
-        Err(f) => {
-            if json {
-                eprintln!(
-                    "{}",
-                    json!({"error": {"code": f.kind(), "message": f.message(), "exit_code": f.code()}})
-                );
-            } else {
-                eprintln!("icloud-findmy: {}", f.message());
-                if matches!(f, Failure::Usage(_)) {
-                    eprintln!("Run `icloud-findmy help` for usage.");
-                }
-            }
-            f.code()
-        }
-    }
-}
-
-/// The command line with global options given before the command (`--json
-/// devices`, `--data-dir DIR history ...`) moved after it.
-fn command_first(args: &[String]) -> Vec<String> {
-    let mut globals = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--json" => globals.push(args[i].clone()),
-            "--data-dir" if i + 1 < args.len() => {
-                globals.extend_from_slice(&args[i..i + 2]);
-                i += 1;
-            }
-            a if a.starts_with("--data-dir=") => globals.push(args[i].clone()),
-            _ => break,
-        }
-        i += 1;
-    }
-    let mut out = args[i..].to_vec();
-    if out.is_empty() {
-        return out;
-    }
-    out.splice(1..1, globals);
-    out
-}
-
-fn dispatch(args: &[String]) -> Outcome {
-    let args = command_first(args);
-    let Some((cmd, rest)) = args.split_first() else {
-        return Err(usage("no command"));
+/// Runs the command line on the process arguments and returns the exit code.
+pub fn run() -> u8 {
+    let args = match cli::parse::<Args>(TOOL) {
+        Ok(args) => args,
+        Err(code) => return code,
     };
-    let wants_help = rest.iter().any(|a| a == "-h" || a == "--help");
-    match cmd.as_str() {
-        "help" | "-h" | "--help" => {
-            return match Opts::parse(rest)?.args.first() {
-                Some(name) => command_help(name),
-                None => {
-                    print!("{USAGE}");
-                    Ok(())
-                }
-            };
-        }
-        name if wants_help => return command_help(name),
-        "-V" | "--version" => {
-            println!("icloud-findmy {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-        _ => {}
-    }
-    let opts = Opts::parse(rest)?;
-    let mut cli = Cli::new(opts, FindMe::new(SessionTransport::default()));
-    match cmd.as_str() {
-        "devices" => cli.devices(),
-        "locate" => cli.locate(),
-        "play-sound" => cli.play_sound(),
-        "lost-mode" => cli.lost_mode(),
-        "history" => cli.history(),
-        "prune-history" => cli.prune_history(),
-        other => Err(usage(format!("unknown command \"{other}\""))),
-    }
-}
-
-fn command_help(name: &str) -> Outcome {
-    match COMMAND_HELP.iter().find(|(n, _)| *n == name) {
-        Some((_, text)) => {
-            println!("{text}\n{COMMAND_FOOTER}");
-            Ok(())
-        }
-        None => Err(usage(format!("unknown command \"{name}\""))),
+    let json = args.json;
+    let mut cli = Cli {
+        json,
+        data_dir: args.data_dir,
+        fm: FindMe::new(SessionTransport::default()),
+        history: None,
+    };
+    let result = match args.command {
+        Command::Devices { locate, coords } => cli.devices(locate, coords),
+        Command::Locate { device, wait } => cli.locate(&device, Duration::from_secs(wait)),
+        Command::PlaySound { device, yes } => cli.play_sound(&device, yes),
+        Command::LostMode {
+            device,
+            phone,
+            message,
+            yes,
+        } => cli.lost_mode(&device, &phone, &message, yes),
+        Command::History { device, since } => cli.history(&device, since),
+        Command::PruneHistory => cli.prune_history(),
+    };
+    match result {
+        Ok(()) => EXIT_OK,
+        Err(f) => cli::report(TOOL, json, f.kind(), f.code(), &f.message(), None),
     }
 }
 
 struct Cli<T: Transport> {
-    opts: Opts,
+    json: bool,
+    data_dir: Option<PathBuf>,
     fm: FindMe<T>,
     history: Option<History>,
 }
 
 impl<T: Transport> Cli<T> {
-    fn new(opts: Opts, fm: FindMe<T>) -> Self {
-        Cli {
-            opts,
-            fm,
-            history: None,
+    fn history_path(&self) -> Result<PathBuf, Failure> {
+        match &self.data_dir {
+            Some(dir) => Ok(dir.join("history.db")),
+            None => history::default_path()
+                .ok_or_else(|| Failure::Other("no data directory: pass --data-dir".into())),
         }
     }
 
     fn open_history(&mut self) -> Result<&History, Failure> {
         if self.history.is_none() {
-            let path = self.opts.history_path()?;
+            let path = self.history_path()?;
             let h = History::open(&path)
                 .map_err(|e| Failure::Other(format!("cannot open {}: {e}", path.display())))?;
             self.history = Some(h);
@@ -497,14 +326,13 @@ impl<T: Transport> Cli<T> {
         Ok(devices)
     }
 
-    fn devices(&mut self) -> Outcome {
-        self.opts.check("devices", &["--locate", "--coords"], 0)?;
-        let devices = self.fetch(self.opts.locate)?;
+    fn devices(&mut self, locate: bool, coords: bool) -> Outcome {
+        let devices = self.fetch(locate)?;
         let now = models::now_ms();
-        if self.opts.json {
+        if self.json {
             let list: Vec<Value> = devices
                 .iter()
-                .map(|d| device_json(d, self.opts.coords, now))
+                .map(|d| device_json(d, coords, now))
                 .collect();
             println!("{}", pretty(&json!(list)));
         } else if devices.is_empty() {
@@ -514,17 +342,15 @@ impl<T: Transport> Cli<T> {
                 if i > 0 {
                     println!();
                 }
-                print!("{}", device_text(d, self.opts.coords, now));
+                print!("{}", device_text(d, coords, now));
             }
         }
         Ok(())
     }
 
-    fn locate(&mut self) -> Outcome {
-        self.opts.check("locate", &["--wait"], 1)?;
-        let wait = Duration::from_secs(self.opts.wait.unwrap_or(DEFAULT_WAIT_SECS));
+    fn locate(&mut self, query: &str, wait: Duration) -> Outcome {
         let devices = self.fetch(false)?;
-        let device = resolve(&devices, &self.opts.args[0])?.clone();
+        let device = resolve(&devices, query)?.clone();
         let before = device.location.map_or(0, |f| f.ts_ms);
         let deadline = Instant::now() + wait;
         let mut devices = self.fm.refresh(true)?;
@@ -566,7 +392,7 @@ impl<T: Transport> Cli<T> {
 
     fn print_fix(&self, d: &Device, fix: &Fix) -> Outcome {
         let now = models::now_ms();
-        if self.opts.json {
+        if self.json {
             println!("{}", pretty(&device_json(d, true, now)));
         } else {
             println!("{}", d.name);
@@ -581,14 +407,17 @@ impl<T: Transport> Cli<T> {
         Ok(())
     }
 
-    fn play_sound(&mut self) -> Outcome {
-        self.opts.check("play-sound", &["--yes"], 1)?;
+    fn play_sound(&mut self, query: &str, yes: bool) -> Outcome {
         let devices = self.fetch(false)?;
-        let device = resolve(&devices, &self.opts.args[0])?.clone();
+        let device = resolve(&devices, query)?.clone();
         if !device.can_play_sound {
             return Err(findme::Error::Unsupported("This device cannot play a sound.").into());
         }
-        self.confirm("play-sound", &format!("Play a sound on {}?", device.name))?;
+        confirm(
+            "play-sound",
+            yes,
+            &format!("Play a sound on {}?", device.name),
+        )?;
         self.fm.play_sound(&device)?;
         self.done(
             "play_sound",
@@ -597,16 +426,12 @@ impl<T: Transport> Cli<T> {
         )
     }
 
-    fn lost_mode(&mut self) -> Outcome {
-        self.opts
-            .check("lost-mode", &["--phone", "--message", "--yes"], 1)?;
-        let phone = self.opts.phone.clone().unwrap_or_default();
-        let message = self.opts.message.clone().unwrap_or_default();
+    fn lost_mode(&mut self, query: &str, phone: &str, message: &str, yes: bool) -> Outcome {
         if phone.trim().is_empty() || message.trim().is_empty() {
             return Err(usage("lost-mode needs --phone P and --message M"));
         }
         let devices = self.fetch(false)?;
-        let device = resolve(&devices, &self.opts.args[0])?.clone();
+        let device = resolve(&devices, query)?.clone();
         if !device.can_lost_mode {
             return Err(
                 findme::Error::Unsupported("This device does not support Lost Mode.").into(),
@@ -618,8 +443,9 @@ impl<T: Transport> Cli<T> {
                 device.name
             )));
         }
-        self.confirm(
+        confirm(
             "lost-mode",
+            yes,
             &format!(
                 "Turn on Lost Mode for {}? It locks and shows \"{}\" with a button to call {}.",
                 device.name,
@@ -635,29 +461,8 @@ impl<T: Transport> Cli<T> {
         )
     }
 
-    /// Asks on a terminal unless `--yes`; refuses without a terminal.
-    fn confirm(&self, cmd: &str, question: &str) -> Outcome {
-        if self.opts.yes {
-            return Ok(());
-        }
-        let stdin = io::stdin();
-        if !stdin.is_terminal() {
-            return Err(usage(format!(
-                "{cmd} asks before it acts: pass --yes when stdin is not a terminal"
-            )));
-        }
-        eprint!("{question} [y/N] ");
-        io::stderr().flush().ok();
-        let mut answer = String::new();
-        stdin.lock().read_line(&mut answer).ok();
-        match answer.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" => Ok(()),
-            _ => Err(Failure::Coded("cancelled", "cancelled".into())),
-        }
-    }
-
     fn done(&self, action: &str, d: &Device, text: &str) -> Outcome {
-        if self.opts.json {
+        if self.json {
             println!(
                 "{}",
                 pretty(
@@ -670,10 +475,8 @@ impl<T: Transport> Cli<T> {
         Ok(())
     }
 
-    fn history(&mut self) -> Outcome {
-        self.opts.check("history", &["--since"], 1)?;
-        let query = self.opts.args[0].clone();
-        let since_secs = self.opts.since.unwrap_or(DEFAULT_SINCE_SECS);
+    fn history(&mut self, query: &str, since_secs: i64) -> Outcome {
+        let query = query.to_string();
         let since = models::now_ms() / 1000 - since_secs;
         // A device ID already in the history needs no network; a NAME is
         // resolved against the live list (which is recorded first).
@@ -685,7 +488,7 @@ impl<T: Transport> Cli<T> {
             (d.id.clone(), Some(d.name.clone()))
         };
         let points = self.open_history()?.trail(&id, since).map_err(db)?;
-        if self.opts.json {
+        if self.json {
             let rows: Vec<Value> = points.iter().map(point_json).collect();
             println!(
                 "{}",
@@ -720,13 +523,12 @@ impl<T: Transport> Cli<T> {
     }
 
     fn prune_history(&mut self) -> Outcome {
-        self.opts.check("prune-history", &[], 0)?;
         let h = self.open_history()?;
         // Opening prunes already; prune again in case the clock moved on.
         let deleted = h.pruned_on_open() + h.prune(models::now_ms() / 1000).map_err(db)?;
         let remaining = h.count().map_err(db)?;
         let days = history::RETENTION_SECS / 86_400;
-        if self.opts.json {
+        if self.json {
             println!(
                 "{}",
                 pretty(
@@ -737,6 +539,27 @@ impl<T: Transport> Cli<T> {
             println!("Deleted {deleted} positions older than {days} days; {remaining} remain.");
         }
         Ok(())
+    }
+}
+
+/// Asks on a terminal unless `yes`; refuses without a terminal.
+fn confirm(cmd: &str, yes: bool, question: &str) -> Outcome {
+    if yes {
+        return Ok(());
+    }
+    let stdin = io::stdin();
+    if !stdin.is_terminal() {
+        return Err(usage(format!(
+            "{cmd} asks before it acts: pass --yes when stdin is not a terminal"
+        )));
+    }
+    eprint!("{question} [y/N] ");
+    io::stderr().flush().ok();
+    let mut answer = String::new();
+    stdin.lock().read_line(&mut answer).ok();
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err(Failure::Coded("cancelled", "cancelled".into())),
     }
 }
 
@@ -897,6 +720,12 @@ pub fn utc(secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cli_definition_is_consistent() {
+        use clap::CommandFactory;
+        Args::command().debug_assert();
+    }
 
     #[test]
     fn utc_formats() {

@@ -1,0 +1,57 @@
+//! What every iCloud command line shares (docs/CLI.md): the exit codes, the
+//! error on stderr, and (the `clap` feature) parsing that answers a usage
+//! error the same way.
+
+pub const EXIT_OK: u8 = 0;
+pub const EXIT_ERROR: u8 = 1;
+/// iCloud sign-in required: `icloud-session sign-in`.
+pub const EXIT_SIGN_IN: u8 = 2;
+/// Has changes or differences; not an error.
+pub const EXIT_CHANGES: u8 = 3;
+/// Find My needs the Apple password: `icloud-session authorize-find-my`.
+pub const EXIT_FIND_MY_AUTH: u8 = 4;
+pub const EXIT_USAGE: u8 = 64;
+/// An internal error, a bug.
+pub const EXIT_INTERNAL: u8 = 70;
+
+/// Reports an error on stderr and returns `exit_code`. With `json`, one line
+/// `{"error":{"code","message","exit_code","hint"?}}`; else `tool: message`,
+/// then the hint on a line of its own.
+pub fn report(tool: &str, json: bool, code: &str, exit_code: u8, message: &str, hint: Option<&str>) -> u8 {
+    if json {
+        let mut error = serde_json::json!({ "code": code, "message": message, "exit_code": exit_code });
+        if let Some(hint) = hint {
+            error["hint"] = hint.into();
+        }
+        eprintln!("{}", serde_json::json!({ "error": error }));
+    } else {
+        eprintln!("{tool}: {message}");
+        if let Some(hint) = hint {
+            eprintln!("{hint}");
+        }
+    }
+    exit_code
+}
+
+/// Parses the process arguments. `--help` and `--version` print and give
+/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_USAGE)` after clap's
+/// message, or the JSON error when `--json` is among the arguments.
+#[cfg(feature = "clap")]
+pub fn parse<P: clap::Parser>(tool: &str) -> Result<P, u8> {
+    P::try_parse().map_err(|e| {
+        if !e.use_stderr() {
+            let _ = e.print();
+            return EXIT_OK;
+        }
+        if !std::env::args_os().skip(1).any(|a| a == "--json") {
+            let _ = e.print();
+            return EXIT_USAGE;
+        }
+        // clap's error without its usage and "try --help" lines, on one line.
+        let rendered = e.render().to_string();
+        let error = rendered.split("\n\n").next().unwrap_or_default();
+        let message = error.strip_prefix("error: ").unwrap_or(error);
+        let message = message.split_whitespace().collect::<Vec<_>>().join(" ");
+        report(tool, true, "usage", EXIT_USAGE, &message, None)
+    })
+}

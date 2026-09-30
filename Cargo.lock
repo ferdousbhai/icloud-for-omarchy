@@ -1100,6 +1100,7 @@ name = "icloud-findmy"
 version = "0.2.0"
 dependencies = [
  "async-channel",
+ "clap",
  "gtk4",
  "icloud-session",
  "libadwaita",
@@ -1159,6 +1160,7 @@ dependencies = [
 name = "icloud-session"
 version = "0.3.0"
 dependencies = [
+ "clap",
  "futures-lite",
  "serde",
  "serde_json",
@@ -1175,6 +1177,7 @@ name = "icloud-sessiond"
 version = "0.3.0"
 dependencies = [
  "blocking",
+ "clap",
  "futures-lite",
  "humantime",
  "icloud-session",
