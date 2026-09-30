@@ -498,6 +498,14 @@ std::optional<Failure> openNote(NotesBackend &b, const Note &n)
     return std::nullopt;
 }
 
+// resolveNote, then openNote: the note named by arg, open in the backend.
+std::optional<Failure> resolveAndOpen(NotesBackend &b, const QString &arg, Note &found)
+{
+    if (auto f = resolveNote(b, arg, found))
+        return f;
+    return openNote(b, found);
+}
+
 // A folder path as given ("" and "/" are the vault root), if it exists.
 std::optional<Failure> resolveFolder(NotesBackend &b, const QString &arg, QString &folder)
 {
@@ -861,9 +869,7 @@ Result list(NotesBackend &b, const Args &a)
 Result read(NotesBackend &b, const Args &a)
 {
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     QJsonArray attachments;
     for (const QVariant &v : b.noteAttachments()) {
@@ -978,9 +984,7 @@ Result write(NotesBackend &b, const Args &a)
     if (!given)
         return usageError(QStringLiteral("write needs the text: --body TEXT, --file PATH or --stdin"));
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     if (!b.readOnlyReason().isEmpty())
         return Failure{ QStringLiteral("read_only"), QStringLiteral("%1 is read-only here: this note %2").arg(n.path(), b.readOnlyReason()),
@@ -1022,9 +1026,7 @@ Failure backendFailure(const QString &message)
 Result rename(NotesBackend &b, const Args &a)
 {
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     const QString err = b.renameCurrentNote(a.positional.at(1));
     if (!err.isEmpty())
@@ -1039,12 +1041,10 @@ Result rename(NotesBackend &b, const Args &a)
 Result move(NotesBackend &b, const Args &a)
 {
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     QString folder;
     if (auto f = resolveFolder(b, a.positional.at(1), folder))
-        return *f;
-    if (auto f = openNote(b, n))
         return *f;
     const QString err = b.moveCurrentNote(folder);
     if (!err.isEmpty())
@@ -1078,9 +1078,7 @@ Result toggle(NotesBackend &b, const Args &a)
     if (!ok || line < 1)
         return usageError(QStringLiteral("LINE is a line number, 1 or more, not \"%1\"").arg(a.positional.at(1)));
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     if (!b.readOnlyReason().isEmpty())
         return backendFailure(QStringLiteral("This note is read-only here: it %1").arg(b.readOnlyReason()));
@@ -1106,9 +1104,7 @@ Result resolve(NotesBackend &b, const Args &a)
     if (all.has_value() == choices.has_value())
         return usageError(QStringLiteral("resolve needs --all local|remote|both or --choices C1,C2,..."));
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     if (b.noteConflictsUnreadable())
         return Failure{ QStringLiteral("conflicts_unreadable"),
@@ -1142,9 +1138,7 @@ Result recover(NotesBackend &b, const Args &a)
         return usageError(QStringLiteral("recover needs --strip or --synced"));
     const QString how = a.has("--strip") ? QStringLiteral("strip") : QStringLiteral("synced");
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     const QVariantMap r = b.recoverConflictedNote(how);
     const QString message = r.value(QStringLiteral("message")).toString();
@@ -1167,9 +1161,7 @@ Result recover(NotesBackend &b, const Args &a)
 Result exportPdf(NotesBackend &b, const Args &a)
 {
     Note n;
-    if (auto f = resolveNote(b, a.positional.at(0), n))
-        return *f;
-    if (auto f = openNote(b, n))
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     const QString err = b.exportPdf();
     if (!err.isEmpty())
