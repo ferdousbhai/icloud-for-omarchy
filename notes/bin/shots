@@ -11,5 +11,7 @@ make -j"$(nproc)" > /dev/null
 # and the status line reads "Pull done." instead of an error.
 # A private session bus keeps the real icloud-session out of it too: the
 # sign-in reads as unknown, so no banner.
+cargo build --quiet --locked -p icloud-notes-sync --manifest-path ../../../../Cargo.toml
+ICLOUD_NOTES_SYNC_REAL="${CARGO_TARGET_DIR:-$(cd ../../../.. && pwd)/target}/debug/icloud-notes-sync" \
 ICLOUD_NOTES_SYNC_BIN="$(cd ../../stubs && pwd)/icloud-notes-sync" dbus-run-session --config-file="$(cd ../.. && pwd)/session-bus.conf" -- \
   ./shots "${1:-/tmp/notes-shot.png}"

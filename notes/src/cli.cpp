@@ -15,19 +15,21 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
 #include <QSet>
 #include <QTextStream>
 #include <QThread>
 #include <QTimeZone>
 #include <QUrl>
 
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <unistd.h>
 #include <variant>
+#include <vector>
 
 #ifndef ICLOUD_NOTES_VERSION
 #define ICLOUD_NOTES_VERSION "dev"
@@ -187,7 +189,8 @@ const QList<Spec> &specs()
         { "pull", "pull", "Fetch what changed in iCloud (as sync, pull only).\nJSON: as for sync", {}, 0, 0 },
         { "push", "push [--dry-run]",
           "Send what changed here to iCloud (as sync, push only). --dry-run previews it instead and exits 3\n"
-          "when there is something to push: icloud-notes-sync's own push --dry-run output.\n"
+          "when there is something to push: icloud-notes-sync's own push --dry-run output (it takes no\n"
+          "lock, so it works while the Notes window is open).\n"
           "JSON: as for sync; with --dry-run icloud-notes-sync's {entries, unchanged, notices, ...}",
           { QStringLiteral("--dry-run") }, 0, 0 },
         { "clone", "clone",
@@ -196,18 +199,18 @@ const QList<Spec> &specs()
           "JSON: as for sync",
           {}, 0, 0 },
         { "history", "history NOTE [--records]",
-          "The note's past versions, newest first (icloud-notes-sync history). --records lists every\n"
-          "snapshot record instead of the epoch timeline.\n"
+          "The note's past versions, newest first (icloud-notes-sync history; no lock, so it works while\n"
+          "the Notes window is open). --records lists every snapshot record instead of the epoch timeline.\n"
           "JSON: icloud-notes-sync's {mode, epochs: [{id, timestamp, changed, carriedOver}]}, or with\n"
           "--records {mode: \"records\", records: [...]}",
           { QStringLiteral("--records") }, 1, 1 },
         { "diff", "diff NOTE REF",
           "A past version (an id from history) against iCloud's copy, or FROM..TO; exits 3 when they\n"
-          "differ (icloud-notes-sync diff).",
+          "differ (icloud-notes-sync diff; no lock).",
           {}, 2, 2 },
         { "restore", "restore NOTE [--yes]",
           "Throw away the note's local edits and go back to the last synced copy (icloud-notes-sync\n"
-          "restore). Asks on a terminal; without one, --yes is required.",
+          "restore, which takes the vault's lock). Asks on a terminal; without one, --yes is required.",
           { QStringLiteral("--yes") }, 1, 1 },
     };
     return list;
@@ -644,26 +647,37 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
     return result;
 }
 
-// icloud-notes-sync itself, its output passed straight through, with the
-// vault's lock held: push --dry-run, history, diff, restore. Its exit
-// codes are this tool's too.
-int passThrough(NotesBackend &b, const Args &a, const QStringList &toolArgs)
+// Becomes icloud-notes-sync itself (exec) for push --dry-run, history,
+// diff and restore, in the vault: its output, errors and exit codes are this
+// tool's. The engine takes the vault's lock where it needs it (restore; the
+// others only read), honouring --wait.
+int execEngine(NotesBackend &b, const Args &a, const QStringList &toolArgs)
 {
     if (auto f = needSyncTool(b))
         return report(*f, a.json);
-    if (auto f = takeLock(b, a))
-        return report(*f, a.json);
-    QProcess tool;
-    tool.setProgram(NotesBackend::syncToolPath());
-    tool.setArguments((a.json ? QStringList{ QStringLiteral("--json") } : QStringList()) + toolArgs);
-    tool.setWorkingDirectory(NotesBackend::rootPath());
-    tool.setProcessChannelMode(QProcess::ForwardedChannels);
-    tool.start();
-    if (!tool.waitForStarted() || !tool.waitForFinished(-1) || tool.exitStatus() != QProcess::NormalExit)
-        return report(Failure{ QStringLiteral("error"),
-                               QStringLiteral("icloud-notes-sync did not run: %1").arg(tool.errorString()), kExitError, {} },
+    QStringList args{ NotesBackend::syncToolPath() };
+    if (a.json)
+        args << QStringLiteral("--json");
+    if (const auto wait = a.value("--wait"))
+        args << QStringLiteral("--wait") << *wait;
+    args += toolArgs;
+    QList<QByteArray> bytes;
+    for (const QString &arg : args)
+        bytes << QFile::encodeName(arg);
+    std::vector<char *> argv;
+    for (QByteArray &arg : bytes)
+        argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    out().flush();
+    if (!QDir::setCurrent(NotesBackend::rootPath()))
+        return report(Failure{ QStringLiteral("error"), QStringLiteral("cannot enter %1").arg(NotesBackend::rootPath()),
+                               kExitError, {} },
                       a.json);
-    return tool.exitCode();
+    ::execv(argv.front(), argv.data());
+    return report(Failure{ QStringLiteral("error"),
+                           QStringLiteral("icloud-notes-sync did not run: %1").arg(QString::fromLocal8Bit(strerror(errno))),
+                           kExitError, {} },
+                  a.json);
 }
 
 // ---- input ------------------------------------------------------------------
@@ -1277,7 +1291,7 @@ int runCommand(const Args &a, const Spec &spec)
 
     // icloud-notes-sync's own commands, on a resolved note.
     if (cmd == u"push")
-        return passThrough(b, a, { QStringLiteral("push"), QStringLiteral("--dry-run") });
+        return execEngine(b, a, { QStringLiteral("push"), QStringLiteral("--dry-run") });
     if (cmd == u"history" || cmd == u"diff" || cmd == u"restore") {
         Note n;
         if (auto f = resolveNote(b, a.positional.at(0), n))
@@ -1290,7 +1304,7 @@ int runCommand(const Args &a, const Spec &spec)
             args << a.positional.at(1);
         if (cmd == u"history" && a.has("--records"))
             args << QStringLiteral("--records");
-        return passThrough(b, a, args);
+        return execEngine(b, a, args);
     }
 
     // Reading needs no lock.

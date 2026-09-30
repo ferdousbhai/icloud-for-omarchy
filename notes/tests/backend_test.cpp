@@ -41,6 +41,23 @@ QString readFile(const QString &rel)
     return f.open(QIODevice::ReadOnly | QIODevice::Text) ? QString::fromUtf8(f.readAll()) : QString();
 }
 
+// A state file as icloud-notes-sync writes it (layout 3), which vault-info
+// reads: the title mode, the default folder's directory (if any) and the
+// tracked notes, {id, file[, read-only reason]}.
+QString stateJson(const QString &mode, const QList<QStringList> &notes, const QString &defaultDir = {})
+{
+    QStringList entries;
+    for (const QStringList &n : notes)
+        entries << QStringLiteral(R"("%1":{"file":"%2","recordChangeTag":"t","modificationDate":0%3})")
+                       .arg(n.at(0), n.at(1),
+                            n.size() > 2 ? QStringLiteral(R"(,"unpublishableReason":"%1")").arg(n.at(2)) : QString());
+    const QString folders = defaultDir.isEmpty()
+        ? QString()
+        : QStringLiteral(R"("folders":{"DefaultFolder-CloudKit":{"name":"%1","dirName":"%1"}},)").arg(defaultDir);
+    return QStringLiteral(R"({"layoutVersion":3,"titleMode":"%1",%2"notes":{%3}})")
+        .arg(mode, folders, entries.join(u','));
+}
+
 bool hasFlag(const NotesBackend &b, const QString &note, const char *flag)
 {
     return b.noteStates().value(note).toStringList().contains(QString::fromLatin1(flag));
@@ -132,19 +149,22 @@ int main(int argc, char *argv[])
     if (!scratch.isValid())
         return EXIT_FAILURE;
     qputenv("ICLOUD_NOTES_VAULT", (scratch.path() + QStringLiteral("/vault")).toUtf8());
-    // No engine until the stub is named below, whatever /usr/lib or PATH hold.
-    qputenv("ICLOUD_NOTES_SYNC_BIN", (scratch.path() + QStringLiteral("/no-such-engine")).toUtf8());
+    // The stub engine, whatever /usr/lib or PATH hold (its vault-info is the
+    // real engine's: the vault's state as the app sees it).
+    const QString stubs =
+        QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../stubs")).canonicalPath();
+    qputenv("ICLOUD_NOTES_SYNC_BIN", (stubs + QStringLiteral("/icloud-notes-sync")).toUtf8());
     // The sync locks go to the runtime directory: the scratch one, so the
     // tests never meet the real app's (or leave lock files behind).
     qputenv("XDG_RUNTIME_DIR", scratch.path().toUtf8());
 
     writeFile(QStringLiteral(".icloud-md/state.json"),
-              QStringLiteral(R"({"titleMode":"in-body","notes":{)"
-                             R"("id-a":{"file":"A.md"},)"
-                             R"("id-b":{"file":"B.md"},)"
-                             R"("id-e":{"file":"E.md"},)"
-                             R"("id-f":{"file":"F.md","unpublishableReason":"is too large"},)"
-                             R"("id-g":{"file":"G.md"}}})"));
+              stateJson(QStringLiteral("in-body"), { { "id-a", "A.md" },
+                                                     { "id-b", "B.md" },
+                                                     { "id-e", "E.md" },
+                                                     { "id-f", "F.md", "is too large" },
+                                                     { "id-g", "G.md" },
+                                                     { "id-order", "Order.md" } }));
     writeFile(QStringLiteral("A.md"), QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nbody\n"));
     writeFile(QStringLiteral("B.md"),
               QStringLiteral("---\napple-note-id: id-b\n---\n# Beta\n<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n"));
@@ -451,8 +471,7 @@ int main(int argc, char *argv[])
     check(!hasFlag(b, QStringLiteral("A.md"), "missing-id"), "backend rename keeps id");
 
     // Filename mode renames the file instead.
-    writeFile(QStringLiteral(".icloud-md/state.json"),
-              QStringLiteral(R"({"titleMode":"filename","notes":{"id-a":{"file":"A.md"}}})"));
+    writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }));
     check(b.vaultTitleMode() == QStringLiteral("filename"), "backend mode filename");
     check(b.renameCurrentNote(QStringLiteral("Second")).isEmpty(), "backend file rename ok");
     check(b.currentNote() == QStringLiteral("Second.md"), "backend file rename updates note");
@@ -527,13 +546,15 @@ int main(int argc, char *argv[])
 
     // CLI seam with the stub icloud-notes-sync: same argv, stdout, stderr,
     // exit codes and parsing the app uses against the real tool. No Apple account involved.
-    const QString stubs =
-        QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../stubs")).canonicalPath();
     check(QFile::exists(stubs + QStringLiteral("/icloud-notes-sync")), "stub present");
     // ICLOUD_NOTES_SYNC_BIN names the engine and nothing else is tried: a
     // missing one is missing even with an engine in /usr/lib or on PATH.
+    // Without it the vault's state is unknown: nothing tracked, in-body.
+    qputenv("ICLOUD_NOTES_SYNC_BIN", (scratch.path() + QStringLiteral("/no-such-engine")).toUtf8());
     check(!b.syncToolAvailable() && NotesBackend::syncToolPath().isEmpty(), "a named engine that is missing is missing");
+    check(b.vaultTitleMode() == QStringLiteral("in-body"), "without the engine the vault's state is unknown");
     qputenv("ICLOUD_NOTES_SYNC_BIN", (stubs + QStringLiteral("/icloud-notes-sync")).toUtf8());
+    check(b.vaultTitleMode() == QStringLiteral("filename"), "the engine's vault-info is read again once it is there");
     check(b.syncToolAvailable() && NotesBackend::syncToolPath() == stubs + QStringLiteral("/icloud-notes-sync"),
           "the stub is the engine");
 
@@ -569,6 +590,27 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Pull done."), "seam pull done");
+    // The engine takes the vault's lock itself: the app, holding it, hands
+    // its descriptor down, so the engine neither waits on the app nor runs
+    // beside it without the lock.
+    qputenv("ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK", "1");
+    b.runPull();
+    waitForSync(b);
+    qunsetenv("ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK");
+    check(b.syncMessage() == QStringLiteral("Pull done."), "seam the engine gets the app's lock, and only through it");
+    {
+        // The same path as icloud-notes-sync computes (notes-sync/tests/cli_lock.rs).
+        const QByteArray vault = qgetenv("ICLOUD_NOTES_VAULT"), runtime = qgetenv("XDG_RUNTIME_DIR");
+        qputenv("ICLOUD_NOTES_VAULT", "/nonexistent/icloud-notes-vault");
+        qputenv("XDG_RUNTIME_DIR", "/run/user/test");
+        check(NotesBackend::lockPath() == QStringLiteral("/run/user/test/icloud-notes-14b8d5b025dfa0cb.lock"),
+              "lock path in the runtime directory, as the engine names it");
+        qunsetenv("XDG_RUNTIME_DIR");
+        check(NotesBackend::lockPath() == QStringLiteral("/nonexistent/.icloud-notes-14b8d5b025dfa0cb.lock"),
+              "lock path beside the vault without a runtime directory");
+        qputenv("ICLOUD_NOTES_VAULT", vault);
+        qputenv("XDG_RUNTIME_DIR", runtime);
+    }
     {
         // The chain ends once, after the pull: what unlocks an editor that
         // waited for it (syncRunning also flips off between the halves).
@@ -702,10 +744,27 @@ int main(int argc, char *argv[])
     fake.stillSignedIn = false;
     fake.reportCalls = 0;
 
-    // A sign-in required is exit 2 (4 from icloud-notes-sync 0.1.1 and
-    // older); icloud-md's text marker (with exit 1) still counts too. Each
-    // alone pauses syncing and reports it.
-    for (const char *style : { "code", "legacy", "marker" }) {
+    // A sign-in required is exit 2, whatever the text says: exit 2 alone
+    // pauses syncing and reports it. Any other failure, even one naming
+    // icloud-md's `reauthenticate` (with exit 1), is only a failure.
+    {
+        fake.reportCalls = 0;
+        qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", "code");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED", "1");
+        b.runPull();
+        waitForSync(b);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
+        check(b.authExpired() && waitUntil([&] { return fake.reportCalls == 1; })
+                  && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
+              "seam exit 2 alone pauses and reports");
+        fake.set({ { QStringLiteral("SigningIn"), true } });
+        waitUntil([&] { return b.signingIn(); });
+        fake.set({ { QStringLiteral("SigningIn"), false } });
+        check(waitUntil([&] { return !b.authExpired() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000),
+              "seam exit 2: a new sign-in resumes");
+    }
+    for (const char *style : { "legacy", "marker" }) {
         fake.reportCalls = 0;
         qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", style);
         qputenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED", "1");
@@ -713,15 +772,10 @@ int main(int argc, char *argv[])
         waitForSync(b);
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
+        waitUntil([] { return false; }, 300); // a report would have gone out by now
         const QByteArray name = QByteArray("seam ") + style;
-        check(b.authExpired() && waitUntil([&] { return fake.reportCalls == 1; })
-                  && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
-              (name + " alone pauses and reports").constData());
-        fake.set({ { QStringLiteral("SigningIn"), true } });
-        waitUntil([&] { return b.signingIn(); });
-        fake.set({ { QStringLiteral("SigningIn"), false } });
-        check(waitUntil([&] { return !b.authExpired() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000),
-              (name + ": a new sign-in resumes").constData());
+        check(!b.authExpired() && fake.reportCalls == 0 && b.syncMessage() == QStringLiteral("Pull failed. See log."),
+              (name + " is a plain failure, not a sign-in").constData());
     }
     fake.reportCalls = 0;
 
@@ -806,9 +860,7 @@ int main(int argc, char *argv[])
     QString bgOut;
     check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync")),
           "background: no vault, nothing to do");
-    writeFile(QStringLiteral(".icloud-md/state.json"), QStringLiteral(R"({"titleMode":"in-body","notes":{}})"));
-    check(NotesBackend::lockPath() != QString::fromUtf8(qgetenv("XDG_RUNTIME_DIR")) + QStringLiteral("/icloud-notes.lock"),
-          "background: a vault named by ICLOUD_NOTES_VAULT has a lock of its own");
+    writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("in-body"), {}));
     {
         const int code = backgroundSync(bgOut);
         const qsizetype push = bgOut.indexOf(QStringLiteral("$ icloud-notes-sync push\n")),

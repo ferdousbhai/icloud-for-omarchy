@@ -43,6 +43,23 @@ QString readFile(const QString &rel, const QString &root = g_vault)
     return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
 }
 
+// A state file as icloud-notes-sync writes it (layout 3), which vault-info
+// reads: the title mode, the default folder's directory (if any) and the
+// tracked notes, {id, file[, read-only reason]}.
+QString stateJson(const QString &mode, const QList<QStringList> &notes, const QString &defaultDir = {})
+{
+    QStringList entries;
+    for (const QStringList &n : notes)
+        entries << QStringLiteral(R"("%1":{"file":"%2","recordChangeTag":"t","modificationDate":0%3})")
+                       .arg(n.at(0), n.at(1),
+                            n.size() > 2 ? QStringLiteral(R"(,"unpublishableReason":"%1")").arg(n.at(2)) : QString());
+    const QString folders = defaultDir.isEmpty()
+        ? QString()
+        : QStringLiteral(R"("folders":{"DefaultFolder-CloudKit":{"name":"%1","dirName":"%1"}},)").arg(defaultDir);
+    return QStringLiteral(R"({"layoutVersion":3,"titleMode":"%1",%2"notes":{%3}})")
+        .arg(mode, folders, entries.join(u','));
+}
+
 bool exists(const QString &rel)
 {
     return QFile::exists(g_vault + QLatin1Char('/') + rel);
@@ -119,12 +136,13 @@ void seedVault()
 {
     QDir(g_vault).removeRecursively();
     writeFile(QStringLiteral(".icloud-md/state.json"),
-              QStringLiteral(R"({"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"dirName":"Notes"}},"notes":{)"
-                             R"("id-a":{"file":"Notes/Alpha.md"},)"
-                             R"("id-b":{"file":"Work/Beta.md"},)"
-                             R"("id-g":{"file":"Work/Grid.md","unpublishableReason":"is too large"},)"
-                             R"("id-p":{"file":"Work/Pics.md"},)"
-                             R"("id-u":{"file":"Work/Tangle.md"}}})"));
+              stateJson(QStringLiteral("in-body"),
+                        { { "id-a", "Notes/Alpha.md" },
+                          { "id-b", "Work/Beta.md" },
+                          { "id-g", "Work/Grid.md", "is too large" },
+                          { "id-p", "Work/Pics.md" },
+                          { "id-u", "Work/Tangle.md" } },
+                        QStringLiteral("Notes")));
     writeFile(QStringLiteral("Notes/Alpha.md"),
               QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\n- [ ] milk\n- eggs\nplain line\n"));
     writeFile(QStringLiteral("Work/Beta.md"),
@@ -466,6 +484,11 @@ int main(int argc, char *argv[])
                   && !exists(QStringLiteral("Notes/While open.md")),
               "cli refuses at once while the window holds the vault");
         check(cli({ QStringLiteral("read"), QStringLiteral("alpha") }).code == 0, "cli reading needs no lock");
+        // history, diff and push --dry-run are the engine's own, and only read:
+        // no lock (the engine takes it itself where it writes).
+        check(cli({ QStringLiteral("history"), QStringLiteral("alpha") }).code == 0
+                  && cli({ QStringLiteral("push"), QStringLiteral("--dry-run") }).code == 3,
+              "cli the engine's read-only commands run while the window is open");
         const QJsonObject s = cliJson({ QStringLiteral("status") }).json().toObject().value(QStringLiteral("lock")).toObject();
         check(s.value(QStringLiteral("app_open")).toBool() && s.value(QStringLiteral("held_by")).toString() == QStringLiteral("Notes (pid 4242)"),
               "cli status names the lock's holder");

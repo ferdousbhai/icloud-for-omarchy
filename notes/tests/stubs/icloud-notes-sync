@@ -6,8 +6,12 @@
 # real tool, --json results go to stdout alone and everything else
 # (progress, notices) to stderr; exit 3 means status has entries or diff
 # found differences, 2 that a sign-in is required, 64 a usage error (the
-# codes every iCloud tool shares; 0.1.1 and older said 4 and 2).
-if [ "$1" = "--json" ] && [ "$2" = "status" ]; then
+# codes every iCloud tool shares). vault-info is the real engine's
+# ($ICLOUD_NOTES_SYNC_REAL, which bin/test builds): it reads the test's
+# vault as the app would.
+if [ "$1" = "--json" ] && [ "$2" = "vault-info" ]; then
+  exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "$@"
+elif [ "$1" = "--json" ] && [ "$2" = "status" ]; then
   echo "Fetching changes from iCloud..." >&2
   echo "icloud-md:progress:fetch:12" >&2
   cat <<'JSON'
@@ -41,7 +45,7 @@ elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
   # A clone into the last argument: the state file and one note.
   dir="${@: -1}"
   mkdir -p "$dir/.icloud-md" "$dir/Notes"
-  echo '{"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md"}}}' > "$dir/.icloud-md/state.json"
+  echo '{"layoutVersion":3,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-md/state.json"
   printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
   echo "Cloned 1 notes"
 elif [ "$1" = "diff" ]; then
@@ -57,9 +61,19 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2"
   # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
   # only that one (a push with nothing to send never asks iCloud).
   # ICLOUD_NOTES_SYNC_STUB_SIGNIN: how a refusal is reported: "code" exit 2
-  # without the old text marker, "legacy" 0.1.1's exit 4 without it,
-  # "marker" icloud-md's exit 1 with only the marker; unset, exit 2 and the
-  # marker, as the real tool does.
+  # without icloud-md's text marker; "legacy" exit 4 and "marker" exit 1 with
+  # only the marker, which the app no longer takes for a sign-in; unset,
+  # exit 2 and the marker, as the real tool does.
+  # ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK: the real engine takes the vault's lock
+  # here (restore of a note that isn't there, so nothing changes): through
+  # the descriptor the app handed down it must get it, without it it must
+  # find the vault busy.
+  if [ -n "${ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK:-}" ]; then
+    with=$("$ICLOUD_NOTES_SYNC_REAL" --json --wait 0 restore no-such-note.md . 2>&1 >/dev/null)
+    without=$(env -u ICLOUD_NOTES_LOCK_FD "$ICLOUD_NOTES_SYNC_REAL" --json --wait 0 restore no-such-note.md . 2>&1 >/dev/null)
+    case "$with" in *vault_busy*) echo "stub: the engine found the vault busy despite the lock handed down" >&2; exit 1 ;; esac
+    case "$without" in *vault_busy*) ;; *) echo "stub: the engine got the vault without the lock: $without" >&2; exit 1 ;; esac
+  fi
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
   if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
     case "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" in

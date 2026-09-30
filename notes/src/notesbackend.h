@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QProcess>
 #include <QQuickTextDocument>
+#include <QSet>
 #include <QTimer>
 
 #include "markdownhighlighter.h"
@@ -78,8 +79,8 @@ public:
     // lockVault() before syncing; no theme, fonts or desktop settings are
     // read. Cli: an `icloud-notes <command>` run, which takes the lock the
     // same way before it changes the vault or syncs, and reads
-    // icloud-session only when asked (refreshSignIn). Either way
-    // icloud-notes-sync never runs without the lock held.
+    // icloud-session only when asked (refreshSignIn). icloud-notes-sync
+    // takes the same lock itself; the backend hands it the one it holds.
     enum class Role { App, Background, Cli };
     explicit NotesBackend(QObject *parent = nullptr, Role role = Role::App);
     ~NotesBackend() override;
@@ -87,10 +88,13 @@ public:
     QStringList folders() const { return m_folders; }
     QVariantMap folderNoteCounts() const { return m_folderNoteCounts; }
     bool cloned() const { return vaultCloned(); }
-    static bool vaultCloned() { return !stateDir().isEmpty(); }
+    static bool vaultCloned();
     // The vault on disk (ICLOUD_NOTES_VAULT, or ~/Documents/icloud-notes).
     static QString rootPath();
-    // The lock the app and background syncs share for the vault.
+    // The lock the app, background syncs, command line changes and
+    // icloud-notes-sync share for the vault: $XDG_RUNTIME_DIR/
+    // icloud-notes-<FNV-1a 64 of the vault's canonical path>.lock (see
+    // notes-sync/src/cmd/lock.rs, which must agree).
     static QString lockPath();
     // Take the vault's lock now (the app does at start, and retries).
     VaultLock::Result lockVault();
@@ -277,8 +281,20 @@ private:
     QString folderAbsolutePath(const QString &folder) const;
     QString noteAbsolutePath() const;
     QString vaultRelative(const QString &name) const;
-    static QString stateDir();
-    QByteArray stateJson() const;
+    // What `icloud-notes-sync vault-info` says about the vault, so the app
+    // never parses the engine's state file: asked once, then again only
+    // when the engine, the vault or the state file changes. Defaults (in-body,
+    // nothing tracked) without an engine or a readable state.
+    struct VaultInfo {
+        QString titleMode = QStringLiteral("in-body");
+        QString defaultFolderDir;
+        QString stateFile;
+        QSet<QString> tracked; // vault-relative files
+        QHash<QString, QString> readOnly; // vault-relative file -> reason
+        QHash<QString, QString> baseFiles; // note id -> absolute path of its last-synced body
+    };
+    const VaultInfo &vaultInfo() const;
+    void startEngine();
     void rebuildFolders();
     void rebuildNotes();
     void classifyNotes();
@@ -402,6 +418,8 @@ private:
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_themeWatcher;
     QProcess m_syncProcess;
+    mutable VaultInfo m_vaultInfo;
+    mutable QString m_vaultInfoKey;
 };
 
 #endif

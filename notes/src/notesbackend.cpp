@@ -14,14 +14,17 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPrinter>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTextDocument>
-#include <QCryptographicHash>
 #include <QTextStream>
 #include <QUrl>
 #include <algorithm>
+#include <fcntl.h>
 #include <utility>
 
 namespace {
@@ -280,19 +283,25 @@ QString NotesBackend::rootPath()
 }
 
 // In the runtime directory, or beside the vault without one: never inside
-// it, since icloud-notes-sync clones only into an empty directory. A vault named
-// by ICLOUD_NOTES_VAULT gets a lock of its own, so tests never share the
-// real vault's.
+// it, since icloud-notes-sync clones only into an empty directory. One per
+// vault, named by a hash of its canonical path (its cleaned absolute path
+// until it exists), so tests never share the real vault's. icloud-notes-sync
+// computes the same path (notes-sync/src/cmd/lock.rs): change both or
+// neither.
 QString NotesBackend::lockPath()
 {
+    const QFileInfo vault(rootPath());
+    QString key = vault.canonicalFilePath();
+    if (key.isEmpty())
+        key = QDir::cleanPath(vault.absoluteFilePath());
+    quint64 hash = 0xcbf29ce484222325ULL; // 64-bit FNV-1a
+    for (const char byte : QFile::encodeName(key)) {
+        hash ^= quint8(byte);
+        hash *= 0x100000001b3ULL;
+    }
+    const QString name = QStringLiteral("icloud-notes-%1.lock").arg(hash, 16, 16, QLatin1Char('0'));
     const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
-    const QString dir = runtime.isEmpty() ? QFileInfo(rootPath()).absolutePath() : runtime;
-    const QString name = runtime.isEmpty() ? QStringLiteral(".icloud-notes") : QStringLiteral("icloud-notes");
-    if (qEnvironmentVariableIsEmpty("ICLOUD_NOTES_VAULT"))
-        return dir + u'/' + name + QStringLiteral(".lock");
-    const QByteArray hash = QCryptographicHash::hash(QFileInfo(rootPath()).absoluteFilePath().toUtf8(),
-                                                     QCryptographicHash::Sha1).toHex().left(12);
-    return dir + u'/' + name + u'-' + QString::fromLatin1(hash) + QStringLiteral(".lock");
+    return runtime.isEmpty() ? QFileInfo(key).absolutePath() + QStringLiteral("/.") + name : runtime + u'/' + name;
 }
 
 VaultLock::Result NotesBackend::lockVault()
@@ -309,14 +318,14 @@ QString NotesBackend::lockHolder() const
     return holder.isEmpty() ? QStringLiteral("another sync") : holder;
 }
 
-// icloud-notes-sync has no lock of its own: it only ever runs with the vault's
-// held. Someone else holding it (a background sync) means waiting for as
-// long as that takes; a lock that cannot be opened at all means no sync.
+// icloud-notes-sync runs with the vault's lock held here. Someone else
+// holding it (a background sync) means waiting for as long as that takes; a
+// lock that cannot be opened at all means no sync.
 void NotesBackend::startProcess()
 {
     switch (lockVault()) {
     case VaultLock::Locked:
-        m_syncProcess.start();
+        startEngine();
         return;
     case VaultLock::Busy:
         setSyncMessage(QStringLiteral("Waiting for %1 to finish…").arg(lockHolder()));
@@ -355,8 +364,23 @@ void NotesBackend::retryLock()
     refresh();
     if (m_syncRunning) {
         setSyncMessage(m_syncLabel + QStringLiteral("…"));
-        m_syncProcess.start();
+        startEngine();
     }
+}
+
+// icloud-notes-sync takes the vault's lock itself (clone, pull, push,
+// restore), which this backend already holds: it gets the locked
+// descriptor as ICLOUD_NOTES_LOCK_FD, which it checks is open on this
+// vault's lock file and holds it before trusting it. The descriptor is
+// close-on-exec everywhere else; only this child keeps it.
+void NotesBackend::startEngine()
+{
+    const int fd = m_lock.fd();
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("ICLOUD_NOTES_LOCK_FD"), QString::number(fd));
+    m_syncProcess.setProcessEnvironment(env);
+    m_syncProcess.setChildProcessModifier([fd] { ::fcntl(fd, F_SETFD, 0); });
+    m_syncProcess.start();
 }
 
 QString NotesBackend::folderAbsolutePath(const QString &folder) const
@@ -375,22 +399,62 @@ QString NotesBackend::vaultRelative(const QString &name) const
     return m_currentFolder.isEmpty() ? name : m_currentFolder + u'/' + name;
 }
 
-// The sync tool's state directory (icloud-md's .icloud-md, which
-// icloud-notes-sync keeps), or the name it used to use.
-QString NotesBackend::stateDir()
+// A clone leaves the engine's state directory (icloud-md's .icloud-md,
+// which icloud-notes-sync keeps) in the vault.
+bool NotesBackend::vaultCloned()
 {
-    for (const char *name : { ".icloud-md", ".icloud-notes-sync" }) {
-        const QString dir = rootPath() + u'/' + QLatin1StringView(name);
-        if (QDir(dir).exists())
-            return dir;
-    }
-    return {};
+    return QDir(rootPath() + QStringLiteral("/.icloud-md")).exists();
 }
 
-QByteArray NotesBackend::stateJson() const
+const NotesBackend::VaultInfo &NotesBackend::vaultInfo() const
 {
-    QFile file(stateDir() + QStringLiteral("/state.json"));
-    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    const QString tool = syncToolPath();
+    const QString root = QFileInfo(rootPath()).absoluteFilePath();
+    auto keyFor = [&](const QString &stateFile) {
+        const QFileInfo state(stateFile);
+        return tool + u'\n' + root + u'\n'
+            + (!stateFile.isEmpty() && state.exists()
+                   ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
+                   : QStringLiteral("-"));
+    };
+    // Taken before asking, so a change while the engine answers asks again.
+    const QString key = keyFor(m_vaultInfo.stateFile);
+    if (!m_vaultInfoKey.isEmpty() && key == m_vaultInfoKey)
+        return m_vaultInfo;
+
+    VaultInfo info;
+    if (!tool.isEmpty()) {
+        QProcess engine;
+        engine.start(tool, { QStringLiteral("--json"), QStringLiteral("vault-info"), root });
+        if (engine.waitForFinished(10000) && engine.exitStatus() == QProcess::NormalExit && engine.exitCode() == 0) {
+            const QJsonObject o = QJsonDocument::fromJson(engine.readAllStandardOutput()).object();
+            if (o.value(QStringLiteral("titleMode")).toString() == u"filename")
+                info.titleMode = QStringLiteral("filename");
+            info.defaultFolderDir = o.value(QStringLiteral("defaultFolderDir")).toString();
+            info.stateFile = o.value(QStringLiteral("stateFile")).toString();
+            const QString vault = o.value(QStringLiteral("vault")).toString();
+            for (const QJsonValue &v : o.value(QStringLiteral("notes")).toArray()) {
+                const QJsonObject note = v.toObject();
+                const QString file = note.value(QStringLiteral("file")).toString();
+                const QString reason = note.value(QStringLiteral("readOnlyReason")).toString();
+                const QString base = note.value(QStringLiteral("baseFile")).toString();
+                if (file.isEmpty())
+                    continue;
+                info.tracked.insert(file);
+                if (!reason.isEmpty())
+                    info.readOnly.insert(file, reason);
+                if (!base.isEmpty())
+                    info.baseFiles.insert(note.value(QStringLiteral("id")).toString(), vault + u'/' + base);
+            }
+        } else if (engine.state() != QProcess::NotRunning) {
+            engine.kill();
+            engine.waitForFinished();
+        }
+    }
+    // The first answer names the state file: only then can its change be seen.
+    m_vaultInfoKey = info.stateFile == m_vaultInfo.stateFile ? key : keyFor(info.stateFile);
+    m_vaultInfo = info;
+    return m_vaultInfo;
 }
 
 QString NotesBackend::syncToolPath()
@@ -417,12 +481,12 @@ bool NotesBackend::syncToolAvailable() const
 
 QString NotesBackend::vaultTitleMode() const
 {
-    return SyncModel::readTitleMode(stateJson());
+    return vaultInfo().titleMode;
 }
 
 QString NotesBackend::defaultFolder() const
 {
-    return SyncModel::defaultFolderDir(stateJson());
+    return vaultInfo().defaultFolderDir;
 }
 
 QString NotesBackend::noteBody() const
@@ -473,7 +537,7 @@ void NotesBackend::rebuildFolders()
         if (!isHidden(rel) && !rel.split(u'/').contains(QStringLiteral("attachments")))
             folders << rel;
     }
-    SyncModel::sortFolders(folders, SyncModel::defaultFolderDir(stateJson()));
+    SyncModel::sortFolders(folders, defaultFolder());
 
     // Every note counts toward each folder above it, the root included.
     QVariantMap counts;
@@ -537,10 +601,10 @@ void NotesBackend::rebuildNotes()
 // untracked notes carrying an id from elsewhere, conflicts and tables.
 void NotesBackend::classifyNotes()
 {
-    const QByteArray state = stateJson();
-    const QSet<QString> tracked = SyncModel::trackedFiles(state);
-    const QHash<QString, QString> readOnly = SyncModel::readOnlyReasons(state);
-    const QString mode = SyncModel::readTitleMode(state);
+    const VaultInfo &info = vaultInfo();
+    const QSet<QString> &tracked = info.tracked;
+    const QHash<QString, QString> &readOnly = info.readOnly;
+    const QString mode = info.titleMode;
     const QDir dir(folderAbsolutePath(m_currentFolder));
     QHash<QString, NoteScan> scans;
     QVariantMap states;
@@ -588,7 +652,7 @@ void NotesBackend::loadCurrentNote()
     m_noteContent = path.isEmpty() ? QString() : readText(path);
     m_noteAttachments = path.isEmpty() ? QVariantList() : attachmentsFor(path, m_noteContent);
     m_readOnlyReason = path.isEmpty() ? QString()
-                                      : SyncModel::readOnlyReasons(stateJson()).value(vaultRelative(m_currentNote));
+                                      : vaultInfo().readOnly.value(vaultRelative(m_currentNote));
     emit noteContentChanged();
 }
 
@@ -963,9 +1027,7 @@ bool NotesBackend::noteConflictsUnreadable() const
 QString NotesBackend::syncedCopyPath() const
 {
     const QString id = SyncModel::extractNoteId(m_noteContent);
-    if (id.isEmpty() || id.contains(u'/') || stateDir().isEmpty())
-        return {};
-    return stateDir() + QStringLiteral("/base/") + id + QStringLiteral(".md");
+    return id.isEmpty() ? QString() : vaultInfo().baseFiles.value(id);
 }
 
 bool NotesBackend::noteHasSyncedCopy() const
@@ -978,8 +1040,7 @@ bool NotesBackend::noteHasSyncedCopy() const
 // tool's own dot-directory, which neither it nor this app reads as notes.
 QString NotesBackend::conflictBackupDir()
 {
-    const QString state = stateDir();
-    return (state.isEmpty() ? rootPath() + QStringLiteral("/.icloud-md") : state) + QStringLiteral("/conflict-backups");
+    return rootPath() + QStringLiteral("/.icloud-md/conflict-backups");
 }
 
 QVariantMap NotesBackend::recoverConflictedNote(const QString &how)
@@ -1288,16 +1349,12 @@ void NotesBackend::finishSync(int exitCode)
                              : QStringLiteral("%1 failed (exit %2). See log.").arg(m_syncLabel).arg(exitCode);
 
     // Every failure that only a sign-in fixes exits 2, the code every iCloud
-    // tool uses (icloud-notes-sync 0.1.1 and older exited 4; the app's own
-    // arguments never make a usage error, which those exited 2 for), and
-    // still names icloud-md's `reauthenticate`, matched too while tools that
-    // only say that are around. Notes never signs in by itself:
-    // icloud-session owns the sign-in, so it is told (it confirms with
-    // Apple before signing everyone out) and syncing pauses until it
-    // reports a sign-in, since every further sync would fail the same way.
-    const bool sessionExpired = !ok
-        && (exitCode == 2 || exitCode == 4 || m_capturedErr.contains("icloud-md reauthenticate")
-            || m_captured.contains("icloud-md reauthenticate"));
+    // tool uses (the app's own arguments never make a usage error). Notes
+    // never signs in by itself: icloud-session owns the sign-in, so it is
+    // told (it confirms with Apple before signing everyone out) and syncing
+    // pauses until it reports a sign-in, since every further sync would
+    // fail the same way.
+    const bool sessionExpired = !ok && exitCode == 2;
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the

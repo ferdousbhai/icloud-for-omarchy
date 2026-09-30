@@ -9,6 +9,10 @@ if [[ "${ICLOUD_NOTES_PRIVATE_BUS:-}" != 1 ]]; then
   export ICLOUD_NOTES_PRIVATE_BUS=1
   exec dbus-run-session --config-file="$PWD/session-bus.conf" -- "$PWD/../bin/test" "$@"
 fi
+# The tests' stub engine answers vault-info with the real one (the app's
+# view of the vault's state), built from this checkout.
+cargo build --quiet --locked -p icloud-notes-sync --manifest-path "$PWD/../../Cargo.toml"
+export ICLOUD_NOTES_SYNC_REAL="${CARGO_TARGET_DIR:-$PWD/../../target}/debug/icloud-notes-sync"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 export NO_AT_BRIDGE=1 # the private bus has no accessibility bus to find
 for t in guardrails_test backend_test cli_test; do

@@ -420,27 +420,6 @@ inline bool hasTable(const QString &text)
     return false;
 }
 
-// CloneState.titleMode from state.json. Absent (pre-mode vaults) or
-// unrecognized means in-body, the shape that never renames files.
-inline QString readTitleMode(const QByteArray &stateJson)
-{
-    const QJsonDocument doc = QJsonDocument::fromJson(stateJson);
-    const bool filename = doc.isObject()
-        && doc.object().value(QStringLiteral("titleMode")).toString() == u"filename";
-    return filename ? QStringLiteral("filename") : QStringLiteral("in-body");
-}
-
-// Directory of the account's default folder ("Notes", or whatever it was
-// renamed or localized to), which Apple Notes lists first. Empty when the
-// state file does not say.
-inline QString defaultFolderDir(const QByteArray &stateJson)
-{
-    return QJsonDocument::fromJson(stateJson).object()
-        .value(QStringLiteral("folders")).toObject()
-        .value(QStringLiteral("DefaultFolder-CloudKit")).toObject()
-        .value(QStringLiteral("dirName")).toString();
-}
-
 // Folder paths in Apple Notes order: iCloud keeps no folder positions, so
 // Notes lists the default folder first and the rest by name, "2" before
 // "10", each folder directly followed by its own subfolders.
@@ -465,40 +444,6 @@ inline void sortFolders(QStringList &folders, const QString &defaultDir)
         }
         return as.size() < bs.size();
     });
-}
-
-// Vault-relative paths of tracked notes from state.json's notes index
-// (keyed by recordName, each carrying its file). An unreadable state
-// file tracks nothing rather than misclassifying everything.
-inline QSet<QString> trackedFiles(const QByteArray &stateJson)
-{
-    QSet<QString> files;
-    const QJsonObject index = QJsonDocument::fromJson(stateJson).object()
-                                  .value(QStringLiteral("notes")).toObject();
-    for (const QJsonValue &note : index) {
-        const QString file = note.toObject().value(QStringLiteral("file")).toString();
-        if (!file.isEmpty())
-            files.insert(file);
-    }
-    return files;
-}
-
-// Tracked notes the sync tool reads but will never push, keyed by vault-relative
-// file, with its reason ("is so large that ...", phrased to follow "this
-// note"). A very large note, or formatting it cannot round-trip, lands here.
-inline QHash<QString, QString> readOnlyReasons(const QByteArray &stateJson)
-{
-    QHash<QString, QString> reasons;
-    const QJsonObject index = QJsonDocument::fromJson(stateJson).object()
-                                  .value(QStringLiteral("notes")).toObject();
-    for (const QJsonValue &note : index) {
-        const QJsonObject entry = note.toObject();
-        const QString file = entry.value(QStringLiteral("file")).toString();
-        const QString reason = entry.value(QStringLiteral("unpublishableReason")).toString();
-        if (!file.isEmpty() && !reason.isEmpty())
-            reasons.insert(file, reason);
-    }
-    return reasons;
 }
 
 // Retitle for in-body vaults: replace the first body line, keeping its

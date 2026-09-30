@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
         QDir().mkpath(root); // empty, unlinked vault: banner + Clone CTA
     } else {
         writeFile(root, QStringLiteral(".icloud-md/state.json"),
-                  QStringLiteral(R"({"titleMode":"in-body","notes":{"a":{"file":"Notes/Groceries.md"%1},"b":{"file":"Notes/Trip ideas.md"},"c":{"file":"Recipes/Pancakes.md"}}})")
+                  QStringLiteral(R"({"layoutVersion":3,"titleMode":"in-body","notes":{"a":{"file":"Notes/Groceries.md","recordChangeTag":"t","modificationDate":0%1},"b":{"file":"Notes/Trip ideas.md","recordChangeTag":"t","modificationDate":0},"c":{"file":"Recipes/Pancakes.md","recordChangeTag":"t","modificationDate":0}}})")
                       .arg(qgetenv("NOTES_SHOT") == "readonly"
                                ? QStringLiteral(R"(,"unpublishableReason":"is so large that Apple keeps its text in a separate file, which can't be written back yet")")
                                : QString()),

@@ -34,34 +34,6 @@ int main()
     check(!SyncModel::hasConflictMarkers(QStringLiteral("a == b\nx === y\n")), "markers equals signs");
     check(SyncModel::hasConflictMarkers(QStringLiteral("x\n||||||| base\n")), "markers ancestor");
 
-    // readTitleMode
-    check(SyncModel::readTitleMode(QByteArrayLiteral(R"({"titleMode":"filename"})")) == QStringLiteral("filename"),
-          "mode filename");
-    check(SyncModel::readTitleMode(QByteArrayLiteral(R"({"titleMode":"in-body"})")) == QStringLiteral("in-body"),
-          "mode in-body");
-    check(SyncModel::readTitleMode(QByteArrayLiteral(R"({"notes":{}})")) == QStringLiteral("in-body"),
-          "mode absent defaults");
-    check(SyncModel::readTitleMode(QByteArrayLiteral("not json")) == QStringLiteral("in-body"),
-          "mode garbage defaults");
-
-    // trackedFiles
-    {
-        const QSet<QString> t = SyncModel::trackedFiles(
-            QByteArrayLiteral(R"({"notes":{"uuid-1":{"file":"A.md"},"uuid-2":{"file":"Sub/B.md"}}})"));
-        check(t.size() == 2 && t.contains(QStringLiteral("A.md")) && t.contains(QStringLiteral("Sub/B.md")),
-              "tracked set");
-    }
-    check(SyncModel::trackedFiles(QByteArrayLiteral(R"({})")).isEmpty(), "tracked empty");
-
-    // readOnlyReasons
-    {
-        const QHash<QString, QString> r = SyncModel::readOnlyReasons(QByteArrayLiteral(
-            R"({"notes":{"u1":{"file":"Big.md","unpublishableReason":"is too large"},"u2":{"file":"A.md"}}})"));
-        check(r.size() == 1 && r.value(QStringLiteral("Big.md")) == QStringLiteral("is too large"),
-              "read-only reasons");
-    }
-    check(SyncModel::readOnlyReasons(QByteArrayLiteral("not json")).isEmpty(), "read-only garbage empty");
-
     // parseStatusJson
     {
         const QByteArray payload = QByteArrayLiteral(
@@ -374,11 +346,7 @@ int main()
           "checkbox non-list noop");
     check(SyncModel::toggleCheckbox(QStringLiteral("a"), 5) == QStringLiteral("a"), "checkbox range noop");
 
-    // defaultFolderDir / sortFolders
-    check(SyncModel::defaultFolderDir(R"({"folders":{"DefaultFolder-CloudKit":{"name":"Notizen","dirName":"Notizen"}}})")
-              == QStringLiteral("Notizen"),
-          "default folder read from state");
-    check(SyncModel::defaultFolderDir("{}").isEmpty(), "default folder absent");
+    // sortFolders
     QStringList folders{ QStringLiteral("Work"), QStringLiteral("bets"), QStringLiteral("Notes/Old"),
                          QStringLiteral("Year 10"), QString(), QStringLiteral("Notes"), QStringLiteral("Work/A"),
                          QStringLiteral("Year 2"), QStringLiteral("Work Stuff") };

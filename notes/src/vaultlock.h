@@ -9,13 +9,14 @@
 #include <sys/file.h>
 #include <unistd.h>
 
-// An exclusive flock on a lock file, held until release() or destruction.
-// icloud-notes-sync has no lock of its own, so the app and `icloud-notes --sync`
-// take this one before running it: the app for its whole lifetime, the
-// background sync for its run. The file is never removed (removing a
-// flock file races with the next locker); it holds only the holder's own
+// An exclusive flock on a lock file, held until release() or destruction:
+// the vault's lock, which icloud-notes-sync takes too (its cmd/lock.rs). The
+// app holds it for its whole lifetime, `icloud-notes --sync` and command
+// line changes for their run. The file is never removed (removing a flock
+// file races with the next locker); it holds only the holder's own
 // description, for whoever waits, and lives in the runtime directory.
-// Close-on-exec, so icloud-notes-sync never inherits it.
+// Close-on-exec: the backend hands it to the engine it runs on purpose
+// (NotesBackend::startEngine), never by accident.
 class VaultLock
 {
 public:
@@ -59,6 +60,8 @@ public:
     }
 
     bool held() const { return m_fd >= 0; }
+    // The locked descriptor, or -1.
+    int fd() const { return m_fd; }
     QString path() const { return m_path; }
     // Who holds the lock, as it described itself; empty when nobody said.
     QString holder() const
