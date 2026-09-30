@@ -1,4 +1,4 @@
-QT += core gui quick printsupport dbus network
+QT += core gui quick printsupport dbus
 CONFIG += c++17 console
 CONFIG -= app_bundle
 TARGET = cli_test

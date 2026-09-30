@@ -328,16 +328,26 @@ void NotesBackend::startProcess()
         startEngine();
         return;
     case VaultLock::Busy:
-        setSyncMessage(QStringLiteral("Waiting for %1 to finish…").arg(lockHolder()));
+        showLockWait();
         if (!m_lockRetry.isActive())
             m_lockRetry.start();
         return;
     case VaultLock::Failed:
-        appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-notes-sync without it.")
-                      .arg(m_lock.path()));
-        finishSync(-1);
+        failWithoutLock();
         return;
     }
+}
+
+void NotesBackend::showLockWait()
+{
+    setSyncMessage(QStringLiteral("Waiting for %1 to finish…").arg(lockHolder()));
+}
+
+void NotesBackend::failWithoutLock()
+{
+    appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-notes-sync without it.")
+                  .arg(m_lock.path()));
+    finishSync(-1);
 }
 
 // Whoever held the vault let go: show what it pulled, then run the sync
@@ -347,15 +357,12 @@ void NotesBackend::retryLock()
     switch (lockVault()) {
     case VaultLock::Busy:
         if (m_syncRunning) // the holder may have changed
-            setSyncMessage(QStringLiteral("Waiting for %1 to finish…").arg(lockHolder()));
+            showLockWait();
         return;
     case VaultLock::Failed:
         m_lockRetry.stop();
-        if (m_syncRunning) {
-            appendLog(QStringLiteral("Could not open the sync lock %1; not running icloud-notes-sync without it.")
-                          .arg(m_lock.path()));
-            finishSync(-1);
-        }
+        if (m_syncRunning)
+            failWithoutLock();
         return;
     case VaultLock::Locked:
         break;

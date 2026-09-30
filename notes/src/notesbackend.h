@@ -48,10 +48,8 @@ class NotesBackend : public QObject
     // a sign-in again.
     Q_PROPERTY(bool authExpired READ authExpired NOTIFY authExpiredChanged)
     // The account as icloud-session (the D-Bus daemon that owns the Apple
-    // sign-in for every iCloud app) reports it. signInKnown is false while
-    // the daemon is missing or has not answered; signInPending while a read
+    // sign-in for every iCloud app) reports it. signInPending while a read
     // of it is on the way.
-    Q_PROPERTY(bool signInKnown READ signInKnown NOTIFY signInChanged)
     Q_PROPERTY(bool signInPending READ signInPending NOTIFY signInChanged)
     Q_PROPERTY(bool signedIn READ signedIn NOTIFY signInChanged)
     Q_PROPERTY(QString appleId READ appleId NOTIFY signInChanged)
@@ -141,6 +139,7 @@ public:
     QString syncLog() const { return m_syncLog; }
     bool syncRunning() const { return m_syncRunning; }
     bool authExpired() const { return m_authExpired; }
+    // False while icloud-session is missing or has not answered.
     bool signInKnown() const { return m_signInKnown; }
     bool signInPending() const { return m_signInReads > 0; }
     bool signedIn() const { return m_signInKnown && m_signedIn; }
@@ -188,8 +187,9 @@ public:
     // Move the open note to another existing folder (vault-relative, ""
     // for the root), as a mv on disk does: the next push moves it in Notes.
     // Refused for a read-only note, one with attachments (their links are
-    // relative to its folder) and a name the folder already has.
-    Q_INVOKABLE QString moveCurrentNote(const QString &folder);
+    // relative to its folder) and a name the folder already has. For the
+    // command line; the window has no move.
+    QString moveCurrentNote(const QString &folder);
     // Keep one side of each conflict block ("local", "remote" or "both").
     Q_INVOKABLE QString resolveConflicts(const QStringList &choices);
     // A note with unreadable conflict markers: "strip" keeps every line
@@ -323,6 +323,8 @@ private:
     void resumeSync();
     void startProcess();
     void retryLock();
+    void showLockWait();
+    void failWithoutLock();
 
 private slots:
     void sessionPropertiesChanged(const QString &interface, const QVariantMap &changed,
