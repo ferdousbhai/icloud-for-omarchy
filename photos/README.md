@@ -82,16 +82,20 @@ the same sign-in, catalog, cache and library folder as the app.
 | `info ID` | everything the catalog knows about one item, including its albums |
 | `thumb ID [--out PATH]` | fetches iCloud's thumbnail into the cache (and copies it to `PATH`) |
 | `download ID... \| --all [--medium] [--out DIR]` | originals (plus a Live Photo's video) into the library folder, or under `DIR`; `--medium` fetches the viewer's preview instead; prints the saved paths |
+| `open ID [--medium]` | the viewer's Open: downloads the original if needed (or fetches the preview) and opens it in the default app (`xdg-open`) |
 | `upload FILE... [--album ID] [--no-sync]` | uploads, progress on stderr, prints the new ids, then syncs until they are in the catalog |
 | `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal, refuses without `--yes` otherwise |
 | `prune-cache` | drops cached previews of deleted items, trims the preview cache |
 | `sign-in` | opens the iCloud sign-in window |
 | `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
 
-- `--json` prints JSON on stdout (errors as a JSON object on stderr);
-  otherwise output is plain text, tab-separated for lists.
+- `--json` prints JSON on stdout, and an error as one JSON line on stderr,
+  `{"error":{"code":"not_found","message":…,"exit_code":1}}` (codes:
+  `usage`, `sign_in_required`, `not_found`, `cancelled`, `error`); otherwise
+  output is plain text, tab-separated for lists. Every command has `--help`.
 - Exit codes: 0 ok, 1 error, 2 sign-in required (`status` also exits 2
-  when signed out), 64 usage.
+  when signed out), 64 usage, as in every iCloud tool
+  ([docs/CLI.md](../docs/CLI.md)).
 - `--data-dir DIR` keeps the catalog, cache, preferences and library all
   under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`), so a
   test run never touches your own.
@@ -99,8 +103,8 @@ the same sign-in, catalog, cache and library folder as the app.
   print as UTC.
 - A delete that conflicts with a change made on another device syncs and
   tries once more, as the app does.
-- `upload --album` adds the new items to an album with a CloudKit request
-  that has not been checked against Apple (see below).
+- `upload --album` adds the new items to an album (checked against a real
+  account on 2026-09-30, see below).
 
 ## Your files
 
@@ -118,8 +122,8 @@ Deleting the cache or the catalog is safe: the next sync fetches them again.
 Everything here talks to Apple's private web endpoints, which are not
 documented. The request and response shapes come from pyicloud
 (picklepete/pyicloud and timlaing/pyicloud), not from captures made for this
-app; `tests/fixtures/README.md` says where each fixture came from. Not yet
-run against a real account:
+app; `tests/fixtures/README.md` says where each fixture came from. Unless an
+item says it was verified live, it has not been run against a real account:
 
 - **Reading** (`records/query` on `com.apple.photos.cloud`, zone
   `PrimarySync`: albums, the asset list, album members, master lookups):
@@ -134,13 +138,15 @@ run against a real account:
   timlaing/pyicloud.
 - **Adding to an album** (`upload --album`, command line only):
   `records/modify` creating a `CPLContainerRelation` named
-  `<asset>-IN-<album>`, the shape the album listing returns; no capture of
-  icloud.com doing it has been made.
+  `<asset>-IN-<album>`, the shape the album listing returns. Verified live:
+  on 2026-09-30 an upload with `--album` landed in that album on a real
+  account. (No capture of icloud.com doing it has been made.)
 - **Upload**: the four-step `photosupload` flow (`createUploadUrl`, bytes
   to the reserved content URL, `putAsset`, `uploadStatus`) ported from
   timlaing/pyicloud, whose fixtures say they matched a live account. The
   older single-request `uploadimagews` endpoint used by the icloudpd fork
-  has answered 410 Gone since 2026-08-25 and is not used.
+  has answered 410 Gone since 2026-08-25 and is not used. Verified live on
+  2026-09-30 (`icloud-photos upload --album`).
 
 ## Limitations
 
@@ -185,7 +191,7 @@ Layout:
 - `src/sync.rs` full listing and incremental `changes/zone`
 - `src/catalog.rs` the SQLite catalog
 - `src/thumbs.rs` downloads (thumbnails, previews, originals) on a small pool
-- `src/upload.rs` upload (unverified, see above)
+- `src/upload.rs` upload (verified live, see above)
 - `src/transport.rs` the HTTP seam every module above goes through, and the mock
 - `src/session.rs` the only file that uses the `icloud-session` crate
 - `src/ui/` the GTK 4 / libadwaita app

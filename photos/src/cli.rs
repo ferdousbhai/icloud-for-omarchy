@@ -3,8 +3,10 @@
 //! as the window: `sync::run`, `thumbs::fetch_detailed`,
 //! `upload::upload_batch`, `CloudKit::delete_asset`, `thumbs::prune_cache`.
 //!
-//! Output is plain text, or JSON on stdout with `--json`. Exit codes: 0 ok,
-//! 1 error, 2 sign-in required, 64 usage.
+//! Output is plain text, or JSON on stdout with `--json`. Exit codes, as in
+//! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 sign-in required,
+//! 64 usage. With `--json` an error is one JSON line on stderr:
+//! `{"error":{"code","message","exit_code"}}`.
 
 use std::cell::RefCell;
 use std::io::{BufRead, IsTerminal, Write};
@@ -27,13 +29,17 @@ const EXIT_ERROR: u8 = 1;
 const EXIT_SIGN_IN: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
+const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 64 usage.\n\
+With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
+{\"error\":{\"code\",\"message\",\"exit_code\"}}.\n\
+ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple.";
+
 #[derive(Parser)]
 #[command(
     name = "icloud-photos",
     version,
     about = "iCloud Photos from the command line. With no command, opens the app.",
-    after_help = "Exit codes: 0 ok, 1 error, 2 sign-in required, 64 usage.\n\
-                  ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple."
+    after_help = AFTER_HELP
 )]
 struct Cli {
     /// Machine-readable JSON on stdout (errors as JSON on stderr).
@@ -50,16 +56,20 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Sign-in state, where things live, catalog counts and the last sync.
+    #[command(after_help = AFTER_HELP)]
     Status,
     /// Bring the catalog up to date (incremental, falling back to a full listing).
+    #[command(after_help = AFTER_HELP)]
     Sync {
         /// List the whole library even when an incremental sync is possible.
         #[arg(long)]
         full: bool,
     },
     /// Albums in the catalog: id, name, photo count.
+    #[command(after_help = AFTER_HELP)]
     Albums,
     /// Photos and videos in the catalog, newest first.
+    #[command(after_help = AFTER_HELP)]
     List {
         /// Only this album (an id from `albums`).
         #[arg(long, value_name = "ID")]
@@ -75,8 +85,10 @@ enum Command {
         kind: Option<KindFilter>,
     },
     /// Everything the catalog knows about one item.
+    #[command(after_help = AFTER_HELP)]
     Info { id: String },
     /// Fetch iCloud's thumbnail into the cache and print its path.
+    #[command(after_help = AFTER_HELP)]
     Thumb {
         id: String,
         /// Also copy it to PATH.
@@ -84,6 +96,7 @@ enum Command {
         out: Option<PathBuf>,
     },
     /// Download originals (and a Live Photo's video) into the library folder.
+    #[command(after_help = AFTER_HELP)]
     Download {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         ids: Vec<String>,
@@ -98,7 +111,16 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
+    /// Download the original if needed and open it in the default app (the viewer's Open).
+    #[command(after_help = AFTER_HELP)]
+    Open {
+        id: String,
+        /// Open iCloud's large JPEG preview instead of the original.
+        #[arg(long)]
+        medium: bool,
+    },
     /// Upload photos and videos, then sync so they appear in the catalog.
+    #[command(after_help = AFTER_HELP)]
     Upload {
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -110,6 +132,7 @@ enum Command {
         no_sync: bool,
     },
     /// Move items to Recently Deleted in iCloud (on every device).
+    #[command(after_help = AFTER_HELP)]
     Delete {
         #[arg(required = true)]
         ids: Vec<String>,
@@ -118,10 +141,13 @@ enum Command {
         yes: bool,
     },
     /// Remove cached previews of deleted items and trim the preview cache.
+    #[command(after_help = AFTER_HELP)]
     PruneCache,
     /// Open the iCloud sign-in window (in mock mode, sign the fake server back in).
+    #[command(after_help = AFTER_HELP)]
     SignIn,
     /// Show the preferences, or change them.
+    #[command(after_help = AFTER_HELP)]
     Config {
         /// Folder for downloaded originals.
         #[arg(long, value_name = "DIR")]
@@ -147,6 +173,10 @@ enum DownloadArg {
 
 enum Fail {
     Usage(String),
+    /// No such item or album in the catalog.
+    NotFound(String),
+    /// The person answered no.
+    Cancelled(String),
     Err(Error),
 }
 
@@ -170,35 +200,57 @@ fn other(msg: impl Into<String>) -> Fail {
 
 /// Run the CLI on the process arguments.
 pub fn main() -> ExitCode {
+    // Scanned from argv so a usage error knows whether to answer in JSON.
+    let json = std::env::args().skip(1).any(|a| a == "--json");
     let cli = match Cli::try_parse() {
         Ok(c) => c,
-        Err(e) => {
-            let code = if e.use_stderr() { EXIT_USAGE } else { 0 };
+        Err(e) if !e.use_stderr() => {
             let _ = e.print();
-            return ExitCode::from(code);
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            if json {
+                let rendered = e.render().to_string();
+                let first = rendered.lines().next().unwrap_or_default();
+                let message = first.strip_prefix("error: ").unwrap_or(first);
+                return ExitCode::from(report(true, "usage", EXIT_USAGE, message));
+            }
+            let _ = e.print();
+            return ExitCode::from(EXIT_USAGE);
         }
     };
-    let json = cli.json;
     match run(cli) {
         Ok(code) => ExitCode::from(code),
         Err(fail) => {
             let (code, kind, msg) = match fail {
                 Fail::Usage(m) => (EXIT_USAGE, "usage", m),
+                Fail::NotFound(m) => (EXIT_ERROR, "not_found", m),
+                Fail::Cancelled(m) => (EXIT_ERROR, "cancelled", m),
                 Fail::Err(e) if e.is_sign_in() => (
                     EXIT_SIGN_IN,
                     "sign_in_required",
-                    format!("{e}; run `icloud-photos sign-in` (or sign in from any iCloud app)"),
+                    format!(
+                        "{e}; run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)"
+                    ),
                 ),
                 Fail::Err(e) => (EXIT_ERROR, "error", e.to_string()),
             };
-            if json {
-                eprintln!("{}", json!({ "error": msg, "kind": kind, "exit_code": code }));
-            } else {
-                eprintln!("icloud-photos: {msg}");
-            }
-            ExitCode::from(code)
+            ExitCode::from(report(json, kind, code, &msg))
         }
     }
+}
+
+/// An error on stderr: one JSON line with `--json`, else a sentence.
+fn report(json: bool, code: &str, exit_code: u8, message: &str) -> u8 {
+    if json {
+        eprintln!(
+            "{}",
+            json!({ "error": { "code": code, "message": message, "exit_code": exit_code } })
+        );
+    } else {
+        eprintln!("icloud-photos: {message}");
+    }
+    exit_code
 }
 
 struct Ctx {
@@ -272,6 +324,7 @@ fn run(cli: Cli) -> Res<u8> {
         Command::Info { id } => info(&ctx, &id),
         Command::Thumb { id, out } => thumb(&ctx, &id, out.as_deref()),
         Command::Download { ids, all, medium, out } => download(&ctx, ids, all, medium, out.as_deref()),
+        Command::Open { id, medium } => open(&ctx, &id, medium),
         Command::Upload { files, album, no_sync } => upload_cmd(&ctx, &files, album.as_deref(), no_sync),
         Command::Delete { ids, yes } => delete(&ctx, &ids, yes),
         Command::PruneCache => prune(&ctx),
@@ -500,7 +553,7 @@ fn list(ctx: &Ctx, album: Option<&str>, since: Option<i64>, limit: Option<usize>
     if let Some(a) = album
         && !cat.albums()?.iter().any(|x| x.id == a)
     {
-        return Err(other(format!(
+        return Err(Fail::NotFound(format!(
             "no album {a} in the catalog (see `icloud-photos albums`)"
         )));
     }
@@ -540,7 +593,7 @@ fn list(ctx: &Ctx, album: Option<&str>, since: Option<i64>, limit: Option<usize>
 
 fn row_or_fail(cat: &Catalog, id: &str) -> Res<Row> {
     cat.asset(id)?.ok_or_else(|| {
-        other(format!(
+        Fail::NotFound(format!(
             "no item {id} in the catalog (run `icloud-photos sync`, then `list`)"
         ))
     })
@@ -616,6 +669,35 @@ fn thumb(ctx: &Ctx, id: &str, out: Option<&Path>) -> Res<u8> {
         None => cached.clone(),
     };
     ctx.out(&json!({ "id": id, "path": path, "cache_path": cached }), || {
+        path.display().to_string()
+    });
+    Ok(0)
+}
+
+/// The viewer's Open: the original (downloaded first when it is not yet),
+/// or with `medium` iCloud's preview, handed to the desktop's default app
+/// (`xdg-open`, or `$ICLOUD_PHOTOS_OPENER`).
+fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<u8> {
+    let cat = ctx.catalog()?;
+    let row = row_or_fail(&cat, id)?;
+    let path = match existing(&row.local_path) {
+        Some(p) if !medium => p.clone(),
+        _ => {
+            let t = ctx.transport()?;
+            let job = if medium { Job::Medium } else { Job::Original };
+            thumbs::fetch_detailed(&*t, &cat, &ctx.targets(None), id, job)?.path
+        }
+    };
+    let opener = std::env::var("ICLOUD_PHOTOS_OPENER").unwrap_or_else(|_| "xdg-open".into());
+    let status = std::process::Command::new(&opener)
+        .arg(&path)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|e| other(format!("could not run {opener}: {e}")))?;
+    if !status.success() {
+        return Err(other(format!("{opener} {} failed ({status})", path.display())));
+    }
+    ctx.out(&json!({ "id": id, "path": path, "opened": true }), || {
         path.display().to_string()
     });
     Ok(0)
@@ -706,7 +788,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
     if let Some(a) = album
         && !ctx.catalog()?.albums()?.iter().any(|x| x.id == a)
     {
-        return Err(other(format!(
+        return Err(Fail::NotFound(format!(
             "no album {a} in the catalog (see `icloud-photos albums`)"
         )));
     }
@@ -874,8 +956,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
             }
         }
         if !confirm(rows.len())? {
-            eprintln!("Nothing deleted.");
-            return Ok(EXIT_ERROR);
+            return Err(Fail::Cancelled("nothing deleted".into()));
         }
     }
     let t = ctx.transport()?;

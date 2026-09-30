@@ -44,9 +44,15 @@ impl Env {
 
     /// The binary with the fake server, a sandboxed HOME/XDG, and no --data-dir.
     fn bare(&self, args: &[&str]) -> Run {
+        self.bare_with(args, &[])
+    }
+
+    /// `bare` with extra environment variables.
+    fn bare_with(&self, args: &[&str], vars: &[(&str, &Path)]) -> Run {
         let home = self.root.join("home");
         let out: Output = Command::new(env!("CARGO_BIN_EXE_icloud-photos"))
             .args(args)
+            .envs(vars.iter().map(|(k, v)| (*k, *v)))
             .env("ICLOUD_SESSION_MOCK", "1")
             .env("ICLOUD_SESSION_MOCK_URL", &self.server.url)
             .env("HOME", &home)
@@ -119,11 +125,15 @@ fn usage_help_and_exit_codes() {
         "download",
         "upload",
         "delete",
+        "open",
         "prune-cache",
         "sign-in",
         "config",
     ] {
         assert!(help.stdout.contains(cmd), "--help lists {cmd}");
+        let own = env.bare(&[cmd, "--help"]);
+        assert_eq!(own.code, 0, "{cmd} --help");
+        assert!(own.stdout.contains("Exit codes"), "{cmd} --help names the exit codes");
     }
     assert_eq!(env.bare(&["--version"]).code, 0);
     assert_eq!(env.bare(&["frobnicate"]).code, 64);
@@ -138,9 +148,19 @@ fn usage_help_and_exit_codes() {
     assert!(r.stdout.is_empty());
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
     assert_eq!(
-        (err["kind"].as_str(), err["exit_code"].as_i64()),
-        (Some("error"), Some(1))
+        (err["error"]["code"].as_str(), err["error"]["exit_code"].as_i64()),
+        (Some("not_found"), Some(1))
     );
+    assert!(err["error"]["message"].as_str().unwrap().contains("NO-SUCH-ID"));
+    // A usage error with --json is JSON too.
+    let r = env.run(&["--json", "list", "--kind", "painting"]);
+    assert_eq!(r.code, 64);
+    let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
+    assert_eq!(err["error"]["code"], "usage");
+    assert_eq!(err["error"]["exit_code"], 64);
+    // Delete never asks without a terminal: --yes or a usage error.
+    let r = env.run(&["--json", "delete", "NO-SUCH-ID"]);
+    assert_eq!(r.code, 1, "the id is checked first: {}", r.stderr);
 }
 
 #[test]
@@ -311,6 +331,51 @@ fn thumb_and_download() {
 }
 
 #[test]
+fn open_downloads_then_hands_the_file_to_the_default_app() {
+    let env = Env::synced("open", 4);
+    let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
+    // A stand-in for xdg-open that records what it was given.
+    let opened = env.root.join("opened");
+    let opener = env.root.join("opener.sh");
+    std::fs::write(&opener, format!("#!/bin/sh\necho \"$1\" >> '{}'\n", opened.display())).unwrap();
+    std::fs::set_permissions(&opener, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let data = env.data();
+    let run = |args: &[&str]| {
+        let mut all = vec!["--data-dir", data.to_str().unwrap(), "--json"];
+        all.extend_from_slice(args);
+        env.bare_with(&all, &[("ICLOUD_PHOTOS_OPENER", &opener)])
+    };
+
+    // Not downloaded yet: fetched into the library first, then opened.
+    let r = run(&["open", &photo]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let v = r.json();
+    let path = PathBuf::from(v["path"].as_str().unwrap());
+    assert!(
+        path.starts_with(env.data().join("library")) && is_jpeg(&path),
+        "{path:?}"
+    );
+    assert_eq!(v["opened"], true);
+    assert_eq!(std::fs::read_to_string(&opened).unwrap().trim(), path.to_str().unwrap());
+    assert_eq!(env.json(&["info", &photo])["local_path"], v["path"]);
+
+    // --medium opens the viewer's preview from the cache.
+    let r = run(&["open", &photo, "--medium"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(PathBuf::from(r.json()["path"].as_str().unwrap()).starts_with(env.data().join("cache/medium")));
+
+    // An opener that fails is an error; an unknown id is not_found.
+    let r = env.bare_with(
+        &["--data-dir", data.to_str().unwrap(), "--json", "open", &photo],
+        &[("ICLOUD_PHOTOS_OPENER", Path::new("/bin/false"))],
+    );
+    assert_eq!(r.code, 1);
+    let r = run(&["open", "NO-SUCH-ID"]);
+    let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
+    assert_eq!((r.code, err["error"]["code"].as_str()), (1, Some("not_found")));
+}
+
+#[test]
 fn upload_then_sync_into_the_catalog() {
     let env = Env::synced("upload", 10);
     let a = env.root.join("NEW_A.JPG");
@@ -452,7 +517,8 @@ fn signed_out_exits_2_until_sign_in() {
     }
     let r = env.run(&["--json", "sync"]);
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
-    assert_eq!(err["kind"], "sign_in_required");
+    assert_eq!(err["error"]["code"], "sign_in_required");
+    assert_eq!(err["error"]["exit_code"], 2);
     let f = env.root.join("X.JPG");
     std::fs::write(&f, b"\xFF\xD8 x").unwrap();
     assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 2);
