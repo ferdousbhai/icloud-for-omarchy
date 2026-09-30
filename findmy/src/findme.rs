@@ -80,19 +80,23 @@ impl SessionTransport {
         }
         Ok(self.session.as_ref().expect("just connected"))
     }
+
+    /// Drops the connection after `SignInRequired` or a daemon failure, so
+    /// the next call reconnects.
+    fn drop_on_lost_session(&mut self, e: &icloud_session::Error) {
+        if matches!(
+            e,
+            icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)
+        ) {
+            self.session = None;
+        }
+    }
 }
 
 impl Transport for SessionTransport {
     fn service_root(&mut self) -> Result<String> {
         let result = self.session()?.webservices();
-        let ws = result.inspect_err(|e| {
-            if matches!(
-                e,
-                icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)
-            ) {
-                self.session = None;
-            }
-        })?;
+        let ws = result.inspect_err(|e| self.drop_on_lost_session(e))?;
         ws.url("findme")
             .map(|url| url.trim_end_matches('/').to_string())
             .ok_or(Error::NoService)
@@ -100,14 +104,7 @@ impl Transport for SessionTransport {
 
     fn post_json(&mut self, url: &str, body: &Value) -> Result<Value> {
         let result = self.session()?.post_json(url, body);
-        let resp = result.inspect_err(|e| {
-            if matches!(
-                e,
-                icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)
-            ) {
-                self.session = None;
-            }
-        })?;
+        let resp = result.inspect_err(|e| self.drop_on_lost_session(e))?;
         if resp.body.is_empty() {
             return Ok(Value::Null);
         }
@@ -124,14 +121,14 @@ pub const APP_NAME: &str = "iCloud Find (Web)";
 pub const TIMEZONE: &str = "US/Pacific";
 
 /// The body for `initClient` (no server context yet) or `refreshClient`.
-pub fn refresh_body(server_ctx: Option<&Value>, locate: bool, with_family: bool) -> Value {
+pub fn refresh_body(server_ctx: Option<&Value>, locate: bool) -> Value {
     let mut body = json!({
         "clientContext": {
             "appName": APP_NAME,
             "appVersion": "2.0",
             "apiVersion": "3.0",
             "deviceListVersion": 1,
-            "fmly": with_family,
+            "fmly": false,
             "timezone": TIMEZONE,
             "inactiveTime": 0,
         }
@@ -205,7 +202,6 @@ pub struct FindMe<T: Transport> {
     transport: T,
     root: Option<String>,
     server_ctx: Option<Value>,
-    with_family: bool,
 }
 
 impl<T: Transport> FindMe<T> {
@@ -214,14 +210,7 @@ impl<T: Transport> FindMe<T> {
             transport,
             root: None,
             server_ctx: None,
-            with_family: false,
         }
-    }
-
-    /// Include Family Sharing members' devices.
-    pub fn with_family(mut self, on: bool) -> Self {
-        self.with_family = on;
-        self
     }
 
     /// Forget the Find My session, e.g. after the user signed in again
@@ -270,7 +259,7 @@ impl<T: Transport> FindMe<T> {
             "initClient"
         };
         let url = self.url(endpoint)?;
-        let body = refresh_body(self.server_ctx.as_ref(), locate, self.with_family);
+        let body = refresh_body(self.server_ctx.as_ref(), locate);
         let resp = self.transport.post_json(&url, &body)?;
         let snap = parse_response(&resp)?;
         if snap.server_ctx.is_some() {
