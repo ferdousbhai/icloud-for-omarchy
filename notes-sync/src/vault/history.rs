@@ -159,16 +159,6 @@ pub struct TrackedNote {
     pub entry: NoteEntry,
 }
 
-/// Anything with a vault-relative `file`.
-pub trait HasFile {
-    fn file(&self) -> &str;
-}
-impl HasFile for NoteEntry {
-    fn file(&self) -> &str {
-        &self.file
-    }
-}
-
 fn node_resolve(base: &Path, p: &Path) -> String {
     let joined = if p.is_absolute() {
         p.to_path_buf()
@@ -197,26 +187,26 @@ fn vault_relative_path(file_arg: &str, target_dir: &Path, cwd: &Path) -> Option<
 /// `matchTrackedFile`: resolve `file_arg` against `cwd` first, then fall
 /// back to a unique basename; several basename matches are
 /// `AmbiguousTrackedFile`.
-pub fn match_tracked_file<'a, T: HasFile>(
-    entries: &'a IndexMap<String, T>,
+pub fn match_tracked_file<'a>(
+    entries: &'a IndexMap<String, NoteEntry>,
     file_arg: &str,
     target_dir: &Path,
     cwd: &Path,
-) -> Result<Option<(&'a String, &'a T)>, Error> {
+) -> Result<Option<(&'a String, &'a NoteEntry)>, Error> {
     if let Some(root_relative) = vault_relative_path(file_arg, target_dir, cwd)
-        && let Some(exact) = entries.iter().find(|(_, e)| e.file() == root_relative)
+        && let Some(exact) = entries.iter().find(|(_, e)| e.file == root_relative)
     {
         return Ok(Some(exact));
     }
     let base = posix::basename(file_arg);
     let by_basename: Vec<_> = entries
         .iter()
-        .filter(|(_, e)| posix::basename(e.file()) == base)
+        .filter(|(_, e)| posix::basename(&e.file) == base)
         .collect();
     if by_basename.len() > 1 {
         return Err(Error::AmbiguousTrackedFile {
             base_name: base.to_owned(),
-            candidates: by_basename.iter().map(|(_, e)| e.file().to_owned()).collect(),
+            candidates: by_basename.iter().map(|(_, e)| e.file.clone()).collect(),
         });
     }
     Ok(by_basename.into_iter().next())
