@@ -66,7 +66,6 @@ fn parse_matches_icloud_md() {
     let cases = cases.as_array().unwrap();
     let mut failures: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
     let mut totals: std::collections::BTreeMap<&str, usize> = Default::default();
-    let mut dump: Vec<String> = Vec::new();
     for case in cases {
         let source = case["source"].as_str().unwrap();
         *totals.entry(source).or_default() += 1;
@@ -85,11 +84,7 @@ fn parse_matches_icloud_md() {
                 .entry(source)
                 .or_default()
                 .push(format!("markdown {markdown:?}\n want {result}\n  got {got:?}"));
-            dump.push(markdown.to_string());
         }
-    }
-    if let Ok(path) = std::env::var("MD_GOLDEN_DUMP") {
-        std::fs::write(path, serde_json::to_string(&dump).unwrap()).unwrap();
     }
     for (source, total) in totals {
         let allowed = match source {
