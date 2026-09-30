@@ -1,7 +1,6 @@
 //! `POST setup.icloud.com/setup/ws/1/validate`, made exactly as icloud-md's
-//! `checkAuthentication` (`cloudkit/setupClient.js`) makes it, and Find My's
-//! one-factor `accountLogin`, made as pyicloud's
-//! `_authenticate_with_credentials_service("find")` makes it.
+//! `checkAuthentication` (`cloudkit/setupClient.js`) makes it. (Find My
+//! signs in through the sign-in window; see `bin/signin.rs`.)
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -9,7 +8,6 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::cookies::Cookie;
 use crate::files::{CLIENT_BUILD_NUMBER, CLIENT_ID, CLIENT_MASTERING_NUMBER};
 
 /// Apple's setup host, where `/setup/ws/1/validate` lives.
@@ -152,22 +150,4 @@ pub fn validate(
         webservices,
         set_cookies,
     })
-}
-
-/// A one-factor Find My sign-in: a fresh jar of its own.
-#[derive(Debug)]
-pub struct FindMyLogin {
-    /// Every cookie Apple set, `X-APPLE-WEBAUTH-FMIP` among them.
-    pub cookies: Vec<Cookie>,
-    /// The account Apple says it signed in, if it said.
-    pub dsid: Option<String>,
-}
-
-#[derive(Debug)]
-pub enum LoginError {
-    /// Apple said the password is wrong (the autofill window exits 3). Not
-    /// worth retrying until the password changes.
-    Rejected,
-    /// No answer, another status, an answer without Find My's cookie.
-    Failed(String),
 }

@@ -16,7 +16,7 @@ use serde::Deserialize;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
-use crate::apple::{self, LoginError, ValidateError};
+use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
 use crate::files::{self, Account, FindMyJar, Paths};
 use crate::secrets::{self, Password, SecretStore};
@@ -142,7 +142,17 @@ enum LoginBlock {
     Until(Instant),
 }
 
-/// How the last Find My one-factor sign-in ended.
+/// How an automatic Find My sign-in failed.
+#[derive(Debug)]
+enum LoginError {
+    /// Apple said the password is wrong (the autofill window exits 3). Not
+    /// worth retrying until the password changes.
+    Rejected,
+    /// No answer, another status, an answer without Find My's cookie.
+    Failed(String),
+}
+
+/// How the last automatic Find My sign-in ended.
 #[derive(Debug, Clone, Copy)]
 struct LoginAttempt {
     finished: Instant,
@@ -591,43 +601,21 @@ impl Daemon {
         }
     }
 
-    /// The client params for a Find My sign-in: the account's build
-    /// numbers, a clientId of its own.
-    fn login_params(a: &Account) -> BTreeMap<String, String> {
-        let mut params = BTreeMap::new();
-        for k in [files::CLIENT_BUILD_NUMBER, files::CLIENT_MASTERING_NUMBER] {
-            params.insert(k.to_string(), a.param(k).to_string());
-        }
-        params.insert(
-            files::CLIENT_ID.to_string(),
-            uuid::Uuid::new_v4().to_string().to_uppercase(),
-        );
-        params
-    }
-
-    /// Runs the one-factor sign-in with a fresh jar and, if it worked for
-    /// the account it was made for, keeps that jar as the Find My jar. The
-    /// main jar is neither sent nor touched. Records the attempt and what
+    /// Signs in to Find My in the hidden autofill window with a fresh jar
+    /// and, if it worked for the account it was made for, keeps that jar
+    /// (and the window's client params) as the Find My jar. The main jar
+    /// is neither sent nor touched. Records the attempt and what
     /// it means for the next one. Call under `find_my_login_lock`.
-    fn find_my_login(
-        &self,
-        generation: u64,
-        apple_id: &str,
-        dsid: &str,
-        params: BTreeMap<String, String>,
-        password: &str,
-    ) -> Result<(), LoginError> {
+    fn find_my_login(&self, generation: u64, apple_id: &str, dsid: &str, password: &str) -> Result<(), LoginError> {
         let fingerprint = self.fingerprint(apple_id, password);
         // Apple's own sign-in page, filled in as a password manager would
         // (a plain-password accountLogin answers 421 now). The page's Find
         // My call answering is what completes it.
         let result = self
             .autofill_find_my(apple_id, password)
-            .and_then(|(login, window_params)| match login.dsid {
-                Some(other) if other != dsid => Err(LoginError::Failed(format!(
-                    "Find My signed in as another account (dsid {other}, signed in as {dsid}); not kept"
-                ))),
-                _ => Ok((login.cookies, window_params)),
+            .and_then(|(jar, params, found)| {
+                same_account(found, dsid).map_err(LoginError::Failed)?;
+                Ok((jar, params))
             });
         let mut st = lock(&self.state);
         let finished = Instant::now();
@@ -645,12 +633,7 @@ impl Daemon {
                 st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry))
             }
         }
-        let (jar, window_params) = result?;
-        let params = if window_params.is_empty() {
-            params
-        } else {
-            window_params
-        };
+        let (jar, params) = result?;
         let same = st.generation == generation;
         let Some(account) = st.account.as_mut().filter(|_| same) else {
             return Err(LoginError::Failed("signed out meanwhile".into()));
@@ -672,7 +655,7 @@ impl Daemon {
     fn auto_find_my_login(&self, why: LoginWhy) -> bool {
         let arrived = Instant::now();
         let _one = lock(&self.find_my_login_lock);
-        let (apple_id, dsid, params, generation) = {
+        let (apple_id, dsid, generation) = {
             let mut st = lock(&self.state);
             // Waited behind a sign-in that finished meanwhile: its answer
             // is ours too (a 450 about the jar it replaced forgets nothing).
@@ -705,12 +688,7 @@ impl Daemon {
                 }
             }
             let a = st.account.as_ref().expect("checked above");
-            let found = (
-                a.apple_id.clone(),
-                a.dsid.clone(),
-                Daemon::login_params(a),
-                st.generation,
-            );
+            let found = (a.apple_id.clone(), a.dsid.clone(), st.generation);
             let waiting = matches!(st.find_my_block, Some(LoginBlock::Until(t)) if Instant::now() < t);
             if !st.password_stored || waiting {
                 drop(st);
@@ -740,7 +718,7 @@ impl Daemon {
         if matches!(lock(&self.state).find_my_block, Some(LoginBlock::Password(f)) if f == fingerprint) {
             return false;
         }
-        let result = self.find_my_login(generation, &apple_id, &dsid, params, &password);
+        let result = self.find_my_login(generation, &apple_id, &dsid, &password);
         drop(password);
         match result {
             Ok(()) => eprintln!("icloud-sessiond: signed in to Find My with the stored password"),
@@ -762,17 +740,12 @@ impl Daemon {
             return Err(ServiceError::Failed("the password is empty".into()));
         }
         let _one = lock(&self.find_my_login_lock);
-        let (apple_id, dsid, params, generation) = {
+        let (apple_id, dsid, generation) = {
             let st = lock(&self.state);
             let a = st.account.as_ref().ok_or_else(sign_in_required)?;
-            (
-                a.apple_id.clone(),
-                a.dsid.clone(),
-                Daemon::login_params(a),
-                st.generation,
-            )
+            (a.apple_id.clone(), a.dsid.clone(), st.generation)
         };
-        let result = self.find_my_login(generation, &apple_id, &dsid, params, &password);
+        let result = self.find_my_login(generation, &apple_id, &dsid, &password);
         self.publish();
         // Only Apple refusing the password keeps it out of the keyring; any
         // other failure (a changed or misread endpoint) says nothing about
@@ -855,11 +828,7 @@ impl Daemon {
     /// in on Apple's own page with the stored password (showing itself only
     /// if Apple asks for more, like a 2FA code) and prints the jar once Find
     /// My answers. The password reaches it only on its stdin.
-    fn autofill_find_my(
-        &self,
-        apple_id: &str,
-        password: &str,
-    ) -> Result<(apple::FindMyLogin, BTreeMap<String, String>), LoginError> {
+    fn autofill_find_my(&self, apple_id: &str, password: &str) -> Result<FindMyCapture, LoginError> {
         use std::io::Write;
         let bin = &self.cfg.signin_bin;
         let failed = |m: String| LoginError::Failed(m);
@@ -893,23 +862,7 @@ impl Daemon {
                 bin.display()
             )));
         }
-        let capture: Capture =
-            serde_json::from_slice(&out).map_err(|e| failed(format!("reading the sign-in window's output: {e}")))?;
-        let dsid = capture.dsid.clone();
-        let (jar, params) = capture.into_parts();
-        if !cookies::find_my_cookie(&jar, now_unix()) {
-            return Err(failed(format!(
-                "the sign-in window captured no {} cookie",
-                cookies::FIND_MY
-            )));
-        }
-        Ok((
-            apple::FindMyLogin {
-                dsid: dsid.or_else(|| cookies::user_dsid(&jar)),
-                cookies: jar,
-            },
-            params,
-        ))
+        find_my_capture(&out).map_err(failed)
     }
 
     /// Runs the sign-in window, validates what it captured, stores it.
@@ -957,17 +910,14 @@ impl Daemon {
         if !status.success() {
             return Err(format!("{} exited with {status} (window closed?)", bin.display()));
         }
-        let capture: Capture =
-            serde_json::from_slice(&out).map_err(|e| format!("reading the sign-in window's output: {e}"))?;
-        let window_dsid = capture.dsid.clone();
-        let (mut jar, params) = capture.into_parts();
+        if find {
+            return self.store_find_my(seq, find_my_capture(&out)?);
+        }
+        let (mut jar, params) = parse_capture(&out)?.into_parts();
         if jar.is_empty() {
             return Err("the sign-in window captured no icloud.com cookies".into());
         }
         let now = now_unix();
-        if find {
-            return self.store_find_my(seq, jar, params, window_dsid);
-        }
         let v = apple::validate(
             &self.agent,
             &self.cfg.setup_url,
@@ -1008,22 +958,9 @@ impl Daemon {
 
     /// Keeps what the Find My window captured as the account's Find My jar:
     /// not validated (Apple's `/validate` refuses a one-factor session),
-    /// and the main jar and its generation are left alone. A
-    /// dsid the window reported (or the jar's X-APPLE-WEBAUTH-USER names)
-    /// must be the account's.
-    fn store_find_my(
-        &self,
-        seq: u64,
-        jar: Vec<Cookie>,
-        params: BTreeMap<String, String>,
-        window_dsid: Option<String>,
-    ) -> Result<(), String> {
-        if !cookies::find_my_cookie(&jar, now_unix()) {
-            return Err(format!("the Find My window captured no {} cookie", cookies::FIND_MY));
-        }
-        let dsid = window_dsid
-            .filter(|d| !d.is_empty())
-            .or_else(|| cookies::user_dsid(&jar));
+    /// and the main jar and its generation are left alone. The account
+    /// it names (see [`find_my_capture`]) must be the signed-in one.
+    fn store_find_my(&self, seq: u64, (jar, params, dsid): FindMyCapture) -> Result<(), String> {
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
             return Err("cancelled by SignOut".into());
@@ -1031,14 +968,7 @@ impl Daemon {
         let Some(account) = st.account.as_mut() else {
             return Err("signed out meanwhile; sign in first".into());
         };
-        if let Some(dsid) = dsid
-            && dsid != account.dsid
-        {
-            return Err(format!(
-                "Find My was authorized as another Apple ID (dsid {dsid}, signed in as {}); not kept",
-                account.dsid
-            ));
-        }
+        same_account(dsid, &account.dsid)?;
         account.find_my = Some(FindMyJar {
             cookies: jar,
             client_params: params,
@@ -1157,6 +1087,38 @@ struct Capture {
     client_build_number: Option<String>,
     #[serde(rename = "clientMasteringNumber")]
     client_mastering_number: Option<String>,
+}
+
+/// A `--find` capture: its jar (holding Find My's cookie), its client
+/// params, and the account it names, if it names one.
+type FindMyCapture = (Vec<Cookie>, BTreeMap<String, String>, Option<String>);
+
+fn parse_capture(out: &[u8]) -> Result<Capture, String> {
+    serde_json::from_slice(out).map_err(|e| format!("reading the sign-in window's output: {e}"))
+}
+
+/// Reads what a `--find` window printed. The account is the dsid the
+/// window reported, else the one the jar's X-APPLE-WEBAUTH-USER names; an
+/// empty one counts as none.
+fn find_my_capture(out: &[u8]) -> Result<FindMyCapture, String> {
+    let capture = parse_capture(out)?;
+    let window_dsid = capture.dsid.clone().filter(|d| !d.is_empty());
+    let (jar, params) = capture.into_parts();
+    if !cookies::find_my_cookie(&jar, now_unix()) {
+        return Err(format!("the Find My window captured no {} cookie", cookies::FIND_MY));
+    }
+    let dsid = window_dsid.or_else(|| cookies::user_dsid(&jar).filter(|d| !d.is_empty()));
+    Ok((jar, params, dsid))
+}
+
+/// Refuses a Find My jar made for another account than `account_dsid`.
+fn same_account(found: Option<String>, account_dsid: &str) -> Result<(), String> {
+    match found {
+        Some(other) if other != account_dsid => Err(format!(
+            "Find My was signed in as another Apple ID (dsid {other}, signed in as {account_dsid}); not kept"
+        )),
+        _ => Ok(()),
+    }
 }
 
 impl Capture {
