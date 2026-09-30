@@ -301,8 +301,3 @@ fn drop_unreachable(plan: &mut FolderCreatePlan, wanted: &[String], refused_dirs
         }
     }
 }
-
-/// `dirOfFile`.
-pub fn dir_of_file(file: &str) -> String {
-    note_dir_of(file)
-}

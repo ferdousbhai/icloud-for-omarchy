@@ -226,7 +226,7 @@ untracked). The port deviates in two places:
 
 - `cloudkit::client::dedupe_zone_records`, applied at the end of every zone
   walk (`walk_zone`, so private and each shared zone, before the
-  `records/lookup` backfill and asset inlining; and `fetch_all_zone_records`):
+  `records/lookup` backfill and asset inlining):
   one record per recordName within a zone. The winner is the occurrence with
   the greater `modified.timestamp` when both have one and they differ, else
   the later occurrence in listing order (a later page is a later server read,

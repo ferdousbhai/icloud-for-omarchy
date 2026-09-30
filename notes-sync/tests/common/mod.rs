@@ -125,16 +125,3 @@ pub fn counting_uuids() -> impl FnMut() -> [u8; 16] {
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-
-/// `bytes` as a canonical UUID string (what `randomUUID` returns).
-pub fn uuid_string(bytes: &[u8; 16]) -> String {
-    let h = hex(bytes);
-    format!(
-        "{}-{}-{}-{}-{}",
-        &h[0..8],
-        &h[8..12],
-        &h[12..16],
-        &h[16..20],
-        &h[20..32]
-    )
-}

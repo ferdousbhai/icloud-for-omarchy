@@ -130,14 +130,18 @@ fn a_later_tombstone_replaces_the_live_copy() {
 }
 
 #[test]
-fn the_unfiltered_zone_walk_dedupes_too() {
+fn without_timestamps_the_later_page_wins() {
     let database = db(scripted(vec![
-        page(vec![note("A", "1", None, "YQ==")], true, "t1"),
+        page(
+            vec![note("A", "1", None, "YQ=="), note("B", "1", None, "Yg==")],
+            true,
+            "t1",
+        ),
         page(vec![note("A", "2", None, "YQ==")], false, "t2"),
     ]));
-    let records = database.fetch_all_zone_records(&mut no_pages()).unwrap();
-    assert_eq!(names(&records), ["A"]);
-    assert_eq!(tag(&records, "A"), "2");
+    let changes = database.fetch_all_note_records(None, &mut no_pages()).unwrap();
+    assert_eq!(names(&changes.records), ["A", "B"]);
+    assert_eq!(tag(&changes.records, "A"), "2");
 }
 
 #[test]

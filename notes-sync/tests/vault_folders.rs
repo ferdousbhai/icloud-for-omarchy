@@ -6,8 +6,7 @@ use std::path::Path;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::folders::{
-    FolderCreatePlan, PlannedFolder, Relocation, dir_of_file, plan_folder_creates, reconcile_note_placements,
-    remove_stale_dirs,
+    FolderCreatePlan, PlannedFolder, Relocation, plan_folder_creates, reconcile_note_placements, remove_stale_dirs,
 };
 use icloud_notes_sync::vault::layout::{PreviousLayout, StateDirInfo, build_vault_layout};
 use icloud_notes_sync::vault::state::{AttachmentEntry, FolderEntry, NoteEntry, SharerHomeEntry};
@@ -387,11 +386,4 @@ fn ignores_vault_root() {
     let p = plan(&["", ""], &index(&[]));
     assert!(p.folders.is_empty());
     assert!(p.refusals.is_empty());
-}
-
-#[test]
-fn dir_of_file_returns_empty_at_root() {
-    assert_eq!(dir_of_file("loose.md"), "");
-    assert_eq!(dir_of_file("Notes/note.md"), "Notes");
-    assert_eq!(dir_of_file("A/B/note.md"), "A/B");
 }

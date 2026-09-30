@@ -4,7 +4,7 @@
 
 use icloud_notes_sync::cmd::plan::{
     PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, SerializedPlanEntry, count_unchanged_notes,
-    render_plan, strip_file_prefix,
+    render_plan,
 };
 
 fn e(kind: K, file: &str, resolution: R) -> SerializedPlanEntry {
@@ -181,22 +181,6 @@ fn count_unchanged_notes_treats_creates_as_untracked_and_noops_as_unchanged() {
     ];
     assert_eq!(count_unchanged_notes(&entries, 10), 8);
     assert_eq!(count_unchanged_notes(&[], 10), 10);
-}
-
-#[test]
-fn strip_file_prefix_removes_prefix() {
-    assert_eq!(
-        strip_file_prefix("Note.md: changed remotely", "Note.md"),
-        "changed remotely"
-    );
-}
-
-#[test]
-fn strip_file_prefix_leaves_other_messages_alone() {
-    assert_eq!(
-        strip_file_prefix("something else entirely", "Note.md"),
-        "something else entirely"
-    );
 }
 
 #[test]

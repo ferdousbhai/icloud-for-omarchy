@@ -206,38 +206,6 @@ impl<T: Transport> Database<T> {
         self.fetch_zone_note_records(zone.database, &zone.zone_id, since_sync_token, on_page)
     }
 
-    /// `fetchAllZoneRecords`: every record of every type in the private
-    /// `Notes` zone, no `desiredKeys`/`desiredRecordTypes` filter; always a
-    /// full walk. (icloud-md's `object` command; kept for diagnostics.)
-    pub fn fetch_all_zone_records(&self, on_page: &mut dyn FnMut(usize)) -> Result<Vec<CloudKitRecord>, CkError> {
-        let mut records = Vec::new();
-        let mut sync_token: Option<String> = None;
-        let mut more_coming = true;
-        while more_coming {
-            let mut zone_request = Map::new();
-            zone_request.insert("zoneID".into(), json!({ "zoneName": "Notes" }));
-            zone_request.insert("reverse".into(), Value::Bool(true));
-            if let Some(token) = truthy(sync_token.as_deref()) {
-                zone_request.insert("syncToken".into(), Value::String(token.to_owned()));
-            }
-            let body = self.post_database(
-                DatabaseScope::Private,
-                "changes/zone",
-                &json!({ "zones": [zone_request] }),
-            )?;
-            let zone = first_zone(&body)?;
-            let page = zone.records.unwrap_or_default();
-            let count = page.len();
-            records.extend(page);
-            if zone.sync_token.is_some() {
-                sync_token = zone.sync_token;
-            }
-            more_coming = zone.more_coming == Some(true);
-            on_page(count);
-        }
-        Ok(dedupe_zone_records(records))
-    }
-
     /// `fetchSharedZoneIds`: page shared `changes/database` (empty body, then
     /// the response's `syncToken`); tombstoned zones are dropped; a page with
     /// `moreComing` and no new token is `RequestFailed("shared changes/database

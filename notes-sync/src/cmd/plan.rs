@@ -278,8 +278,8 @@ pub enum RetitleRefusal {
     Unpublishable { unpublishable_reason: Option<String> },
     /// 1731
     TitleHasEmbed,
-    /// 1770: `detail` is a `TextUpdateRefusal` message with the
-    /// `"{toFile}: "` prefix removed (`.replace`, first occurrence).
+    /// 1770: the `TextUpdateRefusal`, whose message carries no `"{toFile}: "`
+    /// prefix (the JS strips it with `.replace`, first occurrence).
     TextUpdate(TextUpdateRefusal),
     /// 1769 fallback when no refusal was recorded.
     Unapplied,
@@ -732,9 +732,4 @@ pub fn count_unchanged_notes(entries: &[SerializedPlanEntry], tracked_notes: usi
         })
         .count();
     tracked_notes.saturating_sub(touched)
-}
-
-/// `stripFilePrefix`.
-pub fn strip_file_prefix<'a>(message: &'a str, file: &str) -> &'a str {
-    message.strip_prefix(&format!("{file}: ")).unwrap_or(message)
 }
