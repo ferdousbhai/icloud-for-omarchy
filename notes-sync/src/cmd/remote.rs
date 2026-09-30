@@ -6,11 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 use super::errors::Error;
 use crate::cloudkit::transport::{LiveTransport, ReplayTransport};
-use crate::cloudkit::{CkError, Database, Transport};
+use crate::cloudkit::{Database, Transport};
 use crate::vault::state::Account;
 
 /// `ICLOUD_NOTES_SYNC_CASSETTE`: serve CloudKit from a cassette instead of
@@ -19,43 +17,9 @@ pub const CASSETTE_ENV: &str = "ICLOUD_NOTES_SYNC_CASSETTE";
 /// `ICLOUD_NOTES_SYNC_REQUEST_LOG`: where a cassette run logs its requests.
 pub const REQUEST_LOG_ENV: &str = "ICLOUD_NOTES_SYNC_REQUEST_LOG";
 
-/// The transports a command can run over.
-pub enum AnyTransport {
-    Live(LiveTransport),
-    Replay(Box<ReplayTransport>),
-    /// A test double.
-    Boxed(Box<dyn Transport>),
-}
-
-impl Transport for AnyTransport {
-    fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
-        match self {
-            AnyTransport::Live(t) => t.post_json(path, body),
-            AnyTransport::Replay(t) => t.post_json(path, body),
-            AnyTransport::Boxed(t) => t.post_json(path, body),
-        }
-    }
-
-    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
-        match self {
-            AnyTransport::Live(t) => t.download(url, dest),
-            AnyTransport::Replay(t) => t.download(url, dest),
-            AnyTransport::Boxed(t) => t.download(url, dest),
-        }
-    }
-
-    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
-        match self {
-            AnyTransport::Live(t) => t.download_bytes(url),
-            AnyTransport::Replay(t) => t.download_bytes(url),
-            AnyTransport::Boxed(t) => t.download_bytes(url),
-        }
-    }
-}
-
 /// A connected CloudKit database plus the account it belongs to.
 pub struct Remote {
-    pub db: Database<AnyTransport>,
+    pub db: Database<Box<dyn Transport>>,
     pub account: Account,
 }
 
@@ -82,7 +46,7 @@ impl Connector for DefaultConnector {
                 dsid: transport.account().dsid.clone(),
             };
             return Ok(Remote {
-                db: Database::new(AnyTransport::Replay(Box::new(transport))),
+                db: Database::new(Box::new(transport)),
                 account,
             });
         }
@@ -92,7 +56,7 @@ impl Connector for DefaultConnector {
             dsid: live.dsid().to_owned(),
         };
         Ok(Remote {
-            db: Database::new(AnyTransport::Live(live)),
+            db: Database::new(Box::new(live)),
             account,
         })
     }

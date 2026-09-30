@@ -48,20 +48,6 @@ pub trait Transport {
     }
 }
 
-impl<T: Transport + ?Sized> Transport for &T {
-    fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
-        (**self).post_json(path, body)
-    }
-
-    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
-        (**self).download(url, dest)
-    }
-
-    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
-        (**self).download_bytes(url)
-    }
-}
-
 impl<T: Transport + ?Sized> Transport for Box<T> {
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
         (**self).post_json(path, body)

@@ -6,7 +6,7 @@ use icloud_notes_sync::cloudkit::Database;
 use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, CloneSummary, run_clone_with};
 use icloud_notes_sync::cmd::pull::{PullOptions, run_pull_with};
-use icloud_notes_sync::cmd::remote::{AnyTransport, Connector, FnConnector, Remote};
+use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress, NoticeLevel};
 use icloud_notes_sync::vault::state::{Account, CloneState, read_clone_state, write_clone_state};
 use indexmap::IndexMap;
@@ -61,7 +61,7 @@ fn replay(cassette: Cassette, log: PathBuf) -> impl Connector {
         };
         let transport = ReplayTransport::from_cassette(cassette.clone(), Some(log.clone()))?;
         Ok(Remote {
-            db: Database::new(AnyTransport::Replay(Box::new(transport))),
+            db: Database::new(Box::new(transport)),
             account,
         })
     })
