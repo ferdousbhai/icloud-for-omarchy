@@ -28,17 +28,23 @@ no truncated-read retries and no status polling.
 - **Sign-in.** `SignIn()` runs `icloud-session-signin`, a window showing
   `https://www.icloud.com/`: Apple's own page, so every 2FA flavour and
   "Trust this browser" work. Its WebKit profile persists, so a later
-  sign-in usually needs no 2FA. When the page's own `/accountLogin` or
-  `/validate` call answers with `dsInfo` and no pending
-  `hsaChallengeRequired` (icloud-md's rule), the window prints the
-  icloud.com cookies (with expiry) and the client params from that
-  request as JSON and exits. The daemon validates the capture and stores it.
+  sign-in usually needs no 2FA. Once the jar holds a session token, the
+  window makes its own `/validate` call from the page (the default build
+  numbers and a clientId it generates); when that answers with `dsInfo`
+  and no pending `hsaChallengeRequired` (icloud-md's rule), the window
+  prints the icloud.com cookies (with expiry) and those client params as
+  JSON and exits. The daemon validates the capture and stores it.
+  `ICLOUD_SESSION_SIGNIN_TRACE=1` logs the page's form fields (never
+  values) and requests to stderr.
 - **Find My.** Apple's `findme` service answers HTTP 450 (pyicloud's
   `FIND_MY_REAUTH_REQUIRED`, empty body) to a normal signed-in session:
   icloud.com asks for the password again on `www.icloud.com/find` first.
   `AuthorizeFindMy()` runs `icloud-session-signin --find`, which loads that
   page, validates once in-page, then asks Find My's `initClient` every 5 s;
-  once it answers 2xx the window prints the jar like a sign-in. That
+  once it answers 2xx the window prints the jar like a sign-in, plus the
+  `dsid` its `/validate` named. With a stored password the daemon runs it
+  hidden as `--find --autofill` instead (see [Automatic Find My
+  re-authorization](#automatic-find-my-re-authorization)). That
   password step is a one-factor sign-in (pyicloud's
   `canLaunchWithOneFactor`): good for Find My, refused by `/validate`. So
   the daemon never validates it and leaves the main jar alone: it keeps

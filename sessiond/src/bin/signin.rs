@@ -1,23 +1,37 @@
 //! `icloud-session-signin`: Apple's own sign-in page in a GTK4 + WebKitGTK 6
 //! window. When the page has signed in, prints one JSON object to stdout
 //! and exits 0; closing the window exits 1. icloud-sessiond runs it for
-//! `SignIn()`; run it by hand to try a sign-in (it stores nothing but its
-//! WebKit profile).
+//! `SignIn()` (no flags), `AuthorizeFindMy()` (`--find`) and the stored
+//! password's Find My sign-in (`--find --autofill`); run it by hand to try
+//! a sign-in (it stores nothing but its WebKit profile).
 //!
 //! ```json
 //! {"cookies":[{"name":"X-APPLE-WEBAUTH-TOKEN","value":"…","domain":".icloud.com","path":"/","expires":1790000000}],
-//!  "clientId":"…","clientBuildNumber":"…","clientMasteringNumber":"…"}
+//!  "clientId":"…","clientBuildNumber":"…","clientMasteringNumber":"…","dsid":"…"}
 //! ```
 //!
-//! Signed-in detection mirrors icloud-md's Playwright login
-//! (`auth/browserLogin.js`): the page's own `setup.icloud.com/setup/ws/1/
-//! accountLogin` or `/validate` answers 2xx with `dsInfo` and no pending
-//! `hsaChallengeRequired`. The client params come from that request's
-//! query; the cookies from WebKit's cookie manager a second later.
+//! The client params are the default build numbers and a clientId this
+//! window generates. Once the jar holds an X-APPLE-WEBAUTH-TOKEN (on a
+//! timer and after each page load), the window makes its own `/validate`
+//! call from the page, with those params and the page's cookies, and
+//! counts it signed in when it answers 2xx with `dsInfo` and no pending
+//! `hsaChallengeRequired` (icloud-md's `isFullySignedInBody`); a token
+//! `/validate` refused is not tried again until it changes. The cookies
+//! are read from WebKit's cookie manager a second later.
+//!
+//! - `--find` opens `www.icloud.com/find`, validates once in-page, then
+//!   asks Find My's `initClient` every 5 s; it is done once that answers
+//!   2xx, and prints the dsid `/validate` named as `dsid` (only here).
+//! - `--autofill` reads the Apple ID and the password, one per line, from
+//!   stdin, fills them in on Apple's page unseen, and shows the window
+//!   only if it has not finished within 40 s (a 2FA code, say). Apple
+//!   saying the password is wrong exits 3.
 //!
 //! Environment:
 //! - `ICLOUD_SESSION_SIGNIN_UA`: `safari` for a macOS Safari user agent,
 //!   any other value is used verbatim; unset keeps WebKitGTK's default.
+//! - `ICLOUD_SESSION_SIGNIN_TRACE`: set (not `0`) to log each frame's form
+//!   fields (never values) and the page's requests to stderr.
 
 use std::cell::{Cell, RefCell};
 use std::process::ExitCode;

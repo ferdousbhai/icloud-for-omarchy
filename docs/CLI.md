@@ -75,7 +75,7 @@ timer's sync). All of it is new, in the app binary: see
 | Viewer: Delete (Del) | `icloud-photos delete ID... --yes` | existed |
 | Viewer: previous / next | the order of `list` | n/a |
 | Sync Now (Ctrl+R) | `icloud-photos sync [--full]` | existed |
-| Upload… (Ctrl+U), Stop After This File | `icloud-photos upload FILE... [--album ID]` (album: command line only) | existed |
+| Upload… (Ctrl+U), Stop After This File | `icloud-photos upload FILE... [--album ID] [--no-sync]` (album, no-sync: command line only) | existed |
 | Preferences: library folder, download originals on demand / all | `icloud-photos config [--library-dir DIR] [--download on-demand\|all]`; `download --all` | existed |
 | Sign-in banner | `icloud-photos status` (exits 2 signed out), `icloud-photos sign-in` | existed |
 | About | `icloud-photos --version` | existed |

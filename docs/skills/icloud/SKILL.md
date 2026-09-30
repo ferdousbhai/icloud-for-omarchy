@@ -59,7 +59,7 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 
 `sync` · `albums` · `list [--album ID] [--since DATE] [--kind photo|video|live] [--limit N]`
 · `info ID` · `download ID...|--all [--medium] [--out DIR]` · `thumb ID` ·
-`open ID` · `upload FILE... [--album ID]` · `delete ID... --yes` · `config` ·
+`open ID` · `upload FILE... [--album ID] [--no-sync]` · `delete ID... --yes` · `config` ·
 `status` (exit 2 signed out). Batch commands exit 1 if any item failed;
 each item has its own `error`.
 
