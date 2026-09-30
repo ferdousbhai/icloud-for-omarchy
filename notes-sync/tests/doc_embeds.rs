@@ -1,13 +1,16 @@
 //! Ports icloud-md `noteAttachments.test.ts` and `unknownContent.test.ts`
 //! (`embedPushEdit.test.ts` is in `doc_embed_push.rs`).
 
+mod common;
+
+use common::reference;
+
 use icloud_notes_sync::cloudkit::FieldValue;
 use icloud_notes_sync::doc::embeds::{
-    AttachmentAsset, AttachmentReference, EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER,
-    combine_unpublishable_reasons, decode_attachment_filename, decode_note_attachment_refs, decode_note_embed_slots,
-    format_attachment_markdown, format_embed_marker, has_attachment_reference, has_embed_marker,
-    has_unknown_content_marker, is_image_uti, is_table_uti, parse_asset_field, parse_embed_markers,
-    render_attachment_placeholders, render_placeholders,
+    AttachmentAsset, EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER, combine_unpublishable_reasons,
+    decode_attachment_filename, decode_note_attachment_refs, decode_note_embed_slots, format_attachment_markdown,
+    format_embed_marker, has_attachment_reference, has_embed_marker, has_unknown_content_marker, is_image_uti,
+    is_table_uti, parse_asset_field, parse_embed_markers, render_attachment_placeholders, render_placeholders,
 };
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
@@ -41,13 +44,6 @@ fn info_run(length: u32, id: Option<&str>, uti: Option<&str>) -> AttributeRun {
             ..Default::default()
         }),
         ..Default::default()
-    }
-}
-
-fn reference(id: &str, uti: &str) -> AttachmentReference {
-    AttachmentReference {
-        attachment_identifier: id.into(),
-        type_uti: uti.into(),
     }
 }
 

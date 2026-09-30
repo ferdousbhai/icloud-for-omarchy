@@ -1,20 +1,14 @@
 //! Ports icloud-md `src/commands/restore.test.ts`.
 
+mod common;
+
+use common::state;
+
 use std::path::Path;
 
 use icloud_notes_sync::cmd::restore::run_restore;
 use icloud_notes_sync::vault::base::write_base_copy;
-use icloud_notes_sync::vault::state::{CloneState, NoteEntry, write_clone_state};
-
-fn state() -> CloneState {
-    CloneState {
-        sync_token: Some("token".into()),
-        notes: [("REC1".to_owned(), NoteEntry::new("Test Note.md", "1a", 100))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    }
-}
+use icloud_notes_sync::vault::state::write_clone_state;
 
 fn setup(dir: &Path) {
     write_clone_state(dir, &state()).unwrap();

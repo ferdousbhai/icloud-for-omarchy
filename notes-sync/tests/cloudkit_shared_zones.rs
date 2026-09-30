@@ -1,22 +1,19 @@
 //! Port of icloud-md `src/cloudkit/databaseClient.sharedZonePaging.test.ts`
 //! and `databaseClient.sharedZoneSkip.test.ts`.
 
+mod common;
+
+use common::zone;
+
 mod cloudkit_common;
 
 use cloudkit_common::{db, no_pages, scripted};
-use icloud_notes_sync::cloudkit::{CkError, SkippedSharedZone, ZoneId};
+use icloud_notes_sync::cloudkit::{CkError, SkippedSharedZone};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 fn zone_entry(owner: &str) -> Value {
     json!({ "zoneID": { "zoneName": "Notes", "ownerRecordName": owner, "zoneType": "REGULAR_CUSTOM_ZONE" } })
-}
-
-fn zone(owner: &str) -> ZoneId {
-    ZoneId {
-        zone_name: "Notes".into(),
-        owner_record_name: Some(owner.into()),
-    }
 }
 
 // --- sharedZonePaging --------------------------------------------------------

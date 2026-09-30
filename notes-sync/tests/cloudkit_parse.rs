@@ -1,21 +1,16 @@
 //! Port of icloud-md `src/cloudkit/databaseClient.test.ts`.
 
+mod common;
+
+use common::zone;
+
 use icloud_notes_sync::cloudkit::client::{
     first_zone, merge_looked_up_records, parse_note_update_response, parse_record_update_response,
     parse_shared_zone_list,
 };
-use icloud_notes_sync::cloudkit::{
-    CkError, CloudKitRecord, FieldValue, RecordUpdateResult, SharedZoneListPage, ZoneId,
-};
+use icloud_notes_sync::cloudkit::{CkError, CloudKitRecord, FieldValue, RecordUpdateResult, SharedZoneListPage};
 use indexmap::IndexMap;
 use serde_json::json;
-
-fn zone(owner: &str) -> ZoneId {
-    ZoneId {
-        zone_name: "Notes".into(),
-        owner_record_name: Some(owner.into()),
-    }
-}
 
 fn unexpected(err: CkError) -> String {
     match err {

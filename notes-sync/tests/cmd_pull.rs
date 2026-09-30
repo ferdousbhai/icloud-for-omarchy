@@ -3,6 +3,10 @@
 //! plain text (no colours), so pullReport's two chalk colour-forcing tests
 //! are not ported.
 
+mod common;
+
+use common::{read, write_vault_file};
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -14,16 +18,6 @@ use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
 use icloud_notes_sync::vault::state::{AttachmentEntry, NoteEntry, TitleMode};
 use indexmap::IndexMap;
-
-fn write_vault_file(dir: &Path, file: &str, content: &str) {
-    let path = dir.join(file);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
-}
-
-fn read(dir: &Path, file: &str) -> String {
-    std::fs::read_to_string(dir.join(file)).unwrap()
-}
 
 fn entry_for(file: &str) -> NoteEntry {
     NoteEntry::new(file, "1a", 100)

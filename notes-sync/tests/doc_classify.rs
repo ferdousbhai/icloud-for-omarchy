@@ -1,10 +1,14 @@
 //! Ports icloud-md `src/notes/decodeNoteRecord.test.ts`.
 
+mod common;
+
+use common::reference;
+
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::doc::decode::{
     ClassifyOptions, DecodedNote, NoteDecodeResult, UnsyncableReason, classify_note_record,
 };
-use icloud_notes_sync::doc::embeds::{AttachmentReference, EmbedSlot, UNKNOWN_CONTENT_BANNER};
+use icloud_notes_sync::doc::embeds::{EmbedSlot, UNKNOWN_CONTENT_BANNER};
 use icloud_notes_sync::doc::format::ParagraphKind;
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun, ParagraphStyle};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
@@ -82,13 +86,6 @@ fn ok(result: NoteDecodeResult) -> DecodedNote {
     match result {
         NoteDecodeResult::Ok(decoded) => *decoded,
         other => panic!("expected ok, got {other:?}"),
-    }
-}
-
-fn reference(id: &str, uti: &str) -> AttachmentReference {
-    AttachmentReference {
-        attachment_identifier: id.into(),
-        type_uti: uti.into(),
     }
 }
 

@@ -279,10 +279,6 @@ fn protobuf_codec_matches_protobuf_es_on_real_and_hostile_inputs() {
 
 // --- the edit pipeline vs icloud-md ----------------------------------------------
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// Deterministic edits of a note's text: insertions, deletions and
 /// replacements at random UTF-16-safe points, some multi-hunk, some unicode.
 fn random_edit(text: &str, next: &mut impl FnMut() -> u64) -> String {
@@ -352,7 +348,7 @@ fn apply_text_edit_matches_icloud_md_byte_for_byte_on_real_notes() {
             requests.push(json!({
                 "op": "edit",
                 "raw": base64_encode(&raw),
-                "replicaId": hex(&replica_id),
+                "replicaId": common::hex(&replica_id),
                 "steps": steps.iter().map(|t| json!({"text": t})).collect::<Vec<_>>(),
             }));
             plans.push((raw.clone(), replica_id, steps));
@@ -437,11 +433,11 @@ fn text_edit_plus_reconcile_matches_icloud_md_byte_for_byte() {
     // Created from scratch, and edited on top of a real note.
     let real = decompress_note_document(&common::payload("real_formatted_multi_edit_note.json")).unwrap();
     for script in &scripts {
-        requests.push(json!({"op": "edit", "replicaId": hex(&replica), "uuids": uuids,
+        requests.push(json!({"op": "edit", "replicaId": common::hex(&replica), "uuids": uuids,
             "steps": script.iter().map(|m| json!({"markdown": m})).collect::<Vec<_>>()}));
     }
     requests.push(
-        json!({"op": "edit", "raw": base64_encode(&real), "replicaId": hex(&replica), "uuids": uuids,
+        json!({"op": "edit", "raw": base64_encode(&real), "replicaId": common::hex(&replica), "uuids": uuids,
         "steps": [{"markdown": "Rewritten\n\n- [ ] entirely"}]}),
     );
     let Some(expected) = common::oracle(&Value::Array(requests.clone())) else {
@@ -566,10 +562,10 @@ fn table_edits_match_icloud_md_byte_for_byte() {
             cases.push((b64.clone(), variant, replica_low));
         }
     }
-    let randoms: Vec<String> = (1..=32u8).map(|n| hex(&[n; 16])).collect();
+    let randoms: Vec<String> = (1..=32u8).map(|n| common::hex(&[n; 16])).collect();
     let requests: Vec<Value> = cases
         .iter()
-        .map(|(b64, grid, replica)| json!({"op": "tableEdit", "b64": b64, "grid": grid, "replicaId": hex(replica), "randoms": randoms}))
+        .map(|(b64, grid, replica)| json!({"op": "tableEdit", "b64": b64, "grid": grid, "replicaId": common::hex(replica), "randoms": randoms}))
         .collect();
     let Some(expected) = common::oracle(&Value::Array(requests)) else {
         return;

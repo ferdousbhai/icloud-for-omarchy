@@ -1,7 +1,10 @@
 //! Ports icloud-md `src/notes/folderReconcile.test.ts` and `folderCreate.test.ts`.
 
+mod common;
+
+use common::{read, write_vault_file};
+
 use std::collections::HashSet;
-use std::path::Path;
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
@@ -30,16 +33,6 @@ fn folder_record(record_name: &str, title: &str) -> CloudKitRecord {
         fields,
         ..Default::default()
     }
-}
-
-fn write_vault_file(root: &Path, file: &str, content: &str) {
-    let path = root.join(file);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
-}
-
-fn read(root: &Path, file: &str) -> String {
-    std::fs::read_to_string(root.join(file)).unwrap()
 }
 
 fn note(file: &str, tag: &str, date: i64, folder: &str) -> NoteEntry {

@@ -1,5 +1,9 @@
 //! Ports icloud-md `src/commands/push.test.ts`.
 
+mod common;
+
+use common::{no_network, read, write_vault_file};
+
 use std::path::Path;
 
 use icloud_notes_sync::cmd::Error;
@@ -7,7 +11,6 @@ use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution};
 use icloud_notes_sync::cmd::push::{
     BuildPushPlanResult, PushOptions, build_push_plan, plan_remote_changed_merge, run_push_with,
 };
-use icloud_notes_sync::cmd::remote::{FnConnector, Remote};
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
 use icloud_notes_sync::vault::state::{
@@ -15,10 +18,6 @@ use icloud_notes_sync::vault::state::{
     write_clone_state,
 };
 use indexmap::IndexMap;
-
-fn no_network() -> FnConnector<impl Fn() -> Result<Remote, Error>> {
-    FnConnector(|| -> Result<Remote, Error> { panic!("network") })
-}
 
 /// A folder-layout vault: "Notes", "Recipes", and a sharer ("Pat") with one
 /// shared folder.
@@ -73,16 +72,6 @@ fn shared_note(file: &str, folder: Option<&str>) -> NoteEntry {
 fn with_notes(mut s: CloneState, notes: Vec<(&str, NoteEntry)>) -> CloneState {
     s.notes = notes.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
     s
-}
-
-fn write_vault_file(dir: &Path, file: &str, content: &str) {
-    let path = dir.join(file);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
-}
-
-fn read(dir: &Path, file: &str) -> String {
-    std::fs::read_to_string(dir.join(file)).unwrap()
 }
 
 fn plan(dir: &Path) -> BuildPushPlanResult {

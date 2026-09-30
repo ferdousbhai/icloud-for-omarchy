@@ -1,10 +1,18 @@
-//! Shared helpers for the `doc_*` tests: the real fixtures
-//! (`tests/fixtures/real/`, exported from icloud-md's `realFixtures.ts`).
+//! Shared helpers for the tests: the real fixtures (`tests/fixtures/real/`,
+//! exported from icloud-md's `realFixtures.ts`), a scratch vault's files, and
+//! small values several tests build.
 #![allow(dead_code)]
+
+use std::path::Path;
 
 use serde_json::Value;
 
+use icloud_notes_sync::cloudkit::ZoneId;
+use icloud_notes_sync::cmd::Error;
+use icloud_notes_sync::cmd::remote::{FnConnector, Remote};
+use icloud_notes_sync::doc::embeds::AttachmentReference;
 use icloud_notes_sync::js::base64_decode;
+use icloud_notes_sync::vault::state::{CloneState, NoteEntry};
 
 pub fn fixture(file: &str) -> Value {
     let path = format!("{}/tests/fixtures/real/{file}", env!("CARGO_MANIFEST_DIR"));
@@ -124,4 +132,45 @@ pub fn counting_uuids() -> impl FnMut() -> [u8; 16] {
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The shared `Notes` zone `owner` holds.
+pub fn zone(owner: &str) -> ZoneId {
+    ZoneId {
+        zone_name: "Notes".into(),
+        owner_record_name: Some(owner.into()),
+    }
+}
+
+/// A connector for a command that must not reach iCloud.
+pub fn no_network() -> FnConnector<impl Fn() -> Result<Remote, Error>> {
+    FnConnector(|| -> Result<Remote, Error> { panic!("network") })
+}
+
+/// A clone state tracking one note, `REC1` at `Test Note.md`.
+pub fn state() -> CloneState {
+    CloneState {
+        sync_token: Some("token".into()),
+        notes: [("REC1".to_owned(), NoteEntry::new("Test Note.md", "1a", 100))]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    }
+}
+
+pub fn write_vault_file(dir: &Path, file: &str, content: &str) {
+    let path = dir.join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+}
+
+pub fn read(dir: &Path, file: &str) -> String {
+    std::fs::read_to_string(dir.join(file)).unwrap()
+}
+
+pub fn reference(id: &str, uti: &str) -> AttachmentReference {
+    AttachmentReference {
+        attachment_identifier: id.into(),
+        type_uti: uti.into(),
+    }
 }

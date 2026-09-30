@@ -1,17 +1,15 @@
 //! Ports icloud-md `src/commands/history.test.ts`.
 
+mod common;
+
 use icloud_notes_sync::cmd::history::{HistoryOptions, HistoryResult, run_history};
 use icloud_notes_sync::vault::epoch::record_epoch;
 use icloud_notes_sync::vault::history::{VersionSnapshotInput, record_version};
-use icloud_notes_sync::vault::state::{CloneState, NoteEntry, TableAttachmentEntry, write_clone_state};
+use icloud_notes_sync::vault::state::{CloneState, TableAttachmentEntry, write_clone_state};
 
 // "Test Note.md" resolves by unique basename, whatever the process cwd is.
 fn state() -> CloneState {
     CloneState {
-        sync_token: Some("token".into()),
-        notes: [("REC1".to_owned(), NoteEntry::new("Test Note.md", "1a", 100))]
-            .into_iter()
-            .collect(),
         table_attachments: Some(
             [(
                 "ATT-1".to_owned(),
@@ -22,7 +20,7 @@ fn state() -> CloneState {
             .into_iter()
             .collect(),
         ),
-        ..Default::default()
+        ..common::state()
     }
 }
 
