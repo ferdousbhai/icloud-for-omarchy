@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the maintained tests: clippy and the Rust workspace suite, the Qt
-# app's tests (notes/bin/test), the installer's shared add_signed_repo hash
-# check, then install.sh and the per-app installers against stubbed pacman
+# app's tests (notes/bin/test), then install.sh's shared add_signed_repo
+# hash and install.sh and the per-app installers against stubbed pacman
 # (tests/install_test.sh). The notes-sync differential suite against icloud-md
 # runs with the rest (see notes-sync/tests/differential/README.md).
 set -euo pipefail
@@ -20,16 +20,5 @@ fi
 
 notes/bin/test
 
-# The installer's add_signed_repo function is shared verbatim with Ghost's
-# installer (ferdousbhai/ghost); both repositories pin its hash so a change
-# to one copy fails a test until the twin matches.
 bash -n install.sh
-actual="$(sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' install.sh | sed '1d;$d' | sha256sum | cut -d' ' -f1)"
-expected="$(cat tests/add_signed_repo.sha256)"
-if [[ "$actual" != "$expected" ]]; then
-  echo "FAIL add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twin in ferdousbhai/ghost together" >&2
-  exit 1
-fi
-echo "ok add_signed_repo matches its pinned hash"
-
 tests/install_test.sh

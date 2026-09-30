@@ -4,19 +4,12 @@
 # namespace where /etc/pacman.conf, /etc/pacman.d and /root are scratch
 # copies: nothing on this machine changes. Covers the default package
 # lists, named packages, an unknown name, re-running, the migration from
-# the old [icloud-notes] repository, and the add_signed_repo hash of every
-# generated installer. Skips (exit 0) where unprivileged namespaces are off.
+# the old [icloud-notes] repository. First, outside the namespace, checks
+# the add_signed_repo hash of install.sh and every generated installer;
+# only the installer runs are skipped where unprivileged namespaces are off.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
-
-if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
-  if ! unshare -rm true 2>/dev/null; then
-    echo "skip install_test: unprivileged user namespaces are unavailable" >&2
-    exit 0
-  fi
-  exec env ICLOUD_INSTALL_TEST_INNER=1 unshare -rm "$root/tests/install_test.sh"
-fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -27,6 +20,27 @@ check() { # check <description> <command...>
   if "$@"; then echo "ok $what"; else echo "FAIL $what"; fail=1; fi
 }
 not() { ! "$@"; }
+
+if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
+  # add_signed_repo is shared verbatim with Ghost's installer
+  # (ferdousbhai/ghost); both repositories pin its hash, so a change to one
+  # copy fails here until the twin matches.
+  bin/make-installers "$work/dist" >/dev/null
+  hash_of() { sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' "$1" | sed '1d;$d' | sha256sum | cut -d' ' -f1; }
+  for f in install.sh "$work"/dist/install-*.sh; do
+    check "add_signed_repo hash in $(basename "$f")" [ "$(hash_of "$f")" = "$(cat tests/add_signed_repo.sha256)" ]
+  done
+  if ((fail)); then
+    echo "add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twin in ferdousbhai/ghost together" >&2
+    exit 1
+  fi
+  if ! unshare -rm true 2>/dev/null; then
+    echo "skip install_test: unprivileged user namespaces are unavailable" >&2
+    exit 0
+  fi
+  rm -rf "$work"
+  exec env ICLOUD_INSTALL_TEST_INNER=1 unshare -rm "$root/tests/install_test.sh"
+fi
 
 # Stubs: pacman logs its arguments, curl "downloads" an empty key, gpg
 # reports the pinned fingerprint for it.
@@ -51,12 +65,7 @@ fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
 printf '#!/bin/sh\necho "fpr:::::::::%s:"\n' "$fingerprint" >"$work/bin/gpg"
 chmod 755 "$work/bin/"*
 export PATH="$work/bin:$PATH" PACMAN_LOG="$work/pacman.log" SUDO_USER=root
-
 bin/make-installers "$work/dist" >/dev/null
-hash_of() { sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' "$1" | sed '1d;$d' | sha256sum | cut -d' ' -f1; }
-for f in install.sh "$work"/dist/install-*.sh; do
-  check "add_signed_repo hash in $(basename "$f")" [ "$(hash_of "$f")" = "$(cat tests/add_signed_repo.sha256)" ]
-done
 
 # A fresh scratch /etc and /root for each scenario.
 setup() {
