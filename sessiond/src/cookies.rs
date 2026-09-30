@@ -2,7 +2,7 @@
 //! Header parsing is ported from icloud-md's `session.js`
 //! (`parseCookieHeader`, `parseSetCookieName`, `mergeSetCookiesIntoSession`).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The persistent sign-in cookie; its expiry is the session's `ExpiresAt`.
 pub const TOKEN: &str = "X-APPLE-WEBAUTH-TOKEN";
@@ -14,9 +14,11 @@ pub const FIND_MY: &str = "X-APPLE-WEBAUTH-FMIP";
 pub struct Cookie {
     pub name: String,
     pub value: String,
-    #[serde(default = "default_domain")]
+    /// Missing or null reads as `.icloud.com`.
+    #[serde(default = "default_domain", deserialize_with = "domain_or_default")]
     pub domain: String,
-    #[serde(default = "default_path")]
+    /// Missing or null reads as `/`.
+    #[serde(default = "default_path", deserialize_with = "path_or_default")]
     pub path: String,
     /// Unix seconds; `None` for a session cookie.
     #[serde(default)]
@@ -29,6 +31,14 @@ fn default_domain() -> String {
 
 fn default_path() -> String {
     "/".into()
+}
+
+fn domain_or_default<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::deserialize(d)?.unwrap_or_else(default_domain))
+}
+
+fn path_or_default<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::deserialize(d)?.unwrap_or_else(default_path))
 }
 
 impl Cookie {
@@ -253,6 +263,15 @@ mod tests {
 
     fn jar(pairs: &[(&str, &str)]) -> Vec<Cookie> {
         pairs.iter().map(|(n, v)| Cookie::new(n, v)).collect()
+    }
+
+    #[test]
+    fn missing_or_null_domain_and_path_read_as_the_defaults() {
+        let parsed: Vec<Cookie> = serde_json::from_str(
+            r#"[{"name":"a","value":"1"},{"name":"b","value":"2","domain":null,"path":null,"expires":null}]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed, vec![Cookie::new("a", "1"), Cookie::new("b", "2")]);
     }
 
     #[test]

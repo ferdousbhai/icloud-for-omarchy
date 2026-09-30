@@ -1147,7 +1147,7 @@ impl Daemon {
 /// What `icloud-session-signin` prints.
 #[derive(Debug, Deserialize)]
 struct Capture {
-    cookies: Vec<CapturedCookie>,
+    cookies: Vec<Cookie>,
     /// The account the window saw (`--find` only).
     #[serde(default)]
     dsid: Option<String>,
@@ -1159,31 +1159,15 @@ struct Capture {
     client_mastering_number: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct CapturedCookie {
-    name: String,
-    value: String,
-    domain: Option<String>,
-    path: Option<String>,
-    expires: Option<u64>,
-}
-
 impl Capture {
     /// The icloud.com cookies, and client params with icloud-md's fallbacks.
     fn into_parts(self) -> (Vec<Cookie>, BTreeMap<String, String>) {
         let mut jar: Vec<Cookie> = Vec::new();
-        for c in self.cookies {
-            let domain = c.domain.unwrap_or_else(|| ".icloud.com".into());
-            if !cookies::is_icloud_domain(&domain) || c.name.is_empty() {
+        for mut cookie in self.cookies {
+            if !cookies::is_icloud_domain(&cookie.domain) || cookie.name.is_empty() {
                 continue;
             }
-            let cookie = Cookie {
-                name: c.name,
-                value: c.value,
-                domain,
-                path: c.path.unwrap_or_else(|| "/".into()),
-                expires: c.expires.filter(|&e| e > 0),
-            };
+            cookie.expires = cookie.expires.filter(|&e| e > 0);
             match jar.iter_mut().find(|x| x.name == cookie.name) {
                 Some(existing) => *existing = cookie,
                 None => jar.push(cookie),
