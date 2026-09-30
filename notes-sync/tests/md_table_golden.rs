@@ -1,16 +1,11 @@
 //! Tables (`markdownTable.ts`) against icloud-md 0.6.2's own output.
 
+mod common;
+
+use common::{golden, grid};
+
 use icloud_notes_sync::md::table::{find_markdown_table_blocks, parse_markdown_table, render_markdown_table};
 use serde_json::{Value, json};
-
-fn load() -> Value {
-    let path = format!("{}/tests/golden/md_table.json.gz", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
-}
-
-fn grid(value: &Value) -> Vec<Vec<String>> {
-    serde_json::from_value(value.clone()).unwrap()
-}
 
 fn check(what: &str, total: usize, failures: Vec<String>) {
     eprintln!("{what}: {}/{total} match", total - failures.len());
@@ -22,7 +17,7 @@ fn check(what: &str, total: usize, failures: Vec<String>) {
 
 #[test]
 fn render_matches_icloud_md() {
-    let golden = load();
+    let golden = golden("md_table.json");
     let cases = golden["render"].as_array().unwrap();
     let mut failures = Vec::new();
     for case in cases {
@@ -42,7 +37,7 @@ fn render_matches_icloud_md() {
 
 #[test]
 fn parse_matches_icloud_md() {
-    let golden = load();
+    let golden = golden("md_table.json");
     let cases = golden["parse"].as_array().unwrap();
     let mut failures = Vec::new();
     for case in cases {
@@ -63,7 +58,7 @@ fn parse_matches_icloud_md() {
 
 #[test]
 fn find_blocks_matches_icloud_md() {
-    let golden = load();
+    let golden = golden("md_table.json");
     let cases = golden["find"].as_array().unwrap();
     let mut failures = Vec::new();
     for case in cases {

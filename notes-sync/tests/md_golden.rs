@@ -1,17 +1,16 @@
 //! Byte-for-byte comparison of the Markdown renderer/parser against
 //! icloud-md 0.6.2's own output (tests/golden/gen.mts).
 
+mod common;
+
+use common::golden;
+
 use icloud_notes_sync::doc::format::{FormatParagraph, InlineSpan};
 use icloud_notes_sync::doc::format::{formats_round_trip_equal, normalize_spans, trim_trailing_whitespace};
 use icloud_notes_sync::md::parse::{count_quote_markers, parse_note_markdown};
 use icloud_notes_sync::md::render::{RawSpelling, render_note_markdown, spelling_candidates};
 use serde::Deserialize;
 use serde_json::Value;
-
-fn load(name: &str) -> Value {
-    let path = format!("{}/tests/golden/{name}.gz", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
-}
 
 fn paragraphs(value: &Value) -> Vec<FormatParagraph> {
     Vec::<FormatParagraph>::deserialize(value).unwrap()
@@ -38,7 +37,7 @@ fn report_allowing(what: &str, total: usize, failures: &[String], allowed: usize
 
 #[test]
 fn render_matches_icloud_md() {
-    let cases = load("md_render.json");
+    let cases = golden("md_render.json");
     let cases = cases.as_array().unwrap();
     let mut failures = Vec::new();
     for case in cases {
@@ -63,7 +62,7 @@ fn render_matches_icloud_md() {
 /// by multi-line empty items. Their counts are pinned here.
 #[test]
 fn parse_matches_icloud_md() {
-    let cases = load("md_parse.json");
+    let cases = golden("md_parse.json");
     let cases = cases.as_array().unwrap();
     let mut failures: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
     let mut totals: std::collections::BTreeMap<&str, usize> = Default::default();
@@ -109,7 +108,7 @@ fn parse_matches_icloud_md() {
 
 #[test]
 fn projection_matches_icloud_md() {
-    let cases = load("md_projection.json");
+    let cases = golden("md_projection.json");
     let cases = cases.as_array().unwrap();
     let mut failures = Vec::new();
     for (i, case) in cases.iter().enumerate() {
@@ -132,7 +131,7 @@ fn projection_matches_icloud_md() {
 
 #[test]
 fn misc_helpers_match_icloud_md() {
-    let misc = load("md_misc.json");
+    let misc = golden("md_misc.json");
     for case in misc["countQuoteMarkers"].as_array().unwrap() {
         assert_eq!(
             count_quote_markers(case["line"].as_str().unwrap()),

@@ -6,18 +6,17 @@
 //! output may differ: those cases are counted, and must still agree on what
 //! the keys read back as.
 
+mod common;
+
+use common::golden;
+
 use icloud_notes_sync::md::frontmatter::*;
 use icloud_notes_sync::md::yaml::{Parsed, parse_document};
 use serde_json::Value;
 
-fn load() -> Value {
-    let path = format!("{}/tests/golden/md_frontmatter.json.gz", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
-}
-
 #[test]
 fn split_matches_icloud_md() {
-    let golden = load();
+    let golden = golden("md_frontmatter.json");
     for case in golden["split"].as_array().unwrap() {
         let text = case["text"].as_str().unwrap();
         let options = SplitOptions {
@@ -45,7 +44,7 @@ fn yaml_body(frontmatter: &str) -> Option<String> {
 
 #[test]
 fn edits_match_icloud_md() {
-    let golden = load();
+    let golden = golden("md_frontmatter.json");
     let cases = golden["ops"].as_array().unwrap();
     let mut failures = Vec::new();
     let mut fallback = 0;

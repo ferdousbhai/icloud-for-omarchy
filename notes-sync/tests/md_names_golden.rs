@@ -1,21 +1,19 @@
 //! File names and titles (`filename.ts`, `titleFilename.ts`,
 //! `noteTitleParagraph.ts`) against icloud-md 0.6.2's own output.
 
+mod common;
+
+use common::golden;
+
 use std::collections::HashSet;
 
 use icloud_notes_sync::md::filename::*;
 use icloud_notes_sync::md::title::*;
 use icloud_notes_sync::vault::state::TitleMode;
-use serde_json::Value;
-
-fn load() -> Value {
-    let path = format!("{}/tests/golden/md_names.json.gz", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
-}
 
 #[test]
 fn names_match_icloud_md() {
-    let golden = load();
+    let golden = golden("md_names.json");
     let cases = golden["names"].as_array().unwrap();
     for case in cases {
         let title = case["title"].as_str().unwrap();
@@ -62,7 +60,7 @@ fn names_match_icloud_md() {
 
 #[test]
 fn unique_file_names_match_icloud_md() {
-    let golden = load();
+    let golden = golden("md_names.json");
     for case in golden["unique"].as_array().unwrap() {
         let used: HashSet<String> = case["used"]
             .as_array()

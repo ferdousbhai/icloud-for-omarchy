@@ -1,13 +1,12 @@
 //! node-diff3 3.2.1 and `mergeConflict.ts` against the real thing, over
 //! random three-way edits (tests/golden/gen.mts).
 
+mod common;
+
+use common::golden;
+
 use icloud_notes_sync::diff3::*;
 use serde_json::{Value, json};
-
-fn load() -> Value {
-    let path = format!("{}/tests/golden/diff3.json.gz", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
-}
 
 fn array(value: &Value) -> Vec<&str> {
     value.as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect()
@@ -15,7 +14,7 @@ fn array(value: &Value) -> Vec<&str> {
 
 #[test]
 fn merges_match_node_diff3() {
-    let golden = load();
+    let golden = golden("diff3.json");
     let cases = golden["merges"].as_array().unwrap();
     for case in cases {
         let (base, local, remote) = (
@@ -63,7 +62,7 @@ fn merges_match_node_diff3() {
 
 #[test]
 fn conflict_markers_match_icloud_md() {
-    let golden = load();
+    let golden = golden("diff3.json");
     for case in golden["markers"].as_array().unwrap() {
         assert_eq!(
             has_conflict_markers(case["text"].as_str().unwrap()),

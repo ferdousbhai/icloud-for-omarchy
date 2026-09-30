@@ -64,6 +64,12 @@ pub fn all_payloads() -> Vec<(String, String, Vec<u8>, Value)> {
     out
 }
 
+/// A gzipped golden corpus, `tests/golden/<name>.gz`.
+pub fn golden(name: &str) -> Value {
+    let path = format!("{}/tests/golden/{name}.gz", env!("CARGO_MANIFEST_DIR"));
+    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
+}
+
 pub fn grid(value: &Value) -> Vec<Vec<String>> {
     serde_json::from_value(value.clone()).unwrap()
 }
