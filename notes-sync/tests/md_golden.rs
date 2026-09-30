@@ -2,8 +2,8 @@
 //! icloud-md 0.6.2's own output (tests/golden/gen.mts).
 
 use icloud_notes_sync::doc::format::{FormatParagraph, InlineSpan};
+use icloud_notes_sync::doc::format::{formats_round_trip_equal, normalize_spans, trim_trailing_whitespace};
 use icloud_notes_sync::md::parse::{count_quote_markers, parse_note_markdown};
-use icloud_notes_sync::md::projection::{formats_round_trip_equal, normalize_spans, trim_trailing_whitespace};
 use icloud_notes_sync::md::render::{RawSpelling, render_note_markdown, spelling_candidates};
 use serde::Deserialize;
 use serde_json::Value;

@@ -5,9 +5,10 @@
 //! Offsets and slices are UTF-16 code units, as in the JS.
 
 use super::parse::parse_note_markdown;
-use super::projection::{formats_round_trip_equal, normalize_spans, trim_trailing_whitespace};
 use super::to_markdown::{Node, Serializer, W, unw, w};
-use crate::doc::format::{FormatParagraph, InlineSpan, ParagraphKind};
+use crate::doc::format::{
+    FormatParagraph, InlineSpan, ParagraphKind, formats_round_trip_equal, normalize_spans, trim_trailing_whitespace,
+};
 use crate::js;
 
 /// `RawSpelling`: optional escaping relaxations tried nicest-first.

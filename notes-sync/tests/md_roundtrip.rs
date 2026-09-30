@@ -1,8 +1,8 @@
 //! Port of icloud-md's `src/notes/noteMarkdownRoundTrip.test.ts`.
 
+use icloud_notes_sync::doc::format::formats_round_trip_equal;
 use icloud_notes_sync::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};
 use icloud_notes_sync::md::parse::parse_note_markdown;
-use icloud_notes_sync::md::projection::formats_round_trip_equal;
 use icloud_notes_sync::md::render::render_note_markdown;
 
 use ParagraphKind::*;

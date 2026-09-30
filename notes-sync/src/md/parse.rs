@@ -4,8 +4,7 @@
 
 use markdown::mdast;
 
-use super::projection::trim_trailing_whitespace;
-use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};
+use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind, trim_trailing_whitespace};
 use crate::js;
 
 /// `{status: "ok", paragraphs, text}`.
