@@ -14,14 +14,14 @@
 namespace {
 int failures = 0;
 
-void check(bool cond, const char *name)
+inline void check(bool cond, const char *name)
 {
     QTextStream(stdout) << (cond ? "ok " : "FAIL ") << name << "\n";
     if (!cond)
         ++failures;
 }
 
-int report()
+inline int report()
 {
     QTextStream(stdout) << (failures ? "RESULT FAIL\n" : "RESULT OK\n");
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

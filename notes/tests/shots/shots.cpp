@@ -5,10 +5,10 @@
 // NOTES_SHOT=readonly shows the open note as one the sync tool will not push.
 // NOTES_SHOT=conflict opens it on a merge conflict, for the version picker.
 // NOTES_SHOT=unreadable opens it on nested markers the picker can't read.
+#include "../check.h"
 #include "../src/notesbackend.h"
 
-#include <QDir>
-#include <QFile>
+#include <QDateTime>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -16,20 +16,17 @@
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QTemporaryDir>
-#include <QTextStream>
 #include <QTimer>
 
 namespace {
-void writeFile(const QString &root, const QString &rel, const QString &content, int daysAgo)
+// check.h's writeFile, then the file's mtime set daysAgo back, for the
+// list's order and dates.
+void writeAged(const QString &root, const QString &rel, const QString &content, int daysAgo)
 {
-    const QString path = root + QLatin1Char('/') + rel;
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile f(path);
-    if (!f.open(QIODevice::ReadWrite | QIODevice::Text | QIODevice::Truncate))
-        return;
-    f.write(content.toUtf8());
-    f.flush();
-    f.setFileTime(QDateTime::currentDateTime().addDays(-daysAgo), QFileDevice::FileModificationTime);
+    writeFile(rel, content, root);
+    QFile f(root + QLatin1Char('/') + rel);
+    if (f.open(QIODevice::ReadWrite))
+        f.setFileTime(QDateTime::currentDateTime().addDays(-daysAgo), QFileDevice::FileModificationTime);
 }
 } // namespace
 
@@ -54,13 +51,19 @@ int main(int argc, char *argv[])
     if (qgetenv("NOTES_SHOT") == "bare") {
         QDir().mkpath(root); // empty, unlinked vault: banner + Clone CTA
     } else {
-        writeFile(root, QStringLiteral(".icloud-md/state.json"),
-                  QStringLiteral(R"({"layoutVersion":3,"titleMode":"in-body","notes":{"a":{"file":"Notes/Groceries.md","recordChangeTag":"t","modificationDate":0%1},"b":{"file":"Notes/Trip ideas.md","recordChangeTag":"t","modificationDate":0},"c":{"file":"Recipes/Pancakes.md","recordChangeTag":"t","modificationDate":0}}})")
-                      .arg(qgetenv("NOTES_SHOT") == "readonly"
-                               ? QStringLiteral(R"(,"unpublishableReason":"is so large that Apple keeps its text in a separate file, which can't be written back yet")")
-                               : QString()),
+        const QString readOnly = qgetenv("NOTES_SHOT") == "readonly"
+            ? QStringLiteral("is so large that Apple keeps its text in a separate file, which can't be written back yet")
+            : QString();
+        QStringList groceries{ QStringLiteral("a"), QStringLiteral("Notes/Groceries.md") };
+        if (!readOnly.isEmpty())
+            groceries << readOnly;
+        writeAged(root, QStringLiteral(".icloud-md/state.json"),
+                  stateJson(QStringLiteral("in-body"),
+                            { groceries,
+                              { QStringLiteral("b"), QStringLiteral("Notes/Trip ideas.md") },
+                              { QStringLiteral("c"), QStringLiteral("Recipes/Pancakes.md") } }),
                   9);
-        writeFile(root, QStringLiteral("Notes/Groceries.md"),
+        writeAged(root, QStringLiteral("Notes/Groceries.md"),
                   qgetenv("NOTES_SHOT") == "unreadable"
                       // Markers merged twice (nested), as a real vault once had them.
                       ? QStringLiteral("---\napple-note-id: a\n---\n\n<<<<<<< local\n# Groceries\nmilk, eggs\n||||||| base\n# Groceries\n=======\n>>>>>>> remote\n\n"
@@ -74,10 +77,10 @@ int main(int argc, char *argv[])
                       : QStringLiteral("---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n"
                                        "## Weekend\n- [ ] oat milk\n- [x] coffee\n- *maybe* `pancake mix`\n\n> don't forget the bags\n"),
                   0);
-        writeFile(root, QStringLiteral("Notes/Trip ideas.md"),
+        writeAged(root, QStringLiteral("Notes/Trip ideas.md"),
                   QStringLiteral("---\napple-note-id: b\n---\n# Trip ideas\nKyoto in spring for the cherry blossoms.\n| day | plan |\n| 1 | arrive |\n"),
                   2);
-        writeFile(root, QStringLiteral("Recipes/Pancakes.md"),
+        writeAged(root, QStringLiteral("Recipes/Pancakes.md"),
                   QStringLiteral("---\napple-note-id: c\n---\n# Pancakes\nflour, eggs, very hot pan\n"),
                   5);
     }

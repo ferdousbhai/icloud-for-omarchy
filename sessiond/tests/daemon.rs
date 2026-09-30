@@ -1435,6 +1435,11 @@ fn a_session_refuses_to_serve_another_account() {
 
 const INIT_CLIENT: &str = "/fmipservice/client/web/initClient";
 
+/// The Find My initClient URL of the session's findme service.
+fn init_client_url(s: &Session) -> String {
+    format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap())
+}
+
 /// What the Find My window prints: the one-factor session Find My's
 /// password step makes (a token /validate refuses), with its session-only
 /// cookies. `$n`, the window's run count, numbers the FMIP cookie.
@@ -1641,7 +1646,7 @@ fn a_450_with_a_jar_replaced_meanwhile_retries_once() {
     icloud_session::authorize_find_my_on(&conn).unwrap();
     assert!(window_closed(&mut watch).find_my_authorized);
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
 
     *accepted.lock().unwrap() = "fmip2".into();
     let s2 = s.clone();
@@ -1849,7 +1854,7 @@ fn a_450_signs_in_with_the_stored_password_and_retries_once() {
     let (env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
     autofill.set_delay("0.3");
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
     let before = env.account().unwrap();
     let validates = server.count(VALIDATE);
 
@@ -1918,7 +1923,7 @@ fn with_no_find_my_jar_the_stored_password_signs_in_first() {
     });
     assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
     s.post_json(&init, &json!({})).unwrap();
     assert_eq!(server.count(INIT_CLIENT), 1, "sent once, with the new jar");
     assert_eq!(autofill.runs(), 1);
@@ -1930,7 +1935,7 @@ fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
     let (accepted, server) = accepting("auto1");
     let (env, conn, autofill) = stored_password_env(&server, Some("wrong"));
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
 
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), 1, "not retried");
@@ -1995,7 +2000,7 @@ fn a_session_find_my_refuses_at_once_is_not_signed_in_again() {
     let (_accepted, server) = accepting("never");
     let (_env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), 2);
     assert_eq!(autofill.runs(), 1);
@@ -2013,7 +2018,7 @@ fn an_unreachable_find_my_sign_in_backs_off() {
     let (_env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
     autofill.set_failing(true);
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(autofill.runs(), 1, "backing off");
@@ -2051,7 +2056,7 @@ fn forget_password_while_signed_in_stops_automatic_sign_in() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(!watch.next().unwrap().find_my_password_stored);
     let s = Session::connect_on(&conn).unwrap();
-    let init = format!("{}{INIT_CLIENT}", s.webservices().unwrap().url("findme").unwrap());
+    let init = init_client_url(&s);
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(autofill.runs(), 0);
 }

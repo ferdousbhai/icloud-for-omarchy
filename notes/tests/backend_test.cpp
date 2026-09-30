@@ -869,7 +869,7 @@ int main(int argc, char *argv[])
         // without it (it used to sync anyway).
         const QByteArray runtime = qgetenv("XDG_RUNTIME_DIR");
         const QString notADir = scratch.path() + QStringLiteral("/not-a-dir");
-        QFile(notADir).open(QIODevice::WriteOnly); // a file where the lock's directory should be
+        check(QFile(notADir).open(QIODevice::WriteOnly), "background: a file stands where the lock's directory should be");
         qputenv("XDG_RUNTIME_DIR", notADir.toUtf8());
         NotesBackend app;
         app.runSync();
