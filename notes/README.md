@@ -128,7 +128,17 @@ Sync is automatic, like Notes:
   another program writing the file), the app never saves over that
   change. Your edits merge with it line by line: edits to different
   lines land in the note on their own, and only lines both sides changed
-  open side by side the same way.
+  open side by side the same way. A note that still has an unresolved
+  conflict is never merged into (that would nest one conflict in
+  another): your edits go to a new note, "<title> (unsaved edits)", and
+  the conflicted note stays as it is.
+- A note whose conflict markers are garbled (nested or out of order)
+  opens on a banner instead of the versions: **Keep this computer's
+  text** drops only the marker lines and keeps every other line,
+  **Use the last synced version** goes back to the text last synced with
+  iCloud, and **Edit as text** shows the raw markers. Before either
+  change the note is copied as it was to `.icloud-md/conflict-backups/`
+  in the notes folder, which is never synced.
 - Edits made in the app are pushed sooner, about 20 seconds after you
   stop making them, so a burst of typing becomes one push. Nothing waits
   for a click.

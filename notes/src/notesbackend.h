@@ -34,6 +34,8 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString noteBody READ noteBody NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteAttachments READ noteAttachments NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteConflicts READ noteConflicts NOTIFY noteContentChanged)
+    Q_PROPERTY(bool noteConflictsUnreadable READ noteConflictsUnreadable NOTIFY noteContentChanged)
+    Q_PROPERTY(bool noteHasSyncedCopy READ noteHasSyncedCopy NOTIFY noteContentChanged)
     // Why the sync tool will never push the current note, or empty when it is
     // editable. A read-only note opens locked: edits could never sync.
     Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY noteContentChanged)
@@ -113,6 +115,11 @@ public:
     // The open note's conflict blocks, for choosing between versions:
     // {local, remote: [{text, changed}], before, after: [context lines]}.
     QVariantList noteConflicts() const;
+    // Conflict markers noteConflicts cannot read (nested, out of order or
+    // left open), so there are no versions to pick from.
+    bool noteConflictsUnreadable() const;
+    // icloud-notes-sync keeps the note's last synced text (a base copy).
+    bool noteHasSyncedCopy() const;
     QString readOnlyReason() const { return m_readOnlyReason; }
     QString syncMessage() const { return m_syncMessage; }
     QString syncLog() const { return m_syncLog; }
@@ -164,6 +171,12 @@ public:
     Q_INVOKABLE QString renameCurrentNote(const QString &title);
     // Keep one side of each conflict block ("local", "remote" or "both").
     Q_INVOKABLE QString resolveConflicts(const QStringList &choices);
+    // A note with unreadable conflict markers: "strip" keeps every line
+    // but the markers, "synced" goes back to the last synced text. The
+    // file is first copied, byte for byte, under conflictBackupDir();
+    // without that copy nothing is replaced. {ok, message, backup}.
+    Q_INVOKABLE QVariantMap recoverConflictedNote(const QString &how);
+    static QString conflictBackupDir();
     Q_INVOKABLE void newFolder(const QString &name);
     // Folders have no id upstream, so these do what a mv/rm on disk does:
     // a rename becomes a new Notes folder plus note moves, a delete sends
@@ -249,7 +262,8 @@ private:
     QString findNoteById(const QString &id) const;
     bool followNote(const QString &id);
     void loseCurrentNote();
-    bool keepEditsAsNewNote(const QString &mine);
+    bool keepEditsAsNewNote(const QString &mine, const QString &why);
+    QString syncedCopyPath() const;
     void writeQueuedSave();
     void rewatch();
     void startSync(Mode mode, const QStringList &args, const QString &label);

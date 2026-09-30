@@ -245,6 +245,73 @@ int main()
               "merge: huge divergence falls back to one block");
     }
 
+    // Merging never nests conflict blocks. The shape a note ends up in when
+    // an unresolved conflict is merged over again (two openers in a row, a
+    // stray base marker after a closer), neutral text, as seen in the wild.
+    const QString nested = QStringLiteral(
+        "# Shopping\n"
+        "<<<<<<< local\n"
+        "<<<<<<< local\n"
+        "- apples\n"
+        "||||||| base\n"
+        "- pears\n"
+        "=======\n"
+        "- plums\n"
+        ">>>>>>> remote\n"
+        "||||||| base\n"
+        "- pears\n"
+        "=======\n"
+        "- grapes\n"
+        ">>>>>>> remote\n"
+        "- bread\n");
+    check(SyncModel::parseConflicts(nested).isEmpty(), "nested: fixture has no readable blocks");
+    {
+        using SyncModel::conflictBody;
+        const QString clean = QStringLiteral("# Shopping\n- apples\n- bread\n");
+        const QString edited = QStringLiteral("# Shopping\n- apples, green\n- bread\n");
+        const QString oneBlock = QStringLiteral("# Shopping\n<<<<<<< local\n- figs\n=======\n- dates\n>>>>>>> remote\n");
+        // Every place a marker-bearing side can come in: theirs back, untouched.
+        check(conflictBody(nested, clean, edited) == nested, "nested: theirs with markers is not merged into");
+        check(conflictBody(oneBlock, clean, edited) == oneBlock, "nested: theirs with one block is not merged into");
+        check(conflictBody(clean, clean, oneBlock) == clean, "nested: mine with markers is not merged");
+        check(conflictBody(edited, oneBlock, clean) == edited, "nested: base with markers is not merged");
+        check(SyncModel::twoWayConflictBody(oneBlock, QString(), edited) == oneBlock,
+              "nested: two-way fallback never nests either");
+        // No combination yields markers nested or out of order.
+        const QStringList sides{ clean, edited, oneBlock, nested, QStringLiteral("# Shopping\n- milk\n") };
+        bool neverNested = true;
+        for (const QString &t : sides)
+            for (const QString &b : sides)
+                for (const QString &m : sides) {
+                    const QString out = conflictBody(t, b, m);
+                    const bool hadMarkers = SyncModel::hasConflictMarkers(t) || SyncModel::hasConflictMarkers(b)
+                        || SyncModel::hasConflictMarkers(m);
+                    if (hadMarkers ? out != t
+                                   : (SyncModel::hasConflictMarkers(out) && SyncModel::parseConflicts(out).isEmpty()))
+                        neverNested = false;
+                }
+        check(neverNested, "nested: no merge of any sides nests markers");
+    }
+
+    // Unreadable markers: detected, and stripped without losing a line.
+    check(SyncModel::hasUnreadableConflicts(nested), "unreadable: nested markers");
+    check(SyncModel::hasUnreadableConflicts(QStringLiteral("a\n<<<<<<< local\nx\n")), "unreadable: block left open");
+    check(SyncModel::hasUnreadableConflicts(QStringLiteral("a\n>>>>>>> remote\nb\n")), "unreadable: stray closer");
+    check(!SyncModel::hasUnreadableConflicts(QStringLiteral("a\n<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n")),
+          "unreadable: a clean block is readable");
+    check(!SyncModel::hasUnreadableConflicts(QStringLiteral("Title\n=======\n\nbody\n")),
+          "unreadable: a setext underline is prose");
+    check(!SyncModel::hasUnreadableConflicts(QStringLiteral("# Plain\nbody\n")), "unreadable: plain note");
+    {
+        const QString stripped = SyncModel::stripConflictMarkers(nested);
+        check(stripped
+                  == QStringLiteral("# Shopping\n- apples\n- pears\n- plums\n- pears\n- grapes\n- bread\n"),
+              "strip: marker lines gone, every other line kept in order");
+        check(!SyncModel::hasConflictMarkers(stripped), "strip: no markers left");
+        check(SyncModel::stripConflictMarkers(QStringLiteral("# Plain\nbody\n")) == QStringLiteral("# Plain\nbody\n"),
+              "strip: plain note unchanged");
+    }
+
     // retitleInBody
     check(SyncModel::retitleInBody(QStringLiteral("# Old\nbody\n"), QStringLiteral("New"))
               == QStringLiteral("# New\nbody\n"),

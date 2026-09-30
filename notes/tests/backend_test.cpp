@@ -337,6 +337,107 @@ int main(int argc, char *argv[])
     QFile::remove(rootPath() + QStringLiteral("/Doomed (unsaved edits).md"));
     b.refresh();
 
+    // Unsaved edits on a note with an unresolved conflict are never merged
+    // into it (that nests the markers): they go to a new note, and the
+    // conflicted note stays exactly as it is.
+    {
+        const QString block = QStringLiteral("---\napple-note-id: id-clash\n---\n# Clash\nsame\n"
+                                             "<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n");
+        writeFile(QStringLiteral("Clash.md"), block);
+        b.refresh();
+        b.openNote(QStringLiteral("Clash.md"));
+        const QString loaded = b.noteBody();
+        const QString changed = QStringLiteral("---\napple-note-id: id-clash\n---\n# Clash\nsame, from iCloud\n"
+                                               "<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n");
+        writeFile(QStringLiteral("Clash.md"), changed);
+        const QString mine = QStringLiteral("# Clash\nsame, mine\n<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n");
+        QString told;
+        QObject::connect(&b, &NotesBackend::editsKeptAsNote, &b, [&](const QString &m) { told = m; },
+                         Qt::SingleShotConnection);
+        check(b.keepEditsAsConflict(loaded, mine) && b.currentNote() == QStringLiteral("Clash (unsaved edits).md")
+                  && readFile(QStringLiteral("Clash (unsaved edits).md")) == mine,
+              "backend edits on a conflicted note go to a new note");
+        check(readFile(QStringLiteral("Clash.md")) == changed, "backend conflicted note left as it is");
+        check(told.contains(QStringLiteral("unresolved conflict")) && told.contains(QStringLiteral("Clash (unsaved edits)")),
+              "backend says why the edits are in a new note");
+        QFile::remove(rootPath() + QStringLiteral("/Clash (unsaved edits).md"));
+
+        // The note resolved elsewhere, but the editor still holds markers.
+        writeFile(QStringLiteral("Clash.md"), block);
+        b.refresh();
+        b.openNote(QStringLiteral("Clash.md"));
+        const QString resolved = QStringLiteral("---\napple-note-id: id-clash\n---\n# Clash\nsame\ny\n");
+        writeFile(QStringLiteral("Clash.md"), resolved);
+        check(b.keepEditsAsConflict(b.noteBody(), mine) && b.currentNote() == QStringLiteral("Clash (unsaved edits).md")
+                  && readFile(QStringLiteral("Clash.md")) == resolved,
+              "backend marker-bearing edits are not merged into a resolved note");
+        QFile::remove(rootPath() + QStringLiteral("/Clash (unsaved edits).md"));
+        QFile::remove(rootPath() + QStringLiteral("/Clash.md"));
+        b.refresh();
+    }
+
+    // Markers nothing can read (the shape a nested merge leaves): no
+    // versions to pick, but a way out, each backed up first.
+    {
+        const QString envelope = QStringLiteral("---\napple-note-id: id-order\n---\n");
+        const QString nested = QStringLiteral("# Shopping\n<<<<<<< local\n<<<<<<< local\n- apples\n||||||| base\n"
+                                              "- pears\n=======\n- plums\n>>>>>>> remote\n||||||| base\n- pears\n"
+                                              "=======\n- grapes\n>>>>>>> remote\n- bread\n");
+        const QString synced = QStringLiteral("# Shopping\n- pears\n- bread\n");
+        const QString backups = rootPath() + QStringLiteral("/.icloud-md/conflict-backups");
+        auto backupFiles = [&] { return QDir(backups).entryList({ QStringLiteral("*.md") }, QDir::Files, QDir::Name); };
+        writeFile(QStringLiteral("Order.md"), envelope + nested);
+        b.refresh();
+        b.openNote(QStringLiteral("Order.md"));
+        check(b.noteConflictsUnreadable() && b.noteConflicts().isEmpty() && !b.noteHasSyncedCopy(),
+              "backend unreadable markers detected");
+        check(hasFlag(b, QStringLiteral("Order.md"), "conflict"), "backend unreadable note still flagged");
+        check(!b.recoverConflictedNote(QStringLiteral("synced")).value(QStringLiteral("ok")).toBool()
+                  && readFile(QStringLiteral("Order.md")) == envelope + nested && backupFiles().isEmpty(),
+              "backend no synced copy: nothing replaced");
+        check(!b.recoverConflictedNote(QStringLiteral("bogus")).value(QStringLiteral("ok")).toBool()
+                  && readFile(QStringLiteral("Order.md")) == envelope + nested,
+              "backend unknown recovery refused");
+        writeFile(QStringLiteral("Order.md"), envelope + nested + QStringLiteral("- milk\n"));
+        check(!b.recoverConflictedNote(QStringLiteral("strip")).value(QStringLiteral("ok")).toBool()
+                  && readFile(QStringLiteral("Order.md")) == envelope + nested + QStringLiteral("- milk\n"),
+              "backend recovery refused over a newer change on disk");
+        writeFile(QStringLiteral("Order.md"), envelope + nested);
+        b.refresh();
+
+        // Keep this computer's text: every line but the markers.
+        const QVariantMap stripped = b.recoverConflictedNote(QStringLiteral("strip"));
+        const QString backup1 = stripped.value(QStringLiteral("backup")).toString();
+        check(stripped.value(QStringLiteral("ok")).toBool()
+                  && readFile(QStringLiteral("Order.md"))
+                         == envelope + QStringLiteral("# Shopping\n- apples\n- pears\n- plums\n- pears\n- grapes\n- bread\n")
+                  && !b.noteConflictsUnreadable() && !hasFlag(b, QStringLiteral("Order.md"), "conflict"),
+              "backend strip keeps every line but the markers");
+        check(backup1.startsWith(backups + QLatin1Char('/')) && readFile(QDir(rootPath()).relativeFilePath(backup1)) == envelope + nested
+                  && stripped.value(QStringLiteral("message")).toString().contains(QStringLiteral(".icloud-md/conflict-backups/")),
+              "backend strip backed the note up first, and says where");
+        check(!b.notes().contains(QFileInfo(backup1).fileName()), "backend backup is not a note");
+
+        // Use the last synced version: the base copy, envelope kept.
+        writeFile(QStringLiteral(".icloud-md/base/id-order.md"), synced);
+        writeFile(QStringLiteral("Order.md"), envelope + nested);
+        b.refresh();
+        check(b.noteHasSyncedCopy(), "backend synced copy found");
+        const QVariantMap restored = b.recoverConflictedNote(QStringLiteral("synced"));
+        const QString backup2 = restored.value(QStringLiteral("backup")).toString();
+        check(restored.value(QStringLiteral("ok")).toBool() && readFile(QStringLiteral("Order.md")) == envelope + synced,
+              "backend synced version restored");
+        check(backup2 != backup1 && readFile(QDir(rootPath()).relativeFilePath(backup2)) == envelope + nested
+                  && backupFiles().size() == 2,
+              "backend synced restore backed the note up first");
+        check(!b.recoverConflictedNote(QStringLiteral("strip")).value(QStringLiteral("ok")).toBool(),
+              "backend recovery only for unreadable markers");
+        QFile::remove(rootPath() + QStringLiteral("/Order.md"));
+        QFile::remove(rootPath() + QStringLiteral("/.icloud-md/base/id-order.md"));
+        QDir(backups).removeRecursively();
+        b.refresh();
+    }
+
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));
     check(b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty(), "backend rename ok");

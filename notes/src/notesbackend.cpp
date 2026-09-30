@@ -623,9 +623,11 @@ void NotesBackend::loseCurrentNote()
     closeNote();
 }
 
-// Unsaved edits to a note deleted elsewhere: a new note beside where it
-// was, never the deleted note's id (that would bring it back as a copy).
-bool NotesBackend::keepEditsAsNewNote(const QString &mine)
+// Unsaved edits that cannot go into their note (deleted elsewhere, or
+// carrying conflict markers a merge would nest): a new note beside where
+// it was, never the note's id (that would bring a deleted one back as a
+// copy). `why` gets the note's title and the new note's as %1 and %2.
+bool NotesBackend::keepEditsAsNewNote(const QString &mine, const QString &why)
 {
     const QString folder = QDir(folderAbsolutePath(m_lostNote.folder)).exists() ? m_lostNote.folder : QString();
     QString title = sanitized(m_lostNote.title);
@@ -648,8 +650,7 @@ bool NotesBackend::keepEditsAsNewNote(const QString &mine)
     rebuildNotes();
     loadCurrentNote();
     rewatch();
-    const QString message = QStringLiteral("\"%1\" was deleted elsewhere, so your unsaved edits are in a new note, \"%2\".")
-                                .arg(title, name.chopped(3));
+    const QString message = why.arg(title, name.chopped(3));
     appendLog(message);
     emit editsKeptAsNote(message);
     emit vaultChanged();
@@ -738,7 +739,8 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
     // removing the old, so look for its id once more before giving up on it.
     if (m_currentNote.isEmpty() && m_lostNote.valid
         && !followNote(SyncModel::extractNoteId(m_lostNote.content)))
-        return keepEditsAsNewNote(mine);
+        return keepEditsAsNewNote(
+            mine, QStringLiteral("\"%1\" was deleted elsewhere, so your unsaved edits are in a new note, \"%2\"."));
     const QString path = noteAbsolutePath();
     if (path.isEmpty() || !m_readOnlyReason.isEmpty() || !QFile::exists(path))
         return false;
@@ -747,6 +749,17 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
     const QString theirs = SyncModel::editorForm(split.body);
     if (theirs == base || theirs == mine)
         return false;
+    // A conflict still unresolved on either side would nest one block in
+    // another, which nothing can read back (see conflictBody). The note is
+    // left as it is and the edits become a note of their own.
+    if (SyncModel::hasConflictMarkers(theirs) || SyncModel::hasConflictMarkers(base)
+        || SyncModel::hasConflictMarkers(mine)) {
+        m_lostNote = { m_currentFolder,
+                       SyncModel::previewNote(disk, m_currentNote.chopped(3), vaultTitleMode()).title, disk, true };
+        return keepEditsAsNewNote(
+            mine, QStringLiteral("\"%1\" has an unresolved conflict, so your unsaved edits were not merged into it. "
+                                 "They are in a new note, \"%2\", and \"%1\" is unchanged."));
+    }
     // Edits to different lines merge on their own; only lines both sides
     // changed differently become blocks to pick from.
     const QString merged = SyncModel::conflictBody(split.body, base, mine);
@@ -882,6 +895,90 @@ QVariantList NotesBackend::noteConflicts() const
                                { QStringLiteral("after"), context(hunk.last + 1, nextStart, false) } };
     }
     return result;
+}
+
+bool NotesBackend::noteConflictsUnreadable() const
+{
+    return SyncModel::hasUnreadableConflicts(m_noteContent);
+}
+
+// icloud-notes-sync's base copy of the open note: its body as last synced.
+QString NotesBackend::syncedCopyPath() const
+{
+    const QString id = SyncModel::extractNoteId(m_noteContent);
+    if (id.isEmpty() || id.contains(u'/') || stateDir().isEmpty())
+        return {};
+    return stateDir() + QStringLiteral("/base/") + id + QStringLiteral(".md");
+}
+
+bool NotesBackend::noteHasSyncedCopy() const
+{
+    const QString path = syncedCopyPath();
+    return !path.isEmpty() && QFile::exists(path);
+}
+
+// Where recoverConflictedNote copies a note before replacing it: the sync
+// tool's own dot-directory, which neither it nor this app reads as notes.
+QString NotesBackend::conflictBackupDir()
+{
+    const QString state = stateDir();
+    return (state.isEmpty() ? rootPath() + QStringLiteral("/.icloud-md") : state) + QStringLiteral("/conflict-backups");
+}
+
+QVariantMap NotesBackend::recoverConflictedNote(const QString &how)
+{
+    auto fail = [](const QString &message) {
+        return QVariantMap{ { QStringLiteral("ok"), false }, { QStringLiteral("message"), message } };
+    };
+    const QString path = noteAbsolutePath();
+    if (path.isEmpty())
+        return fail(QStringLiteral("No note selected."));
+    if (!m_readOnlyReason.isEmpty())
+        return fail(QStringLiteral("This note is read-only here. Resolve it in Apple Notes."));
+    if (m_syncRunning)
+        return fail(QStringLiteral("Wait for the sync to finish, then try again."));
+    if (!noteConflictsUnreadable())
+        return fail(QStringLiteral("This note has no unreadable conflict markers."));
+    // Only the version on screen is replaced: a newer one is shown first.
+    if (readText(path) != m_noteContent) {
+        refresh();
+        return fail(QStringLiteral("The note changed on disk. Look it over, then try again."));
+    }
+    const SyncModel::EnvelopeSplit split = SyncModel::splitEnvelope(m_noteContent);
+    QString body;
+    if (how == u"strip") {
+        body = SyncModel::stripConflictMarkers(split.body);
+    } else if (how == u"synced") {
+        if (!noteHasSyncedCopy())
+            return fail(QStringLiteral("There is no last synced version of this note."));
+        body = readText(syncedCopyPath());
+    } else {
+        return fail(QStringLiteral("Unknown choice."));
+    }
+    // A byte-exact copy first; nothing is replaced unless it is there.
+    const QString dir = conflictBackupDir() + (m_currentFolder.isEmpty() ? QString() : u'/' + m_currentFolder);
+    const QString stem = m_currentNote.chopped(3) + QStringLiteral(" (conflict backup ")
+        + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HHmmss"));
+    QString backup = dir + u'/' + stem + QStringLiteral(").md");
+    for (int n = 2; QFile::exists(backup); ++n)
+        backup = dir + u'/' + stem + QStringLiteral(" %1).md").arg(n);
+    if (!QDir().mkpath(dir) || !QFile::copy(path, backup) || readText(backup) != m_noteContent)
+        return fail(QStringLiteral("Could not back up the note, so it was left as it is."));
+    if (!writeText(path, split.envelope + body))
+        return fail(QStringLiteral("Could not write the note. It is unchanged."));
+    loadCurrentNote();
+    rebuildNotes();
+    if (!SyncModel::hasConflictMarkers(m_noteContent))
+        emit vaultChanged();
+    const QString shown = QDir(rootPath()).relativeFilePath(backup);
+    appendLog(QStringLiteral("%1: replaced unreadable conflict markers; the note as it was is in %2")
+                  .arg(vaultRelative(m_currentNote), shown));
+    return { { QStringLiteral("ok"), true },
+             { QStringLiteral("message"),
+               (how == u"strip" ? QStringLiteral("Conflict markers removed. Read the note over: both versions' lines are kept. ")
+                                : QStringLiteral("Back to the last synced version. "))
+                   + QStringLiteral("The note as it was is saved in %1.").arg(shown) },
+             { QStringLiteral("backup"), backup } };
 }
 
 QString NotesBackend::resolveConflicts(const QStringList &choices)
@@ -1206,8 +1303,13 @@ void NotesBackend::writeQueuedSave()
     if (!queued.valid || m_currentNote.isEmpty()) // a note gone keeps its edits through keepEditsAsConflict
         return;
     const QString base = SyncModel::editorForm(SyncModel::splitEnvelope(queued.base).body);
-    bool written = m_noteContent != queued.base && keepEditsAsConflict(base, queued.body);
-    if (!written)
+    const bool changed = m_noteContent != queued.base;
+    bool written = changed && keepEditsAsConflict(base, queued.body);
+    // Saving over the note is only for one the sync left as the edits
+    // started, or that already holds them: never over a change a merge
+    // could not take (a failed write), which would drop it.
+    const QString theirs = SyncModel::editorForm(noteBody());
+    if (!written && (!changed || theirs == base || theirs == queued.body))
         written = saveCurrentNote(queued.body);
     if (written)
         emit queuedSaveWritten(queued.body);

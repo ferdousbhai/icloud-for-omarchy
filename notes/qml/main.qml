@@ -64,6 +64,9 @@ ApplicationWindow {
     property var conflictChoices: []
     property bool conflictAsText: false
     readonly property bool resolving: conflicts.length > 0 && !conflictAsText && !noteLocked
+    // Markers with no versions to pick from (nested or out of order): the
+    // note opens on a way out instead, read-only until "Edit as text".
+    readonly property bool unreadableConflict: backend.noteConflictsUnreadable && !conflictAsText && !noteLocked
     onConflictsChanged: conflictChoices = conflicts.map(function () { return ""; })
     property bool searching: searchField.text.trim().length >= 2
     property var searchResults: []
@@ -373,6 +376,12 @@ ApplicationWindow {
         conflictChoices = picked;
     }
     function chooseAllConflicts(side) { conflictChoices = conflicts.map(function () { return side; }); }
+    function recoverConflictedNote(how) {
+        var result = backend.recoverConflictedNote(how);
+        notice = result.message;
+        if (result.ok)
+            loadEditor();
+    }
     function applyConflictChoices() {
         var err = backend.resolveConflicts(conflictChoices);
         notice = err;
@@ -1123,6 +1132,63 @@ ApplicationWindow {
                         }
                     }
 
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 32
+                        Layout.rightMargin: 32
+                        Layout.topMargin: 14
+                        visible: root.unreadableConflict
+                        implicitHeight: unreadableColumn.implicitHeight + 24
+                        radius: 10
+                        color: Qt.rgba(root.colYellow.r, root.colYellow.g, root.colYellow.b, 0.12)
+                        ColumnLayout {
+                            id: unreadableColumn
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 8
+                            RowLayout {
+                                spacing: 12
+                                Glyph { Layout.alignment: Qt.AlignTop; text: "\uf071"; color: root.colYellow; font.pixelSize: 18 }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    Label {
+                                        text: "This note has conflict markers Notes can't read."
+                                        font.bold: true
+                                        color: root.colText
+                                        font.pixelSize: root.pt(13)
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.Wrap
+                                        color: root.colTextDim
+                                        font.pixelSize: root.pt(12)
+                                        text: "\"Keep this computer's text\" removes only the marker lines and keeps every other line for you to read over. "
+                                            + (backend.noteHasSyncedCopy ? "\"Use the last synced version\" goes back to the text last synced with iCloud. " : "")
+                                            + "Before either, the note as it is now is copied to .icloud-md/conflict-backups in your notes folder, so nothing is lost."
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Button { text: "Edit as text"; flat: true; onClicked: root.conflictAsText = true }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    visible: backend.noteHasSyncedCopy
+                                    enabled: !backend.syncRunning && !root.dirty
+                                    text: "Use the last synced version"
+                                    onClicked: root.recoverConflictedNote("synced")
+                                }
+                                PrimaryButton {
+                                    enabled: !backend.syncRunning && !root.dirty
+                                    text: "Keep this computer's text"
+                                    onClicked: root.recoverConflictedNote("strip")
+                                }
+                            }
+                        }
+                    }
+
                     ScrollView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -1141,7 +1207,7 @@ ApplicationWindow {
                             }
                             wrapMode: TextArea.Wrap
                             selectByMouse: true
-                            readOnly: root.noteLocked || root.freshening
+                            readOnly: root.noteLocked || root.freshening || root.unreadableConflict
                             background: null
                             color: root.colText
                             selectionColor: root.colAccent

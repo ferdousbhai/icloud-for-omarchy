@@ -151,6 +151,32 @@ inline QList<ConflictHunk> parseConflicts(const QString &text)
     return part == Outside ? hunks : QList<ConflictHunk>();
 }
 
+// Conflict markers parseConflicts cannot read: blocks nested in one
+// another, closed out of order or left open (a merge run over a note that
+// still had a conflict). Only an opening, base or closing marker counts: a
+// lone "=======" is also a setext underline or a rule in plain prose.
+inline bool hasUnreadableConflicts(const QString &text)
+{
+    for (const QStringView line : QStringView(text).split(u'\n')) {
+        const QStringView s = line.trimmed();
+        if (s.startsWith(u"<<<<<<<") || s.startsWith(u"|||||||") || s.startsWith(u">>>>>>>"))
+            return parseConflicts(text).isEmpty();
+    }
+    return false;
+}
+
+// The text with every conflict marker line dropped and every other line
+// kept, whichever side it came from: nothing is lost, and what is left is
+// plain text to read over (repeated lines included).
+inline QString stripConflictMarkers(const QString &text)
+{
+    QStringList kept;
+    for (const QString &line : text.split(u'\n'))
+        if (!isConflictMarker(line))
+            kept << line;
+    return kept.join(u'\n');
+}
+
 // The text with each conflict block replaced by the side chosen for it:
 // "local", "remote" or "both" (this computer's lines, then iCloud's).
 // Anything but one valid choice per block leaves the text unchanged.
@@ -194,6 +220,8 @@ inline QString editorForm(QString text)
 // its editor form hold in the original.
 inline QString twoWayConflictBody(const QString &theirs, const QString &base, const QString &mine)
 {
+    if (hasConflictMarkers(theirs) || hasConflictMarkers(base) || hasConflictMarkers(mine))
+        return theirs; // never nests blocks: see conflictBody
     const QString theirsE = editorForm(theirs);
     const QStringList t = theirsE.split(u'\n'), m = mine.split(u'\n'), b = base.split(u'\n');
     const qsizetype most = qMin(t.size(), m.size());
@@ -247,8 +275,13 @@ inline QString restoreEditorChars(const QString &original, const QString &edited
 // lines taken from mine (restoreEditorChars), as a save would. A base that shares no line with
 // both sides, or notes too large or too far apart to align, fall back to
 // one block around where mine and theirs part ways (twoWayConflictBody).
+// Any side already carrying conflict markers is never merged: blocks
+// nested in blocks are unreadable (parseConflicts), so theirs comes back
+// unchanged and the caller keeps mine apart (keepEditsAsConflict does).
 inline QString conflictBody(const QString &theirs, const QString &base, const QString &mine)
 {
+    if (hasConflictMarkers(theirs) || hasConflictMarkers(base) || hasConflictMarkers(mine))
+        return theirs;
     const QString theirsE = editorForm(theirs);
     const QStringList t = theirsE.split(u'\n'), m = mine.split(u'\n'), b = base.split(u'\n');
     if (t.size() + m.size() + b.size() > 30000)
