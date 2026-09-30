@@ -1225,14 +1225,16 @@ void NotesBackend::finishSync(int exitCode)
     const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
                              : QStringLiteral("%1 failed (exit %2). See log.").arg(m_syncLabel).arg(exitCode);
 
-    // Every failure that only a sign-in fixes exits 4 (and still names
-    // icloud-md's `reauthenticate`, matched too while tools that only say
-    // that are around). Notes never signs in by itself: icloud-session owns
-    // the sign-in, so it is told (it confirms with Apple before signing
-    // everyone out) and syncing pauses until it reports a sign-in, since
-    // every further sync would fail the same way.
+    // Every failure that only a sign-in fixes exits 2, the code every iCloud
+    // tool uses (icloud-notes-sync 0.1.1 and older exited 4; the app's own
+    // arguments never make a usage error, which those exited 2 for), and
+    // still names icloud-md's `reauthenticate`, matched too while tools that
+    // only say that are around. Notes never signs in by itself:
+    // icloud-session owns the sign-in, so it is told (it confirms with
+    // Apple before signing everyone out) and syncing pauses until it
+    // reports a sign-in, since every further sync would fail the same way.
     const bool sessionExpired = !ok
-        && (exitCode == 4 || m_capturedErr.contains("icloud-md reauthenticate")
+        && (exitCode == 2 || exitCode == 4 || m_capturedErr.contains("icloud-md reauthenticate")
             || m_captured.contains("icloud-md reauthenticate"));
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));

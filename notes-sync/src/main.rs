@@ -2,10 +2,11 @@
 //! kept by the port: clone, pull, push, status, restore, history, diff.
 //! Owner: workstream D.
 //!
-//! Exit codes: 0 ok, 1 known error, 2 usage, 3 `status`/`push --dry-run`
-//! has entries or `diff` found differences, 4 sign-in required, 70 internal.
-//! `--json` is global (before or after the verb): stdout carries only the
-//! JSON result, everything else goes to stderr.
+//! Exit codes: 0 ok, 1 known error, 2 sign-in required, 3 `status`/`push
+//! --dry-run` has entries or `diff` found differences, 64 usage, 70 internal
+//! (the table every iCloud tool shares; docs/CLI.md). `--json` is global
+//! (before or after the verb): stdout carries only the JSON result,
+//! everything else goes to stderr, an error as one JSON line last.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,6 +24,12 @@ use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 #[command(
     name = "icloud-notes-sync",
     about = "Sync iCloud Notes with a folder of Markdown files",
+    after_help = "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 3 status/push --dry-run \
+                  has entries or diff found differences, 64 usage, 70 internal error.\n\
+                  With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
+                  {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}.\n\
+                  In the vault Notes (icloud-notes) syncs, prefer `icloud-notes` for pull/push/sync: it takes the \
+                  vault lock the app holds, which this tool does not.",
     disable_version_flag = true
 )]
 struct Cli {

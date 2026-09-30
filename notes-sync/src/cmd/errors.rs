@@ -2,21 +2,24 @@
 //! classes that survive the port; auth/session/browser/object/revert/delete
 //! ones are gone). Owner: workstream D.
 //!
-//! Exit codes: 0 ok, 1 known error (`IcloudNotesSyncError`), 2 usage,
-//! 3 status has entries / diff has differences (not an error), 4 sign-in
-//! required (new; icloud-md said `Run "icloud-md reauthenticate"` with 1),
+//! Exit codes, shared with the other iCloud tools (icloud-session,
+//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md): 0 ok, 1 known
+//! error (`IcloudNotesSyncError`), 2 sign-in required (icloud-md said
+//! `Run "icloud-md reauthenticate"` with 1), 3 status has entries / diff has
+//! differences (not an error), 64 usage (`EX_USAGE`; icloud-md used 2),
 //! 70 internal (`EX_SOFTWARE`, anything unexpected).
 //!
 //! Messages keep icloud-md's wording (with `icloud-md` → `icloud-notes-sync`
-//! in hints); `name()` is the `--json` `error` field (icloud-md's class name).
+//! in hints). `name()` is icloud-md's class name; `code()` is the
+//! machine-readable `error.code` of the `--json` error object.
 
 use crate::cloudkit::CkError;
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
-pub const EXIT_USAGE: i32 = 2;
+pub const EXIT_SIGN_IN: i32 = 2;
 pub const EXIT_HAS_ENTRIES: i32 = 3;
-pub const EXIT_SIGN_IN: i32 = 4;
+pub const EXIT_USAGE: i32 = 64;
 pub const EXIT_INTERNAL: i32 = 70;
 
 #[derive(Debug, thiserror::Error)]
@@ -61,7 +64,7 @@ pub enum Error {
     UnknownVersionSnapshot { id: String, file: String },
     #[error("Can't complete this operation: {0}.")]
     VersionContentUnavailable(String),
-    /// Sign-in required: exit 4.
+    /// Sign-in required: exit 2.
     #[error("Not signed in to iCloud.")]
     SignInRequired,
     #[error(transparent)]
@@ -121,6 +124,14 @@ impl Error {
         }
     }
 
+    /// The `--json` error object's `code`: the class name in snake case
+    /// without its `Error` suffix (`UntrackedFileError` → `untracked_file`),
+    /// so `sign_in_required`, `usage` and `internal` read as in the other
+    /// iCloud tools.
+    pub fn code(&self) -> String {
+        snake_code(self.name())
+    }
+
     /// The hint line icloud-md prints under the message, if any.
     pub fn hint(&self) -> Option<String> {
         match self {
@@ -163,7 +174,7 @@ impl Error {
                 Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
             }
             // Keeps icloud-md's sign-in marker (`icloud-md reauthenticate`),
-            // which wrappers match on alongside exit code 4.
+            // which wrappers match on alongside exit code 2.
             Error::SignInRequired => Some(
                 "Sign in to iCloud again with icloud-session, then retry (what \"icloud-md reauthenticate\" did for icloud-md)."
                     .into(),
@@ -181,4 +192,22 @@ impl Error {
             Error::CloudKit(_) | Error::Usage(_) | Error::Internal(_) | Error::Io(_) => None,
         }
     }
+}
+
+/// `UntrackedFileError` → `untracked_file`; `CloudKitZoneFetchFailedError` →
+/// `cloudkit_zone_fetch_failed`.
+pub fn snake_code(name: &str) -> String {
+    let base = name.strip_suffix("Error").unwrap_or(name).replace("CloudKit", "Cloudkit");
+    let mut out = String::new();
+    for (i, c) in base.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }

@@ -18,7 +18,7 @@ pub use transport::{LiveTransport, ReplayTransport, Transport};
 pub use types::*;
 
 /// Errors from the CloudKit layer. Exit-code mapping lives in
-/// `cmd::errors`: `SignInRequired` is exit 4; `ZoneFetchFailed` and
+/// `cmd::errors`: `SignInRequired` is exit 2; `ZoneFetchFailed` and
 /// `RequestFailed` are icloud-md's known `CloudKit*Error`s (exit 1);
 /// `UnexpectedResponse` is a plain `Error` in icloud-md (exit 70).
 ///

@@ -56,16 +56,16 @@ fn vault_shape_flags_live_on_the_commands_that_own_them() {
 }
 
 #[test]
-fn usage_error_exits_2_with_a_json_payload() {
+fn usage_error_exits_64_with_a_json_payload() {
     let o = run_here(&["--json", "pull", "--nope"]);
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(64));
     assert!(stdout(&o).is_empty());
     let payload: Value = serde_json::from_str(&stderr(&o)).unwrap();
-    assert_eq!(payload["error"], "UsageError");
-    assert_eq!(payload["exitCode"], 2);
+    assert_eq!(payload["error"]["code"], "usage");
+    assert_eq!(payload["error"]["exit_code"], 64);
 
     let human = run_here(&["pull", "--nope"]);
-    assert_eq!(human.status.code(), Some(2));
+    assert_eq!(human.status.code(), Some(64));
 }
 
 #[test]
@@ -75,15 +75,15 @@ fn status_outside_a_vault_is_a_known_error() {
     assert_eq!(o.status.code(), Some(1));
     assert!(stdout(&o).is_empty());
     let payload: Value = serde_json::from_str(&stderr(&o)).unwrap();
-    assert_eq!(payload["error"], "NotClonedDirectoryError");
-    assert_eq!(payload["exitCode"], 1);
+    assert_eq!(payload["error"]["code"], "not_cloned_directory");
+    assert_eq!(payload["error"]["exit_code"], 1);
 }
 
 #[test]
 fn diff_with_an_invalid_ref_is_a_usage_error() {
     let tmp = tempfile::tempdir().unwrap();
     let o = run(&["--json", "diff", "Note.md", "a..b..c"], tmp.path());
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(64));
     let payload: Value = serde_json::from_str(&stderr(&o)).unwrap();
-    assert_eq!(payload["error"], "UsageError");
+    assert_eq!(payload["error"]["code"], "usage");
 }

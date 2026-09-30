@@ -67,16 +67,17 @@ fn known_error_is_structured_json_in_json_mode() {
     let mut err = Vec::new();
     assert_eq!(JSON.emit_error_to(&known_error(), &mut err), 1);
     let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert_eq!(payload["error"], "UntrackedFileError");
+    assert_eq!(payload["error"]["code"], "untracked_file");
     assert_eq!(
-        payload["message"],
+        payload["error"]["message"],
         "\"missing-note.md\" isn't a tracked note in /some/dir."
     );
     assert_eq!(
-        payload["hint"],
+        payload["error"]["hint"],
         "Check the file name (it's case-sensitive) and try again."
     );
-    assert_eq!(payload["exitCode"], 1);
+    assert_eq!(payload["error"]["exit_code"], 1);
+    assert_eq!(text(&err).lines().count(), 1, "one line, for agents reading stderr");
 }
 
 #[test]
@@ -88,7 +89,7 @@ fn json_payload_omits_hint_when_there_is_none() {
     };
     JSON.emit_error_to(&error, &mut err);
     let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert!(payload.get("hint").is_none());
+    assert!(payload["error"].get("hint").is_none());
 }
 
 #[test]
@@ -111,32 +112,32 @@ fn internal_error_is_structured_json_with_exit_70() {
         70
     );
     let payload: Value = serde_json::from_str(&text(&err)).unwrap();
-    assert_eq!(payload["error"], "InternalError");
-    assert_eq!(payload["message"], "a genuine bug");
-    assert_eq!(payload["exitCode"], 70);
+    assert_eq!(payload["error"]["code"], "internal");
+    assert_eq!(payload["error"]["message"], "a genuine bug");
+    assert_eq!(payload["error"]["exit_code"], 70);
 }
 
 #[test]
-fn usage_error_prints_nothing_for_humans_but_returns_2() {
+fn usage_error_prints_nothing_for_humans_but_returns_64() {
     let mut err = Vec::new();
-    assert_eq!(HUMAN.emit_usage_error_to("unknown option '--nope'", &mut err), 2);
+    assert_eq!(HUMAN.emit_usage_error_to("unknown option '--nope'", &mut err), 64);
     assert!(err.is_empty());
 }
 
 #[test]
 fn usage_error_is_structured_json_in_json_mode() {
     let mut err = Vec::new();
-    assert_eq!(JSON.emit_usage_error_to("unknown option '--nope'", &mut err), 2);
+    assert_eq!(JSON.emit_usage_error_to("unknown option '--nope'", &mut err), 64);
     let payload: Value = serde_json::from_str(&text(&err)).unwrap();
     assert_eq!(
         payload,
-        serde_json::json!({"error": "UsageError", "message": "unknown option '--nope'", "exitCode": 2})
+        serde_json::json!({"error": {"code": "usage", "message": "unknown option '--nope'", "exit_code": 64}})
     );
 }
 
 #[test]
-fn sign_in_required_exits_4_and_keeps_the_sign_in_marker() {
+fn sign_in_required_exits_2_and_keeps_the_sign_in_marker() {
     let mut err = Vec::new();
-    assert_eq!(HUMAN.emit_error_to(&Error::SignInRequired, &mut err), 4);
+    assert_eq!(HUMAN.emit_error_to(&Error::SignInRequired, &mut err), 2);
     assert!(text(&err).contains("icloud-md reauthenticate"));
 }

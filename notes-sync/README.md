@@ -28,9 +28,18 @@ $ icloud-notes-sync diff <file> <id>|<from>..<to>
 $ icloud-notes-sync restore <file>
 ```
 
-Exit codes: 0 ok, 1 error, 2 usage, 3 `status`/`push --dry-run` has
-entries or `diff` found differences, 4 iCloud sign-in required, 70 internal
-error.
+Exit codes: 0 ok, 1 error, 2 iCloud sign-in required, 3 `status`/`push
+--dry-run` has entries or `diff` found differences, 64 usage, 70 internal
+error, the table the other iCloud tools share ([docs/CLI.md](../docs/CLI.md)).
+With `--json`, stdout carries only the JSON result, and an error is one line
+on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hint":…}}`
+(`code` is the error's class in snake case: `untracked_file`,
+`not_cloned_directory`, `usage`, `internal`, …). icloud-md used 2 for usage,
+1 for a sign-in and `{"error":"<Class>Error","exitCode":…}`.
+
+The Notes app runs this tool only while it holds the vault's lock; in the
+vault Notes syncs (`~/Documents/icloud-notes`), `icloud-notes pull|push|sync`
+takes that lock for you (see [docs/AGENTS.md](../docs/AGENTS.md)).
 
 Vaults are icloud-md vaults (`.icloud-md/state.json`, layout version 3) and
 stay readable by icloud-md.

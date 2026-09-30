@@ -697,9 +697,10 @@ int main(int argc, char *argv[])
     fake.stillSignedIn = false;
     fake.reportCalls = 0;
 
-    // A sign-in required is exit 4; icloud-md's text marker (with exit 1)
-    // still counts too. Either alone pauses syncing and reports it.
-    for (const char *style : { "code", "marker" }) {
+    // A sign-in required is exit 2 (4 from icloud-notes-sync 0.1.1 and
+    // older); icloud-md's text marker (with exit 1) still counts too. Each
+    // alone pauses syncing and reports it.
+    for (const char *style : { "code", "legacy", "marker" }) {
         fake.reportCalls = 0;
         qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", style);
         qputenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED", "1");
@@ -707,15 +708,15 @@ int main(int argc, char *argv[])
         waitForSync(b);
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
-        const bool code = qstrcmp(style, "code") == 0;
+        const QByteArray name = QByteArray("seam ") + style;
         check(b.authExpired() && waitUntil([&] { return fake.reportCalls == 1; })
                   && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
-              code ? "seam exit 4 alone pauses and reports" : "seam reauthenticate marker alone pauses and reports");
+              (name + " alone pauses and reports").constData());
         fake.set({ { QStringLiteral("SigningIn"), true } });
         waitUntil([&] { return b.signingIn(); });
         fake.set({ { QStringLiteral("SigningIn"), false } });
         check(waitUntil([&] { return !b.authExpired() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000),
-              code ? "seam exit 4: a new sign-in resumes" : "seam marker: a new sign-in resumes");
+              (name + ": a new sign-in resumes").constData());
     }
     fake.reportCalls = 0;
 

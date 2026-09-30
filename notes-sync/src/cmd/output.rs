@@ -50,7 +50,9 @@ impl OutputContext {
         };
     }
 
-    /// `emitError`: report on stderr, return the exit code.
+    /// `emitError`: report on stderr, return the exit code. With `--json`
+    /// the report is one line, the error object every iCloud tool prints:
+    /// `{"error":{"code","message","exit_code","hint"?}}`.
     pub fn emit_error(&self, error: &Error) -> i32 {
         self.emit_error_to(error, &mut std::io::stderr())
     }
@@ -58,14 +60,7 @@ impl OutputContext {
     pub fn emit_error_to(&self, error: &Error, stderr: &mut dyn Write) -> i32 {
         let code = error.exit_code();
         if self.json {
-            let mut payload = serde_json::Map::new();
-            payload.insert("error".into(), error.name().into());
-            payload.insert("message".into(), error.to_string().into());
-            payload.insert("exitCode".into(), code.into());
-            if let Some(hint) = error.hint() {
-                payload.insert("hint".into(), hint.into());
-            }
-            let _ = writeln!(stderr, "{}", to_json_pretty(&payload));
+            let _ = writeln!(stderr, "{}", error_json(&error.code(), &error.to_string(), code, error.hint()));
         } else {
             let _ = writeln!(stderr, "{error}");
             if let Some(hint) = error.hint() {
@@ -76,16 +71,27 @@ impl OutputContext {
     }
 
     /// `emitUsageError`: clap already printed the human form; `--json` gets a
-    /// structured one. Always 2.
+    /// structured one. Always 64.
     pub fn emit_usage_error(&self, message: &str) -> i32 {
         self.emit_usage_error_to(message, &mut std::io::stderr())
     }
 
     pub fn emit_usage_error_to(&self, message: &str, stderr: &mut dyn Write) -> i32 {
         if self.json {
-            let payload = serde_json::json!({ "error": "UsageError", "message": message, "exitCode": EXIT_USAGE });
-            let _ = writeln!(stderr, "{}", to_json_pretty(&payload));
+            let _ = writeln!(stderr, "{}", error_json("usage", message, EXIT_USAGE, None));
         }
         EXIT_USAGE
     }
+}
+
+/// The one-line `--json` error object.
+pub fn error_json(code: &str, message: &str, exit_code: i32, hint: Option<String>) -> String {
+    let mut error = serde_json::Map::new();
+    error.insert("code".into(), code.into());
+    error.insert("message".into(), message.into());
+    error.insert("exit_code".into(), exit_code.into());
+    if let Some(hint) = hint {
+        error.insert("hint".into(), hint.into());
+    }
+    serde_json::json!({ "error": error }).to_string()
 }
