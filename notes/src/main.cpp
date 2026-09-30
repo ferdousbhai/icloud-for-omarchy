@@ -7,6 +7,7 @@
 #include <QTextStream>
 
 #include "src/backgroundsync.h"
+#include "src/cli.h"
 #include "src/notesbackend.h"
 #include "src/singleinstance.h"
 
@@ -21,6 +22,9 @@ int main(int argc, char *argv[])
         QTextStream out(stdout);
         return runBackgroundSync(out);
     }
+    // `icloud-notes <command>`: the command line, headless (see cli.h).
+    if (argc > 1 && isCliInvocation(argv[1]))
+        return cliMain(argc, argv);
 
     QGuiApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("icloud-notes"));

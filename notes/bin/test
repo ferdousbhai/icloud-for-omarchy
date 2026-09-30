@@ -11,7 +11,7 @@ if [[ "${ICLOUD_NOTES_PRIVATE_BUS:-}" != 1 ]]; then
 fi
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 export NO_AT_BRIDGE=1 # the private bus has no accessibility bus to find
-for t in guardrails_test backend_test; do
+for t in guardrails_test backend_test cli_test; do
   mkdir -p "build-$t"
   (cd "build-$t" && qmake6 "../$t.pro" && make -j"$(nproc)" && "./$t")
 done

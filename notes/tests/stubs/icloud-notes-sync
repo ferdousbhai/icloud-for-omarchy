@@ -19,11 +19,37 @@ elif [ "$1" = "--json" ] && [ "$2" = "history" ]; then
   cat <<'JSON'
 {"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}
 JSON
+elif { [ "$1" = "--json" ] && [ "$2" = "push" ] && [ "$3" = "--dry-run" ]; } || { [ "$1" = "push" ] && [ "$2" = "--dry-run" ]; }; then
+  # What icloud-notes push --dry-run passes through.
+  if [ "$1" = "--json" ]; then
+    echo '{"entries":[{"kind":"update","file":"Notes/Alpha.md","resolution":"ready"}],"unchanged":1,"notices":[],"dryRun":true}'
+  else
+    echo "Would update Notes/Alpha.md"
+  fi
+  exit 3
+elif [ "$1" = "history" ]; then
+  echo "e9  2026-09-01T00:00:00Z  changed: $2"
+elif [ "$1" = "restore" ] || { [ "$1" = "--json" ] && [ "$2" = "restore" ]; }; then
+  [ "$1" = "--json" ] && shift
+  # Stands for "back to the last synced copy": the file gets a marker line.
+  printf 'restored\n' >> "$2"
+  echo "{\"file\":\"$2\"}"
+elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
+  # A clone into the last argument: the state file and one note.
+  dir="${@: -1}"
+  mkdir -p "$dir/.icloud-md" "$dir/Notes"
+  echo '{"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md"}}}' > "$dir/.icloud-md/state.json"
+  printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
+  echo "Cloned 1 notes"
 elif [ "$1" = "diff" ]; then
   echo "Fetching the current remote copy..." >&2
   printf -- '--- remote\n+++ local\n- old\n+ new\n'
   exit 3
-elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
+elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2" = "pull" ] || [ "$2" = "push" ]; }; }; then
+  json=""
+  if [ "$1" = "--json" ]; then json=1; shift; fi
+  # ICLOUD_NOTES_SYNC_STUB_LOG: a file each pull/push appends its verb to.
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "$1" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   # ICLOUD_NOTES_SYNC_STUB_SLEEP: seconds a run takes.
   # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
   # only that one (a push with nothing to send never asks iCloud).
@@ -49,7 +75,7 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
         exit 2 ;;
     esac
   fi
-  echo "stub $1 ok"
+  if [ -n "$json" ]; then echo "{\"stub\":\"$1\",\"ok\":true}"; else echo "stub $1 ok"; fi
 else
   echo "stub: unknown args: $*" >&2
   exit 64

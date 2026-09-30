@@ -76,8 +76,11 @@ public:
     // lifetime (waiting, syncs deferred, while a background sync has it).
     // Background: `icloud-notes --sync`, which takes the lock with
     // lockVault() before syncing; no theme, fonts or desktop settings are
-    // read. Either way icloud-notes-sync never runs without the lock held.
-    enum class Role { App, Background };
+    // read. Cli: an `icloud-notes <command>` run, which takes the lock the
+    // same way before it changes the vault or syncs, and reads
+    // icloud-session only when asked (refreshSignIn). Either way
+    // icloud-notes-sync never runs without the lock held.
+    enum class Role { App, Background, Cli };
     explicit NotesBackend(QObject *parent = nullptr, Role role = Role::App);
     ~NotesBackend() override;
 
@@ -91,6 +94,8 @@ public:
     static QString lockPath();
     // Take the vault's lock now (the app does at start, and retries).
     VaultLock::Result lockVault();
+    // Let it go again (a command line run done with the vault).
+    void unlockVault() { m_lock.release(); }
     // Who holds the vault's lock, as it described itself ("another sync"
     // when it did not).
     QString lockHolder() const;
@@ -100,6 +105,9 @@ public:
     // icloud-notes-sync is on PATH.
     bool syncToolAvailable() const;
     QString vaultTitleMode() const;
+    // The account's default folder ("Notes"), vault-relative; empty when
+    // the sync tool's state does not say.
+    QString defaultFolder() const;
     QString currentFolder() const { return m_currentFolder; }
     void setCurrentFolder(const QString &folder);
     QStringList notes() const { return m_notes; }
@@ -169,6 +177,11 @@ public:
     Q_INVOKABLE void newNote(const QString &name);
     Q_INVOKABLE QString deleteCurrentNote();
     Q_INVOKABLE QString renameCurrentNote(const QString &title);
+    // Move the open note to another existing folder (vault-relative, ""
+    // for the root), as a mv on disk does: the next push moves it in Notes.
+    // Refused for a read-only note, one with attachments (their links are
+    // relative to its folder) and a name the folder already has.
+    Q_INVOKABLE QString moveCurrentNote(const QString &folder);
     // Keep one side of each conflict block ("local", "remote" or "both").
     Q_INVOKABLE QString resolveConflicts(const QStringList &choices);
     // A note with unreadable conflict markers: "strip" keeps every line
@@ -211,6 +224,14 @@ public:
     // Re-reads icloud-session's properties in the background (changes also
     // arrive on their own); keeps the day count current in an app left open.
     Q_INVOKABLE void refreshSignIn();
+
+    // Runs of pull and push pass --json to icloud-notes-sync, so its result
+    // is in lastOutput() (the command line's --json).
+    void setToolJson(bool json) { m_toolJson = json; }
+    // The last icloud-notes-sync run's exit code and stdout, as they were
+    // when syncFinished was emitted for it.
+    int lastExitCode() const { return m_lastExit; }
+    QByteArray lastOutput() const { return m_captured; }
 
 signals:
     void foldersChanged();
@@ -362,6 +383,8 @@ private:
     QDBusServiceWatcher *m_sessionWatcher = nullptr;
     int m_sessionCalls = 0; // icloud-session method calls awaiting an answer
     const Role m_role;
+    bool m_toolJson = false;
+    int m_lastExit = 0;
     VaultLock m_lock;
     // Runs while someone else holds the lock: a sync asked for meanwhile
     // starts once it is free, never before.

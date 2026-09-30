@@ -235,7 +235,8 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         // exits while idle, what it last said still holds.
         connect(m_sessionWatcher, &QDBusServiceWatcher::serviceRegistered, this, &NotesBackend::refreshSignIn);
     }
-    refreshSignIn();
+    if (m_role != Role::Cli) // a command that needs the sign-in reads it itself
+        refreshSignIn();
     refresh();
     setSyncMessage(!syncToolAvailable() ? kNotInstalledMessage
                    : cloned()           ? QStringLiteral("Ready.")
@@ -295,7 +296,8 @@ QString NotesBackend::lockPath()
 
 VaultLock::Result NotesBackend::lockVault()
 {
-    const QString owner = m_role == Role::App ? QStringLiteral("Notes (pid %1)")
+    const QString owner = m_role == Role::App      ? QStringLiteral("Notes (pid %1)")
+                        : m_role == Role::Cli ? QStringLiteral("the icloud-notes command line (pid %1)")
                                               : QStringLiteral("a background sync (icloud-notes --sync, pid %1)");
     return m_lock.tryLock(owner.arg(QCoreApplication::applicationPid()));
 }
@@ -398,6 +400,11 @@ bool NotesBackend::syncToolAvailable() const
 QString NotesBackend::vaultTitleMode() const
 {
     return SyncModel::readTitleMode(stateJson());
+}
+
+QString NotesBackend::defaultFolder() const
+{
+    return SyncModel::defaultFolderDir(stateJson());
 }
 
 QString NotesBackend::noteBody() const
@@ -536,7 +543,8 @@ void NotesBackend::classifyNotes()
         scans.insert(path, scan);
         details.insert(name, QVariantMap{ { QStringLiteral("title"), scan.title },
                                           { QStringLiteral("snippet"), scan.snippet },
-                                          { QStringLiteral("modifiedMs"), scan.modifiedMs } });
+                                          { QStringLiteral("modifiedMs"), scan.modifiedMs },
+                                          { QStringLiteral("id"), scan.id } });
         QStringList flags;
         if (scan.conflict)
             flags << QStringLiteral("conflict");
@@ -863,6 +871,37 @@ QString NotesBackend::renameCurrentNote(const QString &title)
     return {};
 }
 
+QString NotesBackend::moveCurrentNote(const QString &folder)
+{
+    if (m_currentNote.isEmpty())
+        return QStringLiteral("No note selected.");
+    if (!m_readOnlyReason.isEmpty())
+        return QStringLiteral("This note is read-only here. Move it in Apple Notes.");
+    if (!m_noteAttachments.isEmpty())
+        return QStringLiteral("This note has attachments, whose links are relative to its folder. Move it in Apple Notes.");
+    if (!m_folders.contains(folder))
+        return QStringLiteral("No folder \"%1\".").arg(folder);
+    if (folder == m_currentFolder)
+        return {};
+    const QString target = QDir(folderAbsolutePath(folder)).filePath(m_currentNote);
+    if (QFile::exists(target))
+        return QStringLiteral("A note with that name already exists in that folder.");
+    if (!QFile::rename(noteAbsolutePath(), target))
+        return QStringLiteral("Could not move the file.");
+    const QString name = m_currentNote;
+    m_lostNote = {};
+    m_currentFolder = folder;
+    emit currentFolderChanged();
+    m_currentNote = name;
+    emit currentNoteChanged();
+    rebuildFolders();
+    rebuildNotes();
+    loadCurrentNote();
+    rewatch();
+    emit vaultChanged();
+    return {};
+}
+
 QVariantList NotesBackend::noteConflicts() const
 {
     const QList<SyncModel::ConflictHunk> hunks = SyncModel::parseConflicts(m_noteContent);
@@ -1147,12 +1186,14 @@ void NotesBackend::continueClone()
 
 void NotesBackend::runPull()
 {
-    startSync(Mode::Plain, { QStringLiteral("pull") }, QStringLiteral("Pull"));
+    const QStringList json = m_toolJson ? QStringList{ QStringLiteral("--json") } : QStringList();
+    startSync(Mode::Plain, json + QStringList{ QStringLiteral("pull") }, QStringLiteral("Pull"));
 }
 
 void NotesBackend::runPush()
 {
-    startSync(Mode::Plain, { QStringLiteral("push") }, QStringLiteral("Push"));
+    const QStringList json = m_toolJson ? QStringList{ QStringLiteral("--json") } : QStringList();
+    startSync(Mode::Plain, json + QStringList{ QStringLiteral("push") }, QStringLiteral("Push"));
 }
 
 void NotesBackend::runSync()
@@ -1210,6 +1251,7 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
 
 void NotesBackend::finishSync(int exitCode)
 {
+    m_lastExit = exitCode;
     m_syncRunning = false;
     emit syncRunningChanged();
     // Exit 3 is an answer, not a failure: status has entries to push, or

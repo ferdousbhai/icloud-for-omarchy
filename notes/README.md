@@ -190,6 +190,47 @@ systemctl --user daemon-reload
 systemctl --user enable --now icloud-notes-background.timer
 ```
 
+## Command line
+
+`icloud-notes <command>` does from a terminal (or an agent) whatever the
+window does, with no window and no display: the same rules (read-only
+notes, the save checks, trash semantics, the version picker), through the
+same code. `icloud-notes help` lists the commands and `icloud-notes
+COMMAND --help` describes one, with its JSON.
+
+```bash
+icloud-notes status                       # vault, sign-in, lock holder, flagged notes
+icloud-notes list [--folder F] [--flag conflict]
+icloud-notes read "Groceries"             # a path in the vault, an apple-note-id, or a unique title
+icloud-notes search milk
+icloud-notes new "Groceries" --body "bread" [--folder Notes] [--push]
+icloud-notes write Groceries --append --body "- [ ] jam" [--push]
+icloud-notes rename|move|delete|toggle ...
+icloud-notes resolve NOTE --all local|remote|both   # or --choices local,both,...
+icloud-notes recover NOTE --strip|--synced          # unreadable conflict markers
+icloud-notes new-folder|rename-folder|delete-folder ...
+icloud-notes sync | pull | push [--dry-run] | clone
+icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
+```
+
+- Every command takes `--json`: the result as JSON on stdout, an error as
+  one JSON line on stderr, `{"error":{"code","message","exit_code","hint"}}`.
+- Exit codes: 0 ok, 1 error, 2 sign-in required (`icloud-session
+  sign-in`), 3 `push --dry-run` has changes or `diff` found differences,
+  64 usage: the table every iCloud tool shares
+  ([docs/CLI.md](../docs/CLI.md)).
+- Commands that change the vault or sync take the vault's lock first, as
+  the window and the background sync do. While the window is open it holds
+  that lock, so they are refused at once (`vault_busy`): make the change in
+  the window, or quit it. A background sync is waited for (30 s, or
+  `--wait SECS`). Reading never needs the lock.
+- A change stays on this computer until the next sync (the window's, the
+  background timer's, or `icloud-notes sync`); `--push` on any change runs
+  one right after it.
+- `delete`, `delete-folder` and `restore` ask on a terminal and need
+  `--yes` otherwise. Nothing else ever asks.
+- `--vault DIR` works on another vault (tests use a scratch one).
+
 ## Your files
 
 Each note is one `.md` file. A small ID block at the top of every file
@@ -232,6 +273,9 @@ away local edits on one note and go back to the last synced copy:
 cd ~/Documents/icloud-notes
 icloud-notes-sync restore "<note file>"
 ```
+
+With Notes closed, `icloud-notes restore "<note>" --yes` does the same
+under the vault's lock.
 
 ## Credits
 

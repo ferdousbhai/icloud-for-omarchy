@@ -37,7 +37,8 @@ prepare() {
 
 build() {
   cd "$srcdir/$pkgname/notes"
-  ./bin/build
+  # `icloud-notes --version` prints it.
+  ICLOUD_NOTES_VERSION="$pkgver" ./bin/build
 }
 
 package() {
