@@ -15,6 +15,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use icloud_findmy::models::now_ms;
 use serde_json::{Value, json};
 
 /// One server's state: how far the iPhone has walked, and the actions sent.
@@ -36,13 +37,6 @@ impl State {
 fn fixture(name: &str) -> Value {
     let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("fixture JSON")
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// Re-stamps every fresh fix with "now" (old fixes keep their age) and moves
@@ -120,12 +114,8 @@ fn handle(mut request: tiny_http::Request, state: &State) -> std::io::Result<()>
     )
 }
 
-/// Serves requests on `listener` forever, one thread per request.
-pub fn serve(listener: TcpListener) -> std::io::Result<()> {
-    serve_with(listener, Arc::default())
-}
-
-/// [`serve`] with a state the caller keeps, to read the recorded actions.
+/// Serves requests on `listener` forever, one thread per request, recording
+/// actions into `state`.
 pub fn serve_with(listener: TcpListener, state: Arc<State>) -> std::io::Result<()> {
     let server = tiny_http::Server::from_listener(listener, None).map_err(std::io::Error::other)?;
     for request in server.incoming_requests() {
@@ -139,12 +129,12 @@ pub fn serve_with(listener: TcpListener, state: Arc<State>) -> std::io::Result<(
     Ok(())
 }
 
-#[allow(dead_code)] // tests/fake_server.rs includes this file for `serve`.
+#[allow(dead_code)] // tests/cli.rs includes this file.
 fn main() -> std::io::Result<()> {
     let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8765".into());
     let listener = TcpListener::bind(&addr)?;
     let base = format!("http://{}", listener.local_addr()?);
     eprintln!("Fake Find My on {base}");
     eprintln!("Run the app with: ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL={base} cargo run");
-    serve(listener)
+    serve_with(listener, Arc::default())
 }
