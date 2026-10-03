@@ -131,7 +131,7 @@ $ icloud-photos --json download AQx... --out ~/Downloads/holiday
 |---|---|
 | `status` (exit 2 signed out), `sync [--full]` | state; refresh the catalog |
 | `albums`, `list [--album ID] [--since DATE] [--kind photo\|video\|live] [--limit N]`, `info ID` | read the catalog |
-| `thumb ID [--out P]`, `download ID... \| --all [--medium] [--out DIR]`, `open ID` | fetch (originals go to `~/Pictures/iCloud` unless `--out`) |
+| `thumb ID [--out P]`, `download ID... \| --all [--medium] [--out DIR]`, `open ID` | fetch (originals go to `~/Pictures/icloud-photos` unless `--out`) |
 | `upload FILE... [--album ID] [--no-sync]` | upload, then (unless `--no-sync`) sync until the new ids are in the catalog |
 | `delete ID... --yes` | to Recently Deleted on every device |
 | `config [--library-dir DIR] [--download on-demand\|all]`, `prune-cache` | preferences, cache |

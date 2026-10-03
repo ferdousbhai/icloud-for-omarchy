@@ -47,7 +47,7 @@ target/release/icloud-photos
   between photos. The viewer shows iCloud's large preview; Live Photos and
   videos are marked.
 - **Download** (`Ctrl+S` in the viewer) saves the original to
-  `~/Pictures/iCloud/<year>/<month>/`, keeping Apple's file name (a second
+  `~/Pictures/icloud-photos/<year>/<month>/`, keeping Apple's file name (a second
   `IMG_0001.HEIC` from the same month becomes `IMG_0001 (2).HEIC`). A Live
   Photo brings its video half along as the matching `.MOV`.
 - **Open** (`Ctrl+O`) downloads the original if needed and opens it in your
@@ -109,7 +109,7 @@ the same sign-in, catalog, cache and library folder as the app.
 
 | what | where |
 |---|---|
-| originals you downloaded | `~/Pictures/iCloud/` (changeable in Preferences) |
+| originals you downloaded | `~/Pictures/icloud-photos/` (changeable in Preferences) |
 | catalog (what is in your library) | `~/.local/share/icloud-photos/catalog.db` |
 | thumbnails and viewer previews | `~/.cache/icloud-photos/{thumbs,medium}/` |
 | preferences | `~/.config/icloud-photos/settings.json` |

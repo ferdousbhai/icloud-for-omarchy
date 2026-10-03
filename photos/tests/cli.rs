@@ -569,7 +569,7 @@ fn without_data_dir_it_uses_the_xdg_directories() {
     assert_eq!(s["assets"], 3);
     assert_eq!(
         s["library_dir"].as_str().map(PathBuf::from),
-        Some(home.join("Pictures/iCloud"))
+        Some(home.join("Pictures/icloud-photos"))
     );
     assert_eq!(
         s["cache_dir"].as_str().map(PathBuf::from),
@@ -586,4 +586,21 @@ fn without_data_dir_it_uses_the_xdg_directories() {
             .is_some_and(|p| Path::new(p).starts_with(home.join("xdg-cache/icloud-photos/thumbs")))
     );
     assert!(!env.data().exists());
+}
+
+#[test]
+fn the_library_sits_in_the_xdg_pictures_directory() {
+    let env = Env::new("xdg-pictures", 0);
+    let home = env.root.join("home");
+    std::fs::create_dir_all(home.join("xdg-config")).unwrap();
+    std::fs::write(
+        home.join("xdg-config/user-dirs.dirs"),
+        "XDG_PICTURES_DIR=\"$HOME/Photos\"\n",
+    )
+    .unwrap();
+    let s: Value = serde_json::from_str(&env.bare(&["--json", "status"]).stdout).unwrap();
+    assert_eq!(
+        s["library_dir"].as_str().map(PathBuf::from),
+        Some(home.join("Photos/icloud-photos"))
+    );
 }

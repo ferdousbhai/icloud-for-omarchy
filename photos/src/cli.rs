@@ -47,7 +47,7 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
     /// Keep the catalog, cache, settings and library all under DIR instead
-    /// of the XDG directories and ~/Pictures/iCloud.
+    /// of the XDG directories and ~/Pictures/icloud-photos.
     #[arg(long, global = true, value_name = "DIR")]
     data_dir: Option<PathBuf>,
     #[command(subcommand)]

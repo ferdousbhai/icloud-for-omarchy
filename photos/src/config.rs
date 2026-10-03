@@ -17,6 +17,26 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
         .unwrap_or_else(|| home().join(fallback))
 }
 
+/// The XDG Pictures directory, read from `user-dirs.dirs` as Qt's
+/// PicturesLocation reads it (Notes' vault sits in DocumentsLocation the
+/// same way); `~/Pictures` without one.
+fn pictures() -> PathBuf {
+    let file = xdg("XDG_CONFIG_HOME", ".config").join("user-dirs.dirs");
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let value = line.trim().strip_prefix("XDG_PICTURES_DIR=")?.trim().trim_matches('"');
+                match value.strip_prefix("$HOME") {
+                    Some(rest) => Some(home().join(rest.trim_start_matches('/'))),
+                    None => Some(PathBuf::from(value)).filter(|p| p.is_absolute()),
+                }
+            })
+        })
+        .filter(|p| *p != home())
+        .unwrap_or_else(|| home().join("Pictures"))
+}
+
 #[derive(Debug, Clone)]
 pub struct Dirs {
     /// `~/.local/share/icloud-photos` (catalog.db).
@@ -83,7 +103,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            library_dir: home().join("Pictures").join("iCloud"),
+            library_dir: pictures().join("icloud-photos"),
             download: DownloadMode::OnDemand,
         }
     }
