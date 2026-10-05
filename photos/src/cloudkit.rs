@@ -78,13 +78,30 @@ pub struct Record {
 }
 
 impl Record {
+    /// Parse a borrowed record (its fields are copied).
     pub fn parse(v: &Value) -> Option<Record> {
+        let mut r = Self::header(v)?;
+        r.fields = v.get("fields").and_then(Value::as_object).cloned().unwrap_or_default();
+        Some(r)
+    }
+
+    /// Parse a record the caller owns: its fields are moved, not copied
+    /// (a page of 200 records carries a few hundred KB of them).
+    pub fn from_value(mut v: Value) -> Option<Record> {
+        let mut r = Self::header(&v)?;
+        if let Some(Value::Object(fields)) = v.get_mut("fields").map(Value::take) {
+            r.fields = fields;
+        }
+        Some(r)
+    }
+
+    fn header(v: &Value) -> Option<Record> {
         Some(Record {
             name: v.get("recordName")?.as_str()?.to_owned(),
             record_type: v.get("recordType").and_then(Value::as_str).map(str::to_owned),
             change_tag: v.get("recordChangeTag").and_then(Value::as_str).map(str::to_owned),
             deleted: v.get("deleted").and_then(Value::as_bool).unwrap_or(false),
-            fields: v.get("fields").and_then(Value::as_object).cloned().unwrap_or_default(),
+            fields: serde_json::Map::new(),
             created_ms: v.pointer("/created/timestamp").and_then(Value::as_i64),
         })
     }
@@ -427,11 +444,11 @@ impl<'t> CloudKit<'t> {
         if let Some(c) = continuation {
             body["continuationMarker"] = json!(c);
         }
-        let v = self.post("records/query", &body)?;
+        let mut v = self.post("records/query", &body)?;
         Ok(QueryPage {
-            records: records_of(&v),
             continuation: v.get("continuationMarker").and_then(Value::as_str).map(str::to_owned),
             sync_token: v.get("syncToken").and_then(Value::as_str).map(str::to_owned),
+            records: records_of(&mut v),
         })
     }
 
@@ -520,14 +537,23 @@ impl<'t> CloudKit<'t> {
     /// returned the CPLContainerRelation records.
     pub fn album_members(&self, album_id: &str) -> Result<Vec<Relation>> {
         let mut out: Vec<Relation> = Vec::new();
+        // asset id -> its place in `out`: one relation per asset, the
+        // CPLContainerRelation (which has an id) winning over a bare CPLAsset.
+        let mut at: HashMap<String, usize> = HashMap::new();
         self.list_assets(LIST_ALBUM_MEMBERS, &[string_filter("parentId", album_id)], |records| {
             for r in records {
                 if r.is_type("CPLContainerRelation") {
                     if let Some(rel) = Relation::from_record(r).filter(|rel| !rel.deleted) {
-                        out.retain(|o| o.asset_id != rel.asset_id);
-                        out.push(rel);
+                        match at.get(&rel.asset_id) {
+                            Some(&i) => out[i] = rel,
+                            None => {
+                                at.insert(rel.asset_id.clone(), out.len());
+                                out.push(rel);
+                            }
+                        }
                     }
-                } else if r.is_type("CPLAsset") && !out.iter().any(|o| o.asset_id == r.name) {
+                } else if r.is_type("CPLAsset") && !at.contains_key(&r.name) {
+                    at.insert(r.name.clone(), out.len());
                     out.push(Relation {
                         id: String::new(),
                         album_id: album_id.to_owned(),
@@ -560,19 +586,15 @@ impl<'t> CloudKit<'t> {
         if let Some(t) = token {
             zone["syncToken"] = json!(t);
         }
-        let v = self.post("changes/zone", &json!({ "zones": [zone], "resultsLimit": PAGE_LIMIT }))?;
+        let mut v = self.post("changes/zone", &json!({ "zones": [zone], "resultsLimit": PAGE_LIMIT }))?;
         let z = v
-            .get("zones")
-            .and_then(Value::as_array)
-            .and_then(|zs| zs.first())
+            .get_mut("zones")
+            .and_then(Value::as_array_mut)
+            .and_then(|zs| zs.first_mut())
             .ok_or_else(|| Error::Other("changes/zone returned no zone".into()))?;
         server_error(z)?;
         Ok(ZoneChanges {
-            records: z
-                .get("records")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Record::parse).collect())
-                .unwrap_or_default(),
+            records: records_of(z),
             sync_token: z
                 .get("syncToken")
                 .and_then(Value::as_str)
@@ -585,11 +607,11 @@ impl<'t> CloudKit<'t> {
     /// Fresh CPLMaster records (download URLs expire) by recordName.
     pub fn lookup_masters(&self, master_ids: &[&str]) -> Result<Vec<MasterInfo>> {
         let records: Vec<Value> = master_ids.iter().map(|id| json!({ "recordName": id })).collect();
-        let v = self.post(
+        let mut v = self.post(
             "records/lookup",
             &json!({ "records": records, "zoneID": Self::zone(), "desiredKeys": DESIRED_KEYS }),
         )?;
-        Ok(records_of(&v)
+        Ok(records_of(&mut v)
             .iter()
             .filter(|r| r.is_type("CPLMaster"))
             .map(MasterInfo::from_record)
@@ -681,11 +703,12 @@ fn server_error(v: &Value) -> Result<()> {
     }
 }
 
-fn records_of(v: &Value) -> Vec<Record> {
-    v.get("records")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Record::parse).collect())
-        .unwrap_or_default()
+/// The `records` of a reply, moved out of it.
+fn records_of(v: &mut Value) -> Vec<Record> {
+    match v.get_mut("records").map(Value::take) {
+        Some(Value::Array(a)) => a.into_iter().filter_map(Record::from_value).collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn string_filter(field: &str, value: &str) -> Value {

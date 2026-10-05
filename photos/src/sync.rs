@@ -188,20 +188,23 @@ pub fn incremental(ck: &CloudKit, cat: &mut Catalog, token: &str, progress: &dyn
             break;
         }
     }
-    apply_changes(ck, cat, &records, &token)
+    apply_changes(ck, cat, records, &token)
 }
 
 /// Apply one batch of changed records and store the new token, atomically.
-fn apply_changes(ck: &CloudKit, cat: &mut Catalog, records: &[Record], new_token: &str) -> Result<Report> {
-    // Later changes to the same record win.
-    let mut latest: HashMap<&str, &Record> = HashMap::new();
-    let mut order: Vec<&str> = Vec::new();
-    for r in records {
-        if latest.insert(r.name.as_str(), r).is_none() {
-            order.push(r.name.as_str());
+fn apply_changes(ck: &CloudKit, cat: &mut Catalog, all: Vec<Record>, new_token: &str) -> Result<Report> {
+    // Later changes to the same record win, in the place of its first one.
+    let mut at: HashMap<String, usize> = HashMap::with_capacity(all.len());
+    let mut records: Vec<Record> = Vec::with_capacity(all.len());
+    for r in all {
+        match at.get(&r.name) {
+            Some(&i) => records[i] = r,
+            None => {
+                at.insert(r.name.clone(), records.len());
+                records.push(r);
+            }
         }
     }
-    let records: Vec<Record> = order.iter().map(|n| latest[n].clone()).collect();
 
     let Paired {
         assets: paired,

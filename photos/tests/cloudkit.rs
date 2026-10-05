@@ -179,6 +179,42 @@ fn album_members_use_relations_or_assets() {
 }
 
 #[test]
+fn album_members_keep_one_entry_per_asset_preferring_the_relation() {
+    let rel = |asset: &str| {
+        json!({ "recordName": format!("{asset}-IN-A"), "recordType": "CPLContainerRelation",
+                "fields": { "containerId": { "value": "A" }, "itemId": { "value": asset } } })
+    };
+    let asset = |name: &str| json!({ "recordName": name, "recordType": "CPLAsset", "fields": {} });
+    let page = json!({ "records": [
+        asset("X1"), rel("X1"), asset("X2"), asset("X2"), rel("X3"), asset("X3"), rel("X1"),
+        { "recordName": "M", "recordType": "CPLMaster", "fields": {} },
+    ] });
+    let t = FixtureTransport::new(move |call| {
+        Ok(if call.filter("startRank") == Some(&json!(0)) {
+            page.clone()
+        } else {
+            json!({ "records": [] })
+        })
+    });
+    let ck = CloudKit::connect(&t).unwrap();
+    let members = ck.album_members("A").unwrap();
+    let got: Vec<(&str, &str)> = members.iter().map(|r| (r.asset_id.as_str(), r.id.as_str())).collect();
+    assert_eq!(got, vec![("X1", "X1-IN-A"), ("X2", ""), ("X3", "X3-IN-A")]);
+}
+
+#[test]
+fn owned_and_borrowed_parsing_agree() {
+    let v = fixture("assets_page1.json");
+    for r in v["records"].as_array().unwrap() {
+        let (a, b) = (Record::parse(r).unwrap(), Record::from_value(r.clone()).unwrap());
+        assert_eq!(
+            (&a.name, &a.record_type, &a.change_tag, &a.fields),
+            (&b.name, &b.record_type, &b.change_tag, &b.fields)
+        );
+    }
+}
+
+#[test]
 fn zone_changes_parse_records_tombstones_and_token() {
     let t = FixtureTransport::new(|_| Ok(fixture("zone_changes_page2.json")));
     let ck = CloudKit::connect(&t).unwrap();
