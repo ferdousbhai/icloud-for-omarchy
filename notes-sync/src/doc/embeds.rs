@@ -360,11 +360,13 @@ struct LocalRepresentation {
     table: Option<MatchedTableBlock>,
 }
 
-/// `planEmbedRepresentations`.
+/// `planEmbedRepresentations`. `tracked_file_attachments` maps each file
+/// attachment this note tracks to its link path from the note's directory:
+/// the link pull wrote for it stands for the attachment, as a marker does.
 pub fn plan_embed_representations(
     local_text: &str,
     slots: &[EmbedSlot],
-    tracked_file_attachment_ids: &HashSet<String>,
+    tracked_file_attachments: &HashMap<String, String>,
 ) -> std::result::Result<EmbedRepresentation, String> {
     let units = utf16(local_text);
     let markers = parse_embed_markers(local_text);
@@ -431,10 +433,24 @@ pub fn plan_embed_representations(
                 });
                 continue;
             }
-            if tracked_file_attachment_ids.contains(&reference.attachment_identifier) {
-                return Err(
-                    "this note has a file attachment - it can't be edited through this tool and stays read-only".into(),
-                );
+            if let Some(link_path) = tracked_file_attachments.get(&reference.attachment_identifier) {
+                let link = utf16(&format_attachment_markdown(reference, link_path));
+                let from = representations.last().map_or(0, |r| r.end);
+                let Some(start) = (from..=units.len().saturating_sub(link.len()))
+                    .find(|&i| units.len() >= link.len() && units[i..i + link.len()] == link[..])
+                else {
+                    return Err(format!(
+                        "the link to the attachment \"{}\" was removed, changed or moved - attachments can only be \
+                         removed or moved in Notes itself; put the link back as it was",
+                        posix::basename(link_path)
+                    ));
+                };
+                representations.push(LocalRepresentation {
+                    start,
+                    end: start + link.len(),
+                    table: None,
+                });
+                continue;
             }
             return Err(format!(
                 "the embed marker for \"{}\" ({}) is missing - markers must be left exactly as this tool wrote them",

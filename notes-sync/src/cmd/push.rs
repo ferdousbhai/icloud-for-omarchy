@@ -1036,16 +1036,7 @@ pub fn build_push_plan(
 
         let modification_date_ms = mtime_ms(&target_dir.join(&c.entry.file))?;
         let zone = note_zone(c.entry.shared_zone_owner.as_deref());
-        let tracked_ids: HashSet<String> = state
-            .attachments
-            .as_ref()
-            .map(|a| {
-                a.iter()
-                    .filter(|(_, att)| att.note_record_name == c.record_name)
-                    .map(|(k, _)| k.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let tracked_ids = note_attachment_links(&state, &c.record_name, &c.entry.file);
         let prepared = prepare_update(
             db,
             &zone,
@@ -1225,7 +1216,7 @@ fn prepare_update<T: Transport>(
     record: &CloudKitRecord,
     entry: &NoteEntry,
     local_text: &str,
-    tracked_ids: &HashSet<String>,
+    tracked_ids: &HashMap<String, String>,
     replica: &[u8; 16],
     modification_date_ms: i64,
     title_mode: TitleMode,
@@ -1301,7 +1292,7 @@ fn prepare_embed_candidate<T: Transport>(
     classified: &DecodedNote,
     entry: &NoteEntry,
     local_text: &str,
-    tracked_ids: &HashSet<String>,
+    tracked_ids: &HashMap<String, String>,
     replica: &[u8; 16],
     modification_date_ms: i64,
     requested_title: Option<&str>,
@@ -1616,6 +1607,19 @@ fn apply_local_note_deletion(
     Ok(local)
 }
 
+/// The file attachments a note tracks, each with its link path from the
+/// note's directory (what pull wrote into the note for it).
+fn note_attachment_links(state: &CloneState, record_name: &str, note_file: &str) -> HashMap<String, String> {
+    let note_dir = note_dir_of(note_file);
+    state
+        .attachments
+        .iter()
+        .flatten()
+        .filter(|(_, att)| att.note_record_name == record_name)
+        .map(|(k, att)| (k.clone(), posix::relative(&note_dir, &att.file)))
+        .collect()
+}
+
 /// `rememberTrashedNote` (delete.ts).
 fn remember_trashed_note(state: &mut CloneState, record_name: &str, file: &str) {
     let trashed = state.trashed.get_or_insert_with(IndexMap::new);
@@ -1773,16 +1777,7 @@ fn execute<T: Transport>(
             let text = read_text(&target_dir.join(to_file))?.unwrap_or_default();
             let local_text = split_frontmatter(&text, split_options(state.mode())).body;
             // The edit made along with the move goes up now, not a sync later.
-            let tracked_ids: HashSet<String> = state
-                .attachments
-                .as_ref()
-                .map(|a| {
-                    a.iter()
-                        .filter(|(_, att)| att.note_record_name == *record_name)
-                        .map(|(k, _)| k.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let tracked_ids = note_attachment_links(state, record_name, to_file);
             let prepared = prepare_update(
                 db,
                 &private,

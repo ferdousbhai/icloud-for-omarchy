@@ -1,7 +1,7 @@
 //! Ports icloud-md `src/notes/embedPushEdit.test.ts`. Table markdown below is
 //! icloud-md's `renderMarkdownTable` output, spelled out.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use icloud_notes_sync::doc::embeds::{
     AttachmentReference, EmbedMarkerContent, EmbedRepresentation, EmbedSlot, format_embed_marker,
@@ -41,8 +41,8 @@ fn refusal(result: Result<EmbedRepresentation, String>) -> String {
     result.expect_err("expected a refusal")
 }
 
-fn none() -> HashSet<String> {
-    HashSet::new()
+fn none() -> HashMap<String, String> {
+    HashMap::new()
 }
 
 const O: &str = "\u{fffc}";
@@ -147,18 +147,26 @@ fn a_hand_added_marker_with_nothing_behind_it_refuses_the_push() {
     assert!(reason.contains("nothing behind it"), "{reason}");
 }
 
+/// The link pull wrote for a file attachment stands for it: text around it
+/// can be edited, and the attachment goes back where it was.
 #[test]
-fn a_file_attachment_tracked_from_pull_keeps_the_read_only_refusal() {
-    let tracked: HashSet<String> = ["FILE-1".to_string()].into();
-    let reason = refusal(plan_embed_representations(
-        "![photo](attachments/photo.jpeg)",
+fn a_file_attachment_link_maps_back_to_its_placeholder() {
+    let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();
+    let plan = ok(plan_embed_representations(
+        "Edited intro\n![photo.jpeg](attachments/photo.jpeg)\nmore",
         &[slot("FILE-1", "public.jpeg")],
         &tracked,
     ));
-    assert_eq!(
-        reason,
-        "this note has a file attachment - it can't be edited through this tool and stays read-only"
-    );
+    assert_eq!(plan.reconstructed_body_text, format!("Edited intro\n{O}\nmore"));
+}
+
+#[test]
+fn a_removed_or_changed_attachment_link_refuses_the_push() {
+    let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();
+    for text in ["prose only", "![photo.jpeg](attachments/other.jpeg)"] {
+        let reason = refusal(plan_embed_representations(text, &[slot("FILE-1", "public.jpeg")], &tracked));
+        assert!(reason.contains("attachments can only be removed or moved in Notes"), "{reason}");
+    }
 }
 
 #[test]
