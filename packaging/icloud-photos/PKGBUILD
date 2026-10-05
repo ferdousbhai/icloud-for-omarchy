@@ -51,7 +51,9 @@ _cargo_env() {
 build() {
   cd "$srcdir/$pkgname"
   _cargo_env
-  cargo build --frozen --release -p icloud-photos --bin icloud-photos
+  # icloud-photos: the command line (no GTK linked), which runs
+  # icloud-photos-app, the window, when given no arguments.
+  cargo build --frozen --release -p icloud-photos --bin icloud-photos --bin icloud-photos-app
 }
 
 check() {
@@ -63,6 +65,7 @@ check() {
 package() {
   cd "$srcdir/$pkgname"
   install -Dm755 target/release/icloud-photos "$pkgdir/usr/bin/icloud-photos"
+  install -Dm755 target/release/icloud-photos-app "$pkgdir/usr/bin/icloud-photos-app"
   install -Dm644 photos/data/com.ferdousbhai.IcloudPhotos.desktop "$pkgdir/usr/share/applications/com.ferdousbhai.IcloudPhotos.desktop"
   install -Dm644 photos/data/com.ferdousbhai.IcloudPhotos.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.ferdousbhai.IcloudPhotos.svg"
   install -Dm644 photos/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"

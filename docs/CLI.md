@@ -15,10 +15,10 @@ to the command that does it, then fixes the conventions all the tools share.
 
 `icloud-notes`, `icloud-photos` and `icloud-findmy` open their window when
 run with no arguments, and run a command without GTK/Qt GUI initialization
-when given one. `icloud-findmy` goes further: it is a command-line binary
-with no GTK linked in (a command starts in milliseconds, not after loading
-the GTK stack), and with no arguments it runs the window,
-`icloud-findmy-app`, which the desktop entry also runs.
+when given one. `icloud-photos` and `icloud-findmy` go further: each is a
+command-line binary with no GTK linked in (a command starts in milliseconds,
+not after loading the GTK stack), and with no arguments it runs the window,
+`icloud-photos-app` or `icloud-findmy-app`, which the desktop entry also runs.
 
 ## The audit: GUI feature → command
 

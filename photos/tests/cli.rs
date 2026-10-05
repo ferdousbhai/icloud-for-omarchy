@@ -167,6 +167,41 @@ fn usage_help_and_exit_codes() {
 }
 
 #[test]
+fn no_arguments_runs_the_app_in_its_place() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new("app", 1);
+    let app = env.root.join("fake-app");
+    std::fs::write(&app, "#!/bin/sh\necho \"app args:$#\"\nexit 7\n").unwrap();
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let r = env.bare_with(&[], &[("ICLOUD_PHOTOS_APP", &app)]);
+    assert_eq!((r.code, r.stdout.trim()), (7, "app args:0"), "{}", r.stderr);
+    // Without it, the app binary beside this one (cargo builds both).
+    let beside = Path::new(env!("CARGO_BIN_EXE_icloud-photos")).with_file_name("icloud-photos-app");
+    assert_eq!(beside, Path::new(env!("CARGO_BIN_EXE_icloud-photos-app")));
+    // A missing app is an error, not a hang.
+    let r = env.bare_with(&[], &[("ICLOUD_PHOTOS_APP", &env.root.join("nope"))]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("cannot open the app"), "{}", r.stderr);
+}
+
+#[test]
+fn the_command_line_links_no_gtk() {
+    let Ok(out) = Command::new("ldd").arg(env!("CARGO_BIN_EXE_icloud-photos")).output() else {
+        return; // no ldd here
+    };
+    let libs = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !libs.contains("libgtk") && !libs.contains("libadwaita") && !libs.contains("libglib"),
+        "{libs}"
+    );
+    let out = Command::new("ldd")
+        .arg(env!("CARGO_BIN_EXE_icloud-photos-app"))
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("libgtk-4"));
+}
+
+#[test]
 fn status_and_sync() {
     let env = Env::new("status", 12);
     let s = env.json(&["status"]);

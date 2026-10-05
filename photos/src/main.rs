@@ -1,41 +1,37 @@
-//! iCloud Photos for Omarchy: the app with no arguments, the command-line
-//! interface (`src/cli.rs`, no GTK) with any.
+//! `icloud-photos`: the command-line interface (`src/cli.rs`), with no GTK
+//! linked in, so a command starts in milliseconds instead of loading the
+//! toolkit's hundred-odd shared libraries. With no arguments it opens the
+//! app by running `icloud-photos-app` (`src/app.rs`) in its place.
 
 mod cli;
-mod ui;
 
-use adw::prelude::*;
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::{Command, ExitCode};
 
-const APP_ID: &str = "com.ferdousbhai.IcloudPhotos";
+/// The window's binary, installed next to this one.
+const APP_BIN: &str = "icloud-photos-app";
 
-fn main() -> std::process::ExitCode {
+fn main() -> ExitCode {
     if std::env::args_os().len() > 1 {
         return cli::main();
     }
-    gui().into()
+    let app = app_binary();
+    // Only returns on failure; on success the app replaces this process.
+    let e = Command::new(&app).arg0(APP_BIN).exec();
+    eprintln!("icloud-photos: cannot open the app ({}): {e}", app.display());
+    ExitCode::FAILURE
 }
 
-fn gui() -> gtk::glib::ExitCode {
-    gtk::glib::set_prgname(Some("icloud-photos"));
-    gtk::glib::set_application_name("iCloud Photos");
-    let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_startup(|_| {
-        let css = gtk::CssProvider::new();
-        css.load_from_string(ui::CSS);
-        if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        }
-    });
-    app.connect_activate(|app| {
-        if let Some(w) = app.active_window() {
-            w.present();
-            return;
-        }
-        ui::window::build(app).start();
-    });
-    let quit = gtk::gio::SimpleAction::new("quit", None);
-    let a = app.clone();
-    quit.connect_activate(move |_, _| a.quit());
-    app.add_action(&quit);
-    app.run()
+/// `$ICLOUD_PHOTOS_APP` (tests, development), else `icloud-photos-app`
+/// beside this executable, else whichever one is on `PATH`.
+fn app_binary() -> PathBuf {
+    if let Some(p) = std::env::var_os("ICLOUD_PHOTOS_APP").filter(|p| !p.is_empty()) {
+        return p.into();
+    }
+    std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name(APP_BIN))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| APP_BIN.into())
 }

@@ -35,7 +35,7 @@ describes), from the repository root:
 
 ```bash
 bin/build icloud-photos
-target/release/icloud-photos
+target/release/icloud-photos       # or target/release/icloud-photos-app
 ```
 
 ## Everyday use
@@ -68,9 +68,13 @@ target/release/icloud-photos
 
 ## Command line
 
-The same binary is a command-line tool: `icloud-photos` with no arguments
-opens the app; `icloud-photos <command>` runs without GTK or a display, over
-the same sign-in, catalog, cache and library folder as the app.
+`icloud-photos` is also the command-line tool: with no arguments it opens
+the app; `icloud-photos <command>` runs without GTK or a display, over the
+same sign-in, catalog, cache and library folder as the app. The package
+ships two binaries: `icloud-photos`, the command line, which links no GTK
+(a command starts in a few milliseconds) and runs `icloud-photos-app`, the
+window, when given no arguments; the desktop entry starts
+`icloud-photos-app` directly.
 
 | command | what it does |
 |---|---|
@@ -167,7 +171,7 @@ deletes and uploads come back through incremental sync:
 
 ```bash
 cargo run --example fake_cloudkit -- --port 8765            # add --signed-out to test the banner
-ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8765 cargo run
+ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8765 cargo run --bin icloud-photos-app
 ```
 
 The command line works the same way, and `--data-dir` keeps it away from
@@ -193,8 +197,10 @@ Layout:
 - `src/upload.rs` upload (verified live, see above)
 - `src/transport.rs` the HTTP seam every module above goes through
 - `src/session.rs` the only file that uses the `icloud-session` client
-- `src/ui/` the GTK 4 / libadwaita app
-- `src/cli.rs` the command line (no GTK), over the same library code
+- `src/ui/` the GTK 4 / libadwaita app, started by `src/app.rs` (`icloud-photos-app`)
+- `src/cli.rs` the command line (no GTK), over the same library code, started
+  by `src/main.rs` (`icloud-photos`, which runs `icloud-photos-app` when given
+  no arguments; `ICLOUD_PHOTOS_APP=path` points it at another build)
 
 `cargo test -p icloud-photos` runs the test suite (fixtures in `tests/fixtures/`, plus
 an end-to-end run against the fake server, and `tests/cli.rs`, which runs

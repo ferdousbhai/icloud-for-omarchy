@@ -6,14 +6,22 @@ description = "iCloud Photos for Omarchy: browse, download, upload and delete, o
 license.workspace = true
 repository.workspace = true
 publish = false
+# `cargo run` is the command line; `cargo run --bin icloud-photos-app` the window.
+default-run = "icloud-photos"
 
 [lib]
 name = "icloud_photos"
 path = "src/lib.rs"
 
+# The command line; with no arguments it runs the app. Links no GTK.
 [[bin]]
 name = "icloud-photos"
 path = "src/main.rs"
+
+# The window (GTK 4, libadwaita).
+[[bin]]
+name = "icloud-photos-app"
+path = "src/app.rs"
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
