@@ -74,6 +74,11 @@ pub trait Transport: Send + Sync {
     fn post_file(&self, url: &str, content_type: &str, path: &Path) -> Result<Value>;
     /// Stream `url` to `dest` (temp file + rename). Returns bytes written.
     fn download(&self, url: &str, dest: &Path) -> Result<u64>;
+    /// [`Transport::download`] for a cache file (a thumbnail, a viewer
+    /// image): iCloud still has it, so it isn't flushed to disk.
+    fn download_cache(&self, url: &str, dest: &Path) -> Result<u64> {
+        self.download(url, dest)
+    }
 }
 
 /// The sign-in banner's inputs: icloud-sessiond's `SignedIn` and `SigningIn`.

@@ -73,6 +73,10 @@ impl Transport for SessionTransport {
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {
         Ok(self.session.download(url, dest)?)
     }
+
+    fn download_cache(&self, url: &str, dest: &Path) -> Result<u64> {
+        Ok(self.session.download_cache(url, dest)?)
+    }
 }
 
 /// The daemon's current `SignedIn` / `SigningIn` properties (one D-Bus

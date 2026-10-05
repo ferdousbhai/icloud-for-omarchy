@@ -185,7 +185,12 @@ fn download_fresh(
     let url = url_of(row)
         .cloned()
         .ok_or_else(|| Error::Other(format!("{} has no {job:?} rendition", row.filename)))?;
-    match t.download(&url, dest) {
+    // Originals are kept for good; thumbnails and viewer images are a cache.
+    let get = |url: &str| match job {
+        Job::Original => t.download(url, dest),
+        Job::Thumb | Job::Medium => t.download_cache(url, dest),
+    };
+    match get(&url) {
         Ok(_) => Ok(()),
         Err(e) if e.is_expired_url() => {
             // Another download thread may have refreshed it meanwhile.
@@ -195,7 +200,7 @@ fn download_fresh(
                 _ => refresh(t, cat, row, peers)?,
             };
             let url = url_of(row).cloned().ok_or(e)?;
-            t.download(&url, dest).map(drop)
+            get(&url).map(drop)
         }
         Err(e) => Err(e),
     }
