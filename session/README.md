@@ -220,7 +220,7 @@ output is JSON anyway) an error is one line on stderr,
 |---|---|---|
 | `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | `apple_id`, `dsid`, `cookies` (name, value, domain, path, expires), `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`, and `find_my` (the Find My jar: `cookies`, `client_params`, `captured_at`) once authorized. Session-only cookies (`expires: null`) are kept too. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
-| `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache |
+| `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache; its HTTP cache (`WebKitCache`) is deleted when the last sign-in window closes |
 
 `$XDG_STATE_HOME` defaults to `~/.local/state`, `$XDG_DATA_HOME` to
 `~/.local/share`, `$XDG_CACHE_HOME` to `~/.cache`. Every daemon

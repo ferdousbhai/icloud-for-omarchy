@@ -6,7 +6,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -188,6 +188,17 @@ struct State {
     find_my_last_login: Option<LoginAttempt>,
     /// The last Find My sign-in that worked, and its password's fingerprint.
     find_my_last_ok: Option<(Instant, u64)>,
+    /// Bumped by every [`Daemon::save_account`], so the writes done after
+    /// the lock is dropped never put an older account over a newer one.
+    save_seq: u64,
+}
+
+/// An `account.json` write, taken under the state lock and done after it
+/// with [`Daemon::write`]: the account as it was then (`None`: removed).
+#[must_use = "write it once the state lock is dropped"]
+struct Save {
+    seq: u64,
+    account: Option<Account>,
 }
 
 impl State {
@@ -218,6 +229,9 @@ pub struct Daemon {
     /// `Session()` that handed out a jar due for one), on its own thread so
     /// a slow Apple never holds up a caller or the idle exit.
     refreshing: AtomicBool,
+    /// Sign-in windows running (a sign-in and a hidden Find My one can
+    /// overlap); the last to close clears WebKit's HTTP cache.
+    windows: AtomicUsize,
     /// The open sign-in window, with the `signin_seq` that opened it.
     signin_child: Mutex<Option<(u64, Child)>>,
     /// The keyring holding the Apple ID password (opt-in).
@@ -226,6 +240,8 @@ pub struct Daemon {
     find_my_login_lock: Mutex<()>,
     /// Keys the in-memory password fingerprints (never stored or logged).
     fingerprint_key: RandomState,
+    /// The `save_seq` of the last `account.json` write; held while writing.
+    written: Mutex<u64>,
 }
 
 /// How fresh the session must be before `ensure_fresh` skips `/validate`.
@@ -265,6 +281,7 @@ impl Daemon {
             find_my_block: None,
             find_my_last_login: None,
             find_my_last_ok: None,
+            save_seq: 0,
         };
         let props = state.props();
         Arc::new(Daemon {
@@ -275,10 +292,12 @@ impl Daemon {
             published: Mutex::new(props),
             conn: OnceLock::new(),
             refreshing: AtomicBool::new(false),
+            windows: AtomicUsize::new(0),
             signin_child: Mutex::new(None),
             secrets: secrets::from_env(),
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
+            written: Mutex::new(0),
         })
     }
 
@@ -383,12 +402,41 @@ impl Daemon {
 
     // ------------------------------------------------------------- store
 
-    /// Forgets the account (confirmed 421/401 or `SignOut`).
-    fn forget(&self, st: &mut State) {
+    /// Forgets the account (confirmed 421/401 or `SignOut`); the returned
+    /// [`Save`] removes `account.json`.
+    fn forget(&self, st: &mut State) -> Save {
         st.account = None;
         st.generation += 1;
-        if let Err(e) = files::remove(&self.cfg.paths.account) {
-            eprintln!("icloud-sessiond: removing {}: {e}", self.cfg.paths.account.display());
+        self.save_account(st)
+    }
+
+    /// Takes `account.json`'s next contents (the account now, or none):
+    /// cheap, under the state lock. [`Daemon::write`] it once the lock is
+    /// dropped, so no caller waits on the disk for the state.
+    fn save_account(&self, st: &mut State) -> Save {
+        st.save_seq += 1;
+        Save {
+            seq: st.save_seq,
+            account: st.account.clone(),
+        }
+    }
+
+    /// Writes (or removes) `account.json` as `save` says, unless a later
+    /// [`Save`] got there first. Errors are logged: the session in memory
+    /// is still right, and the next change retries.
+    fn write(&self, save: Save) {
+        let mut written = lock(&self.written);
+        if save.seq <= *written {
+            return;
+        }
+        *written = save.seq;
+        let path = &self.cfg.paths.account;
+        let result = match &save.account {
+            Some(a) => a.save(path).map_err(|e| format!("saving {}: {e}", path.display())),
+            None => files::remove(path).map_err(|e| format!("removing {}: {e}", path.display())),
+        };
+        if let Err(e) = result {
+            eprintln!("icloud-sessiond: {e}");
         }
     }
 
@@ -438,6 +486,7 @@ impl Daemon {
                 generation,
             });
         }
+        let mut save = None;
         let outcome = match result {
             Ok(v) => {
                 if let Some(a) = st.account.as_mut().filter(|_| same) {
@@ -445,14 +494,14 @@ impl Daemon {
                     a.webservices = v.webservices;
                     a.apple_id = v.apple_id;
                     a.validated_at = time::now_secs();
-                    self.save_account(&st);
+                    save = Some(self.save_account(&mut st));
                 }
                 Ok(())
             }
             Err(ValidateError::SignedOut) => {
                 if same {
                     eprintln!("icloud-sessiond: Apple ended the session; signed out");
-                    self.forget(&mut st);
+                    save = Some(self.forget(&mut st));
                 }
                 Err(Refresh::SignedOut)
             }
@@ -466,6 +515,9 @@ impl Daemon {
             }
         };
         drop(st);
+        if let Some(save) = save {
+            self.write(save);
+        }
         self.publish();
         outcome
     }
@@ -522,12 +574,15 @@ impl Daemon {
 
     fn merge_cookies(&self, set_cookies: &[String]) {
         let mut st = lock(&self.state);
-        if let Some(a) = st.account.as_mut()
-            && cookies::merge_set_cookies(&mut a.cookies, set_cookies, time::now_secs())
-        {
-            self.save_account(&st);
-        }
+        let changed = st
+            .account
+            .as_mut()
+            .is_some_and(|a| cookies::merge_set_cookies(&mut a.cookies, set_cookies, time::now_secs()));
+        let save = changed.then(|| self.save_account(&mut st));
         drop(st);
+        if let Some(save) = save {
+            self.write(save);
+        }
         self.publish();
     }
 
@@ -540,16 +595,6 @@ impl Daemon {
         match self.ensure_fresh(Fresh::Confirm) {
             Ok(()) | Err(Refresh::Failed) => lock(&self.state).account.is_some(),
             Err(Refresh::SignedOut) => false,
-        }
-    }
-
-    /// Saves `account.json`. Errors are logged: the session in memory is
-    /// still right, and the next change retries.
-    fn save_account(&self, st: &State) {
-        if let Some(a) = &st.account
-            && let Err(e) = a.save(&self.cfg.paths.account)
-        {
-            eprintln!("icloud-sessiond: saving {}: {e}", self.cfg.paths.account.display());
         }
     }
 
@@ -573,12 +618,16 @@ impl Daemon {
     /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
     fn merge_find_my_cookies(&self, set_cookies: &[String]) {
         let mut st = lock(&self.state);
-        if let Some(f) = st.account.as_mut().and_then(|a| a.find_my.as_mut())
-            && cookies::merge_set_cookies(&mut f.cookies, set_cookies, time::now_secs())
-        {
-            self.save_account(&st);
-        }
+        let changed = st
+            .account
+            .as_mut()
+            .and_then(|a| a.find_my.as_mut())
+            .is_some_and(|f| cookies::merge_set_cookies(&mut f.cookies, set_cookies, time::now_secs()));
+        let save = changed.then(|| self.save_account(&mut st));
         drop(st);
+        if let Some(save) = save {
+            self.write(save);
+        }
         self.publish();
     }
 
@@ -667,7 +716,9 @@ impl Daemon {
             client_params: params,
             captured_at: time::rfc3339_millis(time::now_ms()),
         });
-        self.save_account(&st);
+        let save = self.save_account(&mut st);
+        drop(st);
+        self.write(save);
         Ok(())
     }
 
@@ -679,6 +730,7 @@ impl Daemon {
     fn auto_find_my_login(&self, why: LoginWhy) -> bool {
         let arrived = Instant::now();
         let _one = lock(&self.find_my_login_lock);
+        let mut save = None;
         let (apple_id, dsid, generation) = {
             let mut st = lock(&self.state);
             // Waited behind a sign-in that finished meanwhile: its answer
@@ -698,7 +750,7 @@ impl Daemon {
                 LoginWhy::Reported => {
                     if a.find_my.take().is_some() {
                         eprintln!("icloud-sessiond: Find My asked for the password again");
-                        self.save_account(&st);
+                        save = Some(self.save_account(&mut st));
                     }
                     // Find My refused the session the stored password just
                     // made: signing in again would only do the same.
@@ -716,11 +768,17 @@ impl Daemon {
             let waiting = matches!(st.find_my_block, Some(LoginBlock::Until(t)) if Instant::now() < t);
             if !st.password_stored || waiting {
                 drop(st);
+                if let Some(save) = save {
+                    self.write(save);
+                }
                 self.publish();
                 return false;
             }
             found
         };
+        if let Some(save) = save {
+            self.write(save);
+        }
         self.publish();
         let password: Password = match self.secrets.get(&apple_id) {
             Ok(Some(p)) => p,
@@ -848,6 +906,12 @@ impl Daemon {
         });
     }
 
+    /// Counts a sign-in window in until the guard drops.
+    fn window_opened(&self) -> Window<'_> {
+        self.windows.fetch_add(1, Ordering::SeqCst);
+        Window(self)
+    }
+
     /// Runs the sign-in window hidden in `--find --autofill` mode: it signs
     /// in on Apple's own page with the stored password (showing itself only
     /// if Apple asks for more, like a 2FA code) and prints the jar once Find
@@ -862,7 +926,8 @@ impl Daemon {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| failed(format!("running {}: {e}", bin.display())))?;
+            .map_err(|e| failed(spawn_error(bin, &e)))?;
+        let _window = self.window_opened();
         {
             let mut stdin = child.stdin.take().expect("stdin is piped");
             let mut input = zeroize::Zeroizing::new(format!("{apple_id}\n{password}\n"));
@@ -895,7 +960,7 @@ impl Daemon {
     fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), String> {
         let bin = &self.cfg.signin_bin;
         let cancelled = || "cancelled by SignOut".to_string();
-        let mut stdout = {
+        let (mut stdout, window) = {
             // Spawned under the slot's lock, so a SignOut either sees the
             // child (and kills it) or has already cancelled this sign-in.
             let mut slot = lock(&self.signin_child);
@@ -908,10 +973,10 @@ impl Daemon {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
-                .map_err(|e| format!("running {}: {e}", bin.display()))?;
+                .map_err(|e| spawn_error(bin, &e))?;
             let stdout = child.stdout.take().expect("stdout is piped");
             *slot = Some((seq, child));
-            stdout
+            (stdout, self.window_opened())
         };
         let mut out = Vec::new();
         let read = stdout.read_to_end(&mut out);
@@ -930,6 +995,7 @@ impl Daemon {
         let status = child
             .wait()
             .map_err(|e| format!("waiting for {}: {e}", bin.display()))?;
+        drop(window);
         read.map_err(|e| format!("reading the sign-in window's output: {e}"))?;
         if !status.success() {
             return Err(format!("{} exited with {status} (window closed?)", bin.display()));
@@ -977,7 +1043,9 @@ impl Daemon {
         }
         st.account = Some(account);
         st.generation += 1;
-        self.save_account(&st);
+        let save = self.save_account(&mut st);
+        drop(st);
+        self.write(save);
         Ok(())
     }
 
@@ -999,14 +1067,16 @@ impl Daemon {
             client_params: params,
             captured_at: time::rfc3339_millis(time::now_ms()),
         });
-        self.save_account(&st);
+        let save = self.save_account(&mut st);
+        drop(st);
+        self.write(save);
         Ok(())
     }
 
     /// Forgets the account, closes an open sign-in window (its result is
     /// dropped), then deletes the window's WebKit profile.
     fn sign_out(&self) {
-        {
+        let save = {
             let mut slot = lock(&self.signin_child);
             if let Some((_, mut child)) = slot.take() {
                 let _ = child.kill();
@@ -1016,9 +1086,10 @@ impl Daemon {
             st.signin_seq += 1;
             st.signing_in = false;
             st.last_activity = Instant::now();
-            if st.account.is_some() {
-                self.forget(&mut st);
-            }
+            st.account.is_some().then(|| self.forget(&mut st))
+        };
+        if let Some(save) = save {
+            self.write(save);
         }
         for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
             if let Err(e) = files::remove_dir(dir) {
@@ -1092,6 +1163,36 @@ impl Daemon {
                 self.refresh_in_background();
             }
         }
+    }
+}
+
+/// A running sign-in window ([`Daemon::window_opened`]). When the last one
+/// closes, WebKit's HTTP cache (`WebKitCache`, tens of MB of iCloud's
+/// scripts) goes: a sign-in is rare, and the next one fetches afresh. The
+/// rest of the profile (cookies, device trust, HSTS) stays.
+struct Window<'a>(&'a Daemon);
+
+impl Drop for Window<'_> {
+    fn drop(&mut self) {
+        if self.0.windows.fetch_sub(1, Ordering::SeqCst) == 1 {
+            let dir = self.0.cfg.paths.webkit_cache.join("WebKitCache");
+            if let Err(e) = files::remove_dir(&dir) {
+                eprintln!("icloud-sessiond: removing {}: {e}", dir.display());
+            }
+        }
+    }
+}
+
+/// Why the sign-in window could not be started, saying how to install it
+/// when it is not there.
+fn spawn_error(bin: &std::path::Path, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        format!(
+            "the sign-in window ({}) is not installed; reinstall icloud-session (sudo pacman -S icloud-session)",
+            bin.display()
+        )
+    } else {
+        format!("running {}: {e}", bin.display())
     }
 }
 

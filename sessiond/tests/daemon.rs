@@ -794,7 +794,21 @@ fn sign_in_with_a_fake_window_stores_the_account() {
         "clientBuildNumber": "2530Build12",
         "clientMasteringNumber": "2530Hotfix3",
     });
-    let signin = write_script(dir.path(), "signin", &format!("sleep 0.3\ncat <<'EOF'\n{capture}\nEOF"));
+    // Like WebKit, the window leaves its HTTP cache and HSTS list behind.
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!(
+            r#"w="$XDG_CACHE_HOME/icloud-session/webkit"
+mkdir -p "$w/WebKitCache/Version 16" "$w/HSTS"
+echo js > "$w/WebKitCache/Version 16/blob"
+echo hsts > "$w/HSTS/hsts.db"
+sleep 0.3
+cat <<'EOF'
+{capture}
+EOF"#
+        ),
+    );
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -835,6 +849,10 @@ fn sign_in_with_a_fake_window_stores_the_account() {
         done.expires_at.unwrap() >= now() + 2_592_000 - 10,
         "rotated by validate"
     );
+    // The closed window's HTTP cache is gone; the rest of its profile stays.
+    let webkit_cache = env.root().join("cache/icloud-session/webkit");
+    assert!(!webkit_cache.join("WebKitCache").exists());
+    assert!(webkit_cache.join("HSTS/hsts.db").exists());
 
     // The validate used the captured jar (icloud.com cookies only) and params, no dsid yet.
     let v = &server.requests(VALIDATE)[0];
