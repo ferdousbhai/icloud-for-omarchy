@@ -122,6 +122,11 @@ impl Transport for LiveTransport {
         Ok(self.session.download(url, dest)?)
     }
 
+    /// Straight into memory: no temp file, no fsync.
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        Ok(self.session.get_bytes(url)?)
+    }
+
     /// The session (one shared ureq agent behind an `Arc`) is safe to use
     /// from several threads, so attachment downloads overlap their round
     /// trips and fsyncs with each other and with the rest of the pull.

@@ -78,6 +78,17 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
     s.download("https://cvws.icloud-content.com/B/abc?o=1", &dest).unwrap();
     assert_eq!(fs::read_to_string(&dest).unwrap(), "{\"ok\":true}");
     assert_eq!(seen.lock().unwrap()[1].0, "/B/abc?o=1");
+    let thumb = dir.path().join("cache/thumb.jpg");
+    s.download_cache("https://cvws.icloud-content.com/B/thumb", &thumb)
+        .unwrap();
+    assert_eq!(fs::read_to_string(&thumb).unwrap(), "{\"ok\":true}");
+    assert_eq!(seen.lock().unwrap()[2].0, "/B/thumb");
+    assert_eq!(
+        s.get_bytes("https://cvws.icloud-content.com/B/text?o=2").unwrap(),
+        b"{\"ok\":true}"
+    );
+    assert_eq!(seen.lock().unwrap()[3].0, "/B/text?o=2", "no client params");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2, "no temp file left behind");
 
     assert!(matches!(s.get(&format!("{base}/gone")), Err(Error::SignInRequired)));
     let before = seen.lock().unwrap().len();

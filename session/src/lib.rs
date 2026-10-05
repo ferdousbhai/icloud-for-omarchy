@@ -621,6 +621,10 @@ impl Session {
             .timeout_connect(Duration::from_secs(10))
             .timeout_read(Duration::from_secs(120))
             .timeout_write(Duration::from_secs(120))
+            // Apps download in parallel (thumbnails, attachments): keep an
+            // idle connection per worker rather than ureq's default of one
+            // per host, so a burst reuses its TLS connections.
+            .max_idle_connections_per_host(8)
             .user_agent(concat!("icloud-session/", env!("CARGO_PKG_VERSION")))
             .build();
         Session {
@@ -757,10 +761,44 @@ impl Session {
         Ok(Response { status, body })
     }
 
-    /// Streams a URL to `dest` (written to a temp file, renamed on success),
-    /// creating `dest`'s parent directories as needed. Returns bytes
-    /// written. Cookies attached; no client params appended.
+    /// Streams a URL to `dest` (written to a temp file, fsynced, renamed on
+    /// success), creating `dest`'s parent directories as needed. Returns
+    /// bytes written. Cookies attached; no client params appended. For
+    /// files that must survive a crash (originals, a user's attachments);
+    /// [`Session::download_cache`] skips the fsync for files that can be
+    /// fetched again.
     pub fn download(&self, url: &str, dest: &Path) -> Result<u64> {
+        self.download_to(url, dest, true)
+    }
+
+    /// [`Session::download`] without the fsync, for cache files (thumbnails,
+    /// previews): still a temp file renamed into place, so `dest` is never
+    /// half-written, but after a crash it may be missing or empty and the
+    /// caller fetches it again.
+    pub fn download_cache(&self, url: &str, dest: &Path) -> Result<u64> {
+        self.download_to(url, dest, false)
+    }
+
+    /// GET a URL into memory, as [`Session::download`] fetches it (cookies
+    /// attached, no client params appended), without a temp file.
+    pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let response = self.send(&Request {
+            method: "GET",
+            url,
+            content_type: None,
+            body: Body::None,
+            client_params: false,
+            accept: "*/*",
+        })?;
+        let mut body = Vec::new();
+        response
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| Error::Network(format!("download interrupted: {e}")))?;
+        Ok(body)
+    }
+
+    fn download_to(&self, url: &str, dest: &Path, durable: bool) -> Result<u64> {
         let response = self.send(&Request {
             method: "GET",
             url,
@@ -782,7 +820,9 @@ impl Session {
             let written = io::copy(&mut response.into_reader(), &mut file)
                 .map_err(|e| Error::Network(format!("download interrupted: {e}")))?;
             file.flush()?;
-            file.sync_all()?;
+            if durable {
+                file.sync_all()?;
+            }
             fs::rename(&tmp, dest)?;
             Ok(written)
         })();
