@@ -314,8 +314,9 @@ pub fn run_pull_with(
                     return Ok(());
                 }
                 let existing = tracked.notes.get(&record.record_name).cloned();
-                if source.resynced
-                    && let (Some(existing), Some(tag)) = (&existing, &record.record_change_tag)
+                // Already at this version: a resync re-listing it, or the
+                // push just before this pull writing it. Nothing to apply.
+                if let (Some(existing), Some(tag)) = (&existing, &record.record_change_tag)
                     && *tag == existing.record_change_tag
                 {
                     return Ok(());

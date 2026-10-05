@@ -481,10 +481,13 @@ pub fn read_raw_state_file(target_dir: &Path) -> Result<Option<RawStateFile>, Er
 pub fn write_raw_state_file(target_dir: &Path, state: &RawStateFile) -> Result<(), Error> {
     let dir = target_dir.join(STATE_DIR_NAME);
     std::fs::create_dir_all(&dir)?;
-    write_atomic(
-        &dir.join(STATE_FILE_NAME),
-        to_js_json(&Value::Object(state.clone())).as_bytes(),
-    )?;
+    let path = dir.join(STATE_FILE_NAME);
+    let bytes = to_js_json(&Value::Object(state.clone()));
+    // Unchanged state isn't rewritten: its mtime is what the app watches.
+    if std::fs::read(&path).is_ok_and(|on_disk| on_disk == bytes.as_bytes()) {
+        return Ok(());
+    }
+    write_atomic(&path, bytes.as_bytes())?;
     Ok(())
 }
 
