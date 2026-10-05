@@ -2,9 +2,6 @@
 //! icloud-md PR #29 ("Fetch the text of notes too large to store it inline",
 //! fork branch `fetch-asset-note-bodies`), plus the shared-zone path the PR
 //! also covers (inline after the `records/lookup` backfill).
-//!
-//! These run with asset bodies on (the default); nothing here sets
-//! `ICLOUD_NOTES_SYNC_ASSET_BODIES`.
 
 mod cloudkit_common;
 

@@ -42,7 +42,6 @@ fn run(out: &Path, cassette: &Path, args: &[&str]) -> (i32, Value, String) {
     std::fs::create_dir_all(out.join("home")).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
         .args(args)
-        .env("ICLOUD_NOTES_SYNC_ASSET_BODIES", "0")
         .env("HOME", out.join("home"))
         .env("XDG_RUNTIME_DIR", out.join("home"))
         .env("ICLOUD_NOTES_SYNC_CASSETTE", cassette)

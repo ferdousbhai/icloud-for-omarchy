@@ -7,7 +7,6 @@ set -uo pipefail
 ACCOUNT=${ICLOUD_NOTES_SYNC_ITEST_ACCOUNT:?set ICLOUD_NOTES_SYNC_ITEST_ACCOUNT to an Apple ID or dsid}
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 BIN=${ICLOUD_NOTES_SYNC_BIN:-$REPO/../target/release/icloud-notes-sync}  # the workspace target dir
-ORACLE=${ICLOUD_NOTES_SYNC_ORACLE:-icloud-md}
 FOLDER=${ICLOUD_NOTES_SYNC_ITEST_FOLDER:-icloud-notes-sync-itest}
 RUN=$(date +%Y%m%d%H%M%S)
 PREFIX="itest-$RUN "
@@ -59,7 +58,6 @@ clone_with() {
   want_rc 0
 }
 port_clone() { clone_with "clone-$1" "$1" "$BIN"; guard dedupe "$WORK/$1"; }
-oracle_clone() { clone_with "oracle-clone-$1" "$1" "$ORACLE"; }
 
 # plan_check <vault> <expected kinds|-> [allow-refused]: status + dry-run, both logged, then the guard.
 plan_check() {
@@ -82,15 +80,14 @@ expect_clean() { run status-clean "$1" "$BIN" --json status; want_rc 0; }
 
 pull() { run pull "$1" "$BIN" --json pull; want_rc 0; guard pull "$OUT" "$2" || die "pull conflict expectation"; }
 
-# verify <label> <vault>: fresh icloud-md and port clones must hold byte-identical copies of the test folder.
+# verify <label> <vault>: a fresh clone (a separate vault, so nothing the
+# pushing vault remembers) must hold the vault's notes byte for byte.
 verify() {
   local label=$1 v=$2
-  oracle_clone "oracle-$label"
-  port_clone "port-$label"
-  local o="$WORK/oracle-$label/$FOLDER" p="$WORK/port-$label/$FOLDER"
-  guard same-notes "$v/$FOLDER" "$o" || die "$label: vault folder differs from icloud-md clone"
-  diff -r "$o" "$p" >"$LOG/diff-port-$label.txt" 2>&1 || die "$label: icloud-md and port clones differ (logs/diff-port-$label.txt)"
-  echo "  verified: $(find "$o" -name "$PREFIX*" | wc -l) run note(s); vault == icloud-md clone by note id, icloud-md clone == port clone byte for byte" | tee -a "$SUMMARY"
+  port_clone "fresh-$label"
+  local o="$WORK/fresh-$label/$FOLDER"
+  guard same-notes "$v/$FOLDER" "$o" || die "$label: vault folder differs from a fresh clone"
+  echo "  verified: $(find "$o" -name "$PREFIX*" | wc -l) run note(s); vault == fresh clone by note id" | tee -a "$SUMMARY"
   ORC=$o
 }
 
@@ -164,8 +161,8 @@ edit "$A/$FOLDER/$N2" "# ${PREFIX}note two" "# ${PREFIX}note two retitled"
 guarded_push "$A" "-"
 ls "$A/$FOLDER" >"$LOG/s3b-files.txt"
 verify s3b "$A"
-# In-body title mode: the retitle does not rename the local file (push or pull,
-# same as icloud-md); a fresh clone names it by the new title.
+# In-body title mode: the retitle does not rename the local file (push or
+# pull); a fresh clone names it by the new title.
 [[ -f "$A/$FOLDER/$N2" ]] || die "retitle renamed the local file"
 has "$ORC/${PREFIX}note two retitled.md" "# ${PREFIX}note two retitled"
 pull "$A" 0
@@ -219,9 +216,8 @@ expect_clean "$B"
 step "5. delete both notes, push (folder stays)"
 rm "$A/$FOLDER/$N1" "$A/$FOLDER/${PREFIX}note two renamed.md"
 guarded_push "$A" "delete,delete"
-oracle_clone oracle-s5
-port_clone port-s5
-for d in "$WORK/oracle-s5" "$WORK/port-s5"; do
+port_clone fresh-s5
+for d in "$WORK/fresh-s5"; do
   left=$(find "$d/$FOLDER" -name "$PREFIX*" 2>/dev/null | wc -l)
   [[ $left == 0 ]] || die "$d still holds $left run note(s)"
   echo "  $(basename "$d"): run notes gone; folder dir $([[ -d $d/$FOLDER ]] && echo present || echo absent)" | tee -a "$SUMMARY"

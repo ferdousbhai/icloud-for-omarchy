@@ -7,10 +7,13 @@ codes, output, CloudKit requests and vault files (`layoutVersion: 3`,
 `generator: "icloud-md 0.6.2"`). Apple calls go through icloud-session
 (`session/`) instead of icloud-md's own sign-in.
 
-The differential suite that holds it to that lives in `tests/differential/`
-(cassettes, scenarios and icloud-md's recorded results; see its README) and
-runs from `tests/cli_differential.rs`. The only places it deliberately differs
-are listed below.
+That parity was established against icloud-md itself (its results recorded
+over the same cassettes and inputs). The suite no longer runs icloud-md: the
+recorded scenarios in `tests/differential/` (see its README, run from
+`tests/cli_differential.rs`), the golden corpora in `tests/golden/` and the
+real-fixture goldens are now regression tests recorded from this crate
+(re-recorded with `ICLOUD_NOTES_SYNC_REGEN=1`), so the port is free to
+diverge. The places it deliberately differs are listed below.
 
 ## 1. Deliberate differences from icloud-md 0.6.2 (after parity)
 
@@ -45,10 +48,11 @@ written back yet"). Differential tests then run with a flag that turns it off.
 Done: `cloudkit::client` (`note_desired_keys`, `Database::inline_asset_bodies`
 at the end of every zone walk and after the shared lookup backfill; a failed
 download fails the fetch) and `doc::decode::classify_note_record` (the PR's
-reason string). `ICLOUD_NOTES_SYNC_ASSET_BODIES=0` restores stock 0.6.2; the
-0.6.2 differential scenarios run with it, the `asset-*` scenarios compare with
-the fork branch (see tests/differential/README.md). PR tests ported in
-tests/cloudkit_asset_body.rs. Live: a fresh clone of the real account matches
+reason string). Always on (the switch back to stock 0.6.2 that the parity
+scenarios used is gone; every scenario now records `TextDataAsset` in its
+`changes/zone` `desiredKeys`). PR tests ported in
+tests/cloudkit_asset_body.rs; the `asset-*` scenarios cover clone, a failed
+download, status, push and pull end to end. Live: a fresh clone of the real account matches
 the installed PR #29 build byte for byte (bar `generator`).
 
 ### Records listed twice by CloudKit (not in 0.6.2)
@@ -91,10 +95,9 @@ order, differing tags, tombstone, private vs shared plus the lookup
 backfill, a shared zone listed twice), tests/cmd_push.rs
 (`copy_with_original_in_place_is_refused_as_a_duplicate`,
 `byte_identical_twin_from_a_double_clone_is_refused`), tests/cmd_refusals.rs
-(port-only row), and the differential scenario `dup-clone`
-(`portDeviation: dedupe-records`): icloud-md's expectation is recorded as
-usual and asserted to contain the duplicate; the port is asserted to send the
-same requests and to produce icloud-md's `tiny-clone` vault/stdout/mtimes.
+(port-only row), and the scenario `dup-clone`
+(`dup_clone_writes_a_repeated_record_once`: both pages fetched, and the
+same vault/stdout as `tiny-clone`).
 
 ### Local deletes, renames and new files win over a pull (not in 0.6.2)
 
@@ -172,8 +175,7 @@ hold back the whole zone, carrying its old token.) The port deviates in
 - Every live Note in the private listing that has no string
   `TextDataEncrypted` and is not tracked is looked up by id (one private
   `records/lookup`, merged in with `merge_looked_up_records`, then
-  `inline_asset_bodies` when asset bodies are on - the shared backfill's
-  steps). A note the lookup fills is added like any other.
+  `inline_asset_bodies` - the shared backfill's steps). A note the lookup fills is added like any other.
 - If any still has no text, it is skipped and counted as before, a warning
   says so ("Skipped N new note(s) that came through without their text, even
   when looked up - this vault's sync token was kept where it was, so the next
@@ -207,15 +209,11 @@ every live private Note without text is looked up):
   first pull fetches it from scratch.
 
 Tests: tests/cli_differential.rs `bodyless_pull_*` with the scenarios
-`bodyless-pull` and `bodyless-pull-unfilled` (`portDeviation:
-look-up-new-bodyless-notes`): icloud-md's expectation is asserted to skip
-the note, send no lookup and save the new token; the port is asserted to
-send the same requests plus one lookup, and then either to add the note
-(lookup has the text) or to keep the previous token with otherwise
-icloud-md's summary and vault (lookup still without text).
-For clone, `bodyless_clone_*` with the scenarios `bodyless-clone` and
-`bodyless-clone-unfilled` (same `portDeviation`) assert the same way: the
-note written and the token saved, or no `syncToken` with otherwise
-icloud-md's summary and vault. tests/cmd_clone.rs covers the clone followed
+`bodyless-pull` and `bodyless-pull-unfilled`: one private lookup of the
+note, and then either the note added (lookup has the text) or the previous
+token kept and a warning (lookup still without text). For clone,
+`bodyless_clone_*` with the scenarios `bodyless-clone` and
+`bodyless-clone-unfilled`: the note written and the token saved, or no
+`syncToken` and a warning. tests/cmd_clone.rs covers the clone followed
 by a pull that walks from scratch and adds the note, and a shared zone still
 without text.

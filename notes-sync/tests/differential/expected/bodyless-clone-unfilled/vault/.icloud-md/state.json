@@ -4,7 +4,6 @@
     "dsid": "10000000001"
   },
   "titleMode": "in-body",
-  "syncToken": "AQAAAAAAAAAB",
   "sharedZoneSyncTokens": {},
   "notes": {
     "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1": {
@@ -24,5 +23,5 @@
   "attachments": {},
   "tableAttachments": {},
   "layoutVersion": 3,
-  "generator": "icloud-md 0.6.2"
+  "generator": "<generator>"
 }

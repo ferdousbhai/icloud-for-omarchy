@@ -9,11 +9,12 @@ Every command below is implemented: clone, pull, status, push (with
 `--dry-run` and every refusal), history, diff and restore, over the note
 codec (protobuf, the Notes document model, tables, attachments), the
 Markdown renderer and parser, diff3 merging and the CloudKit client. The
-tests are icloud-md's own test suites ported to Rust, golden outputs from
-icloud-md's code, recorded CloudKit sessions replayed end to end, and a
-differential suite that replays icloud-md's recorded results for the same
-inputs and requires the same exit codes, output, requests and vault files. A live write test runs against a real
-account on request only (see below). Where it deliberately differs from
+tests are icloud-md's own test suites ported to Rust, golden corpora,
+recorded CloudKit sessions replayed end to end, and recorded CLI scenarios
+that require the same exit codes, output, requests and vault files as when
+they were recorded. Parity with icloud-md was established against icloud-md
+itself; the recordings now come from this crate, so it is free to diverge. A
+live write test runs against a real account on request only (see below). Where it deliberately differs from
 icloud-md 0.6.2 is in [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 
 It is not a command of its own. The package installs it off PATH, at
@@ -83,12 +84,20 @@ cargo clippy -p icloud-notes-sync --all-targets
 cargo test -p icloud-notes-sync
 ```
 
-The differential harness that runs icloud-md itself against the same
-recorded CloudKit answers is described in
-[tests/differential/README.md](tests/differential/README.md).
+The recorded CLI scenarios (cassettes, expected results, and how to
+re-record them) are described in
+[tests/differential/README.md](tests/differential/README.md). Every test with
+recorded expectations (scenarios, `tests/golden/`, the real-fixture goldens)
+rewrites them from the current code with
+
+```bash
+ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p icloud-notes-sync
+```
+
+after which `git diff` shows what changed - review it before committing.
 
 A live write test against a real iCloud account, confined to one test
-folder and checked against icloud-md, lives in
+folder and checked against a fresh clone, lives in
 [tests/live/](tests/live/README.md). It only runs with
 `ICLOUD_NOTES_SYNC_LIVE=1`.
 

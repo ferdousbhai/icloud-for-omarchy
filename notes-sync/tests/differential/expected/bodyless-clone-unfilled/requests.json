@@ -2,13 +2,6 @@
   "requests": [
     {
       "method": "POST",
-      "service": "setup",
-      "path": "/setup/ws/1/validate",
-      "query": {},
-      "matched": null
-    },
-    {
-      "method": "POST",
       "service": "ckdatabasews",
       "path": "/database/1/com.apple.notes/production/private/changes/zone",
       "query": {
@@ -44,7 +37,8 @@
               "UTIEncrypted",
               "MergeableDataEncrypted",
               "IsPinned",
-              "TextDataEncrypted"
+              "TextDataEncrypted",
+              "TextDataAsset"
             ],
             "desiredRecordTypes": [
               "AccountData",
@@ -77,6 +71,26 @@
       },
       "body": {},
       "matched": 1
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/lookup",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "records": [
+          {
+            "recordName": "5f1d0c3a-7b2e-4c9a-9e61-2b8d4a6c0f17"
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 2
     }
   ]
 }

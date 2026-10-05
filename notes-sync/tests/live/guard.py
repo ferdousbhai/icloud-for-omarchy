@@ -21,8 +21,8 @@ Subcommands (all print one line of verdict; exit 0 = ok, 1 = refuse):
   same-notes <dirA> <dirB>
         Refuses unless both folders hold the same notes (by apple-note-id)
         with byte-identical contents. File names may differ: in in-body title
-        mode neither push nor pull renames a retitled note's file (as in
-        icloud-md), while a fresh clone names it by title.
+        mode neither push nor pull renames a retitled note's file, while a
+        fresh clone names it by title.
   pull <pull.json> <expect-conflict:0|1>
         Checks a pull summary's conflict list is empty (0) or not (1).
 """

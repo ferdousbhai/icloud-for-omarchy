@@ -11,7 +11,7 @@ use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
     Error, NoticeLevel, SyncNotice, SyncProgress, is_purged, skipped_zone_owner, used_names_for, zone_for_owner,
 };
-use crate::cloudkit::client::{asset_bodies_enabled, merge_looked_up_records, needs_body_lookup};
+use crate::cloudkit::client::{merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
 use crate::cloudkit::{Database, SkippedSharedZone};
 use crate::diff3::{has_conflict_markers, merge_note_versions};
@@ -789,9 +789,7 @@ pub(super) fn backfill_new_note_bodies<T: Transport>(
     }
     let looked_up = db.lookup_records(&note_zone(None), &names)?;
     merge_looked_up_records(records, looked_up);
-    if asset_bodies_enabled() {
-        db.inline_asset_bodies(records)?;
-    }
+    db.inline_asset_bodies(records)?;
     Ok(missing(records))
 }
 

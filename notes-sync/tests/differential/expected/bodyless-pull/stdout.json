@@ -1,14 +1,19 @@
 {
-  "added": 0,
+  "added": 1,
   "updated": 0,
   "merged": 0,
   "removed": 0,
   "attachmentsDownloaded": 0,
   "unpublishable": 0,
-  "skippedNewUnsyncable": 1,
+  "skippedNewUnsyncable": 0,
   "droppedUnsyncable": 0,
   "unsharedUntracked": 0,
-  "changes": [],
+  "changes": [
+    {
+      "kind": "add",
+      "file": "Notes/Fresh.md"
+    }
+  ],
   "conflicts": [],
   "notices": []
 }

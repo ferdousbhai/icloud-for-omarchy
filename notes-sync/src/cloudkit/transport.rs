@@ -1,10 +1,8 @@
 //! Transports under [`super::Database`].
 //!
 //! The cassette and request-log types below are the Rust side of the format
-//! documented in `tests/differential/README.md`; the Node driver
-//! (`tests/differential/driver.mts`) reads and writes the same JSON, so a
-//! vault cloned by icloud-md and one cloned by this crate can be served
-//! identical responses and their requests compared.
+//! documented in `tests/differential/README.md`, which the recorded CLI
+//! scenarios replay and log.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;

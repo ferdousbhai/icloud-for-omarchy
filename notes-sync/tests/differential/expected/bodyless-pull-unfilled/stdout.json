@@ -10,5 +10,10 @@
   "unsharedUntracked": 0,
   "changes": [],
   "conflicts": [],
-  "notices": []
+  "notices": [
+    {
+      "level": "warn",
+      "message": "Skipped 1 new note(s) that came through without their text, even when looked up - this vault's sync token was kept where it was, so the next pull will look for them again"
+    }
+  ]
 }

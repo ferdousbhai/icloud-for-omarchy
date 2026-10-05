@@ -1,7 +1,8 @@
-//! ReplayTransport against the differential cassettes: the request logs it
-//! writes must equal the Node driver's (minus its `/validate` setup call),
-//! byte for byte. Plus request-shape checks for records/modify and error
-//! mapping for non-2xx answers and asset downloads.
+//! ReplayTransport against the scenario cassettes: the request logs it
+//! writes in-process must equal the ones the CLI scenarios recorded
+//! (tests/differential/expected/), byte for byte. Plus request-shape checks
+//! for records/modify and error mapping for non-2xx answers and asset
+//! downloads.
 
 use std::path::Path;
 
@@ -17,32 +18,15 @@ use serde_json::{Value, json};
 
 const DIFF: &str = "tests/differential";
 
-/// The Node log without `service: "setup"`, serialized the way both sides do.
-fn node_log_without_setup(dir: &str) -> String {
+/// The request log a CLI scenario recorded.
+fn recorded_log(dir: &str) -> String {
     let text = std::fs::read_to_string(Path::new(DIFF).join("expected").join(dir).join("requests.json")).unwrap();
-    let mut log: RequestLog = serde_json::from_str(&text).unwrap();
-    log.requests.retain(|r| r.service != "setup");
-    serde_json::to_string_pretty(&log).unwrap() + "\n"
-}
-
-/// [`node_log_without_setup`] for a 0.6.2 log, with the one request change
-/// upstream PR #29 makes (on by default in-process): `TextDataAsset` appended
-/// to every `changes/zone` `desiredKeys`.
-fn node_log_with_asset_key(dir: &str) -> String {
-    let mut log: Value = serde_json::from_str(&node_log_without_setup(dir)).unwrap();
-    for request in log["requests"].as_array_mut().unwrap() {
-        let zones = request.get_mut("body").and_then(|b| b.get_mut("zones"));
-        for zone in zones.and_then(Value::as_array_mut).into_iter().flatten() {
-            if let Some(keys) = zone["desiredKeys"].as_array_mut() {
-                keys.push(json!("TextDataAsset"));
-            }
-        }
-    }
+    let log: RequestLog = serde_json::from_str(&text).unwrap();
     serde_json::to_string_pretty(&log).unwrap() + "\n"
 }
 
 #[test]
-fn tiny_clone_requests_match_the_node_driver() {
+fn tiny_clone_requests_match_the_recorded_clone() {
     let tmp = tempfile::tempdir().unwrap();
     let log_path = tmp.path().join("out/requests.json");
     let transport = ReplayTransport::open(
@@ -66,13 +50,13 @@ fn tiny_clone_requests_match_the_node_driver() {
 
     assert_eq!(
         std::fs::read_to_string(&log_path).unwrap(),
-        node_log_with_asset_key("tiny-clone")
+        recorded_log("tiny-clone")
     );
     assert_eq!(database.transport.request_log().requests.len(), 2);
 }
 
 #[test]
-fn tiny_lookup_requests_match_the_node_driver() {
+fn tiny_lookup_requests_match_the_recorded_dry_run() {
     let tmp = tempfile::tempdir().unwrap();
     let log_path = tmp.path().join("requests.json");
     let transport = ReplayTransport::open(
@@ -88,7 +72,7 @@ fn tiny_lookup_requests_match_the_node_driver() {
     assert!(records[0].fields.contains_key("TextDataEncrypted"));
     assert_eq!(
         std::fs::read_to_string(&log_path).unwrap(),
-        node_log_without_setup("tiny-push-dry-run")
+        recorded_log("tiny-push-dry-run")
     );
 }
 

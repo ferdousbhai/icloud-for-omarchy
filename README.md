@@ -117,12 +117,9 @@ notes/bin/test                  # the Qt app's tests alone (they run on a privat
 Rust binaries land in `target/release/`, Notes in `notes/build/`. Each app
 can also run against a local fake of Apple's servers; its README says how.
 
-notes-sync's differential suite compares it with icloud-md's committed
-results and runs with `cargo test`. The tests that run icloud-md itself (and
-regenerating those results) need a clone of
-[icloud-md](https://github.com/coddingtonbear/icloud-md) with its
-`node_modules` at `../../coddingtonbear/icloud-md` from this checkout (or
-`ICLOUD_MD=/path`) and Node 20+; without it they skip.
+notes-sync's recorded scenarios and golden corpora run with `cargo test`;
+`ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p icloud-notes-sync` re-records them
+from the current code (see notes-sync/README.md).
 
 ## Releasing
 

@@ -52,29 +52,15 @@ const NOTE_DESIRED_KEYS: &[&str] = &[
 ];
 
 /// Where a very large note keeps its text instead of `TextDataEncrypted`;
-/// requested (after [`NOTE_DESIRED_KEYS`]) only with asset bodies on - see
+/// requested after [`NOTE_DESIRED_KEYS`] - see
 /// [`Database::inline_asset_bodies`].
 pub const TEXT_DATA_ASSET_KEY: &str = "TextDataAsset";
 
-/// `ICLOUD_NOTES_SYNC_ASSET_BODIES=0` turns off upstream icloud-md PR #29
-/// ("Fetch the text of notes too large to store it inline", unmerged in
-/// 0.6.2): no `TextDataAsset` in the desired keys, no asset download, and no
-/// read-only marking - stock 0.6.2 behaviour, for the differential scenarios
-/// whose expected output comes from 0.6.2. On by default.
-pub const ASSET_BODIES_ENV: &str = "ICLOUD_NOTES_SYNC_ASSET_BODIES";
-
-/// Whether PR #29's asset-body behaviour is on (see [`ASSET_BODIES_ENV`]).
-pub fn asset_bodies_enabled() -> bool {
-    std::env::var_os(ASSET_BODIES_ENV).is_none_or(|v| v != "0")
-}
-
 /// The `desiredKeys` of a note `changes/zone` request: [`NOTE_DESIRED_KEYS`],
-/// plus `TextDataAsset` with asset bodies on.
+/// plus `TextDataAsset`.
 pub fn note_desired_keys() -> Vec<&'static str> {
     let mut keys = NOTE_DESIRED_KEYS.to_vec();
-    if asset_bodies_enabled() {
-        keys.push(TEXT_DATA_ASSET_KEY);
-    }
+    keys.push(TEXT_DATA_ASSET_KEY);
     keys
 }
 
@@ -163,9 +149,7 @@ impl<T: Transport> Database<T> {
             on_page(count);
         }
         let mut records = dedupe_zone_records(records);
-        if asset_bodies_enabled() {
-            self.inline_asset_bodies(&mut records)?;
-        }
+        self.inline_asset_bodies(&mut records)?;
         Ok((records, sync_token))
     }
 
@@ -286,9 +270,7 @@ impl<T: Transport> Database<T> {
                 };
                 let looked_up = self.lookup_records(&zone, &missing)?;
                 merge_looked_up_records(&mut records, looked_up);
-                if asset_bodies_enabled() {
-                    self.inline_asset_bodies(&mut records)?;
-                }
+                self.inline_asset_bodies(&mut records)?;
             }
 
             let still_missing: Vec<String> = records

@@ -1,7 +1,8 @@
 //! Ports icloud-md `src/notes/formatReconcile.test.ts`. The desired
-//! paragraphs are icloud-md's own `parseNoteMarkdown` output for each test's
-//! markdown (`tests/doc_node/parsed_markdown.json`), so this doesn't depend
-//! on the Markdown parser.
+//! paragraphs are the recorded `parse_note_markdown` output for each test's
+//! markdown (`tests/fixtures/parsed_markdown.json`), so the reconcile tests
+//! don't move when the Markdown parser does; `recorded_parses_match_the_parser`
+//! flags a drift (re-record with `ICLOUD_NOTES_SYNC_REGEN=1`).
 
 mod common;
 
@@ -347,4 +348,32 @@ fn misaligned_desired_paragraphs_refuse_rather_than_guess() {
         reconcile(&mut doc, "different text", &REPLICA_A),
         Err("the note's paragraphs don't line up with the edited text - refusing to guess".into())
     );
+}
+
+/// `tests/fixtures/parsed_markdown.json` is what `parse_note_markdown` gives
+/// now; `ICLOUD_NOTES_SYNC_REGEN=1` rewrites it.
+#[test]
+fn recorded_parses_match_the_parser() {
+    use serde::Serialize;
+    use serde_json::{Value, json};
+    let text = std::fs::read_to_string(common::PARSED_MARKDOWN).unwrap();
+    let recorded: Value = serde_json::from_str(&text).unwrap();
+    let mut now = serde_json::Map::new();
+    for markdown in recorded.as_object().unwrap().keys() {
+        let parsed = icloud_notes_sync::md::parse::parse_note_markdown(markdown).unwrap();
+        now.insert(
+            markdown.clone(),
+            json!({ "status": "ok", "paragraphs": parsed.paragraphs, "text": parsed.text }),
+        );
+    }
+    let now = Value::Object(now);
+    if common::regen() {
+        let mut out = Vec::new();
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        now.serialize(&mut serde_json::Serializer::with_formatter(&mut out, formatter))
+            .unwrap();
+        std::fs::write(common::PARSED_MARKDOWN, out).unwrap();
+    } else {
+        assert_eq!(recorded, now, "re-record with ICLOUD_NOTES_SYNC_REGEN=1 if intended");
+    }
 }

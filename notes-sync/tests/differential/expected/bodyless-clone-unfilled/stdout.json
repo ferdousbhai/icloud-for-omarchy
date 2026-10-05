@@ -5,5 +5,10 @@
   "attachmentsDownloaded": 0,
   "skippedDeleted": 0,
   "skippedUndecodable": 1,
-  "notices": []
+  "notices": [
+    {
+      "level": "warn",
+      "message": "Skipped 1 note(s) that came through without their text, even when looked up - no sync token was saved for your own notes, so the first pull will look for them again (and re-read the rest)"
+    }
+  ]
 }

@@ -84,8 +84,7 @@ pub const TEXT_DATA_ASSET_UNPUBLISHABLE_REASON: &str =
 
 /// `classifyNoteRecord`.
 ///
-/// With asset bodies on (see [`crate::cloudkit::client::asset_bodies_enabled`];
-/// upstream PR #29), a note whose text Apple moved into a `TextDataAsset`
+/// A note whose text Apple moved into a `TextDataAsset` (upstream PR #29)
 /// reads like any other once `inline_asset_bodies` has fetched it, but
 /// writing it back would mean uploading a new asset - a path never captured -
 /// so it arrives read-only.
@@ -94,7 +93,6 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
     match result {
         NoteDecodeResult::Ok(mut note)
             if note.publishable
-                && crate::cloudkit::client::asset_bodies_enabled()
                 && record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) =>
         {
             note.publishable = false;

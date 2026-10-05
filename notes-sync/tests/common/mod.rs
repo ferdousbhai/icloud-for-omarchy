@@ -1,6 +1,6 @@
 //! Shared helpers for the tests: the real fixtures (`tests/fixtures/real/`,
-//! exported from icloud-md's `realFixtures.ts`), a scratch vault's files, and
-//! small values several tests build.
+//! payloads captured from iCloud), the golden corpora (`tests/golden/`), a
+//! scratch vault's files, and small values several tests build.
 #![allow(dead_code)]
 
 use std::path::Path;
@@ -64,10 +64,90 @@ pub fn all_payloads() -> Vec<(String, String, Vec<u8>, Value)> {
     out
 }
 
+/// `ICLOUD_NOTES_SYNC_REGEN=1`: tests with recorded expectations rewrite
+/// them from what this crate does now instead of comparing.
+pub fn regen() -> bool {
+    std::env::var_os("ICLOUD_NOTES_SYNC_REGEN").is_some_and(|v| v != "0")
+}
+
+fn golden_path(name: &str) -> String {
+    format!("{}/tests/golden/{name}.gz", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn golden_text(name: &str) -> String {
+    use std::io::Read;
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(golden_path(name)).unwrap())
+        .read_to_string(&mut text)
+        .unwrap();
+    text
+}
+
 /// A gzipped golden corpus, `tests/golden/<name>.gz`.
 pub fn golden(name: &str) -> Value {
-    let path = format!("{}/tests/golden/{name}.gz", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_reader(flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())).unwrap()
+    serde_json::from_str(&golden_text(name)).unwrap()
+}
+
+/// Checks this crate against a golden corpus section: `tests/golden/<name>.gz`
+/// (`section` names a key of its top-level object, or `None` for a top-level
+/// array) holds cases whose inputs are frozen and whose outputs are what the
+/// crate gave when last recorded. `outputs` computes, for one case, each
+/// output field's value now; every field must equal the recorded one.
+///
+/// With [`regen`], the differing fields are rewritten instead (the inputs
+/// stay as they are) and the count printed - review the diff before
+/// committing it.
+pub fn check_golden(name: &str, section: Option<&str>, outputs: impl Fn(&Value) -> Vec<(&'static str, Value)>) {
+    // Several tests may rewrite sections of the same file.
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let label = format!("{name}{}", section.map(|s| format!(" {s}")).unwrap_or_default());
+    let data = golden(name);
+    let mut cases = match section {
+        Some(key) => data[key].clone(),
+        None => data,
+    };
+    let list = cases.as_array_mut().unwrap();
+    let total = list.len();
+    let mut failures = Vec::new();
+    for case in list.iter_mut() {
+        let got = outputs(case);
+        let mut differ = Vec::new();
+        for (field, value) in got {
+            if case[field] != value {
+                differ.push(format!("{field}: recorded {} now {value}", case[field]));
+                case[field] = value;
+            }
+        }
+        if !differ.is_empty() {
+            failures.push(format!("{case}\n  {}", differ.join("\n  ")));
+        }
+    }
+    if regen() {
+        eprintln!("{label}: {} of {total} cases re-recorded", failures.len());
+        if failures.is_empty() {
+            return;
+        }
+        let _guard = WRITE.lock().unwrap();
+        let mut data = golden(name);
+        match section {
+            Some(key) => data[key] = cases,
+            None => data = cases,
+        }
+        let text = serde_json::to_string(&data).unwrap() + "\n";
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut gz, text.as_bytes()).unwrap();
+        std::fs::write(golden_path(name), gz.finish().unwrap()).unwrap();
+        return;
+    }
+    eprintln!("{label}: {}/{total} match", total - failures.len());
+    for failure in failures.iter().take(8) {
+        eprintln!("--- {failure}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{label}: {} of {total} cases differ from the recording (if intended: ICLOUD_NOTES_SYNC_REGEN=1, then review the diff)",
+        failures.len()
+    );
 }
 
 pub fn grid(value: &Value) -> Vec<Vec<String>> {
@@ -80,46 +160,19 @@ pub fn strings(rows: &[&[&str]]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// icloud-md's `parseNoteMarkdown` of `markdown`, as recorded in
-/// `tests/doc_node/parsed_markdown.json` (regenerate with the oracle):
-/// `(text, paragraphs)`.
+pub const PARSED_MARKDOWN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/parsed_markdown.json");
+
+/// `parse_note_markdown` of `markdown` as recorded in
+/// `tests/fixtures/parsed_markdown.json` (kept in line with the parser by
+/// `doc_reconcile`'s `recorded_parses_match_the_parser`): `(text, paragraphs)`.
 pub fn parsed_markdown(markdown: &str) -> (String, Vec<icloud_notes_sync::doc::format::FormatParagraph>) {
-    let path = format!("{}/tests/doc_node/parsed_markdown.json", env!("CARGO_MANIFEST_DIR"));
-    let all: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let all: Value = serde_json::from_str(&std::fs::read_to_string(PARSED_MARKDOWN).unwrap()).unwrap();
     let parsed = &all[markdown];
     assert_eq!(parsed["status"], "ok", "no recorded parse for {markdown:?}");
     (
         parsed["text"].as_str().unwrap().to_string(),
         serde_json::from_value(parsed["paragraphs"].clone()).unwrap(),
     )
-}
-
-/// Runs requests through `tests/doc_node/oracle.mts` (icloud-md itself);
-/// `None` when node/tsx or the icloud-md clone isn't available.
-pub fn oracle(requests: &Value) -> Option<Value> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    let root = env!("CARGO_MANIFEST_DIR");
-    let icloud_md = std::env::var("ICLOUD_MD").unwrap_or_else(|_| format!("{root}/../../../coddingtonbear/icloud-md"));
-    let tsx = format!("{icloud_md}/node_modules/.bin/tsx");
-    if !std::path::Path::new(&tsx).exists() {
-        eprintln!("icloud-md oracle unavailable ({tsx} missing) - skipping the Node comparison");
-        return None;
-    }
-    let mut child = Command::new(tsx)
-        .arg(format!("{root}/tests/doc_node/oracle.mts"))
-        .env("ICLOUD_MD", &icloud_md)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let mut stdin = child.stdin.take().unwrap();
-    let payload = serde_json::to_vec(requests).unwrap();
-    let writer = std::thread::spawn(move || stdin.write_all(&payload).unwrap());
-    let output = child.wait_with_output().ok()?;
-    writer.join().unwrap();
-    assert!(output.status.success(), "oracle failed");
-    Some(serde_json::from_slice(&output.stdout).unwrap())
 }
 
 /// A deterministic, never-repeating 16-byte source (a process-wide counter,

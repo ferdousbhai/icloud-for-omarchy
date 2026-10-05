@@ -13,8 +13,9 @@
 //! | `frontmatter`, `yaml` | frontmatter + noteIdFrontmatter, and the slice of the `yaml` package they use |
 //! | `title`, `filename` | noteTitleParagraph, titleFilename, filename |
 //!
-//! Byte-exactness is frozen by golden corpora from icloud-md's own code
-//! (`tests/golden/gen.mts`, `tests/md_*_golden.rs`).
+//! Output is frozen by golden corpora (`tests/golden/`, checked by
+//! `tests/md_*_golden.rs`), first recorded from icloud-md's own code and now
+//! from this crate.
 
 pub mod filename;
 pub mod frontmatter;

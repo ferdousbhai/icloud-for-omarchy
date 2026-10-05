@@ -2,13 +2,6 @@
   "requests": [
     {
       "method": "POST",
-      "service": "setup",
-      "path": "/setup/ws/1/validate",
-      "query": {},
-      "matched": null
-    },
-    {
-      "method": "POST",
       "service": "ckdatabasews",
       "path": "/database/1/com.apple.notes/production/private/changes/zone",
       "query": {
@@ -44,7 +37,8 @@
               "UTIEncrypted",
               "MergeableDataEncrypted",
               "IsPinned",
-              "TextDataEncrypted"
+              "TextDataEncrypted",
+              "TextDataAsset"
             ],
             "desiredRecordTypes": [
               "AccountData",

@@ -10,7 +10,7 @@ iCloud) as JSON, one file per export, listed in `real/index.json`:
 | `description` | the TS comments above the export |
 | `base64` | the payload exactly as the CloudKit field value (compressed) |
 | `revisions` | for `tableRevisions`: the TS array, each entry plus `golden` |
-| `golden` | what icloud-md's own code makes of it (below) |
+| `golden` | what this crate makes of it (below) |
 
 Note goldens: `text` (decoded visible text), `attributeRunLengths`,
 `roundTrips` (`noteDocumentRoundTrips`), `document` (run/replica counts),
@@ -20,9 +20,16 @@ Note goldens: `text` (decoded visible text), `attributeRunLengths`,
 `roundTrips` (`tableDocumentRoundTrips`), `grid`, `markdown`
 (`decodeTableMarkdown`); a failing step is `{ "error": "<message>" }`.
 
-Regenerate (must reproduce the files byte for byte):
+The payloads are frozen. The goldens were first exported from icloud-md's
+own code and are now recorded from this crate: `doc_fixtures`'
+`fixture_goldens_are_current` checks them, and rewrites the ones that differ
+with
 
 ```bash
-ICLOUD_MD=../../../coddingtonbear/icloud-md   # the default
-$ICLOUD_MD/node_modules/.bin/tsx tests/differential/export-fixtures.mts
+ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p icloud-notes-sync --test doc_fixtures
 ```
+
+`parsed_markdown.json` holds `parse_note_markdown` of the markdown the
+reconcile tests (`tests/doc_reconcile.rs`) start from, recorded so those
+tests don't move with the parser; `recorded_parses_match_the_parser` checks
+and re-records it the same way.

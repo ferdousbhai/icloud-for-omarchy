@@ -1,8 +1,5 @@
-//! `compress_note_document` must be byte-identical to Node's
-//! `zlib.deflateSync` (Chromium zlib), which is what icloud-md uploads.
-
-use std::io::Write;
-use std::process::{Command, Stdio};
+//! `compress_note_document` / `decompress_note_document` (the deflate
+//! codec). Kept in this one file so it can go along with that codec.
 
 use icloud_notes_sync::doc::text::{compress_note_document, decompress_note_document};
 
@@ -79,60 +76,25 @@ fn fixture_payloads() -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Runs every input through `node -e zlib.deflateSync`; `None` without node.
-fn node_deflate(inputs: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
-    let script = r#"
-        const zlib = require("zlib");
-        const lines = require("fs").readFileSync(0, "utf8").split("\n").filter((l, i, a) => i < a.length - 1);
-        process.stdout.write(lines.map((l) => zlib.deflateSync(Buffer.from(l, "base64")).toString("base64")).join("\n") + "\n");
-    "#;
-    let mut child = Command::new("node")
-        .args(["-e", script])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let mut stdin = child.stdin.take().unwrap();
-    let payload: String = inputs
-        .iter()
-        .map(|i| icloud_notes_sync::js::base64_encode(i) + "\n")
-        .collect();
-    let writer = std::thread::spawn(move || stdin.write_all(payload.as_bytes()).unwrap());
-    let output = child.wait_with_output().ok()?;
-    writer.join().unwrap();
-    assert!(output.status.success(), "node failed");
-    Some(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .lines()
-            .map(icloud_notes_sync::js::base64_decode)
-            .collect(),
-    )
-}
-
 #[test]
-fn deflate_matches_node_on_fixtures_and_corpus() {
+fn deflate_round_trips_on_fixtures_and_corpus() {
     let mut inputs = fixture_payloads();
     assert!(inputs.len() >= 50, "expected every fixture payload");
     inputs.extend(corpus());
-    let Some(expected) = node_deflate(&inputs) else {
-        eprintln!("node not available - skipping the live Node comparison");
-        return;
-    };
-    assert_eq!(expected.len(), inputs.len());
-    let mut mismatches = Vec::new();
-    for (i, (input, want)) in inputs.iter().zip(&expected).enumerate() {
-        let got = compress_note_document(input);
-        if &got != want {
-            mismatches.push(format!("#{i} ({} bytes)", input.len()));
-        }
-        assert_eq!(decompress_note_document(&got).unwrap(), *input);
+    for (i, input) in inputs.iter().enumerate() {
+        let compressed = compress_note_document(input);
+        assert_eq!(
+            decompress_note_document(&compressed).unwrap(),
+            *input,
+            "#{i} ({} bytes)",
+            input.len()
+        );
     }
-    assert!(mismatches.is_empty(), "differs from Node for {mismatches:?}");
 }
 
+/// zlib's bytes for an empty input: header, an empty fixed block, Adler-32.
 #[test]
-fn deflate_of_empty_input_matches_node() {
+fn deflate_of_empty_input_is_zlibs() {
     assert_eq!(
         compress_note_document(b""),
         [0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]

@@ -315,12 +315,12 @@ fn tiny_clone_state() -> CloneState {
 }
 
 #[test]
-fn clone_write_matches_icloud_md_byte_for_byte() {
+fn clone_write_matches_the_recorded_clone_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &tiny_clone_state()).unwrap();
     let expected = std::fs::read_to_string("tests/differential/expected/tiny-clone/vault/.icloud-md/state.json")
         .unwrap()
-        .replace("\"icloud-md 0.6.2\"", &format!("\"{GENERATOR}\""));
+        .replace("\"<generator>\"", &format!("\"{GENERATOR}\""));
     assert_eq!(state_text(dir.path()), expected);
 }
 

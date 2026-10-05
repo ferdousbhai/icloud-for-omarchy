@@ -20,19 +20,16 @@
     {
       "name": "dup-clone",
       "cassette": "dup-clone.json",
-      "portDeviation": "dedupe-records",
       "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
     },
     {
       "name": "bodyless-clone",
       "cassette": "bodyless-clone.json",
-      "portDeviation": "look-up-new-bodyless-notes",
       "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
     },
     {
       "name": "bodyless-clone-unfilled",
       "cassette": "bodyless-clone-unfilled.json",
-      "portDeviation": "look-up-new-bodyless-notes",
       "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
     },
     {
@@ -45,7 +42,6 @@
       "name": "tiny-status",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",
-      "portDeviation": "previews-write-nothing",
       "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
       "args": ["--json", "status", "@VAULT@"]
     },
@@ -53,7 +49,6 @@
       "name": "tiny-push-dry-run",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",
-      "portDeviation": "previews-write-nothing",
       "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
       "args": ["--json", "push", "--dry-run", "@VAULT@"]
     },
@@ -106,14 +101,12 @@
     {
       "name": "bodyless-pull",
       "cassette": "bodyless-pull.json",
-      "portDeviation": "look-up-new-bodyless-notes",
       "vaultFrom": "tiny-clone",
       "args": ["--json", "pull", "@VAULT@"]
     },
     {
       "name": "bodyless-pull-unfilled",
       "cassette": "bodyless-pull-unfilled.json",
-      "portDeviation": "look-up-new-bodyless-notes",
       "vaultFrom": "tiny-clone",
       "args": ["--json", "pull", "@VAULT@"]
     },
@@ -172,19 +165,16 @@
     },
     {
       "name": "asset-clone",
-      "icloudMd": "fetch-asset-note-bodies",
       "cassette": "asset-clone.json",
       "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
     },
     {
       "name": "asset-clone-download-failed",
-      "icloudMd": "fetch-asset-note-bodies",
       "cassette": "asset-clone-download-failed.json",
       "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
     },
     {
       "name": "asset-status",
-      "icloudMd": "fetch-asset-note-bodies",
       "cassette": "asset-lookup.json",
       "vaultFrom": "asset-clone",
       "edits": [{ "file": "Notes/Big Note.md", "append": "\nA line added locally." }],
@@ -192,7 +182,6 @@
     },
     {
       "name": "asset-push",
-      "icloudMd": "fetch-asset-note-bodies",
       "cassette": "asset-lookup.json",
       "vaultFrom": "asset-clone",
       "edits": [{ "file": "Notes/Big Note.md", "append": "\nA line added locally." }],
@@ -200,7 +189,6 @@
     },
     {
       "name": "asset-pull-update",
-      "icloudMd": "fetch-asset-note-bodies",
       "cassette": "asset-pull-update.json",
       "vaultFrom": "asset-clone",
       "args": ["--json", "pull", "@VAULT@"]
