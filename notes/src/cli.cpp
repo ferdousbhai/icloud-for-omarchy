@@ -171,13 +171,12 @@ const QList<Spec> &specs()
           "JSON: {action, folder, sync?}",
           { QStringLiteral("--in"), QStringLiteral("--push") }, 1, 1 },
         { "rename-folder", "rename-folder FOLDER NAME [--push]",
-          "Rename a folder. iCloud folders carry no id, so the next push creates the new folder and moves\n"
-          "the notes; the old one stays in Notes, empty, until it is deleted there.\n"
+          "Rename a folder; the next push renames it in iCloud too.\n"
           "JSON: {action, folder, from, sync?}",
           { QStringLiteral("--push") }, 2, 2 },
         { "delete-folder", "delete-folder FOLDER [--yes] [--push]",
           "Move a folder and its notes to the trash; the next push moves the notes to Recently Deleted\n"
-          "(the empty folder stays in Notes). Asks on a terminal; without one, --yes is required.\n"
+          "and deletes the folder in iCloud. Asks on a terminal; without one, --yes is required.\n"
           "JSON: {action, folder, sync?}",
           { QStringLiteral("--yes"), QStringLiteral("--push") }, 1, 1 },
         { "sync", "sync",

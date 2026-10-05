@@ -147,6 +147,12 @@ pub fn relocate_note_attachments(
     for attachment_record_name in mine {
         let attachment = attachments[&attachment_record_name].clone();
         let old_base = posix::basename(&attachment.file).to_owned();
+        // Moved along with a renamed folder directory: already there.
+        let already_there = posix::join(&[&to_attachments, &old_base]);
+        if !target_dir.join(&attachment.file).exists() && target_dir.join(&already_there).exists() {
+            attachments[&attachment_record_name].file = already_there;
+            continue;
+        }
         let new_base = unique_file_name(&old_base, &used);
         let to_attachment = posix::join(&[&to_attachments, &new_base]);
         std::fs::create_dir_all(target_dir.join(&to_attachments))?;

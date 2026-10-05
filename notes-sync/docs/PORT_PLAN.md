@@ -157,6 +157,38 @@ On a real vault one note with an 837 KB document grew 23 snapshots of
 Tests: tests/vault_history.rs, and the recorded scenarios `tiny-status` and
 `tiny-push-dry-run` (their vaults hold no history).
 
+### Push honours what was done to the files (not in 0.6.2)
+
+Anything done to the vault's files is pushed as the same change made in
+Notes; 0.6.2 refuses most of these, some forever:
+
+- A note file at the top level of the vault is created in (or moved to) the
+  default folder, where Notes puts a note made outside any folder.
+- A copy of a tracked note's file (it carries the same `apple-note-id`) is
+  a new note; the create gives it its own id.
+- Emptying a note moves it to Recently Deleted, as Notes discards a note
+  left empty; the empty file goes with it.
+- A note edited here and deleted elsewhere is kept as a new note (pull
+  untracks it and drops its id) instead of delete/modify conflict markers.
+- A remote change is merged in memory and a clean merge goes up in the
+  same push (no "re-run push"); a move's edits go up right after the move;
+  a rename within a folder sends nothing to iCloud.
+- A note with attachments can be edited: the link pull wrote for each file
+  attachment stands for it, as an embed marker does. Removing, changing or
+  moving the link is still refused. Moving such a note to another folder
+  takes its attachment files along.
+- Folder directories: a new directory (even empty) becomes a folder; a
+  folder directory renamed in place (its notes all turn up in one new
+  directory beside it, or both are empty) retitles the folder record; a
+  folder directory deleted moves its notes to Recently Deleted and then
+  deletes the folder record (`records/modify` `delete`, deepest first),
+  unless the private zone's changes since the last pull show a note or
+  folder this vault doesn't know in it (`Refusal::FolderChangedRemotely`).
+  The default folder and shared folders are never renamed or deleted.
+
+Tests: tests/cmd_local_delete.rs, tests/cmd_push.rs (folder planning),
+tests/vault_folders.rs, tests/doc_embed_push.rs.
+
 ### New notes listed without their text (not in 0.6.2)
 
 Found in review (2026-09-29). In 0.6.2's `pull` (`src/commands/pull.ts`

@@ -9,15 +9,26 @@ use std::path::Path;
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution};
 use icloud_notes_sync::cmd::push::{
-    BuildPushPlanResult, PushOptions, apply_remote_merge, build_push_plan, merge_remote_change, run_push_with,
+    BuildPushPlanResult, FolderRename, PushOptions, apply_remote_merge, build_push_plan, merge_remote_change,
+    plan_folder_dir_changes, run_push_with,
 };
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
 use icloud_notes_sync::vault::state::{
     AttachmentEntry, CloneState, FolderEntry, NoteEntry, SharerHomeEntry, TableAttachmentEntry, TitleMode,
-    write_clone_state,
 };
 use indexmap::IndexMap;
+
+/// Writes the state, and every folder directory it names, as a pull leaves
+/// them (a folder directory missing is one deleted here).
+fn write_clone_state(dir: &Path, state: &CloneState) -> Result<(), icloud_notes_sync::cmd::Error> {
+    icloud_notes_sync::vault::state::write_clone_state(dir, state)?;
+    let index = icloud_notes_sync::vault::layout::state_dir_index(icloud_notes_sync::vault::layout::PreviousLayout::of(state));
+    for folder_dir in index.keys() {
+        std::fs::create_dir_all(dir.join(folder_dir)).unwrap();
+    }
+    Ok(())
+}
 
 /// A folder-layout vault: "Notes", "Recipes", and a sharer ("Pat") with one
 /// shared folder.
@@ -805,4 +816,88 @@ fn still_ignores_ordinary_frontmatter_on_a_clean_file() {
     );
     write_clone_state(dir.path(), &title_mode_state()).unwrap();
     assert!(plan_entries(dir.path()).is_empty());
+}
+
+// --- folder directories renamed, deleted or made here --------------------------
+
+fn folder_index(dirs: &[(&str, &str)]) -> IndexMap<String, icloud_notes_sync::vault::layout::StateDirInfo> {
+    dirs.iter()
+        .map(|(dir, rn)| {
+            (
+                dir.to_string(),
+                icloud_notes_sync::vault::layout::StateDirInfo::Folder {
+                    folder_record_name: rn.to_string(),
+                    shared_zone_owner: None,
+                    permission: None,
+                },
+            )
+        })
+        .collect()
+}
+
+fn on_disk(dirs: &[&str]) -> std::collections::HashSet<String> {
+    dirs.iter().map(|d| d.to_string()).collect()
+}
+
+fn tracked(file: &str) -> NoteEntry {
+    NoteEntry {
+        file: file.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_folder_directory_whose_notes_all_moved_beside_it_is_a_rename() {
+    let index = folder_index(&[("Notes", "DefaultFolder-CloudKit"), ("Travel", "F1"), ("Travel/Old", "F2")]);
+    let notes = IndexMap::from([("N1".to_string(), tracked("Travel/Iran.md")), ("N2".to_string(), tracked("Travel/Oman.md"))]);
+    let moves = vec![
+        ("N1".to_string(), notes["N1"].clone(), "Trips/Iran.md".to_string()),
+        ("N2".to_string(), notes["N2"].clone(), "Trips/Oman.md".to_string()),
+    ];
+    let (renames, deletes) = plan_folder_dir_changes(
+        &index,
+        &on_disk(&["Notes", "Trips", "Trips/Old"]),
+        &notes,
+        &moves,
+        &Default::default(),
+    );
+    assert_eq!(
+        renames,
+        vec![FolderRename {
+            record_name: "F1".into(),
+            from: "Travel".into(),
+            to: "Trips".into()
+        }]
+    );
+    assert!(deletes.is_empty(), "the subfolder went along: {deletes:?}");
+}
+
+#[test]
+fn an_empty_folder_directory_renamed_is_a_rename() {
+    let index = folder_index(&[("Notes", "DefaultFolder-CloudKit"), ("Empty", "F1")]);
+    let (renames, deletes) =
+        plan_folder_dir_changes(&index, &on_disk(&["Notes", "Renamed"]), &IndexMap::new(), &[], &Default::default());
+    assert_eq!(renames.len(), 1);
+    assert_eq!(renames[0].to, "Renamed");
+    assert!(deletes.is_empty());
+}
+
+#[test]
+fn a_folder_directory_gone_with_its_notes_is_a_delete_deepest_first() {
+    let index = folder_index(&[("Notes", "DefaultFolder-CloudKit"), ("Old", "F1"), ("Old/Inner", "F2")]);
+    let notes = IndexMap::from([("N1".to_string(), tracked("Old/a.md"))]);
+    let (renames, deletes) =
+        plan_folder_dir_changes(&index, &on_disk(&["Notes"]), &notes, &[], &Default::default());
+    assert!(renames.is_empty());
+    assert_eq!(
+        deletes,
+        vec![("Old/Inner".to_string(), "F2".to_string()), ("Old".to_string(), "F1".to_string())]
+    );
+}
+
+#[test]
+fn the_default_folder_is_never_deleted() {
+    let index = folder_index(&[("Notes", "DefaultFolder-CloudKit")]);
+    let (renames, deletes) = plan_folder_dir_changes(&index, &on_disk(&[]), &IndexMap::new(), &[], &Default::default());
+    assert!(renames.is_empty() && deletes.is_empty());
 }

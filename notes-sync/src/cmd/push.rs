@@ -33,7 +33,7 @@ use crate::doc::embeds::{
     has_unknown_content_marker, plan_embed_representations,
 };
 use crate::doc::encode::{
-    DEFAULT_FOLDER_RECORD_NAME, build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_trash_fields,
+    DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME, build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_trash_fields,
     build_note_update_fields,
 };
 use crate::doc::format::{FormatParagraph, decode_note_format, formats_round_trip_equal};
@@ -170,12 +170,25 @@ pub struct Retitle {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     CreateFolder(PlannedFolder),
+    RenameFolder {
+        rename: FolderRename,
+        record: Box<CloudKitRecord>,
+    },
+    /// After its notes were trashed or moved out.
+    DeleteFolder {
+        record_name: String,
+        dir: String,
+        record: Option<Box<CloudKitRecord>>,
+    },
     Move {
         record_name: String,
         entry: NoteEntry,
         to_file: String,
         folder_record_name: String,
+        /// Into another folder: the record moves.
         relocated: bool,
+        /// Into another directory (its attachment files follow).
+        dir_changed: bool,
         record: Box<CloudKitRecord>,
         retitle: Option<Retitle>,
         /// The moved file's text when it was edited too: pushed right
@@ -303,6 +316,7 @@ struct ReadyMove {
     to_file: String,
     folder_record_name: String,
     relocated: bool,
+    dir_changed: bool,
     new_title: Option<String>,
     /// The moved file's body differs from the base copy.
     edited: bool,
@@ -354,6 +368,141 @@ pub(crate) fn list_untracked_markdown_files(
     walk(target_dir, "", &tracked, &mut found)?;
     found.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     Ok(found)
+}
+
+/// Every directory in the vault that could be a folder's: dot-directories
+/// and `attachments/` skipped, as for note files.
+fn list_vault_dirs(target_dir: &Path) -> Result<HashSet<String>, Error> {
+    fn walk(target_dir: &Path, dir: &str, found: &mut HashSet<String>) -> Result<(), Error> {
+        let entries = match std::fs::read_dir(target_dir.join(dir)) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name.to_lowercase() == "attachments" || !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let relative = if dir.is_empty() { name } else { format!("{dir}/{name}") };
+            walk(target_dir, &relative, found)?;
+            found.insert(relative);
+        }
+        Ok(())
+    }
+    let mut found = HashSet::new();
+    walk(target_dir, "", &mut found)?;
+    Ok(found)
+}
+
+/// A folder directory renamed here (`from` gone, `to` new beside it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FolderRename {
+    pub record_name: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// Own folders whose directory is gone: renamed, when its notes all turn up
+/// in one new directory beside it (or, emptied, when it and one new empty
+/// directory are the only candidates there), else deleted. Renames come
+/// shallowest first; deletes deepest first.
+/// `move_pairs` are (record name, entry, file it moved to); `untracked_dirs`
+/// the directories holding untracked note files.
+pub fn plan_folder_dir_changes(
+    dir_index: &IndexMap<String, StateDirInfo>,
+    dirs_on_disk: &HashSet<String>,
+    notes: &IndexMap<String, NoteEntry>,
+    move_pairs: &[(String, NoteEntry, String)],
+    untracked_dirs: &HashSet<String>,
+) -> (Vec<FolderRename>, Vec<(String, String)>) {
+    let mut own: Vec<(&String, &String)> = dir_index
+        .iter()
+        .filter_map(|(dir, info)| match info {
+            StateDirInfo::Folder {
+                folder_record_name,
+                shared_zone_owner: None,
+                ..
+            } if folder_record_name != DEFAULT_FOLDER_RECORD_NAME && folder_record_name != TRASH_FOLDER_RECORD_NAME => {
+                Some((dir, folder_record_name))
+            }
+            _ => None,
+        })
+        .collect();
+    own.sort_by_key(|(dir, _)| dir.split('/').count());
+    let mut new_dirs: HashSet<&String> = dirs_on_disk.iter().filter(|d| !dir_index.contains_key(*d)).collect();
+    let parent_of = |dir: &str| posix::dirname(dir).trim_start_matches('.').to_owned();
+    let has_notes = |dir: &str| untracked_dirs.contains(dir);
+    let missing_empty = |dir: &&String| {
+        !dirs_on_disk.contains(*dir) && !notes.values().any(|n| note_dir_of(&n.file) == **dir)
+    };
+
+    let mut renames: Vec<FolderRename> = Vec::new();
+    let mut deletes: Vec<(String, String)> = Vec::new();
+    for (dir, record_name) in &own {
+        // Under a folder renamed here, it went along.
+        let mapped = renames.iter().find_map(|r| {
+            dir.strip_prefix(&format!("{}/", r.from))
+                .map(|rest| format!("{}/{rest}", r.to))
+        });
+        if dirs_on_disk.contains(*dir) || mapped.as_ref().is_some_and(|m| dirs_on_disk.contains(m)) {
+            continue;
+        }
+        let parent = parent_of(dir);
+        let parent = renames
+            .iter()
+            .find_map(|r| {
+                (parent == r.from)
+                    .then(|| r.to.clone())
+                    .or_else(|| parent.strip_prefix(&format!("{}/", r.from)).map(|rest| format!("{}/{rest}", r.to)))
+            })
+            .unwrap_or(parent);
+        let notes_here: Vec<&String> = notes
+            .iter()
+            .filter(|(_, n)| note_dir_of(&n.file) == **dir)
+            .map(|(rn, _)| rn)
+            .collect();
+        let targets: HashSet<String> = move_pairs
+            .iter()
+            .filter(|(_, entry, _)| note_dir_of(&entry.file) == **dir)
+            .map(|(_, _, to)| note_dir_of(to))
+            .collect();
+        let to = if notes_here.is_empty() {
+            let gone: Vec<&&String> = own
+                .iter()
+                .map(|(d, _)| d)
+                .filter(|d| parent_of(d) == parent_of(dir) && missing_empty(d))
+                .collect();
+            let fresh: Vec<&&String> = new_dirs
+                .iter()
+                .filter(|d| parent_of(d) == parent && !has_notes(d))
+                .collect();
+            (gone.len() == 1 && fresh.len() == 1).then(|| (*fresh[0]).clone())
+        } else if targets.len() == 1 {
+            let to = targets.into_iter().next().unwrap_or_default();
+            let all_moved_there = notes_here.iter().all(|rn| {
+                move_pairs.iter().any(|(m, _, t)| m == *rn && note_dir_of(t) == to)
+                    || !move_pairs.iter().any(|(m, _, _)| m == *rn)
+            });
+            (all_moved_there && new_dirs.contains(&to) && parent_of(&to) == parent).then_some(to)
+        } else {
+            None
+        };
+        match to {
+            Some(to) => {
+                new_dirs.retain(|d| **d != to);
+                renames.push(FolderRename {
+                    record_name: (*record_name).clone(),
+                    from: (*dir).clone(),
+                    to,
+                });
+            }
+            None => deletes.push(((*dir).clone(), (*record_name).clone())),
+        }
+    }
+    deletes.sort_by_key(|(dir, _)| std::cmp::Reverse(dir.split('/').count()));
+    (renames, deletes)
 }
 
 /// `titleExpressedByFile`: `apple-note-title` when the file carried one,
@@ -643,11 +792,40 @@ pub fn build_push_plan(
     }
     delete_candidates.extend(emptied);
 
-    // --- folders the account doesn't have yet
+    // --- folder directories renamed or deleted here
+    let dirs_on_disk = list_vault_dirs(target_dir)?;
+    let (folder_renames, folder_deletes) =
+        plan_folder_dir_changes(
+            &dir_index,
+            &dirs_on_disk,
+            &state.notes,
+            &move_pairs,
+            &untracked.iter().map(|u| note_dir_of(&u.file)).collect(),
+        );
+    // A renamed directory (and everything under it) answers for its folder.
+    let mut dir_index = dir_index;
+    for rename in &folder_renames {
+        let aliases: Vec<(String, StateDirInfo)> = dir_index
+            .iter()
+            .filter_map(|(dir, info)| {
+                let rest = if *dir == rename.from {
+                    Some("")
+                } else {
+                    dir.strip_prefix(&format!("{}/", rename.from)).map(|_| &dir[rename.from.len()..])
+                }?;
+                Some((format!("{}{rest}", rename.to), info.clone()))
+            })
+            .collect();
+        dir_index.extend(aliases);
+    }
+
+    // --- folders the account doesn't have yet: every new directory, empty
+    // or not, as a folder made in Notes
     let wanted: Vec<String> = move_pairs
         .iter()
         .map(|(_, _, to)| note_dir_of(to))
         .chain(untracked.iter().map(|u| note_dir_of(&u.file)))
+        .chain(dirs_on_disk.iter().cloned())
         .collect();
     let folder_plan = plan_folder_creates(wanted.iter().map(String::as_str), &dir_index, &mut rt::random_uuid);
     let folder_refusals: HashMap<String, super::plan::FolderRefusal> = folder_plan
@@ -678,8 +856,10 @@ pub fn build_push_plan(
     let mut ready_moves: Vec<ReadyMove> = Vec::new();
     for (record_name, entry, to_file) in &move_pairs {
         let to_dir = note_dir_of(to_file);
-        let relocated = to_dir != note_dir_of(&entry.file);
+        let dir_changed = to_dir != note_dir_of(&entry.file);
         let info = resolve_dir(&to_dir);
+        let from_folder = resolve_dir(&note_dir_of(&entry.file)).and_then(|i| i.folder_record_name().map(str::to_owned));
+        let relocated = dir_changed && info.as_ref().and_then(|i| i.folder_record_name()) != from_folder.as_deref();
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             let mut e = PlanEntry::refused(PlanEntryKind::Move, to_file.clone(), refusal);
             e.previous_file = Some(entry.file.clone());
@@ -715,6 +895,7 @@ pub fn build_push_plan(
             to_file: to_file.clone(),
             folder_record_name: info.folder_record_name().unwrap_or_default().to_owned(),
             relocated,
+            dir_changed,
             new_title: retitled.then_some(new_title),
             edited,
         });
@@ -782,6 +963,9 @@ pub fn build_push_plan(
         && delete_candidates.is_empty()
         && create_candidates.is_empty()
         && ready_moves.is_empty()
+        && folder_plan.folders.is_empty()
+        && folder_renames.is_empty()
+        && folder_deletes.is_empty()
     {
         // icloud-md returns before its state write here, even when settling
         // changed something: a later run re-derives it.
@@ -797,21 +981,9 @@ pub fn build_push_plan(
     let db = &remote.db;
 
     // --- folder creates, ahead of every note write
-    let needed_dirs: Vec<String> = create_candidates
-        .iter()
-        .map(|c| note_dir_of(&c.file))
-        .chain(ready_moves.iter().map(|m| note_dir_of(&m.to_file)))
-        .collect::<indexmap::IndexSet<_>>()
-        .into_iter()
-        .collect();
     let folder_entries: Vec<ExecutablePlanEntry> = folder_plan
         .folders
         .iter()
-        .filter(|f| {
-            needed_dirs
-                .iter()
-                .any(|d| *d == f.dir_path || d.starts_with(&format!("{}/", f.dir_path)))
-        })
         .map(|f| {
             let mut e = PlanEntry::new(PlanEntryKind::CreateFolder, f.dir_path.clone(), PlanResolution::Ready);
             e.folder_title = Some(f.title.clone());
@@ -834,6 +1006,13 @@ pub fn build_push_plan(
     for m in &ready_moves {
         lookup_groups.entry(None).or_default().push(m.record_name.clone());
     }
+    for record_name in folder_renames
+        .iter()
+        .map(|r| &r.record_name)
+        .chain(folder_deletes.iter().map(|(_, rn)| rn))
+    {
+        lookup_groups.entry(None).or_default().push(record_name.clone());
+    }
     let mut records_by_name: HashMap<String, CloudKitRecord> = HashMap::new();
     for (owner, names) in &lookup_groups {
         for record in db.lookup_records(&note_zone(owner.as_deref()), names)? {
@@ -849,6 +1028,24 @@ pub fn build_push_plan(
     let replica_bytes: [u8; 16] = js::base64_decode(&replica_id).try_into().map_err(|_| {
         Error::CorruptStateFile("state.json has a malformed replicaId (expected 16 bytes, base64-encoded)".into())
     })?;
+
+    // --- folder renames, ahead of the notes moving with them
+    for rename in &folder_renames {
+        let mut e = PlanEntry::new(PlanEntryKind::RenameFolder, rename.to.clone(), PlanResolution::Ready);
+        e.previous_file = Some(rename.from.clone());
+        match records_by_name.get(&rename.record_name).filter(|r| !r.is_deleted()) {
+            Some(record) => entries.push(ExecutablePlanEntry::with(
+                e,
+                Action::RenameFolder {
+                    rename: rename.clone(),
+                    record: Box::new(record.clone()),
+                },
+            )),
+            None => entries.push(
+                PlanEntry::refused(PlanEntryKind::RenameFolder, rename.to.clone(), Refusal::FolderGoneRemotely).into(),
+            ),
+        }
+    }
 
     // --- moves
     for m in &ready_moves {
@@ -891,6 +1088,7 @@ pub fn build_push_plan(
                 to_file: m.to_file.clone(),
                 folder_record_name: m.folder_record_name.clone(),
                 relocated: m.relocated,
+                dir_changed: m.dir_changed,
                 record: Box::new(record.clone()),
                 retitle,
                 edit: m.edited.then_some(MoveEdit { replica: replica_bytes }),
@@ -1095,6 +1293,52 @@ pub fn build_push_plan(
                 requested_title: c.requested_title.clone(),
                 modification_date_ms,
                 merged,
+            },
+        ));
+    }
+
+    // --- folders deleted here, once their notes are gone. Not one another
+    // device put a note or folder in since the last pull: that would orphan
+    // it. (One look at the private zone's changes, only when deleting.)
+    let mut kept_folders: HashSet<String> = HashSet::new();
+    if !folder_deletes.is_empty() {
+        match state.sync_token.as_deref() {
+            Some(token) => {
+                let changes = db.fetch_all_note_records(Some(token), &mut |_| {})?;
+                // Only what this vault doesn't know yet: tracked notes there are
+                // being trashed or moved by this push.
+                let known = |rn: &String| {
+                    state.notes.contains_key(rn) || state.folders.as_ref().is_some_and(|f| f.contains_key(rn))
+                };
+                for record in changes
+                    .records
+                    .iter()
+                    .filter(|r| !r.is_deleted() && !is_in_trash(r) && !known(&r.record_name))
+                {
+                    let field = if record.record_type == "Folder" { "ParentFolder" } else { "Folder" };
+                    if let Some(folder) = crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
+                    {
+                        kept_folders.insert(folder);
+                    }
+                }
+            }
+            None => kept_folders.extend(folder_deletes.iter().map(|(_, rn)| rn.clone())),
+        }
+    }
+    for (dir, record_name) in &folder_deletes {
+        if kept_folders.contains(record_name) {
+            entries.push(PlanEntry::refused(PlanEntryKind::DeleteFolder, dir.clone(), Refusal::FolderChangedRemotely).into());
+            continue;
+        }
+        entries.push(ExecutablePlanEntry::with(
+            PlanEntry::new(PlanEntryKind::DeleteFolder, dir.clone(), PlanResolution::Ready),
+            Action::DeleteFolder {
+                record_name: record_name.clone(),
+                dir: dir.clone(),
+                record: records_by_name
+                    .get(record_name)
+                    .filter(|r| !r.is_deleted())
+                    .map(|r| Box::new(r.clone())),
             },
         ));
     }
@@ -1696,12 +1940,74 @@ fn execute<T: Transport>(
             );
             Ok(ExecuteOutcome::ok(format!("Created folder {}/", folder.dir_path)))
         }
+        Action::RenameFolder { rename, record } => {
+            let title = posix::basename(&rename.to).to_owned();
+            let mut fields = UpdateFields::new();
+            fields.insert(
+                "TitleEncrypted".into(),
+                UpdateFieldValue::new(serde_json::json!(js::base64_encode(title.as_bytes()))),
+            );
+            let result = db.update_records(
+                &private,
+                &[RecordUpdate {
+                    record_name: rename.record_name.clone(),
+                    record_type: "Folder".into(),
+                    record_change_tag: record.record_change_tag.clone().unwrap_or_default(),
+                    fields,
+                    parent_record_name: record.parent_record_name.clone(),
+                }],
+            )?;
+            if let Some(failure) = result.iter().find_map(rejection) {
+                failed_folders.insert(rename.record_name.clone());
+                return Ok(ExecuteOutcome::failed(format!(
+                    "{}/: server rejected the rename: {failure}",
+                    rename.from
+                )));
+            }
+            if let Some(folder) = state.folders.as_mut().and_then(|f| f.get_mut(&rename.record_name)) {
+                folder.name = title;
+                folder.dir_name = posix::basename(&rename.to).to_owned();
+            }
+            Ok(ExecuteOutcome::ok(format!("Renamed folder {}/ -> {}/", rename.from, rename.to)))
+        }
+        Action::DeleteFolder {
+            record_name,
+            dir,
+            record,
+        } => {
+            let folders = state.folders.clone().unwrap_or_default();
+            let still_holds = state
+                .notes
+                .values()
+                .filter(|n| n.folder_record_name.as_deref() == Some(record_name.as_str()))
+                .count()
+                + folders
+                    .values()
+                    .filter(|f| f.parent_record_name.as_deref() == Some(record_name.as_str()))
+                    .count();
+            if still_holds > 0 {
+                return Ok(ExecuteOutcome::failed(format!(
+                    "{dir}/: kept - {still_holds} note(s) or folder(s) in it couldn't be removed"
+                )));
+            }
+            if let Some(record) = record
+                && let Some(failure) =
+                    db.delete_record(&private, record_name, record.record_change_tag.as_deref().unwrap_or(""))?
+            {
+                return Ok(ExecuteOutcome::failed(format!("{dir}/: server rejected the delete: {failure}")));
+            }
+            if let Some(folders) = state.folders.as_mut() {
+                folders.shift_remove(record_name);
+            }
+            Ok(ExecuteOutcome::ok(format!("Deleted folder {dir}/")))
+        }
         Action::Move {
             record_name,
             entry,
             to_file,
             folder_record_name,
             relocated,
+            dir_changed,
             record,
             retitle,
             edit,
@@ -1728,7 +2034,9 @@ fn execute<T: Transport>(
                 })
             };
             let mut current: CloudKitRecord = (**record).clone();
-            if *relocated || retitle.is_none() {
+            // Renamed within its folder (and not retitled): nothing changes in
+            // iCloud, only where the file is.
+            if *relocated {
                 let fields = build_note_move_fields(&current, folder_record_name, rt::now_ms());
                 match modify(fields, current.record_change_tag.clone().unwrap_or_default())? {
                     Ok(r) => current = r,
@@ -1761,7 +2069,7 @@ fn execute<T: Transport>(
             };
             state.notes.insert(record_name.clone(), updated.clone());
             apply_note_file_times(&target_dir.join(to_file), &current)?;
-            if *relocated && let Some(attachments) = state.attachments.as_mut() {
+            if *dir_changed && let Some(attachments) = state.attachments.as_mut() {
                 relocate_note_attachments(target_dir, record_name, to_file, attachments)?;
             }
             let what = match (retitle.is_some(), *relocated) {

@@ -26,6 +26,10 @@ use crate::md::frontmatter::NOTE_TITLE_KEY;
 pub enum PlanEntryKind {
     Create,
     CreateFolder,
+    /// A folder directory renamed here: the folder record is retitled.
+    RenameFolder,
+    /// A folder directory deleted here: the emptied folder record goes too.
+    DeleteFolder,
     Update,
     Delete,
     Move,
@@ -369,6 +373,11 @@ pub enum Refusal {
     MoveGoneRemotely,
     /// 849 (move, conflict)
     MoveChangedRemotely,
+    /// A folder renamed here that no longer exists remotely.
+    FolderGoneRemotely,
+    /// A folder deleted here that another device put a note or folder in
+    /// since the last pull.
+    FolderChangedRemotely,
     /// 860 (move): `prepareRetitle` refused; `previous_file` = tracked path.
     MoveRetitle {
         refusal: RetitleRefusal,
@@ -404,6 +413,8 @@ impl Refusal {
             | UpdateConflictMarkers
             | MoveGoneRemotely
             | MoveChangedRemotely
+            | FolderGoneRemotely
+            | FolderChangedRemotely
             | UpdateGoneRemotely
             | UpdateChangedRemotelyUnmergeable
             | MergedWithConflicts => PlanResolution::Conflict,
@@ -467,7 +478,12 @@ impl Refusal {
                 "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first."
                     .into()
             }
-            MoveGoneRemotely | UpdateGoneRemotely => "no longer exists remotely - run \"pull\" to reconcile".into(),
+            FolderChangedRemotely => "another device put a note or folder in it since the last pull - \
+                                      run \"pull\", then delete it again"
+                .into(),
+            MoveGoneRemotely | UpdateGoneRemotely | FolderGoneRemotely => {
+                "no longer exists remotely - run \"pull\" to reconcile".into()
+            }
             MoveChangedRemotely => {
                 "changed remotely since the last pull - run \"pull\" first".into()
             }
@@ -553,6 +569,8 @@ fn label_of(kind: PlanEntryKind) -> &'static str {
     match kind {
         PlanEntryKind::Create => "new file:",
         PlanEntryKind::CreateFolder => "new dir:",
+        PlanEntryKind::RenameFolder => "renamed:",
+        PlanEntryKind::DeleteFolder => "deleted:",
         PlanEntryKind::Update => "modified:",
         PlanEntryKind::Delete => "deleted:",
         PlanEntryKind::Move => "moved:",
@@ -595,10 +613,16 @@ pub fn render_plan(
         lines.push(String::new());
     }
     let (mut to_create, mut to_create_folder, mut to_update, mut to_delete, mut to_move) = (0, 0, 0, 0, 0);
+    let mut folder_changes = 0;
     let (mut refused, mut conflicts) = (0, 0);
     for entry in visible {
         let subject = match entry.kind {
-            PlanEntryKind::CreateFolder => format!("{}/", format_path(&entry.file)),
+            PlanEntryKind::CreateFolder | PlanEntryKind::DeleteFolder => format!("{}/", format_path(&entry.file)),
+            PlanEntryKind::RenameFolder => format!(
+                "{}/ -> {}/",
+                format_path(entry.previous_file.as_deref().unwrap_or(&entry.file)),
+                format_path(&entry.file)
+            ),
             PlanEntryKind::Move => format!(
                 "{} -> {}",
                 format_path(entry.previous_file.as_deref().unwrap_or(&entry.file)),
@@ -640,6 +664,7 @@ pub fn render_plan(
         match entry.kind {
             PlanEntryKind::Create => to_create += 1,
             PlanEntryKind::CreateFolder => to_create_folder += 1,
+            PlanEntryKind::RenameFolder | PlanEntryKind::DeleteFolder => folder_changes += 1,
             PlanEntryKind::Update => to_update += 1,
             PlanEntryKind::Move => to_move += 1,
             PlanEntryKind::Delete => to_delete += 1,
@@ -655,6 +680,12 @@ pub fn render_plan(
         summary.push_str(&format!(
             ", {to_create_folder} new folder{}",
             if to_create_folder == 1 { "" } else { "s" }
+        ));
+    }
+    if folder_changes > 0 {
+        summary.push_str(&format!(
+            ", {folder_changes} folder{} renamed or deleted",
+            if folder_changes == 1 { "" } else { "s" }
         ));
     }
     summary.push('.');
@@ -686,7 +717,14 @@ pub fn count_unchanged_notes(entries: &[SerializedPlanEntry], tracked_notes: usi
     let touched = entries
         .iter()
         .filter(|e| {
-            e.kind != PlanEntryKind::Create && e.kind != PlanEntryKind::Rename && e.resolution != PlanResolution::Noop
+            !matches!(
+                e.kind,
+                PlanEntryKind::Create
+                    | PlanEntryKind::Rename
+                    | PlanEntryKind::CreateFolder
+                    | PlanEntryKind::RenameFolder
+                    | PlanEntryKind::DeleteFolder
+            ) && e.resolution != PlanResolution::Noop
         })
         .count();
     tracked_notes.saturating_sub(touched)

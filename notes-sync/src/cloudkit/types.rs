@@ -272,6 +272,12 @@ pub enum RecordOp {
         fields: UpdateFields,
         extras: CreateExtras,
     },
+    /// `operationType: "delete"`: refused with `CONFLICT` if the record
+    /// changed since `record_change_tag`.
+    Delete {
+        record_name: String,
+        record_change_tag: String,
+    },
 }
 
 /// `NoteUpdateResult` / `RecordUpdateResult`: per-record outcome of a

@@ -378,6 +378,27 @@ impl<T: Transport> Database<T> {
         self.create_zone_record("Note", zone, record_name, fields, extras)
     }
 
+    /// Deletes a record: `Ok(None)` when gone, `Ok(Some(reason))` when the
+    /// server refused (a `CONFLICT` if it changed since `record_change_tag`).
+    pub fn delete_record(
+        &self,
+        zone: &NoteZone,
+        record_name: &str,
+        record_change_tag: &str,
+    ) -> Result<Option<String>, CkError> {
+        let op = RecordOp::Delete {
+            record_name: record_name.into(),
+            record_change_tag: record_change_tag.into(),
+        };
+        let body = self.post_database(zone.database, "records/modify", &modify_body(&[op], &zone.zone_id))?;
+        let entry = first_modify_entry(&body)?;
+        Ok(get_str(entry, "serverErrorCode").map(|code| {
+            get_str(entry, "reason")
+                .filter(|r| !r.is_empty())
+                .map_or_else(|| code.to_owned(), |r| format!("{code} ({r})"))
+        }))
+    }
+
     /// `createFolderRecord`.
     pub fn create_folder_record(
         &self,
@@ -506,6 +527,14 @@ fn modify_body(ops: &[RecordOp], zone_id: &ZoneId) -> Value {
                         record.insert("createShortGUID".into(), Value::Bool(true));
                     }
                     "create"
+                }
+                RecordOp::Delete {
+                    record_name,
+                    record_change_tag,
+                } => {
+                    record.insert("recordName".into(), json!(record_name));
+                    record.insert("recordChangeTag".into(), json!(record_change_tag));
+                    "delete"
                 }
             };
             json!({ "operationType": operation_type, "record": record })

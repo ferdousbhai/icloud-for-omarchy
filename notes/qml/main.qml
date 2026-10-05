@@ -1465,7 +1465,7 @@ ApplicationWindow {
         title: "Rename folder"
         placeholder: "Folder name"
         initial: root.folderLabel(backend.currentFolder)
-        hint: "Notes has no folder renames: the next Push creates the new folder and moves these notes into it. The old folder stays in Notes, empty, until you delete it there."
+        hint: "The next Push renames the folder in iCloud too."
         onAccepted: {
             if (value.length === 0 || !root.flushEdits())
                 return;
@@ -1485,7 +1485,7 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
                 text: "Move \"" + root.folderLabel(backend.currentFolder) + "\" and its "
                       + (backend.folderNoteCounts[backend.currentFolder] || 0) + " note(s) to the trash? "
-                      + "The next Push moves the notes to Recently Deleted in iCloud; the empty folder stays in Notes until you delete it there."
+                      + "The next Push moves the notes to Recently Deleted in iCloud and deletes the folder there."
             }
         }
         onAccepted: {
@@ -1577,7 +1577,8 @@ ApplicationWindow {
                         RowLayout {
                             spacing: 8
                             Pill {
-                                label: modelData.kind === "createFolder" ? "new folder" : modelData.kind
+                                label: ({ createFolder: "new folder", renameFolder: "rename folder", deleteFolder: "delete folder" })[modelData.kind]
+                                       || modelData.kind
                                 tint: root.colAccent
                             }
                             Pill {

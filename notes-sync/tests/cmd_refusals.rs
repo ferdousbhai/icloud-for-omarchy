@@ -228,6 +228,20 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "no longer exists remotely - run \"pull\" to reconcile".into(),
         ),
         (
+            0,
+            "no longer exists remotely",
+            Refusal::FolderGoneRemotely,
+            Conflict,
+            "no longer exists remotely - run \"pull\" to reconcile".into(),
+        ),
+        (
+            0,
+            "another device put a note or folder in it",
+            Refusal::FolderChangedRemotely,
+            Conflict,
+            "another device put a note or folder in it since the last pull - run \"pull\", then delete it again".into(),
+        ),
+        (
             849,
             "changed remotely since the last pull - run \"pull\" first",
             Refusal::MoveChangedRemotely,
@@ -591,6 +605,8 @@ fn every_refusal_variant_is_listed() {
             | CreateAttachmentReference
             | MoveGoneRemotely
             | MoveChangedRemotely
+            | FolderGoneRemotely
+            | FolderChangedRemotely
             | MoveRetitle { .. }
             | CreateMarkdown { .. }
             | CreateReconcile { .. }
@@ -607,7 +623,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 31, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 33, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()

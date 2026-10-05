@@ -199,9 +199,8 @@ public:
     Q_INVOKABLE QVariantMap recoverConflictedNote(const QString &how);
     static QString conflictBackupDir();
     Q_INVOKABLE void newFolder(const QString &name);
-    // Folders have no id upstream, so these do what a mv/rm on disk does:
-    // a rename becomes a new Notes folder plus note moves, a delete sends
-    // the notes to Recently Deleted; the old folder stays in Notes, empty.
+    // These do what a mv/rm on disk does; the next push renames the folder
+    // in iCloud, or sends its notes to Recently Deleted and deletes it.
     Q_INVOKABLE QString renameCurrentFolder(const QString &name);
     Q_INVOKABLE QString deleteCurrentFolder();
     Q_INVOKABLE QVariantList searchVault(const QString &query);

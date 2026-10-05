@@ -315,16 +315,9 @@ fn a_rename_with_an_edit_goes_up_in_one_push() {
     std::fs::write(vault.join(renamed), format!("{original}\n\nA line added here.")).unwrap();
     std::fs::remove_file(vault.join(FILE)).unwrap();
 
-    // tiny-push's lookup, then two writes: the move (tag 26a), the edit (26b).
-    let mut cassette: Value =
-        serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes/tiny-push.json")).unwrap())
-            .unwrap();
-    let mut first = cassette["interactions"][1].clone();
-    first["response"]["body"]["records"][0]["recordChangeTag"] = Value::from("26a");
-    cassette["interactions"].as_array_mut().unwrap().insert(1, first);
-    let path = out.join("cassette.json");
-    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
-
+    // A rename within its folder changes nothing in iCloud: the one write is
+    // the edit (tiny-push's answers, tag 26b).
+    let path = differential().join("cassettes/tiny-push.json");
     let (code, stdout, stderr) = run(&out, &path, &["--json", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"].as_array().unwrap().len(), 1, "{stdout}");
@@ -333,7 +326,7 @@ fn a_rename_with_an_edit_goes_up_in_one_push() {
         stdout["entries"][0]["outcome"]["message"].as_str().unwrap().ends_with("with its edits"),
         "{stdout}"
     );
-    assert_eq!(modify_requests(&out), 2);
+    assert_eq!(modify_requests(&out), 1);
     let state = state(&vault);
     assert_eq!(state["notes"][RECORD]["file"], renamed);
     assert_eq!(state["notes"][RECORD]["recordChangeTag"], "26b");

@@ -267,10 +267,12 @@ preview-only: notes with attachments can't be edited back to iCloud.
   usual case: Apple keeps its text in a separate file, which
   icloud-notes-sync reads but does not write back.
   Edit it in Apple Notes; the changes still sync here.
-- Folders carry no id in iCloud, so a folder rename here becomes a new
-  folder plus note moves on push, and a folder delete moves its notes to
-  Recently Deleted; the old folder stays in Notes, empty, until you delete
-  it there. Both are in the folder's right-click menu.
+- Folder directories sync like folders in Notes: renaming one renames the
+  folder in iCloud, deleting one moves its notes to Recently Deleted and
+  deletes the folder (unless another device put something in it since the
+  last pull), and a new directory, even an empty one, becomes a folder.
+  Both are in the folder's right-click menu, and plain `mv`/`rm`/`mkdir`
+  work the same way.
 - Table edits mostly round-trip, but reordering rows/columns is
   refused — the push preview will tell you.
 - Changes from other devices arrive within about a minute while the
