@@ -120,7 +120,14 @@ fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
         3,
         Box::new(move |e| tx.lock().unwrap().send(e).unwrap()),
     );
-    let ids = cat.missing_thumbs().unwrap();
+    let missing_thumbs = |cat: &Catalog| -> Vec<String> {
+        let rows = cat.assets(None).unwrap();
+        rows.into_iter()
+            .filter(|r| r.thumb_path.is_none())
+            .map(|r| r.id)
+            .collect()
+    };
+    let ids = missing_thumbs(&cat);
     assert_eq!(ids.len(), 12);
     for id in &ids {
         pool.enqueue(id, Job::Thumb, Priority::Now);
@@ -137,7 +144,7 @@ fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
         rx.recv_timeout(Duration::from_millis(300)).is_err(),
         "each job ran once"
     );
-    assert!(cat.missing_thumbs().unwrap().is_empty());
+    assert!(missing_thumbs(&cat).is_empty());
     let orig = cat.asset(&ids[0]).unwrap().unwrap().local_path.unwrap();
     assert!(orig.starts_with(root.join("lib")) && orig.exists());
 }

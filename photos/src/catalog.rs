@@ -52,6 +52,38 @@ CREATE INDEX IF NOT EXISTS album_assets_by_relation ON album_assets(relation_id)
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 ";
 
+/// Schema migrations, in order: `PRAGMA user_version` counts how many have
+/// run. Each runs once, in a transaction; append, never edit.
+const MIGRATIONS: &[&str] = &[
+    // 1: the download threads ask "is this library path anyone's?"
+    // (`path_taken`) for every candidate name, and pruning the medium cache
+    // forgets files by path: index the paths, only the rows that have one.
+    "CREATE INDEX IF NOT EXISTS assets_by_local_path ON assets(local_path) WHERE local_path IS NOT NULL;
+     CREATE INDEX IF NOT EXISTS assets_by_live_path ON assets(live_path) WHERE live_path IS NOT NULL;
+     CREATE INDEX IF NOT EXISTS assets_by_medium_path ON assets(medium_path) WHERE medium_path IS NOT NULL;",
+];
+
+/// Create the tables, then bring an older catalog up to date.
+fn init(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(SCHEMA)?;
+    let version: usize = conn
+        .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?
+        .max(0) as usize;
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(version) {
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let done = conn.execute_batch(&format!("{sql} PRAGMA user_version = {};", i + 1));
+        if let Err(e) = done.and_then(|()| conn.execute_batch("COMMIT")) {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
+    }
+    conn.set_prepared_statement_cache_capacity(32);
+    Ok(())
+}
+
+/// The schema version a catalog opened by this build has.
+pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
+
 /// A catalog row, as the UI and downloaders see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -108,6 +140,17 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
     })
 }
 
+/// What the photo grid needs of an asset ([`Catalog::grid_assets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GridRow {
+    pub id: String,
+    pub created: i64,
+    pub thumb_path: Option<PathBuf>,
+    pub kind: Kind,
+    pub is_live: bool,
+    pub filename: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlbumRow {
     pub id: String,
@@ -128,13 +171,13 @@ impl Catalog {
         conn.busy_timeout(Duration::from_secs(10))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(SCHEMA)?;
+        init(&conn)?;
         Ok(Catalog { conn })
     }
 
     pub fn open_in_memory() -> Result<Catalog> {
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch(SCHEMA)?;
+        init(&conn)?;
         Ok(Catalog { conn })
     }
 
@@ -162,10 +205,12 @@ impl Catalog {
 
     pub fn set_meta(&self, key: &str, value: Option<&str>) -> Result<()> {
         match value {
-            Some(v) => self.conn.execute(
-                "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [key, v],
-            )?,
+            Some(v) => self
+                .conn
+                .prepare_cached(
+                    "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )?
+                .execute([key, v])?,
             None => self.conn.execute("DELETE FROM meta WHERE key = ?1", [key])?,
         };
         Ok(())
@@ -174,8 +219,9 @@ impl Catalog {
     /// Insert or refresh an asset from CloudKit, keeping local paths.
     pub fn upsert_asset(&self, a: &Asset) -> Result<()> {
         let m = &a.master;
-        self.conn.execute(
-            "INSERT INTO assets(id, master_id, filename, created, size, w, h, kind, is_live, deleted, change_tag,
+        self.conn
+            .prepare_cached(
+                "INSERT INTO assets(id, master_id, filename, created, size, w, h, kind, is_live, deleted, change_tag,
                                 orig_url, orig_type, thumb_url, medium_url, live_url, live_type)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(id) DO UPDATE SET master_id = excluded.master_id, filename = excluded.filename,
@@ -184,7 +230,8 @@ impl Catalog {
                change_tag = excluded.change_tag, orig_url = excluded.orig_url, orig_type = excluded.orig_type,
                thumb_url = excluded.thumb_url, medium_url = excluded.medium_url,
                live_url = excluded.live_url, live_type = excluded.live_type",
-            params![
+            )?
+            .execute(params![
                 a.id,
                 m.master_id,
                 m.filename,
@@ -202,28 +249,32 @@ impl Catalog {
                 url(&m.medium),
                 url(&m.live),
                 file_type(&m.live),
-            ],
-        )?;
+            ])?;
         Ok(())
     }
 
     /// Apply the asset-side of a change whose master did not come with it.
     /// Returns false when the asset is unknown (the caller must look the master up).
     pub fn update_asset_part(&self, p: &AssetPart) -> Result<bool> {
-        let n = self.conn.execute(
-            "UPDATE assets SET master_id = ?2, created = ?3, deleted = ?4, change_tag = ?5 WHERE id = ?1",
-            params![p.id, p.master_id, p.created, p.deleted as i64, p.change_tag],
-        )?;
+        let n = self
+            .conn
+            .prepare_cached(
+                "UPDATE assets SET master_id = ?2, created = ?3, deleted = ?4, change_tag = ?5 WHERE id = ?1",
+            )?
+            .execute(params![p.id, p.master_id, p.created, p.deleted as i64, p.change_tag])?;
         Ok(n > 0)
     }
 
     /// Apply a master change (new URLs, renamed file) to every asset using it.
     pub fn update_master(&self, m: &MasterInfo) -> Result<usize> {
-        Ok(self.conn.execute(
-            "UPDATE assets SET filename = ?2, size = ?3, w = ?4, h = ?5, kind = ?6, is_live = ?7,
-               orig_url = ?8, orig_type = ?9, thumb_url = ?10, medium_url = ?11, live_url = ?12, live_type = ?13
-             WHERE master_id = ?1",
-            params![
+        Ok(self
+            .conn
+            .prepare_cached(
+                "UPDATE assets SET filename = ?2, size = ?3, w = ?4, h = ?5, kind = ?6, is_live = ?7,
+                   orig_url = ?8, orig_type = ?9, thumb_url = ?10, medium_url = ?11, live_url = ?12, live_type = ?13
+                 WHERE master_id = ?1",
+            )?
+            .execute(params![
                 m.master_id,
                 m.filename,
                 m.size,
@@ -237,15 +288,13 @@ impl Catalog {
                 url(&m.medium),
                 url(&m.live),
                 file_type(&m.live),
-            ],
-        )?)
+            ])?)
     }
 
     pub fn mark_deleted(&self, asset_id: &str, change_tag: Option<&str>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE assets SET deleted = 1, change_tag = COALESCE(?2, change_tag) WHERE id = ?1",
-            params![asset_id, change_tag],
-        )?;
+        self.conn
+            .prepare_cached("UPDATE assets SET deleted = 1, change_tag = COALESCE(?2, change_tag) WHERE id = ?1")?
+            .execute(params![asset_id, change_tag])?;
         Ok(())
     }
 
@@ -270,9 +319,15 @@ impl Catalog {
             let mut st = self.conn.prepare("SELECT id FROM assets WHERE deleted = 0")?;
             st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
         };
+        let gone: Vec<&String> = ids.iter().filter(|id| !seen.contains(*id)).collect();
         let mut n = 0;
-        for id in ids.iter().filter(|id| !seen.contains(*id)) {
-            n += self.conn.execute("UPDATE assets SET deleted = 1 WHERE id = ?1", [id])?;
+        // One UPDATE per batch of ids, well under SQLite's parameter limit.
+        for chunk in gone.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            n += self
+                .conn
+                .prepare(&format!("UPDATE assets SET deleted = 1 WHERE id IN ({marks})"))?
+                .execute(rusqlite::params_from_iter(chunk))?;
         }
         Ok(n)
     }
@@ -317,16 +372,16 @@ impl Catalog {
     pub fn apply_relation(&self, r: &Relation) -> Result<()> {
         let relation_id = (!r.id.is_empty()).then_some(r.id.as_str());
         if r.deleted {
-            self.conn.execute(
-                "DELETE FROM album_assets WHERE album_id = ?1 AND asset_id = ?2",
-                [&r.album_id, &r.asset_id],
-            )?;
+            self.conn
+                .prepare_cached("DELETE FROM album_assets WHERE album_id = ?1 AND asset_id = ?2")?
+                .execute([&r.album_id, &r.asset_id])?;
         } else {
-            self.conn.execute(
-                "INSERT INTO album_assets(album_id, asset_id, relation_id) VALUES(?1, ?2, ?3)
-                 ON CONFLICT(album_id, asset_id) DO UPDATE SET relation_id = COALESCE(excluded.relation_id, relation_id)",
-                params![r.album_id, r.asset_id, relation_id],
-            )?;
+            self.conn
+                .prepare_cached(
+                    "INSERT INTO album_assets(album_id, asset_id, relation_id) VALUES(?1, ?2, ?3)
+                     ON CONFLICT(album_id, asset_id) DO UPDATE SET relation_id = COALESCE(excluded.relation_id, relation_id)",
+                )?
+                .execute(params![r.album_id, r.asset_id, relation_id])?;
         }
         Ok(())
     }
@@ -368,10 +423,44 @@ impl Catalog {
         Ok(rows)
     }
 
+    /// [`assets`](Self::assets) with only what the photo grid shows: no
+    /// download URLs (four long strings a row), no paths it does not use.
+    pub fn grid_assets(&self, album: Option<&str>) -> Result<Vec<GridRow>> {
+        const COLS: &str = "id, created, thumb_path, kind, is_live, filename";
+        let grid_row = |r: &rusqlite::Row| {
+            Ok(GridRow {
+                id: r.get(0)?,
+                created: r.get(1)?,
+                thumb_path: r.get::<_, Option<String>>(2)?.map(PathBuf::from),
+                kind: Kind::parse(&r.get::<_, String>(3)?),
+                is_live: r.get::<_, i64>(4)? != 0,
+                filename: r.get(5)?,
+            })
+        };
+        let rows = match album {
+            None => {
+                let mut st = self.conn.prepare(&format!(
+                    "SELECT {COLS} FROM assets WHERE deleted = 0 ORDER BY created DESC, id"
+                ))?;
+                st.query_map([], grid_row)?.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            Some(album) => {
+                let mut st = self.conn.prepare(&format!(
+                    "SELECT {COLS} FROM assets WHERE deleted = 0
+                       AND id IN (SELECT asset_id FROM album_assets WHERE album_id = ?1)
+                     ORDER BY created DESC, id"
+                ))?;
+                st.query_map([album], grid_row)?.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+        };
+        Ok(rows)
+    }
+
     pub fn asset(&self, id: &str) -> Result<Option<Row>> {
         Ok(self
             .conn
-            .query_row(&format!("SELECT {ROW_COLUMNS} FROM assets WHERE id = ?1"), [id], row)
+            .prepare_cached(&format!("SELECT {ROW_COLUMNS} FROM assets WHERE id = ?1"))?
+            .query_row([id], row)
             .optional()?)
     }
 
@@ -398,11 +487,6 @@ impl Catalog {
         Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn missing_thumbs(&self) -> Result<Vec<String>> {
-        let mut st = self.conn.prepare("SELECT id FROM assets WHERE deleted = 0 AND thumb_path IS NULL AND thumb_url IS NOT NULL ORDER BY created DESC")?;
-        Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
-    }
-
     pub fn set_path(&self, id: &str, which: PathKind, path: Option<&Path>) -> Result<()> {
         let col = match which {
             PathKind::Original => "local_path",
@@ -412,7 +496,8 @@ impl Catalog {
         };
         let p = path.map(|p| p.to_string_lossy().into_owned());
         self.conn
-            .execute(&format!("UPDATE assets SET {col} = ?2 WHERE id = ?1"), params![id, p])?;
+            .prepare_cached(&format!("UPDATE assets SET {col} = ?2 WHERE id = ?1"))?
+            .execute(params![id, p])?;
         Ok(())
     }
 
@@ -432,25 +517,34 @@ impl Catalog {
 
     /// A medium JPEG was evicted from the cache.
     pub fn forget_medium(&self, path: &Path) -> Result<()> {
-        self.conn.execute(
-            "UPDATE assets SET medium_path = NULL WHERE medium_path = ?1",
-            [path.to_string_lossy()],
-        )?;
+        self.conn
+            .prepare_cached("UPDATE assets SET medium_path = NULL WHERE medium_path = ?1")?
+            .execute([path.to_string_lossy()])?;
         Ok(())
     }
 
     /// Is `path` already the original of an asset other than `id`?
+    /// Two indexed lookups (one per partial index), not a scan.
     pub fn path_taken(&self, path: &Path, id: &str) -> Result<bool> {
         let p = path.to_string_lossy();
         Ok(self
             .conn
-            .query_row(
-                "SELECT 1 FROM assets WHERE (local_path = ?1 OR live_path = ?1) AND id != ?2",
-                params![p, id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some())
+            .prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM assets WHERE local_path = ?1 AND id != ?2)
+                     OR EXISTS(SELECT 1 FROM assets WHERE live_path = ?1 AND id != ?2)",
+            )?
+            .query_row(params![p, id], |r| r.get(0))?)
+    }
+
+    /// The query plan SQLite picks for a statement (tests check the indexes are used).
+    #[doc(hidden)]
+    pub fn explain(&self, sql: &str) -> Result<String> {
+        let mut st = self.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let nulls = vec![rusqlite::types::Null; st.parameter_count()];
+        let lines = st
+            .query_map(rusqlite::params_from_iter(nulls), |r| r.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(lines.join("\n"))
     }
 }
 
