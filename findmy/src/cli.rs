@@ -308,15 +308,10 @@ impl<T: Transport> Cli<T> {
         }
     }
 
-    /// The device list: `initClient`, then with `locate` one `refreshClient`
-    /// asking every device to report (a fresh session's `initClient` cannot
-    /// ask). Recorded in the history either way.
+    /// The device list (with `locate`, after asking every device to
+    /// report), recorded in the history.
     fn fetch(&mut self, locate: bool) -> Result<Vec<Device>, Failure> {
-        let mut devices = self.fm.refresh(false)?;
-        if locate {
-            self.record(&devices);
-            devices = self.fm.refresh(true)?;
-        }
+        let devices = self.fm.refresh(locate)?;
         self.record(&devices);
         Ok(devices)
     }

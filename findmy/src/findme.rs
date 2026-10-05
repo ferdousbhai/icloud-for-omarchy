@@ -228,8 +228,11 @@ impl<T: Transport> FindMe<T> {
     /// `refreshClient`. With `locate` the refresh asks every device to report
     /// its position (which wakes them), so pass it only when the user asked;
     /// periodic refreshes pass `false` and get what Apple last heard, as
-    /// pyicloud's monitor does. On `SignInRequired` or `FindMyAuthRequired`
-    /// the context is dropped so the next call starts over with `initClient`.
+    /// pyicloud's monitor does. A `locate` on a fresh session is
+    /// `initClient` then a locating `refreshClient`, so the first load and
+    /// the load after a sign-in do locate. On `SignInRequired` or
+    /// `FindMyAuthRequired` the context is dropped so the next call starts
+    /// over with `initClient`.
     ///
     /// HTTP 500 means the Find My server session lapsed: start over with
     /// `initClient` once before giving up. HTTP 450 is not retried: it is
@@ -247,12 +250,20 @@ impl<T: Transport> FindMe<T> {
         result
     }
 
+    /// `initClient` cannot ask devices to locate (it has no server context
+    /// to send), so with `locate` it is followed by a locating
+    /// `refreshClient` (also after a reset or the HTTP 500 retry).
     fn refresh_inner(&mut self, locate: bool) -> Result<Vec<Device>> {
-        let endpoint = if self.server_ctx.is_some() {
-            "refreshClient"
-        } else {
-            "initClient"
-        };
+        if self.server_ctx.is_none() {
+            let devices = self.post_refresh("initClient", false)?;
+            if !locate || self.server_ctx.is_none() {
+                return Ok(devices);
+            }
+        }
+        self.post_refresh("refreshClient", locate)
+    }
+
+    fn post_refresh(&mut self, endpoint: &str, locate: bool) -> Result<Vec<Device>> {
         let url = self.url(endpoint)?;
         let body = refresh_body(self.server_ctx.as_ref(), locate);
         let resp = self.transport.post_json(&url, &body)?;

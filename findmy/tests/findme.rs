@@ -47,7 +47,7 @@ fn client(replies: Vec<findme::Result<Value>>) -> (FindMe<Fake>, Log) {
 fn init_then_refresh_carries_server_context() {
     let (mut fm, log) = client(vec![Ok(fixture("initClient")), Ok(fixture("refreshClient"))]);
 
-    let devices = fm.refresh(true).unwrap();
+    let devices = fm.refresh(false).unwrap();
     assert_eq!(devices.len(), 4);
     let devices2 = fm.refresh(true).unwrap();
     assert_eq!(devices2.len(), 4);
@@ -73,6 +73,60 @@ fn init_then_refresh_carries_server_context() {
         ctx["theftLoss"].is_null(),
         "theftLoss must be nulled before sending back"
     );
+}
+
+/// The app's first load and its load after a sign-in pass `locate` to a
+/// fresh client: `initClient` cannot ask devices to report, so a locating
+/// `refreshClient` follows it, and its devices are the answer.
+#[test]
+fn locate_on_a_fresh_session_inits_then_locates() {
+    let (mut fm, log) = client(vec![Ok(fixture("initClient")), Ok(fixture("refreshClient"))]);
+
+    let devices = fm.refresh(true).unwrap();
+    // The refreshClient fixture's iPhone has walked from the initClient one.
+    let init_phone = findme::parse_response(&fixture("initClient")).unwrap().devices[0].clone();
+    assert_ne!(devices[0].location, init_phone.location);
+
+    let log = log.lock().unwrap();
+    assert_eq!(endpoints_of(&log), ["initClient", "refreshClient"]);
+    assert!(log[0].1["clientContext"].get("shouldLocate").is_none());
+    let asked = &log[1].1;
+    assert_eq!(asked["clientContext"]["shouldLocate"], true);
+    assert_eq!(asked["isUpdatingAllLocations"], true);
+    assert_eq!(asked["serverContext"]["prsId"], 12345678901_i64);
+}
+
+/// After a reset (a new sign-in) the next locate inits and locates again.
+#[test]
+fn locate_after_reset_inits_then_locates() {
+    let (mut fm, log) = client(vec![
+        Ok(fixture("initClient")),
+        Ok(fixture("initClient")),
+        Ok(fixture("refreshClient")),
+    ]);
+    fm.refresh(false).unwrap();
+    fm.reset();
+    fm.refresh(true).unwrap();
+    let log = log.lock().unwrap();
+    assert_eq!(endpoints_of(&log), ["initClient", "initClient", "refreshClient"]);
+    assert_eq!(log[2].1["clientContext"]["shouldLocate"], true);
+}
+
+/// An `initClient` that returns no server context has nothing to locate
+/// with: its devices are the answer, with no second request.
+#[test]
+fn locate_without_a_server_context_stops_after_init() {
+    let mut init = fixture("initClient");
+    init.as_object_mut().unwrap().remove("serverContext");
+    let (mut fm, log) = client(vec![Ok(init)]);
+    assert_eq!(fm.refresh(true).unwrap().len(), 4);
+    assert_eq!(endpoints(&log), ["initClient"]);
+}
+
+fn endpoints_of(log: &[(String, Value)]) -> Vec<String> {
+    log.iter()
+        .map(|(u, _)| u.rsplit('/').next().unwrap().to_string())
+        .collect()
 }
 
 #[test]
@@ -162,9 +216,9 @@ fn sign_in_required_resets_to_init_client() {
         Err(Error::SignInRequired),
         Ok(fixture("initClient")),
     ]);
-    fm.refresh(true).unwrap();
-    assert!(matches!(fm.refresh(true), Err(Error::SignInRequired)));
-    fm.refresh(true).unwrap();
+    fm.refresh(false).unwrap();
+    assert!(matches!(fm.refresh(false), Err(Error::SignInRequired)));
+    fm.refresh(false).unwrap();
     let urls: Vec<_> = log
         .lock()
         .unwrap()
@@ -175,11 +229,7 @@ fn sign_in_required_resets_to_init_client() {
 }
 
 fn endpoints(log: &Log) -> Vec<String> {
-    log.lock()
-        .unwrap()
-        .iter()
-        .map(|(u, _)| u.rsplit('/').next().unwrap().to_string())
-        .collect()
+    endpoints_of(&log.lock().unwrap())
 }
 
 #[test]
@@ -189,9 +239,28 @@ fn http_500_reinitialises_once() {
         Err(Error::Http(500)),
         Ok(fixture("refreshClient")),
     ]);
-    fm.refresh(true).unwrap();
-    assert_eq!(fm.refresh(true).unwrap().len(), 4);
+    fm.refresh(false).unwrap();
+    assert_eq!(fm.refresh(false).unwrap().len(), 4);
     assert_eq!(endpoints(&log), ["initClient", "refreshClient", "initClient"]);
+}
+
+/// The HTTP 500 retry starts over with `initClient`, and a locate still
+/// locates: a locating `refreshClient` follows.
+#[test]
+fn http_500_retry_still_locates() {
+    let (mut fm, log) = client(vec![
+        Ok(fixture("initClient")),
+        Err(Error::Http(500)),
+        Ok(fixture("initClient")),
+        Ok(fixture("refreshClient")),
+    ]);
+    fm.refresh(false).unwrap();
+    fm.refresh(true).unwrap();
+    assert_eq!(
+        endpoints(&log),
+        ["initClient", "refreshClient", "initClient", "refreshClient"]
+    );
+    assert_eq!(log.lock().unwrap()[3].1["clientContext"]["shouldLocate"], true);
 }
 
 /// A 450 is Find My asking for the password again: surfaced at once, with
@@ -205,12 +274,12 @@ fn find_my_auth_required_surfaces_without_retrying() {
         Err(Error::FindMyAuthRequired),
         Ok(fixture("initClient")),
     ]);
-    assert!(matches!(fm.refresh(true), Err(Error::FindMyAuthRequired)));
+    assert!(matches!(fm.refresh(false), Err(Error::FindMyAuthRequired)));
     assert_eq!(endpoints(&log), ["initClient"]);
-    fm.refresh(true).unwrap();
+    fm.refresh(false).unwrap();
     assert!(matches!(fm.refresh(false), Err(Error::FindMyAuthRequired)));
     assert_eq!(endpoints(&log), ["initClient", "initClient", "refreshClient"]);
-    fm.refresh(true).unwrap();
+    fm.refresh(false).unwrap();
     assert_eq!(
         endpoints(&log),
         ["initClient", "initClient", "refreshClient", "initClient"]
@@ -241,7 +310,7 @@ fn refreshes_feed_history_only_when_moved() {
     let (mut fm, _log) = client(vec![Ok(fixture("initClient")), Ok(fixture("refreshClient"))]);
     let history = History::open_in_memory().unwrap();
 
-    let first = fm.refresh(true).unwrap();
+    let first = fm.refresh(false).unwrap();
     // "Now" is the fixture's time, so retention keeps its fixes.
     let now = first[0].location.unwrap().ts_ms / 1000;
     // phone + mac; the watch's fix is old and the AirPods have none.
@@ -265,21 +334,24 @@ fn periodic_refresh_does_not_ask_devices_to_locate() {
         Ok(fixture("initClient")),
         Ok(fixture("refreshClient")),
         Ok(fixture("refreshClient")),
+        Ok(fixture("refreshClient")),
     ]);
-    // First load and a timer tick, then the user presses refresh.
+    // First load (initClient, then a locating refreshClient) and a timer
+    // tick, then the user presses refresh.
     fm.refresh(true).unwrap();
     fm.refresh(false).unwrap();
     fm.refresh(true).unwrap();
 
     let log = log.lock().unwrap();
-    let tick = &log[1].1;
-    assert!(log[1].0.ends_with("/refreshClient"));
+    assert_eq!(log[1].1["clientContext"]["shouldLocate"], true);
+    let tick = &log[2].1;
+    assert!(log[2].0.ends_with("/refreshClient"));
     assert!(tick["clientContext"].get("shouldLocate").is_none());
     assert!(tick["clientContext"].get("selectedDevice").is_none());
     assert!(tick.get("isUpdatingAllLocations").is_none());
     assert_eq!(tick["serverContext"]["prsId"], 12345678901_i64);
 
-    let asked = &log[2].1;
+    let asked = &log[3].1;
     assert_eq!(asked["clientContext"]["shouldLocate"], true);
     assert_eq!(asked["isUpdatingAllLocations"], true);
 }
