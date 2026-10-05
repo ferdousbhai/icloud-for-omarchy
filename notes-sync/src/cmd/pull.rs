@@ -492,7 +492,9 @@ pub fn run_pull_with(
                 };
 
                 let local = local_file_state(target_dir, &existing, &record.record_name, title_mode)?;
-                if local == LocalFileState::Missing {
+                // A note someone shared with you can't be deleted from here
+                // (push refuses), so its file comes back below.
+                if local == LocalFileState::Missing && existing.shared_zone_owner.is_none() {
                     // Moved or renamed here and not pushed yet: the file that
                     // carries this note's id takes the remote change, merged
                     // against the old base, and the next push pairs the move.
@@ -606,15 +608,19 @@ pub fn run_pull_with(
                     remarks,
                 };
 
-                if local == LocalFileState::Clean {
+                if local == LocalFileState::Clean || local == LocalFileState::Missing {
                     let file_path = target_dir.join(&file);
-                    let text = read_text(&file_path)?.ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!("{}: not found", file_path.display()),
-                        )
-                    })?;
-                    let frontmatter = split_frontmatter(&text, split_options(title_mode)).frontmatter;
+                    let frontmatter = read_text(&file_path)?
+                        .map(|text| split_frontmatter(&text, split_options(title_mode)).frontmatter)
+                        .unwrap_or_default();
+                    if local == LocalFileState::Missing {
+                        summary.notices.push(SyncNotice {
+                            level: NoticeLevel::Info,
+                            message: format!(
+                                "Restored {file}: notes shared by someone else can't be deleted from here"
+                            ),
+                        });
+                    }
                     std::fs::write(
                         &file_path,
                         compose_note_file(&frontmatter, &body_text, &record.record_name, recorded_title.as_deref()),
