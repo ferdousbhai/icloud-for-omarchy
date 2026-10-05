@@ -129,6 +129,10 @@ Sync is automatic, like Notes:
   notify a web client of changes, so an edit on your phone shows up here
   within about a minute. After a failed pull it waits longer each time,
   up to 15 minutes, and goes back to every minute once a pull works.
+- Each sync is one run of the sync engine (push, then pull, over one
+  connection), and the note list is re-read once afterwards, only when
+  the sync changed something. Without a network the status line just
+  says Notes is offline and syncs again later; that is not an error.
 - When they do overlap, the note opens on the two versions side by
   side, this computer's and iCloud's, with the lines that differ
   highlighted. Pick one for each change (or keep both) and the note
@@ -180,7 +184,8 @@ other programs reach iCloud, so a note is less likely to be hours stale
 when you next edit it. It does nothing while the app is open (the app
 syncs itself, and the two never run icloud-notes-sync at once), when nobody is
 signed in to icloud-session, or before the notes are cloned. A sign-in
-Apple refused is reported to icloud-session just as the app does.
+Apple refused is reported to icloud-session just as the app does. Without
+a network it logs one line and exits 0; the next run tries again.
 
 The package turns it on for every user (from the next login; the installer
 also starts it at once). To turn it off for yourself:

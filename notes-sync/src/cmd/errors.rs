@@ -97,7 +97,9 @@ impl Error {
             Error::SignInRequired => EXIT_SIGN_IN,
             Error::Usage(_) => EXIT_USAGE,
             Error::Internal(_) | Error::Io(_) => EXIT_INTERNAL,
-            Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => EXIT_ERROR,
+            Error::CloudKit(
+                CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_) | CkError::Network(_) | CkError::Offline(_),
+            ) => EXIT_ERROR,
             Error::CloudKit(_) => EXIT_INTERNAL,
             _ => EXIT_ERROR,
         }
@@ -124,9 +126,31 @@ impl Error {
             Error::VaultLock { .. } => "VaultLockError",
             Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "CloudKitZoneFetchFailedError",
             Error::CloudKit(CkError::RequestFailed(_)) => "CloudKitRequestFailedError",
+            Error::CloudKit(CkError::Network(_)) => "NetworkError",
+            Error::CloudKit(CkError::Offline(_)) => "OfflineError",
             Error::CloudKit(_) | Error::Internal(_) | Error::Io(_) => "InternalError",
             Error::Usage(_) => "UsageError",
         }
+    }
+
+    /// iCloud couldn't be reached (no network, or the connection failed):
+    /// a retry once the network is back is all there is to do.
+    pub fn is_network(&self) -> bool {
+        matches!(self, Error::CloudKit(CkError::Network(_) | CkError::Offline(_)))
+    }
+
+    /// The `--json` error object, as `emit_error` reports it:
+    /// `{"code","message","exit_code","hint"?}`.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut error = serde_json::json!({
+            "code": self.code(),
+            "message": self.to_string(),
+            "exit_code": self.exit_code(),
+        });
+        if let Some(hint) = self.hint() {
+            error["hint"] = hint.into();
+        }
+        error
     }
 
     /// The `--json` error object's `code`: the class name in snake case
@@ -198,6 +222,9 @@ impl Error {
             Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => Some(
                 "This may be a transient network or iCloud-service issue - wait a moment and try again.".into(),
             ),
+            Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => {
+                Some("Couldn't reach iCloud - check the network connection, then try again.".into())
+            }
             Error::CloudKit(_) | Error::Usage(_) | Error::Internal(_) | Error::Io(_) => None,
         }
     }

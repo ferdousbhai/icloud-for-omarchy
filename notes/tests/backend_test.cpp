@@ -581,17 +581,87 @@ int main(int argc, char *argv[])
         QString lastRun;
         const auto c1 = QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label) { lastRun = label; });
         const auto c2 = QObject::connect(&b, &NotesBackend::syncChainFinished, &b, [&] { ended << lastRun; });
+        b.clearLog();
         b.runSync(); // push, then pull
         waitForSync(b);
-        if (b.syncRunning())
-            waitForSync(b);
-        check(b.syncLog().contains(QStringLiteral("$ icloud-notes-sync push\n")) && b.syncMessage() == QStringLiteral("Pull done."),
-              "seam sync pushes then pulls");
+        const QString log = b.syncLog();
+        check(log.count(QStringLiteral("$ icloud-notes-sync")) == 1 && log.contains(QStringLiteral("$ icloud-notes-sync --json sync\n"))
+                  && log.indexOf(QStringLiteral("push:\nstub push ok")) >= 0
+                  && log.indexOf(QStringLiteral("pull:\nstub pull ok")) > log.indexOf(QStringLiteral("push:\nstub push ok"))
+                  && b.syncMessage() == QStringLiteral("Pull done."),
+              "seam sync pushes then pulls, in one engine run");
+        check(log.contains(QStringLiteral("Fetching changes from iCloud...")) && !log.contains(QStringLiteral("icloud-md:progress")),
+              "seam sync logs the engine's stderr, without its progress lines");
         check(ended == QStringList{ QStringLiteral("Pull") }, "seam sync chain ends once, after the pull");
         QObject::disconnect(c1);
         QObject::disconnect(c2);
     }
     check(b.statusEntries().isEmpty(), "seam pull clears stale preview");
+    {
+        // Each half is still its own run to whoever listens: its label, exit
+        // code and JSON (what the command line's runs are made of).
+        QStringList runs;
+        const auto c = QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
+            runs << label + (ok ? QStringLiteral(" ok ") : QStringLiteral(" failed "))
+                    + QString::fromUtf8(b.lastOutput()) + u' ' + QString::number(b.lastExitCode());
+        });
+        b.runSync();
+        waitForIdle(b);
+        QObject::disconnect(c);
+        check(runs == QStringList{ QStringLiteral(R"(Push ok {"ok":true,"stub":"push"} 0)"),
+                                   QStringLiteral(R"(Pull ok {"ok":true,"stub":"pull"} 0)") },
+              "seam sync reports each half with its own result");
+    }
+    {
+        // A sync that changed nothing re-reads nothing: no vault walk, and
+        // the vault-info the engine's answer carries is taken as it is (no
+        // second engine run, not even with the state file changed).
+        writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }) + u' ');
+        const QString infoLog = scratch.path() + QStringLiteral("/vault-info.log");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG", infoLog.toUtf8());
+        int folderReads = 0;
+        const auto c = QObject::connect(&b, &NotesBackend::foldersChanged, &b, [&] { ++folderReads; });
+        b.runSync();
+        waitForIdle(b);
+        check(folderReads == 0 && b.syncMessage() == QStringLiteral("Pull done."), "seam a sync with no changes re-reads nothing");
+        check(b.vaultTitleMode() == QStringLiteral("filename") && !QFile::exists(infoLog),
+              "seam the sync's vault-info answer is used, without asking the engine again");
+        // A pull that brings a note re-reads the vault, once, after the sync.
+        qputenv("ICLOUD_NOTES_SYNC_STUB_PULL_ADDS", "FromCloud.md");
+        b.runSync();
+        waitForIdle(b);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_PULL_ADDS");
+        check(folderReads == 1 && b.notes().contains(QStringLiteral("FromCloud.md")),
+              "seam a sync that pulled a note re-reads the vault once");
+        QObject::disconnect(c);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG");
+        QFile::remove(testVault() + QStringLiteral("/FromCloud.md"));
+        b.refresh();
+    }
+    {
+        // No network: a quiet skip. One log line, no failure, no pause; the
+        // pull counts as failed (the window backs its polling off) and the
+        // next sync tries again.
+        b.clearLog();
+        QStringList runs;
+        const auto c = QObject::connect(&b, &NotesBackend::syncFinished, &b,
+                                        [&](const QString &label, bool ok) { runs << label + (ok ? u'+' : u'-'); });
+        qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
+        b.runSync();
+        waitForIdle(b);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
+        QObject::disconnect(c);
+        const QString log = b.syncLog();
+        check(b.syncMessage() == QStringLiteral("Offline. Notes syncs again once iCloud can be reached.") && !b.authExpired()
+                  && runs == QStringList{ QStringLiteral("Push-"), QStringLiteral("Pull-") },
+              "seam offline is a quiet skip, not a failure or a pause");
+        check(log.count(QStringLiteral("could not be reached")) == 1 && !log.contains(QStringLiteral("failed"))
+                  && !log.contains(QStringLiteral("stub pull ok")),
+              "seam offline logs one line and pulls nothing");
+        b.runSync();
+        waitForIdle(b);
+        check(b.syncMessage() == QStringLiteral("Pull done."), "seam the next sync after offline goes through");
+    }
 
     // A save (Ctrl+S, leaving the note) while a pull runs writes nothing
     // under it; the edits land once it is done, merged with its changes.
@@ -686,7 +756,7 @@ int main(int argc, char *argv[])
     b.clearLog();
     b.runPush(); // still running when the answer comes
     check(waitUntil([&] { return !b.syncRunning() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000)
-              && b.syncLog().contains(QStringLiteral("$ icloud-notes-sync pull\n")) && !b.authExpired(),
+              && b.syncLog().contains(QStringLiteral("$ icloud-notes-sync --json sync\n")) && !b.authExpired(),
           "seam report answered during a run retries after it");
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
     fake.reportDelayMs = 0;
@@ -786,7 +856,7 @@ int main(int argc, char *argv[])
                { QStringLiteral("ExpiresAt"), seconds(30 * 86400 + 3600) }, { QStringLiteral("SigningIn"), false } });
     check(waitUntil([&] { return !b.authExpired(); }), "seam sign-in clears the pause");
     waitUntil([&] { return b.syncMessage() == QStringLiteral("Pull done."); }, 15000);
-    check(b.syncLog().contains(QStringLiteral("$ icloud-notes-sync push\n")) && b.syncMessage() == QStringLiteral("Pull done."),
+    check(b.syncLog().contains(QStringLiteral("$ icloud-notes-sync --json sync\n")) && b.syncMessage() == QStringLiteral("Pull done."),
           "seam sign-in resumes syncing");
     check(b.signInDaysLeft() == 30, "seam new sign-in's days left");
 
@@ -801,7 +871,7 @@ int main(int argc, char *argv[])
     fake.set({ { QStringLiteral("SignedIn"), true } });
     check(waitUntil([&] { return !b.authExpired(); }), "session signed in again resumes");
     waitForIdle(b);
-    check(b.syncLog().contains(QStringLiteral("$ icloud-notes-sync pull\n")), "session signed in again syncs");
+    check(b.syncLog().contains(QStringLiteral("$ icloud-notes-sync --json sync\n")), "session signed in again syncs");
 
     // A re-read with nothing new neither pauses nor syncs.
     b.clearLog();
@@ -825,10 +895,9 @@ int main(int argc, char *argv[])
     writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("in-body"), {}));
     {
         const int code = backgroundSync(bgOut);
-        const qsizetype push = bgOut.indexOf(QStringLiteral("$ icloud-notes-sync push\n")),
-                        pull = bgOut.indexOf(QStringLiteral("$ icloud-notes-sync pull\n"));
-        check(code == 0 && push >= 0 && pull > push && bgOut.contains(QStringLiteral("stub pull ok")),
-              "background: pushes then pulls, exit 0");
+        const qsizetype push = bgOut.indexOf(QStringLiteral("stub push ok")), pull = bgOut.indexOf(QStringLiteral("stub pull ok"));
+        check(code == 0 && bgOut.count(QStringLiteral("$ icloud-notes-sync --json sync\n")) == 1 && push >= 0 && pull > push,
+              "background: pushes then pulls in one engine run, exit 0");
     }
     {
         VaultLock held(NotesBackend::lockPath());
@@ -843,8 +912,14 @@ int main(int argc, char *argv[])
                   && bgOut.contains(QStringLiteral("(Notes (pid %1))").arg(QCoreApplication::applicationPid())),
               "background: the open app blocks it, and is named");
     }
-    check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("$ icloud-notes-sync pull")),
+    check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("stub pull ok")),
           "background: runs again once the app is closed");
+    // No network: one line, exit 0 (the timer tries again), not a failure.
+    qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
+    check(backgroundSync(bgOut) == 0 && bgOut.count(u'\n') == 1 && bgOut.contains(QStringLiteral("could not be reached"))
+              && bgOut.contains(QStringLiteral("Skipped")),
+          "background: offline is a one-line skip, exit 0");
+    qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
     {
         // The app opening during a background sync waits for it, then syncs.
         VaultLock background(NotesBackend::lockPath());
@@ -903,7 +978,7 @@ int main(int argc, char *argv[])
     // A refused session fails the run, after telling icloud-session.
     fake.reportCalls = 0;
     qputenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED", "1");
-    check(backgroundSync(bgOut) != 0 && fake.reportCalls == 1 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync pull")),
+    check(backgroundSync(bgOut) != 0 && fake.reportCalls == 1 && !bgOut.contains(QStringLiteral("stub pull ok")),
           "background: refused session reported, exit non-zero");
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
     // Signed out: nothing runs.

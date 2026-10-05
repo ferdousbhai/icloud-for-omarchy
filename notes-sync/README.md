@@ -34,6 +34,7 @@ $ icloud-notes-sync clone --account <dsid> ~/Notes
 $ icloud-notes-sync pull
 $ icloud-notes-sync --json status
 $ icloud-notes-sync push
+$ icloud-notes-sync sync
 $ icloud-notes-sync history <file>
 $ icloud-notes-sync diff <file> <id>|<from>..<to>
 $ icloud-notes-sync restore <file>
@@ -49,7 +50,18 @@ on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hin
 `not_cloned_directory`, `usage`, `internal`, …). icloud-md used 2 for usage,
 1 for a sign-in and `{"error":"<Class>Error","exitCode":…}`.
 
-clone, pull, push and restore take the vault's lock, the one the Notes app
+`sync` is this port's own, for the Notes app: push, then pull, in one run
+over one connection (one icloud-sessiond `Session()` call, one TLS
+connection, one lock). Each half is exactly `push` and `pull`; the pull runs
+unless the push found the sign-in gone or iCloud out of reach. With
+`--json` stdout is `{"push": HALF, "pull": HALF|null, "vault_info": …}`
+even when a half failed, HALF being `{ok, exit_code, result, lines}` (the
+command's own JSON and its human report) or `{ok, exit_code, error}`; it
+exits with the worse half's code, 2 (sign-in) above all. No network is the
+error `offline` (nothing reachable at all: icloud-session says so at once)
+or `network`, exit 1.
+
+clone, pull, push, sync and restore take the vault's lock, the one the Notes app
 holds while it is open (`--wait SECS` to wait for it; busy is the error
 `vault_busy`, exit 1); status, history, diff and push --dry-run only read and
 take none.

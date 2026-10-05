@@ -77,7 +77,8 @@ rules, takes the vault's lock, and reaches every engine command you need.
   right after it (push, then pull), or run `icloud-notes sync`. Before a
   sync you did not make yourself, preview with `icloud-notes push --dry-run`
   (exit 3 means there is something to push; `entries[].resolution:
-  "refused"` says what will not go and why).
+  "refused"` says what will not go and why). A sync without a network
+  fails with `offline` (or `network`), exit 1: retry once it is back.
 - A deleted note goes to the trash and, on push, to Recently Deleted in
   iCloud (recoverable there for about 30 days).
 - Read-only notes (`read_only` set: very large notes, attachments Apple

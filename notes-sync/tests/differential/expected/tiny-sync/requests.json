@@ -1,0 +1,176 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/lookup",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "records": [
+          {
+            "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 0
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/modify",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "operations": [
+          {
+            "operationType": "update",
+            "record": {
+              "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+              "recordType": "Note",
+              "recordChangeTag": "25q",
+              "fields": {
+                "ModificationDate": {
+                  "value": 1789999990000
+                },
+                "TitleEncrypted": {
+                  "value": "VGVzdCBOb3Rl"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ]
+                },
+                "Deleted": {
+                  "value": 0
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  }
+                },
+                "CreationDate": {
+                  "value": 1752563940000
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg"
+                },
+                "FirstAttachmentThumbnail": {
+                  "value": null
+                },
+                "FirstAttachmentUTIEncrypted": {
+                  "value": null
+                },
+                "TextDataAsset": {
+                  "value": null
+                },
+                "TextDataEncrypted": {
+                  "value": "eJw90L1KxEAQB/DdzcfNbdQbtoiw1aBNODxrweoQCwsFuYCVcCGJGgkJXJLieh/CZ/FNbKwtrewksut61X/4zewODDD14gFDpn+Euk/Lrqebti9l+lR1VHWUUW+safuShq4s6KHdWKqaR2qHntZVXrdDsTAT3aLbNvlayiXVVVNSVhRlQXWbZ3W9PdUofbMJmbaZcCscGUbaZiKcHOKJE8/JJYIT38kKuZPAyTWGTkKtrFyg+BPiycRZ9L+NeALuZbz7a2pFYIqxNskSqWMJwHAcx3GGTO/qozOpJb7dHgffr3fnV2n98f71uVECUiWAmx4Xnh+EE5jKaG//YIZKwLPpzQGkMjfw5wAr5YOH/i99cEJA"
+                }
+              },
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 1
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/changes/zone",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "zones": [
+          {
+            "zoneID": {
+              "zoneName": "Notes"
+            },
+            "desiredKeys": [
+              "TitleEncrypted",
+              "SnippetEncrypted",
+              "FirstAttachmentUTIEncrypted",
+              "FirstAttachmentThumbnail",
+              "FirstAttachmentThumbnailOrientation",
+              "CreationDate",
+              "ModificationDate",
+              "Deleted",
+              "Folders",
+              "Folder",
+              "Attachments",
+              "ParentFolder",
+              "Note",
+              "LastViewedModificationDate",
+              "MinimumSupportedNotesVersion",
+              "DisplayTextEncrypted",
+              "StandardizedContentEncrypted",
+              "TokenContentIdentifierEncrypted",
+              "AltTextEncrypted",
+              "UTIEncrypted",
+              "MergeableDataEncrypted",
+              "IsPinned",
+              "TextDataEncrypted",
+              "TextDataAsset"
+            ],
+            "desiredRecordTypes": [
+              "AccountData",
+              "Note",
+              "SearchIndexes",
+              "Folder",
+              "PasswordProtectedNote",
+              "User",
+              "Users",
+              "Note_UserSpecific",
+              "PasswordProtectedNote_UserSpecific",
+              "Folder_UserSpecific",
+              "cloudkit.share",
+              "Hashtag",
+              "InlineAttachment"
+            ],
+            "reverse": true,
+            "syncToken": "AQAAAAAAAAAB"
+          }
+        ]
+      },
+      "matched": 2
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/shared/changes/database",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {},
+      "matched": 3
+    }
+  ]
+}

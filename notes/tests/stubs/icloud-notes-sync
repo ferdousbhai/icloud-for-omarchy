@@ -10,7 +10,61 @@
 # ($ICLOUD_NOTES_SYNC_REAL, which bin/test builds): it reads the test's
 # vault as the app would.
 if [ "$1" = "--json" ] && [ "$2" = "vault-info" ]; then
+  # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG: a file each vault-info appends a line to.
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG:-}" ] && echo "vault-info" >> "$ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG"
   exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "$@"
+elif [ "$1" = "--json" ] && [ "$2" = "sync" ]; then
+  # Push, then pull, in one run: {push, pull, vault_info}, each half
+  # {ok, exit_code, result, lines} or {ok, exit_code, error}. The pull is
+  # left out (null) after a refused sign-in or an offline push, as the real
+  # tool does. The same switches as pull/push below, plus
+  # ICLOUD_NOTES_SYNC_STUB_OFFLINE=1 (the push finds no network) and
+  # ICLOUD_NOTES_SYNC_STUB_PULL_ADDS=FILE (the pull writes that note and
+  # reports it, as a pull from iCloud would).
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "sync" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
+  code=0
+  half() { # half VERB: prints that half's JSON
+    if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
+      echo '{"error":{"code":"offline","message":"offline: dns error: no network","exit_code":1}}' >&2
+      printf '{"ok":false,"exit_code":1,"error":{"code":"offline","message":"offline: dns error: no network","exit_code":1}}'
+      return
+    fi
+    if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
+      if [ "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" = marker ]; then
+        echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
+        printf '{"ok":false,"exit_code":1,"error":{"code":"internal","message":"Run \\"icloud-md reauthenticate\\" to sign in interactively.","exit_code":1}}'
+      else
+        echo '{"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","exit_code":2}}' >&2
+        printf '{"ok":false,"exit_code":2,"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","exit_code":2}}'
+      fi
+      return
+    fi
+    if [ "$1" = pull ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PULL_ADDS:-}" ]; then
+      mkdir -p "$(dirname "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS")"
+      printf -- '# Added\nfrom iCloud\n' > "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS"
+      printf '{"ok":true,"exit_code":0,"result":{"stub":"pull","ok":true,"added":1,"changes":[{"kind":"add","file":"%s"}]},"lines":["stub pull ok","added: %s"]}' \
+        "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS" "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS"
+      return
+    fi
+    [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-md:progress:fetch:3" >&2
+    printf '{"ok":true,"exit_code":0,"result":{"stub":"%s","ok":true},"lines":["stub %s ok"]}' "$1" "$1"
+  }
+  push_json=$(half push)
+  pull_json=null
+  case "$push_json" in
+    *'"code":"offline"'*) code=1 ;;
+    *'"code":"sign_in_required"'*) code=2 ;;
+    *'"ok":false'*) code=1; pull_json=$(half pull) ;;
+    *) pull_json=$(half pull) ;;
+  esac
+  case "$pull_json" in
+    *'"code":"sign_in_required"'*) code=2 ;;
+    *'"ok":false'*) [ "$code" -lt 1 ] && code=1 ;;
+  esac
+  info=$("$ICLOUD_NOTES_SYNC_REAL" --json vault-info . 2>/dev/null) || info=null
+  printf '{"push":%s,"pull":%s,"vault_info":%s}\n' "$push_json" "$pull_json" "${info:-null}"
+  exit "$code"
 elif [ "$1" = "--json" ] && [ "$2" = "status" ]; then
   echo "Fetching changes from iCloud..." >&2
   echo "icloud-md:progress:fetch:12" >&2

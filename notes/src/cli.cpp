@@ -181,9 +181,11 @@ const QList<Spec> &specs()
           { QStringLiteral("--yes"), QStringLiteral("--push") }, 1, 1 },
         { "sync", "sync",
           "What the window does on its own: push what changed here, then pull what changed in iCloud,\n"
-          "through icloud-notes-sync with the vault's lock held. A refused sign-in is reported to\n"
-          "icloud-session, which checks it with Apple (one retry if it still works).\n"
-          "JSON: {ok, runs: [{command, ok, exit_code, result}], log} (result: icloud-notes-sync's JSON)",
+          "in one icloud-notes-sync run with the vault's lock held. A refused sign-in is reported to\n"
+          "icloud-session, which checks it with Apple (one retry if it still works). No network is the\n"
+          "error offline (or network), exit 1.\n"
+          "JSON: {ok, runs: [{command, ok, exit_code, result}], log} (result: icloud-notes-sync's JSON for\n"
+          "that half, or {error: {code, message, ...}} when it failed)",
           {}, 0, 0 },
         { "pull", "pull", "Fetch what changed in iCloud (as sync, pull only).\nJSON: as for sync", {}, 0, 0 },
         { "push", "push [--dry-run]",
@@ -605,8 +607,9 @@ struct SyncOutcome {
     std::optional<Failure> failure;
 };
 
-// `what`: "sync" (push, then pull), "pull", "push" or "clone", through the
-// backend with its lock held, as the window runs them.
+// `what`: "sync" (push, then pull, in one engine run), "pull", "push" or
+// "clone", through the backend with its lock held, as the window runs them.
+// A sync still reports two runs, one per half.
 SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
 {
     SyncOutcome result;
@@ -651,6 +654,16 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
     for (const QString &half : what == u"sync" ? QStringList{ QStringLiteral("push"), QStringLiteral("pull") }
                                                : QStringList{ what })
         ok = ok && last.value(half);
+    // iCloud out of reach: the engine's offline or network error, for a run
+    // that is retried later rather than looked into.
+    QJsonObject networkError;
+    for (const QJsonValue &run : std::as_const(runs)) {
+        const QJsonObject error =
+            run.toObject().value(QStringLiteral("result")).toObject().value(QStringLiteral("error")).toObject();
+        const QString code = error.value(QStringLiteral("code")).toString();
+        if (networkError.isEmpty() && (code == u"offline" || code == u"network"))
+            networkError = error;
+    }
     result.json = QJsonObject{ { QStringLiteral("ok"), ok }, { QStringLiteral("runs"), runs },
                                { QStringLiteral("log"), b.syncLog() } };
     result.text = b.syncLog();
@@ -658,6 +671,11 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
         result.failure = Failure{ QStringLiteral("sign_in_required"),
                                   QStringLiteral("iCloud refused the sign-in; icloud-session was told."), kExitSignIn,
                                   QStringLiteral("Run `icloud-session sign-in`: a person signs in in the window that opens.") };
+    else if (!ok && !networkError.isEmpty())
+        result.failure = Failure{ networkError.value(QStringLiteral("code")).toString(),
+                                  QStringLiteral("iCloud could not be reached (%1).")
+                                      .arg(networkError.value(QStringLiteral("message")).toString()),
+                                  kExitError, QStringLiteral("Check the network connection, then retry.") };
     else if (!ok)
         result.failure = Failure{ QStringLiteral("sync_failed"), QStringLiteral("%1 failed; see the log.").arg(what),
                                   kExitError, {} };
@@ -1434,6 +1452,11 @@ int runBackgroundSync(QTextStream &log)
         const bool skip = f.code == u"sign_in_required" || f.code == u"session_unavailable";
         log << f.message << (skip ? QStringLiteral(" Skipped.") : u' ' + f.hint) << '\n';
         return skip ? kExitOk : kExitError;
+    }
+    // No network: one line, and a skip like signed out (the timer tries again).
+    if (sync.failure && (sync.failure->code == u"offline" || sync.failure->code == u"network")) {
+        log << sync.failure->message << " Skipped; the next sync tries again.\n";
+        return kExitOk;
     }
     log << sync.text << '\n';
     if (sync.failure && sync.failure->code == u"sign_in_required") {

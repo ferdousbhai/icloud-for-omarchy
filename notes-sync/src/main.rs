@@ -1,13 +1,16 @@
 //! The `icloud-notes-sync` CLI. Ports icloud-md `src/cli.ts` for the verbs
 //! kept by the port: clone, pull, push, status, restore, history, diff.
 //!
-//! clone, pull, push and restore take the vault lock the Notes app holds
+//! `sync` (push, then pull, in one run) is this port's own, for the Notes app.
+//!
+//! clone, pull, push, sync and restore take the vault lock the Notes app holds
 //! (`cmd::lock`); status, history, diff, push --dry-run and vault-info only
 //! read, and don't.
 //!
 //! Exit codes: 0 ok, 1 known error, 2 sign-in required, 3 `status`/`push
 //! --dry-run` has entries or `diff` found differences, 64 usage, 70 internal
-//! (the table every iCloud tool shares; docs/CLI.md). `--json` is global
+//! (the table every iCloud tool shares; docs/CLI.md); `sync` exits with its
+//! worse half, 2 above all. `--json` is global
 //! (before or after the verb): stdout carries only the JSON result,
 //! everything else goes to stderr, an error as one JSON line last.
 
@@ -20,7 +23,7 @@ use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{OutputContext, TOOL};
 use icloud_notes_sync::cmd::plan::{RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
-    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status,
+    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
     vault_info,
 };
 use icloud_notes_sync::vault::local::{display_path, find_vault_root};
@@ -33,7 +36,7 @@ use icloud_notes_sync::vault::local::{display_path, find_vault_root};
                   has entries or diff found differences, 64 usage, 70 internal error.\n\
                   With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
                   {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}.\n\
-                  clone, pull, push and restore take the vault's lock, shared with the Notes app (icloud-notes); \
+                  clone, pull, push, sync and restore take the vault's lock, shared with the Notes app (icloud-notes); \
                   a busy lock is the error vault_busy (exit 1).",
     disable_version_flag = true
 )]
@@ -46,7 +49,7 @@ struct Cli {
     #[arg(short = 'V', long)]
     version: bool,
 
-    /// How long clone/pull/push/restore wait for the vault's lock: default 30 when another run or a
+    /// How long clone/pull/push/sync/restore wait for the vault's lock: default 30 when another run or a
     /// background sync holds it, none while the Notes window does
     #[arg(long, global = true, value_name = "SECS")]
     wait: Option<u64>,
@@ -84,6 +87,15 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Push, then pull, in one run over one connection (what the Notes app does)
+    #[command(
+        after_help = "With --json, stdout is {\"push\": HALF, \"pull\": HALF or null, \"vault_info\": vault-info's \
+                      answer or null}, even when a half failed; HALF is {\"ok\", \"exit_code\", \"result\" (push's or \
+                      pull's own JSON), \"lines\" (its human report)} or {\"ok\", \"exit_code\", \"error\" (as on \
+                      stderr)}. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
+                      then). Exit code: the worse half's, 2 (sign-in required) above all."
+    )]
+    Sync { directory: Option<PathBuf> },
     /// Preview exactly what the next push will do (requires signing in)
     Status { directory: Option<PathBuf> },
     /// Discard a tracked note's local edits, reverting it to the last synced copy
@@ -176,12 +188,104 @@ fn resolve_target_dir(directory: Option<PathBuf>) -> Result<PathBuf, cmd::Error>
     Ok(find_vault_root(Path::new("."))?.unwrap_or_else(|| PathBuf::from(".")))
 }
 
-fn print_notices(notices: &[SyncNotice]) {
-    for notice in notices {
-        match notice.level {
-            NoticeLevel::Warn => eprintln!("{}", notice.message),
-            NoticeLevel::Info => println!("{}", notice.message),
+/// One line of a human report, and whether it is a warning (stderr).
+type Line = (bool, String);
+
+fn print_lines(lines: Vec<Line>) {
+    for (warn, line) in lines {
+        if warn {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
         }
+    }
+}
+
+fn notice_lines(notices: &[SyncNotice]) -> Vec<Line> {
+    notices
+        .iter()
+        .map(|n| (n.level == NoticeLevel::Warn, n.message.clone()))
+        .collect()
+}
+
+fn print_notices(notices: &[SyncNotice]) {
+    print_lines(notice_lines(notices));
+}
+
+/// `pull`'s human report.
+fn pull_lines(s: &pull::PullSummary, target: &Path) -> Vec<Line> {
+    let mut lines: Vec<Line> = pull::render_pull_report(s, &|file| display_path(target, file))
+        .into_iter()
+        .map(|line| (false, line))
+        .collect();
+    if s.skipped_new_unsyncable > 0 || s.dropped_unsyncable > 0 {
+        lines.push((
+            false,
+            format!(
+                "{} new unsyncable note(s) skipped, {} note(s) dropped from tracking (no longer syncable)",
+                s.skipped_new_unsyncable, s.dropped_unsyncable
+            ),
+        ));
+    }
+    if s.unshared_untracked > 0 {
+        lines.push((
+            false,
+            format!(
+                "{} shared note(s) no longer shared with you - local copies left in place, untracked",
+                s.unshared_untracked
+            ),
+        ));
+    }
+    lines.extend(notice_lines(&s.notices));
+    lines
+}
+
+/// `push`'s (and `push --dry-run`'s) human report.
+fn push_lines(r: &push::PushResult, target: &Path) -> Vec<Line> {
+    let mut lines = notice_lines(&r.notices);
+    for entry in &r.entries {
+        if let Some(outcome) = &entry.outcome {
+            lines.push((false, outcome.message.clone()));
+        }
+    }
+    if let Some(pushed) = r.pushed {
+        lines.push((false, format!("Pushed {pushed} note(s) from {}", target.display())));
+    }
+    let entries: Vec<_> = r.entries.iter().map(|e| e.entry.clone()).collect();
+    let options = if r.dry_run {
+        RenderPlanOptions {
+            preview: true,
+            unchanged: Some(r.unchanged),
+        }
+    } else {
+        RenderPlanOptions::default()
+    };
+    lines.extend(
+        render_plan(&entries, &|file| display_path(target, file), options)
+            .into_iter()
+            .map(|line| (false, line)),
+    );
+    lines
+}
+
+/// One half of `sync --json`: `{ok, exit_code, result, lines}`, or `{ok,
+/// exit_code, error}` when it failed.
+fn sync_half_json<T: serde::Serialize>(
+    half: &Result<T, cmd::Error>,
+    lines: impl FnOnce(&T) -> Vec<Line>,
+) -> serde_json::Value {
+    match half {
+        Ok(result) => serde_json::json!({
+            "ok": true,
+            "exit_code": EXIT_OK,
+            "result": result,
+            "lines": lines(result).into_iter().map(|(_, line)| line).collect::<Vec<_>>(),
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "exit_code": error.exit_code(),
+            "error": error.to_json(),
+        }),
     }
 }
 
@@ -234,24 +338,7 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
             let summary = pull::run_pull(&target, progress, &mut on_status, &pull::PullOptions { defer_renames })?;
-            ctx.emit_result(&summary, |s| {
-                for line in pull::render_pull_report(s, &|file| display_path(&target, file)) {
-                    println!("{line}");
-                }
-                if s.skipped_new_unsyncable > 0 || s.dropped_unsyncable > 0 {
-                    println!(
-                        "{} new unsyncable note(s) skipped, {} note(s) dropped from tracking (no longer syncable)",
-                        s.skipped_new_unsyncable, s.dropped_unsyncable
-                    );
-                }
-                if s.unshared_untracked > 0 {
-                    println!(
-                        "{} shared note(s) no longer shared with you - local copies left in place, untracked",
-                        s.unshared_untracked
-                    );
-                }
-                print_notices(&s.notices);
-            });
+            ctx.emit_result(&summary, |s| print_lines(pull_lines(s, &target)));
             Ok(EXIT_OK)
         }
         Command::Push { directory, dry_run } => {
@@ -262,34 +349,46 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
                 Some(lock_vault(&target, wait)?)
             };
             let result = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
-            ctx.emit_result(&result, |r| {
-                print_notices(&r.notices);
-                for entry in &r.entries {
-                    if let Some(outcome) = &entry.outcome {
-                        println!("{}", outcome.message);
-                    }
-                }
-                if let Some(pushed) = r.pushed {
-                    println!("Pushed {pushed} note(s) from {}", target.display());
-                }
-                let entries: Vec<_> = r.entries.iter().map(|e| e.entry.clone()).collect();
-                let options = if r.dry_run {
-                    RenderPlanOptions {
-                        preview: true,
-                        unchanged: Some(r.unchanged),
-                    }
-                } else {
-                    RenderPlanOptions::default()
-                };
-                for line in render_plan(&entries, &|file| display_path(&target, file), options) {
-                    println!("{line}");
-                }
-            });
+            ctx.emit_result(&result, |r| print_lines(push_lines(r, &target)));
             Ok(if result.dry_run && !result.entries.is_empty() {
                 EXIT_HAS_ENTRIES
             } else {
                 EXIT_OK
             })
+        }
+        Command::Sync { directory } => {
+            let target = resolve_target_dir(directory)?;
+            let _lock = lock_vault(&target, wait)?;
+            let outcome = sync::run_sync(&target, progress, &mut on_status);
+            if ctx.json {
+                // A failed half is reported on stderr too, as push or pull alone would.
+                let pull_error = outcome.pull.as_ref().and_then(|p| p.as_ref().err());
+                for error in [outcome.push.as_ref().err(), pull_error].into_iter().flatten() {
+                    ctx.emit_error(error);
+                }
+                let result = serde_json::json!({
+                    "push": sync_half_json(&outcome.push, |r| push_lines(r, &target)),
+                    "pull": outcome.pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
+                    "vault_info": vault_info::run_vault_info(&target).ok(),
+                });
+                ctx.emit_result(&result, |_| {});
+            } else {
+                match &outcome.push {
+                    Ok(r) => print_lines(push_lines(r, &target)),
+                    Err(error) => {
+                        ctx.emit_error(error);
+                    }
+                }
+                match &outcome.pull {
+                    Some(Ok(s)) => print_lines(pull_lines(s, &target)),
+                    Some(Err(error)) => {
+                        ctx.emit_error(error);
+                    }
+                    // The push's error says why (no sign-in, or no network).
+                    None => eprintln!("Not pulled."),
+                }
+            }
+            Ok(outcome.exit_code())
         }
         Command::Status { directory } => {
             let target = resolve_target_dir(directory)?;

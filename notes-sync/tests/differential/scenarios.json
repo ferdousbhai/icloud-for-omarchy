@@ -192,6 +192,19 @@
       "cassette": "asset-pull-update.json",
       "vaultFrom": "asset-clone",
       "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "tiny-sync",
+      "cassette": "tiny-sync.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
+      "args": ["--json", "sync", "@VAULT@"]
+    },
+    {
+      "name": "tiny-sync-clean",
+      "cassette": "tiny-pull-noop.json",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "sync", "@VAULT@"]
     }
   ]
 }

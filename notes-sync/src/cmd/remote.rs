@@ -4,11 +4,15 @@
 //! left is picking the transport and checking the signed-in account against
 //! `--account` (clone) or the vault's bound account (everything else).
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use serde_json::Value;
 
 use super::errors::Error;
 use crate::cloudkit::transport::{LiveTransport, ReplayTransport};
-use crate::cloudkit::{Database, Transport};
+use crate::cloudkit::{CkError, Database, Transport};
 use crate::vault::state::Account;
 
 /// `ICLOUD_NOTES_SYNC_CASSETTE`: serve CloudKit from a cassette instead of
@@ -68,6 +72,56 @@ pub struct FnConnector<F: Fn() -> Result<Remote, Error>>(pub F);
 impl<F: Fn() -> Result<Remote, Error>> Connector for FnConnector<F> {
     fn connect(&self) -> Result<Remote, Error> {
         (self.0)()
+    }
+}
+
+/// Connects once and hands every later caller the same connection: `sync`
+/// runs push and pull over one session (one icloud-sessiond `Session()`
+/// call, one TLS connection). A failed connect is not kept; the next caller
+/// tries again.
+pub struct SharedConnector<'a> {
+    inner: &'a dyn Connector,
+    connected: RefCell<Option<(Rc<dyn Transport>, Account)>>,
+}
+
+impl<'a> SharedConnector<'a> {
+    pub fn new(inner: &'a dyn Connector) -> Self {
+        SharedConnector {
+            inner,
+            connected: RefCell::new(None),
+        }
+    }
+}
+
+impl Connector for SharedConnector<'_> {
+    fn connect(&self) -> Result<Remote, Error> {
+        let mut connected = self.connected.borrow_mut();
+        if connected.is_none() {
+            let Remote { db, account } = self.inner.connect()?;
+            *connected = Some((Rc::from(db.transport), account));
+        }
+        let (transport, account) = connected.as_ref().expect("connected above");
+        Ok(Remote {
+            db: Database::new(Box::new(SharedTransport(Rc::clone(transport)))),
+            account: account.clone(),
+        })
+    }
+}
+
+/// One of [`SharedConnector`]'s handles on its connection.
+struct SharedTransport(Rc<dyn Transport>);
+
+impl Transport for SharedTransport {
+    fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
+        self.0.post_json(path, body)
+    }
+
+    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
+        self.0.download(url, dest)
+    }
+
+    fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+        self.0.download_bytes(url)
     }
 }
 

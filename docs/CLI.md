@@ -49,7 +49,7 @@ timer's sync). All of it is new, in the app binary: see
 | Conflict picker: per change, All from this computer, All from iCloud, Keep both | `icloud-notes resolve NOTE --choices local,remote,both,...` / `--all local\|remote\|both` | added |
 | Conflict: Edit as text | `read --raw`, then `write --force` | added |
 | Unreadable markers: Remove the markers / Use the last synced version | `icloud-notes recover NOTE --strip` / `--synced` | added |
-| Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull) | added |
+| Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull, in one engine run) | added |
 | Pull | `icloud-notes pull` | added (the engine's `pull` existed) |
 | Push… preview, then Push now; Status preview | `icloud-notes push --dry-run`, then `icloud-notes push` | added |
 | Note history, diffs | `icloud-notes history NOTE [--records]`, `icloud-notes diff NOTE REF` | added (the engine's existed) |
@@ -130,8 +130,9 @@ read-only, the save checks, how a title maps to a file in each vault shape,
 how the conflict picker rewrites a note, the backups `recover` makes, and the
 vault's lock. That is C++ in `notes/src` (`NotesBackend`, `SyncModel`); a
 Rust copy would drift. The engine takes the same lock itself for clone,
-pull, push and restore (the app hands it the one it holds), and tells the
-app what it needs of the vault's state through `vault-info`.
+pull, push, sync and restore (the app hands it the one it holds), and tells the
+app what it needs of the vault's state through `vault-info` (and in each
+`sync` answer, so a sync costs one engine run).
 `icloud-notes <command>` runs that code headless (a `QCoreApplication`; a
 `QGuiApplication` on the offscreen platform only for `export-pdf`), the same
 way `icloud-photos` and `icloud-findmy` put their commands in the app
@@ -193,8 +194,8 @@ PATH (a development build).
 |---|---|
 | all | `usage`, `sign_in_required` |
 | icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `session_service` (daemon unreachable), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
-| icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 64), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `sync_failed`, `cancelled`, `error` |
-| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `cloudkit_request_failed`, `internal`, ... |
+| icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 64), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` |
+| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
 | icloud-photos | `not_found`, `cancelled`, `error` |
 | icloud-findmy | `find_my_auth_required`, `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
 
@@ -233,7 +234,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |
 | `new-folder`, `rename-folder`, `delete-folder` | `{action, folder, from?, sync?}` |
-| `sync`, `pull`, `push`, `clone` (and `sync` under `--push`) | `{ok, runs:[{command, ok, exit_code, result}], log}`; `result` is icloud-notes-sync's own JSON for that run |
+| `sync`, `pull`, `push`, `clone` (and `sync` under `--push`) | `{ok, runs:[{command, ok, exit_code, result}], log}`; `result` is icloud-notes-sync's own JSON for that run, or `{error:{code, message, ...}}` for a half of `sync` that failed. `sync` is one engine run (`icloud-notes-sync sync`) reported as two runs, `push` then `pull` (no `pull` after a refused sign-in) |
 | `push --dry-run`, `history [--records]`, `diff`, `restore` | icloud-notes-sync's own output |
 
 `flags`: `new` (not synced yet), `conflict`, `read-only`, `missing-id`,
@@ -246,6 +247,13 @@ apple-note-id, or a title exactly one note has (ignoring case).
 `history` `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`
 (with `--records`, `{mode:"records", records:[...]}`), `pull`/`clone`
 summaries; see `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`.
+`sync` (push, then pull, in one run: what the app runs) prints
+`{push, pull, vault_info}` even when a half failed: each half is `{ok,
+exit_code, result, lines}` (`result` the command's own JSON, `lines` its
+human report) or `{ok, exit_code, error}`, `pull` is null when it did not
+run (the push found the sign-in gone, or iCloud out of reach), and
+`vault_info` is what `vault-info` would print after it. It exits with the
+worse half's code, 2 above all.
 
 ### icloud-photos
 

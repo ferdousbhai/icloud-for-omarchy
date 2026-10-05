@@ -40,6 +40,9 @@ constexpr int kSessionTimeoutMs = 10000;
 constexpr int kReportTimeoutMs = 60000;
 
 const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to resume.");
+// No network (or iCloud unreachable): not a failure to act on. The next
+// sync (the poll, a focus, the timer) tries again.
+const QString kOfflineMessage = QStringLiteral("Offline. Notes syncs again once iCloud can be reached.");
 
 // The sync engine: icloud-notes-sync, a Rust port of icloud-md that takes
 // the sign-in from icloud-session. The icloud-notes package installs it
@@ -157,6 +160,29 @@ QString findIconFont()
     return {};
 }
 
+// The engine's error code for a failed run: its --json result's
+// {"error":{"code"}} (a half of runSync), else the last JSON error line on
+// its stderr (a --json pull or push). Empty when neither says.
+QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
+{
+    QJsonObject error = QJsonDocument::fromJson(output).object().value(QStringLiteral("error")).toObject();
+    if (error.isEmpty()) {
+        const QList<QByteArray> lines = stderrText.split('\n');
+        for (auto it = lines.crbegin(); it != lines.crend() && error.isEmpty(); ++it) {
+            if (it->startsWith("{\"error\":"))
+                error = QJsonDocument::fromJson(*it).object().value(QStringLiteral("error")).toObject();
+        }
+    }
+    return error.value(QStringLiteral("code")).toString();
+}
+
+// iCloud out of reach: the engine's network errors (icloud-session's
+// `offline` comes at once when there is no network at all).
+bool isNetworkError(const QString &code)
+{
+    return code == u"offline" || code == u"network";
+}
+
 } // namespace
 
 NotesBackend::NotesBackend(QObject *parent, Role role)
@@ -193,6 +219,12 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     // External changes (an icloud-notes-sync pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        // runSync re-reads the vault once, after it, rather than on every
+        // file its pull writes.
+        if (m_syncRunning && m_mode == Mode::Sync) {
+            m_vaultTouched = true;
+            return;
+        }
         rebuildFolders();
         rebuildNotes();
         if (!m_syncRunning) // a pull's own writes are not local changes
@@ -208,15 +240,31 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
 
     // Separate channels: with --json, stdout carries only the JSON result
     // (parsed), and progress, warnings and errors go to stderr (logged).
+    // runSync logs its result's report once it is done (finishSyncHalves),
+    // and leaves out the progress lines and the errors its result repeats.
     connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this, [this] {
         const QByteArray out = m_syncProcess.readAllStandardOutput();
         m_captured += out;
-        appendLog(QString::fromUtf8(out));
+        if (m_mode != Mode::Sync)
+            appendLog(QString::fromUtf8(out));
     });
     connect(&m_syncProcess, &QProcess::readyReadStandardError, this, [this] {
         const QByteArray err = m_syncProcess.readAllStandardError();
         m_capturedErr += err;
-        appendLog(QString::fromUtf8(err));
+        if (m_mode != Mode::Sync) {
+            appendLog(QString::fromUtf8(err));
+            return;
+        }
+        m_errLine += err;
+        QStringList lines;
+        for (qsizetype nl; (nl = m_errLine.indexOf('\n')) >= 0;) {
+            const QByteArray line = m_errLine.left(nl);
+            m_errLine.remove(0, nl + 1);
+            if (!line.startsWith("icloud-md:progress:") && !line.startsWith("{\"error\":"))
+                lines << QString::fromUtf8(line);
+        }
+        if (!lines.isEmpty())
+            appendLog(lines.join(u'\n'));
     });
     connect(&m_syncProcess, &QProcess::finished, this, [this](int exitCode) { finishSync(exitCode); });
     connect(&m_syncProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
@@ -413,54 +461,72 @@ bool NotesBackend::vaultCloned()
     return QDir(rootPath() + QStringLiteral("/.icloud-md")).exists();
 }
 
+QString NotesBackend::vaultInfoKey(const QString &stateFile) const
+{
+    const QFileInfo state(stateFile);
+    return syncToolPath() + u'\n' + QFileInfo(rootPath()).absoluteFilePath() + u'\n'
+        + (!stateFile.isEmpty() && state.exists()
+               ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
+               : QStringLiteral("-"));
+}
+
+QString NotesBackend::stateFileStamp()
+{
+    const QFileInfo state(rootPath() + QStringLiteral("/.icloud-md/state.json"));
+    return state.exists() ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
+                          : QStringLiteral("-");
+}
+
+void NotesBackend::adoptVaultInfo(const QJsonObject &o) const
+{
+    VaultInfo info;
+    if (o.value(QStringLiteral("titleMode")).toString() == u"filename")
+        info.titleMode = QStringLiteral("filename");
+    info.defaultFolderDir = o.value(QStringLiteral("defaultFolderDir")).toString();
+    info.stateFile = o.value(QStringLiteral("stateFile")).toString();
+    const QString vault = o.value(QStringLiteral("vault")).toString();
+    for (const QJsonValue &v : o.value(QStringLiteral("notes")).toArray()) {
+        const QJsonObject note = v.toObject();
+        const QString file = note.value(QStringLiteral("file")).toString();
+        const QString reason = note.value(QStringLiteral("readOnlyReason")).toString();
+        const QString base = note.value(QStringLiteral("baseFile")).toString();
+        if (file.isEmpty())
+            continue;
+        info.tracked.insert(file);
+        if (!reason.isEmpty())
+            info.readOnly.insert(file, reason);
+        if (!base.isEmpty())
+            info.baseFiles.insert(note.value(QStringLiteral("id")).toString(), vault + u'/' + base);
+    }
+    m_vaultInfoKey = vaultInfoKey(info.stateFile);
+    m_vaultInfo = info;
+}
+
 const NotesBackend::VaultInfo &NotesBackend::vaultInfo() const
 {
-    const QString tool = syncToolPath();
-    const QString root = QFileInfo(rootPath()).absoluteFilePath();
-    auto keyFor = [&](const QString &stateFile) {
-        const QFileInfo state(stateFile);
-        return tool + u'\n' + root + u'\n'
-            + (!stateFile.isEmpty() && state.exists()
-                   ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
-                   : QStringLiteral("-"));
-    };
     // Taken before asking, so a change while the engine answers asks again.
-    const QString key = keyFor(m_vaultInfo.stateFile);
+    const QString key = vaultInfoKey(m_vaultInfo.stateFile);
     if (!m_vaultInfoKey.isEmpty() && key == m_vaultInfoKey)
         return m_vaultInfo;
 
-    VaultInfo info;
+    QJsonObject answer;
+    const QString tool = syncToolPath();
     if (!tool.isEmpty()) {
         QProcess engine;
-        engine.start(tool, { QStringLiteral("--json"), QStringLiteral("vault-info"), root });
+        engine.start(tool, { QStringLiteral("--json"), QStringLiteral("vault-info"),
+                             QFileInfo(rootPath()).absoluteFilePath() });
         if (engine.waitForFinished(10000) && engine.exitStatus() == QProcess::NormalExit && engine.exitCode() == 0) {
-            const QJsonObject o = QJsonDocument::fromJson(engine.readAllStandardOutput()).object();
-            if (o.value(QStringLiteral("titleMode")).toString() == u"filename")
-                info.titleMode = QStringLiteral("filename");
-            info.defaultFolderDir = o.value(QStringLiteral("defaultFolderDir")).toString();
-            info.stateFile = o.value(QStringLiteral("stateFile")).toString();
-            const QString vault = o.value(QStringLiteral("vault")).toString();
-            for (const QJsonValue &v : o.value(QStringLiteral("notes")).toArray()) {
-                const QJsonObject note = v.toObject();
-                const QString file = note.value(QStringLiteral("file")).toString();
-                const QString reason = note.value(QStringLiteral("readOnlyReason")).toString();
-                const QString base = note.value(QStringLiteral("baseFile")).toString();
-                if (file.isEmpty())
-                    continue;
-                info.tracked.insert(file);
-                if (!reason.isEmpty())
-                    info.readOnly.insert(file, reason);
-                if (!base.isEmpty())
-                    info.baseFiles.insert(note.value(QStringLiteral("id")).toString(), vault + u'/' + base);
-            }
+            answer = QJsonDocument::fromJson(engine.readAllStandardOutput()).object();
         } else if (engine.state() != QProcess::NotRunning) {
             engine.kill();
             engine.waitForFinished();
         }
     }
+    const QString stateFileBefore = m_vaultInfo.stateFile;
+    adoptVaultInfo(answer);
     // The first answer names the state file: only then can its change be seen.
-    m_vaultInfoKey = info.stateFile == m_vaultInfo.stateFile ? key : keyFor(info.stateFile);
-    m_vaultInfo = info;
+    if (m_vaultInfo.stateFile == stateFileBefore)
+        m_vaultInfoKey = key;
     return m_vaultInfo;
 }
 
@@ -1284,10 +1350,7 @@ void NotesBackend::runPush()
 
 void NotesBackend::runSync()
 {
-    if (m_syncRunning)
-        return;
-    m_pullAfterPush = true;
-    runPush();
+    startSync(Mode::Sync, { QStringLiteral("--json"), QStringLiteral("sync") }, QStringLiteral("Sync"));
 }
 
 void NotesBackend::refreshPushPreview()
@@ -1321,6 +1384,11 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     m_syncLabel = label;
     m_captured.clear();
     m_capturedErr.clear();
+    m_errLine.clear();
+    if (mode == Mode::Sync) {
+        m_stateStampBefore = stateFileStamp();
+        m_vaultTouched = false;
+    }
     m_syncRunning = true;
     emit syncRunningChanged();
     appendLog(QStringLiteral("$ %1 ").arg(QLatin1StringView(kSyncTool)) + args.join(u' '));
@@ -1339,13 +1407,37 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
 
 void NotesBackend::finishSync(int exitCode)
 {
-    m_lastExit = exitCode;
     m_syncRunning = false;
     emit syncRunningChanged();
+    if (m_mode == Mode::Sync && !m_errLine.isEmpty() && !m_errLine.startsWith("icloud-md:progress:")
+        && !m_errLine.startsWith("{\"error\":"))
+        appendLog(QString::fromUtf8(m_errLine));
+    m_errLine.clear();
+    appendLog(QStringLiteral("(exit %1)").arg(exitCode));
+    if (m_mode == Mode::Sync)
+        finishSyncHalves(exitCode);
+    else
+        finishRun(m_syncLabel, exitCode, m_captured);
+
+    if (m_syncWhenIdle && !m_authExpired) {
+        m_syncWhenIdle = false;
+        runSync(); // a sign-in arrived while this ran
+    }
+    continueClone(); // a clone asked for while something else ran
+    if (!m_syncRunning) {
+        writeQueuedSave();
+        emit syncChainFinished();
+    }
+}
+
+void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArray &output)
+{
+    m_syncLabel = label;
+    m_lastExit = exitCode;
+    m_captured = output;
     // Exit 3 is an answer, not a failure: status has entries to push, or
     // diff found differences.
     const bool ok = exitCode == 0 || (exitCode == 3 && (m_mode == Mode::Preview || m_mode == Mode::Diff));
-    appendLog(QStringLiteral("(exit %1)").arg(exitCode));
 
     QVariantMap parsed;
     if (ok && m_mode == Mode::Preview)
@@ -1353,7 +1445,9 @@ void NotesBackend::finishSync(int exitCode)
     else if (ok && m_mode == Mode::History)
         parsed = SyncModel::parseHistoryJson(m_captured);
     const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
-                             : QStringLiteral("%1 failed (exit %2). See log.").arg(m_syncLabel).arg(exitCode);
+                             : QStringLiteral("%1 failed (exit %2). See log.").arg(label).arg(exitCode);
+    // iCloud out of reach is not worth a failure: the next sync tries again.
+    const bool offline = !ok && isNetworkError(engineErrorCode(output, m_capturedErr));
 
     // Every failure that only a sign-in fixes exits 2, the code every iCloud
     // tool uses (the app's own arguments never make a usage error). Notes
@@ -1368,27 +1462,21 @@ void NotesBackend::finishSync(int exitCode)
     // session; a push with nothing to send never checks it.
     // Only that re-arms the retry: a push that sent nothing proves nothing,
     // and clearing it there let push-ok, pull-refused retry forever.
-    const bool sessionWorks = ok && (m_syncLabel == u"Pull" || m_syncLabel == u"Clone");
+    const bool sessionWorks = ok && (label == u"Pull" || label == u"Clone");
     if (sessionWorks)
         m_retriedAfterReport = false;
     setAuthExpired(sessionExpired || (m_authExpired && !sessionWorks));
-    emit syncFinished(m_syncLabel, ok);
+    emit syncFinished(label, ok);
 
     switch (m_mode) {
     case Mode::Plain:
         setPushPreview({}, {}); // a pull or push makes the last preview stale
         refresh(); // a pull or clone changes files behind our back
-        if (m_syncLabel == u"Clone")
+        if (label == u"Clone")
             emit cloneFinished(ok);
-        if (m_pullAfterPush) {
-            m_pullAfterPush = false;
-            if (!m_authExpired) {
-                setSyncMessage(m_syncLabel + (ok ? QStringLiteral(" done.") : QStringLiteral(" failed. See log.")));
-                runPull(); // the second half of runSync, whatever the push did
-                return;
-            }
-        }
         break;
+    case Mode::Sync:
+        break; // re-read once both halves are in (finishSyncHalves)
     case Mode::Preview:
         setPushPreview(parsed, error);
         emit pushPreviewReady(error.isEmpty());
@@ -1409,16 +1497,90 @@ void NotesBackend::finishSync(int exitCode)
     }
     // The sign-in banner already says what went wrong and how to fix it.
     setSyncMessage(sessionExpired ? kPausedMessage
-                   : m_syncLabel + (error.isEmpty() ? QStringLiteral(" done.") : QStringLiteral(" failed. See log.")));
-    if (m_syncWhenIdle && !m_authExpired) {
-        m_syncWhenIdle = false;
-        runSync(); // a sign-in arrived while this ran
+                   : offline      ? kOfflineMessage
+                                  : label + (error.isEmpty() ? QStringLiteral(" done.") : QStringLiteral(" failed. See log.")));
+}
+
+// `icloud-notes-sync --json sync` answers {push, pull, vault_info}, each half
+// {ok, exit_code, result, lines} or {ok, exit_code, error}, pull null when it
+// did not run (the push found the sign-in gone, or iCloud out of reach).
+// Each half is logged and finished as a run of its own was, so syncFinished
+// says "Push", then "Pull"; then the vault is re-read, once, and only when
+// the run may have changed it.
+void NotesBackend::finishSyncHalves(int exitCode)
+{
+    const QJsonObject answer = QJsonDocument::fromJson(m_captured).object();
+    struct Half {
+        QString label;
+        int exitCode;
+        QByteArray output;
+    };
+    QList<Half> halves;
+    // Nothing a re-read would show: no half failed but for a sign-in or the network.
+    bool quiet = true;
+    bool pulledChanges = false;
+    auto take = [&](const QString &label, const QJsonObject &half) {
+        const QString name = label.toLower();
+        const bool ok = half.value(QStringLiteral("ok")).toBool();
+        QJsonObject output;
+        if (ok) {
+            output = half.value(QStringLiteral("result")).toObject();
+            QStringList lines;
+            for (const QJsonValue &line : half.value(QStringLiteral("lines")).toArray())
+                lines << line.toString();
+            appendLog(name + u':' + (lines.isEmpty() ? QString() : u'\n' + lines.join(u'\n')));
+        } else {
+            const QJsonObject error = half.value(QStringLiteral("error")).toObject();
+            output.insert(QStringLiteral("error"), error);
+            const QString code = error.value(QStringLiteral("code")).toString();
+            const QString message = error.value(QStringLiteral("message")).toString();
+            const QString hint = error.value(QStringLiteral("hint")).toString();
+            if (isNetworkError(code)) {
+                appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(name, message));
+            } else {
+                appendLog(name + QStringLiteral(" failed: ") + message + (hint.isEmpty() ? QString() : u'\n' + hint));
+                quiet = quiet && code == u"sign_in_required";
+            }
+        }
+        const int code = half.value(QStringLiteral("exit_code")).toInt(ok ? 0 : 1);
+        halves << Half{ label, code, QJsonDocument(output).toJson(QJsonDocument::Compact) };
+        return output;
+    };
+
+    const QJsonObject push = answer.value(QStringLiteral("push")).toObject();
+    if (push.isEmpty()) {
+        // No answer (no engine, no lock, the vault busy, a crash): both halves
+        // failed as the run did, as two runs would have; a sign-in skips the pull.
+        const int code = exitCode == 0 ? -1 : exitCode;
+        halves << Half{ QStringLiteral("Push"), code, {} };
+        if (code != 2)
+            halves << Half{ QStringLiteral("Pull"), code, {} };
+        quiet = false;
+    } else {
+        take(QStringLiteral("Push"), push);
+        if (answer.value(QStringLiteral("pull")).isObject()) {
+            const QJsonObject pulled = take(QStringLiteral("Pull"), answer.value(QStringLiteral("pull")).toObject());
+            for (const char *count : { "added", "updated", "merged", "removed" })
+                pulledChanges = pulledChanges || pulled.value(QLatin1StringView(count)).toInt() > 0;
+            pulledChanges = pulledChanges || !pulled.value(QStringLiteral("changes")).toArray().isEmpty()
+                || !pulled.value(QStringLiteral("conflicts")).toArray().isEmpty();
+        } else if (halves.first().exitCode != 2) {
+            // Not run: the push found iCloud out of reach. It failed as the push did.
+            halves << Half{ QStringLiteral("Pull"), halves.first().exitCode, halves.first().output };
+        }
     }
-    continueClone(); // a clone asked for while something else ran
-    if (!m_syncRunning) {
-        writeQueuedSave();
-        emit syncChainFinished();
-    }
+    for (const Half &half : halves)
+        finishRun(half.label, half.exitCode, half.output);
+
+    setPushPreview({}, {}); // a sync makes the last preview stale
+    // The answer carries what vault-info would say now: no second engine run.
+    if (answer.value(QStringLiteral("vault_info")).isObject())
+        adoptVaultInfo(answer.value(QStringLiteral("vault_info")).toObject());
+    const QString notePath = noteAbsolutePath();
+    if (!quiet || pulledChanges || m_vaultTouched || stateFileStamp() != m_stateStampBefore)
+        refresh(); // the pull (or something beside it) changed files
+    else if (!notePath.isEmpty() && (!QFile::exists(notePath) || readText(notePath) != m_noteContent))
+        refresh(); // the open note changed under the sync, from elsewhere
 }
 
 // A save refused while the sync ran, now that it is done and its changes

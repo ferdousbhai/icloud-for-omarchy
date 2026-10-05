@@ -176,6 +176,7 @@ null when none did. Rust: `cloudkit::transport::{RequestLog, LoggedRequest}`.
 | `tiny-push.json` | lookup + the `records/modify` answer for an update (tag `26b`) |
 | `tiny-push-create.json` | the `records/modify` answer for a create |
 | `tiny-push-delete.json` | lookup + the answer for the trash move |
+| `tiny-sync.json` | `tiny-push.json` then `tiny-pull-noop.json`: scenario `tiny-sync` pushes and pulls in one run, over one connection (one request log with all four requests) |
 | `dup-clone.json` | `tiny-clone` split over two `changes/zone` pages, the note repeated on the second (what live clones hit about 1 in 9 times); scenario `dup-clone` writes the note once: the same vault and output as `tiny-clone` |
 | `bodyless-pull.json` | a pull whose private listing adds a note (`Fresh`, tag `27a`) without its `TextDataEncrypted`, and a private `records/lookup` answering it with its text; scenario `bodyless-pull` looks it up and adds it |
 | `bodyless-pull-unfilled.json` | the same, with the lookup also answering without the text; scenario `bodyless-pull-unfilled` skips the note, keeps the previous private sync token and warns |

@@ -15,6 +15,7 @@
 #include <QVariant>
 
 class QDBusMessage;
+class QJsonObject;
 class QDBusServiceWatcher;
 
 // The vault on disk plus the icloud-notes-sync CLI, exposed to QML. One sync
@@ -214,7 +215,12 @@ public:
     Q_INVOKABLE void runPush();
     // Push whatever changed locally, then pull: the periodic sync, and what
     // launch does, so edits made while the app was closed or by another
-    // program in any folder reach iCloud without a click.
+    // program in any folder reach iCloud without a click. One engine run
+    // (icloud-notes-sync sync) does both; each half is still reported on
+    // its own (syncFinished "Push", then "Pull"), as two runs were. The
+    // vault is re-read once, after it, and only when something changed.
+    // iCloud out of reach (no network) is a quiet skip: one log line, a
+    // plain status, and the next sync tries again.
     Q_INVOKABLE void runSync();
     // Asks icloud-session to open its sign-in window; returns at once.
     // Syncing resumes when the daemon reports the sign-in.
@@ -233,10 +239,11 @@ public:
     Q_INVOKABLE void refreshSignIn();
 
     // Runs of pull and push pass --json to icloud-notes-sync, so its result
-    // is in lastOutput() (the command line's --json).
+    // is in lastOutput() (the command line's --json). runSync always does.
     void setToolJson(bool json) { m_toolJson = json; }
     // The last icloud-notes-sync run's exit code and stdout, as they were
-    // when syncFinished was emitted for it.
+    // when syncFinished was emitted for it: for a half of runSync, that
+    // half's exit code and JSON result, or {"error": {code, message, ...}}.
     int lastExitCode() const { return m_lastExit; }
     QByteArray lastOutput() const { return m_captured; }
 
@@ -269,13 +276,14 @@ signals:
     // One icloud-notes-sync run ended ("Push", "Pull", "Clone", ...).
     void syncFinished(const QString &label, bool ok);
     // The last run of a chain ended and nothing follows it: after the pull
-    // of runSync (or its push, when that found the sign-in gone), unlike
-    // syncRunningChanged, which also flips between the two halves.
+    // of runSync (or its push, when that found the sign-in gone), unless a
+    // sync waiting on a sign-in follows at once.
     void syncChainFinished();
     void themeChanged();
 
 private:
-    enum class Mode { Plain, Preview, History, Diff };
+    // Sync: runSync's `--json sync`, whose stdout holds both halves.
+    enum class Mode { Plain, Preview, History, Diff, Sync };
 
     QString folderAbsolutePath(const QString &folder) const;
     QString noteAbsolutePath() const;
@@ -293,6 +301,13 @@ private:
         QHash<QString, QString> baseFiles; // note id -> absolute path of its last-synced body
     };
     const VaultInfo &vaultInfo() const;
+    // The cache key vaultInfo() keeps: the engine, the vault and the state
+    // file's mtime and size.
+    QString vaultInfoKey(const QString &stateFile) const;
+    // Takes vault-info's answer (runSync's carries one) as the cached one.
+    void adoptVaultInfo(const QJsonObject &answer) const;
+    // The engine's state file's mtime and size, "-" without one.
+    static QString stateFileStamp();
     void startEngine();
     void rebuildFolders();
     void rebuildNotes();
@@ -308,6 +323,10 @@ private:
     void rewatch();
     void startSync(Mode mode, const QStringList &args, const QString &label);
     void finishSync(int exitCode);
+    // One run, or one half of runSync: what its exit code and output mean.
+    void finishRun(const QString &label, int exitCode, const QByteArray &output);
+    // runSync's run: its two halves, then one re-read of the vault.
+    void finishSyncHalves(int exitCode);
     void setPushPreview(const QVariantMap &parsed, const QString &error);
     void loadTheme();
     QString assembleNote(const QString &body) const;
@@ -383,7 +402,11 @@ private:
     QString m_syncLabel;
     bool m_syncRunning = false;
     Mode m_mode = Mode::Plain;
-    bool m_pullAfterPush = false;
+    // runSync: the state file as it was before, and whether the vault's
+    // directories changed during it (re-read once, after it).
+    QString m_stateStampBefore;
+    bool m_vaultTouched = false;
+    QByteArray m_errLine; // runSync's stderr up to the next newline
     bool m_authExpired = false;
     // A sign-in came back while a sync ran: sync once it finishes.
     bool m_syncWhenIdle = false;

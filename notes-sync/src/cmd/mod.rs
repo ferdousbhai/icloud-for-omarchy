@@ -15,6 +15,7 @@ pub mod remote;
 pub mod report;
 pub mod restore;
 pub mod status;
+pub mod sync;
 pub mod vault_info;
 
 use std::collections::{HashMap, HashSet};

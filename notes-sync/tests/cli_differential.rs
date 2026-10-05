@@ -147,6 +147,29 @@ fn normalize_generator(bytes: &[u8]) -> Vec<u8> {
     out.into_bytes()
 }
 
+/// `icloud-notes-<16 hex>.lock` (vault-info's `lockPath`, named after the
+/// run's temp dir) → `icloud-notes-<hash>.lock`.
+fn normalize_lock_hash(text: &str) -> String {
+    const PREFIX: &str = "icloud-notes-";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(PREFIX) {
+        let after = &rest[at + PREFIX.len()..];
+        let is_hash = after.len() >= 21
+            && after.as_bytes()[..16].iter().all(u8::is_ascii_hexdigit)
+            && after[16..].starts_with(".lock");
+        out.push_str(&rest[..at + PREFIX.len()]);
+        if is_hash {
+            out.push_str("<hash>");
+            rest = &after[16..];
+        } else {
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 struct Scenario {
     name: String,
     raw: Map<String, Value>,
@@ -240,7 +263,7 @@ fn run_binary(scenario: &Scenario) -> Run {
         .env("ICLOUD_NOTES_SYNC_DETERMINISTIC", "1")
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout).replace(&*out.to_string_lossy(), "@OUT@");
+    let stdout = normalize_lock_hash(&String::from_utf8_lossy(&output.stdout).replace(&*out.to_string_lossy(), "@OUT@"));
     std::fs::write(out.join("stdout.json"), &stdout).unwrap();
     Run {
         tmp,
@@ -608,3 +631,33 @@ fn bodyless_clone_unfilled_saves_no_private_sync_token() {
     assert_eq!(note_files(&expected("bodyless-clone-unfilled/vault")), ["Notes/Test Note.md"]);
 }
 
+
+/// `tiny-sync`: one run pushes the local edit, then pulls, over one
+/// connection - the request log (a cassette transport opened afresh would
+/// start a new one) holds both halves' requests, push's first - and each
+/// half's result is what `push` and `pull` alone give.
+#[test]
+fn tiny_sync_pushes_then_pulls_over_one_connection() {
+    let paths: Vec<String> = requests("tiny-sync")
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().rsplit("/production/").next().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "private/records/lookup",
+            "private/records/modify",
+            "private/changes/zone",
+            "shared/changes/database"
+        ]
+    );
+    let sync = read_json(&expected("tiny-sync/stdout.json"));
+    assert_eq!(sync["push"]["result"], read_json(&expected("tiny-push/stdout.json")));
+    assert_eq!(sync["pull"]["result"], read_json(&expected("tiny-pull-noop/stdout.json")));
+    assert_eq!(sync["vault_info"]["notes"].as_array().unwrap().len(), 1);
+    let clean = read_json(&expected("tiny-sync-clean/stdout.json"));
+    assert_eq!(
+        (clean["push"]["result"]["pushed"].as_u64(), clean["pull"]["ok"].as_bool()),
+        (Some(0), Some(true))
+    );
+}

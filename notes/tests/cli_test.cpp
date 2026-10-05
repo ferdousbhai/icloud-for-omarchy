@@ -483,9 +483,14 @@ int main(int argc, char *argv[])
                   && runs.at(1).toObject().value(QStringLiteral("exit_code")).toInt() == 0
                   && runs.at(1).toObject().value(QStringLiteral("result")).toObject().value(QStringLiteral("stub")).toString()
                          == QStringLiteral("pull")
-                  && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --json push"))
-                  && stubLog() == QStringList{ QStringLiteral("push"), QStringLiteral("pull") },
-              "cli sync: push, then pull, each with icloud-notes-sync's JSON");
+                  && runs.at(0).toObject().value(QStringLiteral("result")).toObject().value(QStringLiteral("stub")).toString()
+                         == QStringLiteral("push")
+                  && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --json sync"))
+                  && stubLog() == QStringList{ QStringLiteral("sync") },
+              "cli sync: push, then pull, in one engine run, each half with icloud-notes-sync's JSON");
+        // No network: the engine's offline error, exit 1.
+        const Run offline = cliJson({ QStringLiteral("sync") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
+        check(offline.code == 1 && offline.errorCode() == QStringLiteral("offline"), "cli sync offline: error offline, exit 1");
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
         check(cli({ QStringLiteral("pull") }).code == 0 && stubLog() == QStringList{ QStringLiteral("pull") }, "cli pull");
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
@@ -512,7 +517,7 @@ int main(int argc, char *argv[])
         const Run pushed = cliJson({ QStringLiteral("new"), QStringLiteral("Pushed"), QStringLiteral("--push") });
         check(pushed.code == 0 && exists(QStringLiteral("Notes/Pushed.md"))
                   && pushed.json().toObject().value(QStringLiteral("sync")).toObject().value(QStringLiteral("ok")).toBool()
-                  && stubLog() == QStringList{ QStringLiteral("push"), QStringLiteral("pull") },
+                  && stubLog() == QStringList{ QStringLiteral("sync") },
               "cli new --push syncs afterwards");
 
         // A refused session: exit 2, and icloud-session is told.

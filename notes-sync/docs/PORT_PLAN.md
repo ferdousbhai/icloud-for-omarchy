@@ -36,6 +36,15 @@ file and holds the lock.
 read-only reasons and base copies, the state and lock files) is what the app
 reads instead of parsing state.json.
 
+### sync, and network errors (not in icloud-md)
+
+`sync` (`src/cmd/sync.rs`) is push then pull in one run, over one connection
+(`remote::SharedConnector`), under one lock: what the app runs on every tick.
+The pull runs whatever the push did, except after a sign-in required or a
+network error. Its `--json` holds both results plus vault-info's answer.
+icloud-session's `Offline` and `Network` errors are the errors `offline` and
+`network` (exit 1, with a retry hint) rather than `internal` (70).
+
 Upstream PR #29 (ferdousbhai, "Fetch the text of notes too large to store it
 inline", open and unmerged as of 2026-09-29; fork branch
 `fetch-asset-note-bodies`, commits 768bcb3 and 10fa221 in the icloud-md clone)

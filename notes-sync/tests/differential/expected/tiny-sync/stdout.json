@@ -1,0 +1,68 @@
+{
+  "push": {
+    "ok": true,
+    "exit_code": 0,
+    "result": {
+      "dryRun": false,
+      "pushed": 1,
+      "entries": [
+        {
+          "kind": "update",
+          "file": "Notes/Test Note.md",
+          "resolution": "ready",
+          "outcome": {
+            "succeeded": true,
+            "message": "Pushed Notes/Test Note.md"
+          }
+        }
+      ],
+      "unchanged": 0,
+      "notices": []
+    },
+    "lines": [
+      "Pushed Notes/Test Note.md",
+      "Pushed 1 note(s) from @OUT@/vault",
+      "",
+      "        modified: vault/Notes/Test Note.md",
+      "",
+      "0 to create, 1 changed, 0 to delete."
+    ]
+  },
+  "pull": {
+    "ok": true,
+    "exit_code": 0,
+    "result": {
+      "added": 0,
+      "updated": 0,
+      "merged": 0,
+      "removed": 0,
+      "attachmentsDownloaded": 0,
+      "unpublishable": 0,
+      "skippedNewUnsyncable": 0,
+      "droppedUnsyncable": 0,
+      "unsharedUntracked": 0,
+      "changes": [],
+      "conflicts": [],
+      "notices": []
+    },
+    "lines": [
+      "Already up to date."
+    ]
+  },
+  "vault_info": {
+    "vault": "@OUT@/vault",
+    "cloned": true,
+    "stateDir": "@OUT@/vault/.icloud-md",
+    "stateFile": "@OUT@/vault/.icloud-md/state.json",
+    "titleMode": "in-body",
+    "defaultFolderDir": "Notes",
+    "notes": [
+      {
+        "id": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+        "file": "Notes/Test Note.md",
+        "baseFile": ".icloud-md/base/03667d1d-eee8-4e98-82fb-8c5cd02fd9d1.md"
+      }
+    ],
+    "lockPath": "@OUT@/home/icloud-notes-<hash>.lock"
+  }
+}
