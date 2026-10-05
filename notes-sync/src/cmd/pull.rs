@@ -18,7 +18,7 @@ use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
 use crate::md::filename::{file_name_carries_title, note_file_name_for, title_needing_frontmatter, unique_file_name};
-use crate::md::frontmatter::{NOTE_TITLE_KEY, compose_note_file, join_frontmatter, split_frontmatter};
+use crate::md::frontmatter::{NOTE_TITLE_KEY, compose_note_file, join_frontmatter, read_note_id, split_frontmatter};
 use crate::md::title::representability_problem;
 use crate::vault::attachments::{
     remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments, safe_unlink,
@@ -34,7 +34,7 @@ use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
 };
 use crate::vault::migrate::require_vault;
-use crate::vault::pairing::{file_exists, pending_rename_target, settle_pending_renames};
+use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
     AttachmentEntry, CloneState, FolderEntry, NOTE_ADD_ORDER, NoteEntry, PULL_WRITE_ORDER, TableAttachmentEntry,
     TitleMode, write_clone_state,
@@ -458,6 +458,7 @@ pub fn run_pull_with(
 
                 let Some(existing) = existing else {
                     let used_in_dir = used_names_for(&mut used_file_names, &note_dir);
+                    claim_names_on_disk(target_dir, &note_dir, used_in_dir)?;
                     let file_name = unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir);
                     used_in_dir.insert(file_name.clone());
                     let relative_file = posix::join(&[&note_dir, &file_name]);
@@ -490,6 +491,79 @@ pub fn run_pull_with(
                 };
 
                 let local = local_file_state(target_dir, &existing, &record.record_name, title_mode)?;
+                if local == LocalFileState::Missing {
+                    // Moved or renamed here and not pushed yet: the file that
+                    // carries this note's id takes the remote change, merged
+                    // against the old base, and the next push pairs the move.
+                    let claimants = note_id_claimants(target_dir, &tracked.notes, &record.record_name, title_mode)?;
+                    if !claimants.is_empty() {
+                        let mut statuses = Vec::new();
+                        for claimant in &claimants {
+                            statuses.push(merge_remote_change_into_local_file(
+                                target_dir,
+                                &record.record_name,
+                                claimant,
+                                &body_text,
+                                recorded_title.as_deref(),
+                                title_mode,
+                            )?);
+                        }
+                        if statuses.contains(&MergeStatus::UnresolvedMarkers) {
+                            summary.conflicts.push(format!(
+                                "{}: still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile",
+                                claimants.join(", ")
+                            ));
+                            return Ok(());
+                        }
+                        let conflicted = statuses.contains(&MergeStatus::Conflict);
+                        if !conflicted {
+                            write_base_copy(target_dir, &record.record_name, &body_text)?;
+                        }
+                        let mut entry = existing.clone();
+                        if let Some(tag) = &record.record_change_tag {
+                            entry.record_change_tag = tag.clone();
+                        }
+                        entry.modification_date = modification_date_of(record);
+                        entry.unpublishable_reason = unpublishable_reason.clone();
+                        entry.frontmatter_title = recorded_title.clone();
+                        entry.pending_rename = None;
+                        tracked.notes.insert(record.record_name.clone(), entry);
+                        for claimant in &claimants {
+                            if conflicted {
+                                summary
+                                    .conflicts
+                                    .push(format!("{claimant}: merged with conflict markers - resolve manually"));
+                            } else {
+                                summary.merged += 1;
+                            }
+                            summary.changes.push(PullChange::new(PullChangeKind::Merge, claimant.clone()));
+                        }
+                        return Ok(());
+                    }
+                    // Deleted here: the file stays gone and the next push moves
+                    // the note to Recently Deleted. Tracking follows the remote
+                    // record, so the base copy is the text being deleted.
+                    // (0.6.2 writes the file back.)
+                    write_base_copy(target_dir, &record.record_name, &body_text)?;
+                    let mut entry = existing.clone();
+                    if let Some(tag) = &record.record_change_tag {
+                        entry.record_change_tag = tag.clone();
+                    }
+                    entry.modification_date = modification_date_of(record);
+                    entry.unpublishable_reason = unpublishable_reason.clone();
+                    entry.folder_record_name = placement.folder_record_name.clone();
+                    entry.frontmatter_title = recorded_title.clone();
+                    entry.pending_rename = None;
+                    tracked.notes.insert(record.record_name.clone(), entry);
+                    summary.notices.push(SyncNotice {
+                        level: NoticeLevel::Info,
+                        message: format!(
+                            "{}: deleted here and changed in iCloud since - the next push moves it to Recently Deleted",
+                            existing.file
+                        ),
+                    });
+                    return Ok(());
+                }
                 let (file, pending_rename) = rename_for_remote_title(
                     target_dir,
                     &existing.file,
@@ -531,31 +605,21 @@ pub fn run_pull_with(
                     remarks,
                 };
 
-                if local == LocalFileState::Clean || local == LocalFileState::Missing {
+                if local == LocalFileState::Clean {
                     let file_path = target_dir.join(&file);
-                    let frontmatter = if local == LocalFileState::Clean {
-                        let text = read_text(&file_path)?.ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::NotFound,
-                                format!("{}: not found", file_path.display()),
-                            )
-                        })?;
-                        split_frontmatter(&text, split_options(title_mode)).frontmatter
-                    } else {
-                        String::new()
-                    };
+                    let text = read_text(&file_path)?.ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("{}: not found", file_path.display()),
+                        )
+                    })?;
+                    let frontmatter = split_frontmatter(&text, split_options(title_mode)).frontmatter;
                     std::fs::write(
                         &file_path,
                         compose_note_file(&frontmatter, &body_text, &record.record_name, recorded_title.as_deref()),
                     )?;
                     apply_note_file_times(&file_path, record)?;
                     write_base_copy(target_dir, &record.record_name, &body_text)?;
-                    if local == LocalFileState::Missing {
-                        summary.notices.push(SyncNotice {
-                            level: NoticeLevel::Info,
-                            message: format!("Recreated {file} (was missing locally)"),
-                        });
-                    }
                     tracked
                         .notes
                         .insert(record.record_name.clone(), updated_entry(&existing));
@@ -900,6 +964,25 @@ pub fn reconcile_notes_after_resync_in(
     *attachments = tracked.attachments;
     *table_attachments = tracked.table_attachments;
     result
+}
+
+/// Untracked files whose `apple-note-id` names `record_name`: where a note
+/// whose tracked file is gone was moved or renamed to.
+fn note_id_claimants(
+    target_dir: &Path,
+    notes: &IndexMap<String, NoteEntry>,
+    record_name: &str,
+    title_mode: TitleMode,
+) -> Result<Vec<String>, Error> {
+    let mut claimants = Vec::new();
+    for file in super::push::list_untracked_markdown_files(target_dir, notes)? {
+        let text = read_text(&target_dir.join(&file))?.unwrap_or_default();
+        let frontmatter = split_frontmatter(&text, split_options(title_mode)).frontmatter;
+        if read_note_id(&frontmatter).as_deref() == Some(record_name) {
+            claimants.push(file);
+        }
+    }
+    Ok(claimants)
 }
 
 /// `handleRemoteDeletion`: a clean or missing file goes with the note; a

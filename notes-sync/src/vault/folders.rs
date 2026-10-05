@@ -11,6 +11,7 @@ use super::layout::{
     RESERVED_SIBLING_DIR_NAMES, RESERVED_TOP_LEVEL_DIR_NAMES, StateDirInfo, VaultLayout, expected_note_dir, note_dir_of,
 };
 use super::local::read_text;
+use super::pairing::claim_names_on_disk;
 use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
 use crate::cmd::plan::FolderRefusal;
@@ -86,6 +87,7 @@ pub fn reconcile_note_placements(
             continue;
         };
         let from_file = entry.file.clone();
+        claim_names_on_disk(target_dir, to_dir, names(&mut claimed_names, to_dir))?;
         let base_name = unique_file_name(posix::basename(&from_file), names(&mut claimed_names, to_dir));
         let to_file = posix::join(&[to_dir, &base_name]);
 

@@ -244,7 +244,10 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
 
 ## Your files
 
-Each note is one `.md` file. A small ID block at the top of every file
+Each note is one `.md` file. Editing or deleting a file with any other
+program counts as editing or deleting the note: the next sync pushes the
+edit, or moves the note to Recently Deleted in iCloud (even if another
+device changed it in the meantime). A small ID block at the top of every file
 links it to its iCloud original — don't delete it, or the next push
 will treat the note as a brand-new one. Extra notes you add there
 (tags, aliases) stay on your machine and never upload. Downloaded

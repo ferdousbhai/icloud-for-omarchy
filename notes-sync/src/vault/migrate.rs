@@ -102,7 +102,7 @@ pub fn run_vault_migrations(
     while version < target_version as f64 {
         let Some(migration) = migrations.iter().find(|m| m.from as f64 == version) else {
             return Err(Error::Internal(format!(
-                "No vault migration registered from layout version {version} to {target_version} - this is a bug in icloud-md."
+                "No vault migration registered from layout version {version} to {target_version} - this is a bug in icloud-notes-sync."
             )));
         };
         on_migration(migration);

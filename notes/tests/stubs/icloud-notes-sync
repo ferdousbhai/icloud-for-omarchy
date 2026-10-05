@@ -85,7 +85,7 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2"
         exit 1 ;;
       *)
         echo "Not signed in to iCloud." >&2
-        echo 'Sign in to iCloud again with icloud-session, then retry (what "icloud-md reauthenticate" did for icloud-md).' >&2
+        echo 'Sign in to iCloud again with icloud-session, then retry.' >&2
         exit 2 ;;
     esac
   fi

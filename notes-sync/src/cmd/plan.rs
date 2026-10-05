@@ -132,7 +132,7 @@ impl FolderRefusal {
 
 /// `restore <file>` advice suffix shared by several refusals.
 fn restore_advice(file: &str) -> String {
-    format!("Run \"icloud-md restore {file}\" to discard your local edit.")
+    format!("Run \"icloud-notes restore {file}\" to discard your local edit.")
 }
 
 /// `prepareNoteTextUpdate`'s refusals (push.ts 1915-2007). `file` is the
@@ -389,8 +389,6 @@ pub enum Refusal {
         refusal: RetitleRefusal,
         previous_file: String,
     },
-    /// 967 (delete, conflict)
-    DeleteChangedRemotely,
     /// 1009 (create, refused): `parseNoteMarkdown`'s reason.
     CreateMarkdown { reason: String },
     /// 1024 (create, refused): `reconcileNoteFormat`'s reason.
@@ -423,7 +421,6 @@ impl Refusal {
             | UpdateConflictMarkers
             | MoveGoneRemotely
             | MoveChangedRemotely
-            | DeleteChangedRemotely
             | UpdateGoneRemotely
             | UpdateChangedRemotelyUnmergeable
             | MergedWithConflicts
@@ -438,7 +435,7 @@ impl Refusal {
         use Refusal::*;
         match self {
             PendingRename => {
-                "rename deferred by a previous pull and not yet performed - rename it, or run \"pull\" to have icloud-md do it"
+                "rename deferred by a previous pull and not yet performed - rename it, or run \"pull\" to have it done for you"
                     .into()
             }
             UpdateSharedNote(r) | TitleOnlySharedNote(r) => r.message().into(),
@@ -448,11 +445,11 @@ impl Refusal {
             UpdateEmptied => "pushing a fully emptied note isn't supported yet - edit it in Notes instead".into(),
             UpdateUnknownContent { file } => format!(
                 "this note contains content this tool can't parse and can never be pushed - \
-                 run \"icloud-md restore {file}\" to discard your local edit."
+                 run \"icloud-notes restore {file}\" to discard your local edit."
             ),
             UpdateNewAttachmentReference { file } => format!(
                 "contains an \"attachments/...\" reference, but this tool can't upload new attachments - \
-                 remove it, or run \"icloud-md restore {file}\" to discard the edit."
+                 remove it, or run \"icloud-notes restore {file}\" to discard the edit."
             ),
             AmbiguousNoteId { other_count, others, tracked_file } => format!(
                 "shares its \"{NOTE_ID_KEY}\" with {other_count} other file(s) ({}), and the note's own file ({}) is gone, \
@@ -462,7 +459,7 @@ impl Refusal {
                 tracked_file.as_deref().unwrap_or("unknown")
             ),
             DeleteSharedNote { file } => format!(
-                "deleting notes shared by someone else isn't supported - run \"icloud-md restore {file}\" to bring the file back"
+                "deleting notes shared by someone else isn't supported - run \"icloud-notes restore {file}\" to bring the file back"
             ),
             MoveSharedNote { previous_file } => format!(
                 "renaming or moving notes shared by someone else isn't supported yet - move the file back to {previous_file}"
@@ -504,7 +501,7 @@ impl Refusal {
                     .into()
             }
             MoveGoneRemotely | UpdateGoneRemotely => "no longer exists remotely - run \"pull\" to reconcile".into(),
-            MoveChangedRemotely | DeleteChangedRemotely => {
+            MoveChangedRemotely => {
                 "changed remotely since the last pull - run \"pull\" first".into()
             }
             MoveRetitle { refusal, previous_file } => refusal.message(previous_file),

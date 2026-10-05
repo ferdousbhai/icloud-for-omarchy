@@ -80,7 +80,7 @@ fn open_vault_refuses_a_vault_from_a_newer_tool_without_touching_it() {
     let future = json!({"layoutVersion": CURRENT_LAYOUT_VERSION + 1, "syncToken": "token", "notes": {}});
     write_state_at_version(dir.path(), future.clone());
     let err = open(dir.path()).unwrap_err();
-    assert!(err.to_string().contains("newer version of icloud-md"), "{err}");
+    assert!(err.to_string().contains("newer version of icloud-notes"), "{err}");
     assert_eq!(read_state_file(dir.path()), future);
 }
 
@@ -181,7 +181,7 @@ fn a_gap_in_the_chain_fails_loudly_instead_of_half_migrating() {
     );
     let migrations = vec![migration(3, 4, "unreachable", |_, s| Ok(s))];
     let err = run_vault_migrations(dir.path(), &migrations, 4, &mut |_| {}).unwrap_err();
-    assert!(err.to_string().contains("bug in icloud-md"), "{err}");
+    assert!(err.to_string().contains("bug in icloud-notes-sync"), "{err}");
     assert_eq!(read_state_file(dir.path())["layoutVersion"], json!(2));
 }
 

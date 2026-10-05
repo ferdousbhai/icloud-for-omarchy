@@ -145,6 +145,21 @@ pub(crate) fn file_exists(path: &Path) -> Result<bool, Error> {
     }
 }
 
+/// Adds the names already on disk in `dir` to `used`, so a file this run
+/// writes or moves there never replaces one it doesn't track (a note made
+/// here and not pushed yet, say).
+pub(crate) fn claim_names_on_disk(target_dir: &Path, dir: &str, used: &mut HashSet<String>) -> Result<(), Error> {
+    let entries = match std::fs::read_dir(target_dir.join(dir)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        used.insert(entry?.file_name().to_string_lossy().into_owned());
+    }
+    Ok(())
+}
+
 fn note_id_at(target_dir: &Path, file: &str, title_mode: TitleMode) -> Result<Option<String>, Error> {
     let Some(raw) = read_text(&target_dir.join(file))? else {
         return Ok(None);

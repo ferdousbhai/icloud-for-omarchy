@@ -106,7 +106,7 @@ pub fn run_diff_with(
             if let Some(to_id) = to_id {
                 return Err(Error::VersionContentUnavailable(format!(
                     "epoch-vs-epoch diff (\"{from_id}..{to_id}\") isn't supported yet - diff a specific record's snapshots \
-                     instead (run \"icloud-md history {file} --records\" for their ids), or diff the epoch against the \
+                     instead (run \"icloud-notes history {file} --records\" for their ids), or diff the epoch against the \
                      current remote copy"
                 )));
             }

@@ -283,8 +283,11 @@ struct CreateCandidate {
 
 /// `listUntrackedMarkdownFiles`: untracked `.md` files anywhere in the vault
 /// (dot-directories and `attachments/` skipped), sorted.
-fn list_untracked_markdown_files(target_dir: &Path, state: &CloneState) -> Result<Vec<String>, Error> {
-    let tracked: HashSet<&str> = state.notes.values().map(|e| e.file.as_str()).collect();
+pub(crate) fn list_untracked_markdown_files(
+    target_dir: &Path,
+    notes: &IndexMap<String, NoteEntry>,
+) -> Result<Vec<String>, Error> {
+    let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
     let mut found = Vec::new();
     fn walk(target_dir: &Path, dir: &str, tracked: &HashSet<&str>, found: &mut Vec<String>) -> Result<(), Error> {
         let entries = match std::fs::read_dir(target_dir.join(dir)) {
@@ -383,7 +386,7 @@ pub fn build_push_plan(
     }
 
     let mut untracked: Vec<UntrackedNote> = Vec::new();
-    for file in list_untracked_markdown_files(target_dir, &state)? {
+    for file in list_untracked_markdown_files(target_dir, &state.notes)? {
         let text = read_text(&target_dir.join(&file))?.unwrap_or_default();
         let envelope = split_frontmatter(&text, split_options(title_mode));
         untracked.push(UntrackedNote {
@@ -890,17 +893,10 @@ pub fn build_push_plan(
             }));
             continue;
         }
-        if record.record_change_tag.clone().unwrap_or_default() != entry.record_change_tag {
-            entries.push(
-                PlanEntry::refused(
-                    PlanEntryKind::Delete,
-                    entry.file.clone(),
-                    Refusal::DeleteChangedRemotely,
-                )
-                .into(),
-            );
-            continue;
-        }
+        // Deleting the file deletes the note, as deleting it in Notes would,
+        // even when another device changed it since the last pull: the trash
+        // is written against the live record, and Recently Deleted keeps that
+        // change. (0.6.2 refuses, and its pull then writes the file back.)
         entries.push(ready(Action::Delete {
             record_name: record_name.clone(),
             entry: entry.clone(),

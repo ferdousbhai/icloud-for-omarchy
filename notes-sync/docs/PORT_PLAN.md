@@ -96,6 +96,37 @@ backfill, a shared zone listed twice), tests/cmd_push.rs
 usual and asserted to contain the duplicate; the port is asserted to send the
 same requests and to produce icloud-md's `tiny-clone` vault/stdout/mtimes.
 
+### Local deletes, renames and new files win over a pull (not in 0.6.2)
+
+Deleting a note's file is a delete, as deleting the note in Notes is. In
+0.6.2 it is only when nothing changed remotely since the last pull: push
+refuses with "changed remotely since the last pull - run "pull" first"
+(push.ts L967, a conflict), and the pull that follows writes the file back
+("Recreated <file> (was missing locally)", pull.ts), so the delete is undone
+whenever another device touched the note in between (Apple bumps a note's
+change tag for more than text edits). The port:
+
+- `push` moves such a note to Recently Deleted anyway, against the live
+  record's change tag (the `Refusal::DeleteChangedRemotely` variant is
+  gone). The remote change is in the trashed note, recoverable for ~30 days.
+- `pull` leaves a tracked note whose file is missing deleted: it takes the
+  remote record's change tag and text into tracking (the base copy), writes
+  no file, and notes "<file>: deleted here and changed in iCloud since - the
+  next push moves it to Recently Deleted". `restore <file>` brings the file
+  back from that base copy, as before.
+- Unless the note was moved or renamed here and not pushed yet: when an
+  untracked file carries the note's `apple-note-id`, pull merges the remote
+  change into that file (diff3 against the old base) and keeps tracking at
+  the old path, so the next push pairs the move with a matching change tag.
+  Without this the remote edit would be lost: the move would go up, and
+  the moved file's older text after it.
+- A pull never writes or moves a note over a file it doesn't track (a note
+  made here and not pushed yet): new notes and folder relocations take the
+  names already on disk as used and get a `" 2"` name instead. 0.6.2 only
+  avoids tracked names and overwrites the file.
+
+Tests: tests/cmd_local_delete.rs.
+
 ### New notes listed without their text (not in 0.6.2)
 
 Found in review (2026-09-29). In 0.6.2's `pull` (`src/commands/pull.ts`

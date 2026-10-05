@@ -378,13 +378,6 @@ fn scenarios_and_expectations_line_up() {
 }
 
 #[test]
-fn generator_normalization() {
-    let a = normalize_generator(b"{\n  \"layoutVersion\": 3,\n  \"generator\": \"icloud-md 0.6.2\"\n}\n");
-    let b = normalize_generator(b"{\n  \"layoutVersion\": 3,\n  \"generator\": \"icloud-notes-sync 0.1.0\"\n}\n");
-    assert_eq!(a, b);
-}
-
-#[test]
 fn differential_scenarios() {
     let only: Option<Vec<String>> = std::env::var("ICLOUD_NOTES_SYNC_DIFF_ONLY")
         .ok()

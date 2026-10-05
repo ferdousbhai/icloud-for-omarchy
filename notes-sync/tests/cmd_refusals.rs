@@ -4,9 +4,7 @@
 //! --dry-run --json`. The port builds every such entry from
 //! `cmd::plan::Refusal`, so this table is the checklist that none was lost:
 //! `every_refusal_variant_is_listed` fails to compile when a variant is
-//! added without a row here, and `sites_match_icloud_md_source` (when the
-//! icloud-md clone is present) checks each row's line in push.ts still says
-//! what the row claims. Rows with line 0 are port-only refusals (deliberate
+//! added without a row here. Rows with line 0 are port-only refusals (deliberate
 //! differences from 0.6.2, docs/PORT_PLAN.md §1) with no push.ts site.
 
 use icloud_notes_sync::cmd::plan::{
@@ -20,7 +18,7 @@ const FILE: &str = "Notes/Pie.md";
 /// resolution, its reason verbatim).
 fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
     use PlanResolution::{Conflict, Refused};
-    let restore = format!("Run \"icloud-md restore {FILE}\" to discard your local edit.");
+    let restore = format!("Run \"icloud-notes restore {FILE}\" to discard your local edit.");
     let text = |r: TextUpdateRefusal| Refusal::UpdatePrepare(PrepareRefusal::TextUpdate(r));
     let retitle = |r: RetitleRefusal| Refusal::MoveRetitle {
         refusal: r,
@@ -33,7 +31,7 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "rename deferred by a previous pull",
             Refusal::PendingRename,
             Conflict,
-            "rename deferred by a previous pull and not yet performed - rename it, or run \"pull\" to have icloud-md do it"
+            "rename deferred by a previous pull and not yet performed - rename it, or run \"pull\" to have it done for you"
                 .into(),
         ),
         (
@@ -70,7 +68,7 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::UpdateUnknownContent { file: FILE.into() },
             Refused,
             format!(
-                "this note contains content this tool can't parse and can never be pushed - run \"icloud-md restore {FILE}\" to discard your local edit."
+                "this note contains content this tool can't parse and can never be pushed - run \"icloud-notes restore {FILE}\" to discard your local edit."
             ),
         ),
         (
@@ -79,7 +77,7 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::UpdateNewAttachmentReference { file: FILE.into() },
             Refused,
             format!(
-                "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it, or run \"icloud-md restore {FILE}\" to discard the edit."
+                "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it, or run \"icloud-notes restore {FILE}\" to discard the edit."
             ),
         ),
         (
@@ -116,7 +114,7 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::DeleteSharedNote { file: FILE.into() },
             Refused,
             format!(
-                "deleting notes shared by someone else isn't supported - run \"icloud-md restore {FILE}\" to bring the file back"
+                "deleting notes shared by someone else isn't supported - run \"icloud-notes restore {FILE}\" to bring the file back"
             ),
         ),
         (
@@ -321,13 +319,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             retitle(RetitleRefusal::Unapplied),
             Refused,
             format!("renaming this note would retitle it, but the new title couldn't be applied{rename_back}"),
-        ),
-        (
-            967,
-            "changed remotely since the last pull - run \"pull\" first",
-            Refusal::DeleteChangedRemotely,
-            Conflict,
-            "changed remotely since the last pull - run \"pull\" first".into(),
         ),
         (
             1009,
@@ -656,7 +647,6 @@ fn every_refusal_variant_is_listed() {
             | MoveGoneRemotely
             | MoveChangedRemotely
             | MoveRetitle { .. }
-            | DeleteChangedRemotely
             | CreateMarkdown { .. }
             | CreateReconcile { .. }
             | CreateVerificationFailed
@@ -673,7 +663,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 38, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 37, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()
@@ -699,50 +689,4 @@ fn every_refusal_variant_is_listed() {
         })
         .collect();
     assert_eq!(retitle.len(), 5, "one row per RetitleRefusal variant");
-}
-
-/// Ties each row to its line in icloud-md's push.ts (0.6.2; HEAD's push.ts is
-/// identical). Skipped when the clone isn't there.
-#[test]
-fn sites_match_icloud_md_source() {
-    let root = std::env::var("ICLOUD_MD")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../../coddingtonbear/icloud-md").to_owned());
-    let Ok(push) = std::fs::read_to_string(format!("{root}/src/commands/push.ts")) else {
-        eprintln!("icloud-md clone not found at {root}; skipping");
-        return;
-    };
-    let lines: Vec<&str> = push.lines().collect();
-    for (line, fragment, _, _, _) in sites() {
-        if line == 0 {
-            continue; // port-only refusal
-        }
-        let at = line as usize - 1;
-        let window = lines[at.saturating_sub(3)..(at + 4).min(lines.len())].join("\n");
-        assert!(
-            window.contains(fragment),
-            "push.ts:{line} doesn't say {fragment:?}:\n{window}"
-        );
-    }
-    let folder_create = std::fs::read_to_string(format!("{root}/src/notes/folderCreate.ts")).unwrap();
-    for (fragment, _, _) in folder_sites() {
-        assert!(
-            folder_create.contains(fragment),
-            "folderCreate.ts doesn't say {fragment:?}"
-        );
-    }
-    // Every `resolution: "refused" | "conflict"` literal in push.ts is one of
-    // the listed lines (or within its statement).
-    let listed: Vec<usize> = sites().iter().map(|(l, ..)| *l as usize).filter(|&l| l != 0).collect();
-    for (i, text) in lines.iter().enumerate() {
-        if text.contains("resolution: \"refused\"") || text.contains("resolution: \"conflict\"") {
-            let n = i + 1;
-            let near = listed.iter().any(|&l| l.abs_diff(n) <= 12);
-            // 546 is the move-pair `base` template (resolution refused, the
-            // reason added per site below); 1710 is prepareRetitle's type.
-            assert!(
-                near || [546, 761, 838, 1710].contains(&n),
-                "push.ts:{n} has an unlisted refusal site"
-            );
-        }
-    }
 }

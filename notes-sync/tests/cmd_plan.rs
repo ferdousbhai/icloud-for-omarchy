@@ -189,7 +189,7 @@ fn format_path_applies_inside_reason_lines() {
         K::Update,
         "Recipes/Pie.md",
         R::Refused,
-        "this note has an attachment - run \"icloud-md restore Recipes/Pie.md\" to discard your local edit",
+        "this note has an attachment - run \"icloud-notes restore Recipes/Pie.md\" to discard your local edit",
     )];
     let lines = render_plan(&entries, &|f| format!("../{f}"), RenderPlanOptions::default());
     assert!(lines[1].contains("modified: ../Recipes/Pie.md"), "{lines:?}");

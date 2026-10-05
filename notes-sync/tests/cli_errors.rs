@@ -73,7 +73,7 @@ fn sign_in_required_exits_2_with_the_reauthenticate_marker() {
         Error::SignInRequired
             .hint()
             .unwrap()
-            .contains("icloud-md reauthenticate")
+            .contains("Sign in to iCloud again with icloud-session")
     );
     assert!(matches!(Error::from(CkError::SignInRequired), Error::SignInRequired));
 }

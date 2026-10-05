@@ -32,7 +32,7 @@ pub enum Error {
     )]
     UnsupportedVaultLayout { target_dir: String },
     #[error(
-        "{target_dir} was written by a newer version of icloud-md (vault layout {vault_version}; this build understands {supported_version})."
+        "{target_dir} was written by a newer version of icloud-notes (vault layout {vault_version}; this build understands {supported_version})."
     )]
     VaultFromNewerTool {
         target_dir: String,
@@ -178,10 +178,8 @@ impl Error {
             Error::VersionContentUnavailable(_) => {
                 Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
             }
-            // Keeps icloud-md's sign-in marker (`icloud-md reauthenticate`),
-            // which wrappers match on alongside exit code 2.
             Error::SignInRequired => Some(
-                "Sign in to iCloud again with icloud-session, then retry (what \"icloud-md reauthenticate\" did for icloud-md)."
+                "Sign in to iCloud again with icloud-session, then retry."
                     .into(),
             ),
             Error::VaultBusy { app: true, .. } => Some(
