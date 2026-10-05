@@ -44,7 +44,7 @@ const QString kPausedMessage = QStringLiteral("Sync paused. Sign in to iCloud to
 // sync (the poll, a focus, the timer) tries again.
 const QString kOfflineMessage = QStringLiteral("Offline. Notes syncs again once iCloud can be reached.");
 
-// The sync engine: icloud-notes-sync, a Rust port of icloud-md that takes
+// The sync engine: icloud-notes-sync (originally derived from icloud-md); it takes
 // the sign-in from icloud-session. The icloud-notes package installs it
 // off PATH, in kSyncToolPath; see NotesBackend::syncToolPath.
 constexpr char kSyncTool[] = "icloud-notes-sync";
@@ -260,7 +260,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         for (qsizetype nl; (nl = m_errLine.indexOf('\n')) >= 0;) {
             const QByteArray line = m_errLine.left(nl);
             m_errLine.remove(0, nl + 1);
-            if (!line.startsWith("icloud-md:progress:") && !line.startsWith("{\"error\":"))
+            if (!isProgressLine(line) && !line.startsWith("{\"error\":"))
                 lines << QString::fromUtf8(line);
         }
         if (!lines.isEmpty())
@@ -454,11 +454,29 @@ QString NotesBackend::vaultRelative(const QString &name) const
     return m_currentFolder.isEmpty() ? name : m_currentFolder + u'/' + name;
 }
 
-// A clone leaves the engine's state directory (icloud-md's .icloud-md,
-// which icloud-notes-sync keeps) in the vault.
+// The engine's state directory, as vault-info's stateDir names it:
+// .icloud-notes (layout 4), or .icloud-md for a vault an older engine left,
+// which the next sync moves (.icloud-md then keeps only a tombstone
+// state.json that an older engine refuses as written by a newer version).
+QString NotesBackend::stateDir()
+{
+    const QString current = rootPath() + QStringLiteral("/.icloud-notes");
+    const QString legacy = rootPath() + QStringLiteral("/.icloud-md");
+    if (!QFile::exists(current + QStringLiteral("/state.json")) && QFile::exists(legacy + QStringLiteral("/state.json")))
+        return legacy;
+    return current;
+}
+
+// A clone leaves a state.json in the engine's state directory.
 bool NotesBackend::vaultCloned()
 {
-    return QDir(rootPath() + QStringLiteral("/.icloud-md")).exists();
+    return QFile::exists(stateDir() + QStringLiteral("/state.json"));
+}
+
+bool NotesBackend::isProgressLine(const QByteArray &line)
+{
+    // icloud-notes:progress:..., or an older engine's icloud-md:progress:...
+    return line.startsWith("icloud-notes:progress:") || line.startsWith("icloud-md:progress:");
 }
 
 QString NotesBackend::vaultInfoKey(const QString &stateFile) const
@@ -472,7 +490,7 @@ QString NotesBackend::vaultInfoKey(const QString &stateFile) const
 
 QString NotesBackend::stateFileStamp()
 {
-    const QFileInfo state(rootPath() + QStringLiteral("/.icloud-md/state.json"));
+    const QFileInfo state(stateDir() + QStringLiteral("/state.json"));
     return state.exists() ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
                           : QStringLiteral("-");
 }
@@ -1109,11 +1127,12 @@ bool NotesBackend::noteHasSyncedCopy() const
     return !path.isEmpty() && QFile::exists(path);
 }
 
-// Where recoverConflictedNote copies a note before replacing it: the sync
-// tool's own dot-directory, which neither it nor this app reads as notes.
+// Where recoverConflictedNote copies a note before replacing it: the
+// engine's own state directory, which neither it nor this app reads as
+// notes (the engine takes conflict-backups/ along when it moves the state).
 QString NotesBackend::conflictBackupDir()
 {
-    return rootPath() + QStringLiteral("/.icloud-md/conflict-backups");
+    return stateDir() + QStringLiteral("/conflict-backups");
 }
 
 QVariantMap NotesBackend::recoverConflictedNote(const QString &how)
@@ -1409,7 +1428,7 @@ void NotesBackend::finishSync(int exitCode)
 {
     m_syncRunning = false;
     emit syncRunningChanged();
-    if (m_mode == Mode::Sync && !m_errLine.isEmpty() && !m_errLine.startsWith("icloud-md:progress:")
+    if (m_mode == Mode::Sync && !m_errLine.isEmpty() && !isProgressLine(m_errLine)
         && !m_errLine.startsWith("{\"error\":"))
         appendLog(QString::fromUtf8(m_errLine));
     m_errLine.clear();

@@ -59,11 +59,11 @@ use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
     read_local_note, read_text, split_options,
 };
-use crate::vault::migrate::require_vault;
+use crate::vault::migrate::{read_vault, require_vault};
 use crate::vault::pairing::{UntrackedFile, pending_rename_target, resolve_note_ids, settle_pending_renames};
 use crate::vault::rt;
 use crate::vault::state::{
-    CloneState, FOLDER_CREATE_ORDER, FolderEntry, NOTE_CREATE_ORDER, NoteEntry, TitleMode, TrashedEntry,
+    CloneState, FolderEntry, NoteEntry, TitleMode, TrashedEntry,
     write_clone_state,
 };
 
@@ -550,7 +550,13 @@ pub fn build_push_plan(
     target_dir: &Path,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<BuildPushPlanResult, Error> {
-    let mut state = require_vault(target_dir, on_status)?;
+    // A preview (status, push --dry-run) writes nothing, a migration included:
+    // it reads a layout 3 vault where it is.
+    let mut state = if recording_suppressed() {
+        read_vault(target_dir)?
+    } else {
+        require_vault(target_dir, on_status)?
+    };
     let title_mode = state.mode();
     let mut planning_mutated_state = settle_pending_renames(target_dir, &mut state.notes, false, title_mode)?.changed;
 
@@ -2010,7 +2016,6 @@ fn execute<T: Transport>(
                     dir_name: posix::basename(&folder.dir_path).to_owned(),
                     shared_zone_owner: None,
                     permission: None,
-                    key_order: Some(FOLDER_CREATE_ORDER.to_vec()),
                 },
             );
             Ok(ExecuteOutcome::ok(format!("Created folder {}/", folder.dir_path)))
@@ -2291,7 +2296,6 @@ fn execute<T: Transport>(
                     },
                     folder_record_name: Some(folder_record_name.clone()),
                     shared_zone_owner: shared_zone_owner.clone(),
-                    key_order: Some(NOTE_CREATE_ORDER.to_vec()),
                     ..Default::default()
                 },
             );

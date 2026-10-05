@@ -57,7 +57,7 @@ int main(int argc, char *argv[])
         QStringList groceries{ QStringLiteral("a"), QStringLiteral("Notes/Groceries.md") };
         if (!readOnly.isEmpty())
             groceries << readOnly;
-        writeAged(root, QStringLiteral(".icloud-md/state.json"),
+        writeAged(root, QStringLiteral(".icloud-notes/state.json"),
                   stateJson(QStringLiteral("in-body"),
                             { groceries,
                               { QStringLiteral("b"), QStringLiteral("Notes/Trip ideas.md") },

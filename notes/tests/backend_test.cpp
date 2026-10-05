@@ -121,7 +121,7 @@ int main(int argc, char *argv[])
     // tests never meet the real app's (or leave lock files behind).
     qputenv("XDG_RUNTIME_DIR", scratch.path().toUtf8());
 
-    writeFile(QStringLiteral(".icloud-md/state.json"),
+    writeFile(QStringLiteral(".icloud-notes/state.json"),
               stateJson(QStringLiteral("in-body"), { { "id-a", "A.md" },
                                                      { "id-b", "B.md" },
                                                      { "id-e", "E.md" },
@@ -369,7 +369,7 @@ int main(int argc, char *argv[])
                                               "- pears\n=======\n- plums\n>>>>>>> remote\n||||||| base\n- pears\n"
                                               "=======\n- grapes\n>>>>>>> remote\n- bread\n");
         const QString synced = QStringLiteral("# Shopping\n- pears\n- bread\n");
-        const QString backups = testVault() + QStringLiteral("/.icloud-md/conflict-backups");
+        const QString backups = testVault() + QStringLiteral("/.icloud-notes/conflict-backups");
         auto backupFiles = [&] { return QDir(backups).entryList({ QStringLiteral("*.md") }, QDir::Files, QDir::Name); };
         writeFile(QStringLiteral("Order.md"), envelope + nested);
         b.refresh();
@@ -399,12 +399,12 @@ int main(int argc, char *argv[])
                   && !b.noteConflictsUnreadable() && !hasFlag(b, QStringLiteral("Order.md"), "conflict"),
               "backend strip keeps every line but the markers");
         check(backup1.startsWith(backups + QLatin1Char('/')) && readFile(QDir(testVault()).relativeFilePath(backup1)) == envelope + nested
-                  && stripped.value(QStringLiteral("message")).toString().contains(QStringLiteral(".icloud-md/conflict-backups/")),
+                  && stripped.value(QStringLiteral("message")).toString().contains(QStringLiteral(".icloud-notes/conflict-backups/")),
               "backend strip backed the note up first, and says where");
         check(!b.notes().contains(QFileInfo(backup1).fileName()), "backend backup is not a note");
 
         // Use the last synced version: the base copy, envelope kept.
-        writeFile(QStringLiteral(".icloud-md/base/id-order.md"), synced);
+        writeFile(QStringLiteral(".icloud-notes/base/id-order.md"), synced);
         writeFile(QStringLiteral("Order.md"), envelope + nested);
         b.refresh();
         check(b.noteHasSyncedCopy(), "backend synced copy found");
@@ -418,7 +418,7 @@ int main(int argc, char *argv[])
         check(!b.recoverConflictedNote(QStringLiteral("strip")).value(QStringLiteral("ok")).toBool(),
               "backend recovery only for unreadable markers");
         QFile::remove(testVault() + QStringLiteral("/Order.md"));
-        QFile::remove(testVault() + QStringLiteral("/.icloud-md/base/id-order.md"));
+        QFile::remove(testVault() + QStringLiteral("/.icloud-notes/base/id-order.md"));
         QDir(backups).removeRecursively();
         b.refresh();
     }
@@ -434,7 +434,7 @@ int main(int argc, char *argv[])
     check(!hasFlag(b, QStringLiteral("A.md"), "missing-id"), "backend rename keeps id");
 
     // Filename mode renames the file instead.
-    writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }));
+    writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }));
     check(b.vaultTitleMode() == QStringLiteral("filename"), "backend mode filename");
     check(b.renameCurrentNote(QStringLiteral("Second")).isEmpty(), "backend file rename ok");
     check(b.currentNote() == QStringLiteral("Second.md"), "backend file rename updates note");
@@ -535,7 +535,7 @@ int main(int argc, char *argv[])
     // the progress on stderr is logged but never parsed as the JSON.
     check(b.syncLog().contains(QStringLiteral("(exit 3)")) && b.syncMessage() == QStringLiteral("Push preview done."),
           "seam preview exit 3 is success");
-    check(b.syncLog().contains(QStringLiteral("icloud-md:progress:fetch:12")), "seam preview stderr in the log");
+    check(b.syncLog().contains(QStringLiteral("icloud-notes:progress:fetch:12")), "seam preview stderr in the log");
 
     b.runHistory();
     waitForSync(b);
@@ -590,7 +590,7 @@ int main(int argc, char *argv[])
                   && log.indexOf(QStringLiteral("pull:\nstub pull ok")) > log.indexOf(QStringLiteral("push:\nstub push ok"))
                   && b.syncMessage() == QStringLiteral("Pull done."),
               "seam sync pushes then pulls, in one engine run");
-        check(log.contains(QStringLiteral("Fetching changes from iCloud...")) && !log.contains(QStringLiteral("icloud-md:progress")),
+        check(log.contains(QStringLiteral("Fetching changes from iCloud...")) && !log.contains(QStringLiteral(":progress:")),
               "seam sync logs the engine's stderr, without its progress lines");
         check(ended == QStringList{ QStringLiteral("Pull") }, "seam sync chain ends once, after the pull");
         QObject::disconnect(c1);
@@ -616,7 +616,7 @@ int main(int argc, char *argv[])
         // A sync that changed nothing re-reads nothing: no vault walk, and
         // the vault-info the engine's answer carries is taken as it is (no
         // second engine run, not even with the state file changed).
-        writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }) + u' ');
+        writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }) + u' ');
         const QString infoLog = scratch.path() + QStringLiteral("/vault-info.log");
         qputenv("ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG", infoLog.toUtf8());
         int folderReads = 0;
@@ -892,7 +892,28 @@ int main(int argc, char *argv[])
     QString bgOut;
     check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync")),
           "background: no vault, nothing to do");
-    writeFile(QStringLiteral(".icloud-md/state.json"), stateJson(QStringLiteral("in-body"), {}));
+    // A layout 3 vault keeps its state in .icloud-md until its next sync
+    // moves it: cloned, with its conflict backups beside its state. Once
+    // moved, .icloud-md holds only a tombstone; alone (.icloud-notes gone)
+    // it still reads as cloned, for the engine to say what is wrong.
+    {
+        const QString legacy = bgVault + QStringLiteral("/.icloud-md");
+        const QString current = bgVault + QStringLiteral("/.icloud-notes");
+        writeFile(QStringLiteral(".icloud-md/state.json"),
+                  stateJson(QStringLiteral("in-body"), {})
+                      .replace(QStringLiteral("\"layoutVersion\":4"), QStringLiteral("\"layoutVersion\":3")));
+        check(NotesBackend::vaultCloned() && NotesBackend::stateDir() == legacy
+                  && NotesBackend::conflictBackupDir() == legacy + QStringLiteral("/conflict-backups"),
+              "layout 3: cloned, state and conflict backups in .icloud-md");
+        writeFile(QStringLiteral(".icloud-md/state.json"), QStringLiteral(R"({"layoutVersion":4,"movedTo":".icloud-notes"})"));
+        check(NotesBackend::vaultCloned(), "tombstone alone still reads as cloned");
+        writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("in-body"), {}));
+        check(NotesBackend::vaultCloned() && NotesBackend::stateDir() == current
+                  && NotesBackend::conflictBackupDir() == current + QStringLiteral("/conflict-backups"),
+              "layout 4: state and conflict backups in .icloud-notes");
+        QDir(legacy).removeRecursively();
+    }
+    writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("in-body"), {}));
     {
         const int code = backgroundSync(bgOut);
         const qsizetype push = bgOut.indexOf(QStringLiteral("stub push ok")), pull = bgOut.indexOf(QStringLiteral("stub pull ok"));

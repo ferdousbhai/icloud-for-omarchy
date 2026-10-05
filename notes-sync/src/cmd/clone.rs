@@ -20,7 +20,7 @@ use crate::vault::base::write_base_copy;
 use crate::vault::layout::{PreviousLayout, SharedZoneRecords, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
 use crate::vault::state::{
-    Account, CLONE_WRITE_ORDER, CloneState, NOTE_ADD_ORDER, NoteEntry, TitleMode, read_clone_state, write_clone_state,
+    Account, CloneState, NoteEntry, TitleMode, read_clone_state, write_clone_state,
 };
 
 /// `CloneOptions`.
@@ -246,7 +246,6 @@ pub fn run_clone_with(
                         folder_record_name: placement.folder_record_name,
                         pending_rename: None,
                         frontmatter_title: recorded_title,
-                        key_order: Some(NOTE_ADD_ORDER.to_vec()),
                     },
                 );
                 Ok(())
@@ -277,7 +276,6 @@ pub fn run_clone_with(
         sharer_homes: Some(layout.state_sharer_homes),
         attachments: Some(attachments),
         table_attachments: Some(table_attachments),
-        key_order: Some(CLONE_WRITE_ORDER.to_vec()),
         ..Default::default()
     };
     write_clone_state(target_dir, &state)?;

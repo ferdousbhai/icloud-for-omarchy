@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::Error;
 use crate::vault::epoch::{NoteEpoch, list_epochs};
 use crate::vault::history::{VersionSnapshot, history_record_names, list_versions, resolve_tracked_note};
-use crate::vault::migrate::require_vault;
+use crate::vault::migrate::read_vault;
 
 /// `HistoryOptions`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -47,7 +47,7 @@ pub enum HistoryResult {
 /// `runHistory`: the epoch timeline (or, with `records`, the flat
 /// per-record snapshot list), newest first.
 pub fn run_history(target_dir: &Path, file: &str, options: &HistoryOptions) -> Result<HistoryResult, Error> {
-    let state = require_vault(target_dir, &mut |_| {})?;
+    let state = read_vault(target_dir)?;
     let record_name = resolve_tracked_note(&state, file, target_dir)?.record_name;
     if options.records {
         return Ok(HistoryResult::Records {

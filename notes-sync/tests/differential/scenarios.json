@@ -152,15 +152,47 @@
       "vaultFrom": "tiny-clone",
       "edits": [
         { "file": "Notes/Test Note.md", "replace": ["---\napple-note-id: 03667d1d-eee8-4e98-82fb-8c5cd02fd9d1\n---\n\n", ""] },
+        { "file": ".icloud-notes", "renameTo": ".icloud-md" },
         { "file": ".icloud-md/state.json", "json": { "layoutVersion": 2, "titleMode": null } }
       ],
+      "args": ["--json", "push", "@VAULT@"]
+    },
+    {
+      "name": "tiny-status-v2",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [
+        { "file": ".icloud-notes", "renameTo": ".icloud-md" },
+        { "file": ".icloud-md/state.json", "json": { "layoutVersion": 2 } }
+      ],
       "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "tiny-status-v3",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [
+        { "file": ".icloud-notes", "renameTo": ".icloud-md" },
+        { "file": ".icloud-md/state.json", "json": { "layoutVersion": 3 } }
+      ],
+      "args": ["--json", "status", "@VAULT@"]
+    },
+    {
+      "name": "tiny-migrate-v3",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [
+        { "file": ".icloud-notes", "renameTo": ".icloud-md" },
+        { "file": ".icloud-md/state.json", "json": { "layoutVersion": 3 } }
+      ],
+      "cwd": "@VAULT@",
+      "args": ["--json", "restore", "Notes/Test Note.md"]
     },
     {
       "name": "tiny-newer-layout",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",
-      "edits": [{ "file": ".icloud-md/state.json", "json": { "layoutVersion": 4 } }],
+      "edits": [{ "file": ".icloud-notes/state.json", "json": { "layoutVersion": 5 } }],
       "args": ["--json", "status", "@VAULT@"]
     },
     {
@@ -240,7 +272,7 @@
       "name": "shared-pull-old-state",
       "cassette": "shared-full-listing.json",
       "vaultFrom": "asset-clone",
-      "edits": [{ "file": ".icloud-md/state.json", "json": { "sharedDatabase": null } }],
+      "edits": [{ "file": ".icloud-notes/state.json", "json": { "sharedDatabase": null } }],
       "args": ["--json", "pull", "@VAULT@"]
     },
     {

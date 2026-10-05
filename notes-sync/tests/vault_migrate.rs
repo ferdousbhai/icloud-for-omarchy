@@ -1,15 +1,22 @@
-//! Ports icloud-md `src/notes/vaultMigrations.test.ts`.
+//! Vault migrations: the runner (originally derived from icloud-md's tests),
+//! 2 → 3, and the 3 → 4 move from `.icloud-md/` to `.icloud-notes/`.
 
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use icloud_notes_sync::GENERATOR;
 use icloud_notes_sync::cmd::Error;
-use icloud_notes_sync::vault::base::write_base_copy;
+use icloud_notes_sync::cmd::history::{HistoryOptions, run_history};
+use icloud_notes_sync::cmd::vault_info::run_vault_info;
+use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
-use icloud_notes_sync::vault::migrate::{VaultMigration, open_vault, run_vault_migrations, vault_migrations};
+use icloud_notes_sync::vault::migrate::{
+    VaultMigration, open_vault, read_vault, run_vault_migrations, tombstone, vault_migrations,
+};
 use icloud_notes_sync::vault::state::{
-    CURRENT_LAYOUT_VERSION, CloneState, NoteEntry, RawStateFile, TitleMode, write_clone_state,
+    CURRENT_LAYOUT_VERSION, CloneState, NoteEntry, RawStateFile, TitleMode, read_clone_state, state_file_path,
+    write_clone_state,
 };
 use serde_json::{Value, json};
 
@@ -22,8 +29,9 @@ fn write_state_at_version(dir: &Path, state: Value) {
     .unwrap();
 }
 
+/// The live state file, wherever it is.
 fn read_state_file(dir: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(dir.join(".icloud-md/state.json")).unwrap()).unwrap()
+    serde_json::from_str(&std::fs::read_to_string(state_file_path(dir)).unwrap()).unwrap()
 }
 
 fn open(dir: &Path) -> Result<Option<CloneState>, Error> {
@@ -204,10 +212,10 @@ fn a_version_2_vault_migrates_forward_on_first_contact_in_place() {
     assert_eq!(state.notes["REC-1"].file, "Notes/A.md");
     assert_eq!(
         described,
-        [format!(
-            "Updating this vault's layout: {}...",
-            vault_migrations()[0].describe
-        )]
+        vault_migrations()
+            .iter()
+            .map(|m| format!("Updating this vault's layout: {}...", m.describe))
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         read_state_file(dir.path())["layoutVersion"],
@@ -316,10 +324,233 @@ fn re_running_the_migration_rewrites_nothing() {
     .unwrap();
     let mut state = read_state_file(dir.path());
     state["layoutVersion"] = json!(2);
+    std::fs::remove_file(dir.path().join(".icloud-notes/state.json")).unwrap();
     write_state_at_version(dir.path(), state);
     open(dir.path()).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join("Notes/A.md")).unwrap(),
         after_first
     );
+}
+
+// --- 3 → 4: .icloud-md/ → .icloud-notes/ ------------------------------------
+
+const ID: &str = "089D915D-C76E-4F44-AB80-2190073281A3";
+const NOTE: &str = "---\napple-note-id: 089D915D-C76E-4F44-AB80-2190073281A3\n---\n\n# A\n\nBody A";
+
+/// A layout 3 vault as icloud-md and earlier builds left it: one note, its
+/// base copy, history (a snapshot and an epoch), a conflict backup the app
+/// made, and a top-level key this build doesn't know.
+fn v3_vault(dir: &Path) -> Value {
+    let file = |rel: &str, text: &str| {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    file("Notes/A.md", NOTE);
+    file(&format!(".icloud-md/base/{ID}.md"), "# A\n\nBody A");
+    file(&format!(".icloud-md/history/{ID}/0001-abcd.json"), "{\"id\":\"s1\"}\n");
+    file(
+        &format!(".icloud-md/history/{ID}/epochs/0001-ef01.json"),
+        &format!("{{\"id\":\"e1\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"noteRecordName\":\"{ID}\",\"snapshots\":{{}}}}\n"),
+    );
+    file(".icloud-md/conflict-backups/Notes/A (conflict backup 2026-01-01 000000).md", "old");
+    let state = json!({"layoutVersion": 3, "generator": "icloud-md 0.6.2", "titleMode": "in-body",
+        "syncToken": "token", "someoneElsesKey": [1],
+        "notes": {ID: {"file": "Notes/A.md", "recordChangeTag": "t", "modificationDate": 1}}});
+    write_state_at_version(dir, state.clone());
+    state
+}
+
+/// Every file under `dir`, relative, with its bytes.
+fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let rel = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                out.insert(rel, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+fn backups(dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(".icloud-md.bak-"))
+        .collect();
+    out.sort();
+    out
+}
+
+fn assert_migrated(dir: &Path, legacy_before: &BTreeMap<String, Vec<u8>>) {
+    let current = dir.join(".icloud-notes");
+    let state: Value =
+        serde_json::from_str(&std::fs::read_to_string(current.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["layoutVersion"], json!(4));
+    assert_eq!(state["syncToken"], json!("token"));
+    assert_eq!(state["someoneElsesKey"], json!([1]));
+    assert_eq!(state["notes"][ID]["file"], json!("Notes/A.md"));
+    // Everything but state.json moved, byte for byte.
+    let mut moved = tree(&current);
+    moved.remove("state.json");
+    let mut expected = legacy_before.clone();
+    expected.remove("state.json");
+    assert_eq!(moved, expected);
+    assert_eq!(
+        tree(&dir.join(".icloud-md")),
+        BTreeMap::from([(
+            "state.json".to_owned(),
+            (serde_json::to_string_pretty(&Value::Object(tombstone())).unwrap() + "\n").into_bytes()
+        )])
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("Notes/A.md")).unwrap(), NOTE);
+    assert_eq!(read_base_copy(dir, ID).unwrap().as_deref(), Some("# A\n\nBody A"));
+}
+
+#[test]
+fn a_layout_3_vault_moves_to_icloud_notes_under_open_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    v3_vault(dir.path());
+    let legacy_before = tree(&dir.path().join(".icloud-md"));
+    let mut described = Vec::new();
+    let state = open_vault(dir.path(), &mut |m| described.push(m.to_owned()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        described,
+        ["Updating this vault's layout: moving its state from .icloud-md/ to .icloud-notes/..."]
+    );
+    assert_eq!(state.layout_version, Some(4));
+    assert_migrated(dir.path(), &legacy_before);
+    // The backup is a copy of .icloud-md/ as it was.
+    let backups = backups(dir.path());
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert_eq!(tree(&backups[0]), legacy_before);
+
+    // A second open changes nothing and makes no second backup.
+    let after = tree(dir.path());
+    open(dir.path()).unwrap();
+    assert_eq!(tree(dir.path()), after);
+}
+
+#[test]
+fn read_only_commands_read_a_layout_3_vault_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    v3_vault(dir.path());
+    let before = tree(dir.path());
+
+    let state = read_vault(dir.path()).unwrap();
+    assert_eq!(state.layout_version, Some(3));
+    assert_eq!(state.notes[ID].file, "Notes/A.md");
+    assert_eq!(read_base_copy(dir.path(), ID).unwrap().as_deref(), Some("# A\n\nBody A"));
+    run_history(dir.path(), "Notes/A.md", &HistoryOptions { records: false }).unwrap();
+    let info = serde_json::to_value(run_vault_info(dir.path()).unwrap()).unwrap();
+    let vault = std::path::absolute(dir.path()).unwrap();
+    assert_eq!(info["stateDir"], json!(vault.join(".icloud-md").to_str().unwrap()));
+    assert_eq!(info["notes"][0]["baseFile"], json!(format!(".icloud-md/base/{ID}.md")));
+
+    assert_eq!(tree(dir.path()), before, "nothing was migrated");
+    assert!(!dir.path().join(".icloud-notes").exists());
+}
+
+#[test]
+fn an_interrupted_move_finishes_where_it_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    v3_vault(dir.path());
+    let legacy_before = tree(&dir.path().join(".icloud-md"));
+    // Stopped after the backup, the new directory and the first rename.
+    let backup = dir.path().join(".icloud-md.bak-20260101T000000Z");
+    std::fs::create_dir(&backup).unwrap();
+    std::fs::create_dir(dir.path().join(".icloud-notes")).unwrap();
+    std::fs::rename(
+        dir.path().join(".icloud-md/base"),
+        dir.path().join(".icloud-notes/base"),
+    )
+    .unwrap();
+
+    // Meanwhile a read-only command still finds everything.
+    assert_eq!(read_vault(dir.path()).unwrap().layout_version, Some(3));
+    assert_eq!(read_base_copy(dir.path(), ID).unwrap().as_deref(), Some("# A\n\nBody A"));
+    run_history(dir.path(), "Notes/A.md", &HistoryOptions { records: true }).unwrap();
+
+    open(dir.path()).unwrap().unwrap();
+    assert_migrated(dir.path(), &legacy_before);
+    assert_eq!(backups(dir.path()), [backup], "no second backup");
+}
+
+#[test]
+fn an_unfinished_backup_is_redone() {
+    let dir = tempfile::tempdir().unwrap();
+    v3_vault(dir.path());
+    let legacy_before = tree(&dir.path().join(".icloud-md"));
+    let partial = dir.path().join(".icloud-md.bak-20260101T000000Z.partial");
+    std::fs::create_dir_all(partial.join("base")).unwrap();
+    open(dir.path()).unwrap().unwrap();
+    assert_migrated(dir.path(), &legacy_before);
+    assert!(!partial.exists());
+    let backups = backups(dir.path());
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert_eq!(tree(&backups[0]), legacy_before);
+}
+
+#[test]
+fn a_run_stopped_after_the_commit_leaves_the_tombstone_to_the_next_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = v3_vault(dir.path());
+    let legacy_before = tree(&dir.path().join(".icloud-md"));
+    open(dir.path()).unwrap().unwrap();
+    // As if the tombstone had never been written.
+    write_state_at_version(dir.path(), state);
+    assert_eq!(read_vault(dir.path()).unwrap().layout_version, Some(4));
+    open(dir.path()).unwrap().unwrap();
+    assert_migrated(dir.path(), &legacy_before);
+}
+
+#[test]
+fn conflict_backups_already_in_icloud_notes_are_merged_not_clobbered() {
+    let dir = tempfile::tempdir().unwrap();
+    v3_vault(dir.path());
+    let theirs = dir.path().join(".icloud-notes/conflict-backups/Notes/B.md");
+    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+    std::fs::write(&theirs, "b").unwrap();
+    open(dir.path()).unwrap().unwrap();
+    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "b");
+    assert!(
+        dir.path()
+            .join(".icloud-notes/conflict-backups/Notes/A (conflict backup 2026-01-01 000000).md")
+            .exists()
+    );
+    assert!(!dir.path().join(".icloud-md/conflict-backups").exists());
+}
+
+#[test]
+fn an_older_build_refuses_the_moved_vault_as_newer() {
+    let dir = tempfile::tempdir().unwrap();
+    v3_vault(dir.path());
+    open(dir.path()).unwrap().unwrap();
+    // What a layout 3 build sees: only .icloud-md/state.json.
+    std::fs::rename(dir.path().join(".icloud-notes"), dir.path().join("elsewhere")).unwrap();
+    let err = run_vault_migrations(dir.path(), &[], 3, &mut |_| {}).unwrap_err();
+    assert!(matches!(err, Error::VaultFromNewerTool { vault_version: 4, .. }), "{err}");
+    // This build, with .icloud-notes/ gone, says what happened.
+    let err = read_clone_state(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("moved to .icloud-notes/"), "{err}");
+}
+
+#[test]
+fn a_fresh_clone_writes_layout_4_into_icloud_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &CloneState::default()).unwrap();
+    assert!(dir.path().join(".icloud-notes/state.json").exists());
+    assert!(!dir.path().join(".icloud-md").exists());
+    assert_eq!(read_state_file(dir.path())["layoutVersion"], json!(4));
 }

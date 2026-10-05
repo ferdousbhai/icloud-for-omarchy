@@ -88,6 +88,9 @@ public:
     QVariantMap folderNoteCounts() const { return m_folderNoteCounts; }
     bool cloned() const { return vaultCloned(); }
     static bool vaultCloned();
+    // The engine's state directory in the vault: .icloud-notes, or a layout 3
+    // vault's .icloud-md until its next sync moves it.
+    static QString stateDir();
     // The vault on disk (ICLOUD_NOTES_VAULT, or ~/Documents/icloud-notes).
     static QString rootPath();
     // The lock the app, background syncs, command line changes and
@@ -308,6 +311,9 @@ private:
     void adoptVaultInfo(const QJsonObject &answer) const;
     // The engine's state file's mtime and size, "-" without one.
     static QString stateFileStamp();
+    // An engine progress line (icloud-notes:progress:..., or an older
+    // engine's icloud-md:progress:...), which the log leaves out.
+    static bool isProgressLine(const QByteArray &line);
     void startEngine();
     void rebuildFolders();
     void rebuildNotes();

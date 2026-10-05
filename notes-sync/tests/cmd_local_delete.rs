@@ -57,7 +57,7 @@ fn run(out: &Path, cassette: &Path, args: &[&str]) -> (i32, Value, String) {
 }
 
 fn state(vault: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(vault.join(".icloud-md/state.json")).unwrap()).unwrap()
+    serde_json::from_str(&std::fs::read_to_string(vault.join(".icloud-notes/state.json")).unwrap()).unwrap()
 }
 
 fn modify_requests(out: &Path) -> usize {
@@ -300,7 +300,7 @@ fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
     assert!(text.contains("# Test Note, edited here"), "{text}");
     assert!(text.contains("A line added on the phone."), "{text}");
     assert_eq!(state(&vault)["notes"][RECORD]["recordChangeTag"], "26b");
-    let base = std::fs::read_to_string(vault.join(format!(".icloud-md/base/{RECORD}.md"))).unwrap();
+    let base = std::fs::read_to_string(vault.join(format!(".icloud-notes/base/{RECORD}.md"))).unwrap();
     assert!(base.contains("edited here") && base.contains("on the phone"), "{base}");
 }
 
@@ -330,7 +330,7 @@ fn a_rename_with_an_edit_goes_up_in_one_push() {
     let state = state(&vault);
     assert_eq!(state["notes"][RECORD]["file"], renamed);
     assert_eq!(state["notes"][RECORD]["recordChangeTag"], "26b");
-    let base = std::fs::read_to_string(vault.join(format!(".icloud-md/base/{RECORD}.md"))).unwrap();
+    let base = std::fs::read_to_string(vault.join(format!(".icloud-notes/base/{RECORD}.md"))).unwrap();
     assert!(base.ends_with("A line added here."), "{base}");
 }
 
@@ -348,13 +348,13 @@ fn several_deletes_go_up_in_one_request() {
     entry["file"] = Value::from(second);
     state_json["notes"][other] = entry;
     std::fs::write(
-        vault.join(".icloud-md/state.json"),
+        vault.join(".icloud-notes/state.json"),
         serde_json::to_vec_pretty(&state_json).unwrap(),
     )
     .unwrap();
     std::fs::copy(
-        vault.join(format!(".icloud-md/base/{RECORD}.md")),
-        vault.join(format!(".icloud-md/base/{other}.md")),
+        vault.join(format!(".icloud-notes/base/{RECORD}.md")),
+        vault.join(format!(".icloud-notes/base/{other}.md")),
     )
     .unwrap();
     std::fs::remove_file(vault.join(FILE)).unwrap();

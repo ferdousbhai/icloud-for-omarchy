@@ -112,7 +112,7 @@ fn the_json_error_line_is_the_shared_one() {
         String::from_utf8_lossy(&o.stderr),
         format!(
             "{{\"error\":{{\"code\":\"not_cloned_directory\",\"message\":\"{dir} doesn't look like a cloned notes directory \
-             (no .icloud-md/state.json).\",\"exit_code\":1,\"hint\":\"Run \\\"icloud-notes-sync clone <directory>\\\" first.\"}}}}\n"
+             (no .icloud-notes/state.json).\",\"exit_code\":1,\"hint\":\"Run \\\"icloud-notes-sync clone <directory>\\\" first.\"}}}}\n"
         )
     );
     let human = std::process::Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))

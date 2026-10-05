@@ -49,7 +49,7 @@ inline QString readFile(const QString &rel, const QString &root = testVault())
     return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
 }
 
-// A state file as icloud-notes-sync writes it (layout 3), which vault-info
+// A state file as icloud-notes-sync writes it (layout 4, in .icloud-notes/), which vault-info
 // reads: the title mode, the default folder's directory (if any) and the
 // tracked notes, {id, file[, read-only reason]}.
 inline QString stateJson(const QString &mode, const QList<QStringList> &notes, const QString &defaultDir = {})
@@ -62,7 +62,7 @@ inline QString stateJson(const QString &mode, const QList<QStringList> &notes, c
     const QString folders = defaultDir.isEmpty()
         ? QString()
         : QStringLiteral(R"("folders":{"DefaultFolder-CloudKit":{"name":"%1","dirName":"%1"}},)").arg(defaultDir);
-    return QStringLiteral(R"({"layoutVersion":3,"titleMode":"%1",%2"notes":{%3}})")
+    return QStringLiteral(R"({"layoutVersion":4,"titleMode":"%1",%2"notes":{%3}})")
         .arg(mode, folders, entries.join(u','));
 }
 } // namespace

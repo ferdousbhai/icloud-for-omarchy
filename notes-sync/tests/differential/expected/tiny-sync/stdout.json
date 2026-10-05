@@ -52,15 +52,15 @@
   "vault_info": {
     "vault": "@OUT@/vault",
     "cloned": true,
-    "stateDir": "@OUT@/vault/.icloud-md",
-    "stateFile": "@OUT@/vault/.icloud-md/state.json",
+    "stateDir": "@OUT@/vault/.icloud-notes",
+    "stateFile": "@OUT@/vault/.icloud-notes/state.json",
     "titleMode": "in-body",
     "defaultFolderDir": "Notes",
     "notes": [
       {
         "id": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
         "file": "Notes/Test Note.md",
-        "baseFile": ".icloud-md/base/03667d1d-eee8-4e98-82fb-8c5cd02fd9d1.md"
+        "baseFile": ".icloud-notes/base/03667d1d-eee8-4e98-82fb-8c5cd02fd9d1.md"
       }
     ],
     "lockPath": "@OUT@/home/icloud-notes-<hash>.lock"

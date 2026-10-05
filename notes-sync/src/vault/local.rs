@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::base::read_base_copy;
-use super::state::{NoteEntry, STATE_DIR_NAME, STATE_FILE_NAME, TitleMode};
+use super::state::{LEGACY_STATE_DIR_NAME, NoteEntry, STATE_DIR_NAME, STATE_FILE_NAME, TitleMode};
 use crate::cloudkit::CloudKitRecord;
 use crate::cmd::errors::Error;
 use crate::md::frontmatter::{SplitOptions, split_frontmatter};
@@ -148,14 +148,17 @@ pub fn mtime_ms(path: &Path) -> Result<i64, Error> {
 // --- vaultRoot.ts ------------------------------------------------------------
 
 /// `findVaultRoot`: walk up from `start_dir` to the directory holding
-/// `.icloud-md/state.json`, git-style.
+/// `.icloud-notes/state.json` (or a layout 3 vault's `.icloud-md/state.json`),
+/// git-style.
 pub fn find_vault_root(start_dir: &Path) -> std::io::Result<Option<PathBuf>> {
     let mut dir = std::path::absolute(start_dir)?;
     loop {
-        match std::fs::metadata(dir.join(STATE_DIR_NAME).join(STATE_FILE_NAME)) {
-            Ok(_) => return Ok(Some(dir)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+        for state_dir in [STATE_DIR_NAME, LEGACY_STATE_DIR_NAME] {
+            match std::fs::metadata(dir.join(state_dir).join(STATE_FILE_NAME)) {
+                Ok(_) => return Ok(Some(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
         if !dir.pop() {
             return Ok(None);

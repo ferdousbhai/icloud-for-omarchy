@@ -1165,7 +1165,7 @@ ApplicationWindow {
                                         font.pixelSize: root.pt(12)
                                         text: "\"Remove the markers\" keeps every line from both versions and drops only the marker lines, for you to read over. "
                                             + (backend.noteHasSyncedCopy ? "\"Use the last synced version\" goes back to the text last synced with iCloud. " : "")
-                                            + "Before either, the note as it is now is copied to .icloud-md/conflict-backups in your notes folder, so nothing is lost."
+                                            + "Before either, the note as it is now is copied to .icloud-notes/conflict-backups in your notes folder, so nothing is lost."
                                     }
                                 }
                             }

@@ -1,0 +1,59 @@
+{
+  "layoutVersion": 4,
+  "generator": "<generator>",
+  "titleMode": "in-body",
+  "account": {
+    "appleId": "harness@example.com",
+    "dsid": "10000000001"
+  },
+  "syncToken": "AQAAAAAAAAAE",
+  "sharedZoneSyncTokens": {},
+  "sharedDatabase": {
+    "syncToken": "AQAAAAAAAAAC",
+    "zones": [],
+    "listedAt": 1790000000000
+  },
+  "notes": {
+    "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1": {
+      "file": "Notes/Test Note.md",
+      "recordChangeTag": "25q",
+      "modificationDate": 1752564000000,
+      "folderRecordName": "DefaultFolder-CloudKit"
+    },
+    "a1b2c3d4-0000-4000-8000-00000000a0d1": {
+      "file": "Notes/Call with Janice Elkins.md",
+      "recordChangeTag": "30a",
+      "modificationDate": 1752800000000,
+      "folderRecordName": "DefaultFolder-CloudKit"
+    },
+    "a1b2c3d4-0000-4000-8000-00000000196e": {
+      "file": "Notes/Test Note 2.md",
+      "recordChangeTag": "30b",
+      "modificationDate": 1752800060000,
+      "folderRecordName": "DefaultFolder-CloudKit"
+    }
+  },
+  "folders": {
+    "DefaultFolder-CloudKit": {
+      "name": "Notes",
+      "dirName": "Notes"
+    }
+  },
+  "sharerHomes": {},
+  "attachments": {
+    "7DAFDA6F-4AC4-41D8-9958-049373B80824": {
+      "file": "Notes/attachments/Call with Janice Elkins.m4a",
+      "mediaRecordName": "0B8509A3-A5FC-470B-A777-03BFFFDFB5F9",
+      "mediaFileChecksum": "AUMraefNsgNffHQpfB8oQFo5P51-",
+      "noteRecordName": "a1b2c3d4-0000-4000-8000-00000000a0d1"
+    },
+    "7ED80274-4400-4C02-87EA-F542F056FF02": {
+      "file": "Notes/attachments/_7130093.jpeg",
+      "mediaRecordName": "066C8A2E-796F-403F-AD75-A5267CBD0E18",
+      "mediaFileChecksum": "ARKf/Vy+irL9d80LorfL6M0D7FG5",
+      "noteRecordName": "a1b2c3d4-0000-4000-8000-00000000196e"
+    }
+  },
+  "tableAttachments": {},
+  "trashed": {}
+}

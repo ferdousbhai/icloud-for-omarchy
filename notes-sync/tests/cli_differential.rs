@@ -23,7 +23,8 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
-const STATE_DIR: &str = ".icloud-md";
+const STATE_DIR: &str = ".icloud-notes";
+const LEGACY_STATE_DIR: &str = ".icloud-md";
 
 fn here() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/differential")
@@ -34,6 +35,8 @@ fn apply_edit(vault: &Path, edit: &Map<String, Value>) {
     let path = vault.join(file);
     if edit.get("delete").and_then(Value::as_bool) == Some(true) {
         std::fs::remove_file(&path).unwrap();
+    } else if let Some(to) = edit.get("renameTo").and_then(Value::as_str) {
+        std::fs::rename(&path, vault.join(to)).unwrap();
     } else if let Some(text) = edit.get("write").and_then(Value::as_str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, text).unwrap();
@@ -63,7 +66,8 @@ fn apply_edit(vault: &Path, edit: &Map<String, Value>) {
     }
 }
 
-/// Every file under `vault` except the state directory.
+/// Every file under `vault` except the state directories (`.icloud-notes`,
+/// a layout 3 vault's `.icloud-md`, its backup `.icloud-md.bak-*`).
 fn working_files(vault: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -71,7 +75,8 @@ fn working_files(vault: &Path) -> Vec<PathBuf> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if dir == root && entry.file_name() == STATE_DIR {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if dir == root && (name == STATE_DIR || name.starts_with(LEGACY_STATE_DIR)) {
                 continue;
             }
             if path.is_dir() {
@@ -558,7 +563,7 @@ fn assert_fresh_written(name: &str) {
         std::fs::read_to_string(vault.join("Notes/Fresh.md")).unwrap(),
         format!("---\napple-note-id: {FRESH}\n---\n\n# Fresh\nA note made locally.")
     );
-    let state = read_json(&vault.join(".icloud-md/state.json"));
+    let state = read_json(&vault.join(".icloud-notes/state.json"));
     assert_eq!(state["notes"][FRESH]["file"], "Notes/Fresh.md");
     assert_eq!(state["notes"][FRESH]["recordChangeTag"], "27a");
 }
@@ -581,7 +586,7 @@ fn bodyless_pull_looks_the_new_note_up_and_adds_it() {
     assert_eq!(stdout["skippedNewUnsyncable"], 0);
     assert_eq!(stdout["notices"], serde_json::json!([]));
     assert_fresh_written("bodyless-pull");
-    let state = read_json(&expected("bodyless-pull/vault/.icloud-md/state.json"));
+    let state = read_json(&expected("bodyless-pull/vault/.icloud-notes/state.json"));
     assert_eq!(state["syncToken"], "AQAAAAAAAAAD");
 }
 
@@ -595,8 +600,8 @@ fn bodyless_pull_unfilled_keeps_the_previous_sync_token() {
     assert_eq!(stdout["skippedNewUnsyncable"], 1);
     let message = warning(&stdout);
     assert!(message.contains("1 new note(s)") && message.contains("next pull"), "{message}");
-    let state = read_json(&expected("bodyless-pull-unfilled/vault/.icloud-md/state.json"));
-    let before = read_json(&expected("tiny-clone/vault/.icloud-md/state.json"));
+    let state = read_json(&expected("bodyless-pull-unfilled/vault/.icloud-notes/state.json"));
+    let before = read_json(&expected("tiny-clone/vault/.icloud-notes/state.json"));
     assert_eq!(state["syncToken"], before["syncToken"], "the previous token is kept");
     assert!(state["notes"].get(FRESH).is_none());
 }
@@ -611,7 +616,7 @@ fn bodyless_clone_looks_the_new_note_up_and_writes_it() {
     assert_eq!(stdout["skippedUndecodable"], 0);
     assert_eq!(stdout["notices"], serde_json::json!([]));
     assert_fresh_written("bodyless-clone");
-    let state = read_json(&expected("bodyless-clone/vault/.icloud-md/state.json"));
+    let state = read_json(&expected("bodyless-clone/vault/.icloud-notes/state.json"));
     assert_eq!(state["syncToken"], "AQAAAAAAAAAB");
 }
 
@@ -626,7 +631,7 @@ fn bodyless_clone_unfilled_saves_no_private_sync_token() {
     assert_eq!(stdout["skippedUndecodable"], 1);
     let message = warning(&stdout);
     assert!(message.contains("1 note(s)") && message.contains("first pull"), "{message}");
-    let state = read_json(&expected("bodyless-clone-unfilled/vault/.icloud-md/state.json"));
+    let state = read_json(&expected("bodyless-clone-unfilled/vault/.icloud-notes/state.json"));
     assert!(state.get("syncToken").is_none(), "{state}");
     assert_eq!(note_files(&expected("bodyless-clone-unfilled/vault")), ["Notes/Test Note.md"]);
 }
@@ -694,7 +699,7 @@ fn assert_attachments_batched(name: &str) {
         b"audio bytes"
     );
     assert_eq!(std::fs::read(vault.join("Notes/attachments/_7130093.jpeg")).unwrap(), b"jpeg  bytes");
-    let state = read_json(&vault.join(".icloud-md/state.json"));
+    let state = read_json(&vault.join(".icloud-notes/state.json"));
     assert_eq!(state["attachments"].as_object().unwrap().len(), 2, "{name}");
 }
 
@@ -726,7 +731,7 @@ fn shared_requests(name: &str) -> (Vec<Value>, usize) {
 }
 
 fn state_of(name: &str) -> Value {
-    read_json(&expected(name).join("vault/.icloud-md/state.json"))
+    read_json(&expected(name).join("vault/.icloud-notes/state.json"))
 }
 
 /// `shared-pull-unchanged`: the stored shared-database token is resumed,
@@ -789,4 +794,65 @@ fn shared_pull_lists_from_scratch_when_the_cursor_cannot_be_used() {
         assert_eq!(state["sharedZoneSyncTokens"][SHARER], "AQAAAAAAAAAW", "{name}");
         assert!(state["notes"].get(SHARED_NOTE).is_some(), "{name}");
     }
+}
+
+/// `tiny-migrate-v3`: restore (a command that takes the lock, and needs no
+/// network) on a layout 3 vault moves its state to `.icloud-notes/`: base/
+/// moved as it was, state.json there at layout 4, a
+/// tombstone left in `.icloud-md/`, a backup of `.icloud-md/` beside it, and
+/// the note files untouched.
+#[test]
+fn tiny_migrate_v3_moves_the_state_to_icloud_notes() {
+    let clone = expected("tiny-clone/vault");
+    let vault = expected("tiny-migrate-v3/vault");
+    assert_eq!(state_of("tiny-migrate-v3")["layoutVersion"], 4);
+    // (A clone records no history; vault_migrate.rs moves some.)
+    assert!(clone.join(STATE_DIR).join("base").is_dir());
+    assert_eq!(
+        all_files(&vault.join(STATE_DIR).join("base")),
+        all_files(&clone.join(STATE_DIR).join("base"))
+    );
+    assert_eq!(
+        read_json(&vault.join(".icloud-md/state.json")),
+        serde_json::json!({ "layoutVersion": 4, "movedTo": ".icloud-notes" })
+    );
+    assert_eq!(all_files(&vault.join(LEGACY_STATE_DIR)).len(), 1, "only the tombstone is left");
+    let backups: Vec<PathBuf> = std::fs::read_dir(&vault)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(".icloud-md.bak-"))
+        .collect();
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert_eq!(read_json(&backups[0].join("state.json"))["layoutVersion"], 3);
+    assert_eq!(all_files(&backups[0].join("base")), all_files(&clone.join(STATE_DIR).join("base")));
+    let notes = |v: &Path| -> BTreeMap<String, Vec<u8>> {
+        note_files(v)
+            .into_iter()
+            .map(|f| (f.clone(), std::fs::read(v.join(&f)).unwrap()))
+            .collect()
+    };
+    assert_eq!(notes(&vault), notes(&clone));
+}
+
+/// `tiny-status-v3`: status reads a layout 3 vault where it is and moves
+/// nothing; `tiny-status-v2`: an older layout is refused, not migrated, by
+/// status; `tiny-migrate-v2`: push takes a layout 2 vault through 3 to 4.
+#[test]
+fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
+    let vault = expected("tiny-status-v3/vault");
+    assert!(!vault.join(STATE_DIR).exists());
+    assert_eq!(read_json(&vault.join(".icloud-md/state.json"))["layoutVersion"], 3);
+    assert_eq!(read_json(&expected("tiny-status-v3/stdout.json"))["entries"], serde_json::json!([]));
+
+    assert!(!expected("tiny-status-v2/vault").join(STATE_DIR).exists());
+    assert_eq!(std::fs::read_to_string(expected("tiny-status-v2/exit")).unwrap(), "1\n");
+
+    assert_eq!(state_of("tiny-migrate-v2")["layoutVersion"], 4);
+    assert_eq!(state_of("tiny-migrate-v2")["titleMode"], "in-body");
+    assert!(
+        std::fs::read_to_string(expected("tiny-migrate-v2/vault/Notes/Test Note.md"))
+            .unwrap()
+            .starts_with("---\napple-note-id: 03667d1d-eee8-4e98-82fb-8c5cd02fd9d1\n---\n")
+    );
 }

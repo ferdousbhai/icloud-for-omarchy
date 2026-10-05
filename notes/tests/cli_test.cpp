@@ -103,7 +103,7 @@ QStringList stubLog()
 void seedVault()
 {
     QDir(g_vault).removeRecursively();
-    writeFile(QStringLiteral(".icloud-md/state.json"),
+    writeFile(QStringLiteral(".icloud-notes/state.json"),
               stateJson(QStringLiteral("in-body"),
                         { { "id-a", "Notes/Alpha.md" },
                           { "id-b", "Work/Beta.md" },
@@ -123,7 +123,7 @@ void seedVault()
     writeFile(QStringLiteral("Work/Tangle.md"),
               QStringLiteral("---\napple-note-id: id-u\n---\n# Tangle\n<<<<<<< local\na\n<<<<<<< local\nb\n=======\nc\n"
                              ">>>>>>> remote\n=======\nd\n>>>>>>> remote\n"));
-    writeFile(QStringLiteral(".icloud-md/base/id-u.md"), QStringLiteral("# Tangle\nsynced text\n"));
+    writeFile(QStringLiteral(".icloud-notes/base/id-u.md"), QStringLiteral("# Tangle\nsynced text\n"));
     writeFile(QStringLiteral("Twin.md"), QStringLiteral("# Same title\n"));
     writeFile(QStringLiteral("Notes/Twin.md"), QStringLiteral("# Same title\n"));
 }
@@ -405,7 +405,7 @@ int main(int argc, char *argv[])
         const QString backup = strip.json().toObject().value(QStringLiteral("backup")).toString();
         check(strip.code == 0
                   && readFile(QStringLiteral("Work/Tangle.md")) == QStringLiteral("---\napple-note-id: id-u\n---\n# Tangle\na\nb\nc\nd\n")
-                  && backup.contains(QStringLiteral("/.icloud-md/conflict-backups/Work/")) && QFile::exists(backup),
+                  && backup.contains(QStringLiteral("/.icloud-notes/conflict-backups/Work/")) && QFile::exists(backup),
               "cli recover --strip keeps every line, after a backup");
         writeFile(QStringLiteral("Work/Tangle.md"),
                   QStringLiteral("---\napple-note-id: id-u\n---\n# Tangle\n<<<<<<< local\n<<<<<<< local\nb\n"));
@@ -544,7 +544,7 @@ int main(int argc, char *argv[])
         const QString fresh = g_scratch + QStringLiteral("/fresh");
         const int signIns = fake.signInCalls;
         const Run noClone = cliJson({ QStringLiteral("--vault"), fresh, QStringLiteral("clone") });
-        check(noClone.code == 2 && fake.signInCalls == signIns && !QFile::exists(fresh + QStringLiteral("/.icloud-md")),
+        check(noClone.code == 2 && fake.signInCalls == signIns && !QFile::exists(fresh + QStringLiteral("/.icloud-notes")),
               "cli clone signed out: exit 2, no sign-in window");
         fake.set({ { QStringLiteral("SignedIn"), true } });
         const Run cloned = cliJson({ QStringLiteral("--vault"), fresh, QStringLiteral("clone") },

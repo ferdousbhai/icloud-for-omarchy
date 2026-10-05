@@ -47,7 +47,7 @@ elif [ "$1" = "--json" ] && [ "$2" = "sync" ]; then
         "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS" "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS"
       return
     fi
-    [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-md:progress:fetch:3" >&2
+    [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-notes:progress:fetch:3" >&2 && echo "icloud-md:progress:fetch:3" >&2
     printf '{"ok":true,"exit_code":0,"result":{"stub":"%s","ok":true},"lines":["stub %s ok"]}' "$1" "$1"
   }
   push_json=$(half push)
@@ -67,7 +67,7 @@ elif [ "$1" = "--json" ] && [ "$2" = "sync" ]; then
   exit "$code"
 elif [ "$1" = "--json" ] && [ "$2" = "status" ]; then
   echo "Fetching changes from iCloud..." >&2
-  echo "icloud-md:progress:fetch:12" >&2
+  echo "icloud-notes:progress:fetch:12" >&2
   cat <<'JSON'
 {"entries":[{"kind":"update","file":"A.md","resolution":"ready"},{"kind":"update","file":"B.md","resolution":"refused","reason":"B.md: has attachments"},{"kind":"createFolder","file":"New","resolution":"ready","folderTitle":"New"}],"unchanged":2,"notices":[{"level":"warn","message":"careful"}]}
 JSON
@@ -98,8 +98,8 @@ elif [ "$1" = "restore" ] || { [ "$1" = "--json" ] && [ "$2" = "restore" ]; }; t
 elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
   # A clone into the last argument: the state file and one note.
   dir="${@: -1}"
-  mkdir -p "$dir/.icloud-md" "$dir/Notes"
-  echo '{"layoutVersion":3,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-md/state.json"
+  mkdir -p "$dir/.icloud-notes" "$dir/Notes"
+  echo '{"layoutVersion":4,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-notes/state.json"
   printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
   echo "Cloned 1 notes"
 elif [ "$1" = "diff" ]; then

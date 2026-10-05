@@ -113,7 +113,7 @@ fn snapshot_file_is_written_in_icloud_md_key_order() {
     // `<ms>-<seq>-<shortId>.json`.
     let dir = tempfile::tempdir().unwrap();
     record_version(dir.path(), &att_input("CCCC")).unwrap();
-    let history = dir.path().join(".icloud-md/history/ATT-1");
+    let history = dir.path().join(".icloud-notes/history/ATT-1");
     let files: Vec<_> = std::fs::read_dir(&history)
         .unwrap()
         .map(|e| e.unwrap().file_name())
@@ -165,7 +165,7 @@ fn record_epoch_records_null_for_an_uncaptured_record() {
     record_epoch(dir.path(), "REC-1", &names(&["REC-1", "ATT-NEVER-CAPTURED"])).unwrap();
     let epoch = list_epochs(dir.path(), "REC-1").unwrap().remove(0);
     assert_eq!(epoch.snapshots["ATT-NEVER-CAPTURED"], None);
-    let raw = std::fs::read_dir(dir.path().join(".icloud-md/history/REC-1/epochs"))
+    let raw = std::fs::read_dir(dir.path().join(".icloud-notes/history/REC-1/epochs"))
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
         .next()
@@ -382,7 +382,7 @@ fn write_snapshot(dir: &Path, record_name: &str, now: i64, days_ago: i64, seq: u
     // Ids (and so short ids) distinct across records.
     let tag: u32 = record_name.bytes().map(u32::from).sum();
     let id = format!("{tag:04x}{:04x}-0000-4000-8000-000000000000", seq + 1);
-    let record_dir = dir.join(".icloud-md/history").join(record_name);
+    let record_dir = dir.join(".icloud-notes/history").join(record_name);
     std::fs::create_dir_all(&record_dir).unwrap();
     let json = serde_json::json!({
         "recordName": record_name, "recordType": "Note", "field": "TextDataEncrypted",
@@ -396,7 +396,7 @@ fn write_snapshot(dir: &Path, record_name: &str, now: i64, days_ago: i64, seq: u
 
 fn write_epoch(dir: &Path, note: &str, ms: i64, seq: usize, snapshots: serde_json::Value) {
     let id = format!("e{seq:07x}-0000-4000-8000-000000000000");
-    let epochs = dir.join(".icloud-md/history").join(note).join("epochs");
+    let epochs = dir.join(".icloud-notes/history").join(note).join("epochs");
     std::fs::create_dir_all(&epochs).unwrap();
     let json = serde_json::json!({
         "id": id, "timestamp": "2026-01-01T00:00:00.000Z", "noteRecordName": note, "snapshots": snapshots,
@@ -419,7 +419,7 @@ fn record_version_and_record_epoch_parse_only_the_latest_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap();
     record_version(dir.path(), &note_input("REC-1", "tag-2", "BBBB")).unwrap();
-    let record_dir = dir.path().join(".icloud-md/history/REC-1");
+    let record_dir = dir.path().join(".icloud-notes/history/REC-1");
     let older = file_names(&record_dir).remove(0);
     std::fs::write(record_dir.join(&older), "not json").unwrap();
 
@@ -442,7 +442,7 @@ fn sequence_numbers_continue_past_pruned_snapshots() {
     let dir = tempfile::tempdir().unwrap();
     write_snapshot(dir.path(), "REC-1", now_ms(), 1, 41);
     record_version(dir.path(), &note_input("REC-1", "tag-2", "BBBB")).unwrap();
-    let names = file_names(&dir.path().join(".icloud-md/history/REC-1"));
+    let names = file_names(&dir.path().join(".icloud-notes/history/REC-1"));
     assert_eq!(names.len(), 2);
     assert_eq!(names[1].split('-').nth(1), Some("000042"));
 }
@@ -522,7 +522,7 @@ fn record_version_prunes_the_record_but_keeps_what_kept_epochs_point_at() {
 
     assert!(record_version(dir.path(), &note_input("REC-1", "tag-new", "NEW")).unwrap());
 
-    let history = dir.path().join(".icloud-md/history");
+    let history = dir.path().join(".icloud-notes/history");
     let kept = list_versions(dir.path(), "REC-1").unwrap();
     let kept_ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(kept.last().unwrap().value_base64, "NEW");
@@ -579,6 +579,6 @@ fn without_recording_writes_no_history_and_then_records_again() {
         wrote
     });
     assert!(!wrote);
-    assert!(!dir.path().join(".icloud-md").exists());
+    assert!(!dir.path().join(".icloud-notes").exists());
     assert!(record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap());
 }

@@ -1,18 +1,15 @@
-//! Base copies: `.icloud-md/base/<recordName>.md`, the body-only
-//! last-synced text - the merge ancestor for pull's diff3. Ports icloud-md
-//! `src/notes/baseCopy.ts`.
+//! Base copies: `<state dir>/base/<recordName>.md`, the body-only
+//! last-synced text - the merge ancestor for pull's diff3. Originally
+//! derived from icloud-md.
 
 use std::path::{Path, PathBuf};
 
 use crate::cmd::errors::Error;
 
-use super::state::STATE_DIR_NAME;
+use super::state::{BASE_DIR_NAME, state_subdir};
 
 fn base_copy_path(target_dir: &Path, record_name: &str) -> PathBuf {
-    target_dir
-        .join(STATE_DIR_NAME)
-        .join("base")
-        .join(format!("{record_name}.md"))
+    state_subdir(target_dir, BASE_DIR_NAME).join(format!("{record_name}.md"))
 }
 
 /// `readBaseCopy`: `None` when there is none.

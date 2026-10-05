@@ -12,7 +12,7 @@ use crate::doc::encode::{DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME};
 use crate::js::{self, posix};
 
 /// Directory names the clone reserves at the top level.
-pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[".icloud-md"];
+pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[super::state::STATE_DIR_NAME, super::state::LEGACY_STATE_DIR_NAME];
 /// Directory names reserved inside every folder directory.
 pub const RESERVED_SIBLING_DIR_NAMES: &[&str] = &["attachments"];
 
@@ -527,7 +527,6 @@ pub fn build_vault_layout(
                     dir_name: node.dir_name.clone(),
                     shared_zone_owner: Some(zone.owner_record_name.clone()),
                     permission: permission.clone(),
-                    key_order: None,
                 },
             );
             layout.all_dirs.push(dir_path);

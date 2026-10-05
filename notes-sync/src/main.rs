@@ -123,7 +123,7 @@ enum Command {
     },
 }
 
-/// `--json` progress: one `icloud-md:progress:...` line per event on stderr
+/// `--json` progress: one `icloud-notes:progress:...` line per event on stderr
 /// (the prefix is what wrapping processes match).
 struct MachineProgress {
     processed: usize,
@@ -132,18 +132,18 @@ struct MachineProgress {
 
 impl SyncProgress for MachineProgress {
     fn on_fetch_page(&mut self, records_so_far: usize) {
-        eprintln!("icloud-md:progress:fetch:{records_so_far}");
+        eprintln!("icloud-notes:progress:fetch:{records_so_far}");
     }
     fn on_process_start(&mut self, total_records: usize) {
         self.total = total_records;
-        eprintln!("icloud-md:progress:process-start:{total_records}");
+        eprintln!("icloud-notes:progress:process-start:{total_records}");
     }
     fn on_record_processed(&mut self) {
         self.processed += 1;
-        eprintln!("icloud-md:progress:process:{}/{}", self.processed, self.total);
+        eprintln!("icloud-notes:progress:process:{}/{}", self.processed, self.total);
     }
     fn on_process_complete(&mut self) {
-        eprintln!("icloud-md:progress:process-done");
+        eprintln!("icloud-notes:progress:process-done");
     }
 }
 

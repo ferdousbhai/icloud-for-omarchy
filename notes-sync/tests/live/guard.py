@@ -49,7 +49,11 @@ def note_id(path):
 
 
 def load_state(vault):
-    with open(os.path.join(vault, ".icloud-md", "state.json"), encoding="utf-8") as f:
+    # .icloud-notes/ (layout 4), or a layout 3 vault's .icloud-md/.
+    path = os.path.join(vault, ".icloud-notes", "state.json")
+    if not os.path.exists(path):
+        path = os.path.join(vault, ".icloud-md", "state.json")
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::rt;
-use super::state::{CloneState, NoteEntry, STATE_DIR_NAME, to_js_json};
+use super::state::{CloneState, HISTORY_DIR_NAME, NoteEntry, state_subdir, to_js_json};
 use crate::cmd::errors::Error;
 use crate::js::{self, posix};
 
@@ -77,7 +77,7 @@ impl VersionSnapshotInput {
 }
 
 pub(crate) fn history_dir(target_dir: &Path) -> PathBuf {
-    target_dir.join(STATE_DIR_NAME).join("history")
+    state_subdir(target_dir, HISTORY_DIR_NAME)
 }
 
 fn record_history_dir(target_dir: &Path, record_name: &str) -> PathBuf {

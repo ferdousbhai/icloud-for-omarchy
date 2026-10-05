@@ -37,7 +37,7 @@ use crate::vault::local::{
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
-    AttachmentEntry, CloneState, FolderEntry, NOTE_ADD_ORDER, NoteEntry, PULL_WRITE_ORDER, TableAttachmentEntry,
+    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry,
     TitleMode, write_clone_state,
 };
 
@@ -505,7 +505,6 @@ pub fn run_pull_with(
                             folder_record_name: placement.folder_record_name.clone(),
                             pending_rename: None,
                             frontmatter_title: recorded_title.clone(),
-                            key_order: Some(NOTE_ADD_ORDER.to_vec()),
                         },
                     );
                     summary.added += 1;
@@ -789,7 +788,7 @@ pub fn run_pull_with(
         attachments: Some(tracked.attachments),
         table_attachments: Some(tracked.table_attachments),
         trashed: Some(trashed),
-        key_order: Some(PULL_WRITE_ORDER.to_vec()),
+        extra: state.extra.clone(),
         ..Default::default()
     };
     write_clone_state(target_dir, &new_state)?;

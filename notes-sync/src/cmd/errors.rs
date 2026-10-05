@@ -14,6 +14,7 @@
 //! machine-readable `error.code` of the `--json` error object.
 
 use crate::cloudkit::CkError;
+use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
 
 /// `status`/`push --dry-run` has entries, `diff` found differences.
 pub use icloud_session::cli::EXIT_CHANGES as EXIT_HAS_ENTRIES;
@@ -23,7 +24,7 @@ pub use icloud_session::cli::{EXIT_ERROR, EXIT_INTERNAL, EXIT_OK, EXIT_SIGN_IN, 
 pub enum Error {
     #[error("\"{file}\" isn't a tracked note in {target_dir}.")]
     UntrackedFile { file: String, target_dir: String },
-    #[error("{target_dir} doesn't look like a cloned notes directory (no .icloud-md/state.json).")]
+    #[error("{target_dir} doesn't look like a cloned notes directory (no {STATE_DIR_NAME}/{STATE_FILE_NAME}).")]
     NotClonedDirectory { target_dir: String },
     #[error("\"{base_name}\" matches more than one tracked note: {}.", candidates.join(", "))]
     AmbiguousTrackedFile { base_name: String, candidates: Vec<String> },
@@ -39,13 +40,17 @@ pub enum Error {
         vault_version: u64,
         supported_version: u32,
     },
+    /// A layout older than 3, which only a command that takes the lock
+    /// updates.
+    #[error("{target_dir} uses an older vault layout ({vault_version}) that has to be updated first.")]
+    VaultNeedsUpdate { target_dir: String, vault_version: u64 },
     #[error("Authenticated, but the account reported no ckdatabasews host - can't reach Notes.")]
     NotesUnavailable,
     #[error("{0}")]
     CorruptStateFile(String),
-    #[error("{target_dir} is already a cloned notes directory (.icloud-md/state.json exists).")]
+    #[error("{target_dir} is already a cloned notes directory ({STATE_DIR_NAME}/{STATE_FILE_NAME} exists).")]
     AlreadyClonedDirectory { target_dir: String },
-    #[error("{target_dir} has no account bound to it (missing \"account\" in .icloud-md/state.json).")]
+    #[error("{target_dir} has no account bound to it (missing \"account\" in {STATE_DIR_NAME}/{STATE_FILE_NAME}).")]
     UnboundAccount { target_dir: String },
     /// `--account` (clone) or the vault's bound account doesn't match the
     /// icloud-session account.
@@ -113,6 +118,7 @@ impl Error {
             Error::AmbiguousTrackedFile { .. } => "AmbiguousTrackedFileError",
             Error::UnsupportedVaultLayout { .. } => "UnsupportedVaultLayoutError",
             Error::VaultFromNewerTool { .. } => "VaultFromNewerToolError",
+            Error::VaultNeedsUpdate { .. } => "VaultNeedsUpdateError",
             Error::NotesUnavailable => "NotesUnavailableError",
             Error::CorruptStateFile(_) => "CorruptStateFileError",
             Error::AlreadyClonedDirectory { .. } => "AlreadyClonedDirectoryError",
@@ -176,12 +182,15 @@ impl Error {
             Error::VaultFromNewerTool { .. } => {
                 Some("Upgrade icloud-notes-sync to the latest release. (This tool made no changes.)".into())
             }
+            Error::VaultNeedsUpdate { .. } => Some(
+                "Run \"icloud-notes-sync pull\" once to update it, then try again. (This command made no changes.)".into(),
+            ),
             Error::NotesUnavailable => {
                 Some("Check that Notes is enabled for this Apple ID (icloud.com → Notes) and try again.".into())
             }
             Error::CorruptStateFile(_) => Some(
                 "This usually means state.json was hand-edited or written by an incompatible version. If you don't have \
-                 local edits worth preserving, remove .icloud-md/ and run \"icloud-notes-sync clone\" again into a fresh directory."
+                 local edits worth preserving, remove .icloud-notes/ and run \"icloud-notes-sync clone\" again into a fresh directory."
                     .into(),
             ),
             Error::AlreadyClonedDirectory { .. } => {
@@ -189,7 +198,7 @@ impl Error {
             }
             Error::UnboundAccount { .. } => Some(
                 "This folder may predate per-folder account binding. If you don't have local edits worth preserving, \
-                 remove .icloud-md/ and run \"icloud-notes-sync clone\" again into a fresh directory."
+                 remove .icloud-notes/ and run \"icloud-notes-sync clone\" again into a fresh directory."
                     .into(),
             ),
             Error::AccountMismatch { expected, .. } => {

@@ -159,7 +159,7 @@ const QList<Spec> &specs()
         { "recover", "recover NOTE (--strip | --synced) [--push]",
           "For conflict markers the picker cannot read (nested or out of order): --strip drops only the\n"
           "marker lines and keeps every other line; --synced goes back to the text last synced with\n"
-          "iCloud. The note is first copied as it was to .icloud-md/conflict-backups/.\n"
+          "iCloud. The note is first copied as it was to .icloud-notes/conflict-backups/.\n"
           "JSON: {action, path, how, backup, message, sync?}",
           { QStringLiteral("--strip"), QStringLiteral("--synced"), QStringLiteral("--push") }, 1, 1 },
         { "export-pdf", "export-pdf NOTE",

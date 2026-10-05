@@ -1,5 +1,5 @@
-//! Ports icloud-md `src/notes/cloneState.test.ts`, plus byte-exact checks of
-//! state.json's per-write-path key order.
+//! state.json: round trips, validation, and what it looks like on disk.
+//! Originally derived from icloud-md's tests.
 
 use std::path::Path;
 
@@ -7,9 +7,8 @@ use icloud_notes_sync::GENERATOR;
 use icloud_notes_sync::cloudkit::{SharedDatabaseCursor, ZoneId};
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::vault::state::{
-    Account, AttachmentEntry, CLONE_WRITE_ORDER, CURRENT_LAYOUT_VERSION, CloneState, FOLDER_CREATE_ORDER, FolderEntry,
-    NOTE_ADD_ORDER, NOTE_CREATE_ORDER, NoteEntry, PULL_WRITE_ORDER, SharerHomeEntry, TableAttachmentEntry, TitleMode,
-    TrashedEntry, read_clone_state, write_clone_state,
+    Account, AttachmentEntry, CURRENT_LAYOUT_VERSION, CloneState, FolderEntry, NoteEntry, SharerHomeEntry,
+    TableAttachmentEntry, TitleMode, TrashedEntry, read_clone_state, write_clone_state,
 };
 use indexmap::IndexMap;
 
@@ -32,12 +31,12 @@ fn round_trip(state: &CloneState) -> CloneState {
 }
 
 fn write_raw(dir: &Path, json: &str) {
-    std::fs::create_dir_all(dir.join(".icloud-md")).unwrap();
-    std::fs::write(dir.join(".icloud-md/state.json"), json).unwrap();
+    std::fs::create_dir_all(dir.join(".icloud-notes")).unwrap();
+    std::fs::write(dir.join(".icloud-notes/state.json"), json).unwrap();
 }
 
 fn state_text(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join(".icloud-md/state.json")).unwrap()
+    std::fs::read_to_string(dir.join(".icloud-notes/state.json")).unwrap()
 }
 
 #[test]
@@ -322,11 +321,11 @@ fn corrupt_for_a_malformed_trashed_entry() {
     assert!(matches!(read_clone_state(dir.path()), Err(Error::CorruptStateFile(_))));
 }
 
-// --- byte-exact key order per write path -------------------------------------
+// --- what state.json looks like on disk --------------------------------------
 
-/// What `runClone` hands `writeCloneState` for the tiny cassette.
+/// What a clone of the tiny cassette writes.
 fn tiny_clone_state() -> CloneState {
-    let mut entry = NoteEntry::new("Notes/Test Note.md", "25q", 1_752_564_000_000).with_order(NOTE_ADD_ORDER);
+    let mut entry = NoteEntry::new("Notes/Test Note.md", "25q", 1_752_564_000_000);
     entry.folder_record_name = Some("DefaultFolder-CloudKit".into());
     CloneState {
         account: Some(Account {
@@ -350,7 +349,6 @@ fn tiny_clone_state() -> CloneState {
         sharer_homes: Some(IndexMap::new()),
         attachments: Some(IndexMap::new()),
         table_attachments: Some(IndexMap::new()),
-        key_order: Some(CLONE_WRITE_ORDER.to_vec()),
         ..Default::default()
     }
 }
@@ -359,24 +357,24 @@ fn tiny_clone_state() -> CloneState {
 fn clone_write_matches_the_recorded_clone_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &tiny_clone_state()).unwrap();
-    let expected = std::fs::read_to_string("tests/differential/expected/tiny-clone/vault/.icloud-md/state.json")
+    let expected = std::fs::read_to_string("tests/differential/expected/tiny-clone/vault/.icloud-notes/state.json")
         .unwrap()
         .replace("\"<generator>\"", &format!("\"{GENERATOR}\""));
     assert_eq!(state_text(dir.path()), expected);
 }
 
 #[test]
-fn read_modify_write_keeps_read_order() {
+fn writes_keys_in_field_order() {
     let dir = tempfile::tempdir().unwrap();
-    write_clone_state(dir.path(), &tiny_clone_state()).unwrap();
-    let mut state = read_clone_state(dir.path()).unwrap().unwrap();
+    let mut state = tiny_clone_state();
     state.replica_id = Some("AQIDBAUGBwgJCgsMDQ4PEA==".into());
-    state.notes["03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"].pending_rename = Some("X.md".into());
+    // Set in another order than the fields'.
     state.notes["03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"].frontmatter_title = Some("T".into());
+    state.notes["03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"].pending_rename = Some("X.md".into());
     write_clone_state(dir.path(), &state).unwrap();
     let expected = format!(
         r#"{{
-  "layoutVersion": 3,
+  "layoutVersion": {CURRENT_LAYOUT_VERSION},
   "generator": "{GENERATOR}",
   "titleMode": "in-body",
   "account": {{
@@ -414,97 +412,62 @@ fn read_modify_write_keeps_read_order() {
 "#
     );
     assert_eq!(state_text(dir.path()), expected);
+    // Reading it back and writing it again changes nothing.
+    let back = read_clone_state(dir.path()).unwrap().unwrap();
+    write_clone_state(dir.path(), &back).unwrap();
+    assert_eq!(state_text(dir.path()), expected);
 }
 
 #[test]
-fn a_read_state_without_generator_keeps_its_slot() {
-    // readCloneState rebuilds every key, `generator: undefined` included, so
-    // the stamped generator lands second, not last.
+fn reads_keys_in_any_order_and_keeps_unknown_top_level_keys() {
     let dir = tempfile::tempdir().unwrap();
-    write_raw(dir.path(), r#"{"layoutVersion":3,"notes":{}}"#);
-    let state = read_clone_state(dir.path()).unwrap().unwrap();
-    write_clone_state(dir.path(), &state).unwrap();
-    assert_eq!(
-        state_text(dir.path()),
-        format!(
-            "{{\n  \"layoutVersion\": 3,\n  \"generator\": \"{GENERATOR}\",\n  \"titleMode\": \"in-body\",\n  \"notes\": {{}}\n}}\n"
-        )
+    write_raw(
+        dir.path(),
+        &format!(
+            r#"{{"notes":{{"R":{{"modificationDate":1,"someday":true,"recordChangeTag":"t","file":"a.md"}}}},
+                "futureKey":{{"x":[1,2]}},"syncToken":"s","layoutVersion":{CURRENT_LAYOUT_VERSION}}}"#
+        ),
     );
-}
-
-#[test]
-fn pull_write_order_appends_layout_version_and_generator() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut state = tiny_clone_state();
-    state.key_order = Some(PULL_WRITE_ORDER.to_vec());
-    state.replica_id = Some("R".into());
-    state.trashed = Some(IndexMap::new());
+    let state = read_clone_state(dir.path()).unwrap().unwrap();
+    assert_eq!(state.notes["R"], NoteEntry::new("a.md", "t", 1));
+    assert_eq!(state.sync_token.as_deref(), Some("s"));
     write_clone_state(dir.path(), &state).unwrap();
-    let text = state_text(dir.path());
-    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&state_text(dir.path())).unwrap();
     let keys: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        [
-            "account",
-            "syncToken",
-            "sharedZoneSyncTokens",
-            "sharedDatabase",
-            "replicaId",
-            "titleMode",
-            "notes",
-            "folders",
-            "sharerHomes",
-            "attachments",
-            "tableAttachments",
-            "trashed",
-            "layoutVersion",
-            "generator"
-        ]
+        ["layoutVersion", "generator", "titleMode", "syncToken", "notes", "futureKey"]
     );
-    assert!(text.ends_with("}\n") && !text.ends_with("\n\n"));
+    assert_eq!(value["futureKey"], serde_json::json!({"x": [1, 2]}));
+    // Unknown keys inside an entry are not kept.
+    assert!(value["notes"]["R"].get("someday").is_none());
 }
 
 #[test]
-fn entry_orders_per_construction_site() {
-    let mut create = NoteEntry::new("Notes/New.md", "t", 1).with_order(NOTE_CREATE_ORDER);
-    create.folder_record_name = Some("F".into());
-    create.shared_zone_owner = Some("_o".into());
+fn entries_serialize_in_field_order() {
     let keys = |v: &serde_json::Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
+    let mut note = NoteEntry::new("a.md", "t", 1);
+    note.pending_rename = Some("P.md".into());
+    note.frontmatter_title = Some("T".into());
+    note.shared_zone_owner = Some("_o".into());
+    note.folder_record_name = Some("F".into());
     assert_eq!(
-        keys(&create.to_json()),
+        keys(&note.to_json()),
         [
             "file",
             "recordChangeTag",
             "modificationDate",
+            "sharedZoneOwner",
             "folderRecordName",
-            "sharedZoneOwner"
+            "pendingRename",
+            "frontmatterTitle"
         ]
     );
-
-    let mut add = NoteEntry::new("a.md", "t", 1).with_order(NOTE_ADD_ORDER);
-    add.frontmatter_title = Some("T".into());
-    add.folder_record_name = Some("F".into());
-    // A key assigned later that the construction site didn't have appends.
-    add.pending_rename = Some("P.md".into());
-    assert_eq!(
-        keys(&add.to_json()),
-        [
-            "file",
-            "recordChangeTag",
-            "modificationDate",
-            "folderRecordName",
-            "frontmatterTitle",
-            "pendingRename"
-        ]
-    );
-
     let mut folder = FolderEntry::new("Sub", "Sub");
     folder.parent_record_name = Some("P".into());
     assert_eq!(keys(&folder.to_json()), ["name", "parentRecordName", "dirName"]);
-    folder.key_order = Some(FOLDER_CREATE_ORDER.to_vec());
-    assert_eq!(keys(&folder.to_json()), ["name", "dirName", "parentRecordName"]);
 }
+
 
 #[test]
 fn nested_maps_serialize_in_field_order() {
