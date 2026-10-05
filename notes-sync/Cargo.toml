@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
-flate2 = "1"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 icloud-session = { workspace = true, features = ["clap"] }
 icu_collator = "2"
 icu_properties = "2.3"

@@ -10,7 +10,6 @@
 //! text is held as `String`. See `format.rs`.
 
 pub mod decode;
-pub mod deflate;
 pub mod document;
 pub mod embeds;
 pub mod encode;

@@ -196,4 +196,4 @@ one-liner, which is idempotent.
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party credits (icloud-md, node-diff3,
-the mdast/micromark utilities, zlib, yaml) are in [NOTICE](NOTICE).
+the mdast/micromark utilities, yaml) are in [NOTICE](NOTICE).

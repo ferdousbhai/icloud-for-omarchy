@@ -25,10 +25,15 @@ pub fn decompress_note_document(buf: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `compressNoteDocument`: `zlib.deflateSync(raw)`, byte for byte as Node
-/// (Chromium zlib) produces it - see `deflate.rs`.
+/// `compressNoteDocument`: a zlib stream (not gzip) at the default level,
+/// like `zlib.deflateSync(raw)`. Not byte-identical to Node's output: Apple
+/// accepts any valid zlib stream, and the decoder above takes either.
 pub fn compress_note_document(raw: &[u8]) -> Vec<u8> {
-    super::deflate::deflate_sync(raw)
+    use std::io::Write;
+    let mut enc =
+        flate2::write::ZlibEncoder::new(Vec::with_capacity(raw.len() / 2 + 64), flate2::Compression::default());
+    enc.write_all(raw).expect("writing to a Vec cannot fail");
+    enc.finish().expect("writing to a Vec cannot fail")
 }
 
 /// `decodeNoteString`: decompress + unwrap + parse the topotext `String`.

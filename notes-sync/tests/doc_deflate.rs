@@ -1,5 +1,6 @@
 //! `compress_note_document` / `decompress_note_document` (the deflate
-//! codec). Kept in this one file so it can go along with that codec.
+//! codec, flate2): everything compressed must inflate back unchanged, and
+//! the container must stay zlib (what Notes writes and icloud-md sent).
 
 use icloud_notes_sync::doc::text::{compress_note_document, decompress_note_document};
 
@@ -92,11 +93,13 @@ fn deflate_round_trips_on_fixtures_and_corpus() {
     }
 }
 
-/// zlib's bytes for an empty input: header, an empty fixed block, Adler-32.
+/// A zlib stream (RFC 1950 header, not gzip's 1f 8b), at the default level.
 #[test]
-fn deflate_of_empty_input_is_zlibs() {
-    assert_eq!(
-        compress_note_document(b""),
-        [0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]
-    );
+fn compressed_documents_are_zlib_streams() {
+    for input in [&b""[..], b"hello note", &[7u8; 5000][..]] {
+        let out = compress_note_document(input);
+        assert_eq!(out[0], 0x78, "deflate, 32 KiB window");
+        assert_eq!(u16::from_be_bytes([out[0], out[1]]) % 31, 0, "header check bits");
+        assert_eq!(out[1] & 0x20, 0, "no preset dictionary");
+    }
 }
