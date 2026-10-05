@@ -6,7 +6,8 @@ use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
 use icloud_photos::thumbs::{
-    Job, Targets, fetch, fetch_detailed, live_ext, original_dest, prune_cache, rename_noreplace,
+    Downloader, Job, MAX_NOW_JOBS, Priority, Targets, fetch, fetch_detailed, fetch_detailed_with, live_ext,
+    prune_cache, rename_noreplace,
 };
 use icloud_photos::transport::{Result, Transport};
 use serde_json::Value;
@@ -80,12 +81,12 @@ fn same_filename_in_the_same_month_gets_a_suffix() {
     fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
     let second = fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap();
     assert_eq!(second, root.join("Pictures/icloud-photos/2025/09/IMG_0001 (2).HEIC"));
-    // The first asset keeps its own name on a re-plan.
-    let row = cat.asset("ASSET-001").unwrap().unwrap();
-    assert_eq!(
-        original_dest(&cat, &targets.library, &row).unwrap(),
-        root.join("Pictures/icloud-photos/2025/09/IMG_0001.HEIC")
-    );
+    // The first asset keeps its own name on a re-plan (its file removed,
+    // the catalog's record of that name is its own, not another asset's).
+    let first = root.join("Pictures/icloud-photos/2025/09/IMG_0001.HEIC");
+    std::fs::remove_file(&first).unwrap();
+    std::fs::remove_file(first.with_extension("MOV")).unwrap();
+    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap(), first);
 }
 
 #[test]
@@ -129,6 +130,131 @@ fn an_expired_url_is_refreshed_once() {
         cat.asset("ASSET-002").unwrap().unwrap().medium_url.as_deref(),
         Some(fresh_url)
     );
+}
+
+#[test]
+fn an_expired_url_refreshes_the_queued_peers_in_the_same_lookup() {
+    let tmp = temp_dir("expired-batch");
+    let root = tmp.path();
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, root);
+    let row = cat.asset("ASSET-002").unwrap().unwrap();
+    let mut m = icloud_photos::cloudkit::MasterInfo {
+        master_id: row.master_id.clone(),
+        filename: row.filename.clone(),
+        size: row.size,
+        width: row.w,
+        height: row.h,
+        kind: row.kind,
+        original: None,
+        thumb: None,
+        medium: None,
+        live: None,
+    };
+    m.medium = Some(icloud_photos::cloudkit::Resource {
+        url: "https://cvws.icloud-content.com/expired/med".into(),
+        size: 1,
+        file_type: None,
+    });
+    cat.update_master(&m).unwrap();
+    let fresh = fixture("lookup_m002_fresh.json");
+    let fresh_url = fresh
+        .pointer("/records/0/fields/resJPEGMedRes/value/downloadURL")
+        .and_then(Value::as_str)
+        .unwrap();
+    t.serve(fresh_url, b"medium");
+
+    // ASSET-002 itself, an unknown id and a duplicate are skipped; the
+    // others' masters ride along, after this asset's.
+    let peers = || {
+        ["ASSET-001", "ASSET-002", "NOPE", "ASSET-003", "ASSET-001"]
+            .map(String::from)
+            .to_vec()
+    };
+    let path = fetch_detailed_with(&t, &cat, &targets, "ASSET-002", Job::Medium, &peers)
+        .unwrap()
+        .path;
+    assert_eq!(std::fs::read(path).unwrap(), b"medium");
+    let lookups: Vec<_> = t.calls().into_iter().filter(|c| c.op == "records/lookup").collect();
+    assert_eq!(lookups.len(), 1, "one lookup for all of them");
+    let names: Vec<&str> = lookups[0].body["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["recordName"].as_str().unwrap())
+        .collect();
+    let master = |id: &str| cat.asset(id).unwrap().unwrap().master_id;
+    assert_eq!(
+        names,
+        vec![master("ASSET-002"), master("ASSET-001"), master("ASSET-003")]
+    );
+}
+
+#[test]
+fn a_cancelled_job_never_runs_and_old_thumbnail_requests_give_way() {
+    let tmp = temp_dir("cancel");
+    let root = tmp.path();
+    let t = FixtureTransport::new(library);
+    let (_cat, targets) = synced(&t, root);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    // A transport whose downloads block until released, so jobs stay queued.
+    struct Gate(FixtureTransport, std::sync::Mutex<()>);
+    impl Transport for Gate {
+        fn service_url(&self, key: &str) -> Result<String> {
+            self.0.service_url(key)
+        }
+        fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
+            self.0.post_json(url, body)
+        }
+        fn post_file(&self, url: &str, ct: &str, path: &std::path::Path) -> Result<Value> {
+            self.0.post_file(url, ct, path)
+        }
+        fn download(&self, url: &str, dest: &std::path::Path) -> Result<u64> {
+            drop(self.1.lock().unwrap());
+            self.0.download(url, dest)
+        }
+    }
+    let gate = std::sync::Arc::new(Gate(t, std::sync::Mutex::new(())));
+    let held = gate.1.lock().unwrap();
+    let pool = Downloader::start(
+        gate.clone(),
+        targets.dirs.clone(),
+        targets.library.clone(),
+        1,
+        Box::new(move |e| tx.lock().unwrap().send(e).unwrap()),
+    );
+    pool.enqueue("ASSET-001", Job::Thumb, Priority::Now);
+    // Wait for the worker to take it (it then blocks in download).
+    while pool.queued() > 0 {
+        std::thread::yield_now();
+    }
+    pool.enqueue("ASSET-002", Job::Thumb, Priority::Now);
+    pool.enqueue("ASSET-003", Job::Thumb, Priority::Now);
+    pool.cancel("ASSET-002", Job::Thumb);
+    pool.cancel("ASSET-001", Job::Thumb); // running: finishes anyway
+    assert_eq!(pool.queued(), 1);
+    // Flood with more than the cap: the oldest thumbnail requests are dropped.
+    for i in 0..MAX_NOW_JOBS + 10 {
+        pool.enqueue(&format!("FLOOD-{i}"), Job::Thumb, Priority::Now);
+    }
+    assert_eq!(pool.queued(), MAX_NOW_JOBS);
+    // A dropped job can be asked for again.
+    pool.enqueue("ASSET-003", Job::Thumb, Priority::Now);
+    assert_eq!(pool.queued(), MAX_NOW_JOBS);
+    drop(held);
+    let mut ran = Vec::new();
+    while let Ok(e) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        ran.push(e.id);
+        if ran.len() == MAX_NOW_JOBS + 1 {
+            break;
+        }
+    }
+    assert_eq!(ran.len(), MAX_NOW_JOBS + 1);
+    assert_eq!(ran[0], "ASSET-001");
+    assert_eq!(ran[1], "ASSET-003", "newest request first");
+    assert!(!ran.contains(&"ASSET-002".to_string()), "cancelled");
+    assert!(!ran.contains(&"FLOOD-0".to_string()), "dropped as stale");
 }
 
 #[test]

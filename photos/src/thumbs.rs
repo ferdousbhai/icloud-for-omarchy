@@ -54,13 +54,34 @@ pub fn fetch(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job:
 /// A 4xx on a signed URL means it expired: the master is looked up again for
 /// fresh URLs and the download retried once.
 pub fn fetch_detailed(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job: Job) -> Result<Fetched> {
+    fetch_detailed_with(t, cat, targets, id, job, &Vec::new)
+}
+
+/// The most masters one `records/lookup` refreshes.
+pub const LOOKUP_BATCH: usize = 200;
+
+/// Asset ids that will be downloaded soon (a pool's queue). When one URL
+/// turns out to have expired, the others signed at the same time have too:
+/// their masters are refreshed in the same `records/lookup`.
+pub type Peers<'a> = &'a dyn Fn() -> Vec<String>;
+
+/// [`fetch_detailed`], refreshing `peers()` along with this asset when its
+/// URL has expired.
+pub fn fetch_detailed_with(
+    t: &dyn Transport,
+    cat: &Catalog,
+    targets: &Targets,
+    id: &str,
+    job: Job,
+    peers: Peers,
+) -> Result<Fetched> {
     let mut row = cat
         .asset(id)?
         .ok_or_else(|| Error::Other(format!("unknown asset {id}")))?;
     let (dir, kind, url_of): (PathBuf, PathKind, UrlOf) = match job {
         Job::Thumb => (targets.dirs.thumbs(), PathKind::Thumb, |r| r.thumb_url.as_ref()),
         Job::Medium => (targets.dirs.medium(), PathKind::Medium, |r| r.medium_url.as_ref()),
-        Job::Original => return original(t, cat, targets, row),
+        Job::Original => return original(t, cat, targets, row, peers),
     };
     let cached = if job == Job::Thumb {
         &row.thumb_path
@@ -79,7 +100,7 @@ pub fn fetch_detailed(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &
     // The cache is ours and named by asset id: replacing a file there is fine.
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(format!("{}.jpg", sanitize(&row.id)));
-    download_fresh(t, cat, &mut row, url_of, job, &dest)?;
+    download_fresh(t, cat, &mut row, url_of, job, &dest, peers)?;
     cat.set_path(id, kind, Some(&dest))?;
     Ok(Fetched {
         path: dest,
@@ -89,7 +110,7 @@ pub fn fetch_detailed(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &
 
 type UrlOf = fn(&Row) -> Option<&String>;
 
-fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row) -> Result<Fetched> {
+fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, peers: Peers) -> Result<Fetched> {
     let mut hold = Reservation::default();
     let photo = match row.local_path.clone().filter(|p| p.exists()) {
         Some(p) => p,
@@ -104,7 +125,7 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row) -
                 photo
             };
             let tmp = Temp::beside(&dest)?;
-            download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0)?;
+            download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?;
             let library = targets.library.clone();
             let photo = settle(tmp, dest, &mut hold, |taken| {
                 Ok(plan_original(cat, &library, &row, taken)?.0)
@@ -115,7 +136,7 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row) -
         }
     };
     let live_error = if row.live_url.is_some() && row.live_path.as_ref().is_none_or(|p| !p.exists()) {
-        live(t, cat, &mut row, &photo, hold).err()
+        live(t, cat, &mut row, &photo, hold, peers).err()
     } else {
         None
     };
@@ -126,7 +147,14 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row) -
 }
 
 /// The Live Photo's video, named after the photo's (already unique) stem.
-fn live(t: &dyn Transport, cat: &Catalog, row: &mut Row, photo: &Path, mut hold: Reservation) -> Result<PathBuf> {
+fn live(
+    t: &dyn Transport,
+    cat: &Catalog,
+    row: &mut Row,
+    photo: &Path,
+    mut hold: Reservation,
+    peers: Peers,
+) -> Result<PathBuf> {
     let dest = {
         let mut taken = reserved();
         // The photo is in the catalog now; re-plan the video with the lock held.
@@ -136,23 +164,36 @@ fn live(t: &dyn Transport, cat: &Catalog, row: &mut Row, photo: &Path, mut hold:
         dest
     };
     let tmp = Temp::beside(&dest)?;
-    download_fresh(t, cat, row, |r| r.live_url.as_ref(), Job::Original, &tmp.0)?;
+    download_fresh(t, cat, row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?;
     let live = settle(tmp, dest, &mut hold, |taken| plan_live(cat, row, photo, taken))?;
     cat.set_path(&row.id, PathKind::Live, Some(&live))?;
     row.live_path = Some(live.clone());
     Ok(live)
 }
 
-/// Download `url_of(row)` to `dest`; on an expired URL, refresh `row` from
-/// iCloud and try once more.
-fn download_fresh(t: &dyn Transport, cat: &Catalog, row: &mut Row, url_of: UrlOf, job: Job, dest: &Path) -> Result<()> {
+/// Download `url_of(row)` to `dest`; on an expired URL, refresh `row` (and
+/// the `peers` queued behind it) from iCloud and try once more.
+fn download_fresh(
+    t: &dyn Transport,
+    cat: &Catalog,
+    row: &mut Row,
+    url_of: UrlOf,
+    job: Job,
+    dest: &Path,
+    peers: Peers,
+) -> Result<()> {
     let url = url_of(row)
         .cloned()
         .ok_or_else(|| Error::Other(format!("{} has no {job:?} rendition", row.filename)))?;
     match t.download(&url, dest) {
         Ok(_) => Ok(()),
         Err(e) if e.is_expired_url() => {
-            *row = refresh(t, cat, row)?;
+            // Another download thread may have refreshed it meanwhile.
+            let stored = cat.asset(&row.id)?;
+            *row = match stored {
+                Some(r) if url_of(&r).is_some_and(|u| *u != url) => r,
+                _ => refresh(t, cat, row, peers)?,
+            };
             let url = url_of(row).cloned().ok_or(e)?;
             t.download(&url, dest).map(drop)
         }
@@ -160,13 +201,31 @@ fn download_fresh(t: &dyn Transport, cat: &Catalog, row: &mut Row, url_of: UrlOf
     }
 }
 
-fn refresh(t: &dyn Transport, cat: &Catalog, row: &Row) -> Result<Row> {
+/// Fresh URLs for `row`'s master and, in the same lookup, for the masters
+/// of `peers()` (up to [`LOOKUP_BATCH`] in all).
+fn refresh(t: &dyn Transport, cat: &Catalog, row: &Row, peers: Peers) -> Result<Row> {
+    let mut masters = vec![row.master_id.clone()];
+    let mut seen: HashSet<String> = masters.iter().cloned().collect();
+    for id in peers() {
+        if masters.len() >= LOOKUP_BATCH {
+            break;
+        }
+        if let Ok(Some(r)) = cat.asset(&id)
+            && seen.insert(r.master_id.clone())
+        {
+            masters.push(r.master_id);
+        }
+    }
     let ck = CloudKit::connect(t)?;
-    let masters = ck.lookup_masters(&[row.master_id.as_str()])?;
-    let m = masters
-        .first()
-        .ok_or_else(|| Error::Other(format!("{} is no longer in iCloud", row.filename)))?;
-    cat.update_master(m)?;
+    let ids: Vec<&str> = masters.iter().map(String::as_str).collect();
+    let mut found = false;
+    for m in ck.lookup_masters(&ids)? {
+        found |= m.master_id == row.master_id;
+        cat.update_master(&m)?;
+    }
+    if !found {
+        return Err(Error::Other(format!("{} is no longer in iCloud", row.filename)));
+    }
     cat.asset(&row.id)?
         .ok_or_else(|| Error::Other(format!("unknown asset {}", row.id)))
 }
@@ -353,14 +412,6 @@ fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) 
     )))
 }
 
-/// Where this asset's original is, or would go if downloaded now.
-pub fn original_dest(cat: &Catalog, library: &Path, row: &Row) -> Result<PathBuf> {
-    if let Some(p) = row.local_path.as_ref().filter(|p| p.exists()) {
-        return Ok(p.clone());
-    }
-    Ok(plan_original(cat, library, row, &reserved())?.0)
-}
-
 fn safe_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -459,6 +510,10 @@ pub enum Priority {
 
 type Notify = Box<dyn Fn(Event) + Send + Sync>;
 
+/// The most `Now` jobs kept queued: beyond it the oldest thumbnail request
+/// is dropped (a screenful of tiles is far fewer).
+pub const MAX_NOW_JOBS: usize = 256;
+
 struct Queues {
     now: VecDeque<(String, Job)>,
     background: VecDeque<(String, Job)>,
@@ -534,7 +589,37 @@ impl Downloader {
             Priority::Now => q.now.push_front(key),
             Priority::Background => q.background.push_back(key),
         }
+        // Thumbnails asked for long ago (scrolled past) give way to new ones.
+        if q.now.len() > MAX_NOW_JOBS
+            && let Some(i) = q.now.iter().rposition(|(_, j)| *j == Job::Thumb)
+            && let Some(stale) = q.now.remove(i)
+        {
+            q.pending.remove(&stale);
+        }
         self.inner.wake.notify_one();
+    }
+
+    /// Drop a queued job that is no longer wanted (its tile scrolled away).
+    /// A job already running finishes.
+    pub fn cancel(&self, id: &str, job: Job) {
+        let mut q = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+        let is = |k: &(String, Job)| k.1 == job && k.0 == id;
+        let removed = match q.now.iter().position(is) {
+            Some(i) => q.now.remove(i),
+            None => match q.background.iter().position(is) {
+                Some(i) => q.background.remove(i),
+                None => None,
+            },
+        };
+        if let Some(k) = removed {
+            q.pending.remove(&k);
+        }
+    }
+
+    /// Jobs waiting (not running), for tests and progress.
+    pub fn queued(&self) -> usize {
+        let q = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+        q.now.len() + q.background.len()
     }
 
     pub fn clear_background(&self) {
@@ -567,7 +652,20 @@ fn worker(inner: Arc<Inner>) {
                     dirs: inner.dirs.clone(),
                     library: inner.library.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 };
-                fetch_detailed(&*inner.transport, cat, &targets, &id, job)
+                let peers = || {
+                    let q = inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut ids: Vec<String> = Vec::new();
+                    for (id, _) in q.now.iter().chain(q.background.iter()) {
+                        if ids.len() >= LOOKUP_BATCH {
+                            break;
+                        }
+                        if !ids.contains(id) {
+                            ids.push(id.clone());
+                        }
+                    }
+                    ids
+                };
+                fetch_detailed_with(&*inner.transport, cat, &targets, &id, job, &peers)
             }
             None => Err(Error::Other("could not open the catalog".into())),
         };
