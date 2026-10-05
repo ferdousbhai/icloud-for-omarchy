@@ -1,7 +1,7 @@
 //! `icloud-photos <command>`: every feature of the app from a terminal (or an
 //! agent), without GTK or a display. The commands run the same library code
-//! as the window: `sync::run`, `thumbs::fetch_detailed`,
-//! `upload::upload_batch`, `CloudKit::delete_asset`, `thumbs::prune_cache`.
+//! as the window: `sync::run`, `thumbs::fetch_detailed` and the download pool,
+//! `upload::upload_batch`, `CloudKit::delete_assets`, `thumbs::prune_cache`.
 //!
 //! Output is plain text, or JSON on stdout with `--json`. Exit codes, as in
 //! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 sign-in required,
@@ -9,6 +9,7 @@
 //! `{"error":{"code","message","exit_code"}}`.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -17,11 +18,11 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use icloud_photos::catalog::{Catalog, LAST_SYNC_KEY, Row, SYNC_TOKEN_KEY};
-use icloud_photos::cloudkit::{CloudKit, Kind, sanitize};
+use icloud_photos::cloudkit::{CloudKit, Kind, Modified, sanitize};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
 use icloud_photos::session;
 use icloud_photos::sync::{self, Mode, Progress, Report};
-use icloud_photos::thumbs::{self, Job, Targets};
+use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_SIGN_IN, EXIT_USAGE};
@@ -680,6 +681,9 @@ fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<u8> {
     Ok(0)
 }
 
+/// Parallel downloads, as in the app.
+const DOWNLOAD_WORKERS: usize = 4;
+
 fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&Path>) -> Res<u8> {
     let cat = ctx.catalog()?;
     let ids = if all { cat.missing_originals()? } else { ids };
@@ -688,28 +692,71 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
     }
     let t = ctx.transport()?;
     let targets = ctx.targets(if medium { None } else { out });
-    let mut results = Vec::new();
-    let mut failed = 0;
+    let job = if medium { Job::Medium } else { Job::Original };
+
+    // The app's download pool: a few threads, each with its own catalog
+    // connection; an id named twice is fetched once.
+    let mut unique: Vec<&str> = Vec::new();
+    let mut seen = HashSet::new();
     for id in &ids {
-        let result: Res<Value> = (|| {
-            if medium {
-                let cached = thumbs::fetch(&*t, &cat, &targets, id, Job::Medium)?;
+        if seen.insert(id.as_str()) {
+            unique.push(id);
+        }
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<thumbs::Event>();
+    let pool = (!unique.is_empty()).then(|| {
+        Downloader::start(
+            t.clone(),
+            targets.dirs.clone(),
+            targets.library.clone(),
+            DOWNLOAD_WORKERS.min(unique.len()),
+            Box::new(move |e| {
+                let _ = tx.send(e);
+            }),
+        )
+    });
+    for id in &unique {
+        if let Some(p) = &pool {
+            p.enqueue(id, job, Priority::Background);
+        }
+    }
+
+    let mut done: HashMap<String, Res<Value>> = HashMap::new();
+    let mut failed = 0;
+    while done.len() < unique.len() {
+        let e = rx.recv().map_err(|_| other("the download threads stopped"))?;
+        let id = e.id.clone();
+        let result: Res<Value> = match e.result {
+            // A lapsed sign-in fails every other item too: stop.
+            Err(err) if err.is_sign_in() => {
+                if let Some(p) = &pool {
+                    p.clear_background();
+                }
+                return Err(Fail::Err(err));
+            }
+            Err(err) => Err(Fail::Err(err)),
+            Ok(cached) if medium => (|| {
                 let path = match out {
-                    Some(dir) => copy_to(&cached, &dir.join(format!("{}.jpg", sanitize(id))))?,
+                    Some(dir) => copy_to(&cached, &dir.join(format!("{}.jpg", sanitize(&id))))?,
                     None => cached,
                 };
-                return Ok(json!({ "id": id, "path": path }));
-            }
-            let fetched = thumbs::fetch_detailed(&*t, &cat, &targets, id, Job::Original)?;
-            let row = row_or_fail(&cat, id)?;
-            Ok(json!({
-                "id": id,
-                "path": fetched.path,
-                "live_path": existing(&row.live_path),
-                "live_error": fetched.live_error.map(|e| e.to_string()),
-            }))
-        })();
-        match result {
+                Ok(json!({ "id": id, "path": path }))
+            })(),
+            Ok(path) => row_or_fail(&cat, &id).map(|row| {
+                json!({
+                    "id": id,
+                    "path": path,
+                    "live_path": existing(&row.live_path),
+                    "live_error": e.live_error.map(|e| e.to_string()),
+                })
+            }),
+        };
+        let result = match result {
+            Err(f @ (Fail::Usage(_) | Fail::NotFound(_) | Fail::Cancelled(_))) => return Err(f),
+            r => r,
+        };
+        // Lines as each finishes; the JSON array keeps the order asked for.
+        match &result {
             Ok(v) => {
                 if !v["live_error"].is_null() {
                     failed += 1;
@@ -719,25 +766,30 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
                     if let Some(p) = v["live_path"].as_str() {
                         println!("{p}");
                     }
-                    if let Some(e) = v["live_error"].as_str() {
-                        eprintln!("icloud-photos: {id}: Live Photo video: {e}");
+                    if let Some(err) = v["live_error"].as_str() {
+                        eprintln!("icloud-photos: {id}: Live Photo video: {err}");
                     }
                 }
-                results.push(v);
             }
-            // A lapsed sign-in fails every other item too: stop.
-            Err(Fail::Err(e)) if e.is_sign_in() => return Err(Fail::Err(e)),
-            Err(Fail::Err(e)) => {
+            Err(Fail::Err(err)) => {
                 failed += 1;
                 if !ctx.json {
-                    eprintln!("icloud-photos: {id}: {e}");
+                    eprintln!("icloud-photos: {id}: {err}");
                 }
-                results.push(json!({ "id": id, "error": e.to_string() }));
             }
-            Err(f) => return Err(f),
+            Err(_) => {}
         }
+        done.insert(id, result);
     }
     if ctx.json {
+        let results: Vec<Value> = ids
+            .iter()
+            .map(|id| match done.get(id) {
+                Some(Ok(v)) => v.clone(),
+                Some(Err(Fail::Err(e))) => json!({ "id": id, "error": e.to_string() }),
+                _ => json!({ "id": id, "error": "not downloaded" }),
+            })
+            .collect();
         ctx.out(&Value::Array(results), String::new);
     }
     Ok(if failed > 0 { EXIT_ERROR } else { 0 })
@@ -932,24 +984,54 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
     }
     let t = ctx.transport()?;
     let ck = CloudKit::connect(&*t)?;
+    // Up to 200 deletions per request, each answered on its own.
+    let first: Vec<(&str, Option<&str>)> = rows.iter().map(|r| (r.id.as_str(), r.change_tag.as_deref())).collect();
+    let mut outcome: Vec<icloud_photos::transport::Result<Modified>> = ck.delete_assets(&first);
+    let code_of = |r: &icloud_photos::transport::Result<Modified>| match r {
+        Err(Error::CloudKit { code, .. }) => Some(code.clone()),
+        _ => None,
+    };
+    // Changed on another device since the last sync (as the app does: sync,
+    // then try again with the fresh change tag). ATOMIC_ERROR: failed only
+    // because another record did; send it again as it was.
+    let conflicts = outcome.iter().any(|r| code_of(r).as_deref() == Some("CONFLICT"));
+    let mut retry: Vec<(usize, String, Option<String>)> = Vec::new();
+    if conflicts {
+        sync::sync(&ck, &mut cat, &|_| {})?;
+    }
+    for (i, r) in outcome.iter_mut().enumerate() {
+        match code_of(r).as_deref() {
+            Some("CONFLICT") => {
+                let fresh = row_or_fail(&cat, &rows[i].id)?;
+                if fresh.deleted {
+                    *r = Err(Error::Other("already deleted on another device".into()));
+                } else {
+                    retry.push((i, fresh.id, fresh.change_tag));
+                }
+            }
+            Some("ATOMIC_ERROR") => retry.push((i, rows[i].id.clone(), rows[i].change_tag.clone())),
+            _ => {}
+        }
+    }
+    if !retry.is_empty() {
+        let again: Vec<(&str, Option<&str>)> = retry.iter().map(|(_, id, tag)| (id.as_str(), tag.as_deref())).collect();
+        for ((i, ..), r) in retry.iter().zip(ck.delete_assets(&again)) {
+            outcome[*i] = r;
+        }
+    }
+    cat.transaction(|cat| {
+        for (row, r) in rows.iter().zip(&outcome) {
+            if let Ok(m) = r {
+                cat.mark_deleted(&row.id, m.change_tag.as_deref())?;
+            }
+        }
+        Ok(())
+    })?;
     let mut results = Vec::new();
     let mut failed = 0;
-    for row in rows {
-        let mut result = ck.delete_asset(&row.id, row.change_tag.as_deref());
-        // Changed on another device since the last sync (as the app does:
-        // sync, then try again with the fresh change tag).
-        if matches!(&result, Err(Error::CloudKit { code, .. }) if code == "CONFLICT") {
-            sync::sync(&ck, &mut cat, &|_| {})?;
-            let fresh = row_or_fail(&cat, &row.id)?;
-            result = if fresh.deleted {
-                Err(Error::Other("already deleted on another device".into()))
-            } else {
-                ck.delete_asset(&row.id, fresh.change_tag.as_deref())
-            };
-        }
+    for (row, result) in rows.iter().zip(outcome) {
         match result {
-            Ok(m) => {
-                cat.mark_deleted(&row.id, m.change_tag.as_deref())?;
+            Ok(_) => {
                 if !ctx.json {
                     println!("{}\tmoved to Recently Deleted", row.id);
                 }

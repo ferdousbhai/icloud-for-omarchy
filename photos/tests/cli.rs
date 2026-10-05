@@ -327,6 +327,19 @@ fn thumb_and_download() {
     assert_eq!(env.json(&["status"])["downloaded"], 4);
     assert_eq!(env.json(&["download", "--all"]).as_array().unwrap().len(), 0);
 
+    // Several at once (on the download pool): the JSON keeps the order
+    // asked for, a repeated id included.
+    let ids = env.ids(&[]);
+    let many = env.json(&["download", &ids[3], &ids[0], &ids[3]]);
+    let got: Vec<&str> = many
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(got, vec![ids[3].as_str(), ids[0].as_str(), ids[3].as_str()]);
+    assert_eq!(many[0]["path"], many[2]["path"]);
+
     assert_eq!(env.run(&["download", "NO-SUCH-ID"]).code, 1);
     assert_eq!(env.run(&["thumb", "NO-SUCH-ID"]).code, 1);
     // Nothing escaped the sandbox.
@@ -480,6 +493,40 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     assert_eq!(env.run(&["delete", "NO-SUCH-ID", "--yes"]).code, 1);
     assert_eq!(env.json(&["sync"])["mode"], "incremental");
     assert_eq!(env.ids(&[]).len(), 6);
+}
+
+#[test]
+fn delete_sends_many_in_one_call_and_reports_each() {
+    let env = Env::synced("delete-batch", 6);
+    let ids = env.ids(&[]);
+    // One fine, one edited elsewhere (a conflict, retried after a sync),
+    // one deleted elsewhere (reported).
+    env.server.edit_elsewhere(&ids[1]);
+    env.server.delete_elsewhere(&ids[2]);
+    let r = env.run(&["--json", "delete", &ids[0], &ids[1], &ids[2], &ids[3], "--yes"]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    let v = r.json();
+    let got: Vec<(&str, bool)> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| (x["id"].as_str().unwrap(), x["deleted"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (ids[0].as_str(), true),
+            (ids[1].as_str(), true),
+            (ids[2].as_str(), false),
+            (ids[3].as_str(), true)
+        ]
+    );
+    assert!(v[2]["error"].as_str().unwrap().contains("another device"), "{v}");
+    for id in [&ids[0], &ids[1], &ids[3]] {
+        assert!(!env.server.asset_ids().contains(id));
+        assert_eq!(env.json(&["info", id])["deleted"], true);
+    }
+    assert_eq!(env.ids(&[]).len(), 2);
 }
 
 #[test]

@@ -23,6 +23,8 @@ const LIST_ALBUMS: &str = "CPLAlbumByPositionLive";
 const LIST_ALBUM_MEMBERS: &str = "CPLContainerRelationLiveByAssetDate";
 /// CPLAsset + CPLMaster records per page (pyicloud asks for 2x its page size).
 const PAGE_LIMIT: usize = 200;
+/// The most operations one records/modify carries.
+pub const MODIFY_BATCH: usize = 200;
 const ROOT_FOLDER: &str = "----Root-Folder----";
 const ALBUM_TYPE_FOLDER: i64 = 3;
 
@@ -623,17 +625,9 @@ impl<'t> CloudKit<'t> {
     /// answers a per-record CONFLICT. Shape from a browser capture of
     /// icloud.com (timlaing/pyicloud `photos_browser_mutations/photo_delete_*`).
     pub fn delete_asset(&self, asset_id: &str, change_tag: Option<&str>) -> Result<Modified> {
-        let mut record = json!({
-            "recordName": asset_id,
-            "recordType": "CPLAsset",
-            "fields": { "isDeleted": { "value": 1 } },
-        });
-        if let Some(tag) = change_tag {
-            record["recordChangeTag"] = json!(tag);
-        }
         let body = json!({
             "atomic": true,
-            "operations": [{ "operationType": "update", "record": record }],
+            "operations": [{ "operationType": "update", "record": delete_record(asset_id, change_tag) }],
             "zoneID": Self::zone(),
         });
         let v = self.post("records/modify", &body)?;
@@ -642,15 +636,62 @@ impl<'t> CloudKit<'t> {
             .and_then(Value::as_array)
             .and_then(|a| a.first())
             .ok_or_else(|| Error::Other("records/modify returned no record".into()))?;
-        server_error(rec)?;
-        Ok(Modified {
-            name: rec
-                .get("recordName")
-                .and_then(Value::as_str)
-                .unwrap_or(asset_id)
-                .to_owned(),
-            change_tag: rec.get("recordChangeTag").and_then(Value::as_str).map(str::to_owned),
-        })
+        modified(rec, asset_id)
+    }
+
+    /// Move many assets to Recently Deleted: [`delete_asset`](Self::delete_asset)'s
+    /// update, up to [`MODIFY_BATCH`] per `records/modify`, non-atomic so one
+    /// record's error (a CONFLICT) does not fail the others. Returns one
+    /// result per asset, in order. A request that fails as a whole fails
+    /// every asset in it; after a lapsed sign-in nothing more is sent.
+    /// UNVERIFIED AGAINST APPLE: the browser capture deletes one record
+    /// (`atomic: true`); batching and `atomic: false` follow CloudKit Web
+    /// Services' documented records/modify. A record answered with
+    /// `ATOMIC_ERROR` (the request treated as atomic anyway) failed only
+    /// because another did, and may be sent again as it was.
+    pub fn delete_assets(&self, assets: &[(&str, Option<&str>)]) -> Vec<Result<Modified>> {
+        let mut out = Vec::with_capacity(assets.len());
+        let mut signed_out = false;
+        for chunk in assets.chunks(MODIFY_BATCH) {
+            if signed_out {
+                out.extend(chunk.iter().map(|_| Err(Error::SignInRequired)));
+                continue;
+            }
+            let operations: Vec<Value> = chunk
+                .iter()
+                .map(|(id, tag)| json!({ "operationType": "update", "record": delete_record(id, *tag) }))
+                .collect();
+            let body = json!({ "atomic": false, "operations": operations, "zoneID": Self::zone() });
+            let v = match self.post("records/modify", &body) {
+                Ok(v) => v,
+                Err(e) => {
+                    signed_out = e.is_sign_in();
+                    out.extend(chunk.iter().map(|_| Err(e.duplicate())));
+                    continue;
+                }
+            };
+            let records = v
+                .get("records")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let by_name: HashMap<&str, &Value> = records
+                .iter()
+                .filter_map(|r| Some((r.get("recordName")?.as_str()?, r)))
+                .collect();
+            for (i, (id, _)) in chunk.iter().enumerate() {
+                // By name; by position when a reply omits names.
+                let rec = by_name
+                    .get(id)
+                    .copied()
+                    .or_else(|| records.get(i).filter(|r| r.get("recordName").is_none()));
+                out.push(match rec {
+                    Some(rec) => modified(rec, id),
+                    None => Err(Error::Other(format!("records/modify returned nothing for {id}"))),
+                });
+            }
+        }
+        out
     }
 
     /// Add assets to an album: one CPLContainerRelation per asset, named
@@ -690,6 +731,32 @@ impl<'t> CloudKit<'t> {
         }
         Ok(out)
     }
+}
+
+/// A CPLAsset update to `isDeleted = 1` (Recently Deleted).
+fn delete_record(asset_id: &str, change_tag: Option<&str>) -> Value {
+    let mut record = json!({
+        "recordName": asset_id,
+        "recordType": "CPLAsset",
+        "fields": { "isDeleted": { "value": 1 } },
+    });
+    if let Some(tag) = change_tag {
+        record["recordChangeTag"] = json!(tag);
+    }
+    record
+}
+
+/// One record of a records/modify reply: its new change tag, or its error.
+fn modified(rec: &Value, asset_id: &str) -> Result<Modified> {
+    server_error(rec)?;
+    Ok(Modified {
+        name: rec
+            .get("recordName")
+            .and_then(Value::as_str)
+            .unwrap_or(asset_id)
+            .to_owned(),
+        change_tag: rec.get("recordChangeTag").and_then(Value::as_str).map(str::to_owned),
+    })
 }
 
 /// A `serverErrorCode` on a reply, zone or record, as `Error::CloudKit`.

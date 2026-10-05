@@ -273,6 +273,59 @@ fn delete_conflict_is_reported() {
 }
 
 #[test]
+fn delete_assets_batches_and_maps_each_record_by_name() {
+    let t = FixtureTransport::new(|call| {
+        // Answer out of order, with one per-record error.
+        let ops = call.body["operations"].as_array().unwrap();
+        let mut recs: Vec<Value> = ops
+            .iter()
+            .map(|op| {
+                let name = op["record"]["recordName"].as_str().unwrap();
+                if name == "B" {
+                    json!({ "recordName": name, "serverErrorCode": "CONFLICT", "reason": "oplock" })
+                } else {
+                    json!({ "recordName": name, "recordType": "CPLAsset", "recordChangeTag": format!("{name}-new") })
+                }
+            })
+            .collect();
+        recs.reverse();
+        Ok(json!({ "records": recs }))
+    });
+    let ck = CloudKit::connect(&t).unwrap();
+    let names: Vec<String> = (0..450)
+        .map(|i| if i == 1 { "B".into() } else { format!("A{i}") })
+        .collect();
+    let items: Vec<(&str, Option<&str>)> = names.iter().map(|n| (n.as_str(), Some("t"))).collect();
+    let out = ck.delete_assets(&items);
+    assert_eq!(out.len(), 450);
+    assert_eq!(out[0].as_ref().unwrap().change_tag.as_deref(), Some("A0-new"));
+    assert!(matches!(&out[1], Err(Error::CloudKit { code, .. }) if code == "CONFLICT"));
+    assert_eq!(out[449].as_ref().unwrap().name, "A449");
+    let calls = t.calls();
+    let sizes: Vec<usize> = calls
+        .iter()
+        .map(|c| c.body["operations"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(sizes, vec![200, 200, 50]);
+    assert_eq!(calls[0].body["atomic"], false);
+    assert_eq!(
+        calls[0].body["operations"][0]["record"]["fields"]["isDeleted"]["value"],
+        1
+    );
+}
+
+#[test]
+fn delete_assets_stops_sending_after_a_lapsed_sign_in() {
+    let t = FixtureTransport::new(|_| Err(Error::SignInRequired));
+    let ck = CloudKit::connect(&t).unwrap();
+    let names: Vec<String> = (0..250).map(|i| format!("A{i}")).collect();
+    let items: Vec<(&str, Option<&str>)> = names.iter().map(|n| (n.as_str(), None)).collect();
+    let out = ck.delete_assets(&items);
+    assert!(out.iter().all(|r| matches!(r, Err(e) if e.is_sign_in())));
+    assert_eq!(t.calls().len(), 1);
+}
+
+#[test]
 fn sign_in_required_propagates() {
     let t = FixtureTransport::new(|_| Err(Error::SignInRequired));
     let ck = CloudKit::connect(&t).unwrap();
