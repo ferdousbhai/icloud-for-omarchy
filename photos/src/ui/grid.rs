@@ -231,11 +231,12 @@ impl Grid {
                 if let Some(button) = w.downcast_ref::<gtk::Button>() {
                     let (picture, _) = tile_parts(button);
                     let id = picture.widget_name();
-                    if !id.is_empty() {
-                        let mut map = unbind_map.borrow_mut();
-                        if map.get(id.as_str()) == Some(&picture) {
-                            map.remove(id.as_str());
-                        }
+                    // Only when no other tile shows it now: on a regrid the
+                    // list may bind an asset's new row before it unbinds
+                    // the old one.
+                    let mut map = unbind_map.borrow_mut();
+                    if !id.is_empty() && map.get(id.as_str()) == Some(&picture) {
+                        map.remove(id.as_str());
                         drop(map);
                         if let Some(cb) = unbind_cb.borrow().as_ref() {
                             cb(&id);
