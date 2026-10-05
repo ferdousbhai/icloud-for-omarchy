@@ -1,5 +1,5 @@
 //! The semantic formatting model: the contract between the codec and the
-//! Markdown renderer/parser. Ports icloud-md `src/notes/noteFormat.ts`.
+//! Markdown renderer/parser. Originally derived from icloud-md.
 //!
 //! Units: every `length`, `start` and offset is in UTF-16 code units, exactly
 //! as in icloud-md (JS string indices) and on the wire (attribute-run

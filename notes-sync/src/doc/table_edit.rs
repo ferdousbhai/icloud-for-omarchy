@@ -1,5 +1,5 @@
-//! Table writes: grid diff → CRDT operations. Ports icloud-md
-//! `src/notes/tableEdit.ts`, `tableCellEdit.ts` and `tablePushEdit.ts`.
+//! Table writes: grid diff → CRDT operations. Originally derived from
+//! icloud-md.
 
 use std::collections::{HashMap, HashSet};
 
@@ -267,7 +267,7 @@ struct TextClock {
 }
 
 /// `TopotextClockSource`: a table's document-global topotext clock, scoped
-/// to the writing replica (`tableCellEdit.ts`).
+/// to the writing replica.
 pub trait TopotextClockSource {
     /// 1-based `CharID.replicaID` of the writing replica.
     fn replica_index(&self) -> u32;

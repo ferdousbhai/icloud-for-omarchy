@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/notes/decodeNoteRecord.test.ts`.
+//! Decoding a Note record and classifying what it holds. Originally derived from icloud-md's tests.
 
 mod common;
 
@@ -341,8 +341,8 @@ fn body_text_is_the_notes_raw_text_in_both_modes() {
     assert_eq!(filename.body_text, in_body.body_text);
 }
 
-/// Every real fixture note classifies exactly as icloud-md does (goldens'
-/// markdown from the exporter).
+/// Every real fixture note classifies to its golden markdown (first
+/// exported from icloud-md).
 #[test]
 fn real_fixture_notes_classify_to_their_golden_markdown() {
     for file in [

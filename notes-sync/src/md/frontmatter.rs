@@ -1,9 +1,8 @@
-//! The frontmatter envelope and the keys this tool owns in it. Ports icloud-md
-//! `src/notes/frontmatter.ts` and `noteIdFrontmatter.ts`.
+//! The frontmatter envelope and the keys this tool owns in it. Originally
+//! derived from icloud-md.
 //!
-//! Plan deviation: the plan's `with_note_id(body, id)` is icloud-md's
-//! `composeNoteFile(frontmatter, body, recordName, unrepresentableTitle)`;
-//! every vault's note files are exactly `---\napple-note-id: <ID>\n---\n\n`
+//! A note file is composed from its frontmatter, body, record name and any
+//! unrepresentable title; every vault's note files are exactly `---\napple-note-id: <ID>\n---\n\n`
 //! + body when the file had no other frontmatter.
 //!
 //! icloud-md edits the YAML with the `yaml` package's Document API, which

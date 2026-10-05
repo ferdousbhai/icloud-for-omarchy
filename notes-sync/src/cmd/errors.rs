@@ -1,6 +1,5 @@
-//! Known failures and their exit codes. Ports icloud-md `src/errors.ts` (the
-//! classes that survive the port; auth/session/browser/object/revert/delete
-//! ones are gone).
+//! Known failures and their exit codes. Originally derived from icloud-md's
+//! error classes.
 //!
 //! Exit codes, shared with the other iCloud tools (icloud-session,
 //! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md): 0 ok, 1 known
@@ -9,8 +8,8 @@
 //! differences (not an error), 64 usage (`EX_USAGE`; icloud-md used 2),
 //! 70 internal (`EX_SOFTWARE`, anything unexpected).
 //!
-//! Messages keep icloud-md's wording (with `icloud-md` → `icloud-notes-sync`
-//! in hints). `name()` is icloud-md's class name; `code()` is the
+//! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
+//! `name()` is the error's class name; `code()` is the
 //! machine-readable `error.code` of the `--json` error object.
 
 use crate::cloudkit::CkError;

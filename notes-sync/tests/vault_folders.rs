@@ -1,4 +1,5 @@
-//! Ports icloud-md `src/notes/folderReconcile.test.ts` and `folderCreate.test.ts`.
+//! Folder directories: reconciling them with the account's folders, and
+//! planning new folders. Originally derived from icloud-md's tests.
 
 mod common;
 

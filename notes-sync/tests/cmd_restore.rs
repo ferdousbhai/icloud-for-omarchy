@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/commands/restore.test.ts`.
+//! `restore`. Originally derived from icloud-md's tests.
 
 mod common;
 

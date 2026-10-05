@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/commands/clone.test.ts`.
+//! `clone`. Originally derived from icloud-md's tests.
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +36,7 @@ fn refuses_an_already_cloned_folder_without_authenticating() {
     assert!(err.to_string().contains("is already a cloned notes directory"));
 }
 
-// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1, "New
-// notes listed without their text"): clone looks such notes up and, if they
+// docs/DESIGN.md §1, "New notes listed without their text": clone looks such notes up and, if they
 // still have no text, saves no private sync token so the first pull sees them.
 
 const FRESH: &str = "5f1d0c3a-7b2e-4c9a-9e61-2b8d4a6c0f17";

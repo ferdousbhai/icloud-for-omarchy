@@ -1,4 +1,4 @@
-//! Ports icloud-md `realFixtures.test.ts`, plus the byte-exactness gates:
+//! The real captured fixtures, plus the byte-exactness gates:
 //! every real payload decodes and re-encodes byte for byte at every layer,
 //! and every recorded golden is reproduced (`fixture_goldens_are_current`
 //! re-records them with `ICLOUD_NOTES_SYNC_REGEN=1`).
@@ -188,7 +188,7 @@ fn fixture_goldens_are_current() {
     }
 }
 
-// --- realFixtures.test.ts ---------------------------------------------------------
+// --- real fixtures ----------------------------------------------------------------
 
 #[test]
 fn real_captured_notes_decode_to_the_expected_text_and_round_trip() {

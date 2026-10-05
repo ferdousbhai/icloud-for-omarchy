@@ -1,9 +1,9 @@
-//! `Database<T>`: icloud-md's `databaseClient.ts` functions as methods over a
-//! [`Transport`].
+//! `Database<T>`: the CloudKit database operations as methods over a
+//! [`Transport`]. Originally derived from icloud-md.
 //!
-//! Request bodies are built as `serde_json` objects in the exact key order
-//! icloud-md builds them (the crate enables `preserve_order`), so a request
-//! log from this client is byte-comparable with one from the Node driver.
+//! Request bodies are built as `serde_json` objects in a fixed key order
+//! (the crate enables `preserve_order`), so request logs are stable and
+//! comparable across runs.
 //! Endpoint path: `/database/1/com.apple.notes/production/{private|shared}/
 //! {operation}?ckjsBuildVersion=..&ckjsVersion=..`; icloud-session appends
 //! the per-session `clientId`/`clientBuildNumber`/`clientMasteringNumber`/
@@ -231,7 +231,7 @@ impl<T: Transport> Database<T> {
             }
             more_coming = page.more_coming;
         }
-        // Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1):
+        // docs/DESIGN.md §1:
         // a zone listed on two pages is fetched - and its notes cloned - once.
         let mut seen = std::collections::HashSet::new();
         zone_ids.retain(|z| seen.insert((z.zone_name.clone(), z.owner_record_name.clone())));
@@ -1053,12 +1053,11 @@ pub fn parse_note_update_response(body: &Value) -> Result<RecordUpdateResult, Ck
 }
 
 /// Collapses repeated occurrences of a record in one zone's `changes/zone`
-/// listing. Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md
-/// §1): CloudKit occasionally returns the same record on two pages of one
-/// walk (and could within a page); 0.6.2 keeps every occurrence, so `clone`
-/// writes the note twice - the second copy under a uniquified name, one of
-/// the two left untracked - and the next `push` would create it as a new
-/// note. Callers pass the records of a single zone, so the key is
+/// listing (docs/DESIGN.md §1): CloudKit occasionally returns the same
+/// record on two pages of one walk (and could within a page); kept, every
+/// occurrence would make `clone` write the note twice - the second copy
+/// under a uniquified name, one of the two left untracked - and the next
+/// `push` create it as a new note. Callers pass the records of a single zone, so the key is
 /// `recordName`; the same recordName in another zone (private vs a shared
 /// zone) is a different record and is never collapsed here.
 ///

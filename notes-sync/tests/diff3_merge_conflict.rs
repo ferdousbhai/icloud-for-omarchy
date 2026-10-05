@@ -1,4 +1,4 @@
-//! Port of icloud-md's `mergeConflict.test.ts`.
+//! Three-way merges with conflict markers. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::diff3::{has_conflict_markers, merge_note_versions};
 

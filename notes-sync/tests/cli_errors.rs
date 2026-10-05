@@ -1,10 +1,6 @@
-//! Ports icloud-md `src/errors.test.ts` for the error classes the port keeps
-//! (`src/cmd/errors.rs`). Dropped with auth/session handling (icloud-session
-//! owns sign-in): AuthenticationExpiredError, SilentReauthFailedError,
-//! MissingSessionFileError, CorruptSessionFileError, ChromiumNotInstalledError,
-//! SignInIncompleteError (all become `SignInRequired`, exit 4). The
-//! IcloudNotesSyncError base-class/`cause` tests have no Rust counterpart
-//! (an enum, not a class hierarchy).
+//! Known errors (`src/cmd/errors.rs`): messages, hints, codes and exit
+//! codes. Sign-in failures are all `SignInRequired` (icloud-session owns
+//! sign-in). Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cloudkit::CkError;
 use icloud_notes_sync::cmd::Error;

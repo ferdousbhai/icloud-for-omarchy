@@ -1,7 +1,5 @@
-//! Ports icloud-md `src/commands/pull.test.ts`, `pullResync.test.ts`,
-//! `pullTitleMode.test.ts` and `src/cli/pullReport.test.ts`. The report is
-//! plain text (no colours), so pullReport's two chalk colour-forcing tests
-//! are not ported.
+//! `pull`: merging remote changes into local files, resyncing, title modes,
+//! and the report (plain text, no colours). Originally derived from icloud-md's tests.
 
 mod common;
 
@@ -23,7 +21,7 @@ fn entry_for(file: &str) -> NoteEntry {
     NoteEntry::new(file, "1a", 100)
 }
 
-// --- pull.test.ts: mergeRemoteChangeIntoLocalFile --------------------------------
+// --- merging a remote change into a local file -----------------------------------
 
 fn merge(dir: &Path, record: &str, file: &str, remote: &str) -> MergeStatus {
     merge_remote_change_into_local_file(dir, record, file, remote, None, TitleMode::InBody).unwrap()
@@ -169,7 +167,7 @@ fn merge_preserves_user_keys_alongside_the_id() {
     assert!(written.contains(&format!("apple-note-id: {MERGE_NOTE_ID}")));
 }
 
-// --- pullResync.test.ts ------------------------------------------------------------
+// --- resync ------------------------------------------------------------------------
 
 fn shared_entry(file: &str, owner: Option<&str>) -> NoteEntry {
     let mut e = entry_for(file);
@@ -340,7 +338,7 @@ fn reconciled_deletion_drops_attachment_tracking_and_files() {
     assert!(!dir.join("Notes/attachments/pic.png").exists());
 }
 
-// --- pullTitleMode.test.ts ----------------------------------------------------------
+// --- title modes --------------------------------------------------------------------
 
 fn vault() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
@@ -571,7 +569,7 @@ fn freed_name_is_available_to_the_next_note() {
     assert_eq!(read(dir, "Notes/C.md"), "first");
 }
 
-// --- pullReport.test.ts ---------------------------------------------------------------
+// --- the report -----------------------------------------------------------------------
 
 fn id(f: &str) -> String {
     f.to_owned()

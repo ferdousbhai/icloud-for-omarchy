@@ -1,5 +1,5 @@
-//! Ports icloud-md `src/cli.test.ts` (running the built binary), plus the
-//! exit-code contract: usage errors exit 2, known errors exit 1.
+//! The CLI, running the built binary: arguments, help, and the exit-code
+//! contract. Originally derived from icloud-md's tests.
 
 use std::path::Path;
 use std::process::{Command, Output};

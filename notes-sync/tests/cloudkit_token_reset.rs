@@ -1,4 +1,5 @@
-//! Port of icloud-md `src/cloudkit/databaseClient.tokenReset.test.ts`.
+//! An expired sync token: the zone is walked again from scratch.
+//! Originally derived from icloud-md's tests.
 
 mod cloudkit_common;
 

@@ -1,9 +1,8 @@
-//! CloudKit wire types, ported from icloud-md `src/cloudkit/databaseClient.ts`
-//! (the interfaces at the top of that file).
+//! CloudKit wire types. Originally derived from icloud-md.
 //!
-//! Field maps are `IndexMap`, not `BTreeMap`: icloud-md builds request field
-//! objects in a deliberate order (`encodeNoteRecord.ts` matches captured
-//! web-client requests key for key), and JSON object order survives
+//! Field maps are `IndexMap`, not `BTreeMap`: request field objects are
+//! built in a deliberate order (`doc::encode` matches captured web-client
+//! requests key for key), and JSON object order survives
 //! serialization, so request bodies are only byte-equal if insertion order is
 //! kept end to end.
 
@@ -223,7 +222,7 @@ pub struct ParsedZone {
     pub records: Option<Vec<CloudKitRecord>>,
 }
 
-/// A modify-request field (TS `UpdateFieldValue` in `encodeNoteRecord.ts`,
+/// A modify-request field (as `doc::encode` builds them,
 /// `{ value: unknown }`): bare `{value}` with no `type`.
 ///
 /// TS distinguishes three shapes that must stay distinct on the wire:

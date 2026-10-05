@@ -1,6 +1,4 @@
-//! Commands. Ports icloud-md `src/commands/{clone,pull,
-//! push,status,history,diff,restore}.ts`, `src/cli/{output,pullReport,
-//! reportStyle}.ts`, `src/progress.ts` and `src/errors.ts`.
+//! Commands, their output and errors. Originally derived from icloud-md.
 
 pub mod clone;
 pub mod diff;
@@ -82,7 +80,7 @@ pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     }
 }
 
-/// `isInTrash` (delete.ts): the note's Folder reference is the Trash folder.
+/// Whether the note is in the trash: its Folder reference is the Trash folder.
 pub(crate) fn is_in_trash(record: &CloudKitRecord) -> bool {
     record
         .fields
@@ -93,7 +91,7 @@ pub(crate) fn is_in_trash(record: &CloudKitRecord) -> bool {
         == Some(TRASH_FOLDER_RECORD_NAME)
 }
 
-/// `isPurged` (delete.ts): Apple's stage-2 `Deleted: 1` mark.
+/// Whether the note is purged: Apple's stage-2 `Deleted: 1` mark.
 pub(crate) fn is_purged(record: &CloudKitRecord) -> bool {
     record
         .fields

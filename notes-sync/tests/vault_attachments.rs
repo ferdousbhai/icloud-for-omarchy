@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/notes/attachmentSync.test.ts`.
+//! Attachment files: downloading, placing and tracking them. Originally derived from icloud-md's tests.
 
 use std::collections::HashSet;
 use std::path::Path;

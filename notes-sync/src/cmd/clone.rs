@@ -1,4 +1,4 @@
-//! `clone`. Ports icloud-md `src/commands/clone.ts`.
+//! `clone`. Originally derived from icloud-md.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

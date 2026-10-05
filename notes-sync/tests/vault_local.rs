@@ -1,5 +1,5 @@
-//! Ports icloud-md `src/notes/localFileState.test.ts`,
-//! `noteTimestamps.test.ts` and `src/vaultRoot.test.ts`.
+//! Local files: clean/modified state, note timestamps, and finding the
+//! vault root. Originally derived from icloud-md's tests.
 
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
@@ -13,7 +13,7 @@ use icloud_notes_sync::vault::local::{
 };
 use icloud_notes_sync::vault::state::{NoteEntry, TitleMode};
 
-// --- localFileState.test.ts ---------------------------------------------------
+// --- local file state ---------------------------------------------------------
 
 const REC: &str = "REC1";
 const BODY: &str = "# Title\nbody line";
@@ -144,7 +144,7 @@ fn read_local_note_reports_a_vanished_file_as_missing() {
     );
 }
 
-// --- noteTimestamps.test.ts ---------------------------------------------------
+// --- note timestamps ----------------------------------------------------------
 
 fn record_with_dates(creation: Option<i64>, modification: Option<i64>) -> CloudKitRecord {
     let mut record = CloudKitRecord {
@@ -221,7 +221,7 @@ fn apply_note_file_times_is_a_no_op_without_modification_date() {
     assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before);
 }
 
-// --- vaultRoot.test.ts --------------------------------------------------------
+// --- the vault root -----------------------------------------------------------
 
 fn make_vault(root: &Path) {
     std::fs::create_dir_all(root.join(".icloud-md")).unwrap();

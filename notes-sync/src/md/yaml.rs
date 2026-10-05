@@ -104,7 +104,7 @@ pub enum Parsed {
     Ok(Document),
     /// yaml reports errors for this text.
     Invalid,
-    /// Valid or not, outside what this port models.
+    /// Valid or not, outside what this module models.
     Unsupported,
 }
 
@@ -188,7 +188,7 @@ fn bracket_depth(text: &str) -> isize {
     depth
 }
 
-/// Lines this port doesn't model at all (comments, directives, markers,
+/// Lines this module doesn't model at all (comments, directives, markers,
 /// tab indentation).
 fn is_structural(text: &str) -> bool {
     text.starts_with(['#', '%', '\t']) || text.starts_with("---") || text.starts_with("...")

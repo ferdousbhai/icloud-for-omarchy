@@ -1,5 +1,5 @@
-//! Port of icloud-md `src/cloudkit/databaseClient.sharedZonePaging.test.ts`
-//! and `databaseClient.sharedZoneSkip.test.ts`.
+//! Shared zones: paging through them, skipping the ones that fail, and the
+//! shared-database cursor. Originally derived from icloud-md's tests.
 
 mod common;
 
@@ -128,7 +128,7 @@ fn fetch_shared_note_records_stays_fatal_for_other_zone_errors() {
     }
 }
 
-// --- the shared-database cursor (not in icloud-md) ---------------------------
+// --- the shared-database cursor ---------------------------------------------
 
 /// The shared database answers `delta` to an incremental listing; a zone
 /// walk answers no changes and `token-<owner>`, except `_ownerB`'s, which

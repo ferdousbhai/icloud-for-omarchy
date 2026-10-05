@@ -1,7 +1,6 @@
-//! The `icloud-notes-sync` CLI. Ports icloud-md `src/cli.ts` for the verbs
-//! kept by the port: clone, pull, push, status, restore, history, diff.
-//!
-//! `sync` (push, then pull, in one run) is this port's own, for the Notes app.
+//! The `icloud-notes-sync` CLI: clone, pull, push, status, restore, history,
+//! diff (originally derived from icloud-md), plus `sync` (push, then pull, in
+//! one run, for the Notes app) and `vault-info`.
 //!
 //! clone, pull, push, sync and restore take the vault lock the Notes app holds
 //! (`cmd::lock`); status, history, diff, push --dry-run and vault-info only

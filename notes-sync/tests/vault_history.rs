@@ -1,6 +1,6 @@
-//! Ports icloud-md `src/notes/versionHistory.test.ts`, `noteEpoch.test.ts`
-//! and `trackedFile.test.ts`, plus what the port adds: latest-only reading,
-//! retention and previews that record nothing.
+//! Version history: per-record snapshots, note epochs, tracked-file
+//! resolution, latest-only reading, retention, and previews that record
+//! nothing. Partly derived from icloud-md's tests.
 
 use std::path::Path;
 
@@ -26,7 +26,7 @@ fn names(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| (*s).to_owned()).collect()
 }
 
-// --- versionHistory.test.ts ---------------------------------------------------
+// --- version snapshots --------------------------------------------------------
 
 #[test]
 fn record_version_and_list_versions_round_trip_a_single_snapshot() {
@@ -133,7 +133,7 @@ fn snapshot_file_is_written_in_icloud_md_key_order() {
     assert_eq!(text, expected);
 }
 
-// --- noteEpoch.test.ts --------------------------------------------------------
+// --- note epochs --------------------------------------------------------------
 
 #[test]
 fn list_epochs_is_empty_when_nothing_recorded() {
@@ -212,7 +212,7 @@ fn record_epoch_keeps_notes_separate() {
     assert_eq!(list_epochs(dir.path(), "REC-2").unwrap().len(), 1);
 }
 
-// --- trackedFile.test.ts ------------------------------------------------------
+// --- tracked files ------------------------------------------------------------
 
 fn notes(entries: &[(&str, &str)]) -> IndexMap<String, NoteEntry> {
     entries
@@ -349,7 +349,7 @@ fn find_snapshot_by_id_errors_when_nothing_matches() {
     assert!(matches!(err, Error::UnknownVersionSnapshot { .. }));
 }
 
-// --- latest-only reading, retention, previews (not in icloud-md) -------------
+// --- latest-only reading, retention, previews --------------------------------
 
 const DAY_MS: i64 = 86_400_000;
 const HOUR_MS: i64 = 3_600_000;

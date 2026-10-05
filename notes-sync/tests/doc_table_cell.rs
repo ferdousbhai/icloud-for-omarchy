@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/notes/tableCellEdit.test.ts`.
+//! Editing a table cell's text. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::doc::document::{RunCoord, TextRun};
 use icloud_notes_sync::doc::proto::Message;

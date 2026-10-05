@@ -1,5 +1,5 @@
-//! Ports icloud-md `noteAttachments.test.ts` and `unknownContent.test.ts`
-//! (`embedPushEdit.test.ts` is in `doc_embed_push.rs`).
+//! Embedded objects: attachments and content this tool can't parse
+//! (pushing edits around them is in `doc_embed_push.rs`). Originally derived from icloud-md's tests.
 
 mod common;
 
@@ -294,7 +294,7 @@ fn has_attachment_reference_detects_a_hand_typed_attachments_link_or_embed() {
     assert!(has_attachment_reference("[a] [b](attachments/c)"));
 }
 
-// --- unknownContent.test.ts ----------------------------------------------------
+// --- content this tool cannot parse --------------------------------------------
 
 #[test]
 fn unknown_content_banner_is_a_danger_admonition() {

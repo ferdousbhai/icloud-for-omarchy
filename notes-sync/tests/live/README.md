@@ -19,7 +19,7 @@ The binary signs in through icloud-session. A run takes a few minutes.
   `~/.cache/icloud-apps-test/push-live/run-<runId>/`; the script refuses a
   work root under `~/Documents`.
 - All writes go into one folder, `icloud-notes-sync-itest`, created by the
-  port's own folder-create path on the first run. The run refuses to start if
+  engine's own folder-create path on the first run. The run refuses to start if
   that folder holds a note without an `itest-` prefix.
 - Every note it creates is titled `itest-<runId> ...`.
 - Before every real push, `status --json` and `push --dry-run --json` are
@@ -33,7 +33,7 @@ The binary signs in through icloud-session. A run takes a few minutes.
 
 CloudKit intermittently lists a record twice. The clone dedupes the listing
 and never writes a second copy, and push refuses such a file anyway
-(docs/PORT_PLAN.md §1). `guard.py dedupe` still deletes untracked
+(docs/DESIGN.md §1). `guard.py dedupe` still deletes untracked
 byte-identical copies from every scratch vault before any plan is made; it
 should always report 0.
 

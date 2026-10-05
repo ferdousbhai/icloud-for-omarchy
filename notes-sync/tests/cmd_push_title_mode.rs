@@ -1,5 +1,5 @@
-//! Ports icloud-md `src/commands/pushTitleMode.test.ts`: push's write path for
-//! a filename-as-title vault (body-only files, titles in names).
+//! Push's write path for a filename-as-title vault (body-only files, titles
+//! in names). Originally derived from icloud-md's tests.
 
 use std::collections::HashMap;
 

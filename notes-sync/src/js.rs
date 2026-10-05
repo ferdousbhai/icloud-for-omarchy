@@ -1,5 +1,5 @@
-//! JavaScript semantics the port leans on, so code can say `js::trim(..)`
-//! where icloud-md's TypeScript says `.trim()` and mean exactly that: the
+//! JavaScript semantics the code derived from icloud-md leans on, so it can
+//! say `js::trim(..)` where the TypeScript said `.trim()` and mean exactly that: the
 //! ECMAScript whitespace set, UTF-16 lengths and slices, Node's `Buffer`
 //! base64 and UTF-8, `String.prototype.localeCompare` (ICU root collation,
 //! what Node uses), `Date.prototype.toISOString`, `encodeURIComponent`, `typeof`

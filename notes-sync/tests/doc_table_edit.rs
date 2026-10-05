@@ -1,5 +1,5 @@
-//! Ports icloud-md `src/notes/tableEdit.test.ts`. (The "malformed replica
-//! id" case is unrepresentable here: replica ids are `[u8; 16]`.)
+//! Table edits: rows, columns and cells. (A malformed replica id is
+//! unrepresentable here: replica ids are `[u8; 16]`.) Originally derived from icloud-md's tests.
 
 mod common;
 

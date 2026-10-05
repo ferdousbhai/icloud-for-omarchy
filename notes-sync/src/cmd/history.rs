@@ -1,4 +1,4 @@
-//! `history`. Ports icloud-md `src/commands/history.ts`.
+//! `history`. Originally derived from icloud-md.
 
 use std::path::Path;
 

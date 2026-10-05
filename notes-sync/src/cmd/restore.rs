@@ -1,4 +1,4 @@
-//! `restore`. Ports icloud-md `src/commands/restore.ts`.
+//! `restore`. Originally derived from icloud-md.
 
 use std::path::Path;
 

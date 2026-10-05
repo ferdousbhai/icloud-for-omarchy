@@ -1,6 +1,5 @@
-//! Ports icloud-md `src/notes/pushPlan.test.ts`. Human text is plain (no
-//! colours) and names `icloud-notes-sync`; the two chalk colour-forcing
-//! tests are not ported (the port prints no ANSI colours).
+//! The push plan and how it is rendered. Human text is plain (no colours)
+//! and names `icloud-notes-sync`. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cmd::plan::{
     PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, SerializedPlanEntry, count_unchanged_notes,

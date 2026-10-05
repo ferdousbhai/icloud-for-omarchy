@@ -1,4 +1,4 @@
-//! Port of icloud-md's `markdownTable.test.ts`.
+//! Markdown tables: rendering and parsing. Originally derived from icloud-md's tests.
 
 mod common;
 

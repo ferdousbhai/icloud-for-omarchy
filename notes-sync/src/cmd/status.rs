@@ -1,5 +1,4 @@
-//! `status`: the push plan, rendered. Ports icloud-md
-//! `src/commands/status.ts`.
+//! `status`: the push plan, rendered. Originally derived from icloud-md.
 
 use std::path::Path;
 

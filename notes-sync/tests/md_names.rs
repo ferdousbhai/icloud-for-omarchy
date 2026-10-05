@@ -1,5 +1,5 @@
-//! Ports of icloud-md's `titleFilename.test.ts`, `filename.test.ts` and
-//! `noteTitleParagraph.test.ts`.
+//! Note titles and file names: title to file name, sanitizing, and the
+//! title paragraph. Originally derived from icloud-md's tests.
 
 use std::collections::HashSet;
 

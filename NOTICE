@@ -11,10 +11,10 @@ own work.
 notes-sync/ (icloud-notes-sync, shipped in the icloud-notes package)
 ============================================================================
 
-icloud-notes-sync is a Rust port of icloud-md 0.6.2
-(https://github.com/coddingtonbear/icloud-md) by Adam Coddington. Its
-behaviour, file formats, request shapes, message strings and algorithms are
-taken from icloud-md, and notes-sync/proto/*.proto and
+icloud-notes-sync was originally derived from icloud-md 0.6.2
+(https://github.com/coddingtonbear/icloud-md) by Adam Coddington, as a Rust
+port. Much of its behaviour, file formats, request shapes, message strings
+and algorithms come from icloud-md, and notes-sync/proto/*.proto and
 notes-sync/tests/fixtures/ are copied or derived from it. icloud-md's license:
 
 MIT License

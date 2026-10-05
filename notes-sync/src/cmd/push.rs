@@ -1,9 +1,7 @@
-//! `push` (and the plan `status` shares). Ports icloud-md
-//! `src/commands/push.ts` (plus the bits of `delete.ts` push uses).
+//! `push` (and the plan `status` shares). Originally derived from icloud-md.
 //! Refusal strings live in `plan.rs`.
 //!
-//! icloud-md's plan entries carry an `execute` closure; here they carry an
-//! [`Action`] that [`execute`] interprets, over the same state.
+//! Plan entries carry an [`Action`] that [`execute`] interprets.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1165,7 +1163,7 @@ pub fn build_push_plan(
         // Deleting the file deletes the note, as deleting it in Notes would,
         // even when another device changed it since the last pull: the trash
         // is written against the live record, and Recently Deleted keeps that
-        // change. (0.6.2 refuses, and its pull then writes the file back.)
+        // change. (icloud-md refuses, and its pull then writes the file back.)
         entries.push(ready(Action::Delete {
             record_name: record_name.clone(),
             entry: entry.clone(),
@@ -1397,7 +1395,7 @@ pub fn build_push_plan(
     })
 }
 
-/// The create path's document build and verification (push.ts 1000-1049):
+/// The create path's document build and verification:
 /// `Ok((payloadBase64, plainText))` or the refusal.
 fn build_create_payload(
     file: &str,
@@ -1862,7 +1860,7 @@ fn prepare_note_text_update(
 
 // --- execution --------------------------------------------------------------------
 
-/// `applyLocalNoteDeletion` (delete.ts): drop tracking; delete a clean file.
+/// A note deleted locally: drop tracking; delete a clean file.
 fn apply_local_note_deletion(
     target_dir: &Path,
     record_name: &str,
@@ -1905,7 +1903,7 @@ fn note_attachment_links(state: &CloneState, record_name: &str, note_file: &str)
         .collect()
 }
 
-/// `rememberTrashedNote` (delete.ts).
+/// Records a note moved to Recently Deleted in the trash registry.
 fn remember_trashed_note(state: &mut CloneState, record_name: &str, file: &str) {
     let trashed = state.trashed.get_or_insert_with(IndexMap::new);
     trashed.insert(

@@ -1,9 +1,6 @@
 //! The Apple Notes document codec.
 //!
-//! Ports icloud-md's noteDocument, noteFormat, formatReconcile,
-//! decode/encodeNoteRecord, encodeFolderRecord, noteText, versionedDocument,
-//! mergeableDataPool, decodeTableRecord, tableEdit, tableCellEdit,
-//! tablePushEdit, embedPushEdit, noteAttachments and unknownContent.
+//! Originally derived from icloud-md's codec.
 //!
 //! Offsets and lengths in this model are UTF-16 code units, as on the wire
 //! (Apple's topotext and icloud-md's JS strings both count UTF-16), while

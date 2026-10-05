@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/notes/noteFormat.test.ts`.
+//! The format model: paragraph styles and inline spans. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::doc::format::{
     FormatParagraph, InlineSpan, InlineStyle, ParagraphKind, decode_note_format, formats_round_trip_equal,

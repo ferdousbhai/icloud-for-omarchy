@@ -1,5 +1,5 @@
-//! Working-file state, file times and vault-root discovery. Ports icloud-md
-//! `src/notes/localFileState.ts`, `noteTimestamps.ts` and `src/vaultRoot.ts`.
+//! Working-file state, file times and vault-root discovery. Originally
+//! derived from icloud-md.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -92,7 +92,7 @@ pub fn local_file_state(
     Ok(read_local_note(target_dir, entry, record_name, title_mode)?.status())
 }
 
-// --- noteTimestamps.ts -------------------------------------------------------
+// --- file times --------------------------------------------------------------
 
 fn date_field_of(record: &CloudKitRecord, name: &str) -> i64 {
     record
@@ -145,7 +145,7 @@ pub fn mtime_ms(path: &Path) -> Result<i64, Error> {
     Ok(ms)
 }
 
-// --- vaultRoot.ts ------------------------------------------------------------
+// --- vault root --------------------------------------------------------------
 
 /// `findVaultRoot`: walk up from `start_dir` to the directory holding
 /// `.icloud-notes/state.json` (or a layout 3 vault's `.icloud-md/state.json`),

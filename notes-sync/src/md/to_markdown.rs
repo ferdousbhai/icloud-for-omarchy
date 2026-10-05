@@ -1,8 +1,7 @@
 //! The subset of `mdast-util-to-markdown` 2.1.2 (+ `mdast-util-gfm` 3.1.0's
 //! strikethrough, task-list, table, footnote and autolink-literal
 //! extensions, `markdown-table` 3) that `remark-stringify` runs for
-//! icloud-md: the node types `renderNoteMarkdown` and `markdownTable.ts`
-//! build, the full `unsafe` escaping machinery, and the attention
+//! the renderer: the node types `render` and `table` build, the full `unsafe` escaping machinery, and the attention
 //! encoding rules. MIT, Titus Wormer - see NOTICE.
 //!
 //! Strings are UTF-16 code-unit vectors throughout, because the JS code

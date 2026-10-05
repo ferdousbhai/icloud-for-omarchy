@@ -1,7 +1,5 @@
-//! Attachment download and table-attachment rendering. Ports icloud-md
-//! `src/notes/attachmentSync.ts` (plus `noteAttachments.ts`'s
-//! `decodeAttachmentFilename` and `parseAssetField`, which only this module
-//! uses).
+//! Attachment download and table-attachment rendering. Originally derived
+//! from icloud-md.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

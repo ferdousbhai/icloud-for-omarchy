@@ -1,4 +1,4 @@
-//! Port of icloud-md's `src/notes/noteMarkdownRoundTrip.test.ts`.
+//! Format model → Markdown → format model round trips. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::doc::format::formats_round_trip_equal;
 use icloud_notes_sync::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};

@@ -1,13 +1,14 @@
-//! icloud-notes-sync: iCloud Notes ⇄ a folder of Markdown files. A Rust
-//! port of icloud-md 0.6.2 (MIT, Adam Coddington); see `docs/PORT_PLAN.md`.
+//! icloud-notes-sync: iCloud Notes ⇄ a folder of Markdown files. Originally
+//! derived from icloud-md 0.6.2 (MIT, Adam Coddington; see NOTICE); design
+//! notes in `docs/DESIGN.md`.
 //!
-//! | module | ports |
+//! | module | what |
 //! |---|---|
-//! | `cloudkit` | `cloudkit/databaseClient.ts` (+ icloud-session transport) |
-//! | `doc` | the note/table codec (`notes/noteDocument.ts` & co.) |
-//! | `md`, `diff3` | Markdown, frontmatter, names, node-diff3 |
+//! | `cloudkit` | the CloudKit database client (over icloud-session's transport) |
+//! | `doc` | the note/table codec |
+//! | `md`, `diff3` | Markdown, frontmatter, names, three-way merge |
 //! | `vault`, `cmd` | vault state and the commands |
-//! | `js` | the JavaScript/Node semantics the ports rely on |
+//! | `js` | JavaScript/Node semantics the derived code relies on |
 
 pub mod cloudkit;
 pub mod cmd;

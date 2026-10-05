@@ -1,7 +1,6 @@
 //! Embedded objects: attachment references, embed slots, inline embed
-//! markers, the unknown-content banner, and the push-side embed plan. Ports
-//! icloud-md `src/notes/noteAttachments.ts`, `unknownContent.ts` and
-//! `embedPushEdit.ts`. Offsets are UTF-16 code units.
+//! markers, the unknown-content banner, and the push-side embed plan.
+//! Originally derived from icloud-md. Offsets are UTF-16 code units.
 
 use std::collections::{HashMap, HashSet};
 

@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/notes/folderTree.test.ts` and `folderLayout.test.ts`.
+//! The folder tree and where notes go in the vault. Originally derived from icloud-md's tests.
 
 use std::collections::HashMap;
 

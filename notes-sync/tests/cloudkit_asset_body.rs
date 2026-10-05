@@ -1,7 +1,7 @@
-//! Port of `src/cloudkit/databaseClient.assetBody.test.ts` from upstream
-//! icloud-md PR #29 ("Fetch the text of notes too large to store it inline",
-//! fork branch `fetch-asset-note-bodies`), plus the shared-zone path the PR
-//! also covers (inline after the `records/lookup` backfill).
+//! Notes too large to store their text inline (`TextDataAsset`): the text is
+//! downloaded, on the private path and the shared-zone path (after the
+//! `records/lookup` backfill). Originally derived from the tests of
+//! icloud-md PR #29 ("Fetch the text of notes too large to store it inline").
 
 mod cloudkit_common;
 

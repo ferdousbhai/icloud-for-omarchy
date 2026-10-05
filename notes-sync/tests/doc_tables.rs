@@ -1,4 +1,4 @@
-//! Ports icloud-md `decodeTableRecord.test.ts` and `tablePushEdit.test.ts`.
+//! Decoding table records, and pushing table edits. Originally derived from icloud-md's tests.
 
 mod common;
 
@@ -33,7 +33,7 @@ fn revisions(file: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-// --- decodeTableRecord.test.ts --------------------------------------------------
+// --- decoding table records -----------------------------------------------------
 
 #[test]
 fn decode_table_markdown_renders_a_real_captured_2x2_grid() {
@@ -117,7 +117,7 @@ fn real_revision_2ai_decodes_to_the_expected_grid() {
     );
 }
 
-// --- tablePushEdit.test.ts ------------------------------------------------------
+// --- pushing table edits --------------------------------------------------------
 
 fn our_replica() -> [u8; 16] {
     std::array::from_fn(|i| 0xb0 + i as u8)

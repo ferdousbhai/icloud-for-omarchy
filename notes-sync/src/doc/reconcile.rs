@@ -1,5 +1,5 @@
 //! Formatting reconciliation: rewrite a document's attribute runs to carry a
-//! desired format model. Ports icloud-md `src/notes/formatReconcile.ts`.
+//! desired format model. Originally derived from icloud-md.
 
 use std::collections::{BTreeSet, HashSet};
 

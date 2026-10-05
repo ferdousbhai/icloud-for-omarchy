@@ -1,4 +1,4 @@
-//! The note CRDT document. Ports icloud-md `src/notes/noteDocument.ts`.
+//! The note CRDT document. Originally derived from icloud-md.
 //!
 //! Offsets, lengths and clocks count UTF-16 code units, as in icloud-md and
 //! on the wire; `text` is held as a `String` and converted where needed.
@@ -743,7 +743,7 @@ pub(crate) fn compare_bytes(a: &[u8], b: &[u8]) -> i64 {
 }
 
 /// `adjustAttributeRuns` (note bodies; `attachment_aware`) and the cell
-/// variant in `tableCellEdit.ts` (which grows any run, attachment or not).
+/// variant used for table cells (which grows any run, attachment or not).
 pub(crate) fn adjust_attribute_runs(
     runs: &mut Vec<AttributeRun>,
     start: usize,

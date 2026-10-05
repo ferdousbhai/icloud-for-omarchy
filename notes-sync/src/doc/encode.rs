@@ -1,5 +1,5 @@
-//! Request field sets for note and folder writes. Ports icloud-md
-//! `src/notes/encodeNoteRecord.ts` and `encodeFolderRecord.ts`.
+//! Request field sets for note and folder writes. Originally derived from
+//! icloud-md.
 //!
 //! Field order matters (it is the request JSON's key order, matched to
 //! captured web-client requests), hence `UpdateFields` (an `IndexMap`), not

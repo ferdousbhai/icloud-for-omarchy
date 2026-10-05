@@ -1,6 +1,5 @@
-//! Per-record version snapshots (`.icloud-md/history/<recordName>/*.json`)
-//! and tracked-file resolution. Ports icloud-md `src/notes/versionHistory.ts`
-//! and `trackedFile.ts`.
+//! Per-record version snapshots (`<state dir>/history/<recordName>/*.json`)
+//! and tracked-file resolution. Originally derived from icloud-md.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -335,7 +334,7 @@ fn remove_capture(path: &Path) -> Result<usize, Error> {
     }
 }
 
-// --- trackedFile.ts --------------------------------------------------------
+// --- tracked-file resolution -----------------------------------------------
 
 /// `TrackedNote`.
 #[derive(Debug, Clone, PartialEq, Eq)]

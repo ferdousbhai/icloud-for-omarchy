@@ -1,4 +1,5 @@
-//! Port of icloud-md `src/cloudkit/databaseClient.test.ts`.
+//! The CloudKit client: zone walks, paging, response parsing and error
+//! mapping. Originally derived from icloud-md's tests.
 
 mod common;
 

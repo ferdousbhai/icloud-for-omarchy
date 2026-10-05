@@ -1,5 +1,4 @@
-//! Folder tree and note placement. Ports icloud-md `src/notes/folderTree.ts`
-//! and `folderLayout.ts`.
+//! Folder tree and note placement. Originally derived from icloud-md.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +15,7 @@ pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[super::state::STATE_DIR_NAME
 /// Directory names reserved inside every folder directory.
 pub const RESERVED_SIBLING_DIR_NAMES: &[&str] = &["attachments"];
 
-// --- folderTree.ts ---------------------------------------------------------------
+// --- folder tree ----------------------------------------------------------------
 
 /// `FolderInfo`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -254,7 +253,7 @@ fn assign_dir_names(
     }
 }
 
-// --- folderLayout.ts -------------------------------------------------------------
+// --- folder layout --------------------------------------------------------------
 
 /// `SharedZoneRecords`.
 #[derive(Debug, Clone, PartialEq)]

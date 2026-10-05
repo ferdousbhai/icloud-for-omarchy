@@ -1,4 +1,5 @@
-//! Ports icloud-md `src/notes/formatReconcile.test.ts`. The desired
+//! Reconciling a document with a desired format model (originally derived
+//! from icloud-md's tests). The desired
 //! paragraphs are the recorded `parse_note_markdown` output for each test's
 //! markdown (`tests/fixtures/parsed_markdown.json`), so the reconcile tests
 //! don't move when the Markdown parser does; `recorded_parses_match_the_parser`

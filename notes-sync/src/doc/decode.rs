@@ -1,5 +1,5 @@
 //! Record classification: the shared skip/decode rules `clone`, `pull` and
-//! `push` use. Ports icloud-md `src/notes/decodeNoteRecord.ts`.
+//! `push` use. Originally derived from icloud-md.
 
 use serde_json::Value;
 

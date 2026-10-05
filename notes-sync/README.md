@@ -1,21 +1,21 @@
 # icloud-notes-sync
 
 The sync engine inside the [icloud-notes](../notes/README.md) package: your
-iCloud Notes as a folder of Markdown files, synced both ways. A Rust port of [icloud-md](https://github.com/coddingtonbear/icloud-md)
-0.6.2 by Adam Coddington, using [icloud-session](../session) for the
-Apple sign-in instead of a browser of its own.
+iCloud Notes as a folder of Markdown files, synced both ways, in Rust, with
+[icloud-session](../session) for the Apple sign-in. It was originally
+derived from [icloud-md](https://github.com/coddingtonbear/icloud-md) 0.6.2
+by Adam Coddington (MIT; see [NOTICE](../NOTICE)) and has gone its own way
+since.
 
-Every command below is implemented: clone, pull, status, push (with
-`--dry-run` and every refusal), history, diff and restore, over the note
-codec (protobuf, the Notes document model, tables, attachments), the
-Markdown renderer and parser, diff3 merging and the CloudKit client. The
-tests are icloud-md's own test suites ported to Rust, golden corpora,
-recorded CloudKit sessions replayed end to end, and recorded CLI scenarios
-that require the same exit codes, output, requests and vault files as when
-they were recorded. Parity with icloud-md was established against icloud-md
-itself; the recordings now come from this crate, so it is free to diverge. A
-live write test runs against a real account on request only (see below). Where it deliberately differs from
-icloud-md 0.6.2 is in [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
+It implements clone, pull, status, push (with `--dry-run`), sync, history,
+diff and restore, over the note codec (protobuf, the Notes document model,
+tables, attachments), the Markdown renderer and parser, diff3 merging and
+the CloudKit client. The tests are unit suites (many first derived from
+icloud-md's), golden corpora, recorded CloudKit sessions replayed end to
+end, and recorded CLI scenarios that require the same exit codes, output,
+requests and vault files as when they were recorded. A live write test runs
+against a real account on request only (see below). How it behaves where
+that isn't obvious, and why, is in [docs/DESIGN.md](docs/DESIGN.md).
 
 It is not a command of its own. The package installs it off PATH, at
 `/usr/lib/icloud-notes/icloud-notes-sync`, and the Notes window, its
@@ -47,10 +47,9 @@ error, the table the other iCloud tools share ([docs/CLI.md](../docs/CLI.md)).
 With `--json`, stdout carries only the JSON result, and an error is one line
 on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hint":…}}`
 (`code` is the error's class in snake case: `untracked_file`,
-`not_cloned_directory`, `usage`, `internal`, …). icloud-md used 2 for usage,
-1 for a sign-in and `{"error":"<Class>Error","exitCode":…}`.
+`not_cloned_directory`, `vault_needs_update`, `usage`, `internal`, …).
 
-`sync` is this port's own, for the Notes app: push, then pull, in one run
+`sync` is for the Notes app: push, then pull, in one run
 over one connection (one icloud-sessiond `Session()` call, one TLS
 connection, one lock). Each half is exactly `push` and `pull`; the pull runs
 unless the push found the sign-in gone or iCloud out of reach. With
@@ -66,17 +65,28 @@ holds while it is open (`--wait SECS` to wait for it; busy is the error
 `vault_busy`, exit 1); status, history, diff and push --dry-run only read and
 take none.
 
-History lives in `.icloud-md/history/<record>/` (one JSON snapshot of a
+A vault keeps the engine's state in `.icloud-notes/` (vault layout 4):
+`state.json`, `base/` (each note's last-synced body, the merge base),
+`history/` and the app's `conflict-backups/`. A vault from an older engine
+(or icloud-md) keeps them in `.icloud-md/` (layout 3). Read-only commands
+read it there; the first command that takes the lock moves it to
+`.icloud-notes/`, after copying `.icloud-md/` to `.icloud-md.bak-<UTC time>`
+(kept: delete it once you are happy), and leaves a tombstone
+`.icloud-md/state.json` that makes an older engine refuse the vault as
+written by a newer version. Note files are not touched. See
+docs/DESIGN.md §1.
+
+History lives in `.icloud-notes/history/<record>/` (one JSON snapshot of a
 note's or table's CloudKit text per version that pull or push saw) and
-`.icloud-md/history/<note>/epochs/` (one entry per run that changed the
+`.icloud-notes/history/<note>/epochs/` (one entry per run that changed the
 note, naming the snapshot current for each of its records). It is kept
 bounded: each record keeps its newest 20 snapshots, plus the newest one of
 each day for the last 30 days, and each note its epochs by the same rule;
 a snapshot a kept epoch names is never dropped. Pruning happens when a
 version is recorded, and touches only that note's directories. Recording
 reads only the latest snapshot's file. status and push --dry-run record no
-history (icloud-md 0.6.2 records one during planning). `vault-info` prints what the app reads from the vault's state
-(docs/PORT_PLAN.md §1). In the vault Notes syncs (`~/Documents/icloud-notes`),
+history. `vault-info` prints what the app reads from the vault's state,
+`stateDir` included. In the vault Notes syncs (`~/Documents/icloud-notes`),
 use `icloud-notes` (see [docs/AGENTS.md](../docs/AGENTS.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the
@@ -85,14 +95,13 @@ to run the app against a development build), else at
 `/usr/lib/icloud-notes/icloud-notes-sync`, else as `icloud-notes-sync` on
 PATH.
 
-Vaults are icloud-md vaults (`.icloud-md/state.json`, layout version 3) and
-stay readable by icloud-md. state.json has one key icloud-md doesn't know,
-`sharedDatabase`: where the shared-database listing left off, so a pull
-walks only the shared zones that changed (and lists them all from scratch at
-least daily, or when the key is missing). A pull or clone looks up the
-attachments of all its notes in one `records/lookup` walk per zone and
-record type, and downloads up to four attachment files at once. Both are in
-docs/PORT_PLAN.md §1.
+state.json's `sharedDatabase` records where the shared-database listing
+left off, so a pull walks only the shared zones that changed (and lists them
+all from scratch at least daily, or when the key is missing). A pull or
+clone looks up the attachments of all its notes in one `records/lookup`
+walk per zone and record type, and downloads up to four attachment files at
+once. Both are in docs/DESIGN.md §1. With `--json`, progress goes to stderr
+as `icloud-notes:progress:...` lines.
 
 ## Development
 
@@ -121,5 +130,5 @@ folder and checked against a fresh clone, lives in
 
 ## License
 
-MIT, see [LICENSE](../LICENSE). Derived from icloud-md (MIT, Adam Coddington)
-and node-diff3 (MIT); see [NOTICE](../NOTICE).
+MIT, see [LICENSE](../LICENSE). Originally derived from icloud-md (MIT, Adam
+Coddington) and node-diff3 (MIT); see [NOTICE](../NOTICE).

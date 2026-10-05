@@ -1,5 +1,5 @@
 //! The vault's state directory and `state.json`. Originally derived from
-//! icloud-md (`cloneState.ts`).
+//! icloud-md.
 //!
 //! Layout 4 keeps everything in `.icloud-notes/` (state.json, base/,
 //! history/, conflict-backups/); layout 3 and older kept it in `.icloud-md/`.

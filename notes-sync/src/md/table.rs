@@ -1,5 +1,4 @@
-//! Markdown tables for table attachments. Ports icloud-md
-//! `src/notes/markdownTable.ts`.
+//! Markdown tables for table attachments. Originally derived from icloud-md.
 
 use markdown::mdast;
 

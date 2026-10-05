@@ -1,5 +1,5 @@
-//! icloud-md's real captured notes and tables (tests/fixtures/real): the
-//! Markdown icloud-md renders from each decoded format / table grid.
+//! The real captured notes and tables (tests/fixtures/real): the Markdown
+//! rendered from each decoded format / table grid, against its golden.
 
 use icloud_notes_sync::doc::format::FormatParagraph;
 use icloud_notes_sync::doc::format::formats_round_trip_equal;

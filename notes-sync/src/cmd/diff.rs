@@ -1,4 +1,4 @@
-//! `diff`. Ports icloud-md `src/commands/diff.ts`.
+//! `diff`. Originally derived from icloud-md.
 
 use std::path::Path;
 

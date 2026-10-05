@@ -1,7 +1,7 @@
-//! Table attachments: the CRDT mergeable-data document and its grid. Ports
-//! icloud-md `src/notes/decodeTableRecord.ts` and `mergeableDataPool.ts`.
+//! Table attachments: the CRDT mergeable-data document and its grid.
+//! Originally derived from icloud-md.
 //!
-//! TS's `TableDocument` aliases the pool arrays (`objects`, `keyNames`,
+//! icloud-md's `TableDocument` aliases the pool arrays (`objects`, `keyNames`,
 //! `uuidTable`, `version`) into `document`; here the pool *is* `document`
 //! and the accessors below read it.
 

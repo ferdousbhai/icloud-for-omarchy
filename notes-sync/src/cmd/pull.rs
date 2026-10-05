@@ -1,4 +1,4 @@
-//! `pull`. Ports icloud-md `src/commands/pull.ts` and `src/cli/pullReport.ts`.
+//! `pull`, and its human report. Originally derived from icloud-md.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -569,7 +569,7 @@ pub fn run_pull_with(
                     // Deleted here: the file stays gone and the next push moves
                     // the note to Recently Deleted. Tracking follows the remote
                     // record, so the base copy is the text being deleted.
-                    // (0.6.2 writes the file back.)
+                    // (icloud-md writes the file back.)
                     write_base_copy(target_dir, &record.record_name, &body_text)?;
                     let mut entry = existing.clone();
                     if let Some(tag) = &record.record_change_tag {
@@ -795,7 +795,7 @@ pub fn run_pull_with(
     Ok(summary)
 }
 
-/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1): a note
+/// (docs/DESIGN.md §1) A note
 /// new to this vault that the private `changes/zone` walk listed without its
 /// text is looked up by id (`records/lookup`, then the asset-body inlining)
 /// instead of being skipped while the new sync token moves past it. Returns
@@ -1018,7 +1018,7 @@ fn note_id_claimants(
 
 /// `handleRemoteDeletion`: a clean or missing file goes with the note. One
 /// with local edits is kept as a new note: it stops being tracked and loses
-/// its id, so the next push creates it, edits and all. (0.6.2 writes
+/// its id, so the next push creates it, edits and all. (icloud-md writes
 /// delete/modify conflict markers and keeps tracking a note that no longer
 /// exists, which no push can ever settle.)
 fn handle_remote_deletion(
@@ -1139,7 +1139,7 @@ pub fn merge_remote_change_into_local_file(
     })
 }
 
-// --- pullReport.ts -------------------------------------------------------------
+// --- the human report ----------------------------------------------------------
 
 fn label_of(kind: PullChangeKind) -> &'static str {
     match kind {

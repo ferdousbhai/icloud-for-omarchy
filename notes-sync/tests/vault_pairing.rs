@@ -1,4 +1,5 @@
-//! Ports icloud-md `src/notes/noteIdPairing.test.ts` and `pendingRename.test.ts`.
+//! Pairing files with notes by `apple-note-id`, and pending renames.
+//! Originally derived from icloud-md's tests.
 
 use std::path::Path;
 

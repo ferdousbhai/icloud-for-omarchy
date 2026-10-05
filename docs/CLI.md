@@ -144,7 +144,7 @@ for `push --dry-run`, `history [--records]`, `diff` and `restore` becomes
 the engine (exec), with `--json` and `--wait` passed on: the first three
 only read and take no lock, so they work while the window is open. The engine's other flags are the app's to choose: `clone
 --filename-as-title` (the app clones with titles in the first line) and
-`pull --defer-renames` (icloud-md compatibility) are not exposed.
+`pull --defer-renames` are not exposed.
 
 The app runs the engine at `$ICLOUD_NOTES_SYNC_BIN` when set (tests,
 development; nothing else is tried then), else
@@ -195,7 +195,7 @@ PATH (a development build).
 | all | `usage`, `sign_in_required` |
 | icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `session_service` (daemon unreachable), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
 | icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 64), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` |
-| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
+| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
 | icloud-photos | `not_found`, `cancelled`, `error` |
 | icloud-findmy | `find_my_auth_required`, `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
 
@@ -242,7 +242,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 
 ### icloud-notes-sync (the engine, inside icloud-notes)
 
-`--json` results are icloud-md's shapes: `status`/`push --dry-run`
+`--json` results (shapes first taken from icloud-md): `status`/`push --dry-run`
 `{entries:[{kind, file, resolution, reason?, ...}], unchanged, notices}`,
 `history` `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`
 (with `--records`, `{mode:"records", records:[...]}`), `pull`/`clone`
@@ -253,7 +253,12 @@ exit_code, result, lines}` (`result` the command's own JSON, `lines` its
 human report) or `{ok, exit_code, error}`, `pull` is null when it did not
 run (the push found the sign-in gone, or iCloud out of reach), and
 `vault_info` is what `vault-info` would print after it. It exits with the
-worse half's code, 2 above all.
+worse half's code, 2 above all. `vault-info` prints `{vault, cloned,
+stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}`;
+`stateDir` is the engine's state directory, `.icloud-notes` (or a layout 3
+vault's `.icloud-md`, until a command that takes the lock moves it; see
+notes-sync/docs/DESIGN.md §1). With `--json`, progress goes to stderr as
+`icloud-notes:progress:...` lines (older engines: `icloud-md:progress:...`).
 
 ### icloud-photos
 

@@ -1,6 +1,5 @@
-//! Ports icloud-md `encodeNoteRecord.test.ts` and `encodeFolderRecord.test.ts`,
-//! plus exact request-JSON goldens (key order included) captured from
-//! icloud-md itself.
+//! Encoding Note and Folder records, plus exact request-JSON goldens (key
+//! order included), first captured from icloud-md. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue, UpdateFields};
 use icloud_notes_sync::doc::encode::{

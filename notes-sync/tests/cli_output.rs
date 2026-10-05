@@ -1,7 +1,5 @@
-//! Ports icloud-md `src/cli/output.test.ts`. `Error` variants stand in for
-//! the TS test's `TestKnownError`; `Error::Internal` for a plain `Error`.
-//! Not ported: the stack-trace assertions (the port has no stack) and
-//! "a thrown non-Error value" (Rust can't throw one).
+//! Output: `--json` results and error objects, human text, and which stream
+//! each goes to. `Error::Internal` stands for an unexpected error. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::cmd::output::OutputContext;

@@ -1,6 +1,6 @@
 //! What's done to the vault's files is honoured as if done in Notes, even
-//! when another device changed the note since the last pull (deliberate
-//! differences from icloud-md 0.6.2, docs/PORT_PLAN.md §1): a deleted file
+//! when another device changed the note since the last pull
+//! (docs/DESIGN.md §1): a deleted file
 //! is trashed and never written back, a renamed file takes the remote edit
 //! and still goes up as a move, and a pull never writes over a file it
 //! doesn't track.

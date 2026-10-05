@@ -23,9 +23,9 @@ The package depends on icloud-session, and the installer adds its signed
 repository; when building from source, install it too.
 
 The sync engine comes in the package: `icloud-notes-sync`
-([notes-sync/](../notes-sync/README.md)), a Rust port of
-[icloud-md](https://github.com/coddingtonbear/icloud-md) (see
-[Credits](#credits)) that syncs the folder of Markdown files with iCloud
+([notes-sync/](../notes-sync/README.md)), a Rust engine originally derived
+from [icloud-md](https://github.com/coddingtonbear/icloud-md) (see
+[Credits](#credits)), that syncs the folder of Markdown files with iCloud
 Notes. It is installed off PATH, at
 `/usr/lib/icloud-notes/icloud-notes-sync`, and run for you by the window,
 the background sync and `icloud-notes`; up to icloud-notes 0.5.0 it was a
@@ -151,7 +151,7 @@ Sync is automatic, like Notes:
   text** drops only the marker lines and keeps every other line,
   **Use the last synced version** goes back to the text last synced with
   iCloud, and **Edit as text** shows the raw markers. Before either
-  change the note is copied as it was to `.icloud-md/conflict-backups/`
+  change the note is copied as it was to `.icloud-notes/conflict-backups/`
   in the notes folder, which is never synced.
 - Edits made in the app are pushed sooner, about 20 seconds after you
   stop making them, so a burst of typing becomes one push. Nothing waits
@@ -301,10 +301,15 @@ close Notes first.
 ## Credits
 
 The sync engine started as [icloud-md](https://github.com/coddingtonbear/icloud-md)
-by Adam Coddington, which Notes ran directly until icloud-notes-sync, its
-Rust port, took over (and moved into this package). Vaults are icloud-md vaults (the `.icloud-md/` state
-directory is unchanged), so a vault cloned with either tool works with the
-other.
+by Adam Coddington, which Notes ran directly until icloud-notes-sync, first
+a Rust port of it, took over (and moved into this package); the engine has
+gone its own way since. The vault keeps the engine's state in
+`.icloud-notes/`. A vault from an older engine or from icloud-md keeps it in
+`.icloud-md/`: Notes reads it there, and its first sync moves it to
+`.icloud-notes/`, keeping a copy of the old directory as
+`.icloud-md.bak-<time>` in the notes folder (delete it once you're happy).
+After that, an older engine or icloud-md refuses the vault as written by a
+newer version.
 
 ## Releasing
 

@@ -1,7 +1,5 @@
 //! Reaching iCloud: which transport a command uses and whose account it is.
-//! Replaces icloud-md's `auth/folderAuth.ts` (`bindKnownAccount`,
-//! `resolveFolderAccount`): sign-in is icloud-session's job, so all that is
-//! left is picking the transport and checking the signed-in account against
+//! Sign-in is icloud-session's job, so all that is left here is picking the transport and checking the signed-in account against
 //! `--account` (clone) or the vault's bound account (everything else).
 
 use std::cell::RefCell;

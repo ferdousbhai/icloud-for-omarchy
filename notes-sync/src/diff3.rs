@@ -1,13 +1,14 @@
 //! 3-way merge and 2-way line diff: a hand port of node-diff3 3.2.1 (MIT; Tony
 //! Garnock-Jones, LShift Ltd., Bryan Housel - see NOTICE) - `LCS`,
 //! `diffIndices`, `diff3MergeRegions`, `diff3Merge`, `mergeDiff3`, `diffComm` -
-//! plus icloud-md's `src/notes/mergeConflict.ts`. Myers-based crates align
+//! plus conflict-marker merging originally derived from icloud-md.
+//! Myers-based crates align
 //! differently, so this is a port, not a dependency.
 
 use std::collections::HashMap;
 use std::hash::Hash;
 
-/// `MergeOutcome` (mergeConflict.ts).
+/// The result of a three-way merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeOutcome {
     pub text: String,

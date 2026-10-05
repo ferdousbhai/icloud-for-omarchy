@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/notes/noteDocument.test.ts`.
+//! The note CRDT document. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::doc::document::{
     ApplyTextEditOptions, NoteDocument, ReplicaEntry, RunCoord, Splice, TextRun, apply_formatting_op, apply_text_edit,

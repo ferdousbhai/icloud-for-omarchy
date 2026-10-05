@@ -1,17 +1,19 @@
 //! The vault on disk.
 //!
-//! | module | ports (icloud-md `src/notes/`) |
+//! Originally derived from icloud-md.
+//!
+//! | module | what |
 //! |---|---|
-//! | state | cloneState |
-//! | migrate | vaultMigrations |
-//! | base | baseCopy |
-//! | history | versionHistory, trackedFile |
-//! | epoch | noteEpoch |
-//! | layout | folderLayout, folderTree |
-//! | folders | folderReconcile, folderCreate |
-//! | attachments | attachmentSync |
-//! | pairing | noteIdPairing, pendingRename |
-//! | local | localFileState, noteTimestamps, `vaultRoot.ts` |
+//! | state | the state directory and state.json |
+//! | migrate | layout migrations |
+//! | base | last-synced bodies (merge bases) |
+//! | history | version snapshots, tracked-file resolution |
+//! | epoch | whole-note epochs |
+//! | layout | folder tree and note placement |
+//! | folders | folder reconciliation and creation |
+//! | attachments | attachment files |
+//! | pairing | note-id pairing, deferred renames |
+//! | local | working-file state, file times, vault root |
 //! | rt | clock and randomness (with the differential harness's hooks) |
 
 pub mod attachments;

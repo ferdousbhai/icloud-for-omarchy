@@ -1,4 +1,5 @@
-//! Port of icloud-md `src/cloudkit/databaseClient.bodyLookup.test.ts`.
+//! Notes listed without their text are looked up by record name.
+//! Originally derived from icloud-md's tests.
 
 mod cloudkit_common;
 

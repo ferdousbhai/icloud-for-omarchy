@@ -7,11 +7,11 @@ earlier run recorded in `expected/<scenario>/`: the exit code, the `--json`
 output, every request sent to CloudKit, the vault on disk and the file
 mtimes that don't depend on when the test ran.
 
-The expectations were first recorded from icloud-md 0.6.2 itself, when the
-port was held to byte-for-byte parity with it (docs/PORT_PLAN.md). They are
-now recorded from this crate, so a deliberate behaviour change is
-re-recorded and reviewed like any other code change. No Node or icloud-md is
-needed. (The directory keeps its old name, `differential`.)
+The expectations are recorded from this crate, so a deliberate behaviour
+change is re-recorded and reviewed like any other code change; no Node or
+icloud-md is needed. (History: the first recordings came from icloud-md
+0.6.2 itself, which the engine was derived from, hence the directory's name,
+`differential`; see docs/DESIGN.md.)
 
 The test is `tests/cli_differential.rs`:
 
@@ -22,8 +22,19 @@ ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test -p icloud-notes-sync
 
 A few scenarios also have named checks on what their recording must show
 (`dup_clone_*`, `bodyless_pull_*`, `bodyless_clone_*`, `attach_*`,
-`shared_pull_*`). These catch a
+`shared_pull_*`, and the vault-layout ones below). These catch a
 re-recording that quietly accepts a regression.
+
+Vault layouts (all on `tiny-lookup.json`, from the `tiny-clone` vault turned
+back into an older layout with a `renameTo` edit):
+
+- `tiny-migrate-v2`: push migrates a layout 2 vault through 3 to 4;
+- `tiny-status-v2`: status refuses a layout 2 vault (`vault_needs_update`,
+  exit 1) and migrates nothing;
+- `tiny-status-v3`: status reads a layout 3 vault in place, no migration;
+- `tiny-migrate-v3`: restore moves a layout 3 vault's state to
+  `.icloud-notes/`, leaving a backup (`.icloud-md.bak-<time>`) and a
+  tombstone `.icloud-md/state.json`.
 
 ## Re-recording
 
@@ -65,10 +76,10 @@ them (notes-sync/README.md).
 | `cassette` | file in `cassettes/` |
 | `args` | icloud-notes-sync arguments; `@VAULT@` = the vault, `@OUT@` = the run's temp dir |
 | `vaultFrom` | start from a copy of `expected/<scenario>/vault` (an earlier scenario) instead of nothing |
-| `edits` | applied in order: `{file, write}`, `{file, append}`, `{file, replace: [old, new]}` (first occurrence), `{file, delete: true}`, `{file, json: {key: value or null}}` (set in place / remove, rewritten 2-space + newline) |
+| `edits` | applied in order: `{file, write}`, `{file, append}`, `{file, replace: [old, new]}` (first occurrence), `{file, delete: true}`, `{file, renameTo: path}` (renames a file or directory in the vault, e.g. `.icloud-notes` → `.icloud-md` to turn a recorded layout 4 vault back into a layout 3 one), `{file, json: {key: value or null}}` (set in place / remove, rewritten 2-space + newline) |
 | `cwd` | working directory (default `@OUT@`) |
 | `now` | frozen clock, ms (default in `defaults`) |
-| `setupMtimeMs` | after the edits, every file outside `.icloud-md/` gets this mtime (push reads file mtimes into request bodies) |
+| `setupMtimeMs` | after the edits, every file outside the state directories (`.icloud-notes/`, and a layout 3 vault's `.icloud-md/` and `.icloud-md.bak-*/`) gets this mtime (push reads file mtimes into request bodies) |
 | `compare` | subset of `exit`, `stdout`, `requests`, `vault`, `mtimes` to compare (default all; everything is recorded regardless) |
 
 The binary runs with `HOME` and `XDG_RUNTIME_DIR` in the temp dir,

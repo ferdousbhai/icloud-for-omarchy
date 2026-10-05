@@ -1,6 +1,6 @@
-//! Whole-note epochs (`.icloud-md/history/<note>/epochs/`): one per pull/push
-//! run that changed a note, indexing which snapshot was current for each of
-//! its records. Ports icloud-md `src/notes/noteEpoch.ts`.
+//! Whole-note epochs (`<state dir>/history/<note>/epochs/`): one per
+//! pull/push run that changed a note, indexing which snapshot was current
+//! for each of its records. Originally derived from icloud-md.
 
 use std::path::{Path, PathBuf};
 

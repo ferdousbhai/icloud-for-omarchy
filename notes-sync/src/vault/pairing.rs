@@ -1,5 +1,5 @@
-//! Note-id pairing of moved files and deferred renames. Ports icloud-md
-//! `src/notes/noteIdPairing.ts` and `pendingRename.ts`.
+//! Note-id pairing of moved files and deferred renames. Originally derived
+//! from icloud-md.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -13,7 +13,7 @@ use crate::cmd::errors::Error;
 use crate::js::posix;
 use crate::md::frontmatter::{read_note_id, split_frontmatter};
 
-// --- noteIdPairing.ts ----------------------------------------------------------
+// --- note-id pairing -----------------------------------------------------------
 
 /// `UntrackedFile`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +103,7 @@ pub fn resolve_note_ids<'a>(
     resolution
 }
 
-// --- pendingRename.ts ----------------------------------------------------------
+// --- deferred renames ----------------------------------------------------------
 
 /// `pendingRenameTarget`: where a note with a rename outstanding should end
 /// up (its pending name in its current directory), or `None`.

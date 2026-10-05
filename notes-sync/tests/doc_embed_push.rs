@@ -1,5 +1,6 @@
-//! Ports icloud-md `src/notes/embedPushEdit.test.ts`. Table markdown below is
-//! icloud-md's `renderMarkdownTable` output, spelled out.
+//! Pushing edits to notes with embedded objects (tables, attachments).
+//! Table markdown below is the table renderer's output, spelled out.
+//! Originally derived from icloud-md's tests.
 
 use std::collections::HashMap;
 

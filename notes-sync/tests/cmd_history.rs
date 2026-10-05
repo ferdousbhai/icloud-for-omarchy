@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/commands/history.test.ts`.
+//! `history`. Originally derived from icloud-md's tests.
 
 mod common;
 

@@ -1,5 +1,5 @@
-//! Folder reconciliation on pull and folder creation on push. Ports
-//! icloud-md `src/notes/folderReconcile.ts` and `folderCreate.ts`.
+//! Folder reconciliation on pull and folder creation on push. Originally
+//! derived from icloud-md.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::cmd::plan::FolderRefusal;
 use crate::js::{self, posix};
 use crate::md::filename::unique_file_name;
 
-// --- folderReconcile.ts ----------------------------------------------------------
+// --- folder reconciliation (pull) ----------------------------------------------
 
 /// `Relocation`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,7 +201,7 @@ fn rewrite_attachment_link(
     Ok(())
 }
 
-// --- folderCreate.ts -------------------------------------------------------------
+// --- folder creation (push) ----------------------------------------------------
 
 /// `PlannedFolder`.
 #[derive(Debug, Clone, PartialEq, Eq)]

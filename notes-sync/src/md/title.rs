@@ -1,5 +1,5 @@
-//! Title paragraphs and title-carrying file names. Ports icloud-md
-//! `src/notes/noteTitleParagraph.ts` and `titleFilename.ts`.
+//! Title paragraphs and title-carrying file names. Originally derived from
+//! icloud-md.
 
 use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind};
 use crate::js;

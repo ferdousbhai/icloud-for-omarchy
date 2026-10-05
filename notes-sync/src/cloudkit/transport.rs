@@ -132,8 +132,7 @@ impl Transport for LiveTransport {
 }
 
 /// Serves requests from a cassette (see [`Cassette`]) and, with a record
-/// path, rewrites a [`RequestLog`] there after every request, in the same
-/// shape the Node driver writes, so the two can be diffed.
+/// path, rewrites a [`RequestLog`] there after every request.
 pub struct ReplayTransport {
     cassette: Cassette,
     ck_host: String,
@@ -203,7 +202,7 @@ impl ReplayTransport {
     }
 
     /// Logs the request, answers it from the first matching unused
-    /// interaction (HTTP 599 when none matches, as the Node driver does).
+    /// interaction (HTTP 599 when none matches).
     fn serve(&self, method: &str, url: &Url, body: Option<&Value>) -> Result<Answer, CkError> {
         let service = if url.host_str() == Some(self.ck_host.as_str()) {
             "ckdatabasews"
@@ -430,8 +429,7 @@ impl Cassette {
     }
 }
 
-/// What a run sent, in order. Written by the Node driver (`--requests`) and
-/// by a recording `ReplayTransport`.
+/// What a run sent, in order. Written by a recording `ReplayTransport`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestLog {

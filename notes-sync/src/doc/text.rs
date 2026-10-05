@@ -1,5 +1,5 @@
-//! Compression and the versioned-document wrapper. Ports icloud-md
-//! `src/notes/noteText.ts` and `src/notes/versionedDocument.ts`.
+//! Compression and the versioned-document wrapper. Originally derived from
+//! icloud-md.
 
 use std::io::Read;
 

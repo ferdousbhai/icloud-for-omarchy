@@ -1,4 +1,4 @@
-//! Ports of icloud-md's `frontmatter.test.ts` and `noteIdFrontmatter.test.ts`.
+//! Frontmatter: splitting, joining, and the `apple-note-id` key. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::md::frontmatter::*;
 

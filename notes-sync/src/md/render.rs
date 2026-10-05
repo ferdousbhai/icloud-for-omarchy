@@ -1,4 +1,4 @@
-//! Format model → Markdown. Ports icloud-md `src/notes/renderNoteMarkdown.ts`
+//! Format model → Markdown. Originally derived from icloud-md
 //! (remark-stringify + remark-gfm, `unsafe` escaping, `tablePipeAlign:false`;
 //! the serializer itself is `to_markdown`).
 //!

@@ -1,17 +1,12 @@
 //! The push plan: entries, their `--json` projection, and every refusal and
-//! conflict push can plan, enumerated. Ports icloud-md
-//! `src/notes/pushPlan.ts` and the reason strings of `src/commands/push.ts`
-//! (plus `folderCreate.ts`'s folder refusals).
+//! conflict push can plan, enumerated. Originally derived from icloud-md.
 //!
-//! Every `resolution: "refused" | "conflict"` site in push.ts is one
-//! [`Refusal`] variant (the push.ts line numbers at v0.6.2 are in each doc
-//! comment). Reason strings are copied verbatim; interpolations become
-//! fields. [`Refusal::reason`] is what lands in `PlanEntry.reason` (and so in
-//! `status --json`), which is byte-compared against icloud-md.
+//! Every way push can refuse or conflict is one [`Refusal`] variant; reason
+//! interpolations become fields. [`Refusal::reason`] is what lands in
+//! `PlanEntry.reason` (and so in `status --json`).
 //!
-//! push.ts builds some reasons as `"<file>: <message>"` in a `PushSummary`
-//! and strips the prefix again with `stripFilePrefix` for the plan entry;
-//! those messages are [`PrepareRefusal`] / [`TextUpdateRefusal`], whose
+//! Some reasons are reported as `"<file>: <message>"` in the push summary
+//! and without the prefix in the plan entry; those messages are [`PrepareRefusal`] / [`TextUpdateRefusal`], whose
 //! `message()` is the unprefixed text.
 
 use serde::{Deserialize, Serialize};
@@ -87,7 +82,7 @@ impl SharedWriteRefusal {
     }
 }
 
-/// `planFolderCreates` refusals (folderCreate.ts): why a directory can't
+/// Folder-creation refusals: why a directory can't
 /// become a Notes folder. Shown in place of the generic "can't become one of
 /// the account's folders" when present.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -139,7 +134,7 @@ fn restore_advice(file: &str) -> String {
     format!("Run \"icloud-notes restore {file}\" to discard your local edit.")
 }
 
-/// `prepareNoteTextUpdate`'s refusals (push.ts 1915-2007). `file` is the
+/// Refusals while preparing a note's text update. `file` is the
 /// entry's file as `prepareNoteTextUpdate` saw it (the move target for a
 /// retitle).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -154,7 +149,7 @@ pub enum TextUpdateRefusal {
     TouchesEmbed { file: String },
     /// 1964
     DecoderDisagreement,
-    /// 1971: `reconcileNoteFormat`'s reason, passed through.
+    /// `reconcileNoteFormat`'s reason, passed through.
     Reconcile { reason: String, file: String },
     /// 1981
     RebuiltDecodeFailed,
@@ -162,7 +157,7 @@ pub enum TextUpdateRefusal {
     RebuiltEmbedFailed,
     /// 1998
     RebuiltFormatFailed,
-    /// 2004: a thrown error's message.
+    /// a thrown error's message.
     Exception { message: String },
 }
 
@@ -197,32 +192,32 @@ impl TextUpdateRefusal {
 }
 
 /// `prepareUpdate` / `prepareEmbedCandidate` / `restoreStrippedTitle`
-/// outcomes that stop an update (push.ts 1469-1685, 1851-1883). `file` is
+/// outcomes that stop an update. `file` is
 /// `entry.file`. All are `refused` except `TableGoneRemotely` (a conflict).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PrepareRefusal {
-    /// 1491: `detail` is "undecodable" | "missing-body" | "deleted".
+    /// `detail` is "undecodable" | "missing-body" | "deleted".
     NoLongerEditable { detail: String },
     /// 1496
     Unpublishable {
         unpublishable_reason: Option<String>,
         file: String,
     },
-    /// 1523: `parseNoteMarkdown`'s reason (plain path).
+    /// `parseNoteMarkdown`'s reason (plain path).
     Markdown { reason: String, file: String },
-    /// 1579: `planEmbedRepresentations`'s reason.
+    /// `planEmbedRepresentations`'s reason.
     EmbedPlan { reason: String, file: String },
-    /// 1586: `parseNoteMarkdown`'s reason (embed path).
+    /// `parseNoteMarkdown`'s reason (embed path).
     EmbedMarkdown { reason: String, file: String },
-    /// 1638 (conflict)
+    /// (conflict)
     TableGoneRemotely,
-    /// 1644: `prepareTableAttachmentUpdate`'s reason.
+    /// `prepareTableAttachmentUpdate`'s reason.
     TableUpdate { reason: String, file: String },
     /// 1865
     TitleHasEmbedCannotRetitle,
     /// 1877
     NoTitleParagraph,
-    /// 1926-2004 via `prepareNoteTextUpdate`.
+    /// via `prepareNoteTextUpdate`.
     TextUpdate(TextUpdateRefusal),
 }
 
@@ -265,7 +260,7 @@ impl PrepareRefusal {
     }
 }
 
-/// `prepareRetitle`'s refusals (push.ts 1703-1776), for a move pair whose
+/// Retitle refusals, for a move pair whose
 /// rename retitles the note. Every one is wrapped as
 /// `"{inner} - rename the file back to {basename(previous_file)}, or retitle
 /// the note in Notes instead"`.
@@ -277,10 +272,10 @@ pub enum RetitleRefusal {
     Unpublishable { unpublishable_reason: Option<String> },
     /// 1731
     TitleHasEmbed,
-    /// 1770: the `TextUpdateRefusal`, whose message carries no `"{toFile}: "`
+    /// the `TextUpdateRefusal`, whose message carries no `"{toFile}: "`
     /// prefix (the JS strips it with `.replace`, first occurrence).
     TextUpdate(TextUpdateRefusal),
-    /// 1769 fallback when no refusal was recorded.
+    /// fallback when no refusal was recorded.
     Unapplied,
 }
 
@@ -319,17 +314,17 @@ impl RetitleRefusal {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Refusal {
     // --- plan-time, no network (buildPushPlan) ---
-    /// 262 (rename, conflict)
+    /// (rename, conflict)
     PendingRename,
-    /// 327 (update, refused)
+    /// (update, refused)
     UpdateSharedNote(SharedWriteRefusal),
-    /// 335 (update, conflict)
+    /// (update, conflict)
     UpdateConflictMarkers,
-    /// 358 (update, refused); `file` = entry.file
+    /// (update, refused); `file` = entry.file
     UpdateUnknownContent { file: String },
-    /// 379 (update, refused)
+    /// (update, refused)
     UpdateNewAttachmentReference { file: String },
-    /// 436 (create, refused): one of several files sharing an `apple-note-id`
+    /// (create, refused): one of several files sharing an `apple-note-id`
     /// whose note's own file is gone. `others` = the other claiming files in
     /// claim order; `other_count` = `claim.files.length - 1`.
     AmbiguousNoteId {
@@ -337,71 +332,71 @@ pub enum Refusal {
         others: Vec<String>,
         tracked_file: Option<String>,
     },
-    /// 504 (delete, refused)
+    /// (delete, refused)
     DeleteSharedNote { file: String },
-    /// 561 (move, refused); `previous_file` = the tracked path
+    /// (move, refused); `previous_file` = the tracked path
     MoveSharedNote { previous_file: String },
-    /// 577 (move, refused)
+    /// (move, refused)
     MoveIntoUnfolderableDir {
         dir: String,
         folder_refusal: Option<FolderRefusal>,
     },
-    /// 583 (move, refused)
+    /// (move, refused)
     MoveIntoSharerArea,
-    /// 650 (create, refused)
+    /// (create, refused)
     CreateInUnfolderableDir {
         dir: String,
         folder_refusal: Option<FolderRefusal>,
     },
-    /// 663 (create, refused)
+    /// (create, refused)
     CreateLooseInSharerHome,
-    /// 672 (create, refused)
+    /// (create, refused)
     CreateInReadOnlyShare,
-    /// 680 (create, refused)
+    /// (create, refused)
     CreateEmptyFile,
-    /// 688 (create, refused - unlike the update case)
+    /// (create, refused - unlike the update case)
     CreateConflictMarkers,
-    /// 697 (create, refused)
+    /// (create, refused)
     CreateUnknownContent,
-    /// 706 (create, refused)
+    /// (create, refused)
     CreateEmbedMarker,
-    /// 715 (create, refused)
+    /// (create, refused)
     CreateAttachmentReference,
 
     // --- after the live lookup ---
-    /// 845 (move, conflict)
+    /// (move, conflict)
     MoveGoneRemotely,
-    /// 849 (move, conflict)
+    /// (move, conflict)
     MoveChangedRemotely,
     /// A folder renamed here that no longer exists remotely.
     FolderGoneRemotely,
     /// A folder deleted here that another device put a note or folder in
     /// since the last pull.
     FolderChangedRemotely,
-    /// 860 (move): `prepareRetitle` refused; `previous_file` = tracked path.
+    /// (move): `prepareRetitle` refused; `previous_file` = tracked path.
     MoveRetitle {
         refusal: RetitleRefusal,
         previous_file: String,
     },
-    /// 1009 (create, refused): `parseNoteMarkdown`'s reason.
+    /// (create, refused): `parseNoteMarkdown`'s reason.
     CreateMarkdown { reason: String },
-    /// 1024 (create, refused): `reconcileNoteFormat`'s reason.
+    /// (create, refused): `reconcileNoteFormat`'s reason.
     CreateReconcile { reason: String },
-    /// 1039 (create, refused)
+    /// (create, refused)
     CreateVerificationFailed,
-    /// 1047 (create, refused): a thrown error's message.
+    /// (create, refused): a thrown error's message.
     CreateBuildError { message: String },
-    /// 1127 (update, conflict)
+    /// (update, conflict)
     UpdateGoneRemotely,
-    /// 1164 (update, conflict): changed remotely and not eagerly mergeable.
+    /// (update, conflict): changed remotely and not eagerly mergeable.
     UpdateChangedRemotelyUnmergeable,
-    /// 1356 (update, conflict): `planRemoteChangedMerge` left markers.
+    /// (update, conflict): `planRemoteChangedMerge` left markers.
     MergedWithConflicts,
-    /// 1194 (update, refused): title-only candidate, shared note.
+    /// (update, refused): title-only candidate, shared note.
     TitleOnlySharedNote(SharedWriteRefusal),
-    /// 1231/1237 (update): `prepareUpdate` stopped.
+    /// (update): `prepareUpdate` stopped.
     UpdatePrepare(PrepareRefusal),
-    /// 1237 fallback: `prepareUpdate` stopped without recording why.
+    /// fallback: `prepareUpdate` stopped without recording why.
     UpdateRefusedUnspecified,
 }
 
@@ -581,8 +576,7 @@ fn label_of(kind: PlanEntryKind) -> &'static str {
 /// `LABEL_WIDTH`: the longest label.
 const LABEL_WIDTH: usize = 9;
 
-/// `renderPlan`: the git-status-style listing (human text; not
-/// byte-compared).
+/// The status-style listing of the plan (human text).
 pub fn render_plan(
     entries: &[SerializedPlanEntry],
     format_path: &dyn Fn(&str) -> String,

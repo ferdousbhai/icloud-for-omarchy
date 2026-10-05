@@ -1,11 +1,9 @@
-//! Every refused/conflict plan entry icloud-md 0.6.2's push can produce,
-//! site by site (`src/commands/push.ts`, `src/notes/folderCreate.ts`), with
-//! the exact `reason` string each one puts in `status --json` / `push
-//! --dry-run --json`. The port builds every such entry from
-//! `cmd::plan::Refusal`, so this table is the checklist that none was lost:
-//! `every_refusal_variant_is_listed` fails to compile when a variant is
-//! added without a row here. Rows with line 0 are port-only refusals (deliberate
-//! differences from 0.6.2, docs/PORT_PLAN.md §1) with no push.ts site.
+//! Every refused/conflict plan entry the engine's push can produce, with the
+//! exact `reason` string each one puts in `status --json` / `push --dry-run
+//! --json`, and the folder refusals behind moves and creates. Every such
+//! entry is built from `cmd::plan::Refusal`, so this table is the checklist
+//! of them all: `every_refusal_variant_is_listed` fails to compile when a
+//! variant is added without a row here.
 
 use icloud_notes_sync::cmd::plan::{
     FolderRefusal, PlanEntry, PlanEntryKind, PlanResolution, PrepareRefusal, Refusal, RetitleRefusal,
@@ -14,9 +12,8 @@ use icloud_notes_sync::cmd::plan::{
 
 const FILE: &str = "Notes/Pie.md";
 
-/// (push.ts line, a fragment of source at that line, the refusal, its
-/// resolution, its reason verbatim).
-fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
+/// (the refusal, its resolution, its reason verbatim).
+fn sites() -> Vec<(Refusal, PlanResolution, String)> {
     use PlanResolution::{Conflict, Refused};
     let restore = format!("Run \"icloud-notes restore {FILE}\" to discard your local edit.");
     let text = |r: TextUpdateRefusal| Refusal::UpdatePrepare(PrepareRefusal::TextUpdate(r));
@@ -27,37 +24,27 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
     let rename_back = " - rename the file back to Old Title.md, or retitle the note in Notes instead";
     vec![
         (
-            262,
-            "rename deferred by a previous pull",
             Refusal::PendingRename,
             Conflict,
             "rename deferred by a previous pull and not yet performed - rename it, or run \"pull\" to have it done for you"
                 .into(),
         ),
         (
-            327,
-            "reason: sharedRefusal",
             Refusal::UpdateSharedNote(SharedWriteRefusal::IndividuallyShared),
             Refused,
             "individually-shared notes can't be edited yet - only notes inside a shared folder can".into(),
         ),
         (
-            327,
-            "reason: sharedRefusal",
             Refusal::UpdateSharedNote(SharedWriteRefusal::ReadOnlyFolder),
             Refused,
             "this shared folder is read-only for you - the server would reject the edit".into(),
         ),
         (
-            335,
-            "still contains diff3 conflict markers",
             Refusal::UpdateConflictMarkers,
             Conflict,
             "still contains diff3 conflict markers - resolve them before pushing".into(),
         ),
         (
-            358,
-            "this note contains content this tool can't parse and can never be pushed",
             Refusal::UpdateUnknownContent { file: FILE.into() },
             Refused,
             format!(
@@ -65,8 +52,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            379,
-            "reference, but this tool can",
             Refusal::UpdateNewAttachmentReference { file: FILE.into() },
             Refused,
             format!(
@@ -74,8 +59,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            436,
-            "shares its",
             Refusal::AmbiguousNoteId {
                 other_count: 2,
                 others: vec!["Notes/B.md".into(), "Notes/C.md".into()],
@@ -88,8 +71,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
                 .into(),
         ),
         (
-            436,
-            "shares its",
             Refusal::AmbiguousNoteId {
                 other_count: 1,
                 others: vec!["Notes/B.md".into()],
@@ -102,8 +83,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
                 .into(),
         ),
         (
-            504,
-            "deleting notes shared by someone else",
             Refusal::DeleteSharedNote { file: FILE.into() },
             Refused,
             format!(
@@ -111,8 +90,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            561,
-            "renaming or moving notes shared by someone else",
             Refusal::MoveSharedNote {
                 previous_file: "Pat/Shared/Pie.md".into(),
             },
@@ -121,8 +98,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
                 .into(),
         ),
         (
-            578,
-            "which can't become one of the account's folders",
             Refusal::MoveIntoUnfolderableDir {
                 dir: "Somewhere".into(),
                 folder_refusal: None,
@@ -131,8 +106,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "moved into \"Somewhere/\", which can't become one of the account's folders".into(),
         ),
         (
-            577,
-            "folderRefusals.get(toDir)",
             Refusal::MoveIntoUnfolderableDir {
                 dir: ".obsidian".into(),
                 folder_refusal: Some(FolderRefusal::Hidden {
@@ -143,15 +116,11 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "\".obsidian\" is a hidden directory - this tool won't create a Notes folder for one".into(),
         ),
         (
-            583,
-            "moved into a sharer's area",
             Refusal::MoveIntoSharerArea,
             Refused,
             "moved into a sharer's area - notes can't be moved into someone else's share".into(),
         ),
         (
-            650,
-            "which can't become one of the account's folders",
             Refusal::CreateInUnfolderableDir {
                 dir: "Somewhere".into(),
                 folder_refusal: None,
@@ -160,8 +129,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "sits in \"Somewhere/\", which can't become one of the account's folders".into(),
         ),
         (
-            650,
-            "folderRefusals.get(dir)",
             Refusal::CreateInUnfolderableDir {
                 dir: "Notes/attachments".into(),
                 folder_refusal: Some(FolderRefusal::ReservedAttachments {
@@ -172,85 +139,61 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "\"attachments\" is reserved for a folder's downloaded attachments".into(),
         ),
         (
-            663,
-            "sits loose at the top of a sharer's area",
             Refusal::CreateLooseInSharerHome,
             Refused,
             "sits loose at the top of a sharer's area - notes can only be created inside one of their shared folders".into(),
         ),
         (
-            672,
-            "sits in a shared folder you only have read access to",
             Refusal::CreateInReadOnlyShare,
             Refused,
             "sits in a shared folder you only have read access to - the server would reject the create".into(),
         ),
         (
-            680,
-            "the file is empty - nothing to create",
             Refusal::CreateEmptyFile,
             Refused,
             "the file is empty - nothing to create".into(),
         ),
         (
-            688,
-            "still contains diff3 conflict markers",
             Refusal::CreateConflictMarkers,
             Refused,
             "still contains diff3 conflict markers - resolve them before pushing".into(),
         ),
         (
-            697,
-            "unknown-content banner",
             Refusal::CreateUnknownContent,
             Refused,
             "this file contains the unknown-content banner - remove it before pushing".into(),
         ),
         (
-            706,
-            "contains an embed marker",
             Refusal::CreateEmbedMarker,
             Refused,
             "contains an embed marker, but this tool can't create embeds - remove it before pushing".into(),
         ),
         (
-            715,
-            "remove it first.",
             Refusal::CreateAttachmentReference,
             Refused,
             "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first.".into(),
         ),
         (
-            845,
-            "no longer exists remotely",
             Refusal::MoveGoneRemotely,
             Conflict,
             "no longer exists remotely - run \"pull\" to reconcile".into(),
         ),
         (
-            0,
-            "no longer exists remotely",
             Refusal::FolderGoneRemotely,
             Conflict,
             "no longer exists remotely - run \"pull\" to reconcile".into(),
         ),
         (
-            0,
-            "another device put a note or folder in it",
             Refusal::FolderChangedRemotely,
             Conflict,
             "another device put a note or folder in it since the last pull - run \"pull\", then delete it again".into(),
         ),
         (
-            849,
-            "changed remotely since the last pull - run \"pull\" first",
             Refusal::MoveChangedRemotely,
             Conflict,
             "changed remotely since the last pull - run \"pull\" first".into(),
         ),
         (
-            1720,
-            "the note is no longer safely editable",
             retitle(RetitleRefusal::NoLongerEditable {
                 detail: "undecodable".into(),
             }),
@@ -260,8 +203,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            1724,
-            "contains content this tool can't parse",
             retitle(RetitleRefusal::Unpublishable {
                 unpublishable_reason: None,
             }),
@@ -269,15 +210,11 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             format!("renaming this note would retitle it, but this note contains content this tool can't parse{rename_back}"),
         ),
         (
-            1731,
-            "its file name doesn't carry the title",
             retitle(RetitleRefusal::TitleHasEmbed),
             Refused,
             format!("this note's title contains an embedded object, so its file name doesn't carry the title{rename_back}"),
         ),
         (
-            1770,
-            "renaming this note would retitle it, but ${detail}",
             retitle(RetitleRefusal::TextUpdate(TextUpdateRefusal::NotRoundTrip)),
             Refused,
             format!(
@@ -285,15 +222,11 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            1769,
-            "the new title couldn't be applied",
             retitle(RetitleRefusal::Unapplied),
             Refused,
             format!("renaming this note would retitle it, but the new title couldn't be applied{rename_back}"),
         ),
         (
-            1009,
-            "reason: parsed.reason",
             Refusal::CreateMarkdown {
                 reason: "a parse refusal".into(),
             },
@@ -301,8 +234,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "a parse refusal".into(),
         ),
         (
-            1024,
-            "reason: reconciled.reason",
             Refusal::CreateReconcile {
                 reason: "a reconcile refusal".into(),
             },
@@ -310,15 +241,11 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "a reconcile refusal".into(),
         ),
         (
-            1039,
-            "built document failed decode verification - refusing to create",
             Refusal::CreateVerificationFailed,
             Refused,
             "built document failed decode verification - refusing to create".into(),
         ),
         (
-            1047,
-            "reason: message",
             Refusal::CreateBuildError {
                 message: "a thrown error".into(),
             },
@@ -326,45 +253,33 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "a thrown error".into(),
         ),
         (
-            1127,
-            "no longer exists remotely",
             Refusal::UpdateGoneRemotely,
             Conflict,
             "no longer exists remotely - run \"pull\" to reconcile".into(),
         ),
         (
-            1164,
-            "(which merges) first",
             Refusal::UpdateChangedRemotelyUnmergeable,
             Conflict,
             "changed remotely since the last pull - run \"pull\" (which merges) first".into(),
         ),
         (
-            1194,
-            "reason: sharedRefusal",
             Refusal::TitleOnlySharedNote(SharedWriteRefusal::IndividuallyShared),
             Refused,
             "individually-shared notes can't be edited yet - only notes inside a shared folder can".into(),
         ),
         (
-            1356,
-            "merged with conflict markers, resolve manually",
             Refusal::MergedWithConflicts,
             Conflict,
             "changed remotely since the last pull - merged with conflict markers, resolve manually".into(),
         ),
         (
-            1237,
-            "newRefusal ?? \"refused\"",
             Refusal::UpdateRefusedUnspecified,
             Refused,
             "refused".into(),
         ),
-        // prepareUpdate & co. (reported through 1231 / 1237 with the
+        // prepareUpdate & co. (reported with the
         // "<file>: " prefix stripped)
         (
-            1491,
-            "remote note is no longer safely editable",
             Refusal::UpdatePrepare(PrepareRefusal::NoLongerEditable {
                 detail: "missing-body".into(),
             }),
@@ -372,8 +287,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "remote note is no longer safely editable (missing-body)".into(),
         ),
         (
-            1496,
-            "it can't be safely edited",
             Refusal::UpdatePrepare(PrepareRefusal::Unpublishable {
                 unpublishable_reason: Some("contains embedded content this tool can't parse (com.example)".into()),
                 file: FILE.into(),
@@ -384,8 +297,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            1523,
-            "${parsed.reason}. Run",
             Refusal::UpdatePrepare(PrepareRefusal::Markdown {
                 reason: "unsupported markdown".into(),
                 file: FILE.into(),
@@ -394,8 +305,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             format!("unsupported markdown. {restore}"),
         ),
         (
-            1579,
-            "${plan.reason}. Run",
             Refusal::UpdatePrepare(PrepareRefusal::EmbedPlan {
                 reason: "an embed moved".into(),
                 file: FILE.into(),
@@ -404,8 +313,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             format!("an embed moved. {restore}"),
         ),
         (
-            1586,
-            "${parsed.reason}. Run",
             Refusal::UpdatePrepare(PrepareRefusal::EmbedMarkdown {
                 reason: "unsupported markdown".into(),
                 file: FILE.into(),
@@ -414,15 +321,11 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             format!("unsupported markdown. {restore}"),
         ),
         (
-            1638,
-            "a table in this note no longer exists remotely",
             Refusal::UpdatePrepare(PrepareRefusal::TableGoneRemotely),
             Conflict,
             "a table in this note no longer exists remotely - run \"pull\" to reconcile".into(),
         ),
         (
-            1644,
-            "${result.reason}. Run",
             Refusal::UpdatePrepare(PrepareRefusal::TableUpdate {
                 reason: "the table changed shape".into(),
                 file: FILE.into(),
@@ -431,44 +334,32 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             format!("the table changed shape. {restore}"),
         ),
         (
-            1865,
-            "can't retitle it",
             Refusal::UpdatePrepare(PrepareRefusal::TitleHasEmbedCannotRetitle),
             Refused,
             "this note's title contains an embedded object, so \"apple-note-title\" can't retitle it - retitle it in Notes instead."
                 .into(),
         ),
         (
-            1877,
-            "the remote note has no title paragraph to restore",
             Refusal::UpdatePrepare(PrepareRefusal::NoTitleParagraph),
             Refused,
             "the remote note has no title paragraph to restore - refusing to edit".into(),
         ),
         (
-            1926,
-            "remote note has no readable text data",
             text(TextUpdateRefusal::NoTextData),
             Refused,
             "remote note has no readable text data".into(),
         ),
         (
-            1932,
-            "remote note stores its text as an asset",
             text(TextUpdateRefusal::TextAsAsset),
             Refused,
             "remote note stores its text as an asset - refusing to edit".into(),
         ),
         (
-            1939,
-            "doesn't round-trip byte-for-byte",
             text(TextUpdateRefusal::NotRoundTrip),
             Refused,
             "the note's document doesn't round-trip byte-for-byte through our model - refusing to edit".into(),
         ),
         (
-            1955,
-            "this edit would delete or move an embedded object",
             text(TextUpdateRefusal::TouchesEmbed { file: FILE.into() }),
             Refused,
             format!(
@@ -476,15 +367,11 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            1964,
-            "decoder disagreement on the note's current text",
             text(TextUpdateRefusal::DecoderDisagreement),
             Refused,
             "decoder disagreement on the note's current text - refusing to edit".into(),
         ),
         (
-            1971,
-            "${reconciled.reason}. Run",
             text(TextUpdateRefusal::Reconcile {
                 reason: "a checklist changed".into(),
                 file: FILE.into(),
@@ -493,29 +380,21 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             format!("a checklist changed. {restore}"),
         ),
         (
-            1981,
-            "rebuilt document failed decode verification",
             text(TextUpdateRefusal::RebuiltDecodeFailed),
             Refused,
             "rebuilt document failed decode verification - refusing to push".into(),
         ),
         (
-            1989,
-            "rebuilt document failed embed-structure verification",
             text(TextUpdateRefusal::RebuiltEmbedFailed),
             Refused,
             "rebuilt document failed embed-structure verification - refusing to push".into(),
         ),
         (
-            1998,
-            "rebuilt document failed formatting verification",
             text(TextUpdateRefusal::RebuiltFormatFailed),
             Refused,
             "rebuilt document failed formatting verification - refusing to push".into(),
         ),
         (
-            2004,
-            "summary.refused.push(`${entry.file}: ${message}`)",
             text(TextUpdateRefusal::Exception {
                 message: "invariant violated".into(),
             }),
@@ -525,7 +404,7 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
     ]
 }
 
-/// folderCreate.ts's refusals (what a move/create into that directory shows).
+/// Folder refusals (what a move/create into that directory shows).
 fn folder_sites() -> Vec<(&'static str, FolderRefusal, String)> {
     vec![
         (
@@ -564,9 +443,9 @@ fn folder_sites() -> Vec<(&'static str, FolderRefusal, String)> {
 
 #[test]
 fn every_site_has_its_verbatim_reason_and_resolution() {
-    for (line, _, refusal, resolution, reason) in sites() {
-        assert_eq!(refusal.reason(), reason, "push.ts:{line}");
-        assert_eq!(refusal.resolution(), resolution, "push.ts:{line}");
+    for (refusal, resolution, reason) in sites() {
+        assert_eq!(refusal.reason(), reason, "{refusal:?}");
+        assert_eq!(refusal.resolution(), resolution, "{refusal:?}");
         let entry = PlanEntry::refused(PlanEntryKind::Update, FILE, refusal.clone());
         assert_eq!(entry.resolution, resolution);
         assert_eq!(entry.reason.as_deref(), Some(reason.as_str()));
@@ -580,7 +459,7 @@ fn every_site_has_its_verbatim_reason_and_resolution() {
 /// Fails to compile when a `Refusal` variant has no row in `sites()`.
 #[test]
 fn every_refusal_variant_is_listed() {
-    let listed: Vec<Refusal> = sites().into_iter().map(|(_, _, r, _, _)| r).collect();
+    let listed: Vec<Refusal> = sites().into_iter().map(|(r, _, _)| r).collect();
     let covers = |pred: &dyn Fn(&Refusal) -> bool| listed.iter().any(pred);
     let all: [fn(&Refusal) -> bool; 1] = [|r| {
         use Refusal::*;

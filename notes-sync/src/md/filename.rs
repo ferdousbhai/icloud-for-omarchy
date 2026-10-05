@@ -1,9 +1,8 @@
-//! Note file names. Ports icloud-md `src/notes/filename.ts`.
+//! Note file names. Originally derived from icloud-md.
 //!
-//! Plan deviation: the plan's `note_filename(title, taken)` is two calls in
-//! icloud-md - `noteFileNameFor(titleLine, titleMode)` then
-//! `uniqueFileName(name, usedNames)` (per directory) - kept separate here.
-//! icloud-md does no Unicode normalization of names; neither does this.
+//! Two steps: `noteFileNameFor(titleLine, titleMode)` then
+//! `uniqueFileName(name, usedNames)` (per directory). No Unicode
+//! normalization of names.
 
 use std::collections::HashSet;
 

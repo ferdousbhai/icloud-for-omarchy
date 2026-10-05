@@ -1,6 +1,6 @@
 //! The vault lock the Notes app (icloud-notes) shares with this tool, so a
 //! pull, push, clone or restore never runs while the app or another run is
-//! changing the same vault. Not in icloud-md (docs/PORT_PLAN.md §1).
+//! changing the same vault (docs/DESIGN.md §1).
 //!
 //! An exclusive `flock` on a file outside the vault, never removed (removing
 //! a flock file races the next locker). The holder writes a description of

@@ -1,7 +1,7 @@
-//! A record CloudKit lists twice in one zone walk is kept once (deliberate
-//! difference from icloud-md 0.6.2, docs/PORT_PLAN.md §1): same page, across
-//! pages, the shared-zone path with its `records/lookup` backfill, a shared
-//! zone listed twice, and which occurrence wins.
+//! A record CloudKit lists twice in one zone walk is kept once
+//! (docs/DESIGN.md §1): same page, across pages, the shared-zone path with
+//! its `records/lookup` backfill, a shared zone listed twice, and which
+//! occurrence wins.
 
 mod cloudkit_common;
 

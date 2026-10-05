@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/commands/push.test.ts`.
+//! `push`. Originally derived from icloud-md's tests.
 
 mod common;
 

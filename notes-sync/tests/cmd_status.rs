@@ -1,4 +1,4 @@
-//! Ports icloud-md `src/commands/status.test.ts`.
+//! `status`. Originally derived from icloud-md's tests.
 
 use std::path::Path;
 

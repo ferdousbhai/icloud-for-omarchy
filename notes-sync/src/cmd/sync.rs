@@ -1,4 +1,4 @@
-//! `sync`: push, then pull, in one process. Not in icloud-md. The Notes app
+//! `sync`: push, then pull, in one process. The Notes app
 //! (icloud-notes) syncs this way: one run, so one icloud-sessiond
 //! `Session()` call, one TLS connection and one vault lock instead of two of
 //! each. Each half is exactly what `push` and `pull` do on their own.

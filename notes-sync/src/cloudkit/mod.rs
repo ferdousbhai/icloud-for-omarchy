@@ -1,7 +1,7 @@
 //! CloudKit database client and transports.
 //!
-//! Ports icloud-md `src/cloudkit/databaseClient.ts` (request shapes, paging,
-//! response parsing). Authentication and `/validate` are icloud-session's job:
+//! Request shapes, paging and response parsing (originally derived from
+//! icloud-md). Authentication and `/validate` are icloud-session's job:
 //! [`transport::LiveTransport`] sends through `icloud_session::Session`, which
 //! adds cookies and the `clientBuildNumber`/`clientMasteringNumber`/`clientId`/
 //! `dsid` query parameters itself. [`transport::ReplayTransport`] serves the
