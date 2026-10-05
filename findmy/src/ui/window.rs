@@ -17,7 +17,7 @@ use super::banner::SignInBanner;
 use super::devices::DeviceList;
 use super::map::DeviceMap;
 use crate::findme::{self, FindMe, SessionTransport};
-use crate::history::{History, Point};
+use crate::history::{History, LazyHistory, Point};
 use crate::models::Device;
 
 const REFRESH_SECS: u32 = 60;
@@ -25,7 +25,7 @@ const REFRESH_SECS: u32 = 60;
 const TRAIL_SECS: i64 = 24 * 3600;
 const LOST_MESSAGE: &str = "This device has been lost. Please call me.";
 
-type SharedHistory = Arc<Mutex<Option<History>>>;
+type SharedHistory = Arc<Mutex<LazyHistory>>;
 
 /// The Find My client, shared with the worker threads. Workers hold the
 /// lock across blocking HTTP, so the main loop never takes it: it asks for
@@ -275,10 +275,7 @@ impl Window {
             move || {
                 let devices = client.lock().refresh(locate)?;
                 let mut history = lock(&history);
-                if history.is_none() {
-                    *history = History::open_default().ok();
-                }
-                if let Some(h) = history.as_ref()
+                if let Some(h) = history.get_or_open(Instant::now(), History::open_default)
                     && let Err(e) = h.record_devices(&devices, icloud_session::time::now_ms() / 1000)
                 {
                     eprintln!("icloud-findmy: could not save history: {e}");
@@ -445,7 +442,7 @@ impl Window {
             move || -> Vec<Point> {
                 let history = lock(&history);
                 history
-                    .as_ref()
+                    .get()
                     .and_then(|h| h.trail(&id, since).ok())
                     .unwrap_or_default()
             },

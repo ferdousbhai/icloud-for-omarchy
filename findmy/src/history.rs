@@ -4,15 +4,18 @@
 //! [`MOVE_THRESHOLD_M`] from the last stored point, and more than the larger
 //! of the two accuracy radii (so a stationary phone whose fix wobbles between
 //! Wi-Fi and GPS does not draw a scribble). Rows older than
-//! [`RETENTION_SECS`] are deleted on open and after every batch of inserts.
+//! [`RETENTION_SECS`] are deleted on open and after a batch of inserts at
+//! most once every [`PRUNE_EVERY_SECS`]; a batch is one transaction.
 //!
 //! Location history is private: the directory is kept `0700` and the
 //! database (with its `-wal` and `-shm` files) `0600`, and both are fixed on
 //! every open.
 
+use std::cell::Cell;
 use std::fs::{DirBuilder, OpenOptions, Permissions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -23,6 +26,9 @@ pub const MOVE_THRESHOLD_M: f64 = 25.0;
 
 /// How long positions are kept: 30 days.
 pub const RETENTION_SECS: i64 = 30 * 24 * 3600;
+
+/// How often [`History::record_devices`] prunes, besides on open: daily.
+pub const PRUNE_EVERY_SECS: i64 = 24 * 3600;
 
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
@@ -40,6 +46,8 @@ pub struct Point {
 pub struct History {
     conn: Connection,
     pruned_on_open: usize,
+    /// When rows were last pruned (Unix seconds).
+    last_prune: Cell<i64>,
 }
 
 /// `~/.local/share/icloud-findmy/history.db` (honours an absolute
@@ -98,21 +106,27 @@ impl History {
                  accuracy  REAL NOT NULL,
                  battery   REAL
              );
-             CREATE INDEX IF NOT EXISTS history_device_ts ON history(device_id, ts);",
+             CREATE INDEX IF NOT EXISTS history_device_ts ON history(device_id, ts);
+             CREATE INDEX IF NOT EXISTS history_ts ON history(ts);",
         )?;
+        let now = icloud_session::time::now_ms() / 1000;
         let mut history = History {
             conn,
             pruned_on_open: 0,
+            last_prune: Cell::new(now),
         };
-        history.pruned_on_open = history.prune(icloud_session::time::now_ms() / 1000)?;
+        history.pruned_on_open = history.prune(now)?;
         Ok(history)
     }
 
     /// Deletes rows older than [`RETENTION_SECS`] before `now` (Unix
     /// seconds). Returns rows deleted.
     pub fn prune(&self, now: i64) -> rusqlite::Result<usize> {
-        self.conn
-            .execute("DELETE FROM history WHERE ts < ?1", params![now - RETENTION_SECS])
+        let deleted = self
+            .conn
+            .execute("DELETE FROM history WHERE ts < ?1", params![now - RETENTION_SECS])?;
+        self.last_prune.set(now);
+        Ok(deleted)
     }
 
     /// Rows the prune on open deleted.
@@ -130,12 +144,11 @@ impl History {
     /// The newest stored point for a device.
     pub fn last(&self, device_id: &str) -> rusqlite::Result<Option<Point>> {
         self.conn
-            .query_row(
+            .prepare_cached(
                 "SELECT ts, lat, lon, accuracy, battery FROM history
                  WHERE device_id = ?1 ORDER BY ts DESC, rowid DESC LIMIT 1",
-                params![device_id],
-                row_to_point,
-            )
+            )?
+            .query_row(params![device_id], row_to_point)
             .optional()
     }
 
@@ -152,17 +165,21 @@ impl History {
                 return Ok(false);
             }
         }
-        self.conn.execute(
-            "INSERT INTO history (device_id, ts, lat, lon, accuracy, battery)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![device_id, ts, fix.lat, fix.lon, fix.accuracy, battery],
-        )?;
+        self.conn
+            .prepare_cached(
+                "INSERT INTO history (device_id, ts, lat, lon, accuracy, battery)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?
+            .execute(params![device_id, ts, fix.lat, fix.lon, fix.accuracy, battery])?;
         Ok(true)
     }
 
-    /// Records every device with a current (not old) fix, then prunes rows
-    /// past the retention as of `now` (Unix seconds). Returns rows written.
+    /// Records every device with a current (not old) fix, in one
+    /// transaction, then prunes rows past the retention as of `now` (Unix
+    /// seconds) if the last prune was [`PRUNE_EVERY_SECS`] or more before.
+    /// Returns rows written.
     pub fn record_devices(&self, devices: &[Device], now: i64) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
         let mut written = 0;
         for d in devices {
             if let Some(fix) = d.location.as_ref().filter(|f| !f.is_old && f.ts_ms > 0)
@@ -171,7 +188,10 @@ impl History {
                 written += 1;
             }
         }
-        self.prune(now)?;
+        if now - self.last_prune.get() >= PRUNE_EVERY_SECS {
+            self.prune(now)?;
+        }
+        tx.commit()?;
         Ok(written)
     }
 
@@ -182,6 +202,57 @@ impl History {
              WHERE device_id = ?1 AND ts >= ?2 ORDER BY ts, rowid",
         )?;
         stmt.query_map(params![device_id, since], row_to_point)?.collect()
+    }
+}
+
+/// How long [`LazyHistory`] waits after a failed open before trying again.
+pub const REOPEN_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// The app's history: opened on first use and kept. A failed open is
+/// reported once (not on every refresh) and retried only after
+/// [`REOPEN_AFTER`], so a broken data directory does not cost an open
+/// attempt on every tick.
+#[derive(Default)]
+pub struct LazyHistory {
+    db: Option<History>,
+    retry_at: Option<Instant>,
+    warned: bool,
+}
+
+impl LazyHistory {
+    /// The open history, opening it with `open` if it is not open and no
+    /// failed attempt is more recent than [`REOPEN_AFTER`] before `now`.
+    pub fn get_or_open(
+        &mut self,
+        now: Instant,
+        open: impl FnOnce() -> rusqlite::Result<History>,
+    ) -> Option<&History> {
+        if self.db.is_none() && self.retry_at.is_none_or(|at| now >= at) {
+            match open() {
+                Ok(h) => {
+                    if self.warned {
+                        eprintln!("icloud-findmy: location history opened");
+                    }
+                    (self.db, self.retry_at, self.warned) = (Some(h), None, false);
+                }
+                Err(e) => {
+                    if !self.warned {
+                        eprintln!(
+                            "icloud-findmy: cannot open the location history ({e}); trying again every {} min",
+                            REOPEN_AFTER.as_secs() / 60
+                        );
+                        self.warned = true;
+                    }
+                    self.retry_at = Some(now + REOPEN_AFTER);
+                }
+            }
+        }
+        self.db.as_ref()
+    }
+
+    /// The history if it is open, without trying to open it.
+    pub fn get(&self) -> Option<&History> {
+        self.db.as_ref()
     }
 }
 

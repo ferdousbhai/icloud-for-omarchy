@@ -69,9 +69,9 @@ Positions are kept only on this computer, in
 refresh only when the device moved more than 25 m, and more than the
 larger accuracy radius of its fixes, since the last stored point, so a
 phone sitting on a desk does not fill the file. Positions older than 30
-days are deleted when the app opens the file and after every refresh.
-The directory is readable only by you (`0700`, the database files
-`0600`). Delete the file to clear the history.
+days are deleted when the app opens the file and, while it runs, once a
+day. The directory is readable only by you (`0700`, the database
+files `0600`). Delete the file to clear the history.
 
 ## Command line
 
