@@ -88,8 +88,11 @@ pub const MOCK_WEBSERVICES: &[&str] = &[
     "uploadimagews",
 ];
 
-/// How long a `Session()` answer is reused in-process.
-pub const SESSION_CACHE_TTL: Duration = Duration::from_secs(60);
+/// How long a `Session()` answer is reused in-process. Longer than an app's
+/// refresh interval (Find My's is 60 s), so a refresh doesn't ask the daemon
+/// every time; any cookie rotation, and a session the server refuses, drop
+/// it sooner.
+pub const SESSION_CACHE_TTL: Duration = Duration::from_secs(300);
 
 const ORIGIN: &str = "https://www.icloud.com";
 const REFERER: &str = "https://www.icloud.com/";
@@ -526,6 +529,9 @@ struct Inner {
     mock_url: Option<String>,
     agent: ureq::Agent,
     cached: Mutex<Option<(Instant, Snapshot)>>,
+    /// The daemon's `FindMySession()`, until Find My sets cookies, refuses
+    /// it, or the snapshot is dropped.
+    find_my: Mutex<Option<(String, HashMap<String, String>)>>,
     apple_id: String,
     dsid: String,
 }
@@ -633,6 +639,7 @@ impl Session {
                 mock_url,
                 agent,
                 cached: Mutex::new(None),
+                find_my: Mutex::new(None),
                 apple_id,
                 dsid,
             }),
@@ -693,6 +700,22 @@ impl Session {
 
     fn forget_snapshot(&self) {
         *self.inner.cached.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.forget_find_my();
+    }
+
+    fn forget_find_my(&self) {
+        *self.inner.find_my.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The daemon's `FindMySession()`, reused until dropped.
+    fn find_my_jar(&self, conn: &Connection) -> Result<(String, HashMap<String, String>)> {
+        let mut cached = self.inner.find_my.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(jar) = cached.as_ref() {
+            return Ok(jar.clone());
+        }
+        let jar = proxy(conn)?.find_my_session()?;
+        *cached = Some(jar.clone());
+        Ok(jar)
     }
 
     /// The `webservices` map from the daemon's last `/validate`
@@ -869,6 +892,7 @@ impl Session {
         let Some(conn) = &self.inner.conn else {
             return Err(Error::FindMyAuthRequired);
         };
+        self.forget_find_my();
         let changed = match proxy(conn)?.find_my_session() {
             Ok((now, _)) => now != cookie,
             // None held (another client's report is re-authorizing): report.
@@ -920,7 +944,7 @@ impl Session {
         // Find My has its own jar (a one-factor sign-in the main session
         // cannot stand in for): the `findme` host gets it instead.
         let find_my = match &self.inner.conn {
-            Some(conn) if is_find_my_host(request.url, &snap.webservices) => Some(proxy(conn)?.find_my_session()?),
+            Some(conn) if is_find_my_host(request.url, &snap.webservices) => Some(self.find_my_jar(conn)?),
             _ => None,
         };
         let (cookie, params) = match &find_my {
@@ -959,6 +983,7 @@ impl Session {
                 {
                     if find_my.is_some() {
                         proxy(conn)?.merge_find_my_cookies(&set_cookies)?;
+                        self.forget_find_my();
                     } else {
                         proxy(conn)?.merge_cookies(&set_cookies)?;
                         self.forget_snapshot();
@@ -969,6 +994,8 @@ impl Session {
             // Find My wants the password again (pyicloud's
             // FIND_MY_REAUTH_REQUIRED, empty body), or ended its session.
             Err(ureq::Error::Status(450 | 401 | 421, _)) if find_my.is_some() => {
+                // A refused jar is never reused: the daemon decides what next.
+                self.forget_find_my();
                 Ok(Sent::FindMyAuth { cookie: cookie.clone() })
             }
             // Only the session's own hosts judge the session; a content

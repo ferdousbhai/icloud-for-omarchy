@@ -91,7 +91,7 @@ icloud-session = "=0.5.0"
 use icloud_session::{Error, Session};
 
 let s = Session::connect()?;           // D-Bus; SignInRequired when signed out
-let ws = s.webservices()?;             // from Session(); cached in-process ≤ 60 s
+let ws = s.webservices()?;             // from Session(); cached in-process ≤ 5 min, dropped on cookie rotation
 let findme = ws.url("findme").unwrap();
 let r = s.post_json(&format!("{findme}/fmipservice/client/web/refreshClient"), &body)?;
 let devices: serde_json::Value = r.json()?;
