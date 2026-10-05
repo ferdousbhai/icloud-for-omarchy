@@ -84,7 +84,7 @@ fn locate_on_a_fresh_session_inits_then_locates() {
 
     let devices = fm.refresh(true).unwrap();
     // The refreshClient fixture's iPhone has walked from the initClient one.
-    let init_phone = findme::parse_response(&fixture("initClient")).unwrap().devices[0].clone();
+    let init_phone = findme::parse_response(fixture("initClient")).unwrap().devices.remove(0);
     assert_ne!(devices[0].location, init_phone.location);
 
     let log = log.lock().unwrap();
@@ -131,7 +131,7 @@ fn endpoints_of(log: &[(String, Value)]) -> Vec<String> {
 
 #[test]
 fn parses_devices() {
-    let snap = findme::parse_response(&fixture("initClient")).unwrap();
+    let snap = findme::parse_response(fixture("initClient")).unwrap();
     let [phone, mac, watch, pods] = &snap.devices[..] else {
         panic!("want 4 devices")
     };
@@ -165,15 +165,15 @@ fn parses_devices() {
 
 #[test]
 fn empty_content_is_no_devices() {
-    let snap = findme::parse_response(&serde_json::json!({"serverContext": {"a": 1}})).unwrap();
+    let snap = findme::parse_response(serde_json::json!({"serverContext": {"a": 1}})).unwrap();
     assert!(snap.devices.is_empty());
-    assert!(findme::parse_response(&serde_json::json!([1])).is_err());
-    assert!(findme::parse_response(&serde_json::json!({"content": 3})).is_err());
+    assert!(findme::parse_response(serde_json::json!([1])).is_err());
+    assert!(findme::parse_response(serde_json::json!({"content": 3})).is_err());
 }
 
 #[test]
 fn play_sound_and_lost_mode_payloads() {
-    let snap = findme::parse_response(&fixture("initClient")).unwrap();
+    let snap = findme::parse_response(fixture("initClient")).unwrap();
     let phone = &snap.devices[0];
     let (mut fm, log) = client(vec![Ok(fixture("playSound")), Ok(fixture("lostDevice"))]);
 
@@ -199,7 +199,7 @@ fn play_sound_and_lost_mode_payloads() {
 
 #[test]
 fn unsupported_actions_send_nothing() {
-    let snap = findme::parse_response(&fixture("initClient")).unwrap();
+    let snap = findme::parse_response(fixture("initClient")).unwrap();
     let pods = &snap.devices[3];
     let (mut fm, log) = client(vec![]);
     assert!(matches!(fm.lost_mode(pods, "1", "x"), Err(Error::Unsupported(_))));

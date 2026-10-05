@@ -147,19 +147,20 @@ pub struct Snapshot {
     pub devices: Vec<Device>,
 }
 
-/// Parses an `initClient` / `refreshClient` response.
-pub fn parse_response(resp: &Value) -> Result<Snapshot> {
-    let obj = resp
-        .as_object()
-        .ok_or_else(|| Error::Parse("not a JSON object".into()))?;
+/// Parses an `initClient` / `refreshClient` response. Takes it by value so
+/// the server context is moved out rather than copied.
+pub fn parse_response(resp: Value) -> Result<Snapshot> {
+    let Value::Object(mut obj) = resp else {
+        return Err(Error::Parse("not a JSON object".into()));
+    };
     if let Some(code) = obj.get("statusCode").and_then(Value::as_str)
         && code != "200"
     {
         return Err(Error::Parse(format!("statusCode {code}")));
     }
-    let server_ctx = obj.get("serverContext").cloned().map(|mut ctx| {
-        if ctx.get("theftLoss").is_some() {
-            ctx["theftLoss"] = Value::Null;
+    let server_ctx = obj.remove("serverContext").map(|mut ctx| {
+        if let Some(theft_loss) = ctx.get_mut("theftLoss") {
+            *theft_loss = Value::Null;
         }
         ctx
     });
@@ -266,8 +267,7 @@ impl<T: Transport> FindMe<T> {
     fn post_refresh(&mut self, endpoint: &str, locate: bool) -> Result<Vec<Device>> {
         let url = self.url(endpoint)?;
         let body = refresh_body(self.server_ctx.as_ref(), locate);
-        let resp = self.transport.post_json(&url, &body)?;
-        let snap = parse_response(&resp)?;
+        let snap = parse_response(self.transport.post_json(&url, &body)?)?;
         if snap.server_ctx.is_some() {
             self.server_ctx = snap.server_ctx;
         }

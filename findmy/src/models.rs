@@ -104,11 +104,22 @@ struct RawDevice {
     #[serde(default)]
     location: Option<RawLocation>,
     #[serde(default)]
-    features: Option<std::collections::HashMap<String, serde_json::Value>>,
+    features: Option<RawFeatures>,
     #[serde(default)]
     lost_mode_capable: Option<bool>,
     #[serde(default)]
     lost_mode_enabled: Option<bool>,
+}
+
+/// The two `features` flags we read, out of the dozens Apple sends. Kept
+/// as raw values so a non-boolean one reads as off instead of failing the
+/// whole device.
+#[derive(Deserialize)]
+struct RawFeatures {
+    #[serde(default, rename = "LOC")]
+    loc: Option<serde_json::Value>,
+    #[serde(default, rename = "SND")]
+    snd: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -127,14 +138,14 @@ struct RawLocation {
 impl Device {
     /// Parses one `content` entry. `None` if it has no `id`.
     pub fn from_json(v: &serde_json::Value) -> Option<Device> {
-        let raw: RawDevice = serde_json::from_value(v.clone()).ok()?;
-        let feature = |k: &str| {
-            raw.features
-                .as_ref()
-                .and_then(|f| f.get(k))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-        };
+        // Straight from the borrowed value: no copy of the device's JSON.
+        let raw = RawDevice::deserialize(v).ok()?;
+        let flag = |f: Option<&serde_json::Value>| f.and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let features = raw.features.as_ref();
+        let (loc, snd) = (
+            flag(features.and_then(|f| f.loc.as_ref())),
+            flag(features.and_then(|f| f.snd.as_ref())),
+        );
         let status = raw.battery_status.as_deref().unwrap_or("Unknown");
         let battery = match (raw.battery_level, status) {
             (_, "Unknown") => None,
@@ -142,7 +153,7 @@ impl Device {
             _ => None,
         };
         // pyicloud: location is only usable when LOC is on and it is present.
-        let location = raw.location.filter(|_| feature("LOC")).map(|l| Fix {
+        let location = raw.location.filter(|_| loc).map(|l| Fix {
             lat: l.latitude,
             lon: l.longitude,
             accuracy: l.horizontal_accuracy.unwrap_or(0.0),
@@ -159,7 +170,7 @@ impl Device {
             // deviceStatus: 200 online, 201 offline, 203 pending, 204 unregistered.
             online: raw.device_status.as_deref() == Some("200"),
             location,
-            can_play_sound: feature("SND"),
+            can_play_sound: snd,
             can_lost_mode: raw.lost_mode_capable.unwrap_or(false),
             lost_mode_enabled: raw.lost_mode_enabled.unwrap_or(false),
             id: raw.id,
@@ -231,6 +242,19 @@ mod tests {
         assert_eq!(last_seen(now, now - 30 * 3_600_000), "yesterday");
         assert_eq!(last_seen(now, now - 5 * 86_400_000), "5 days ago");
         assert_eq!(last_seen(now, now + 60_000), "just now");
+    }
+
+    #[test]
+    fn odd_feature_values_read_as_off_and_missing_id_is_skipped() {
+        let v = serde_json::json!({
+            "id": "x", "features": {"LOC": "yes", "SND": true, "KEY": 3},
+            "location": {"latitude": 1.0, "longitude": 2.0}
+        });
+        let d = Device::from_json(&v).unwrap();
+        assert!(d.can_play_sound);
+        assert_eq!(d.location, None);
+        assert!(Device::from_json(&serde_json::json!({"name": "no id"})).is_none());
+        assert!(!Device::from_json(&serde_json::json!({"id": "y"})).unwrap().can_play_sound);
     }
 
     #[test]
