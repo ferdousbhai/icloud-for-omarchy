@@ -15,7 +15,7 @@ use crate::js::base64_decode;
 use crate::vault::attachments::decode_table_attachment;
 use crate::vault::epoch::{NoteEpoch, find_epoch_by_id};
 use crate::vault::history::{
-    VersionSnapshot, find_snapshot_by_id, history_record_names, list_versions, resolve_tracked_note,
+    VersionSnapshot, find_snapshot_by_id, find_version, history_record_names, resolve_tracked_note,
 };
 use crate::vault::migrate::require_vault;
 use crate::vault::state::CloneState;
@@ -180,10 +180,7 @@ fn render_epoch_diff(
             });
             continue;
         };
-        let Some(snapshot) = list_versions(target_dir, record_name)?
-            .into_iter()
-            .find(|s| s.id == *snapshot_id)
-        else {
+        let Some(snapshot) = find_version(target_dir, record_name, snapshot_id)? else {
             sections.push(DiffEpochSection {
                 label,
                 skipped: true,

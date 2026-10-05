@@ -45,6 +45,7 @@
       "name": "tiny-status",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",
+      "portDeviation": "previews-write-nothing",
       "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
       "args": ["--json", "status", "@VAULT@"]
     },
@@ -52,6 +53,7 @@
       "name": "tiny-push-dry-run",
       "cassette": "tiny-lookup.json",
       "vaultFrom": "tiny-clone",
+      "portDeviation": "previews-write-nothing",
       "edits": [{ "file": "Notes/Test Note.md", "append": "\nA line added locally." }],
       "args": ["--json", "push", "--dry-run", "@VAULT@"]
     },

@@ -479,6 +479,74 @@ fn dup_clone_icloud_md_duplicates_and_the_port_does_not() {
     assert_eq!(tracked_files(&port_vault), ["Notes/Test Note.md"]);
 }
 
+/// `tiny-status` and `tiny-push-dry-run` (portDeviation
+/// `previews-write-nothing`): icloud-md 0.6.2 records a history snapshot of
+/// the looked-up note while planning, even for a preview. The port writes
+/// nothing: same exit, stdout, requests and mtimes, and a vault that is
+/// icloud-md's minus its `.icloud-md/history/`, its state directory exactly
+/// the `tiny-clone` one it started from.
+#[test]
+fn previews_icloud_md_records_history_and_the_port_does_not() {
+    let all = scenarios();
+    for name in ["tiny-status", "tiny-push-dry-run"] {
+        let scenario = all.iter().find(|s| s.name == name).expect("scenario");
+        assert_eq!(scenario.raw["portDeviation"], "previews-write-nothing");
+        let history = format!("{STATE_DIR}/history/");
+        let node_vault = all_files(&here().join("expected").join(name).join("vault"));
+        let node_history: Vec<&String> = node_vault.keys().filter(|k| k.starts_with(&history)).collect();
+        assert_eq!(node_history.len(), 1, "{name}: icloud-md wrote one snapshot");
+
+        let mut raw = scenario.raw.clone();
+        raw.insert(
+            "compare".into(),
+            serde_json::json!(["exit", "stdout", "requests", "mtimes"]),
+        );
+        let run = Scenario {
+            name: scenario.name.clone(),
+            raw,
+            now: scenario.now,
+            setup_mtime: scenario.setup_mtime,
+        };
+        let (failures, tmp) = run_scenario_against(&run, name);
+        assert!(failures.is_empty(), "{name}: {}", failures.join("\n\n"));
+
+        let state_json = format!("{STATE_DIR}/state.json");
+        let normalize = |files: BTreeMap<String, Vec<u8>>| -> BTreeMap<String, Vec<u8>> {
+            files
+                .into_iter()
+                .map(|(k, v)| {
+                    let v = if k == state_json { normalize_generator(&v) } else { v };
+                    (k, v)
+                })
+                .collect()
+        };
+        let ours = all_files(&tmp.path().canonicalize().unwrap().join("vault"));
+        let node_without_history = normalize(
+            node_vault
+                .into_iter()
+                .filter(|(k, _)| !k.starts_with(&history))
+                .collect(),
+        );
+        let ours_normalized = normalize(ours.clone());
+        assert_eq!(
+            ours_normalized.keys().collect::<Vec<_>>(),
+            node_without_history.keys().collect::<Vec<_>>(),
+            "{name}"
+        );
+        assert!(
+            ours_normalized == node_without_history,
+            "{name}: vault differs beyond history"
+        );
+        let state_dir = |files: BTreeMap<String, Vec<u8>>| -> BTreeMap<String, Vec<u8>> {
+            files.into_iter().filter(|(k, _)| k.starts_with(STATE_DIR)).collect()
+        };
+        assert!(
+            state_dir(ours) == state_dir(all_files(&here().join("expected/tiny-clone/vault"))),
+            "{name}: the state directory was written"
+        );
+    }
+}
+
 /// A pull scenario's `requests.json` entries, `setup` dropped.
 fn node_requests(name: &str) -> Vec<Value> {
     let log: Value = serde_json::from_str(

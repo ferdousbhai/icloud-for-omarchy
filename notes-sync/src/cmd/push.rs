@@ -53,7 +53,7 @@ use crate::vault::attachments::{remove_attachments_for_note, remove_table_attach
 use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{PlannedFolder, plan_folder_creates};
-use crate::vault::history::{VersionSnapshotInput, history_record_names, record_version};
+use crate::vault::history::{VersionSnapshotInput, history_record_names, record_version, without_recording};
 use crate::vault::layout::{PreviousLayout, StateDirInfo, note_dir_of, state_dir_index};
 use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
@@ -2061,7 +2061,11 @@ pub fn run_push_with(
         entries,
         notices,
         remote,
-    } = build_push_plan(connector, target_dir, on_status)?;
+    } = if dry_run {
+        without_recording(|| build_push_plan(connector, target_dir, on_status))?
+    } else {
+        build_push_plan(connector, target_dir, on_status)?
+    };
     let serialized: Vec<SerializedPlanEntry> = entries.iter().map(|e| e.entry.serialize()).collect();
     let unchanged = count_unchanged_notes(&serialized, state.notes.len());
 

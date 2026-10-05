@@ -227,7 +227,7 @@ ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test -p icloud-notes-sync
 | file | what |
 |---|---|
 | `cassettes/tiny-clone.json` | private zone with the default folder and one plain note (`REAL_PLAIN_NOTE`), no shared zones |
-| `cassettes/tiny-lookup.json` | `records/lookup` answering that note unchanged |
+| `cassettes/tiny-lookup.json` | `records/lookup` answering that note unchanged; scenarios `tiny-status` and `tiny-push-dry-run` (`portDeviation: previews-write-nothing`): icloud-md records a history snapshot while planning, the port writes nothing - otherwise the same exit, stdout, requests, vault and mtimes |
 | `cassettes/tiny-pull-noop.json` | a pull with nothing changed |
 | `cassettes/tiny-pull-update.json` | a pull delivering the note edited on another device (a line appended via icloud-md's own `applyTextEdit`; tag `26a`) |
 | `cassettes/tiny-push.json` | lookup + the `records/modify` answer for an update (tag `26b`) |

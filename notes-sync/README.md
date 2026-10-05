@@ -51,7 +51,18 @@ on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hin
 clone, pull, push and restore take the vault's lock, the one the Notes app
 holds while it is open (`--wait SECS` to wait for it; busy is the error
 `vault_busy`, exit 1); status, history, diff and push --dry-run only read and
-take none. `vault-info` prints what the app reads from the vault's state
+take none.
+
+History lives in `.icloud-md/history/<record>/` (one JSON snapshot of a
+note's or table's CloudKit text per version that pull or push saw) and
+`.icloud-md/history/<note>/epochs/` (one entry per run that changed the
+note, naming the snapshot current for each of its records). It is kept
+bounded: each record keeps its newest 20 snapshots, plus the newest one of
+each day for the last 30 days, and each note its epochs by the same rule;
+a snapshot a kept epoch names is never dropped. Pruning happens when a
+version is recorded, and touches only that note's directories. Recording
+reads only the latest snapshot's file. status and push --dry-run record no
+history (icloud-md 0.6.2 records one during planning). `vault-info` prints what the app reads from the vault's state
 (docs/PORT_PLAN.md §1). In the vault Notes syncs (`~/Documents/icloud-notes`),
 use `icloud-notes` (see [docs/AGENTS.md](../docs/AGENTS.md)).
 

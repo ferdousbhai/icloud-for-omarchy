@@ -127,6 +127,38 @@ change tag for more than text edits). The port:
 
 Tests: tests/cmd_local_delete.rs.
 
+### Bounded history, and previews that record none (not in 0.6.2)
+
+0.6.2 keeps every snapshot forever, and `recordVersion` / `recordEpoch`
+parse every snapshot of a record to compare with (or index) the last one.
+On a real vault one note with an 837 KB document grew 23 snapshots of
+~1.1 MB in a week. The port (`src/vault/history.rs`, `epoch.rs`):
+
+- Reads only the latest snapshot: the file names are listed and sorted
+  (`<ms>-<seq>-<shortId>.json`, oldest first) and the last one parsed. The
+  next `seq` is one past the highest in the names (the count, as 0.6.2
+  numbers them, while nothing was pruned). Lookups by id (`diff`,
+  `restore`, `find_epoch_by_id`) parse only files whose name carries the
+  id's short id.
+- Prunes on every capture (`prune_history`, only the note's directories):
+  each record keeps its newest 20 snapshots (`HISTORY_KEEP_RECENT`) plus
+  the newest of each UTC day within 30 days (`HISTORY_RETENTION_DAYS`,
+  the window `icloud-findmy prune-history` uses); the note's epochs follow
+  the same rule, and a snapshot a kept epoch names is kept, so every
+  listed epoch still resolves. Files that aren't capture names are left
+  alone. The on-disk format is unchanged, and icloud-md reads it.
+- `status` and `push --dry-run` record nothing: planning runs inside
+  `history::without_recording`, where `record_version` and `record_epoch`
+  are no-ops. 0.6.2 records the looked-up note's snapshot while planning.
+
+Tests: tests/vault_history.rs, and tests/cli_differential.rs
+`previews_icloud_md_records_history_and_the_port_does_not` with the
+scenarios `tiny-status` and `tiny-push-dry-run` (`portDeviation:
+previews-write-nothing`): icloud-md's vault is asserted to hold one history
+snapshot; the port's is asserted to be icloud-md's without it (its state
+directory the unchanged `tiny-clone` one), with the same exit, stdout,
+requests and mtimes.
+
 ### New notes listed without their text (not in 0.6.2)
 
 Found in review (2026-09-29). In 0.6.2's `pull` (`src/commands/pull.ts`

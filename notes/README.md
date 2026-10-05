@@ -107,7 +107,8 @@ without asking.
   a checklist toggle (`Ctrl+Enter`), and PDF export (saved next to the
   note) are in the toolbar. The window follows the active Omarchy theme.
 - **History** shows past versions of the current note with diffs,
-  read-only. Throwing away a note's local edits is a deliberate terminal
+  read-only. It keeps a note's newest 20 versions, plus one a day for
+  the last 30 days; older ones are dropped as new ones arrive. Throwing away a note's local edits is a deliberate terminal
   step (`icloud-notes restore`, see
   [If something looks wrong](#if-something-looks-wrong)), never a click.
 

@@ -9,6 +9,7 @@ use super::plan::{SerializedPlanEntry, count_unchanged_notes};
 use super::push::build_push_plan;
 use super::remote::{Connector, DefaultConnector};
 use super::{Error, SyncNotice};
+use crate::vault::history::without_recording;
 
 /// `StatusResult`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,7 +30,7 @@ pub fn run_status_with(
     target_dir: &Path,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<StatusResult, Error> {
-    let plan = build_push_plan(connector, target_dir, on_status)?;
+    let plan = without_recording(|| build_push_plan(connector, target_dir, on_status))?;
     let entries: Vec<SerializedPlanEntry> = plan.entries.iter().map(|e| e.entry.serialize()).collect();
     Ok(StatusResult {
         unchanged: count_unchanged_notes(&entries, plan.state.notes.len()),
