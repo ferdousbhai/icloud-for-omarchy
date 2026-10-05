@@ -79,7 +79,7 @@ struct Snapshot {
     albums: Vec<icloud_photos::catalog::AlbumRow>,
     total: i64,
     album: Option<String>,
-    assets: Vec<icloud_photos::catalog::Row>,
+    tiles: Vec<Arc<super::grid::Tile>>,
     rows: Vec<super::grid::RowItem>,
     columns: usize,
     first_sync: bool,
@@ -288,6 +288,14 @@ impl App {
     fn connect(self: &Rc<Self>) {
         let a = self.clone();
         *self.grid.on_bind.borrow_mut() = Some(Box::new(move |id, thumb, picture| a.bind_tile(id, thumb, picture)));
+        // A tile scrolled away: its thumbnail need not download now (fast
+        // scrolling would otherwise queue one per tile it passed).
+        let a = self.clone();
+        *self.grid.on_unbind.borrow_mut() = Some(Box::new(move |id| {
+            if let Some(d) = a.downloader.borrow().as_ref() {
+                d.cancel(id, Job::Thumb);
+            }
+        }));
 
         let a = self.clone();
         self.albums.list.connect_row_selected(move |_, row| {
@@ -629,7 +637,7 @@ impl App {
         } else {
             "Photos you add in iCloud, or upload from here, appear in this view."
         }));
-        self.grid.set_rows(snap.assets, snap.rows, snap.columns);
+        self.grid.set_rows(snap.tiles, snap.rows, snap.columns);
     }
 
     fn bind_tile(self: &Rc<Self>, id: &str, thumb: Option<&PathBuf>, picture: &gtk::Picture) {
@@ -637,18 +645,32 @@ impl App {
             picture.set_paintable(Some(&t));
             return;
         }
-        match thumb.filter(|p| p.exists()) {
-            Some(p) => self.load_texture(id, p),
-            None => {
-                if let Some(d) = self.downloader.borrow().as_ref() {
-                    d.enqueue(id, Job::Thumb, Priority::Now);
-                }
-            }
+        // No stat here, on the main loop: decoding the cached file (off it)
+        // finds out whether it is still there.
+        match thumb {
+            Some(p) => self.load_texture_or_download(id, p),
+            None => self.download_thumb(id),
+        }
+    }
+
+    fn download_thumb(&self, id: &str) {
+        if let Some(d) = self.downloader.borrow().as_ref() {
+            d.enqueue(id, Job::Thumb, Priority::Now);
         }
     }
 
     /// Decode a thumbnail off the main loop, then show it wherever it is bound.
     pub fn load_texture(self: &Rc<Self>, id: &str, path: &Path) {
+        self.decode_texture(id, path, false);
+    }
+
+    /// [`load_texture`](Self::load_texture) for a cached path the catalog
+    /// recorded: when it cannot be read (the cache was cleared), download it.
+    fn load_texture_or_download(self: &Rc<Self>, id: &str, path: &Path) {
+        self.decode_texture(id, path, true);
+    }
+
+    fn decode_texture(self: &Rc<Self>, id: &str, path: &Path, download_if_missing: bool) {
         if !self.textures.borrow_mut().loading.insert(id.to_owned()) {
             return;
         }
@@ -660,11 +682,18 @@ impl App {
                 .flatten();
             let mut textures = a.textures.borrow_mut();
             textures.loading.remove(&id);
-            if let Some(t) = tex {
-                textures.insert(id.clone(), t.clone());
-                drop(textures);
-                a.grid.show_texture(&id, &t);
-                a.viewer.on_thumb(&a, &id);
+            match tex {
+                Some(t) => {
+                    textures.insert(id.clone(), t.clone());
+                    drop(textures);
+                    a.grid.show_texture(&id, &t);
+                    a.viewer.on_thumb(&a, &id);
+                }
+                None if download_if_missing => {
+                    drop(textures);
+                    a.download_thumb(&id);
+                }
+                None => {}
             }
         });
     }
@@ -829,19 +858,20 @@ fn snapshot(cat: &Catalog, mut album: Option<String>, with_albums: bool, columns
     if with_albums && album.as_ref().is_some_and(|c| !albums.iter().any(|a| &a.id == c)) {
         album = None;
     }
-    let assets = cat.assets(album.as_deref()).unwrap_or_default();
+    let assets = cat.grid_assets(album.as_deref()).unwrap_or_default();
     let first_sync = assets.is_empty()
         && cat
             .meta(icloud_photos::catalog::SYNC_TOKEN_KEY)
             .ok()
             .flatten()
             .is_none();
-    let rows = super::grid::rows_of(&assets, columns);
+    let tiles = super::grid::tiles_of(assets);
+    let rows = super::grid::rows_of(&tiles, columns);
     Snapshot {
         albums,
         total: if with_albums { cat.count().unwrap_or(0) } else { 0 },
         album,
-        assets,
+        tiles,
         rows,
         columns,
         first_sync,

@@ -4,12 +4,14 @@
 //! model gives the month headers.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use icloud_photos::catalog::Row;
+use icloud_photos::catalog::GridRow;
 use icloud_photos::cloudkit::Kind;
 
 /// Smallest tile edge; tiles grow to fill the width.
@@ -17,6 +19,8 @@ const TILE: i32 = 140;
 const GAP: i32 = 3;
 const PAD: i32 = 12;
 
+/// One asset as the grid shows it. Built off the main loop with its month
+/// already worked out, so re-chunking for a new width does no date maths.
 #[derive(Debug, Clone)]
 pub struct Tile {
     pub id: String,
@@ -24,18 +28,23 @@ pub struct Tile {
     pub kind: Kind,
     pub is_live: bool,
     pub filename: String,
+    /// year * 12 + month, local time.
+    pub month: i64,
 }
 
 #[derive(Debug, Clone)]
 pub struct RowItem {
     /// year * 12 + month, local time; sections sort newest first.
     pub month: i64,
-    pub label: String,
-    pub tiles: Vec<Tile>,
+    /// The month's header ("September 2026"), shared by its rows.
+    pub label: Arc<str>,
+    pub tiles: Vec<Arc<Tile>>,
 }
 
 /// Called when a tile is bound: (asset id, its thumb file if downloaded, the picture).
 type BindTile = Box<dyn Fn(&str, Option<&PathBuf>, &gtk::Picture)>;
+/// Called when a tile scrolls out of the list's reach: (asset id).
+type UnbindTile = Box<dyn Fn(&str)>;
 
 pub struct Grid {
     pub root: gtk::Stack,
@@ -44,40 +53,65 @@ pub struct Grid {
     store: gio::ListStore,
     columns: Rc<Cell<usize>>,
     tile: Rc<Cell<i32>>,
-    assets: RefCell<Vec<Row>>,
+    tiles: RefCell<Vec<Arc<Tile>>>,
+    /// The picture each bound asset is shown in, so a decoded thumbnail goes
+    /// straight to it.
+    bound: Rc<RefCell<HashMap<String, gtk::Picture>>>,
     pub on_bind: Rc<RefCell<Option<BindTile>>>,
+    pub on_unbind: Rc<RefCell<Option<UnbindTile>>>,
 }
 
-fn month_of(unix: i64) -> (i64, String) {
+fn month_key(unix: i64) -> i64 {
     match glib::DateTime::from_unix_local(unix) {
-        Ok(dt) => {
-            let key = i64::from(dt.year()) * 12 + i64::from(dt.month());
-            let label = dt.format("%B %Y").map(|s| s.to_string()).unwrap_or_default();
-            (key, label)
-        }
-        Err(_) => (0, String::new()),
+        Ok(dt) => i64::from(dt.year()) * 12 + i64::from(dt.month()),
+        Err(_) => 0,
     }
 }
 
-/// Chunk assets (newest first) into rows of `columns`, never crossing a month.
-pub fn rows_of(assets: &[Row], columns: usize) -> Vec<RowItem> {
+fn month_label(key: i64) -> Arc<str> {
+    let (year, month) = ((key - 1).div_euclid(12), (key - 1).rem_euclid(12) + 1);
+    glib::DateTime::from_local(year as i32, month as i32, 1, 0, 0, 0.0)
+        .ok()
+        .and_then(|dt| dt.format("%B %Y").ok())
+        .map(|s| Arc::from(s.as_str()))
+        .unwrap_or_else(|| Arc::from(""))
+}
+
+/// Catalog rows to tiles (newest first), each with its local month. Runs
+/// off the main loop, once per reload.
+pub fn tiles_of(assets: Vec<GridRow>) -> Vec<Arc<Tile>> {
+    assets
+        .into_iter()
+        .map(|a| {
+            Arc::new(Tile {
+                month: month_key(a.created),
+                id: a.id,
+                thumb: a.thumb_path,
+                kind: a.kind,
+                is_live: a.is_live,
+                filename: a.filename,
+            })
+        })
+        .collect()
+}
+
+/// Chunk tiles (newest first) into rows of `columns`, never crossing a month.
+pub fn rows_of(tiles: &[Arc<Tile>], columns: usize) -> Vec<RowItem> {
     let mut rows: Vec<RowItem> = Vec::new();
-    for a in assets {
-        let (month, label) = month_of(a.created);
-        let tile = Tile {
-            id: a.id.clone(),
-            thumb: a.thumb_path.clone(),
-            kind: a.kind,
-            is_live: a.is_live,
-            filename: a.filename.clone(),
-        };
+    for t in tiles {
         match rows.last_mut() {
-            Some(r) if r.month == month && r.tiles.len() < columns => r.tiles.push(tile),
-            _ => rows.push(RowItem {
-                month,
-                label,
-                tiles: vec![tile],
-            }),
+            Some(r) if r.month == t.month && r.tiles.len() < columns => r.tiles.push(t.clone()),
+            last => {
+                let label = match last {
+                    Some(r) if r.month == t.month => r.label.clone(),
+                    _ => month_label(t.month),
+                };
+                rows.push(RowItem {
+                    month: t.month,
+                    label,
+                    tiles: vec![t.clone()],
+                });
+            }
         }
     }
     rows
@@ -101,6 +135,8 @@ impl Grid {
         let columns = Rc::new(Cell::new(4usize));
         let tile = Rc::new(Cell::new(TILE));
         let on_bind: Rc<RefCell<Option<BindTile>>> = Rc::new(RefCell::new(None));
+        let on_unbind: Rc<RefCell<Option<UnbindTile>>> = Rc::new(RefCell::new(None));
+        let bound: Rc<RefCell<HashMap<String, gtk::Picture>>> = Rc::default();
 
         let factory = gtk::SignalListItemFactory::new();
         factory.connect_setup(|_, obj| {
@@ -121,6 +157,7 @@ impl Grid {
         let cols = columns.clone();
         let size = tile.clone();
         let bind_cb = on_bind.clone();
+        let bind_map = bound.clone();
         factory.connect_bind(move |_, obj| {
             let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -159,6 +196,7 @@ impl Grid {
                         button.set_tooltip_text(Some(&t.filename));
                         let (picture, badge) = tile_parts(button);
                         picture.set_widget_name(&t.id);
+                        bind_map.borrow_mut().insert(t.id.clone(), picture.clone());
                         if let Some(spacer) = picture.prev_sibling() {
                             spacer.set_size_request(size.get(), size.get());
                         }
@@ -178,7 +216,9 @@ impl Grid {
                 i += 1;
             }
         });
-        factory.connect_unbind(|_, obj| {
+        let unbind_cb = on_unbind.clone();
+        let unbind_map = bound.clone();
+        factory.connect_unbind(move |_, obj| {
             let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
@@ -190,6 +230,17 @@ impl Grid {
                 slot = w.next_sibling();
                 if let Some(button) = w.downcast_ref::<gtk::Button>() {
                     let (picture, _) = tile_parts(button);
+                    let id = picture.widget_name();
+                    if !id.is_empty() {
+                        let mut map = unbind_map.borrow_mut();
+                        if map.get(id.as_str()) == Some(&picture) {
+                            map.remove(id.as_str());
+                        }
+                        drop(map);
+                        if let Some(cb) = unbind_cb.borrow().as_ref() {
+                            cb(&id);
+                        }
+                    }
                     picture.set_widget_name("");
                     picture.set_paintable(None::<&gtk::gdk::Paintable>);
                 }
@@ -247,22 +298,38 @@ impl Grid {
             store,
             columns,
             tile,
-            assets: RefCell::new(Vec::new()),
+            tiles: RefCell::new(Vec::new()),
+            bound,
             on_bind,
+            on_unbind,
         };
         grid.watch_width();
         grid
     }
 
     /// Size tiles to fill the width: re-chunk the rows when the number of
-    /// columns changes, otherwise just resize the tiles on screen.
+    /// columns changes, otherwise just resize the tiles on screen. The list
+    /// view sets its horizontal adjustment's page size to its width on every
+    /// allocation, so that notification is the resize signal (no per-frame
+    /// tick). The work runs on idle, outside the allocation that told us.
     fn watch_width(&self) {
         let (cols, tile) = (self.columns.clone(), self.tile.clone());
-        let last = Cell::new(0);
-        self.scrolled.add_tick_callback(move |sw, _| {
-            let width = sw.width();
-            if width != last.get() && width > 0 {
-                last.set(width);
+        let last = Rc::new(Cell::new(0));
+        let queued = Rc::new(Cell::new(false));
+        let sw = self.scrolled.clone();
+        self.scrolled.hadjustment().connect_page_size_notify(move |adj| {
+            let width = adj.page_size().round() as i32;
+            if width <= 0 || width == last.get() || queued.replace(true) {
+                return;
+            }
+            let (cols, tile, last, queued, sw) = (cols.clone(), tile.clone(), last.clone(), queued.clone(), sw.clone());
+            let adj = adj.clone();
+            glib::idle_add_local_once(move || {
+                queued.set(false);
+                let width = adj.page_size().round() as i32;
+                if width <= 0 || width == last.replace(width) {
+                    return;
+                }
                 let inner = width - 2 * PAD;
                 let fit = ((inner + GAP) / (TILE + GAP)).max(1);
                 let edge = ((inner - GAP * (fit - 1)) / fit).max(TILE / 2);
@@ -277,8 +344,7 @@ impl Grid {
                         }
                     });
                 }
-            }
-            glib::ControlFlow::Continue
+            });
         });
     }
 
@@ -286,10 +352,10 @@ impl Grid {
         self.columns.get()
     }
 
-    /// Show these assets (newest first), already chunked into `rows` of
+    /// Show these tiles (newest first), already chunked into `rows` of
     /// `columns` (off the main loop), keeping the scroll position.
-    pub fn set_rows(&self, assets: Vec<Row>, rows: Vec<RowItem>, columns: usize) {
-        *self.assets.borrow_mut() = assets;
+    pub fn set_rows(&self, tiles: Vec<Arc<Tile>>, rows: Vec<RowItem>, columns: usize) {
+        *self.tiles.borrow_mut() = tiles;
         if columns == self.columns.get() {
             self.show_rows(rows);
         } else {
@@ -299,7 +365,7 @@ impl Grid {
 
     /// Re-chunk for a new column count.
     pub fn regrid(&self) {
-        let rows = rows_of(&self.assets.borrow(), self.columns.get());
+        let rows = rows_of(&self.tiles.borrow(), self.columns.get());
         self.show_rows(rows);
     }
 
@@ -321,18 +387,16 @@ impl Grid {
     }
 
     pub fn ids(&self) -> Vec<String> {
-        self.assets.borrow().iter().map(|a| a.id.clone()).collect()
+        self.tiles.borrow().iter().map(|t| t.id.clone()).collect()
     }
 
     /// Put a freshly loaded thumbnail on the tile showing `id`, if any.
     pub fn show_texture(&self, id: &str, texture: &gtk::gdk::Texture) {
-        walk(self.scrolled.upcast_ref(), &mut |w| {
-            if let Some(p) = w.downcast_ref::<gtk::Picture>()
-                && p.widget_name() == id
-            {
-                p.set_paintable(Some(texture));
-            }
-        });
+        if let Some(p) = self.bound.borrow().get(id)
+            && p.widget_name() == id
+        {
+            p.set_paintable(Some(texture));
+        }
     }
 }
 
@@ -392,29 +456,14 @@ fn tile_parts(button: &gtk::Button) -> (gtk::Picture, gtk::Image) {
 mod tests {
     use super::*;
 
-    fn row(id: &str, created: i64) -> Row {
-        Row {
+    fn row(id: &str, created: i64) -> GridRow {
+        GridRow {
             id: id.into(),
-            master_id: format!("m-{id}"),
-            filename: format!("{id}.JPG"),
             created,
-            size: 0,
-            w: 0,
-            h: 0,
+            thumb_path: None,
             kind: Kind::Photo,
             is_live: false,
-            local_path: None,
-            live_path: None,
-            thumb_path: None,
-            medium_path: None,
-            deleted: false,
-            change_tag: None,
-            orig_url: None,
-            orig_type: None,
-            thumb_url: None,
-            medium_url: None,
-            live_url: None,
-            live_type: None,
+            filename: format!("{id}.JPG"),
         }
     }
 
@@ -423,17 +472,28 @@ mod tests {
         // Mid-month noon UTC, so no time zone moves these across a month.
         let sep = 1_789_905_600; // 2026-09-20
         let aug = sep - 31 * 86_400; // 2026-08-20
-        let assets: Vec<Row> = (0..5)
+        let assets: Vec<GridRow> = (0..5)
             .map(|i| row(&format!("s{i}"), sep - i))
             .chain((0..2).map(|i| row(&format!("a{i}"), aug - i)))
             .collect();
-        let rows = rows_of(&assets, 3);
-        let shape: Vec<(usize, &str)> = rows.iter().map(|r| (r.tiles.len(), r.label.as_str())).collect();
+        let tiles = tiles_of(assets);
+        let rows = rows_of(&tiles, 3);
+        let shape: Vec<(usize, &str)> = rows.iter().map(|r| (r.tiles.len(), &*r.label)).collect();
         assert_eq!(
             shape,
             vec![(3, "September 2026"), (2, "September 2026"), (2, "August 2026")]
         );
         assert!(rows[0].month > rows[2].month);
         assert_eq!(rows[1].tiles[0].id, "s3");
+        // Re-chunking shares the tiles; nothing is re-read or re-dated.
+        let wide = rows_of(&tiles, 10);
+        assert_eq!(wide.len(), 2);
+        assert!(Arc::ptr_eq(&wide[0].tiles[0], &tiles[0]));
+    }
+
+    #[test]
+    fn month_labels_round_trip_the_key() {
+        assert_eq!(&*month_label(2026 * 12 + 1), "January 2026");
+        assert_eq!(&*month_label(2026 * 12 + 12), "December 2026");
     }
 }
