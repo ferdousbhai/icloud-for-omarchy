@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 use icloud_notes_sync::cmd::errors::{EXIT_HAS_ENTRIES, EXIT_OK};
 use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{OutputContext, TOOL};
-use icloud_notes_sync::cmd::plan::{RenderPlanOptions, render_plan};
+use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
     self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
     vault_info,
@@ -248,7 +248,25 @@ fn push_lines(r: &push::PushResult, target: &Path) -> Vec<Line> {
         }
     }
     if let Some(pushed) = r.pushed {
-        lines.push((false, format!("Pushed {pushed} note(s) from {}", target.display())));
+        // `pushed` counts folder changes too; name them apart.
+        let folders = r
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.entry.kind,
+                    PlanEntryKind::CreateFolder | PlanEntryKind::RenameFolder | PlanEntryKind::DeleteFolder
+                ) && e.entry.resolution == PlanResolution::Ready
+                    && e.outcome.as_ref().is_some_and(|o| o.succeeded)
+            })
+            .count();
+        let notes = pushed.saturating_sub(folders);
+        let what = match (notes, folders) {
+            (_, 0) => format!("{notes} note(s)"),
+            (0, _) => format!("{folders} folder change(s)"),
+            _ => format!("{notes} note(s) and {folders} folder change(s)"),
+        };
+        lines.push((false, format!("Pushed {what} from {}", target.display())));
     }
     let entries: Vec<_> = r.entries.iter().map(|e| e.entry.clone()).collect();
     let options = if r.dry_run {

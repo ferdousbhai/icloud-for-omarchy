@@ -401,3 +401,27 @@ fn several_deletes_go_up_in_one_request() {
     let after = state(&vault);
     assert!(after["notes"].get(RECORD).is_none() && after["notes"].get(other).is_none());
 }
+
+/// The push summary names folder changes apart from notes.
+#[test]
+fn the_push_summary_counts_folder_changes_apart_from_notes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    std::fs::create_dir(vault.join("Ideas")).unwrap();
+    std::fs::create_dir_all(out.join("home")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
+        .args(["push", vault.to_str().unwrap()])
+        .env("HOME", out.join("home"))
+        .env("XDG_RUNTIME_DIR", out.join("home"))
+        .env("ICLOUD_NOTES_SYNC_CASSETTE", differential().join("cassettes/tiny-push-create.json"))
+        .env("ICLOUD_NOTES_SYNC_REQUEST_LOG", out.join("requests.json"))
+        .env("ICLOUD_NOTES_SYNC_NOW", "1790000000000")
+        .env("ICLOUD_NOTES_SYNC_DETERMINISTIC", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("Pushed 1 folder change(s) from"), "{stdout}");
+}
