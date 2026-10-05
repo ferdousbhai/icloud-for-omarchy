@@ -232,20 +232,26 @@ fn clean_absent_note_is_removed_like_a_tombstone() {
     assert_eq!(summary.changes, vec![PullChange::new(K::Remove, "Notes/Gone.md")]);
 }
 
+/// Deleted elsewhere but edited here: the edits are kept as a new note (no
+/// id, untracked), which the next push creates.
 #[test]
-fn absent_note_with_local_edits_becomes_a_conflict() {
+fn absent_note_with_local_edits_is_kept_as_a_new_note() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
-    write_vault_file(dir, "Notes/Edited.md", "body plus my local edit\n");
+    write_vault_file(
+        dir,
+        "Notes/Edited.md",
+        "---\napple-note-id: REC-EDITED\n---\n\nbody plus my local edit\n",
+    );
     write_base_copy(dir, "REC-EDITED", "body\n").unwrap();
     let mut notes = IndexMap::from([("REC-EDITED".to_string(), entry_for("Notes/Edited.md"))]);
     let mut summary = PullSummary::default();
     let removed = resync(dir, None, &seen(&[]), &mut notes, &mut IndexMap::new(), &mut summary);
     assert_eq!(removed, 1);
-    assert!(notes.contains_key("REC-EDITED"));
-    assert!(read(dir, "Notes/Edited.md").contains("<<<<<<< local"));
-    assert_eq!(summary.conflicts.len(), 1);
-    assert!(summary.conflicts[0].contains("deleted remotely"));
+    assert!(!notes.contains_key("REC-EDITED"));
+    assert_eq!(read(dir, "Notes/Edited.md"), "body plus my local edit\n");
+    assert!(summary.conflicts.is_empty());
+    assert!(summary.notices[0].message.contains("kept as a new note"));
 }
 
 #[test]

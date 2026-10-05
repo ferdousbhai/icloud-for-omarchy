@@ -9,7 +9,7 @@ use std::path::Path;
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution};
 use icloud_notes_sync::cmd::push::{
-    BuildPushPlanResult, PushOptions, build_push_plan, plan_remote_changed_merge, run_push_with,
+    BuildPushPlanResult, PushOptions, apply_remote_merge, build_push_plan, merge_remote_change, run_push_with,
 };
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
@@ -118,16 +118,14 @@ fn untracked_md_in_known_folder_is_a_create_candidate_reaching_network() {
     assert_unbound(dir.path());
 }
 
+/// A note at the top level of the vault goes in the default folder, as one
+/// made outside any folder does in Notes.
 #[test]
-fn refuses_loose_top_level_md_locally() {
+fn loose_top_level_md_is_a_create_candidate_reaching_network() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
     write_vault_file(dir.path(), "Loose.md", "Hello");
-    let entries = plan_entries(dir.path());
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].kind, PlanEntryKind::Create);
-    assert_eq!(entries[0].resolution, PlanResolution::Refused);
-    assert!(reason(&entries[0]).contains("outside any folder"));
+    assert_unbound(dir.path());
 }
 
 #[test]
@@ -467,28 +465,18 @@ fn deleting_a_note_with_a_tracked_table_attachment_reaches_network() {
     assert_unbound(dir.path());
 }
 
-// --- planRemoteChangedMerge -----------------------------------------------------
+// --- remote-change merges ---------------------------------------------------------
 
 #[test]
-fn plan_remote_changed_merge_keeps_merged_file_modified() {
+fn remote_merge_keeps_merged_file_modified() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "line one\n\nline two\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "line one edited locally\n\nline two\n");
-    let plan_entry = plan_remote_changed_merge(
-        dir.path(),
-        &mut s,
-        "REC1",
-        &entry,
-        "",
-        "line one edited locally\n\nline two\n",
-        "line one\n\nline two edited remotely\n",
-        "2b",
-    )
-    .unwrap();
-    assert_eq!(plan_entry.resolution, PlanResolution::Conflict);
-    assert!(reason(&plan_entry).contains("re-run push to upload"));
+    let merged = merge_remote_change(dir.path(), "REC1", "", "line one edited locally\n\nline two\n", "line one\n\nline two edited remotely\n", "2b").unwrap();
+    apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
+    assert!(!merged.has_conflict);
     assert_eq!(
         read(dir.path(), "Notes/Tracked.md"),
         "line one edited locally\n\nline two edited remotely\n"
@@ -505,23 +493,14 @@ fn plan_remote_changed_merge_keeps_merged_file_modified() {
 }
 
 #[test]
-fn plan_remote_changed_merge_with_tag_only_bump_leaves_edit_uploadable() {
+fn remote_merge_with_tag_only_bump_leaves_edit_uploadable() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "shared text\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "shared text plus my edit\n");
-    plan_remote_changed_merge(
-        dir.path(),
-        &mut s,
-        "REC1",
-        &entry,
-        "",
-        "shared text plus my edit\n",
-        "shared text\n",
-        "2b",
-    )
-    .unwrap();
+    let merged = merge_remote_change(dir.path(), "REC1", "", "shared text plus my edit\n", "shared text\n", "2b").unwrap();
+    apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
     assert_eq!(read(dir.path(), "Notes/Tracked.md"), "shared text plus my edit\n");
     assert_eq!(
         read_base_copy(dir.path(), "REC1").unwrap().as_deref(),
@@ -535,48 +514,29 @@ fn plan_remote_changed_merge_with_tag_only_bump_leaves_edit_uploadable() {
 }
 
 #[test]
-fn plan_remote_changed_merge_preserves_frontmatter() {
+fn remote_merge_preserves_frontmatter() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "body\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "---\nkeep: me\n---\n\nbody edited\n");
-    plan_remote_changed_merge(
-        dir.path(),
-        &mut s,
-        "REC1",
-        &entry,
-        "---\nkeep: me\n---\n\n",
-        "body edited\n",
-        "body\n",
-        "2b",
-    )
-    .unwrap();
+    let merged = merge_remote_change(dir.path(), "REC1", "---\nkeep: me\n---\n\n", "body edited\n", "body\n", "2b").unwrap();
+    apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
     let written = read(dir.path(), "Notes/Tracked.md");
     assert!(written.starts_with("---\nkeep: me\n---\n"));
     assert!(written.ends_with("body edited\n"));
 }
 
 #[test]
-fn plan_remote_changed_merge_conflict_writes_markers_and_keeps_base() {
+fn remote_merge_conflict_writes_markers_and_keeps_base() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "shared line\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "shared line edited locally\n");
-    let plan_entry = plan_remote_changed_merge(
-        dir.path(),
-        &mut s,
-        "REC1",
-        &entry,
-        "",
-        "shared line edited locally\n",
-        "shared line edited remotely\n",
-        "2b",
-    )
-    .unwrap();
-    assert_eq!(plan_entry.resolution, PlanResolution::Conflict);
-    assert!(reason(&plan_entry).contains("conflict markers"));
+    let merged = merge_remote_change(dir.path(), "REC1", "", "shared line edited locally\n", "shared line edited remotely\n", "2b").unwrap();
+    apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
+    assert!(merged.has_conflict);
     let written = read(dir.path(), "Notes/Tracked.md");
     assert!(written.contains("<<<<<<< local"));
     assert!(written.contains(">>>>>>> remote"));
@@ -658,46 +618,28 @@ fn envelope_stripped_falls_back_to_delete_plus_create() {
     assert_unbound(dir.path());
 }
 
-/// Deliberate difference from icloud-md 0.6.2 (docs/PORT_PLAN.md §1): 0.6.2
-/// plans a copy that keeps the original's `apple-note-id` (original still in
-/// place) as a create; the port refuses it, naming the tracked note.
+/// A copy of a tracked note's file is a new note, as a duplicated note is
+/// in Notes: the create gives it its own id.
 #[test]
-fn copy_with_original_in_place_is_refused_as_a_duplicate() {
+fn copy_with_original_in_place_is_a_create() {
     let dir = tempfile::tempdir().unwrap();
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "Synced text");
     write_vault_file(dir.path(), "Recipes/Tracked copy.md", &with_id(NOTE_ID, "Synced text"));
     write_clone_state(dir.path(), &id_state()).unwrap();
-    let entries = plan_entries(dir.path());
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].kind, PlanEntryKind::Create);
-    assert_eq!(entries[0].file, "Recipes/Tracked copy.md");
-    assert_eq!(entries[0].resolution, PlanResolution::Refused);
-    assert_eq!(
-        reason(&entries[0]),
-        "carries the \"apple-note-id\" of Notes/Tracked.md, a note this clone already tracks, so pushing it would \
-         create a duplicate of that note - delete this file if it is a leftover copy, or remove its \
-         \"apple-note-id\" line to push it as a new note"
-    );
+    assert_unbound(dir.path());
 }
 
-/// The file a clone that saw one record twice leaves behind: a byte-identical
-/// twin of the tracked file under a uniquified name. Push refuses it (no
-/// network needed) and leaves the tracked note alone.
+/// A byte-identical twin of the tracked file is a copy like any other.
 #[test]
-fn byte_identical_twin_from_a_double_clone_is_refused() {
+fn byte_identical_twin_is_a_create() {
     let dir = tempfile::tempdir().unwrap();
     let file = with_id(NOTE_ID, "Synced text");
     write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", &file);
     write_vault_file(dir.path(), "Notes/Tracked 2.md", &file);
     write_clone_state(dir.path(), &id_state()).unwrap();
-    let entries = plan_entries(dir.path());
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(entries[0].file, "Notes/Tracked 2.md");
-    assert_eq!(entries[0].kind, PlanEntryKind::Create);
-    assert_eq!(entries[0].resolution, PlanResolution::Refused);
-    assert!(reason(&entries[0]).contains("of Notes/Tracked.md, a note this clone already tracks"));
+    assert_unbound(dir.path());
 }
 
 /// Without the id line the same copy is an ordinary new note.

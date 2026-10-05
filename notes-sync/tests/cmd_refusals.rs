@@ -56,13 +56,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "still contains diff3 conflict markers - resolve them before pushing".into(),
         ),
         (
-            348,
-            "pushing a fully emptied note",
-            Refusal::UpdateEmptied,
-            Refused,
-            "pushing a fully emptied note isn't supported yet - edit it in Notes instead".into(),
-        ),
-        (
             358,
             "this note contains content this tool can't parse and can never be pushed",
             Refusal::UpdateUnknownContent { file: FILE.into() },
@@ -128,13 +121,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
                 .into(),
         ),
         (
-            569,
-            "moved to the top level of the clone",
-            Refusal::MoveToTopLevel,
-            Refused,
-            "moved to the top level of the clone, but every note lives in a folder - move it into a folder directory".into(),
-        ),
-        (
             578,
             "which can't become one of the account's folders",
             Refusal::MoveIntoUnfolderableDir {
@@ -169,14 +155,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::MoveWithAttachments,
             Refused,
             "this note has attachments, whose files can't be relocated safely yet - move it back (or move the note in Notes and pull instead)"
-                .into(),
-        ),
-        (
-            640,
-            "sits at the top level of the clone",
-            Refusal::CreateAtTopLevel,
-            Refused,
-            "sits at the top level of the clone, outside any folder - every note lives in a folder, so move it into one of the folder directories first"
                 .into(),
         ),
         (
@@ -249,19 +227,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::CreateAttachmentReference,
             Refused,
             "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first.".into(),
-        ),
-        (
-            // Port only (docs/PORT_PLAN.md §1): no push.ts site.
-            0,
-            "",
-            Refusal::CreateDuplicatesTrackedNote {
-                tracked_file: "Notes/Pie.md".into(),
-            },
-            Refused,
-            "carries the \"apple-note-id\" of Notes/Pie.md, a note this clone already tracks, so pushing it would \
-             create a duplicate of that note - delete this file if it is a leftover copy, or remove its \
-             \"apple-note-id\" line to push it as a new note"
-                .into(),
         ),
         (
             845,
@@ -381,13 +346,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             Refusal::MergedWithConflicts,
             Conflict,
             "changed remotely since the last pull - merged with conflict markers, resolve manually".into(),
-        ),
-        (
-            1366,
-            "merged remote changes into your local edit",
-            Refusal::MergedCleanly,
-            Conflict,
-            "merged remote changes into your local edit - re-run push to upload".into(),
         ),
         (
             1237,
@@ -624,17 +582,14 @@ fn every_refusal_variant_is_listed() {
             PendingRename
             | UpdateSharedNote(_)
             | UpdateConflictMarkers
-            | UpdateEmptied
             | UpdateUnknownContent { .. }
             | UpdateNewAttachmentReference { .. }
             | AmbiguousNoteId { .. }
             | DeleteSharedNote { .. }
             | MoveSharedNote { .. }
-            | MoveToTopLevel
             | MoveIntoUnfolderableDir { .. }
             | MoveIntoSharerArea
             | MoveWithAttachments
-            | CreateAtTopLevel
             | CreateInUnfolderableDir { .. }
             | CreateLooseInSharerHome
             | CreateInReadOnlyShare
@@ -643,7 +598,6 @@ fn every_refusal_variant_is_listed() {
             | CreateUnknownContent
             | CreateEmbedMarker
             | CreateAttachmentReference
-            | CreateDuplicatesTrackedNote { .. }
             | MoveGoneRemotely
             | MoveChangedRemotely
             | MoveRetitle { .. }
@@ -654,7 +608,6 @@ fn every_refusal_variant_is_listed() {
             | UpdateGoneRemotely
             | UpdateChangedRemotelyUnmergeable
             | MergedWithConflicts
-            | MergedCleanly
             | TitleOnlySharedNote(_)
             | UpdatePrepare(_)
             | UpdateRefusedUnspecified => true,
@@ -663,7 +616,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 37, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 32, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()

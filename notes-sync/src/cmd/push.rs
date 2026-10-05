@@ -33,7 +33,7 @@ use crate::doc::embeds::{
     has_unknown_content_marker, plan_embed_representations,
 };
 use crate::doc::encode::{
-    build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_trash_fields,
+    DEFAULT_FOLDER_RECORD_NAME, build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_trash_fields,
     build_note_update_fields,
 };
 use crate::doc::format::{FormatParagraph, decode_note_format, formats_round_trip_equal};
@@ -178,6 +178,9 @@ pub enum Action {
         relocated: bool,
         record: Box<CloudKitRecord>,
         retitle: Option<Retitle>,
+        /// The moved file's text when it was edited too: pushed right
+        /// after the move, against the moved record.
+        edit: Option<MoveEdit>,
     },
     DeleteAlreadyGone {
         record_name: String,
@@ -201,11 +204,20 @@ pub enum Action {
         shared_zone_owner: Option<String>,
         modification_date_ms: i64,
     },
-    /// A byte-level difference with nothing to send: re-sync the base copy.
+    /// A byte-level difference with nothing to send: re-sync the base copy
+    /// (and, after merging a remote change, the file and the tag).
     Rebase {
         record_name: String,
         file: String,
         local_text: String,
+        merged: Option<RemoteMerge>,
+    },
+    /// A remote change merged into the local edit that can't go up now
+    /// (conflict markers, or the merged text is refused): write it locally.
+    WriteMerge {
+        record_name: String,
+        entry: NoteEntry,
+        merged: RemoteMerge,
     },
     Update {
         record_name: String,
@@ -216,7 +228,28 @@ pub enum Action {
         local_text: String,
         requested_title: Option<String>,
         modification_date_ms: i64,
+        merged: Option<RemoteMerge>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoveEdit {
+    pub local_text: String,
+    pub replica: [u8; 16],
+}
+
+/// A remote change diff3-merged into the local edit during planning; nothing
+/// is written until the plan executes, so a preview changes no file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteMerge {
+    /// The whole merged file (frontmatter kept).
+    pub file_text: String,
+    /// The merged body.
+    pub text: String,
+    /// The remote body: the base copy after a clean merge.
+    pub remote_text: String,
+    pub remote_tag: String,
+    pub has_conflict: bool,
 }
 
 /// `ExecutablePlanEntry`.
@@ -272,6 +305,8 @@ struct ReadyMove {
     folder_record_name: String,
     relocated: bool,
     new_title: Option<String>,
+    /// The moved file's body, when it differs from the base copy.
+    edited_text: Option<String>,
 }
 
 struct CreateCandidate {
@@ -403,6 +438,7 @@ pub fn build_push_plan(
 
     let mut update_candidates: Vec<PushCandidate> = Vec::new();
     let mut missing_candidates: Vec<(String, NoteEntry)> = Vec::new();
+    let mut emptied: Vec<(String, NoteEntry)> = Vec::new();
 
     for (record_name, entry) in &state.notes {
         let (local_state, frontmatter, local_text) = match read_local_note(target_dir, entry, record_name, title_mode)?
@@ -447,7 +483,8 @@ pub fn build_push_plan(
             continue;
         }
         if local_text.is_empty() && title_mode != TitleMode::Filename {
-            entries.push(PlanEntry::refused(PlanEntryKind::Update, entry.file.clone(), Refusal::UpdateEmptied).into());
+            // Notes discards a note left empty: so does emptying its file.
+            emptied.push((record_name.clone(), entry.clone()));
             continue;
         }
         if has_unknown_content_marker(&local_text) {
@@ -605,6 +642,7 @@ pub fn build_push_plan(
         }
         delete_candidates.push((record_name.clone(), entry.clone()));
     }
+    delete_candidates.extend(emptied);
 
     // --- folders the account doesn't have yet
     let wanted: Vec<String> = move_pairs
@@ -619,6 +657,15 @@ pub fn build_push_plan(
         .map(|r| (r.dir_path.clone(), r.reason.clone()))
         .collect();
     let resolve_dir = |dir: &str| -> Option<StateDirInfo> {
+        // Every note lives in a folder: one at the top level of the vault
+        // goes in the default one, where Notes puts a note made outside any.
+        if dir.is_empty() {
+            return Some(StateDirInfo::Folder {
+                folder_record_name: DEFAULT_FOLDER_RECORD_NAME.to_owned(),
+                shared_zone_owner: None,
+                permission: None,
+            });
+        }
         if let Some(existing) = dir_index.get(dir) {
             return Some(existing.clone());
         }
@@ -645,10 +692,6 @@ pub fn build_push_plan(
             }));
             continue;
         }
-        if to_dir.is_empty() {
-            entries.push(refuse(Refusal::MoveToTopLevel));
-            continue;
-        }
         let Some(info) = info else {
             entries.push(refuse(Refusal::MoveIntoUnfolderableDir {
                 dir: to_dir.clone(),
@@ -668,6 +711,12 @@ pub fn build_push_plan(
             entries.push(refuse(Refusal::MoveWithAttachments));
             continue;
         }
+        let edited_text = match untracked.iter().find(|u| u.file == *to_file) {
+            Some(u) if read_base_copy(target_dir, record_name)?.as_deref() != Some(u.local_text.as_str()) => {
+                Some(u.local_text.clone())
+            }
+            _ => None,
+        };
         let previous_title = title_from_note_file_name(&entry.file);
         let new_title = title_expressed_by_file(to_file, &recorded_titles);
         let retitled = title_mode == TitleMode::Filename && new_title != previous_title;
@@ -678,6 +727,7 @@ pub fn build_push_plan(
             folder_record_name: info.folder_record_name().unwrap_or_default().to_owned(),
             relocated,
             new_title: retitled.then_some(new_title),
+            edited_text,
         });
     }
 
@@ -693,19 +743,9 @@ pub fn build_push_plan(
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             PlanEntry::refused(PlanEntryKind::Create, file.clone(), refusal).into()
         };
-        // Port only (docs/PORT_PLAN.md §1): an id claimed by a move or an
-        // ambiguous claim was handled above, so a tracked id here means that
-        // note's own file is still present - this file is a duplicate of it.
-        if let Some(tracked) = u.note_id.as_deref().and_then(|id| state.notes.get(id)) {
-            entries.push(refuse(Refusal::CreateDuplicatesTrackedNote {
-                tracked_file: tracked.file.clone(),
-            }));
-            continue;
-        }
-        if dir.is_empty() {
-            entries.push(refuse(Refusal::CreateAtTopLevel));
-            continue;
-        }
+        // A tracked id here means that note's own file is still present:
+        // this file is a copy, and a copy is a new note (the create gives it
+        // its own id).
         let Some(info) = info else {
             entries.push(refuse(Refusal::CreateInUnfolderableDir {
                 dir: dir.clone(),
@@ -864,6 +904,10 @@ pub fn build_push_plan(
                 relocated: m.relocated,
                 record: Box::new(record.clone()),
                 retitle,
+                edit: m.edited_text.clone().map(|local_text| MoveEdit {
+                    local_text,
+                    replica: replica_bytes,
+                }),
             },
         ));
     }
@@ -954,6 +998,10 @@ pub fn build_push_plan(
             )?;
         }
 
+        // Changed remotely since the last pull: merge the remote text into the
+        // local edit, and push a clean merge straight away against the live
+        // record, as Notes would apply both edits.
+        let mut merged: Option<RemoteMerge> = None;
         if record.record_change_tag.clone().unwrap_or_default() != c.entry.record_change_tag {
             let classified = classify_note_record(record, &ClassifyOptions { title_mode });
             let remote_text = match &classified {
@@ -967,22 +1015,21 @@ pub fn build_push_plan(
                 .record_change_tag
                 .clone()
                 .unwrap_or_else(|| c.entry.record_change_tag.clone());
-            entries.push(
-                plan_remote_changed_merge(
-                    target_dir,
-                    &mut state,
-                    &c.record_name,
-                    &c.entry,
-                    &c.frontmatter,
-                    &c.local_text,
-                    &remote_text,
-                    &remote_tag,
-                )?
-                .into(),
-            );
-            planning_mutated_state = true;
-            continue;
+            let merge = merge_remote_change(target_dir, &c.record_name, &c.frontmatter, &c.local_text, &remote_text, &remote_tag)?;
+            if merge.has_conflict {
+                entries.push(ExecutablePlanEntry::with(
+                    PlanEntry::refused(PlanEntryKind::Update, file.clone(), Refusal::MergedWithConflicts),
+                    Action::WriteMerge {
+                        record_name: c.record_name.clone(),
+                        entry: c.entry.clone(),
+                        merged: merge,
+                    },
+                ));
+                continue;
+            }
+            merged = Some(merge);
         }
+        let local_text = merged.as_ref().map_or(c.local_text.as_str(), |m| m.text.as_str());
 
         if c.title_only {
             let classified = classify_note_record(record, &ClassifyOptions { title_mode });
@@ -1019,7 +1066,7 @@ pub fn build_push_plan(
             target_dir,
             record,
             &c.entry,
-            &c.local_text,
+            local_text,
             &tracked_ids,
             &replica_bytes,
             modification_date_ms,
@@ -1029,7 +1076,19 @@ pub fn build_push_plan(
         let prepared = match prepared {
             Ok(p) => p,
             Err(refusal) => {
-                entries.push(refuse(Refusal::UpdatePrepare(refusal)));
+                let refused = PlanEntry::refused(PlanEntryKind::Update, file.clone(), Refusal::UpdatePrepare(refusal));
+                // The remote change still lands in the file.
+                entries.push(match merged {
+                    Some(merged) => ExecutablePlanEntry::with(
+                        refused,
+                        Action::WriteMerge {
+                            record_name: c.record_name.clone(),
+                            entry: c.entry.clone(),
+                            merged,
+                        },
+                    ),
+                    None => refused.into(),
+                });
                 continue;
             }
         };
@@ -1039,7 +1098,8 @@ pub fn build_push_plan(
                 Action::Rebase {
                     record_name: c.record_name.clone(),
                     file: file.clone(),
-                    local_text: c.local_text.clone(),
+                    local_text: local_text.to_owned(),
+                    merged,
                 },
             ));
             continue;
@@ -1054,9 +1114,10 @@ pub fn build_push_plan(
                 zone,
                 updates: prepared.updates,
                 note_text_updated: prepared.note_text_updated,
-                local_text: c.local_text.clone(),
+                local_text: local_text.to_owned(),
                 requested_title: c.requested_title.clone(),
                 modification_date_ms,
+                merged,
             },
         ));
     }
@@ -1111,42 +1172,44 @@ fn build_create_payload(
     Ok((js::base64_encode(&compressed), desired.text))
 }
 
-/// `planRemoteChangedMerge`: diff3 the remote text into the local edit
-/// during planning; the tag advances, the base copy only on a clean merge.
-#[allow(clippy::too_many_arguments)]
-pub fn plan_remote_changed_merge(
+/// diff3 the remote text into the local edit, in memory.
+pub fn merge_remote_change(
     target_dir: &Path,
-    state: &mut CloneState,
     record_name: &str,
-    entry: &NoteEntry,
     frontmatter: &str,
     local_text: &str,
     remote_text: &str,
     remote_tag: &str,
-) -> Result<PlanEntry, Error> {
+) -> Result<RemoteMerge, Error> {
     let base = read_base_copy(target_dir, record_name)?.unwrap_or_default();
     let outcome = merge_note_versions(&base, local_text, remote_text);
-    std::fs::write(
-        target_dir.join(&entry.file),
-        join_frontmatter(frontmatter, &outcome.text),
-    )?;
-    let mut updated = entry.clone();
-    updated.record_change_tag = remote_tag.to_owned();
-    if outcome.has_conflict {
-        state.notes.insert(record_name.to_owned(), updated);
-        return Ok(PlanEntry::refused(
-            PlanEntryKind::Update,
-            entry.file.clone(),
-            Refusal::MergedWithConflicts,
-        ));
+    Ok(RemoteMerge {
+        file_text: join_frontmatter(frontmatter, &outcome.text),
+        text: outcome.text,
+        remote_text: remote_text.to_owned(),
+        remote_tag: remote_tag.to_owned(),
+        has_conflict: outcome.has_conflict,
+    })
+}
+
+/// Writes a merge that isn't going up: the merged file, the remote tag, and
+/// the remote text as the base copy unless it conflicted (so the local half
+/// stays a pending edit).
+pub fn apply_remote_merge(
+    target_dir: &Path,
+    state: &mut CloneState,
+    record_name: &str,
+    entry: &NoteEntry,
+    merged: &RemoteMerge,
+) -> Result<(), Error> {
+    std::fs::write(target_dir.join(&entry.file), &merged.file_text)?;
+    if !merged.has_conflict {
+        write_base_copy(target_dir, record_name, &merged.remote_text)?;
     }
-    write_base_copy(target_dir, record_name, remote_text)?;
+    let mut updated = entry.clone();
+    updated.record_change_tag = merged.remote_tag.clone();
     state.notes.insert(record_name.to_owned(), updated);
-    Ok(PlanEntry::refused(
-        PlanEntryKind::Update,
-        entry.file.clone(),
-        Refusal::MergedCleanly,
-    ))
+    Ok(())
 }
 
 /// `PreparedCandidate`.
@@ -1545,8 +1608,12 @@ fn apply_local_note_deletion(
     let mut attachments = state.attachments.take().unwrap_or_default();
     let mut table_attachments = state.table_attachments.take().unwrap_or_default();
     let local = local_file_state(target_dir, entry, record_name, state.mode())?;
-    if local == LocalFileState::Clean {
-        safe_unlink(&target_dir.join(&entry.file))?;
+    let path = target_dir.join(&entry.file);
+    let emptied = || -> Result<bool, Error> {
+        Ok(read_text(&path)?.is_some_and(|text| split_frontmatter(&text, split_options(state.mode())).body.is_empty()))
+    };
+    if local == LocalFileState::Clean || (local == LocalFileState::Modified && emptied()?) {
+        safe_unlink(&path)?;
     }
     state.notes.shift_remove(record_name);
     remove_base_copy(target_dir, record_name)?;
@@ -1645,6 +1712,7 @@ fn execute<T: Transport>(
             relocated,
             record,
             retitle,
+            edit,
         } => {
             if failed_folders.contains(folder_record_name) {
                 return Ok(ExecuteOutcome::failed(format!(
@@ -1699,14 +1767,69 @@ fn execute<T: Transport>(
                 0 => rt::now_ms(),
                 ms => ms,
             };
-            state.notes.insert(record_name.clone(), updated);
+            state.notes.insert(record_name.clone(), updated.clone());
             apply_note_file_times(&target_dir.join(to_file), &current)?;
             let what = match (retitle.is_some(), *relocated) {
                 (false, _) => "Moved",
                 (true, true) => "Moved and retitled",
                 (true, false) => "Retitled",
             };
-            Ok(ExecuteOutcome::ok(format!("{what} {} -> {to_file}", entry.file)))
+            let moved = format!("{what} {} -> {to_file}", entry.file);
+            let Some(edit) = edit else {
+                return Ok(ExecuteOutcome::ok(moved));
+            };
+            // The edit made along with the move goes up now, not a sync later.
+            let tracked_ids: HashSet<String> = state
+                .attachments
+                .as_ref()
+                .map(|a| {
+                    a.iter()
+                        .filter(|(_, att)| att.note_record_name == *record_name)
+                        .map(|(k, _)| k.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let prepared = prepare_update(
+                db,
+                &private,
+                target_dir,
+                &current,
+                &updated,
+                &edit.local_text,
+                &tracked_ids,
+                &edit.replica,
+                mtime_ms(&target_dir.join(to_file))?,
+                state.mode(),
+                None,
+            )?;
+            let prepared = match prepared {
+                Ok(p) => p,
+                Err(refusal) => {
+                    return Ok(ExecuteOutcome::ok(format!(
+                        "{moved} (its edits weren't pushed: {})",
+                        Refusal::UpdatePrepare(refusal).reason()
+                    )));
+                }
+            };
+            if !prepared.updates.is_empty() {
+                let results = db.update_records(&private, &prepared.updates)?;
+                if let Some(failure) = results.iter().find_map(rejection) {
+                    return Ok(ExecuteOutcome::ok(format!("{moved} (its edits weren't pushed: {failure})")));
+                }
+                if let Some(RecordUpdateResult::Ok(note)) = results.first()
+                    && note.record_name == *record_name
+                {
+                    updated.record_change_tag = note.record_change_tag.clone().unwrap_or_default();
+                    if let ms @ 1.. = modification_date_of(note) {
+                        updated.modification_date = ms;
+                    }
+                    apply_note_file_times(&target_dir.join(to_file), note)?;
+                    state.notes.insert(record_name.clone(), updated);
+                }
+            }
+            write_base_copy(target_dir, record_name, &edit.local_text)?;
+            record_epoch(target_dir, record_name, &history_record_names(state, record_name))?;
+            Ok(ExecuteOutcome::ok(format!("{moved}, with its edits")))
         }
         Action::DeleteAlreadyGone { record_name, entry } => {
             apply_local_note_deletion(target_dir, record_name, entry, state)?;
@@ -1828,11 +1951,26 @@ fn execute<T: Transport>(
             record_epoch(target_dir, &record_name, &history_record_names(state, &record_name))?;
             Ok(ExecuteOutcome::ok(format!("Created {file}")))
         }
+        Action::WriteMerge {
+            record_name,
+            entry,
+            merged,
+        } => {
+            apply_remote_merge(target_dir, state, record_name, entry, merged)?;
+            Ok(ExecuteOutcome::ok(format!("{}: merged the remote change into your edit", entry.file)))
+        }
         Action::Rebase {
             record_name,
             file,
             local_text,
+            merged,
         } => {
+            if let Some(merged) = merged {
+                std::fs::write(target_dir.join(file), &merged.file_text)?;
+                if let Some(entry) = state.notes.get_mut(record_name) {
+                    entry.record_change_tag = merged.remote_tag.clone();
+                }
+            }
             write_base_copy(target_dir, record_name, local_text)?;
             Ok(ExecuteOutcome::ok(format!("{file}: no server-side change needed")))
         }
@@ -1845,6 +1983,7 @@ fn execute<T: Transport>(
             local_text,
             requested_title,
             modification_date_ms,
+            merged,
         } => {
             let results = db.update_records(zone, updates)?;
             if let Some(failed) = results.iter().find(|r| !r.is_ok())
@@ -1870,6 +2009,12 @@ fn execute<T: Transport>(
                     )
                 };
                 return Ok(ExecuteOutcome::failed(message));
+            }
+            if let Some(merged) = merged {
+                std::fs::write(target_dir.join(&entry.file), &merged.file_text)?;
+                if let Some(tracked) = state.notes.get_mut(record_name) {
+                    tracked.record_change_tag = merged.remote_tag.clone();
+                }
             }
             if *note_text_updated
                 && let Some(RecordUpdateResult::Ok(note)) = results.first()

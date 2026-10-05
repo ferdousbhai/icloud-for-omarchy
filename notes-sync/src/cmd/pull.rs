@@ -18,7 +18,7 @@ use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
 use crate::md::filename::{file_name_carries_title, note_file_name_for, title_needing_frontmatter, unique_file_name};
-use crate::md::frontmatter::{NOTE_TITLE_KEY, compose_note_file, join_frontmatter, read_note_id, split_frontmatter};
+use crate::md::frontmatter::{NOTE_TITLE_KEY, clear_note_id, compose_note_file, join_frontmatter, read_note_id, split_frontmatter};
 use crate::md::title::representability_problem;
 use crate::vault::attachments::{
     remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments, safe_unlink,
@@ -985,8 +985,11 @@ fn note_id_claimants(
     Ok(claimants)
 }
 
-/// `handleRemoteDeletion`: a clean or missing file goes with the note; a
-/// modified one gets delete/modify conflict markers and stays tracked.
+/// `handleRemoteDeletion`: a clean or missing file goes with the note. One
+/// with local edits is kept as a new note: it stops being tracked and loses
+/// its id, so the next push creates it, edits and all. (0.6.2 writes
+/// delete/modify conflict markers and keeps tracking a note that no longer
+/// exists, which no push can ever settle.)
 fn handle_remote_deletion(
     target_dir: &Path,
     record_name: &str,
@@ -1008,21 +1011,22 @@ fn handle_remote_deletion(
         return Ok(());
     }
 
-    let base = read_base_copy(target_dir, record_name)?.unwrap_or_default();
     let path = target_dir.join(&existing.file);
     let text = read_text(&path)?.unwrap_or_default();
     let envelope = split_frontmatter(&text, split_options(title_mode));
-    let outcome = merge_note_versions(&base, &envelope.body, "");
-    std::fs::write(&path, join_frontmatter(&envelope.frontmatter, &outcome.text))?;
-    summary.conflicts.push(format!(
-        "{}: deleted remotely, but has local edits - merged with conflict markers, resolve manually",
-        existing.file
-    ));
-    let mut change = PullChange::new(PullChangeKind::Update, existing.file.clone());
-    change.remarks = Some(vec![PullChangeRemark::new(
-        "conflict",
-        "deleted remotely, but has local edits - merged with conflict markers, resolve manually",
-    )]);
+    std::fs::write(&path, join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body))?;
+    // Its attachment files stay with the kept text; only tracking goes.
+    tracked.notes.shift_remove(record_name);
+    remove_base_copy(target_dir, record_name)?;
+    tracked.attachments.retain(|_, a| a.note_record_name != record_name);
+    tracked.table_attachments.retain(|_, a| a.note_record_name != record_name);
+    let remark = "deleted on another device, but has local edits - kept as a new note, which the next push creates";
+    summary.notices.push(SyncNotice {
+        level: NoticeLevel::Warn,
+        message: format!("{}: {remark}", existing.file),
+    });
+    let mut change = PullChange::new(PullChangeKind::Untrack, existing.file.clone());
+    change.remarks = Some(vec![PullChangeRemark::new("note", remark)]);
     summary.changes.push(change);
     Ok(())
 }

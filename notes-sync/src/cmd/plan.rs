@@ -321,8 +321,6 @@ pub enum Refusal {
     UpdateSharedNote(SharedWriteRefusal),
     /// 335 (update, conflict)
     UpdateConflictMarkers,
-    /// 348 (update, refused)
-    UpdateEmptied,
     /// 358 (update, refused); `file` = entry.file
     UpdateUnknownContent { file: String },
     /// 379 (update, refused)
@@ -339,8 +337,6 @@ pub enum Refusal {
     DeleteSharedNote { file: String },
     /// 561 (move, refused); `previous_file` = the tracked path
     MoveSharedNote { previous_file: String },
-    /// 569 (move, refused)
-    MoveToTopLevel,
     /// 577 (move, refused)
     MoveIntoUnfolderableDir {
         dir: String,
@@ -350,8 +346,6 @@ pub enum Refusal {
     MoveIntoSharerArea,
     /// 597 (move, refused)
     MoveWithAttachments,
-    /// 640 (create, refused)
-    CreateAtTopLevel,
     /// 650 (create, refused)
     CreateInUnfolderableDir {
         dir: String,
@@ -371,13 +365,6 @@ pub enum Refusal {
     CreateEmbedMarker,
     /// 715 (create, refused)
     CreateAttachmentReference,
-    /// Port only, no push.ts site (create, refused): an untracked file whose
-    /// `apple-note-id` names a note this clone tracks while that note's own
-    /// file is still present. 0.6.2 pushes such a file as a brand-new note;
-    /// the port refuses, so a stray duplicate (e.g. one written by a clone
-    /// that saw a record twice) never becomes a second note on the account.
-    /// See docs/PORT_PLAN.md §1.
-    CreateDuplicatesTrackedNote { tracked_file: String },
 
     // --- after the live lookup ---
     /// 845 (move, conflict)
@@ -403,8 +390,6 @@ pub enum Refusal {
     UpdateChangedRemotelyUnmergeable,
     /// 1356 (update, conflict): `planRemoteChangedMerge` left markers.
     MergedWithConflicts,
-    /// 1366 (update, conflict): merged cleanly, push again.
-    MergedCleanly,
     /// 1194 (update, refused): title-only candidate, shared note.
     TitleOnlySharedNote(SharedWriteRefusal),
     /// 1231/1237 (update): `prepareUpdate` stopped.
@@ -423,8 +408,7 @@ impl Refusal {
             | MoveChangedRemotely
             | UpdateGoneRemotely
             | UpdateChangedRemotelyUnmergeable
-            | MergedWithConflicts
-            | MergedCleanly => PlanResolution::Conflict,
+            | MergedWithConflicts => PlanResolution::Conflict,
             UpdatePrepare(p) if p.is_conflict() => PlanResolution::Conflict,
             _ => PlanResolution::Refused,
         }
@@ -442,7 +426,6 @@ impl Refusal {
             UpdateConflictMarkers | CreateConflictMarkers => {
                 "still contains diff3 conflict markers - resolve them before pushing".into()
             }
-            UpdateEmptied => "pushing a fully emptied note isn't supported yet - edit it in Notes instead".into(),
             UpdateUnknownContent { file } => format!(
                 "this note contains content this tool can't parse and can never be pushed - \
                  run \"icloud-notes restore {file}\" to discard your local edit."
@@ -464,9 +447,6 @@ impl Refusal {
             MoveSharedNote { previous_file } => format!(
                 "renaming or moving notes shared by someone else isn't supported yet - move the file back to {previous_file}"
             ),
-            MoveToTopLevel => {
-                "moved to the top level of the clone, but every note lives in a folder - move it into a folder directory".into()
-            }
             MoveIntoUnfolderableDir { dir, folder_refusal } => match folder_refusal {
                 Some(r) => r.message(),
                 None => format!("moved into \"{dir}/\", which can't become one of the account's folders"),
@@ -474,9 +454,6 @@ impl Refusal {
             MoveIntoSharerArea => "moved into a sharer's area - notes can't be moved into someone else's share".into(),
             MoveWithAttachments => "this note has attachments, whose files can't be relocated safely yet - move it back \
                                     (or move the note in Notes and pull instead)"
-                .into(),
-            CreateAtTopLevel => "sits at the top level of the clone, outside any folder - every note lives in a folder, \
-                                 so move it into one of the folder directories first"
                 .into(),
             CreateInUnfolderableDir { dir, folder_refusal } => match folder_refusal {
                 Some(r) => r.message(),
@@ -491,11 +468,6 @@ impl Refusal {
             CreateEmptyFile => "the file is empty - nothing to create".into(),
             CreateUnknownContent => "this file contains the unknown-content banner - remove it before pushing".into(),
             CreateEmbedMarker => "contains an embed marker, but this tool can't create embeds - remove it before pushing".into(),
-            CreateDuplicatesTrackedNote { tracked_file } => format!(
-                "carries the \"{NOTE_ID_KEY}\" of {tracked_file}, a note this clone already tracks, so pushing it would \
-                 create a duplicate of that note - delete this file if it is a leftover copy, or remove its \
-                 \"{NOTE_ID_KEY}\" line to push it as a new note"
-            ),
             CreateAttachmentReference => {
                 "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first."
                     .into()
@@ -514,7 +486,6 @@ impl Refusal {
             MergedWithConflicts => {
                 "changed remotely since the last pull - merged with conflict markers, resolve manually".into()
             }
-            MergedCleanly => "merged remote changes into your local edit - re-run push to upload".into(),
             UpdatePrepare(p) => p.message(),
             UpdateRefusedUnspecified => "refused".into(),
         }

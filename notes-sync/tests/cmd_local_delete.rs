@@ -199,3 +199,145 @@ fn pull_never_overwrites_an_untracked_file_with_the_same_name() {
         "Notes/Fresh 2.md"
     );
 }
+
+#[test]
+fn a_note_at_the_top_level_is_created_in_the_default_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    std::fs::write(vault.join("Fresh.md"), "# Fresh\nA note made locally.").unwrap();
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &differential().join("cassettes/tiny-push-create.json"),
+        &["--json", "push", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"][0]["kind"], "create", "{stdout}");
+    assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
+    let log: Value = serde_json::from_str(&std::fs::read_to_string(out.join("requests.json")).unwrap()).unwrap();
+    let modify = log["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["path"].as_str().is_some_and(|p| p.ends_with("/records/modify")))
+        .unwrap();
+    assert!(
+        modify["body"].to_string().contains("DefaultFolder-CloudKit"),
+        "{}",
+        modify["body"]
+    );
+    let state = state(&vault);
+    let created = state["notes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|e| e["file"] == "Fresh.md")
+        .expect("tracked");
+    assert_eq!(created["folderRecordName"], "DefaultFolder-CloudKit");
+}
+
+#[test]
+fn emptying_a_note_moves_it_to_recently_deleted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    std::fs::write(
+        vault.join(FILE),
+        format!("---\napple-note-id: {RECORD}\n---\n"),
+    )
+    .unwrap();
+
+    let cassette = push_delete_cassette(&out, "25q");
+    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"][0]["kind"], "delete", "{stdout}");
+    assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
+    assert!(state(&vault)["notes"].get(RECORD).is_none());
+    assert!(!vault.join(FILE).exists(), "the empty file goes with the note");
+}
+
+/// tiny-push's answers, with the lookup returning the note as another
+/// device left it (tiny-pull-update's record: a line appended, tag 26a).
+fn push_over_remote_edit_cassette(out: &Path) -> PathBuf {
+    let read = |name: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes").join(name)).unwrap()).unwrap()
+    };
+    let remote = read("tiny-pull-update.json")["interactions"][0]["response"]["body"]["zones"][0]["records"][0].clone();
+    let mut cassette = read("tiny-push.json");
+    cassette["interactions"][0]["response"]["body"]["records"][0] = remote;
+    let path = out.join("cassette.json");
+    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
+    path
+}
+
+#[test]
+fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    let original = std::fs::read_to_string(vault.join(FILE)).unwrap();
+    std::fs::write(vault.join(FILE), original.replace("# Test Note", "# Test Note, edited here")).unwrap();
+
+    let cassette = push_over_remote_edit_cassette(&out);
+    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", "--dry-run", vault.to_str().unwrap()]);
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(vault.join(FILE)).unwrap(),
+        original.replace("# Test Note", "# Test Note, edited here"),
+        "a preview writes nothing"
+    );
+
+    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"][0]["kind"], "update", "{stdout}");
+    assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
+    assert_eq!(modify_requests(&out), 1);
+    let text = std::fs::read_to_string(vault.join(FILE)).unwrap();
+    assert!(text.contains("# Test Note, edited here"), "{text}");
+    assert!(text.contains("A line added on the phone."), "{text}");
+    assert_eq!(state(&vault)["notes"][RECORD]["recordChangeTag"], "26b");
+    let base = std::fs::read_to_string(vault.join(format!(".icloud-md/base/{RECORD}.md"))).unwrap();
+    assert!(base.contains("edited here") && base.contains("on the phone"), "{base}");
+}
+
+#[test]
+fn a_rename_with_an_edit_goes_up_in_one_push() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    let original = std::fs::read_to_string(vault.join(FILE)).unwrap();
+    let renamed = "Notes/Renamed.md";
+    std::fs::write(vault.join(renamed), format!("{original}\n\nA line added here.")).unwrap();
+    std::fs::remove_file(vault.join(FILE)).unwrap();
+
+    // tiny-push's lookup, then two writes: the move (tag 26a), the edit (26b).
+    let mut cassette: Value =
+        serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes/tiny-push.json")).unwrap())
+            .unwrap();
+    let mut first = cassette["interactions"][1].clone();
+    first["response"]["body"]["records"][0]["recordChangeTag"] = Value::from("26a");
+    cassette["interactions"].as_array_mut().unwrap().insert(1, first);
+    let path = out.join("cassette.json");
+    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
+
+    let (code, stdout, stderr) = run(&out, &path, &["--json", "push", vault.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"].as_array().unwrap().len(), 1, "{stdout}");
+    assert_eq!(stdout["entries"][0]["kind"], "move", "{stdout}");
+    assert!(
+        stdout["entries"][0]["outcome"]["message"].as_str().unwrap().ends_with("with its edits"),
+        "{stdout}"
+    );
+    assert_eq!(modify_requests(&out), 2);
+    let state = state(&vault);
+    assert_eq!(state["notes"][RECORD]["file"], renamed);
+    assert_eq!(state["notes"][RECORD]["recordChangeTag"], "26b");
+    let base = std::fs::read_to_string(vault.join(format!(".icloud-md/base/{RECORD}.md"))).unwrap();
+    assert!(base.ends_with("A line added here."), "{base}");
+}
