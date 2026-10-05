@@ -154,13 +154,8 @@ On a real vault one note with an 837 KB document grew 23 snapshots of
   `history::without_recording`, where `record_version` and `record_epoch`
   are no-ops. 0.6.2 records the looked-up note's snapshot while planning.
 
-Tests: tests/vault_history.rs, and tests/cli_differential.rs
-`previews_icloud_md_records_history_and_the_port_does_not` with the
-scenarios `tiny-status` and `tiny-push-dry-run` (`portDeviation:
-previews-write-nothing`): icloud-md's vault is asserted to hold one history
-snapshot; the port's is asserted to be icloud-md's without it (its state
-directory the unchanged `tiny-clone` one), with the same exit, stdout,
-requests and mtimes.
+Tests: tests/vault_history.rs, and the recorded scenarios `tiny-status` and
+`tiny-push-dry-run` (their vaults hold no history).
 
 ### New notes listed without their text (not in 0.6.2)
 
