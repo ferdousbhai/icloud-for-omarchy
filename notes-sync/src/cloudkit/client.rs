@@ -751,7 +751,10 @@ fn stop_marker() -> (usize, CkError) {
 
 impl Drop for DownloadPool {
     fn drop(&mut self) {
-        self.errors.lock().unwrap_or_else(|e| e.into_inner()).push(stop_marker());
+        self.errors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(stop_marker());
         self.join();
     }
 }

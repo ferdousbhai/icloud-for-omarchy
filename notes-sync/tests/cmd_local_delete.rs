@@ -51,8 +51,12 @@ fn run(out: &Path, cassette: &Path, args: &[&str]) -> (i32, Value, String) {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let stdout: Value = serde_json::from_slice(&output.stdout)
-        .unwrap_or_else(|e| panic!("stdout isn't JSON ({e}): {}\n{stderr}", String::from_utf8_lossy(&output.stdout)));
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout isn't JSON ({e}): {}\n{stderr}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
     (output.status.code().unwrap_or(-1), stdout, stderr)
 }
 
@@ -121,10 +125,16 @@ fn pull_leaves_a_deleted_note_deleted_and_the_next_push_trashes_it() {
     assert!(!vault.join(FILE).exists(), "the file stays deleted");
     assert_eq!(stdout["updated"], 0, "{stdout}");
     let notices = stdout["notices"].to_string();
-    assert!(notices.contains("the next push moves it to Recently Deleted"), "{stdout}");
+    assert!(
+        notices.contains("the next push moves it to Recently Deleted"),
+        "{stdout}"
+    );
     let pulled = state(&vault);
     assert_eq!(pulled["notes"][RECORD]["file"], FILE);
-    assert_eq!(pulled["notes"][RECORD]["recordChangeTag"], "26a", "tracking follows the remote record");
+    assert_eq!(
+        pulled["notes"][RECORD]["recordChangeTag"], "26a",
+        "tracking follows the remote record"
+    );
 
     // The deletion is still pending, and goes up on the next push.
     let cassette = push_delete_cassette(&out, "26a");
@@ -155,19 +165,31 @@ fn pull_merges_a_remote_edit_into_a_renamed_file_and_the_move_still_pairs() {
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert!(!vault.join(FILE).exists(), "the old name isn't written back");
     let text = std::fs::read_to_string(vault.join(renamed)).unwrap();
-    assert!(text.contains("A line added on the phone."), "remote edit merged in: {text}");
+    assert!(
+        text.contains("A line added on the phone."),
+        "remote edit merged in: {text}"
+    );
     assert!(!text.contains("<<<<<<<"), "{text}");
     let pulled = state(&vault);
-    assert_eq!(pulled["notes"][RECORD]["file"], FILE, "still tracked at the old name, so push pairs the move");
+    assert_eq!(
+        pulled["notes"][RECORD]["file"], FILE,
+        "still tracked at the old name, so push pairs the move"
+    );
     assert_eq!(pulled["notes"][RECORD]["recordChangeTag"], "26a");
 
     // The rename now goes up as a move instead of being refused.
     let cassette = push_delete_cassette(&out, "26a");
-    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", "--dry-run", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(
+        &out,
+        &cassette,
+        &["--json", "push", "--dry-run", vault.to_str().unwrap()],
+    );
     assert_eq!(code, 3, "{stdout}\n{stderr}");
     let entries = stdout["entries"].as_array().unwrap();
     assert!(
-        entries.iter().any(|e| e["kind"] == "move" && e["resolution"] == "ready"),
+        entries
+            .iter()
+            .any(|e| e["kind"] == "move" && e["resolution"] == "ready"),
         "{stdout}"
     );
     assert!(!entries.iter().any(|e| e["kind"] == "delete"), "{stdout}");
@@ -243,11 +265,7 @@ fn emptying_a_note_moves_it_to_recently_deleted() {
     let out = tmp.path().canonicalize().unwrap();
     let vault = out.join("vault");
     copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
-    std::fs::write(
-        vault.join(FILE),
-        format!("---\napple-note-id: {RECORD}\n---\n"),
-    )
-    .unwrap();
+    std::fs::write(vault.join(FILE), format!("---\napple-note-id: {RECORD}\n---\n")).unwrap();
 
     let cassette = push_delete_cassette(&out, "25q");
     let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
@@ -279,10 +297,18 @@ fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
     let vault = out.join("vault");
     copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
     let original = std::fs::read_to_string(vault.join(FILE)).unwrap();
-    std::fs::write(vault.join(FILE), original.replace("# Test Note", "# Test Note, edited here")).unwrap();
+    std::fs::write(
+        vault.join(FILE),
+        original.replace("# Test Note", "# Test Note, edited here"),
+    )
+    .unwrap();
 
     let cassette = push_over_remote_edit_cassette(&out);
-    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", "--dry-run", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(
+        &out,
+        &cassette,
+        &["--json", "push", "--dry-run", vault.to_str().unwrap()],
+    );
     assert_eq!(code, 3, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
     assert_eq!(
@@ -334,7 +360,10 @@ fn a_rename_with_an_edit_goes_up_in_one_push() {
     assert_eq!(stdout["entries"].as_array().unwrap().len(), 1, "{stdout}");
     assert_eq!(stdout["entries"][0]["kind"], "move", "{stdout}");
     assert!(
-        stdout["entries"][0]["outcome"]["message"].as_str().unwrap().ends_with("with its edits"),
+        stdout["entries"][0]["outcome"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("with its edits"),
         "{stdout}"
     );
     assert_eq!(modify_requests(&out), 1);
@@ -375,7 +404,9 @@ fn several_deletes_go_up_in_one_request() {
         serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes/tiny-push-delete.json")).unwrap())
             .unwrap();
     for i in 0..2 {
-        let records = cassette["interactions"][i]["response"]["body"]["records"].as_array_mut().unwrap();
+        let records = cassette["interactions"][i]["response"]["body"]["records"]
+            .as_array_mut()
+            .unwrap();
         let mut copy = records[0].clone();
         copy["recordName"] = Value::from(other);
         records.push(copy);
@@ -387,7 +418,12 @@ fn several_deletes_go_up_in_one_request() {
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     let entries = stdout["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2, "{stdout}");
-    assert!(entries.iter().all(|e| e["kind"] == "delete" && e["outcome"]["succeeded"] == true), "{stdout}");
+    assert!(
+        entries
+            .iter()
+            .all(|e| e["kind"] == "delete" && e["outcome"]["succeeded"] == true),
+        "{stdout}"
+    );
     assert_eq!(modify_requests(&out), 1, "one request for both");
     let log: Value = serde_json::from_str(&std::fs::read_to_string(out.join("requests.json")).unwrap()).unwrap();
     let modify = log["requests"]
@@ -415,13 +451,20 @@ fn the_push_summary_counts_folder_changes_apart_from_notes() {
         .args(["push", vault.to_str().unwrap()])
         .env("HOME", out.join("home"))
         .env("XDG_RUNTIME_DIR", out.join("home"))
-        .env("ICLOUD_NOTES_SYNC_CASSETTE", differential().join("cassettes/tiny-push-create.json"))
+        .env(
+            "ICLOUD_NOTES_SYNC_CASSETTE",
+            differential().join("cassettes/tiny-push-create.json"),
+        )
         .env("ICLOUD_NOTES_SYNC_REQUEST_LOG", out.join("requests.json"))
         .env("ICLOUD_NOTES_SYNC_NOW", "1790000000000")
         .env("ICLOUD_NOTES_SYNC_DETERMINISTIC", "1")
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(stdout.contains("Pushed 1 folder change(s) from"), "{stdout}");
 }

@@ -165,8 +165,15 @@ fn a_file_attachment_link_maps_back_to_its_placeholder() {
 fn a_removed_or_changed_attachment_link_refuses_the_push() {
     let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();
     for text in ["prose only", "![photo.jpeg](attachments/other.jpeg)"] {
-        let reason = refusal(plan_embed_representations(text, &[slot("FILE-1", "public.jpeg")], &tracked));
-        assert!(reason.contains("attachments can only be removed or moved in Notes"), "{reason}");
+        let reason = refusal(plan_embed_representations(
+            text,
+            &[slot("FILE-1", "public.jpeg")],
+            &tracked,
+        ));
+        assert!(
+            reason.contains("attachments can only be removed or moved in Notes"),
+            "{reason}"
+        );
     }
 }
 

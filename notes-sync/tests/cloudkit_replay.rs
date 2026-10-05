@@ -48,10 +48,7 @@ fn tiny_clone_requests_match_the_recorded_clone() {
         .unwrap();
     assert!(shared.zones.is_empty() && shared.skipped_zones.is_empty());
 
-    assert_eq!(
-        std::fs::read_to_string(&log_path).unwrap(),
-        recorded_log("tiny-clone")
-    );
+    assert_eq!(std::fs::read_to_string(&log_path).unwrap(), recorded_log("tiny-clone"));
     assert_eq!(database.transport.request_log().requests.len(), 2);
 }
 

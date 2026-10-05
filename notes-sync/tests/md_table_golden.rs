@@ -25,7 +25,10 @@ fn render_golden() {
 #[test]
 fn parse_golden() {
     check_golden("md_table.json", Some("parse"), |case| {
-        vec![("result", result(parse_markdown_table(case["markdown"].as_str().unwrap())))]
+        vec![(
+            "result",
+            result(parse_markdown_table(case["markdown"].as_str().unwrap())),
+        )]
     });
 }
 

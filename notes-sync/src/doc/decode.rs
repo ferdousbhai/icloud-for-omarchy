@@ -92,8 +92,7 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
     let result = classify_note_body(record, options);
     match result {
         NoteDecodeResult::Ok(mut note)
-            if note.publishable
-                && record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) =>
+            if note.publishable && record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) =>
         {
             note.publishable = false;
             note.unpublishable_reason = Some(TEXT_DATA_ASSET_UNPUBLISHABLE_REASON.into());

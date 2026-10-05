@@ -19,9 +19,7 @@ use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy;
 use crate::vault::layout::{PreviousLayout, SharedZoneRecords, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
-use crate::vault::state::{
-    Account, CloneState, NoteEntry, TitleMode, read_clone_state, write_clone_state,
-};
+use crate::vault::state::{Account, CloneState, NoteEntry, TitleMode, read_clone_state, write_clone_state};
 
 /// `CloneOptions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

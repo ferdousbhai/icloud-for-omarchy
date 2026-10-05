@@ -18,7 +18,9 @@ use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
 use crate::md::filename::{file_name_carries_title, note_file_name_for, title_needing_frontmatter, unique_file_name};
-use crate::md::frontmatter::{NOTE_TITLE_KEY, clear_note_id, compose_note_file, join_frontmatter, read_note_id, split_frontmatter};
+use crate::md::frontmatter::{
+    NOTE_TITLE_KEY, clear_note_id, compose_note_file, join_frontmatter, read_note_id, split_frontmatter,
+};
 use crate::md::title::representability_problem;
 use crate::vault::attachments::{
     AttachmentRecords, remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments,
@@ -37,8 +39,7 @@ use crate::vault::local::{
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
-    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry,
-    TitleMode, write_clone_state,
+    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry, TitleMode, write_clone_state,
 };
 
 /// `PullOptions`.
@@ -562,7 +563,9 @@ pub fn run_pull_with(
                             } else {
                                 summary.merged += 1;
                             }
-                            summary.changes.push(PullChange::new(PullChangeKind::Merge, claimant.clone()));
+                            summary
+                                .changes
+                                .push(PullChange::new(PullChangeKind::Merge, claimant.clone()));
                         }
                         return Ok(());
                     }
@@ -1045,12 +1048,17 @@ fn handle_remote_deletion(
     let path = target_dir.join(&existing.file);
     let text = read_text(&path)?.unwrap_or_default();
     let envelope = split_frontmatter(&text, split_options(title_mode));
-    std::fs::write(&path, join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body))?;
+    std::fs::write(
+        &path,
+        join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
+    )?;
     // Its attachment files stay with the kept text; only tracking goes.
     tracked.notes.shift_remove(record_name);
     remove_base_copy(target_dir, record_name)?;
     tracked.attachments.retain(|_, a| a.note_record_name != record_name);
-    tracked.table_attachments.retain(|_, a| a.note_record_name != record_name);
+    tracked
+        .table_attachments
+        .retain(|_, a| a.note_record_name != record_name);
     let remark = "deleted on another device, but has local edits - kept as a new note, which the next push creates";
     summary.notices.push(SyncNotice {
         level: NoticeLevel::Warn,

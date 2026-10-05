@@ -31,8 +31,8 @@ use crate::doc::embeds::{
     has_unknown_content_marker, plan_embed_representations,
 };
 use crate::doc::encode::{
-    DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME, build_folder_create_fields, build_note_create_fields, build_note_move_fields, build_note_trash_fields,
-    build_note_update_fields,
+    DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME, build_folder_create_fields, build_note_create_fields,
+    build_note_move_fields, build_note_trash_fields, build_note_update_fields,
 };
 use crate::doc::format::{FormatParagraph, decode_note_format, formats_round_trip_equal};
 use crate::doc::reconcile::reconcile_note_format;
@@ -51,7 +51,9 @@ use crate::vault::attachments::{remove_attachments_for_note, remove_table_attach
 use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{PlannedFolder, plan_folder_creates, relocate_note_attachments};
-use crate::vault::history::{VersionSnapshotInput, history_record_names, record_version, recording_suppressed, without_recording};
+use crate::vault::history::{
+    VersionSnapshotInput, history_record_names, record_version, recording_suppressed, without_recording,
+};
 use crate::vault::layout::{PreviousLayout, StateDirInfo, note_dir_of, state_dir_index};
 use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
@@ -60,10 +62,7 @@ use crate::vault::local::{
 use crate::vault::migrate::{read_vault, require_vault};
 use crate::vault::pairing::{UntrackedFile, pending_rename_target, resolve_note_ids, settle_pending_renames};
 use crate::vault::rt;
-use crate::vault::state::{
-    CloneState, FolderEntry, NoteEntry, TitleMode, TrashedEntry,
-    write_clone_state,
-};
+use crate::vault::state::{CloneState, FolderEntry, NoteEntry, TitleMode, TrashedEntry, write_clone_state};
 
 /// The body plus formatting a push builds a document from (`{text,
 /// paragraphs}`).
@@ -432,9 +431,8 @@ pub fn plan_folder_dir_changes(
     let mut new_dirs: HashSet<&String> = dirs_on_disk.iter().filter(|d| !dir_index.contains_key(*d)).collect();
     let parent_of = |dir: &str| posix::dirname(dir).trim_start_matches('.').to_owned();
     let has_notes = |dir: &str| untracked_dirs.contains(dir);
-    let missing_empty = |dir: &&String| {
-        !dirs_on_disk.contains(*dir) && !notes.values().any(|n| note_dir_of(&n.file) == **dir)
-    };
+    let missing_empty =
+        |dir: &&String| !dirs_on_disk.contains(*dir) && !notes.values().any(|n| note_dir_of(&n.file) == **dir);
 
     let mut renames: Vec<FolderRename> = Vec::new();
     let mut deletes: Vec<(String, String)> = Vec::new();
@@ -451,9 +449,11 @@ pub fn plan_folder_dir_changes(
         let parent = renames
             .iter()
             .find_map(|r| {
-                (parent == r.from)
-                    .then(|| r.to.clone())
-                    .or_else(|| parent.strip_prefix(&format!("{}/", r.from)).map(|rest| format!("{}/{rest}", r.to)))
+                (parent == r.from).then(|| r.to.clone()).or_else(|| {
+                    parent
+                        .strip_prefix(&format!("{}/", r.from))
+                        .map(|rest| format!("{}/{rest}", r.to))
+                })
             })
             .unwrap_or(parent);
         let notes_here: Vec<&String> = notes
@@ -574,7 +574,10 @@ pub fn build_push_plan(
 
     // `attachments/` holds attachment files, never notes: say so rather than
     // skip notes put there in silence.
-    for dir in list_vault_dirs(target_dir)?.iter().chain(std::iter::once(&String::new())) {
+    for dir in list_vault_dirs(target_dir)?
+        .iter()
+        .chain(std::iter::once(&String::new()))
+    {
         let Ok(entries) = std::fs::read_dir(target_dir.join(dir)) else {
             continue;
         };
@@ -833,14 +836,13 @@ pub fn build_push_plan(
 
     // --- folder directories renamed or deleted here
     let dirs_on_disk = list_vault_dirs(target_dir)?;
-    let (folder_renames, folder_deletes) =
-        plan_folder_dir_changes(
-            &dir_index,
-            &dirs_on_disk,
-            &state.notes,
-            &move_pairs,
-            &untracked.iter().map(|u| note_dir_of(&u.file)).collect(),
-        );
+    let (folder_renames, folder_deletes) = plan_folder_dir_changes(
+        &dir_index,
+        &dirs_on_disk,
+        &state.notes,
+        &move_pairs,
+        &untracked.iter().map(|u| note_dir_of(&u.file)).collect(),
+    );
     // A renamed directory (and everything under it) answers for its folder.
     let mut dir_index = dir_index;
     for rename in &folder_renames {
@@ -850,7 +852,8 @@ pub fn build_push_plan(
                 let rest = if *dir == rename.from {
                     Some("")
                 } else {
-                    dir.strip_prefix(&format!("{}/", rename.from)).map(|_| &dir[rename.from.len()..])
+                    dir.strip_prefix(&format!("{}/", rename.from))
+                        .map(|_| &dir[rename.from.len()..])
                 }?;
                 Some((format!("{}{rest}", rename.to), info.clone()))
             })
@@ -897,7 +900,8 @@ pub fn build_push_plan(
         let to_dir = note_dir_of(to_file);
         let dir_changed = to_dir != note_dir_of(&entry.file);
         let info = resolve_dir(&to_dir);
-        let from_folder = resolve_dir(&note_dir_of(&entry.file)).and_then(|i| i.folder_record_name().map(str::to_owned));
+        let from_folder =
+            resolve_dir(&note_dir_of(&entry.file)).and_then(|i| i.folder_record_name().map(str::to_owned));
         let relocated = dir_changed && info.as_ref().and_then(|i| i.folder_record_name()) != from_folder.as_deref();
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             let mut e = PlanEntry::refused(PlanEntryKind::Move, to_file.clone(), refusal);
@@ -1081,7 +1085,12 @@ pub fn build_push_plan(
                 },
             )),
             None => entries.push(
-                PlanEntry::refused(PlanEntryKind::RenameFolder, rename.to.clone(), Refusal::FolderGoneRemotely).into(),
+                PlanEntry::refused(
+                    PlanEntryKind::RenameFolder,
+                    rename.to.clone(),
+                    Refusal::FolderGoneRemotely,
+                )
+                .into(),
             ),
         }
     }
@@ -1238,7 +1247,14 @@ pub fn build_push_plan(
                 .record_change_tag
                 .clone()
                 .unwrap_or_else(|| c.entry.record_change_tag.clone());
-            let merge = merge_remote_change(target_dir, &c.record_name, &c.frontmatter, &c.local_text, &remote_text, &remote_tag)?;
+            let merge = merge_remote_change(
+                target_dir,
+                &c.record_name,
+                &c.frontmatter,
+                &c.local_text,
+                &remote_text,
+                &remote_tag,
+            )?;
             if merge.has_conflict {
                 entries.push(ExecutablePlanEntry::with(
                     PlanEntry::refused(PlanEntryKind::Update, file.clone(), Refusal::MergedWithConflicts),
@@ -1354,8 +1370,13 @@ pub fn build_push_plan(
                     .iter()
                     .filter(|r| !r.is_deleted() && !is_in_trash(r) && !known(&r.record_name))
                 {
-                    let field = if record.record_type == "Folder" { "ParentFolder" } else { "Folder" };
-                    if let Some(folder) = crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
+                    let field = if record.record_type == "Folder" {
+                        "ParentFolder"
+                    } else {
+                        "Folder"
+                    };
+                    if let Some(folder) =
+                        crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
                     {
                         kept_folders.insert(folder);
                     }
@@ -1366,7 +1387,9 @@ pub fn build_push_plan(
     }
     for (dir, record_name) in &folder_deletes {
         if kept_folders.contains(record_name) {
-            entries.push(PlanEntry::refused(PlanEntryKind::DeleteFolder, dir.clone(), Refusal::FolderChangedRemotely).into());
+            entries.push(
+                PlanEntry::refused(PlanEntryKind::DeleteFolder, dir.clone(), Refusal::FolderChangedRemotely).into(),
+            );
             continue;
         }
         entries.push(ExecutablePlanEntry::with(
@@ -1944,8 +1967,13 @@ fn batch_writes<T: Transport>(
     let mut by_zone: IndexMap<NoteZone, Vec<RecordUpdate>> = IndexMap::new();
     for action in entries.iter().filter_map(|e| e.action.as_ref()) {
         match action {
-            Action::Delete { record_name, record, .. } => {
-                by_zone.entry(note_zone(None)).or_default().push(trash_update(record_name, record));
+            Action::Delete {
+                record_name, record, ..
+            } => {
+                by_zone
+                    .entry(note_zone(None))
+                    .or_default()
+                    .push(trash_update(record_name, record));
             }
             Action::Update { zone, updates, .. } if updates.len() == 1 => {
                 by_zone.entry(zone.clone()).or_default().push(updates[0].clone());
@@ -2051,7 +2079,10 @@ fn execute<T: Transport>(
                 folder.name = title;
                 folder.dir_name = posix::basename(&rename.to).to_owned();
             }
-            Ok(ExecuteOutcome::ok(format!("Renamed folder {}/ -> {}/", rename.from, rename.to)))
+            Ok(ExecuteOutcome::ok(format!(
+                "Renamed folder {}/ -> {}/",
+                rename.from, rename.to
+            )))
         }
         Action::DeleteFolder {
             record_name,
@@ -2077,7 +2108,9 @@ fn execute<T: Transport>(
                 && let Some(failure) =
                     db.delete_record(&private, record_name, record.record_change_tag.as_deref().unwrap_or(""))?
             {
-                return Ok(ExecuteOutcome::failed(format!("{dir}/: server rejected the delete: {failure}")));
+                return Ok(ExecuteOutcome::failed(format!(
+                    "{dir}/: server rejected the delete: {failure}"
+                )));
             }
             if let Some(folders) = state.folders.as_mut() {
                 folders.shift_remove(record_name);
@@ -2194,7 +2227,9 @@ fn execute<T: Transport>(
             if !prepared.updates.is_empty() {
                 let results = db.update_records(&private, &prepared.updates)?;
                 if let Some(failure) = results.iter().find_map(rejection) {
-                    return Ok(ExecuteOutcome::ok(format!("{moved} (its edits weren't pushed: {failure})")));
+                    return Ok(ExecuteOutcome::ok(format!(
+                        "{moved} (its edits weren't pushed: {failure})"
+                    )));
                 }
                 if let Some(RecordUpdateResult::Ok(note)) = results.first()
                     && note.record_name == *record_name
@@ -2330,7 +2365,10 @@ fn execute<T: Transport>(
             merged,
         } => {
             apply_remote_merge(target_dir, state, record_name, entry, merged)?;
-            Ok(ExecuteOutcome::ok(format!("{}: merged the remote change into your edit", entry.file)))
+            Ok(ExecuteOutcome::ok(format!(
+                "{}: merged the remote change into your edit",
+                entry.file
+            )))
         }
         Action::Rebase {
             record_name,
@@ -2483,7 +2521,14 @@ pub fn run_push_with(
             });
             continue;
         };
-        let outcome = execute(action, &remote.db, target_dir, &mut state, &mut failed_folders, &mut batched)?;
+        let outcome = execute(
+            action,
+            &remote.db,
+            target_dir,
+            &mut state,
+            &mut failed_folders,
+            &mut batched,
+        )?;
         if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded {
             pushed += 1;
         }

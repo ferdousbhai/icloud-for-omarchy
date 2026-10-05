@@ -12,7 +12,8 @@ use icloud_notes_sync::vault::state::{CloneState, FolderEntry, NoteEntry};
 /// them (a folder directory missing is one deleted here).
 fn write_clone_state(dir: &Path, state: &CloneState) -> Result<(), Error> {
     icloud_notes_sync::vault::state::write_clone_state(dir, state)?;
-    let index = icloud_notes_sync::vault::layout::state_dir_index(icloud_notes_sync::vault::layout::PreviousLayout::of(state));
+    let index =
+        icloud_notes_sync::vault::layout::state_dir_index(icloud_notes_sync::vault::layout::PreviousLayout::of(state));
     for folder_dir in index.keys() {
         std::fs::create_dir_all(dir.join(folder_dir)).unwrap();
     }

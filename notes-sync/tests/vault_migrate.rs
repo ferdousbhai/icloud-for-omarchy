@@ -352,9 +352,14 @@ fn v3_vault(dir: &Path) -> Value {
     file(&format!(".icloud-md/history/{ID}/0001-abcd.json"), "{\"id\":\"s1\"}\n");
     file(
         &format!(".icloud-md/history/{ID}/epochs/0001-ef01.json"),
-        &format!("{{\"id\":\"e1\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"noteRecordName\":\"{ID}\",\"snapshots\":{{}}}}\n"),
+        &format!(
+            "{{\"id\":\"e1\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"noteRecordName\":\"{ID}\",\"snapshots\":{{}}}}\n"
+        ),
     );
-    file(".icloud-md/conflict-backups/Notes/A (conflict backup 2026-01-01 000000).md", "old");
+    file(
+        ".icloud-md/conflict-backups/Notes/A (conflict backup 2026-01-01 000000).md",
+        "old",
+    );
     let state = json!({"layoutVersion": 3, "generator": "icloud-md 0.6.2", "titleMode": "in-body",
         "syncToken": "token", "someoneElsesKey": [1],
         "notes": {ID: {"file": "Notes/A.md", "recordChangeTag": "t", "modificationDate": 1}}});
@@ -393,8 +398,7 @@ fn backups(dir: &Path) -> Vec<PathBuf> {
 
 fn assert_migrated(dir: &Path, legacy_before: &BTreeMap<String, Vec<u8>>) {
     let current = dir.join(".icloud-notes");
-    let state: Value =
-        serde_json::from_str(&std::fs::read_to_string(current.join("state.json")).unwrap()).unwrap();
+    let state: Value = serde_json::from_str(&std::fs::read_to_string(current.join("state.json")).unwrap()).unwrap();
     assert_eq!(state["layoutVersion"], json!(4));
     assert_eq!(state["syncToken"], json!("token"));
     assert_eq!(state["someoneElsesKey"], json!([1]));
@@ -451,7 +455,10 @@ fn read_only_commands_read_a_layout_3_vault_in_place() {
     let state = read_vault(dir.path()).unwrap();
     assert_eq!(state.layout_version, Some(3));
     assert_eq!(state.notes[ID].file, "Notes/A.md");
-    assert_eq!(read_base_copy(dir.path(), ID).unwrap().as_deref(), Some("# A\n\nBody A"));
+    assert_eq!(
+        read_base_copy(dir.path(), ID).unwrap().as_deref(),
+        Some("# A\n\nBody A")
+    );
     run_history(dir.path(), "Notes/A.md", &HistoryOptions { records: false }).unwrap();
     let info = serde_json::to_value(run_vault_info(dir.path()).unwrap()).unwrap();
     let vault = std::path::absolute(dir.path()).unwrap();
@@ -479,7 +486,10 @@ fn an_interrupted_move_finishes_where_it_stopped() {
 
     // Meanwhile a read-only command still finds everything.
     assert_eq!(read_vault(dir.path()).unwrap().layout_version, Some(3));
-    assert_eq!(read_base_copy(dir.path(), ID).unwrap().as_deref(), Some("# A\n\nBody A"));
+    assert_eq!(
+        read_base_copy(dir.path(), ID).unwrap().as_deref(),
+        Some("# A\n\nBody A")
+    );
     run_history(dir.path(), "Notes/A.md", &HistoryOptions { records: true }).unwrap();
 
     open(dir.path()).unwrap().unwrap();
@@ -540,7 +550,10 @@ fn an_older_build_refuses_the_moved_vault_as_newer() {
     // What a layout 3 build sees: only .icloud-md/state.json.
     std::fs::rename(dir.path().join(".icloud-notes"), dir.path().join("elsewhere")).unwrap();
     let err = run_vault_migrations(dir.path(), &[], 3, &mut |_| {}).unwrap_err();
-    assert!(matches!(err, Error::VaultFromNewerTool { vault_version: 4, .. }), "{err}");
+    assert!(
+        matches!(err, Error::VaultFromNewerTool { vault_version: 4, .. }),
+        "{err}"
+    );
     // This build, with .icloud-notes/ gone, says what happened.
     let err = read_clone_state(dir.path()).unwrap_err();
     assert!(err.to_string().contains("moved to .icloud-notes/"), "{err}");

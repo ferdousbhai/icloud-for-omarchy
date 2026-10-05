@@ -54,7 +54,11 @@ pub fn run_vault_info(target_dir: &Path) -> Result<VaultInfo, Error> {
     let state_dir = state_dir(&vault);
     let state = read_clone_state(&vault)?;
     let base_dir = state_subdir(&vault, BASE_DIR_NAME);
-    let base_dir = base_dir.strip_prefix(&vault).unwrap_or(&base_dir).to_string_lossy().into_owned();
+    let base_dir = base_dir
+        .strip_prefix(&vault)
+        .unwrap_or(&base_dir)
+        .to_string_lossy()
+        .into_owned();
     let (title_mode, default_folder_dir, notes) = match &state {
         None => ("in-body", None, Vec::new()),
         Some(state) => {

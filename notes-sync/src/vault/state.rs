@@ -64,7 +64,9 @@ pub fn state_dir(target_dir: &Path) -> PathBuf {
 
 /// Whether the live state is still in `.icloud-md/`.
 pub fn is_legacy_state_dir(target_dir: &Path) -> bool {
-    state_dir(target_dir).file_name().is_some_and(|n| n == LEGACY_STATE_DIR_NAME)
+    state_dir(target_dir)
+        .file_name()
+        .is_some_and(|n| n == LEGACY_STATE_DIR_NAME)
 }
 
 /// `name` (base, history, conflict-backups) in the state directory. While

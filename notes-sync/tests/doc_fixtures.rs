@@ -157,7 +157,11 @@ fn fixture_goldens_are_current() {
         let note = json["kind"] == "note";
         let golden = |b64: &Value| {
             let compressed = base64_decode(b64.as_str().unwrap());
-            if note { note_golden(&compressed) } else { table_golden(&compressed) }
+            if note {
+                note_golden(&compressed)
+            } else {
+                table_golden(&compressed)
+            }
         };
         let mut changed = false;
         if json.get("base64").is_some() {
@@ -165,7 +169,12 @@ fn fixture_goldens_are_current() {
             changed |= json["golden"] != now;
             json["golden"] = now;
         }
-        for revision in json.get_mut("revisions").and_then(Value::as_array_mut).into_iter().flatten() {
+        for revision in json
+            .get_mut("revisions")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
             let now = golden(&revision["base64"]);
             changed |= revision["golden"] != now;
             revision["golden"] = now;

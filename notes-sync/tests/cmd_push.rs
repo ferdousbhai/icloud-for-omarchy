@@ -23,7 +23,8 @@ use indexmap::IndexMap;
 /// them (a folder directory missing is one deleted here).
 fn write_clone_state(dir: &Path, state: &CloneState) -> Result<(), icloud_notes_sync::cmd::Error> {
     icloud_notes_sync::vault::state::write_clone_state(dir, state)?;
-    let index = icloud_notes_sync::vault::layout::state_dir_index(icloud_notes_sync::vault::layout::PreviousLayout::of(state));
+    let index =
+        icloud_notes_sync::vault::layout::state_dir_index(icloud_notes_sync::vault::layout::PreviousLayout::of(state));
     for folder_dir in index.keys() {
         std::fs::create_dir_all(dir.join(folder_dir)).unwrap();
     }
@@ -481,7 +482,15 @@ fn remote_merge_keeps_merged_file_modified() {
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "line one\n\nline two\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "line one edited locally\n\nline two\n");
-    let merged = merge_remote_change(dir.path(), "REC1", "", "line one edited locally\n\nline two\n", "line one\n\nline two edited remotely\n", "2b").unwrap();
+    let merged = merge_remote_change(
+        dir.path(),
+        "REC1",
+        "",
+        "line one edited locally\n\nline two\n",
+        "line one\n\nline two edited remotely\n",
+        "2b",
+    )
+    .unwrap();
     apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
     assert!(!merged.has_conflict);
     assert_eq!(
@@ -506,7 +515,15 @@ fn remote_merge_with_tag_only_bump_leaves_edit_uploadable() {
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "shared text\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "shared text plus my edit\n");
-    let merged = merge_remote_change(dir.path(), "REC1", "", "shared text plus my edit\n", "shared text\n", "2b").unwrap();
+    let merged = merge_remote_change(
+        dir.path(),
+        "REC1",
+        "",
+        "shared text plus my edit\n",
+        "shared text\n",
+        "2b",
+    )
+    .unwrap();
     apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
     assert_eq!(read(dir.path(), "Notes/Tracked.md"), "shared text plus my edit\n");
     assert_eq!(
@@ -527,7 +544,15 @@ fn remote_merge_preserves_frontmatter() {
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "body\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "---\nkeep: me\n---\n\nbody edited\n");
-    let merged = merge_remote_change(dir.path(), "REC1", "---\nkeep: me\n---\n\n", "body edited\n", "body\n", "2b").unwrap();
+    let merged = merge_remote_change(
+        dir.path(),
+        "REC1",
+        "---\nkeep: me\n---\n\n",
+        "body edited\n",
+        "body\n",
+        "2b",
+    )
+    .unwrap();
     apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
     let written = read(dir.path(), "Notes/Tracked.md");
     assert!(written.starts_with("---\nkeep: me\n---\n"));
@@ -541,7 +566,15 @@ fn remote_merge_conflict_writes_markers_and_keeps_base() {
     let entry = s.notes["REC1"].clone();
     write_base_copy(dir.path(), "REC1", "shared line\n").unwrap();
     write_vault_file(dir.path(), "Notes/Tracked.md", "shared line edited locally\n");
-    let merged = merge_remote_change(dir.path(), "REC1", "", "shared line edited locally\n", "shared line edited remotely\n", "2b").unwrap();
+    let merged = merge_remote_change(
+        dir.path(),
+        "REC1",
+        "",
+        "shared line edited locally\n",
+        "shared line edited remotely\n",
+        "2b",
+    )
+    .unwrap();
     apply_remote_merge(dir.path(), &mut s, "REC1", &entry, &merged).unwrap();
     assert!(merged.has_conflict);
     let written = read(dir.path(), "Notes/Tracked.md");
@@ -848,8 +881,15 @@ fn tracked(file: &str) -> NoteEntry {
 
 #[test]
 fn a_folder_directory_whose_notes_all_moved_beside_it_is_a_rename() {
-    let index = folder_index(&[("Notes", "DefaultFolder-CloudKit"), ("Travel", "F1"), ("Travel/Old", "F2")]);
-    let notes = IndexMap::from([("N1".to_string(), tracked("Travel/Iran.md")), ("N2".to_string(), tracked("Travel/Oman.md"))]);
+    let index = folder_index(&[
+        ("Notes", "DefaultFolder-CloudKit"),
+        ("Travel", "F1"),
+        ("Travel/Old", "F2"),
+    ]);
+    let notes = IndexMap::from([
+        ("N1".to_string(), tracked("Travel/Iran.md")),
+        ("N2".to_string(), tracked("Travel/Oman.md")),
+    ]);
     let moves = vec![
         ("N1".to_string(), notes["N1"].clone(), "Trips/Iran.md".to_string()),
         ("N2".to_string(), notes["N2"].clone(), "Trips/Oman.md".to_string()),
@@ -875,8 +915,13 @@ fn a_folder_directory_whose_notes_all_moved_beside_it_is_a_rename() {
 #[test]
 fn an_empty_folder_directory_renamed_is_a_rename() {
     let index = folder_index(&[("Notes", "DefaultFolder-CloudKit"), ("Empty", "F1")]);
-    let (renames, deletes) =
-        plan_folder_dir_changes(&index, &on_disk(&["Notes", "Renamed"]), &IndexMap::new(), &[], &Default::default());
+    let (renames, deletes) = plan_folder_dir_changes(
+        &index,
+        &on_disk(&["Notes", "Renamed"]),
+        &IndexMap::new(),
+        &[],
+        &Default::default(),
+    );
     assert_eq!(renames.len(), 1);
     assert_eq!(renames[0].to, "Renamed");
     assert!(deletes.is_empty());
@@ -886,12 +931,14 @@ fn an_empty_folder_directory_renamed_is_a_rename() {
 fn a_folder_directory_gone_with_its_notes_is_a_delete_deepest_first() {
     let index = folder_index(&[("Notes", "DefaultFolder-CloudKit"), ("Old", "F1"), ("Old/Inner", "F2")]);
     let notes = IndexMap::from([("N1".to_string(), tracked("Old/a.md"))]);
-    let (renames, deletes) =
-        plan_folder_dir_changes(&index, &on_disk(&["Notes"]), &notes, &[], &Default::default());
+    let (renames, deletes) = plan_folder_dir_changes(&index, &on_disk(&["Notes"]), &notes, &[], &Default::default());
     assert!(renames.is_empty());
     assert_eq!(
         deletes,
-        vec![("Old/Inner".to_string(), "F2".to_string()), ("Old".to_string(), "F1".to_string())]
+        vec![
+            ("Old/Inner".to_string(), "F2".to_string()),
+            ("Old".to_string(), "F1".to_string())
+        ]
     );
 }
 
@@ -912,7 +959,11 @@ fn removing_the_title_key_retitles_to_the_file_name() {
     s.notes.get_mut("REC1").unwrap().frontmatter_title = Some("Restaurants ".into());
     write_clone_state(dir.path(), &s).unwrap();
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
-    write_vault_file(dir.path(), "Notes/Tracked.md", "---\napple-note-id: REC1\n---\n\nSynced text");
+    write_vault_file(
+        dir.path(),
+        "Notes/Tracked.md",
+        "---\napple-note-id: REC1\n---\n\nSynced text",
+    );
     assert_unbound(dir.path());
 }
 
@@ -926,7 +977,10 @@ fn notes_put_in_an_attachments_directory_are_reported() {
     let result = plan(dir.path());
     assert!(result.entries.is_empty());
     assert!(
-        result.notices.iter().any(|n| n.message.starts_with("Notes/Attachments/ holds note files")),
+        result
+            .notices
+            .iter()
+            .any(|n| n.message.starts_with("Notes/Attachments/ holds note files")),
         "{:?}",
         result.notices
     );

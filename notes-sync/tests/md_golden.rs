@@ -21,7 +21,10 @@ fn paragraphs(value: &Value) -> Vec<FormatParagraph> {
 #[test]
 fn render_golden() {
     check_golden("md_render.json", None, |case| {
-        vec![("markdown", json!(render_note_markdown(&paragraphs(&case["paragraphs"]))))]
+        vec![(
+            "markdown",
+            json!(render_note_markdown(&paragraphs(&case["paragraphs"]))),
+        )]
     });
 }
 

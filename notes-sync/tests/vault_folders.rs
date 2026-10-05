@@ -10,8 +10,8 @@ use std::collections::HashSet;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::folders::{
-    relocate_note_attachments,
-    FolderCreatePlan, PlannedFolder, Relocation, plan_folder_creates, reconcile_note_placements, remove_stale_dirs,
+    FolderCreatePlan, PlannedFolder, Relocation, plan_folder_creates, reconcile_note_placements,
+    relocate_note_attachments, remove_stale_dirs,
 };
 use icloud_notes_sync::vault::layout::{PreviousLayout, StateDirInfo, build_vault_layout};
 use icloud_notes_sync::vault::state::{AttachmentEntry, FolderEntry, NoteEntry, SharerHomeEntry};

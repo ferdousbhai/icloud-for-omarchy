@@ -43,7 +43,10 @@ fn merges_golden() {
             .map(|h| json!({"buffer1": [h.buffer1.0, h.buffer1.1], "buffer2": [h.buffer2.0, h.buffer2.1]}))
             .collect();
         vec![
-            ("merged", json!({ "text": merged.text, "hasConflict": merged.has_conflict })),
+            (
+                "merged",
+                json!({ "text": merged.text, "hasConflict": merged.has_conflict }),
+            ),
             ("plain", json!({ "conflict": conflict, "result": result })),
             ("comm", json!(comm)),
             ("indices", json!(indices)),

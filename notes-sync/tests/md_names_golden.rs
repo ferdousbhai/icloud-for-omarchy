@@ -22,8 +22,14 @@ fn names_golden() {
             ("noteFileName", json!(note_file_name(title))),
             ("inBody", json!(note_file_name_for(title, TitleMode::InBody))),
             ("filename", json!(note_file_name_for(title, TitleMode::Filename))),
-            ("needingInBody", json!(title_needing_frontmatter(title, TitleMode::InBody))),
-            ("needingFilename", json!(title_needing_frontmatter(title, TitleMode::Filename))),
+            (
+                "needingInBody",
+                json!(title_needing_frontmatter(title, TitleMode::InBody)),
+            ),
+            (
+                "needingFilename",
+                json!(title_needing_frontmatter(title, TitleMode::Filename)),
+            ),
             ("carries", json!(file_name_carries_title(file, title))),
             ("encoded", json!(encode_title_stem(title))),
             ("decoded", json!(decode_title_stem(title))),
@@ -43,6 +49,9 @@ fn unique_file_names_golden() {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
-        vec![("result", json!(unique_file_name(case["fileName"].as_str().unwrap(), &used)))]
+        vec![(
+            "result",
+            json!(unique_file_name(case["fileName"].as_str().unwrap(), &used)),
+        )]
     });
 }

@@ -436,7 +436,14 @@ fn reads_keys_in_any_order_and_keeps_unknown_top_level_keys() {
     let keys: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["layoutVersion", "generator", "titleMode", "syncToken", "notes", "futureKey"]
+        [
+            "layoutVersion",
+            "generator",
+            "titleMode",
+            "syncToken",
+            "notes",
+            "futureKey"
+        ]
     );
     assert_eq!(value["futureKey"], serde_json::json!({"x": [1, 2]}));
     // Unknown keys inside an entry are not kept.
@@ -467,7 +474,6 @@ fn entries_serialize_in_field_order() {
     folder.parent_record_name = Some("P".into());
     assert_eq!(keys(&folder.to_json()), ["name", "parentRecordName", "dirName"]);
 }
-
 
 #[test]
 fn nested_maps_serialize_in_field_order() {

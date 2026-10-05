@@ -268,7 +268,8 @@ fn run_binary(scenario: &Scenario) -> Run {
         .env("ICLOUD_NOTES_SYNC_DETERMINISTIC", "1")
         .output()
         .unwrap();
-    let stdout = normalize_lock_hash(&String::from_utf8_lossy(&output.stdout).replace(&*out.to_string_lossy(), "@OUT@"));
+    let stdout =
+        normalize_lock_hash(&String::from_utf8_lossy(&output.stdout).replace(&*out.to_string_lossy(), "@OUT@"));
     std::fs::write(out.join("stdout.json"), &stdout).unwrap();
     Run {
         tmp,
@@ -300,7 +301,12 @@ fn deterministic_mtimes(run: &Run) -> BTreeMap<String, i64> {
     let vault = run.vault();
     working_files(&vault)
         .into_iter()
-        .map(|p| (p.strip_prefix(&vault).unwrap().to_string_lossy().into_owned(), mtime_ms(&p)))
+        .map(|p| {
+            (
+                p.strip_prefix(&vault).unwrap().to_string_lossy().into_owned(),
+                mtime_ms(&p),
+            )
+        })
         .filter(|(_, ms)| *ms < run.started_ms - 5000)
         .collect()
 }
@@ -599,7 +605,10 @@ fn bodyless_pull_unfilled_keeps_the_previous_sync_token() {
     let stdout = read_json(&expected("bodyless-pull-unfilled/stdout.json"));
     assert_eq!(stdout["skippedNewUnsyncable"], 1);
     let message = warning(&stdout);
-    assert!(message.contains("1 new note(s)") && message.contains("next pull"), "{message}");
+    assert!(
+        message.contains("1 new note(s)") && message.contains("next pull"),
+        "{message}"
+    );
     let state = read_json(&expected("bodyless-pull-unfilled/vault/.icloud-notes/state.json"));
     let before = read_json(&expected("tiny-clone/vault/.icloud-notes/state.json"));
     assert_eq!(state["syncToken"], before["syncToken"], "the previous token is kept");
@@ -630,12 +639,17 @@ fn bodyless_clone_unfilled_saves_no_private_sync_token() {
     assert_eq!(stdout["written"], 1);
     assert_eq!(stdout["skippedUndecodable"], 1);
     let message = warning(&stdout);
-    assert!(message.contains("1 note(s)") && message.contains("first pull"), "{message}");
+    assert!(
+        message.contains("1 note(s)") && message.contains("first pull"),
+        "{message}"
+    );
     let state = read_json(&expected("bodyless-clone-unfilled/vault/.icloud-notes/state.json"));
     assert!(state.get("syncToken").is_none(), "{state}");
-    assert_eq!(note_files(&expected("bodyless-clone-unfilled/vault")), ["Notes/Test Note.md"]);
+    assert_eq!(
+        note_files(&expected("bodyless-clone-unfilled/vault")),
+        ["Notes/Test Note.md"]
+    );
 }
-
 
 /// `tiny-sync`: one run pushes the local edit, then pulls, over one
 /// connection - the request log (a cassette transport opened afresh would
@@ -645,7 +659,15 @@ fn bodyless_clone_unfilled_saves_no_private_sync_token() {
 fn tiny_sync_pushes_then_pulls_over_one_connection() {
     let paths: Vec<String> = requests("tiny-sync")
         .iter()
-        .map(|r| r["path"].as_str().unwrap().rsplit("/production/").next().unwrap().to_owned())
+        .map(|r| {
+            r["path"]
+                .as_str()
+                .unwrap()
+                .rsplit("/production/")
+                .next()
+                .unwrap()
+                .to_owned()
+        })
         .collect();
     assert_eq!(
         paths,
@@ -658,11 +680,17 @@ fn tiny_sync_pushes_then_pulls_over_one_connection() {
     );
     let sync = read_json(&expected("tiny-sync/stdout.json"));
     assert_eq!(sync["push"]["result"], read_json(&expected("tiny-push/stdout.json")));
-    assert_eq!(sync["pull"]["result"], read_json(&expected("tiny-pull-noop/stdout.json")));
+    assert_eq!(
+        sync["pull"]["result"],
+        read_json(&expected("tiny-pull-noop/stdout.json"))
+    );
     assert_eq!(sync["vault_info"]["notes"].as_array().unwrap().len(), 1);
     let clean = read_json(&expected("tiny-sync-clean/stdout.json"));
     assert_eq!(
-        (clean["push"]["result"]["pushed"].as_u64(), clean["pull"]["ok"].as_bool()),
+        (
+            clean["push"]["result"]["pushed"].as_u64(),
+            clean["pull"]["ok"].as_bool()
+        ),
         (Some(0), Some(true))
     );
 }
@@ -683,12 +711,18 @@ fn assert_attachments_batched(name: &str) {
     assert_eq!(lookups.len(), 2, "{name}");
     assert_eq!(
         names(&lookups[0]),
-        ["7DAFDA6F-4AC4-41D8-9958-049373B80824", "7ED80274-4400-4C02-87EA-F542F056FF02"],
+        [
+            "7DAFDA6F-4AC4-41D8-9958-049373B80824",
+            "7ED80274-4400-4C02-87EA-F542F056FF02"
+        ],
         "{name}: both Attachment records"
     );
     assert_eq!(
         names(&lookups[1]),
-        ["0B8509A3-A5FC-470B-A777-03BFFFDFB5F9", "066C8A2E-796F-403F-AD75-A5267CBD0E18"],
+        [
+            "0B8509A3-A5FC-470B-A777-03BFFFDFB5F9",
+            "066C8A2E-796F-403F-AD75-A5267CBD0E18"
+        ],
         "{name}: both Media records"
     );
     let downloads = requests(name).into_iter().filter(|r| r["method"] == "GET").count();
@@ -698,7 +732,10 @@ fn assert_attachments_batched(name: &str) {
         std::fs::read(vault.join("Notes/attachments/Call with Janice Elkins.m4a")).unwrap(),
         b"audio bytes"
     );
-    assert_eq!(std::fs::read(vault.join("Notes/attachments/_7130093.jpeg")).unwrap(), b"jpeg  bytes");
+    assert_eq!(
+        std::fs::read(vault.join("Notes/attachments/_7130093.jpeg")).unwrap(),
+        b"jpeg  bytes"
+    );
     let state = read_json(&vault.join(".icloud-notes/state.json"));
     assert_eq!(state["attachments"].as_object().unwrap().len(), 2, "{name}");
 }
@@ -706,7 +743,10 @@ fn assert_attachments_batched(name: &str) {
 #[test]
 fn attach_clone_looks_attachments_up_once_per_zone() {
     assert_attachments_batched("attach-clone");
-    assert_eq!(read_json(&expected("attach-clone/stdout.json"))["attachmentsDownloaded"], 2);
+    assert_eq!(
+        read_json(&expected("attach-clone/stdout.json"))["attachmentsDownloaded"],
+        2
+    );
 }
 
 #[test]
@@ -726,7 +766,11 @@ const SHARED_NOTE: &str = "9d8c7b6a-5f4e-4d3c-8b2a-192837465abc";
 /// many shared `changes/zone` requests it sent.
 fn shared_requests(name: &str) -> (Vec<Value>, usize) {
     let all = requests(name);
-    let listings = all.iter().filter(|r| r["path"] == SHARED_DB).map(|r| r["body"].clone()).collect();
+    let listings = all
+        .iter()
+        .filter(|r| r["path"] == SHARED_DB)
+        .map(|r| r["body"].clone())
+        .collect();
     (listings, all.iter().filter(|r| r["path"] == SHARED_ZONE).count())
 }
 
@@ -749,7 +793,10 @@ fn shared_pull_unchanged_resumes_the_listing_and_walks_no_zone() {
     assert_eq!(after["notes"], before["notes"]);
     assert_eq!(after["sharedDatabase"]["syncToken"], "AQAAAAAAAAAU");
     assert_eq!(after["sharedDatabase"]["zones"], before["sharedDatabase"]["zones"]);
-    assert_eq!(after["sharedDatabase"]["listedAt"], before["sharedDatabase"]["listedAt"]);
+    assert_eq!(
+        after["sharedDatabase"]["listedAt"],
+        before["sharedDatabase"]["listedAt"]
+    );
     assert_eq!(
         note_files(&expected("shared-pull-unchanged/vault")),
         note_files(&expected("asset-clone/vault"))
@@ -783,7 +830,10 @@ fn shared_pull_lists_from_scratch_when_the_cursor_cannot_be_used() {
     for (name, listings) in [
         (
             "shared-pull-token-rejected",
-            vec![serde_json::json!({ "syncToken": "AQAAAAAAAAAS" }), serde_json::json!({})],
+            vec![
+                serde_json::json!({ "syncToken": "AQAAAAAAAAAS" }),
+                serde_json::json!({}),
+            ],
         ),
         ("shared-pull-old-state", vec![serde_json::json!({})]),
         ("shared-pull-stale-cursor", vec![serde_json::json!({})]),
@@ -816,7 +866,11 @@ fn tiny_migrate_v3_moves_the_state_to_icloud_notes() {
         read_json(&vault.join(".icloud-md/state.json")),
         serde_json::json!({ "layoutVersion": 4, "movedTo": ".icloud-notes" })
     );
-    assert_eq!(all_files(&vault.join(LEGACY_STATE_DIR)).len(), 1, "only the tombstone is left");
+    assert_eq!(
+        all_files(&vault.join(LEGACY_STATE_DIR)).len(),
+        1,
+        "only the tombstone is left"
+    );
     let backups: Vec<PathBuf> = std::fs::read_dir(&vault)
         .unwrap()
         .flatten()
@@ -825,7 +879,10 @@ fn tiny_migrate_v3_moves_the_state_to_icloud_notes() {
         .collect();
     assert_eq!(backups.len(), 1, "{backups:?}");
     assert_eq!(read_json(&backups[0].join("state.json"))["layoutVersion"], 3);
-    assert_eq!(all_files(&backups[0].join("base")), all_files(&clone.join(STATE_DIR).join("base")));
+    assert_eq!(
+        all_files(&backups[0].join("base")),
+        all_files(&clone.join(STATE_DIR).join("base"))
+    );
     let notes = |v: &Path| -> BTreeMap<String, Vec<u8>> {
         note_files(v)
             .into_iter()
@@ -843,7 +900,10 @@ fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
     let vault = expected("tiny-status-v3/vault");
     assert!(!vault.join(STATE_DIR).exists());
     assert_eq!(read_json(&vault.join(".icloud-md/state.json"))["layoutVersion"], 3);
-    assert_eq!(read_json(&expected("tiny-status-v3/stdout.json"))["entries"], serde_json::json!([]));
+    assert_eq!(
+        read_json(&expected("tiny-status-v3/stdout.json"))["entries"],
+        serde_json::json!([])
+    );
 
     assert!(!expected("tiny-status-v2/vault").join(STATE_DIR).exists());
     assert_eq!(std::fs::read_to_string(expected("tiny-status-v2/exit")).unwrap(), "1\n");
