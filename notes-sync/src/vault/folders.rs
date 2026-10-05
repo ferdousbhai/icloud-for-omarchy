@@ -126,6 +126,42 @@ pub fn reconcile_note_placements(
     Ok(relocations)
 }
 
+/// Moves a note's attachment files into `attachments/` beside the note's
+/// (new) file, after the note itself was moved there. A name taken there
+/// gets a `" 2"` name, and the note's links (and base copy) follow it.
+pub fn relocate_note_attachments(
+    target_dir: &Path,
+    record_name: &str,
+    note_file: &str,
+    attachments: &mut IndexMap<String, AttachmentEntry>,
+) -> Result<(), Error> {
+    let to_dir = note_dir_of(note_file);
+    let to_attachments = posix::join(&[&to_dir, "attachments"]);
+    let mut used = HashSet::new();
+    claim_names_on_disk(target_dir, &to_attachments, &mut used)?;
+    let mine: Vec<String> = attachments
+        .iter()
+        .filter(|(_, a)| a.note_record_name == record_name && note_dir_of(&posix::dirname(&a.file)) != to_dir)
+        .map(|(k, _)| k.clone())
+        .collect();
+    for attachment_record_name in mine {
+        let attachment = attachments[&attachment_record_name].clone();
+        let old_base = posix::basename(&attachment.file).to_owned();
+        let new_base = unique_file_name(&old_base, &used);
+        let to_attachment = posix::join(&[&to_attachments, &new_base]);
+        std::fs::create_dir_all(target_dir.join(&to_attachments))?;
+        if !try_rename(&target_dir.join(&attachment.file), &target_dir.join(&to_attachment))? {
+            continue;
+        }
+        used.insert(new_base.clone());
+        attachments[&attachment_record_name].file = to_attachment;
+        if new_base != old_base {
+            rewrite_attachment_link(target_dir, note_file, record_name, &old_base, &new_base)?;
+        }
+    }
+    Ok(())
+}
+
 /// `removeStaleDirs`: best-effort rmdir of directories the previous layout
 /// used and the current one doesn't (deepest first; only if empty).
 pub fn remove_stale_dirs(target_dir: &Path, previous_dirs: &[String], current_dirs: &HashSet<String>) {

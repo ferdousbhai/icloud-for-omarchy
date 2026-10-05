@@ -52,7 +52,7 @@ use crate::md::title::{
 use crate::vault::attachments::{remove_attachments_for_note, remove_table_attachments_for_note, safe_unlink};
 use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
-use crate::vault::folders::{PlannedFolder, plan_folder_creates};
+use crate::vault::folders::{PlannedFolder, plan_folder_creates, relocate_note_attachments};
 use crate::vault::history::{VersionSnapshotInput, history_record_names, record_version, recording_suppressed, without_recording};
 use crate::vault::layout::{PreviousLayout, StateDirInfo, note_dir_of, state_dir_index};
 use crate::vault::local::{
@@ -234,7 +234,6 @@ pub enum Action {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoveEdit {
-    pub local_text: String,
     pub replica: [u8; 16],
 }
 
@@ -305,8 +304,8 @@ struct ReadyMove {
     folder_record_name: String,
     relocated: bool,
     new_title: Option<String>,
-    /// The moved file's body, when it differs from the base copy.
-    edited_text: Option<String>,
+    /// The moved file's body differs from the base copy.
+    edited: bool,
 }
 
 struct CreateCandidate {
@@ -703,19 +702,9 @@ pub fn build_push_plan(
             entries.push(refuse(Refusal::MoveIntoSharerArea));
             continue;
         }
-        let has_tracked_attachments = state
-            .attachments
-            .as_ref()
-            .is_some_and(|a| a.values().any(|a| a.note_record_name == *record_name));
-        if relocated && has_tracked_attachments {
-            entries.push(refuse(Refusal::MoveWithAttachments));
-            continue;
-        }
-        let edited_text = match untracked.iter().find(|u| u.file == *to_file) {
-            Some(u) if read_base_copy(target_dir, record_name)?.as_deref() != Some(u.local_text.as_str()) => {
-                Some(u.local_text.clone())
-            }
-            _ => None,
+        let edited = match untracked.iter().find(|u| u.file == *to_file) {
+            Some(u) => read_base_copy(target_dir, record_name)?.as_deref() != Some(u.local_text.as_str()),
+            None => false,
         };
         let previous_title = title_from_note_file_name(&entry.file);
         let new_title = title_expressed_by_file(to_file, &recorded_titles);
@@ -727,7 +716,7 @@ pub fn build_push_plan(
             folder_record_name: info.folder_record_name().unwrap_or_default().to_owned(),
             relocated,
             new_title: retitled.then_some(new_title),
-            edited_text,
+            edited,
         });
     }
 
@@ -904,10 +893,7 @@ pub fn build_push_plan(
                 relocated: m.relocated,
                 record: Box::new(record.clone()),
                 retitle,
-                edit: m.edited_text.clone().map(|local_text| MoveEdit {
-                    local_text,
-                    replica: replica_bytes,
-                }),
+                edit: m.edited.then_some(MoveEdit { replica: replica_bytes }),
             },
         ));
     }
@@ -1771,6 +1757,9 @@ fn execute<T: Transport>(
             };
             state.notes.insert(record_name.clone(), updated.clone());
             apply_note_file_times(&target_dir.join(to_file), &current)?;
+            if *relocated && let Some(attachments) = state.attachments.as_mut() {
+                relocate_note_attachments(target_dir, record_name, to_file, attachments)?;
+            }
             let what = match (retitle.is_some(), *relocated) {
                 (false, _) => "Moved",
                 (true, true) => "Moved and retitled",
@@ -1780,6 +1769,9 @@ fn execute<T: Transport>(
             let Some(edit) = edit else {
                 return Ok(ExecuteOutcome::ok(moved));
             };
+            // Read again: relocating attachments may have renamed links.
+            let text = read_text(&target_dir.join(to_file))?.unwrap_or_default();
+            let local_text = split_frontmatter(&text, split_options(state.mode())).body;
             // The edit made along with the move goes up now, not a sync later.
             let tracked_ids: HashSet<String> = state
                 .attachments
@@ -1797,7 +1789,7 @@ fn execute<T: Transport>(
                 target_dir,
                 &current,
                 &updated,
-                &edit.local_text,
+                &local_text,
                 &tracked_ids,
                 &edit.replica,
                 mtime_ms(&target_dir.join(to_file))?,
@@ -1829,7 +1821,7 @@ fn execute<T: Transport>(
                     state.notes.insert(record_name.clone(), updated);
                 }
             }
-            write_base_copy(target_dir, record_name, &edit.local_text)?;
+            write_base_copy(target_dir, record_name, &local_text)?;
             record_epoch(target_dir, record_name, &history_record_names(state, record_name))?;
             Ok(ExecuteOutcome::ok(format!("{moved}, with its edits")))
         }

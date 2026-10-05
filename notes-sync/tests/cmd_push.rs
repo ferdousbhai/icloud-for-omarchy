@@ -414,7 +414,7 @@ fn attachment(file: &str) -> AttachmentEntry {
 }
 
 #[test]
-fn refuses_moving_a_note_with_tracked_attachments() {
+fn moving_a_note_with_tracked_attachments_reaches_network() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = state();
     s.attachments = Some(
@@ -425,11 +425,7 @@ fn refuses_moving_a_note_with_tracked_attachments() {
     write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
     write_vault_file(dir.path(), "Recipes/Tracked.md", "Synced text");
     write_clone_state(dir.path(), &s).unwrap();
-    let entries = plan_entries(dir.path());
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].kind, PlanEntryKind::Move);
-    assert_eq!(entries[0].resolution, PlanResolution::Refused);
-    assert!(reason(&entries[0]).contains("has attachments"));
+    assert_unbound(dir.path());
 }
 
 #[test]

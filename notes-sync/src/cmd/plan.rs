@@ -344,8 +344,6 @@ pub enum Refusal {
     },
     /// 583 (move, refused)
     MoveIntoSharerArea,
-    /// 597 (move, refused)
-    MoveWithAttachments,
     /// 650 (create, refused)
     CreateInUnfolderableDir {
         dir: String,
@@ -452,9 +450,6 @@ impl Refusal {
                 None => format!("moved into \"{dir}/\", which can't become one of the account's folders"),
             },
             MoveIntoSharerArea => "moved into a sharer's area - notes can't be moved into someone else's share".into(),
-            MoveWithAttachments => "this note has attachments, whose files can't be relocated safely yet - move it back \
-                                    (or move the note in Notes and pull instead)"
-                .into(),
             CreateInUnfolderableDir { dir, folder_refusal } => match folder_refusal {
                 Some(r) => r.message(),
                 None => format!("sits in \"{dir}/\", which can't become one of the account's folders"),

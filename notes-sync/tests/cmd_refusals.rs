@@ -150,14 +150,6 @@ fn sites() -> Vec<(u32, &'static str, Refusal, PlanResolution, String)> {
             "moved into a sharer's area - notes can't be moved into someone else's share".into(),
         ),
         (
-            597,
-            "this note has attachments, whose files can't be relocated safely yet",
-            Refusal::MoveWithAttachments,
-            Refused,
-            "this note has attachments, whose files can't be relocated safely yet - move it back (or move the note in Notes and pull instead)"
-                .into(),
-        ),
-        (
             650,
             "which can't become one of the account's folders",
             Refusal::CreateInUnfolderableDir {
@@ -589,7 +581,6 @@ fn every_refusal_variant_is_listed() {
             | MoveSharedNote { .. }
             | MoveIntoUnfolderableDir { .. }
             | MoveIntoSharerArea
-            | MoveWithAttachments
             | CreateInUnfolderableDir { .. }
             | CreateLooseInSharerHome
             | CreateInReadOnlyShare
@@ -616,7 +607,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 32, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 31, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()

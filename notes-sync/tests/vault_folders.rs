@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::folders::{
+    relocate_note_attachments,
     FolderCreatePlan, PlannedFolder, Relocation, plan_folder_creates, reconcile_note_placements, remove_stale_dirs,
 };
 use icloud_notes_sync::vault::layout::{PreviousLayout, StateDirInfo, build_vault_layout};
@@ -379,4 +380,35 @@ fn ignores_vault_root() {
     let p = plan(&["", ""], &index(&[]));
     assert!(p.folders.is_empty());
     assert!(p.refusals.is_empty());
+}
+
+/// A note moved here takes its attachment files along; a name already taken
+/// in the new folder's `attachments/` gets a " 2" name and the links follow.
+#[test]
+fn relocating_a_moved_notes_attachments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write_vault_file(dir, "Notes/attachments/pic.jpg", "mine");
+    write_vault_file(dir, "Recipes/attachments/pic.jpg", "someone else's");
+    write_vault_file(dir, "Recipes/Tracked.md", "Text ![](attachments/pic.jpg)");
+    write_base_copy(dir, "REC1", "Text ![](attachments/pic.jpg)").unwrap();
+    let mut attachments = IndexMap::from([(
+        "ATT1".to_owned(),
+        AttachmentEntry {
+            file: "Notes/attachments/pic.jpg".into(),
+            media_record_name: "MEDIA1".into(),
+            media_file_checksum: "abc".into(),
+            note_record_name: "REC1".into(),
+        },
+    )]);
+    relocate_note_attachments(dir, "REC1", "Recipes/Tracked.md", &mut attachments).unwrap();
+    assert_eq!(attachments["ATT1"].file, "Recipes/attachments/pic 2.jpg");
+    assert_eq!(read(dir, "Recipes/attachments/pic 2.jpg"), "mine");
+    assert_eq!(read(dir, "Recipes/attachments/pic.jpg"), "someone else's");
+    assert!(!dir.join("Notes/attachments/pic.jpg").exists());
+    assert_eq!(read(dir, "Recipes/Tracked.md"), "Text ![](attachments/pic%202.jpg)");
+    assert_eq!(
+        read_base_copy(dir, "REC1").unwrap().as_deref(),
+        Some("Text ![](attachments/pic%202.jpg)")
+    );
 }
