@@ -5,7 +5,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::Error;
-use crate::js;
 use crate::vault::epoch::{NoteEpoch, list_epochs};
 use crate::vault::history::{VersionSnapshot, history_record_names, list_versions, resolve_tracked_note};
 use crate::vault::migrate::require_vault;
@@ -104,7 +103,7 @@ fn build_record_history(
             rows.push((snapshot, label.clone()));
         }
     }
-    rows.sort_by(|(a, _), (b, _)| js::locale_compare(&b.timestamp, &a.timestamp));
+    rows.sort_by(|(a, _), (b, _)| b.timestamp.cmp(&a.timestamp));
     Ok(rows
         .into_iter()
         .map(|(snapshot, label)| HistoryRecordRow {
