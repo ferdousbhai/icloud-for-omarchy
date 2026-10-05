@@ -57,6 +57,14 @@ def load_state(vault):
         return json.load(f)
 
 
+def contained(path, folder, prefix, depth):
+    """`folder/<prefix>...`, or (depth 2) `folder/<prefix>dir/<prefix>...`."""
+    if not path.startswith(folder + "/"):
+        return False
+    parts = path[len(folder) + 1 :].split("/")
+    return 1 <= len(parts) <= depth and all(part.startswith(prefix) for part in parts)
+
+
 def refuse(msg):
     print("REFUSE: " + msg)
     sys.exit(1)
@@ -81,22 +89,30 @@ def plan(vault, folder, prefix, ids_file, status_path, dry_path, expect, allow_r
         where = f"entry {i} ({e.get('kind')})"
         if e.get("resolution") not in ok_res:
             refuse(f"{where}: resolution {e.get('resolution')}")
-        if e.get("kind") == "createFolder":
-            if e.get("file").rstrip("/") != folder:
-                refuse(f"{where}: folder outside containment")
+        if e.get("kind") in ("createFolder", "renameFolder", "deleteFolder"):
+            # The containment folder itself (created once), or a subfolder of
+            # it named with this run's prefix.
+            for key in ("file", "previousFile"):
+                p = e.get(key)
+                if p is None:
+                    continue
+                p = p.rstrip("/")
+                if e["kind"] == "createFolder" and p == folder:
+                    continue
+                if not contained(p, folder, prefix, depth=1):
+                    refuse(f"{where}: {key} {p!r} is not a run subfolder of {folder}/")
             continue
         for key in ("file", "previousFile", "pendingRename"):
             p = e.get(key)
             if p is None:
                 continue
-            if not p.startswith(folder + "/") or "/" in p[len(folder) + 1 :]:
-                refuse(f"{where}: {key} outside {folder}/")
-            if not os.path.basename(p).startswith(prefix):
-                refuse(f"{where}: {key} lacks this run's prefix")
+            if not contained(p, folder, prefix, depth=2):
+                refuse(f"{where}: {key} {p!r} outside {folder}/ or lacks this run's prefix")
         if e["kind"] == "create":
             nid = note_id(os.path.join(vault, e["file"]))
-            if nid is not None:
-                refuse(f"{where}: create of a file that already carries an apple-note-id")
+            # A copy of one of this run's notes carries its id: a new note.
+            if nid is not None and nid not in ids:
+                refuse(f"{where}: create of a file that carries a foreign apple-note-id")
             continue
         nid = by_file.get(e.get("previousFile") or e["file"]) or note_id(os.path.join(vault, e["file"]))
         if nid is None or nid not in ids:
@@ -137,10 +153,16 @@ def ids(vault, folder, prefix):
     if not os.path.isdir(d):
         return
     for name in sorted(os.listdir(d)):
-        if name.startswith(prefix) and name.endswith(".md"):
-            nid = note_id(os.path.join(d, name))
-            if nid:
-                print(nid)
+        path = os.path.join(d, name)
+        if not name.startswith(prefix):
+            continue
+        # One level of this run's subfolders.
+        names = [os.path.join(path, n) for n in sorted(os.listdir(path)) if n.startswith(prefix)] if os.path.isdir(path) else [path]
+        for note in names:
+            if note.endswith(".md"):
+                nid = note_id(note)
+                if nid:
+                    print(nid)
 
 
 def folder_clean(vault, folder):
@@ -159,6 +181,8 @@ def same_notes(a, b):
         out = {}
         for name in os.listdir(d) if os.path.isdir(d) else []:
             path = os.path.join(d, name)
+            if os.path.isdir(path):
+                continue  # run subfolders are checked by the steps that make them
             nid = note_id(path)
             if nid is None:
                 refuse(f"{path} has no apple-note-id")

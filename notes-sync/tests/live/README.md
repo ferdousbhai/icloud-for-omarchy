@@ -26,8 +26,10 @@ The binary signs in through icloud-session. A run takes a few minutes.
   logged and `guard.py plan` refuses the push unless the two plans agree,
   every entry is `ready` (the one exception: the dry-run that checks a file
   with conflict markers is refused, where `conflict` is required), every file (and `previousFile` / `pendingRename`)
-  is directly inside the folder with this run's prefix, and every non-create
-  entry is a note id this run created. The expected entry kinds are asserted
+  is inside the folder with this run's prefix (directly, or in a subfolder
+  named with the prefix), every folder entry is the containment folder or
+  such a subfolder, and every non-create entry is a note id this run created
+  (a create may carry one too: a copy of this run's note). The expected entry kinds are asserted
   too where they are known.
 - Only this run's notes are ever deleted. The folder is left in place.
 
@@ -45,7 +47,15 @@ should always report 0.
 4. Two vaults: edits on different lines merge cleanly on pull; edits to the
    same line produce conflict markers, which the plan refuses to push until
    they are resolved.
-5. Delete both notes, push; fresh clones no longer hold them.
+6. Two vaults edit different lines; the second pushes without pulling, and
+   the push merges and uploads in one go.
+7. A copy of a note's file is pushed as a new note with its own id, then
+   deleted.
+8. Emptying a note moves it to Recently Deleted.
+9. A subfolder of the containment folder (named with the run's prefix) is
+   made empty, renamed, gets a note moved in with an edit, and is deleted
+   with that note; a fresh clone after each step shows iCloud followed.
+5. Delete both notes, push; fresh clones no longer hold them. (Runs last.)
 
 After each push, a fresh clone must hold the same notes as the pushing vault
 (matched by `apple-note-id`) with identical bytes. Names are not compared:
