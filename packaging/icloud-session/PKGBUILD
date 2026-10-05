@@ -14,7 +14,10 @@ arch=('x86_64')
 url='https://github.com/ferdousbhai/icloud-for-omarchy'
 license=('MIT')
 options=('!debug' '!lto')
-depends=('gtk4' 'webkitgtk-6.0' 'dbus' 'glib2' 'gcc-libs' 'glibc')
+# No 'dbus': the daemon and CLI speak D-Bus in Rust (zbus) and link only
+# glibc and gcc-libs; the session bus itself is every desktop's. The sign-in
+# window links gtk4, webkitgtk-6.0 and glib2.
+depends=('gtk4' 'webkitgtk-6.0' 'glib2' 'gcc-libs' 'glibc')
 makedepends=('rust' 'cargo' 'git')
 checkdepends=('dbus')
 

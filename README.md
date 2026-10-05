@@ -99,7 +99,7 @@ the move. icloud-notes' release tags `v0.1.0`...`v0.3.8` are here as
 
 ## Development
 
-Needs `rust`, `gtk4`, `libadwaita`, `libshumate` (findmy) and
+Needs `rust`, `sqlite`, `gtk4`, `libadwaita`, `libshumate` (findmy) and
 `webkitgtk-6.0` (the sign-in window) for the Rust crates, and `qt6-base`,
 `qt6-declarative` and `make` for Notes. The apps talk to the icloud-session
 daemon over D-Bus; for development without the package, `bin/dev-install`
