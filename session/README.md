@@ -9,7 +9,7 @@ Photos use it instead of signing in themselves.
 | `icloud-session` (`session/`) | – | client library the apps link |
 | `icloud-sessiond` (`sessiond/`) | `icloud-sessiond` | D-Bus user service, the only owner of the session |
 | | `icloud-session-signin` | GTK4 + WebKitGTK 6 sign-in window the daemon runs |
-| | `icloud-session` | CLI for scripts and debugging |
+| | `icloud-session` | CLI for scripts and debugging: the same executable as `icloud-sessiond`, run by this name (a symlink) |
 
 Requirements: an Apple ID with Advanced Data Protection off and "Access
 iCloud Data on the Web" on. Runtime: `gtk4`, `webkitgtk-6.0`, a D-Bus
@@ -346,7 +346,8 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 ```
 
 or build the package from this checkout: `cd packaging/icloud-session &&
-makepkg -si`. Either installs the three binaries and the D-Bus activation
+makepkg -si`. Either installs the daemon (also the CLI, through the `icloud-session`
+symlink), the sign-in window and the D-Bus activation
 file. Nothing to enable; the bus starts the daemon on first use. Updates
 arrive through `omarchy update`.
 

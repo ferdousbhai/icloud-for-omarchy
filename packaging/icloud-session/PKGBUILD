@@ -69,9 +69,11 @@ check() {
 package() {
   cd "$srcdir/$pkgname"
   local bin
-  for bin in icloud-sessiond icloud-session icloud-session-signin; do
+  for bin in icloud-sessiond icloud-session-signin; do
     install -Dm755 "target/release/$bin" "$pkgdir/usr/bin/$bin"
   done
+  # One executable: run as icloud-session it is the CLI.
+  ln -s icloud-sessiond "$pkgdir/usr/bin/icloud-session"
   # D-Bus activation, no systemd unit: the bus starts the daemon on the
   # first call and it exits when idle.
   install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.service \

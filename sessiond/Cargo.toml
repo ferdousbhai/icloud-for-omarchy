@@ -13,13 +13,14 @@ default = ["signin"]
 # tests without webkitgtk-6.0 installed.
 signin = ["dep:webkit6"]
 
+[lib]
+# The CLI's help text (src/cli.rs doc comments) has shell examples, not Rust.
+doctest = false
+
+# Also the icloud-session CLI, run by that name (the package links it).
 [[bin]]
 name = "icloud-sessiond"
 path = "src/main.rs"
-
-[[bin]]
-name = "icloud-session"
-path = "src/bin/cli.rs"
 
 [[bin]]
 name = "icloud-session-signin"

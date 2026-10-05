@@ -107,7 +107,7 @@ enum Command {
     Validate,
 }
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     let args = match cli::parse::<Args>(TOOL) {
         Ok(args) => args,
         Err(code) => return ExitCode::from(code),

@@ -20,7 +20,20 @@ use zbus::blocking::Connection;
 
 const DSID: &str = "12345";
 const DAEMON: &str = env!("CARGO_BIN_EXE_icloud-sessiond");
-const CLI: &str = env!("CARGO_BIN_EXE_icloud-session");
+
+/// The CLI: the daemon's executable run as `icloud-session`, through a
+/// symlink as the package installs it.
+fn cli_bin() -> &'static Path {
+    static CLI: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    CLI.get_or_init(|| {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cli-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("icloud-session");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(DAEMON, &link).unwrap();
+        link
+    })
+}
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
@@ -373,7 +386,7 @@ impl Env {
     }
 
     fn cli(&self, args: &[&str]) -> std::process::Output {
-        Command::new(CLI)
+        Command::new(cli_bin())
             .args(args)
             .env_clear()
             .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
@@ -384,7 +397,7 @@ impl Env {
     /// The CLI with `stdin` piped in (not a terminal) and `env` set.
     fn cli_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> std::process::Output {
         use std::io::Write;
-        let mut child = Command::new(CLI)
+        let mut child = Command::new(cli_bin())
             .args(args)
             .env_clear()
             .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
@@ -1129,6 +1142,21 @@ fn client_lib_against_the_daemon() {
 }
 
 #[test]
+fn one_executable_answers_to_both_names() {
+    let version = |bin: &Path| {
+        let out = Command::new(bin).arg("--version").env_clear().output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let v = env!("CARGO_PKG_VERSION");
+    assert_eq!(version(Path::new(DAEMON)), format!("icloud-sessiond {v}\n"));
+    assert_eq!(version(cli_bin()), format!("icloud-session {v}\n"));
+    // Run as the daemon it takes no commands; as the CLI it does.
+    let out = Command::new(DAEMON).arg("status").env_clear().output().unwrap();
+    assert_eq!(out.status.code(), Some(64), "{out:?}");
+}
+
+#[test]
 fn cli_status_validate_sign_in_and_sign_out() {
     let server = Server::start(|s, n, base| match s.path() {
         VALIDATE => validate_ok(n, base),
@@ -1525,7 +1553,7 @@ fn cli_sign_in_ends_when_the_daemon_dies() {
         seed: false,
         ..Default::default()
     });
-    let mut cli = Command::new(CLI)
+    let mut cli = Command::new(cli_bin())
         .arg("sign-in")
         .env_clear()
         .env("DBUS_SESSION_BUS_ADDRESS", &env.address)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install this checkout's icloud-session daemon for development, without the package: the three
-# binaries into ~/.local/bin and a D-Bus activation file into
+# Install this checkout's icloud-session daemon for development, without the package: the
+# daemon (also the icloud-session CLI, by a symlink) and the sign-in window into ~/.local/bin and a D-Bus activation file into
 # ~/.local/share/dbus-1/services pointing at ~/.local/bin/icloud-sessiond.
 # The user services directory is searched before /usr/share, so this build
 # wins over an installed package until bin/dev-uninstall.
@@ -12,9 +12,11 @@ bin_dir="$HOME/.local/bin"
 services_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
 
 cargo build --release --locked -p icloud-sessiond --bins
-for bin in icloud-sessiond icloud-session icloud-session-signin; do
+for bin in icloud-sessiond icloud-session-signin; do
   install -Dm755 "target/release/$bin" "$bin_dir/$bin"
 done
+# One executable: run as icloud-session it is the CLI.
+ln -sfn icloud-sessiond "$bin_dir/icloud-session"
 install -d "$services_dir"
 sed "s|^Exec=.*|Exec=$bin_dir/icloud-sessiond|" "sessiond/data/$service" >"$services_dir/$service"
 # The sign-in window's desktop entry: its name and icon in bars and docks.
