@@ -386,3 +386,87 @@ fn signed_out_exits_2() {
     assert_eq!(code(&out), 2, "{}", stderr(&out));
     assert!(stderr(&out).contains("icloud-session sign-in"), "{}", stderr(&out));
 }
+
+/// The shared libraries an x86-64 ELF executable needs (its `DT_NEEDED`
+/// entries), as `ldd` would start from.
+fn needed_libs(path: &str) -> Vec<String> {
+    let f = std::fs::read(path).unwrap();
+    let u16_at = |o: usize| u16::from_le_bytes(f[o..o + 2].try_into().unwrap()) as usize;
+    let u64_at = |o: usize| u64::from_le_bytes(f[o..o + 8].try_into().unwrap()) as usize;
+    assert_eq!(&f[..5], b"\x7fELF\x02", "a 64-bit ELF file");
+    let (phoff, phentsize, phnum) = (u64_at(0x20), u16_at(0x36), u16_at(0x38));
+    let headers: Vec<usize> = (0..phnum).map(|i| phoff + i * phentsize).collect();
+    let p_type = |h: usize| u32::from_le_bytes(f[h..h + 4].try_into().unwrap());
+    // A virtual address to its file offset, through the PT_LOAD segments.
+    let file_offset = |vaddr: usize| {
+        headers
+            .iter()
+            .filter(|&&h| p_type(h) == 1)
+            .find(|&&h| (u64_at(h + 0x10)..u64_at(h + 0x10) + u64_at(h + 0x20)).contains(&vaddr))
+            .map(|&h| vaddr - u64_at(h + 0x10) + u64_at(h + 0x08))
+            .expect("address in a loaded segment")
+    };
+    let dynamic = headers.iter().find(|&&h| p_type(h) == 2).expect("dynamically linked");
+    let entries: Vec<(usize, usize)> = (u64_at(dynamic + 0x08)..u64_at(dynamic + 0x08) + u64_at(dynamic + 0x20))
+        .step_by(16)
+        .map(|e| (u64_at(e), u64_at(e + 8)))
+        .take_while(|&(tag, _)| tag != 0)
+        .collect();
+    let strtab = file_offset(entries.iter().find(|e| e.0 == 5).expect("DT_STRTAB").1);
+    entries
+        .iter()
+        .filter(|e| e.0 == 1)
+        .map(|&(_, name)| {
+            let start = strtab + name;
+            let end = start + f[start..].iter().position(|&b| b == 0).unwrap();
+            String::from_utf8_lossy(&f[start..end]).into_owned()
+        })
+        .collect()
+}
+
+/// `icloud-findmy` is the command line only: GTK, libadwaita and libshumate
+/// are not among the libraries it needs, so commands do not load them. The
+/// app binary does need them.
+#[test]
+fn the_command_line_binary_does_not_link_gtk() {
+    let ui = |libs: Vec<String>| {
+        libs.into_iter()
+            .filter(|l| ["libgtk-4.", "libadwaita-1.", "libshumate-1.0."].iter().any(|p| l.starts_with(p)))
+            .count()
+    };
+    let cli = needed_libs(env!("CARGO_BIN_EXE_icloud-findmy"));
+    assert!(cli.iter().any(|l| l.starts_with("libc.")), "{cli:?}");
+    assert_eq!(ui(cli.clone()), 0, "{cli:?}");
+    if let Some(app) = option_env!("CARGO_BIN_EXE_icloud-findmy-app") {
+        assert_eq!(ui(needed_libs(app)), 3);
+    }
+}
+
+/// With no command, `icloud-findmy` becomes `icloud-findmy-app` from its
+/// own directory (the same process: its exit code is the app's).
+#[test]
+fn no_command_runs_the_app_beside_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let cli = tmp.path().join("icloud-findmy");
+    std::fs::copy(env!("CARGO_BIN_EXE_icloud-findmy"), &cli).unwrap();
+    let app = tmp.path().join("icloud-findmy-app");
+    let marker = tmp.path().join("ran");
+    let script = format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display());
+    std::fs::write(&app, script).unwrap();
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = Command::new(&cli).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(code(&out), 7, "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "0");
+
+    // Without it (and none on PATH) it says so.
+    std::fs::remove_file(&app).unwrap();
+    let out = Command::new(&cli)
+        .env("PATH", tmp.path().join("nowhere"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 1);
+    assert!(stderr(&out).contains("cannot open the app"), "{}", stderr(&out));
+}

@@ -15,7 +15,10 @@ to the command that does it, then fixes the conventions all the tools share.
 
 `icloud-notes`, `icloud-photos` and `icloud-findmy` open their window when
 run with no arguments, and run a command without GTK/Qt GUI initialization
-when given one.
+when given one. `icloud-findmy` goes further: it is a command-line binary
+with no GTK linked in (a command starts in milliseconds, not after loading
+the GTK stack), and with no arguments it runs the window,
+`icloud-findmy-app`, which the desktop entry also runs.
 
 ## The audit: GUI feature → command
 
@@ -135,8 +138,7 @@ app what it needs of the vault's state through `vault-info` (and in each
 `sync` answer, so a sync costs one engine run).
 `icloud-notes <command>` runs that code headless (a `QCoreApplication`; a
 `QGuiApplication` on the offscreen platform only for `export-pdf`), the same
-way `icloud-photos` and `icloud-findmy` put their commands in the app
-binary. `icloud-notes-sync` stays the engine, shipped inside the
+way `icloud-photos` puts its commands in the app binary. `icloud-notes-sync` stays the engine, shipped inside the
 icloud-notes package and off PATH, and `icloud-notes` is the one command
 for notes: it runs the engine for `sync`, `pull`, `push` and `clone` the
 way the window does (a refused sign-in is reported to icloud-session), and

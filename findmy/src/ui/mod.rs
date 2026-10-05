@@ -28,6 +28,9 @@ where
 pub fn run() -> glib::ExitCode {
     use adw::prelude::*;
 
+    // The name the app had as one binary (X11 WM_CLASS, logs), not the
+    // `icloud-findmy-app` binary's.
+    glib::set_prgname(Some("icloud-findmy"));
     glib::set_application_name("Find My");
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {

@@ -75,9 +75,11 @@ files `0600`). Delete the file to clear the history.
 
 ## Command line
 
-The same `icloud-findmy` binary runs without its window when given a
-command (GTK is not started), with the same Find My client and history as
-the app:
+`icloud-findmy` given a command runs it without the window, with the
+same Find My client and history as the app. It is a binary of its own
+with no GTK linked in, so a command starts in a few milliseconds; with no
+command it opens the app, `icloud-findmy-app` (which the desktop entry
+runs directly):
 
 ```console
 $ icloud-findmy devices                  # name, model, battery, online, last fix
@@ -126,7 +128,7 @@ the repository root:
 
 ```bash
 bin/build icloud-findmy
-target/release/icloud-findmy
+target/release/icloud-findmy-app      # the app; icloud-findmy is the command line
 ```
 
 ### Running without an Apple account
@@ -163,8 +165,8 @@ cargo test -p icloud-findmy
 runs the full Rust test suite (the root `bin/test` runs every crate's). The core
 (`findme.rs`, `history.rs`, `models.rs`) and the command line (`cli.rs`)
 have no GTK dependency, so `cargo test --no-default-features` tests them
-on a machine without the GTK stack (the binary is then the command line
-only).
+on a machine without the GTK stack (only `icloud-findmy`, the command
+line, is built then).
 
 ## How it works
 

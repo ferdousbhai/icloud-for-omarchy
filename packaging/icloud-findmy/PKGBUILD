@@ -51,7 +51,7 @@ _cargo_env() {
 build() {
   cd "$srcdir/$pkgname"
   _cargo_env
-  cargo build --frozen --release -p icloud-findmy --bin icloud-findmy
+  cargo build --frozen --release -p icloud-findmy --bins
 }
 
 check() {
@@ -62,7 +62,9 @@ check() {
 
 package() {
   cd "$srcdir/$pkgname"
+  # The command line (no GTK linked) and the window it runs with no command.
   install -Dm755 target/release/icloud-findmy "$pkgdir/usr/bin/icloud-findmy"
+  install -Dm755 target/release/icloud-findmy-app "$pkgdir/usr/bin/icloud-findmy-app"
   install -Dm644 findmy/data/com.ferdousbhai.IcloudFindMy.desktop "$pkgdir/usr/share/applications/com.ferdousbhai.IcloudFindMy.desktop"
   install -Dm644 findmy/data/com.ferdousbhai.IcloudFindMy.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.ferdousbhai.IcloudFindMy.svg"
   install -Dm644 findmy/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
