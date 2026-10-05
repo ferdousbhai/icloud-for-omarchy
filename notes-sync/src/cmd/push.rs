@@ -568,6 +568,35 @@ pub fn build_push_plan(
         entries.push(plan_entry.into());
     }
 
+    // `attachments/` holds attachment files, never notes: say so rather than
+    // skip notes put there in silence.
+    for dir in list_vault_dirs(target_dir)?.iter().chain(std::iter::once(&String::new())) {
+        let Ok(entries) = std::fs::read_dir(target_dir.join(dir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.to_lowercase() != "attachments" || !entry.path().is_dir() {
+                continue;
+            }
+            let holds_notes = std::fs::read_dir(entry.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|f| f.file_name().to_string_lossy().ends_with(".md"));
+            if holds_notes {
+                let at = if dir.is_empty() { name } else { format!("{dir}/{name}") };
+                notices.push(SyncNotice {
+                    level: NoticeLevel::Warn,
+                    message: format!(
+                        "{at}/ holds note files, but \"attachments\" is where attachment files live, so they're \
+                         ignored - move them to a folder with another name"
+                    ),
+                });
+            }
+        }
+    }
+
     let mut untracked: Vec<UntrackedNote> = Vec::new();
     for file in list_untracked_markdown_files(target_dir, &state.notes)? {
         let text = read_text(&target_dir.join(&file))?.unwrap_or_default();
@@ -602,7 +631,13 @@ pub fn build_push_plan(
             } => (state, frontmatter, body),
         };
         let requested_title = if filename_as_title {
-            read_note_title(&frontmatter)
+            // Removing the title key asks for the title the file name spells.
+            read_note_title(&frontmatter).or_else(|| {
+                entry
+                    .frontmatter_title
+                    .is_some()
+                    .then(|| title_from_note_file_name(&entry.file))
+            })
         } else {
             None
         };
@@ -1890,12 +1925,52 @@ fn rejection(result: &RecordUpdateResult) -> Option<String> {
 }
 
 /// Runs one entry's action - icloud-md's `execute()`.
+/// Sends every trash and every single-record update of the plan together,
+/// one `records/modify` per zone (non-atomic, so each note stands alone),
+/// when there are several: their results, by record name, for `execute`.
+fn batch_writes<T: Transport>(
+    entries: &[ExecutablePlanEntry],
+    db: &Database<T>,
+) -> Result<HashMap<String, Vec<RecordUpdateResult>>, Error> {
+    let mut by_zone: IndexMap<NoteZone, Vec<RecordUpdate>> = IndexMap::new();
+    for action in entries.iter().filter_map(|e| e.action.as_ref()) {
+        match action {
+            Action::Delete { record_name, record, .. } => {
+                by_zone.entry(note_zone(None)).or_default().push(trash_update(record_name, record));
+            }
+            Action::Update { zone, updates, .. } if updates.len() == 1 => {
+                by_zone.entry(zone.clone()).or_default().push(updates[0].clone());
+            }
+            _ => {}
+        }
+    }
+    let mut results = HashMap::new();
+    for (zone, updates) in by_zone.into_iter().filter(|(_, u)| u.len() > 1) {
+        let answers = db.update_records_independently(&zone, &updates)?;
+        for (update, answer) in updates.into_iter().zip(answers) {
+            results.insert(update.record_name, vec![answer]);
+        }
+    }
+    Ok(results)
+}
+
+fn trash_update(record_name: &str, record: &CloudKitRecord) -> RecordUpdate {
+    RecordUpdate {
+        record_name: record_name.to_owned(),
+        record_type: "Note".into(),
+        record_change_tag: record.record_change_tag.clone().unwrap_or_default(),
+        fields: build_note_trash_fields(record, rt::now_ms()),
+        parent_record_name: record.parent_record_name.clone(),
+    }
+}
+
 fn execute<T: Transport>(
     action: &Action,
     db: &Database<T>,
     target_dir: &Path,
     state: &mut CloneState,
     failed_folders: &mut HashSet<String>,
+    batched: &mut HashMap<String, Vec<RecordUpdateResult>>,
 ) -> Result<ExecuteOutcome, Error> {
     let private = note_zone(None);
     match action {
@@ -2151,16 +2226,10 @@ fn execute<T: Transport>(
             entry,
             record,
         } => {
-            let result = db.update_note_record(
-                &private,
-                &RecordUpdate {
-                    record_name: record_name.clone(),
-                    record_type: "Note".into(),
-                    record_change_tag: record.record_change_tag.clone().unwrap_or_default(),
-                    fields: build_note_trash_fields(record, rt::now_ms()),
-                    parent_record_name: record.parent_record_name.clone(),
-                },
-            )?;
+            let result = match batched.remove(record_name).and_then(|mut r| r.pop()) {
+                Some(result) => result,
+                None => db.update_note_record(&private, &trash_update(record_name, record))?,
+            };
             if let Some(failure) = rejection(&result) {
                 return Ok(ExecuteOutcome::failed(format!(
                     "{}: server rejected the delete: {failure}",
@@ -2282,7 +2351,10 @@ fn execute<T: Transport>(
             modification_date_ms,
             merged,
         } => {
-            let results = db.update_records(zone, updates)?;
+            let results = match batched.remove(record_name) {
+                Some(results) => results,
+                None => db.update_records(zone, updates)?,
+            };
             if let Some(failed) = results.iter().find(|r| !r.is_ok())
                 && let RecordUpdateResult::Rejected {
                     server_error_code,
@@ -2391,6 +2463,10 @@ pub fn run_push_with(
     let mut pushed = 0;
     let mut results = Vec::with_capacity(entries.len());
     let mut failed_folders: HashSet<String> = HashSet::new();
+    let mut batched = match &remote {
+        Some(remote) => batch_writes(&entries, &remote.db)?,
+        None => HashMap::new(),
+    };
     for plan_entry in &entries {
         let serialized = plan_entry.entry.serialize();
         let (Some(action), Some(remote)) = (&plan_entry.action, &remote) else {
@@ -2400,7 +2476,7 @@ pub fn run_push_with(
             });
             continue;
         };
-        let outcome = execute(action, &remote.db, target_dir, &mut state, &mut failed_folders)?;
+        let outcome = execute(action, &remote.db, target_dir, &mut state, &mut failed_folders, &mut batched)?;
         if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded {
             pushed += 1;
         }

@@ -333,3 +333,60 @@ fn a_rename_with_an_edit_goes_up_in_one_push() {
     let base = std::fs::read_to_string(vault.join(format!(".icloud-md/base/{RECORD}.md"))).unwrap();
     assert!(base.ends_with("A line added here."), "{base}");
 }
+
+#[test]
+fn several_deletes_go_up_in_one_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    // A second tracked note, a copy of the first under another record name.
+    let second = "Notes/Second.md";
+    let other = "11111111-2222-3333-4444-555555555555";
+    let mut state_json = state(&vault);
+    let mut entry = state_json["notes"][RECORD].clone();
+    entry["file"] = Value::from(second);
+    state_json["notes"][other] = entry;
+    std::fs::write(
+        vault.join(".icloud-md/state.json"),
+        serde_json::to_vec_pretty(&state_json).unwrap(),
+    )
+    .unwrap();
+    std::fs::copy(
+        vault.join(format!(".icloud-md/base/{RECORD}.md")),
+        vault.join(format!(".icloud-md/base/{other}.md")),
+    )
+    .unwrap();
+    std::fs::remove_file(vault.join(FILE)).unwrap();
+
+    // Lookup and modify answer for both records.
+    let mut cassette: Value =
+        serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes/tiny-push-delete.json")).unwrap())
+            .unwrap();
+    for i in 0..2 {
+        let records = cassette["interactions"][i]["response"]["body"]["records"].as_array_mut().unwrap();
+        let mut copy = records[0].clone();
+        copy["recordName"] = Value::from(other);
+        records.push(copy);
+    }
+    let path = out.join("cassette.json");
+    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
+
+    let (code, stdout, stderr) = run(&out, &path, &["--json", "push", vault.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let entries = stdout["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{stdout}");
+    assert!(entries.iter().all(|e| e["kind"] == "delete" && e["outcome"]["succeeded"] == true), "{stdout}");
+    assert_eq!(modify_requests(&out), 1, "one request for both");
+    let log: Value = serde_json::from_str(&std::fs::read_to_string(out.join("requests.json")).unwrap()).unwrap();
+    let modify = log["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["path"].as_str().is_some_and(|p| p.ends_with("/records/modify")))
+        .unwrap();
+    assert_eq!(modify["body"]["atomic"], false);
+    assert_eq!(modify["body"]["operations"].as_array().unwrap().len(), 2);
+    let after = state(&vault);
+    assert!(after["notes"].get(RECORD).is_none() && after["notes"].get(other).is_none());
+}

@@ -336,6 +336,29 @@ impl<T: Transport> Database<T> {
         parse_record_update_response(&body)
     }
 
+    /// Many unrelated updates in as few `records/modify` requests as fit
+    /// (200 each), non-atomically: each record succeeds or is refused on its
+    /// own. Results in request order.
+    pub fn update_records_independently(
+        &self,
+        zone: &NoteZone,
+        updates: &[RecordUpdate],
+    ) -> Result<Vec<RecordUpdateResult>, CkError> {
+        let mut results = Vec::with_capacity(updates.len());
+        for batch in updates.chunks(LOOKUP_BATCH_SIZE) {
+            let ops: Vec<RecordOp> = batch.iter().cloned().map(RecordOp::Update).collect();
+            let mut body = modify_body(&ops, &zone.zone_id);
+            body["atomic"] = Value::Bool(false);
+            let response = self.post_database(zone.database, "records/modify", &body)?;
+            let parsed = parse_record_update_response(&response)?;
+            if parsed.len() != batch.len() {
+                return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
+            }
+            results.extend(parsed);
+        }
+        Ok(results)
+    }
+
     /// `updateNoteRecord`: `update_records` with one `Note` update.
     pub fn update_note_record(&self, zone: &NoteZone, update: &RecordUpdate) -> Result<RecordUpdateResult, CkError> {
         let update = RecordUpdate {

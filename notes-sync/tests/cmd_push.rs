@@ -901,3 +901,33 @@ fn the_default_folder_is_never_deleted() {
     let (renames, deletes) = plan_folder_dir_changes(&index, &on_disk(&[]), &IndexMap::new(), &[], &Default::default());
     assert!(renames.is_empty() && deletes.is_empty());
 }
+
+/// Removing the `apple-note-title` line asks for the title the file name
+/// spells: a retitle, which needs the live record.
+#[test]
+fn removing_the_title_key_retitles_to_the_file_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = state();
+    s.title_mode = Some(TitleMode::Filename);
+    s.notes.get_mut("REC1").unwrap().frontmatter_title = Some("Restaurants ".into());
+    write_clone_state(dir.path(), &s).unwrap();
+    write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", "---\napple-note-id: REC1\n---\n\nSynced text");
+    assert_unbound(dir.path());
+}
+
+#[test]
+fn notes_put_in_an_attachments_directory_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &state()).unwrap();
+    write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", "Synced text");
+    write_vault_file(dir.path(), "Notes/Attachments/Idea.md", "An idea");
+    let result = plan(dir.path());
+    assert!(result.entries.is_empty());
+    assert!(
+        result.notices.iter().any(|n| n.message.starts_with("Notes/Attachments/ holds note files")),
+        "{:?}",
+        result.notices
+    );
+}
