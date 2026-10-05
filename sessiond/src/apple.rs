@@ -32,7 +32,10 @@ pub struct Validated {
 pub enum ValidateError {
     /// 421/401, or a 200 that still wants a 2FA challenge.
     SignedOut,
-    /// Anything else: no answer, another status, an unexpected body.
+    /// No route to Apple: the name did not resolve or the connection was
+    /// refused or timed out. The network is most likely down.
+    Offline(String),
+    /// Anything else: a slow answer, another status, an unexpected body.
     Failed(String),
 }
 
@@ -89,6 +92,12 @@ fn read_reply(response: ureq::Response, what: &str) -> Result<SetupReply, String
     Ok(SetupReply { set_cookies, body })
 }
 
+/// The name did not resolve or nothing answered the connect: no network,
+/// rather than a slow or broken Apple.
+fn is_offline(t: &ureq::Transport) -> bool {
+    matches!(t.kind(), ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed)
+}
+
 /// `/validate` with `cookie`, the answer read but not judged.
 fn post_validate(
     agent: &ureq::Agent,
@@ -109,6 +118,7 @@ fn post_validate(
         Ok(r) => read_reply(r, "/validate").map_err(ValidateError::Failed),
         Err(ureq::Error::Status(401 | 421, _)) => Err(ValidateError::SignedOut),
         Err(ureq::Error::Status(status, _)) => Err(ValidateError::Failed(format!("/validate answered HTTP {status}"))),
+        Err(ureq::Error::Transport(t)) if is_offline(&t) => Err(ValidateError::Offline(format!("/validate: {t}"))),
         Err(e) => Err(ValidateError::Failed(format!("/validate: {e}"))),
     }
 }

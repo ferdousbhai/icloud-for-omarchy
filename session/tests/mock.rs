@@ -86,4 +86,15 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
         Err(Error::FindMyAuthRequired)
     ));
     assert_eq!(seen.lock().unwrap().len(), before + 1, "a 450 is not retried");
+
+    // Nothing listening: Offline, at once, not a plain network error.
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let started = std::time::Instant::now();
+    let err = Session::mock(&closed).get(&format!("{closed}/anything")).unwrap_err();
+    assert!(matches!(err, Error::Offline(_)), "{err:?}");
+    assert!(err.to_string().starts_with("offline: "), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

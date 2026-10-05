@@ -239,6 +239,7 @@ struct Opts<'a> {
     signin: Option<&'a str>,
     idle_secs: f64,
     validate_secs: f64,
+    handout_secs: f64,
     retry_secs: f64,
     seed: bool,
 }
@@ -250,6 +251,7 @@ impl Default for Opts<'_> {
             signin: None,
             idle_secs: 60.0,
             validate_secs: 600.0,
+            handout_secs: 6.0 * 3600.0,
             retry_secs: 60.0,
             seed: true,
         }
@@ -325,6 +327,7 @@ impl Env {
             .env("ICLOUD_SESSION_SIGNIN_BIN", signin)
             .env("ICLOUD_SESSIOND_IDLE_SECS", opts.idle_secs.to_string())
             .env("ICLOUD_SESSIOND_VALIDATE_SECS", opts.validate_secs.to_string())
+            .env("ICLOUD_SESSIOND_HANDOUT_SECS", opts.handout_secs.to_string())
             .env("ICLOUD_SESSIOND_RETRY_SECS", opts.retry_secs.to_string())
             // Never the real Secret Service: a file in the temp dir.
             .env("ICLOUD_SESSION_TEST_SECRET_FILE", root.join("secrets.json"))
@@ -414,6 +417,14 @@ impl Env {
             "secret": password,
         }]);
         fs::write(self.secrets_path(), items.to_string()).unwrap();
+    }
+
+    /// Sets the seeded account's last `/validate`, as an earlier daemon
+    /// would have left it (before this one starts).
+    fn seed_validated_at(&self, at: u64) {
+        let mut account = self.account().unwrap();
+        account["validated_at"] = json!(at);
+        fs::write(self.account_path(), account.to_string()).unwrap();
     }
 
     /// Gives the seeded account a Find My jar Find My no longer accepts.
@@ -514,6 +525,8 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     let env = Env::start(Opts {
         setup_url: &server.url,
         validate_secs: 1.0,
+        // Past this, Session() validates before it answers.
+        handout_secs: 1.0,
         ..Default::default()
     });
     let conn = env.conn();
@@ -567,6 +580,113 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     let token = cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").unwrap();
     let n: usize = token.strip_prefix("rotated").unwrap().parse().unwrap();
     assert!(n >= 2, "{token}");
+}
+
+#[test]
+fn a_recently_validated_jar_is_handed_out_without_asking_apple() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    // An earlier daemon validated a minute ago and idled out since.
+    env.seed_validated_at(now() - 60);
+    let (cookie, _, _) = session(&env.conn()).unwrap();
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("original"));
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(server.count(VALIDATE), 0, "neither start-up nor Session() asked Apple");
+}
+
+#[test]
+fn a_due_jar_is_handed_out_at_once_and_refreshed_behind_the_callers() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => {
+            thread::sleep(Duration::from_millis(1000));
+            validate_ok(n, base)
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    // Validated an hour ago: due, but well within the 6 hours.
+    env.seed_validated_at(now() - 3600);
+    let started = Instant::now();
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let conn = env.conn();
+            thread::spawn(move || session(&conn).unwrap())
+        })
+        .collect();
+    for caller in callers {
+        let (cookie, _, _) = caller.join().unwrap();
+        assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("original"));
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "no caller waited for the slow /validate: {:?}",
+        started.elapsed()
+    );
+    // One refresh, however start-up and the callers raced, and its jar is
+    // what the next caller gets.
+    wait_until("the background refresh", Duration::from_secs(5), || {
+        env.account_cookie("X-APPLE-WEBAUTH-TOKEN").as_deref() == Some("rotated1")
+    });
+    let (cookie, _, _) = session(&env.conn()).unwrap();
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("rotated1"));
+    assert_eq!(server.count(VALIDATE), 1);
+    assert!(env.account().unwrap()["validated_at"].as_u64().unwrap() >= now() - 5);
+}
+
+#[test]
+fn a_background_refresh_that_finds_the_session_ended_signs_out() {
+    let server = Server::start(|s, _, _| match s.path() {
+        VALIDATE => {
+            thread::sleep(Duration::from_millis(500));
+            signed_out()
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    env.seed_validated_at(now() - 3600);
+    let conn = env.conn();
+    let watch = changes(&conn);
+    assert!(watch.first.signed_in);
+    let started = Instant::now();
+    session(&conn).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(400),
+        "{:?}",
+        started.elapsed()
+    );
+    // Announced as any /validate's 421 is.
+    let change = watch.until("SignedIn false", |s| !s.signed_in);
+    assert_eq!(change.dsid, None);
+    assert!(env.account().is_none());
+    match session(&conn) {
+        Err(zbus::Error::MethodError(name, _, _)) => assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_unreachable_apple_answers_at_once() {
+    // Nothing listens on the default setup URL: the connect is refused.
+    let env = Env::start(Opts {
+        retry_secs: 2.0,
+        ..Default::default()
+    });
+    let started = Instant::now();
+    let (cookie, _, _) = session(&env.conn()).unwrap();
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("original"));
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
 }
 
 #[test]

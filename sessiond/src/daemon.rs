@@ -35,8 +35,13 @@ pub struct Config {
     signin_bin: PathBuf,
     /// Exit after this long with no clients and no sign-in (5 minutes).
     pub idle: Duration,
-    /// Revalidate when the last `/validate` is older than this (10 minutes).
+    /// Revalidate when the last `/validate` is older than this (10 minutes):
+    /// in the background, without holding up the caller, while the jar is
+    /// younger than `handout_max_age`.
     validate_max_age: Duration,
+    /// `Session()` hands out a jar validated within this long at once (6
+    /// hours); an older one is validated before it is handed out.
+    handout_max_age: Duration,
     /// After a `/validate` that got no answer, hand out the session as it is
     /// for this long before trying Apple again (1 minute).
     validate_retry: Duration,
@@ -58,6 +63,7 @@ impl Config {
             signin_bin: signin_bin(),
             idle: env_secs("ICLOUD_SESSIOND_IDLE_SECS", 5 * 60),
             validate_max_age: env_secs("ICLOUD_SESSIOND_VALIDATE_SECS", 10 * 60),
+            handout_max_age: env_secs("ICLOUD_SESSIOND_HANDOUT_SECS", 6 * 3600),
             validate_retry: env_secs("ICLOUD_SESSIOND_RETRY_SECS", 60),
         }
     }
@@ -202,16 +208,16 @@ impl State {
 pub struct Daemon {
     cfg: Config,
     agent: ureq::Agent,
-    started_at: u64,
     state: Mutex<State>,
     /// One `/validate` at a time; a waiter re-checks freshness after it.
     validate_lock: Mutex<()>,
     /// Orders property announcements.
     published: Mutex<Props>,
     conn: OnceLock<Connection>,
-    /// A heartbeat `/validate` is running (on its own thread, so a slow
-    /// Apple never holds up the idle exit).
-    heartbeat_busy: AtomicBool,
+    /// A background `/validate` is running (start-up, heartbeat, or a
+    /// `Session()` that handed out a jar due for one), on its own thread so
+    /// a slow Apple never holds up a caller or the idle exit.
+    refreshing: AtomicBool,
     /// The open sign-in window, with the `signin_seq` that opened it.
     signin_child: Mutex<Option<(u64, Child)>>,
     /// The keyring holding the Apple ID password (opt-in).
@@ -264,12 +270,11 @@ impl Daemon {
         Arc::new(Daemon {
             cfg,
             agent: apple::agent(),
-            started_at: time::now_secs(),
             state: Mutex::new(state),
             validate_lock: Mutex::new(()),
             published: Mutex::new(props),
             conn: OnceLock::new(),
-            heartbeat_busy: AtomicBool::new(false),
+            refreshing: AtomicBool::new(false),
             signin_child: Mutex::new(None),
             secrets: secrets::from_env(),
             find_my_login_lock: Mutex::new(()),
@@ -311,11 +316,9 @@ impl Daemon {
         // from: announce every property once.
         self.announce(true);
 
-        // Validate once on start (unless a caller already made us).
-        let me = self.clone();
-        thread::spawn(move || {
-            let _ = me.ensure_fresh(Fresh::Since(me.started_at));
-        });
+        // Validate on start if the stored jar is due (`validated_at` is
+        // kept in account.json, so a restart alone does not make it due).
+        self.refresh_in_background();
 
         self.tick_until_idle();
         Ok(())
@@ -453,6 +456,10 @@ impl Daemon {
                 }
                 Err(Refresh::SignedOut)
             }
+            Err(ValidateError::Offline(msg)) => {
+                eprintln!("icloud-sessiond: Apple unreachable, offline? {msg}");
+                Err(Refresh::Failed)
+            }
             Err(ValidateError::Failed(msg)) => {
                 eprintln!("icloud-sessiond: {msg}");
                 Err(Refresh::Failed)
@@ -463,20 +470,45 @@ impl Daemon {
         outcome
     }
 
+    /// [`Daemon::ensure_fresh`] with [`Daemon::fresh_enough`] on its own
+    /// thread, unless one is running already; nobody waits for it. What it
+    /// finds is announced as any `/validate`'s is: a 421/401 signs out and
+    /// `PropertiesChanged` says so.
+    fn refresh_in_background(self: &Arc<Daemon>) {
+        if self.refreshing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        thread::spawn(move || {
+            let _ = me.ensure_fresh(me.fresh_enough());
+            me.refreshing.store(false, Ordering::SeqCst);
+        });
+    }
+
     // ----------------------------------------------------------- methods
 
     /// Validated within `validate_max_age`.
     fn fresh_enough(&self) -> Fresh {
-        let max_age = self.cfg.validate_max_age.as_secs_f64().ceil() as u64;
-        Fresh::Since(time::now_secs().saturating_sub(max_age))
+        Fresh::Since(time::now_secs().saturating_sub(whole_secs(self.cfg.validate_max_age)))
     }
 
-    fn session(&self) -> Result<SessionReply, ServiceError> {
-        match self.ensure_fresh(self.fresh_enough()) {
-            Err(Refresh::SignedOut) => return Err(sign_in_required()),
-            // Apple unreachable: hand out what we have; the app's own
-            // request will fail the same way and say so.
-            Err(Refresh::Failed) | Ok(()) => {}
+    /// Hands out the jar. One validated within `handout_max_age` goes out
+    /// at once, and if it is due (older than `validate_max_age`) is
+    /// revalidated behind the caller: Apple almost surely still takes it,
+    /// and if not, the app's request gets 421/401 and
+    /// `ReportSignInRequired()` confirms. An older one is validated first.
+    fn session(self: &Arc<Daemon>) -> Result<SessionReply, ServiceError> {
+        let validated_at = lock(&self.state).account.as_ref().map(|a| a.validated_at);
+        let age = time::now_secs().saturating_sub(validated_at.ok_or_else(sign_in_required)?);
+        if age >= whole_secs(self.cfg.handout_max_age) {
+            match self.ensure_fresh(self.fresh_enough()) {
+                Err(Refresh::SignedOut) => return Err(sign_in_required()),
+                // Apple unreachable: hand out what we have; the app's own
+                // request will fail the same way and say so.
+                Err(Refresh::Failed) | Ok(()) => {}
+            }
+        } else if age >= whole_secs(self.cfg.validate_max_age) {
+            self.refresh_in_background();
         }
         let st = lock(&self.state);
         let a = st.account.as_ref().ok_or_else(sign_in_required)?;
@@ -919,6 +951,7 @@ impl Daemon {
         )
         .map_err(|e| match e {
             ValidateError::SignedOut => "Apple did not accept the captured session".to_string(),
+            ValidateError::Offline(m) => format!("Apple unreachable, offline? {m}"),
             ValidateError::Failed(m) => m,
         })?;
         cookies::merge_set_cookies(&mut jar, &v.set_cookies, now);
@@ -1055,15 +1088,16 @@ impl Daemon {
                 }
                 st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
             };
-            if heartbeat && !self.heartbeat_busy.swap(true, Ordering::SeqCst) {
-                let me = self.clone();
-                thread::spawn(move || {
-                    let _ = me.ensure_fresh(me.fresh_enough());
-                    me.heartbeat_busy.store(false, Ordering::SeqCst);
-                });
+            if heartbeat {
+                self.refresh_in_background();
             }
         }
     }
+}
+
+/// `d` in whole seconds, rounded up (unix-second timestamps compare with it).
+fn whole_secs(d: Duration) -> u64 {
+    d.as_secs_f64().ceil() as u64
 }
 
 /// What `icloud-session-signin` prints.
@@ -1183,8 +1217,9 @@ impl Service {
         self.props().signing_in
     }
 
-    /// `(cookie_header, client_params, webservices)`; revalidates first when
-    /// the last `/validate` is older than 10 minutes.
+    /// `(cookie_header, client_params, webservices)`; validates first only
+    /// when the last `/validate` is older than 6 hours, and in the
+    /// background when it is older than 10 minutes.
     #[zbus(name = "Session", out_args("cookie_header", "client_params", "webservices"))]
     // The literal tuple (not `SessionReply`) lets the macro see three out args.
     async fn session(&self) -> Result<(String, HashMap<String, String>, HashMap<String, String>), ServiceError> {

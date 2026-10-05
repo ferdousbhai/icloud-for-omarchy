@@ -100,8 +100,9 @@ enum Command {
     /// The session's webservices: {dsid, apple_id, webservices}.
     ///
     /// The session's webservices: {dsid, apple_id, webservices} (the daemon
-    /// revalidates when older than 10 minutes). Exits 2 when Apple no longer
-    /// accepts the sign-in.
+    /// validates first when older than 6 hours, and in the background when
+    /// older than 10 minutes). Exits 2 when Apple no longer accepts the
+    /// sign-in.
     #[command(after_help = AFTER_HELP)]
     Validate,
 }
@@ -237,6 +238,7 @@ fn fail(e: Error) -> ExitCode {
         ),
         Error::Service(_) => fail_with("session_service", EXIT_ERROR, &message, None),
         Error::Network(_) => fail_with("network", EXIT_ERROR, &message, None),
+        Error::Offline(_) => fail_with("offline", EXIT_ERROR, &message, None),
         Error::Http { .. } => fail_with("http", EXIT_ERROR, &message, None),
         Error::Io(_) => fail_with("io", EXIT_ERROR, &message, None),
     }

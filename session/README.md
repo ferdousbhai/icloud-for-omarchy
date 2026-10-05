@@ -56,13 +56,23 @@ no truncated-read retries and no status polling.
   `FindMySession()` for the `findme` host only. `FindMyAuthorized` is true
   while that jar exists and holds `X-APPLE-WEBAUTH-FMIP`; a client's 450
   (`ReportFindMyAuthRequired()`), a sign-out or another account forgets it.
-- **Heartbeat.** `/validate` once on start, then whenever the last one is
-  older than 10 minutes and a client called within the last 15 (the
-  browser's own heartbeat is 14). `Session()` also revalidates first when
-  the last validate is older than 10 minutes. Rotated cookies merge by name.
-  If Apple cannot be reached (10 s to connect, 20 s in all), callers get
-  the session as it is, and `/validate` is not tried again for a minute;
-  callers that queued behind a failed attempt share its answer.
+- **Heartbeat.** The time of the last successful `/validate` is kept in
+  `account.json` (`validated_at`), so it outlives the daemon's idle exit.
+  `/validate` runs on start and whenever a client called within the last
+  15 minutes (the browser's own heartbeat is 14), each time only if the
+  last one is older than 10 minutes. `Session()` never waits for a jar
+  validated within the last 6 hours: it answers at once, and if the jar is
+  older than 10 minutes, revalidates behind the caller (one refresh at a
+  time; concurrent callers never wait for it). A refresh that finds the
+  sign-in ended signs out and announces it like any other (`SignedIn`
+  false in `PropertiesChanged`); the app that got the old jar meanwhile
+  gets a 421/401, which `ReportSignInRequired()` confirms. Only a jar
+  older than 6 hours is validated before `Session()` answers. Rotated
+  cookies merge by name. If Apple cannot be reached (10 s to connect, 20 s
+  in all; a name that does not resolve or a refused connect fails at
+  once and is logged as offline), callers get the session as it is, and
+  `/validate` is not tried again for a minute; callers that queued behind
+  a failed attempt share its answer.
 - **Expiry** is the captured X-APPLE-WEBAUTH-TOKEN cookie's own expiry,
   updated when Apple rotates it.
 - **Signing out.** 421/401 on `/validate` signs out. A client's 421/401
@@ -130,7 +140,10 @@ true (the daemon signed in again with the stored password); otherwise it
 returns `FindMyAuthRequired`. One retry at most, so a 450 never loops.
 
 Errors: `SignInRequired`, `FindMyAuthRequired`, `Http { status, body }` (any other non-2xx),
-`Network`, `Service` (the daemon could not be reached or failed), `Io`.
+`Network`, `Offline` (the host's name did not resolve or nothing answered
+the connect within 10 s: no network, so a background sync can skip its
+run instead of trying every request), `Service` (the daemon could not be
+reached or failed), `Io`.
 
 Every call is blocking: ureq for HTTP, zbus's blocking API with its own
 small executor thread for D-Bus, no tokio. GTK apps run calls on
@@ -150,7 +163,7 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `ExpiresAt` | property | `t` unix seconds, 0 = session-only or unknown |
 | `SigningIn` | property | `b`, the sign-in window is open (also for `AuthorizeFindMy()`) |
 | `FindMyAuthorized` | property | `b`, a Find My jar is held and has `X-APPLE-WEBAUTH-FMIP` |
-| `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out; revalidates first if the last validate is older than 10 minutes (if Apple is unreachable it answers with what it has) |
+| `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out. Answers at once when the last validate is within 6 hours, revalidating in the background if it is older than 10 minutes; validates first only when it is older than 6 hours (if Apple is unreachable it answers with what it has) |
 | `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
 | `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it keeps the fresh jar and answers true (fetch `Session()` and retry once); on 421/401 it signs out and answers false |
 | `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
@@ -296,7 +309,7 @@ never yields and `watch_forever` returns at once.
 | `ICLOUD_SESSION_SIGNIN_UA` | sign-in window | WebKitGTK's own user agent; `safari` for a macOS Safari one, anything else verbatim |
 | `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
 | `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring |
-| `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS`, `ICLOUD_SESSIOND_RETRY_SECS` | daemon (tests) | 300, 600, 60 |
+| `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS`, `ICLOUD_SESSIOND_HANDOUT_SECS`, `ICLOUD_SESSIOND_RETRY_SECS` | daemon (tests) | 300, 600, 21600, 60 |
 
 ## The sign-in spike
 

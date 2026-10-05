@@ -113,6 +113,12 @@ pub enum Error {
     Http { status: u16, body: String },
     #[error("network: {0}")]
     Network(String),
+    /// The host's name did not resolve, or nothing answered the connect
+    /// (refused, or no answer within 10 s): most likely no network. Every
+    /// other request would fail the same way, so a sync can skip its run
+    /// rather than try each one.
+    #[error("offline: {0}")]
+    Offline(String),
     /// `icloud-sessiond` could not be reached or failed.
     #[error("icloud-sessiond: {0}")]
     Service(String),
@@ -610,7 +616,9 @@ impl Session {
 
     fn new(conn: Option<Connection>, mock_url: Option<String>, apple_id: String, dsid: String) -> Session {
         let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(30))
+            // A connect that takes longer is a network that is down: fail
+            // with `Offline` rather than sit for long.
+            .timeout_connect(Duration::from_secs(10))
             .timeout_read(Duration::from_secs(120))
             .timeout_write(Duration::from_secs(120))
             .user_agent(concat!("icloud-session/", env!("CARGO_PKG_VERSION")))
@@ -684,7 +692,8 @@ impl Session {
     }
 
     /// The `webservices` map from the daemon's last `/validate`
-    /// (it revalidates when that is older than 10 minutes).
+    /// (it revalidates when that is older than 10 minutes, in the
+    /// background unless it is older than 6 hours).
     pub fn webservices(&self) -> Result<Webservices> {
         Ok(Webservices {
             urls: self.snapshot()?.webservices,
@@ -934,6 +943,7 @@ impl Session {
                 status,
                 body: read_body_lossy(response),
             }),
+            Err(ureq::Error::Transport(t)) if is_offline(&t) => Err(Error::Offline(t.to_string())),
             Err(e) => Err(Error::Network(e.to_string())),
         }
     }
@@ -972,6 +982,12 @@ impl Session {
         }
         Ok(url.into())
     }
+}
+
+/// The name did not resolve or nothing answered the connect: no network,
+/// rather than a slow or broken server.
+fn is_offline(t: &ureq::Transport) -> bool {
+    matches!(t.kind(), ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed)
 }
 
 /// Whether `url`'s host domain-matches `.icloud.com` or is one of the
