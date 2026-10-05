@@ -296,6 +296,17 @@ fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
     assert_eq!(stdout["entries"][0]["kind"], "update", "{stdout}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
     assert_eq!(modify_requests(&out), 1);
+    let log: Value = serde_json::from_str(&std::fs::read_to_string(out.join("requests.json")).unwrap()).unwrap();
+    let modify = log["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["path"].as_str().is_some_and(|p| p.ends_with("/records/modify")))
+        .unwrap();
+    assert_eq!(
+        modify["body"]["operations"][0]["record"]["recordChangeTag"], "26a",
+        "written against the live record, not the tracked 25q"
+    );
     let text = std::fs::read_to_string(vault.join(FILE)).unwrap();
     assert!(text.contains("# Test Note, edited here"), "{text}");
     assert!(text.contains("A line added on the phone."), "{text}");

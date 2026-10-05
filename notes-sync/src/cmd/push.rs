@@ -1764,7 +1764,12 @@ fn note_record_update(record: &CloudKitRecord, entry: &NoteEntry, fields: Update
     RecordUpdate {
         record_name: record.record_name.clone(),
         record_type: "Note".into(),
-        record_change_tag: entry.record_change_tag.clone(),
+        // The live record's: after merging a remote change it is newer than
+        // the tracked one.
+        record_change_tag: record
+            .record_change_tag
+            .clone()
+            .unwrap_or_else(|| entry.record_change_tag.clone()),
         fields,
         parent_record_name: if entry.shared_zone_owner.is_none() {
             record.parent_record_name.clone()
