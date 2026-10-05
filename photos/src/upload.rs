@@ -58,8 +58,7 @@ pub struct Uploaded {
 /// Local time zone as the web client sends it: an IANA id and the offset in
 /// JavaScript's `getTimezoneOffset()` sign (UTC+2 → -120).
 pub fn local_time_zone() -> (String, i64) {
-    let now = gtk::glib::DateTime::now_local().ok();
-    let minutes = now.as_ref().map_or(0, |d| -(d.utc_offset().as_minutes()));
+    let minutes = -utc_offset_secs() / 60;
     let id = std::env::var("TZ")
         .ok()
         .map(|tz| tz.trim_start_matches(':').to_owned())
@@ -72,6 +71,20 @@ pub fn local_time_zone() -> (String, i64) {
         })
         .unwrap_or_else(|| "UTC".into());
     (id, minutes)
+}
+
+/// The local time's offset from UTC now, in seconds east (UTC+2 → 7200),
+/// as the C library works it out from `TZ` or /etc/localtime.
+fn utc_offset_secs() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs()) as libc::time_t;
+    // SAFETY: an all-zero `tm` is a valid value of that plain C struct.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are to live locals; localtime_r is the
+    // re-entrant variant and writes only to `tm`.
+    let ok = unsafe { !libc::localtime_r(&now, &mut tm).is_null() };
+    if ok { tm.tm_gmtoff as i64 } else { 0 }
 }
 
 pub struct Uploader<'t> {

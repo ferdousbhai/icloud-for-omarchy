@@ -311,32 +311,15 @@ fn settle(
 /// rename(2) that fails with `AlreadyExists` instead of replacing `to`:
 /// renameat2(RENAME_NOREPLACE), or link + unlink where the filesystem lacks it.
 pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    let (f, t) = (
-        CString::new(from.as_os_str().as_bytes())?,
-        CString::new(to.as_os_str().as_bytes())?,
-    );
-    // SAFETY: both are valid NUL-terminated paths that outlive the call.
-    let r = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            f.as_ptr(),
-            libc::AT_FDCWD,
-            t.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if r == 0 {
-        return Ok(());
-    }
-    let e = io::Error::last_os_error();
-    match e.raw_os_error() {
-        Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP) => {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Ok(()) => Ok(()),
+        Err(Errno::INVAL | Errno::NOSYS | Errno::OPNOTSUPP) => {
             std::fs::hard_link(from, to)?;
             std::fs::remove_file(from)
         }
-        _ => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 

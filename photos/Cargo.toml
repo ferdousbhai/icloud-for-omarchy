@@ -29,6 +29,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 # renameat2(RENAME_NOREPLACE): originals never replace a file on disk.
+# (Already in the tree, through tempfile.)
+rustix = { version = "1", features = ["fs"] }
+# localtime_r: the UTC offset an upload reports, without GLib.
 libc = "0.2"
 
 [dev-dependencies]

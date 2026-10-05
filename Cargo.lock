@@ -941,6 +941,7 @@ dependencies = [
  "libadwaita",
  "libc",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

@@ -100,6 +100,19 @@ fn uploads_in_three_requests_with_pyicloud_shapes() {
 }
 
 #[test]
+fn the_time_zone_offset_matches_the_system_clock() {
+    // date(1) works the offset out from the same TZ / /etc/localtime.
+    let out = std::process::Command::new("date").arg("+%z").output().unwrap();
+    let z = String::from_utf8(out.stdout).unwrap();
+    let z = z.trim();
+    let (sign, digits) = z.split_at(1);
+    let minutes = digits[..2].parse::<i64>().unwrap() * 60 + digits[2..4].parse::<i64>().unwrap();
+    let east = if sign == "-" { -minutes } else { minutes };
+    // JavaScript's getTimezoneOffset() sign: UTC+2 is -120.
+    assert_eq!(local_time_zone().1, -east, "date +%z said {z}");
+}
+
+#[test]
 fn a_duplicate_returns_the_existing_asset() {
     let t = apple("write/put_asset_duplicate.json");
     let out = Uploader::connect(&t)
