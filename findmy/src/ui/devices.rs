@@ -12,9 +12,10 @@ pub struct DeviceList {
     pub widget: gtk::ScrolledWindow,
     list: gtk::ListBox,
     placeholder: adw::StatusPage,
-    ids: RefCell<Vec<String>>,
-    /// Set while rows are rebuilt, so restoring the selection does not
-    /// re-center the map on every refresh.
+    rows: RefCell<Vec<DeviceRow>>,
+    /// Set while rows are updated or the highlight is moved for the
+    /// window, so that does not count as the user selecting (and does not
+    /// re-center the map on every refresh).
     rebuilding: Cell<bool>,
 }
 
@@ -41,7 +42,7 @@ impl DeviceList {
             widget,
             list,
             placeholder,
-            ids: RefCell::default(),
+            rows: RefCell::default(),
             rebuilding: Cell::new(false),
         });
         // The selection drives the window's selected device, so moving the
@@ -64,12 +65,15 @@ impl DeviceList {
         this
     }
 
-    /// The device id of a row, or `None` while the rows are rebuilt.
+    /// The device id of a row, or `None` while the rows are updated.
     fn id_at(&self, row: &gtk::ListBoxRow) -> Option<String> {
         if self.rebuilding.get() {
             return None;
         }
-        self.ids.borrow().get(usize::try_from(row.index()).ok()?).cloned()
+        let rows = self.rows.borrow();
+        rows.iter()
+            .find(|r| r.row.upcast_ref::<gtk::ListBoxRow>() == row)
+            .map(|r| r.id.clone())
     }
 
     /// Shows an empty-state message (e.g. "Sign in required").
@@ -78,60 +82,112 @@ impl DeviceList {
         self.placeholder.set_description(description);
     }
 
+    /// Shows `devices`. When the list holds the same devices in the same
+    /// order (as on nearly every minute's refresh) the rows are updated in
+    /// place, which costs next to nothing when nothing changed; otherwise
+    /// they are rebuilt.
     pub fn set_devices(&self, devices: &[Device], selected: Option<&str>) {
-        self.rebuilding.set(true);
-        self.list.remove_all();
         let now = icloud_session::time::now_ms();
-        let mut ids = Vec::with_capacity(devices.len());
-        for d in devices {
-            let row = device_row(d, now);
-            self.list.append(&row);
-            if selected == Some(d.id.as_str()) {
-                self.list.select_row(Some(&row));
+        let same = {
+            let rows = self.rows.borrow();
+            rows.len() == devices.len() && rows.iter().zip(devices).all(|(r, d)| r.id == d.id)
+        };
+        self.rebuilding.set(true);
+        if same {
+            for (row, d) in self.rows.borrow().iter().zip(devices) {
+                row.update(d, now);
             }
-            ids.push(d.id.clone());
+        } else {
+            self.list.remove_all();
+            let rows: Vec<DeviceRow> = devices.iter().map(|d| DeviceRow::new(d, now)).collect();
+            for row in &rows {
+                self.list.append(&row.row);
+            }
+            *self.rows.borrow_mut() = rows;
         }
-        *self.ids.borrow_mut() = ids;
+        self.select_quietly(selected);
         self.rebuilding.set(false);
     }
 
+    /// Moves the highlight to `id` without reporting it as the user's
+    /// selection.
     pub fn select(&self, id: &str) {
-        let index = self.ids.borrow().iter().position(|i| i == id);
-        if let Some(row) = index.and_then(|i| self.list.row_at_index(i as i32)) {
-            self.rebuilding.set(true);
-            self.list.select_row(Some(&row));
-            self.rebuilding.set(false);
+        self.rebuilding.set(true);
+        self.select_quietly(Some(id));
+        self.rebuilding.set(false);
+    }
+
+    fn select_quietly(&self, id: Option<&str>) {
+        let rows = self.rows.borrow();
+        let Some(row) = id.and_then(|id| rows.iter().find(|r| r.id == id)) else {
+            return;
+        };
+        let row = row.row.upcast_ref::<gtk::ListBoxRow>();
+        if self.list.selected_row().as_ref() != Some(row) {
+            self.list.select_row(Some(row));
         }
     }
 }
 
-fn device_row(d: &Device, now_ms: i64) -> adw::ActionRow {
-    let row = adw::ActionRow::builder()
-        .title(&d.name)
-        .subtitle(d.summary(now_ms))
-        .use_markup(false)
-        .activatable(true)
-        .build();
-    let icon = gtk::Image::from_icon_name(d.class.icon_name());
-    icon.set_pixel_size(24);
-    if !d.online {
-        icon.add_css_class("dim-label");
-        row.set_tooltip_text(Some("Offline"));
-    }
-    row.add_prefix(&icon);
-    if d.lost_mode_enabled {
+/// One device's row and the widgets in it that change with the device.
+struct DeviceRow {
+    id: String,
+    row: adw::ActionRow,
+    icon: gtk::Image,
+    lost: gtk::Image,
+    battery: gtk::Image,
+}
+
+impl DeviceRow {
+    fn new(d: &Device, now_ms: i64) -> Self {
+        let row = adw::ActionRow::builder().use_markup(false).activatable(true).build();
+        let icon = gtk::Image::new();
+        icon.set_pixel_size(24);
+        row.add_prefix(&icon);
         let lost = gtk::Image::from_icon_name("dialog-warning-symbolic");
         lost.set_tooltip_text(Some("Lost Mode is on"));
         lost.add_css_class("warning");
         row.add_suffix(&lost);
-    }
-    if let Some(level) = d.battery {
-        let battery = gtk::Image::from_icon_name(&models::battery_icon_name(level, d.charging));
-        battery.set_tooltip_text(Some(&format!("{}%", (level * 100.0).round() as i64)));
-        if level < 0.2 && !d.charging {
-            battery.add_css_class("error");
-        }
+        let battery = gtk::Image::new();
         row.add_suffix(&battery);
+        let this = Self {
+            id: d.id.clone(),
+            row,
+            icon,
+            lost,
+            battery,
+        };
+        this.update(d, now_ms);
+        this
     }
-    row
+
+    /// Sets every property from `d`; unchanged values cost nothing.
+    fn update(&self, d: &Device, now_ms: i64) {
+        self.row.set_title(&d.name);
+        self.row.set_subtitle(&d.summary(now_ms));
+        self.icon.set_icon_name(Some(d.class.icon_name()));
+        set_class(&self.icon, "dim-label", !d.online);
+        self.row.set_tooltip_text((!d.online).then_some("Offline"));
+        self.lost.set_visible(d.lost_mode_enabled);
+        match d.battery {
+            Some(level) => {
+                self.battery
+                    .set_icon_name(Some(&models::battery_icon_name(level, d.charging)));
+                self.battery
+                    .set_tooltip_text(Some(&format!("{}%", (level * 100.0).round() as i64)));
+                set_class(&self.battery, "error", level < 0.2 && !d.charging);
+                self.battery.set_visible(true);
+            }
+            None => self.battery.set_visible(false),
+        }
+    }
+}
+
+/// Adds or removes a CSS class.
+pub fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
+    if on {
+        widget.add_css_class(class);
+    } else {
+        widget.remove_css_class(class);
+    }
 }

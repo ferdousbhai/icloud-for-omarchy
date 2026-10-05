@@ -18,12 +18,22 @@ use super::devices::DeviceList;
 use super::map::DeviceMap;
 use crate::findme::{self, FindMe, SessionTransport};
 use crate::history::{History, LazyHistory, Point};
-use crate::models::Device;
+use crate::models::{Device, Fix};
 
 const REFRESH_SECS: u32 = 60;
 /// How much history the trail shows.
 const TRAIL_SECS: i64 = 24 * 3600;
+/// How old a shown trail may get before a refresh reloads it although the
+/// device has not moved, so points leave the 24 h window.
+const TRAIL_RELOAD: Duration = Duration::from_secs(10 * 60);
 const LOST_MESSAGE: &str = "This device has been lost. Please call me.";
+
+/// Which trail is on the map: whose, up to which fix, loaded when.
+struct TrailShown {
+    id: String,
+    fix: Option<Fix>,
+    at: Instant,
+}
 
 type SharedHistory = Arc<Mutex<LazyHistory>>;
 
@@ -99,6 +109,7 @@ pub struct Window {
     last_refresh: Cell<Option<Instant>>,
     last_error: RefCell<Option<String>>,
     centered: Cell<bool>,
+    trail_shown: RefCell<Option<TrailShown>>,
 }
 
 impl Window {
@@ -370,19 +381,19 @@ impl Window {
                 {
                     self.map.show_initial(&fix);
                 }
-                self.load_trail(&d);
+                self.load_trail_if_needed(&d);
             }
             (None, Some(_)) => {
                 let name = self.selected_name.borrow().clone();
                 self.title.set_subtitle(&format!("{name} (unavailable)"));
-                self.map.clear_trail();
+                self.clear_trail();
                 if vanished {
                     self.toast(&format!("{name} is no longer in Find My"));
                 }
             }
             (None, None) => {
                 self.title.set_subtitle("");
-                self.map.clear_trail();
+                self.clear_trail();
             }
         }
         self.update_actions();
@@ -400,8 +411,7 @@ impl Window {
     fn select(self: &Rc<Self>, id: &str) {
         *self.selected.borrow_mut() = Some(id.to_string());
         self.list.select(id);
-        let devices = self.devices.borrow().clone();
-        self.map.set_devices(&devices, Some(id));
+        self.map.set_selected(Some(id));
         let Some(d) = self.selected_device() else {
             return;
         };
@@ -410,7 +420,7 @@ impl Window {
             Some(fix) => self.map.center_on(&fix),
             None => self.toast(&format!("No location for {}", d.name)),
         }
-        self.load_trail(&d);
+        self.load_trail_if_needed(&d);
         self.update_actions();
     }
 
@@ -431,6 +441,28 @@ impl Window {
         if self.split.is_collapsed() {
             self.split.set_show_sidebar(false);
         }
+    }
+
+    /// Loads the trail when it would differ from the one shown: another
+    /// device, a new fix (which the refresh just stored), or a trail loaded
+    /// [`TRAIL_RELOAD`] ago (the 24 h window has moved). Not on every tick.
+    fn load_trail_if_needed(self: &Rc<Self>, device: &Device) {
+        let shown = self.trail_shown.borrow().as_ref().is_some_and(|t| {
+            t.id == device.id && t.fix == device.location && t.at.elapsed() < TRAIL_RELOAD
+        });
+        if !shown {
+            *self.trail_shown.borrow_mut() = Some(TrailShown {
+                id: device.id.clone(),
+                fix: device.location,
+                at: Instant::now(),
+            });
+            self.load_trail(device);
+        }
+    }
+
+    fn clear_trail(&self) {
+        self.trail_shown.take();
+        self.map.clear_trail();
     }
 
     fn load_trail(self: &Rc<Self>, device: &Device) {
@@ -454,7 +486,7 @@ impl Window {
                 }
                 let Some(device) = this.selected_device() else {
                     // It left the list meanwhile.
-                    this.map.clear_trail();
+                    this.clear_trail();
                     return;
                 };
                 let current = device.location;
@@ -686,5 +718,6 @@ fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
         last_refresh: Cell::new(None),
         last_error: RefCell::default(),
         centered: Cell::new(false),
+        trail_shown: RefCell::default(),
     }
 }

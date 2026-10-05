@@ -1,11 +1,14 @@
 //! The map: OpenStreetMap tiles through libshumate, a marker per located
 //! device, and the selected device's history trail as a polyline.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use adw::prelude::*;
 use shumate::prelude::*;
 
+use super::devices::set_class;
 use crate::history::Point;
 use crate::models::{Device, Fix};
 
@@ -15,8 +18,17 @@ const DEVICE_ZOOM: f64 = 16.0;
 pub struct DeviceMap {
     pub widget: shumate::SimpleMap,
     markers: shumate::MarkerLayer,
+    /// The marker of each located device, by device id.
+    by_id: RefCell<HashMap<String, DeviceMarker>>,
     trail: shumate::PathLayer,
     on_marker: Rc<dyn Fn(&str)>,
+}
+
+struct DeviceMarker {
+    marker: shumate::Marker,
+    badge: gtk::Image,
+    /// Where it was last put, to move it only when the fix moved.
+    at: Option<(f64, f64)>,
 }
 
 impl DeviceMap {
@@ -43,6 +55,7 @@ impl DeviceMap {
         Rc::new(Self {
             widget,
             markers,
+            by_id: RefCell::default(),
             trail,
             on_marker: Rc::new(on_marker),
         })
@@ -52,22 +65,62 @@ impl DeviceMap {
         self.widget.map()
     }
 
-    /// Redraws every device marker; the selected one is highlighted.
+    /// Shows a marker per located device, the selected one highlighted.
+    /// Markers are kept per device and moved and restyled in place; only
+    /// devices that appear or lose their location add or remove one.
     pub fn set_devices(&self, devices: &[Device], selected: Option<&str>) {
-        self.markers.remove_all();
+        let now = icloud_session::time::now_ms();
+        let mut markers = self.by_id.borrow_mut();
+        let located: HashSet<&str> = devices
+            .iter()
+            .filter(|d| d.location.is_some())
+            .map(|d| d.id.as_str())
+            .collect();
+        markers.retain(|id, m| {
+            let keep = located.contains(id.as_str());
+            if !keep {
+                self.markers.remove_marker(&m.marker);
+            }
+            keep
+        });
         for d in devices {
             let Some(fix) = d.location else { continue };
-            let marker = shumate::Marker::new();
-            marker.set_location(fix.lat, fix.lon);
-            marker.set_child(Some(&marker_content(d, selected == Some(d.id.as_str()))));
-            let click = gtk::GestureClick::new();
-            let (on_marker, id) = (self.on_marker.clone(), d.id.clone());
-            click.connect_released(move |gesture, _, _, _| {
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                on_marker(&id);
-            });
-            marker.add_controller(click);
-            self.markers.add_marker(&marker);
+            let m = markers.entry(d.id.clone()).or_insert_with(|| self.new_marker(&d.id));
+            if m.at != Some((fix.lat, fix.lon)) {
+                m.marker.set_location(fix.lat, fix.lon);
+                m.at = Some((fix.lat, fix.lon));
+            }
+            style_badge(&m.badge, d, now);
+        }
+        drop(markers);
+        self.set_selected(selected);
+    }
+
+    /// Moves the highlight to `selected`'s marker.
+    pub fn set_selected(&self, selected: Option<&str>) {
+        for (id, m) in self.by_id.borrow().iter() {
+            set_class(&m.badge, "selected", selected == Some(id.as_str()));
+        }
+    }
+
+    fn new_marker(&self, id: &str) -> DeviceMarker {
+        let marker = shumate::Marker::new();
+        let badge = gtk::Image::new();
+        badge.add_css_class("device-marker");
+        badge.set_cursor_from_name(Some("pointer"));
+        marker.set_child(Some(&badge));
+        let click = gtk::GestureClick::new();
+        let (on_marker, id) = (self.on_marker.clone(), id.to_string());
+        click.connect_released(move |gesture, _, _, _| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            on_marker(&id);
+        });
+        marker.add_controller(click);
+        self.markers.add_marker(&marker);
+        DeviceMarker {
+            marker,
+            badge,
+            at: None,
         }
     }
 
@@ -108,24 +161,13 @@ impl DeviceMap {
 }
 
 /// A round badge with the model icon, centred on the position (so the trail
-/// ends under it); the selected device's badge is accent-coloured. The name
-/// is in the tooltip and the window subtitle.
-fn marker_content(d: &Device, selected: bool) -> gtk::Image {
-    let badge = gtk::Image::from_icon_name(d.class.icon_name());
-    badge.add_css_class("device-marker");
-    if selected {
-        badge.add_css_class("selected");
-    }
-    if d.location.is_some_and(|f| f.is_old) || !d.online {
-        badge.add_css_class("stale");
-    }
-    badge.set_tooltip_text(Some(&format!(
-        "{}\n{}",
-        d.name,
-        d.summary(icloud_session::time::now_ms())
-    )));
-    badge.set_cursor_from_name(Some("pointer"));
-    badge
+/// ends under it); the selected device's badge is accent-coloured
+/// ([`DeviceMap::set_selected`]). The name is in the tooltip and the window
+/// subtitle.
+fn style_badge(badge: &gtk::Image, d: &Device, now_ms: i64) {
+    badge.set_icon_name(Some(d.class.icon_name()));
+    set_class(badge, "stale", d.location.is_some_and(|f| f.is_old) || !d.online);
+    badge.set_tooltip_text(Some(&format!("{}\n{}", d.name, d.summary(now_ms))));
 }
 
 /// Styles for the map badges, loaded once at startup.
