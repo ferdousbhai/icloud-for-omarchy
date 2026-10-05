@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{Error, NoticeLevel, SyncNotice, SyncProgress, skipped_zone_owner, used_names_for, zone_for_owner};
+use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
 use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_file_name};
 use crate::md::frontmatter::compose_note_file;
-use crate::vault::attachments::resolve_note_attachments;
+use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy;
 use crate::vault::layout::{PreviousLayout, SharedZoneRecords, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
@@ -93,7 +94,7 @@ pub fn run_clone_with(
             fetched += n;
             progress.on_fetch_page(fetched);
         };
-        db.fetch_shared_note_records(&IndexMap::new(), &mut on_page)?
+        db.fetch_shared_note_records_since(&IndexMap::new(), None, crate::vault::rt::now_ms(), &mut on_page)?
     };
     let held_back = backfill_new_note_bodies(db, &IndexMap::new(), &mut changes.records)?;
 
@@ -158,6 +159,14 @@ pub fn run_clone_with(
         std::fs::create_dir_all(target_dir.join(dir))?;
     }
 
+    // One records/lookup walk per zone for every note's attachments.
+    let mut attachment_records = AttachmentRecords::default();
+    for (records, shared_zone_owner) in &sources {
+        let notes: Vec<&CloudKitRecord> = records.iter().collect();
+        attachment_records.prefetch(db, &zone_for_owner(shared_zone_owner.as_deref()), &notes)?;
+    }
+    let mut downloads = DownloadQueue::new(db);
+
     let total: usize = sources.iter().map(|(records, _)| records.len()).sum();
     progress.on_process_start(total);
 
@@ -186,6 +195,8 @@ pub fn run_clone_with(
                 if !decoded.embed_slots.is_empty() {
                     let resolved = resolve_note_attachments(
                         db,
+                        &mut attachment_records,
+                        &mut downloads,
                         &zone_for_owner(owner),
                         target_dir,
                         &record.record_name,
@@ -245,6 +256,7 @@ pub fn run_clone_with(
         }
     }
     progress.on_process_complete();
+    downloads.finish()?;
 
     let state = CloneState {
         account: Some(Account {
@@ -259,6 +271,7 @@ pub fn run_clone_with(
             None
         },
         shared_zone_sync_tokens: Some(shared_zone_sync_tokens),
+        shared_database: shared.cursor.clone(),
         notes,
         folders: Some(layout.state_folders),
         sharer_homes: Some(layout.state_sharer_homes),

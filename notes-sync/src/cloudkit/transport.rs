@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,7 +44,18 @@ pub trait Transport {
         let _ = fs::remove_dir_all(&dir);
         result
     }
+
+    /// A [`Transport::download`] other threads can run, when downloads may
+    /// overlap. `None` (the default) keeps every download on the caller's
+    /// thread, one at a time and in order, so a recording transport logs
+    /// them deterministically.
+    fn shared_downloader(&self) -> Option<SharedDownloader> {
+        None
+    }
 }
+
+/// See [`Transport::shared_downloader`].
+pub type SharedDownloader = Arc<dyn Fn(&str, &Path) -> Result<u64, CkError> + Send + Sync>;
 
 impl<T: Transport + ?Sized> Transport for Box<T> {
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
@@ -57,6 +68,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         (**self).download_bytes(url)
+    }
+
+    fn shared_downloader(&self) -> Option<SharedDownloader> {
+        (**self).shared_downloader()
     }
 }
 
@@ -105,6 +120,14 @@ impl Transport for LiveTransport {
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
         Ok(self.session.download(url, dest)?)
+    }
+
+    /// The session (one shared ureq agent behind an `Arc`) is safe to use
+    /// from several threads, so attachment downloads overlap their round
+    /// trips and fsyncs with each other and with the rest of the pull.
+    fn shared_downloader(&self) -> Option<SharedDownloader> {
+        let session = self.session.clone();
+        Some(Arc::new(move |url: &str, dest: &Path| Ok(session.download(url, dest)?)))
     }
 }
 

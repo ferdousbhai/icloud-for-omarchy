@@ -36,6 +36,7 @@ fn parse_shared_zone_list_extracts_zone_name_and_owner_per_zone() {
                 zone("_35c0dc4416a1c75e7d98713af3f50348"),
                 zone("_3ae5f00b01edbda385d0db894253c622")
             ],
+            deleted_zone_ids: vec![],
             more_coming: false,
             sync_token: Some("AQAAAZ9XZ9gy".into()),
         }
@@ -49,6 +50,7 @@ fn parse_shared_zone_list_surfaces_more_coming() {
         parse_shared_zone_list(&body).unwrap(),
         SharedZoneListPage {
             zone_ids: vec![],
+            deleted_zone_ids: vec![],
             more_coming: true,
             sync_token: Some("page-1".into()),
         }
@@ -75,9 +77,12 @@ fn parse_shared_zone_list_skips_tombstoned_zones() {
         "zones": [
             { "zoneID": { "zoneName": "Notes", "ownerRecordName": "_live", "zoneType": "REGULAR_CUSTOM_ZONE" } },
             { "zoneID": { "zoneName": "Notes", "ownerRecordName": "_revoked", "zoneType": "REGULAR_CUSTOM_ZONE" }, "deleted": true },
+            { "zoneID": { "zoneName": "Notes", "ownerRecordName": "_purged", "zoneType": "REGULAR_CUSTOM_ZONE" }, "purged": true },
         ],
     });
-    assert_eq!(parse_shared_zone_list(&body).unwrap().zone_ids, vec![zone("_live")]);
+    let page = parse_shared_zone_list(&body).unwrap();
+    assert_eq!(page.zone_ids, vec![zone("_live")]);
+    assert_eq!(page.deleted_zone_ids, vec![zone("_revoked"), zone("_purged")]);
 }
 
 #[test]

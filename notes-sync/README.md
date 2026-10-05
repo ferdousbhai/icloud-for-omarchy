@@ -86,7 +86,13 @@ to run the app against a development build), else at
 PATH.
 
 Vaults are icloud-md vaults (`.icloud-md/state.json`, layout version 3) and
-stay readable by icloud-md.
+stay readable by icloud-md. state.json has one key icloud-md doesn't know,
+`sharedDatabase`: where the shared-database listing left off, so a pull
+walks only the shared zones that changed (and lists them all from scratch at
+least daily, or when the key is missing). A pull or clone looks up the
+attachments of all its notes in one `records/lookup` walk per zone and
+record type, and downloads up to four attachment files at once. Both are in
+docs/PORT_PLAN.md §1.
 
 ## Development
 

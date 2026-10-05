@@ -11,7 +11,7 @@ use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
     Error, NoticeLevel, SyncNotice, SyncProgress, is_purged, skipped_zone_owner, used_names_for, zone_for_owner,
 };
-use crate::cloudkit::client::{merge_looked_up_records, needs_body_lookup};
+use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
 use crate::cloudkit::{Database, SkippedSharedZone};
 use crate::diff3::{has_conflict_markers, merge_note_versions};
@@ -21,7 +21,8 @@ use crate::md::filename::{file_name_carries_title, note_file_name_for, title_nee
 use crate::md::frontmatter::{NOTE_TITLE_KEY, clear_note_id, compose_note_file, join_frontmatter, read_note_id, split_frontmatter};
 use crate::md::title::representability_problem;
 use crate::vault::attachments::{
-    remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments, safe_unlink,
+    AttachmentRecords, remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments,
+    safe_unlink,
 };
 use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
@@ -188,7 +189,12 @@ pub fn run_pull_with(
             fetched += n;
             progress.on_fetch_page(fetched);
         };
-        db.fetch_shared_note_records(&state.shared_zone_sync_tokens.clone().unwrap_or_default(), &mut on_page)?
+        db.fetch_shared_note_records_since(
+            &state.shared_zone_sync_tokens.clone().unwrap_or_default(),
+            state.shared_database.as_ref(),
+            crate::vault::rt::now_ms(),
+            &mut on_page,
+        )?
     };
     backfill_share_permissions(db, state.folders.as_ref(), &mut shared.zones)?;
     let held_back = backfill_new_note_bodies(db, &state.notes, &mut changes.records)?;
@@ -304,6 +310,22 @@ pub fn run_pull_with(
         std::fs::create_dir_all(target_dir.join(dir))?;
     }
 
+    // One records/lookup walk per zone for the attachments of every note the
+    // loop below applies, rather than two per note.
+    let mut attachment_records = AttachmentRecords::default();
+    for source in &sources {
+        let to_apply: Vec<&CloudKitRecord> = source
+            .records
+            .iter()
+            .filter(|r| match (tracked.notes.get(&r.record_name), &r.record_change_tag) {
+                (Some(existing), Some(tag)) => existing.record_change_tag != *tag,
+                _ => true,
+            })
+            .collect();
+        attachment_records.prefetch(db, &zone_for_owner(source.shared_zone_owner.as_deref()), &to_apply)?;
+    }
+    let mut downloads = DownloadQueue::new(db);
+
     let total: usize = sources.iter().map(|s| s.records.len()).sum();
     progress.on_process_start(total);
 
@@ -406,6 +428,8 @@ pub fn run_pull_with(
                 if !decoded.embed_slots.is_empty() {
                     let resolved = resolve_note_attachments(
                         db,
+                        &mut attachment_records,
+                        &mut downloads,
                         &zone_for_owner(source.shared_zone_owner.as_deref()),
                         target_dir,
                         &record.record_name,
@@ -692,6 +716,8 @@ pub fn run_pull_with(
         }
     }
     progress.on_process_complete();
+    // Before anything below moves or removes attachment files.
+    downloads.finish()?;
 
     for source in &sources {
         if !source.resynced {
@@ -754,6 +780,7 @@ pub fn run_pull_with(
             state.sync_token.clone()
         },
         shared_zone_sync_tokens: Some(shared_zone_sync_tokens),
+        shared_database: shared.cursor.clone(),
         replica_id: state.replica_id.clone(),
         title_mode: state.title_mode,
         notes: tracked.notes,

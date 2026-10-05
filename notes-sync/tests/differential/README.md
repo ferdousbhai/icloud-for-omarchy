@@ -21,7 +21,8 @@ ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test -p icloud-notes-sync
 ```
 
 A few scenarios also have named checks on what their recording must show
-(`dup_clone_*`, `bodyless_pull_*`, `bodyless_clone_*`). These catch a
+(`dup_clone_*`, `bodyless_pull_*`, `bodyless_clone_*`, `attach_*`,
+`shared_pull_*`). These catch a
 re-recording that quietly accepts a regression.
 
 ## Re-recording
@@ -86,6 +87,10 @@ same on every run:
   `00000000-0000-4000-8000-<n as 12 lowercase hex digits>`.
 - `random_bytes(k)`: the m-th call (1-based) returns the bytes
   `(m + j) & 0xff` for `j = 0..k-1`.
+
+`ReplayTransport` offers no shared downloader, so attachment downloads run
+one at a time in the order the notes queue them (live, up to four overlap)
+and the request log is the same on every run.
 
 Randomness drawn through `vault::rt`: `recordVersion`/`recordEpoch` ids,
 folder-create record names, push's create record name and replica id, and
@@ -186,3 +191,8 @@ null when none did. Rust: `cloudkit::transport::{RequestLog, LoggedRequest}`.
 | `asset-clone-download-failed.json` | the same with the asset download failing: the clone fails |
 | `asset-lookup.json` | lookup for status/push of the read-only asset note (both refuse it) |
 | `asset-pull-update.json` | a pull delivering a changed asset note |
+| `attach-clone.json` | `tiny-clone` plus two notes with one file attachment each (a recording, a photo); one repeatable `records/lookup` answering all their Attachment and Media records, and the two asset GETs |
+| `attach-pull.json` | a pull delivering those two notes, with the same lookup and assets; scenarios `attach-clone` and `attach-pull` look the attachments up in one lookup per record type, not two per note |
+| `shared-pull-unchanged.json` | a pull of the `asset-clone` vault: the shared `changes/database` resumed from its stored token (pinned) reports no zone changed, so no shared zone is walked |
+| `shared-pull-revoked.json` | the same, reporting the shared zone `deleted`: its note is untracked |
+| `shared-full-listing.json` | the resumed listing rejected (HTTP 400), then a listing from scratch and an unchanged shared zone; scenarios `shared-pull-token-rejected`, `shared-pull-old-state` (no `sharedDatabase` in state) and `shared-pull-stale-cursor` (a day later) |

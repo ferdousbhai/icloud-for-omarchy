@@ -661,3 +661,132 @@ fn tiny_sync_pushes_then_pulls_over_one_connection() {
         (Some(0), Some(true))
     );
 }
+/// `attach-clone` / `attach-pull`: two notes with one file attachment each.
+/// Their Attachment records are looked up in one `records/lookup`, their
+/// Media records in a second (not two per note), both files are downloaded
+/// and linked, and state tracks them.
+fn assert_attachments_batched(name: &str) {
+    let lookups: Vec<Value> = requests(name).into_iter().filter(|r| r["path"] == LOOKUP).collect();
+    let names = |r: &Value| -> Vec<String> {
+        r["body"]["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["recordName"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(lookups.len(), 2, "{name}");
+    assert_eq!(
+        names(&lookups[0]),
+        ["7DAFDA6F-4AC4-41D8-9958-049373B80824", "7ED80274-4400-4C02-87EA-F542F056FF02"],
+        "{name}: both Attachment records"
+    );
+    assert_eq!(
+        names(&lookups[1]),
+        ["0B8509A3-A5FC-470B-A777-03BFFFDFB5F9", "066C8A2E-796F-403F-AD75-A5267CBD0E18"],
+        "{name}: both Media records"
+    );
+    let downloads = requests(name).into_iter().filter(|r| r["method"] == "GET").count();
+    assert_eq!(downloads, 2, "{name}");
+    let vault = expected(name).join("vault");
+    assert_eq!(
+        std::fs::read(vault.join("Notes/attachments/Call with Janice Elkins.m4a")).unwrap(),
+        b"audio bytes"
+    );
+    assert_eq!(std::fs::read(vault.join("Notes/attachments/_7130093.jpeg")).unwrap(), b"jpeg  bytes");
+    let state = read_json(&vault.join(".icloud-md/state.json"));
+    assert_eq!(state["attachments"].as_object().unwrap().len(), 2, "{name}");
+}
+
+#[test]
+fn attach_clone_looks_attachments_up_once_per_zone() {
+    assert_attachments_batched("attach-clone");
+    assert_eq!(read_json(&expected("attach-clone/stdout.json"))["attachmentsDownloaded"], 2);
+}
+
+#[test]
+fn attach_pull_looks_attachments_up_once_per_zone() {
+    assert_attachments_batched("attach-pull");
+    let stdout = read_json(&expected("attach-pull/stdout.json"));
+    assert_eq!(stdout["added"], 2);
+    assert_eq!(stdout["attachmentsDownloaded"], 2);
+}
+
+const SHARED_DB: &str = "/database/1/com.apple.notes/production/shared/changes/database";
+const SHARED_ZONE: &str = "/database/1/com.apple.notes/production/shared/changes/zone";
+const SHARER: &str = "_0123456789abcdef0123456789abcdef";
+const SHARED_NOTE: &str = "9d8c7b6a-5f4e-4d3c-8b2a-192837465abc";
+
+/// The bodies of a scenario's shared `changes/database` requests, and how
+/// many shared `changes/zone` requests it sent.
+fn shared_requests(name: &str) -> (Vec<Value>, usize) {
+    let all = requests(name);
+    let listings = all.iter().filter(|r| r["path"] == SHARED_DB).map(|r| r["body"].clone()).collect();
+    (listings, all.iter().filter(|r| r["path"] == SHARED_ZONE).count())
+}
+
+fn state_of(name: &str) -> Value {
+    read_json(&expected(name).join("vault/.icloud-md/state.json"))
+}
+
+/// `shared-pull-unchanged`: the stored shared-database token is resumed,
+/// no zone changed, so no shared `changes/zone` is sent - and the zone, its
+/// token, its sharer home and its note all stay as they were.
+#[test]
+fn shared_pull_unchanged_resumes_the_listing_and_walks_no_zone() {
+    let (listings, zone_walks) = shared_requests("shared-pull-unchanged");
+    assert_eq!(listings, [serde_json::json!({ "syncToken": "AQAAAAAAAAAS" })]);
+    assert_eq!(zone_walks, 0);
+    let before = state_of("asset-clone");
+    let after = state_of("shared-pull-unchanged");
+    assert_eq!(after["sharedZoneSyncTokens"], before["sharedZoneSyncTokens"]);
+    assert_eq!(after["sharerHomes"], before["sharerHomes"]);
+    assert_eq!(after["notes"], before["notes"]);
+    assert_eq!(after["sharedDatabase"]["syncToken"], "AQAAAAAAAAAU");
+    assert_eq!(after["sharedDatabase"]["zones"], before["sharedDatabase"]["zones"]);
+    assert_eq!(after["sharedDatabase"]["listedAt"], before["sharedDatabase"]["listedAt"]);
+    assert_eq!(
+        note_files(&expected("shared-pull-unchanged/vault")),
+        note_files(&expected("asset-clone/vault"))
+    );
+}
+
+/// `shared-pull-revoked`: the incremental listing marks the zone deleted;
+/// its note is untracked (file kept) as a full listing without it would.
+#[test]
+fn shared_pull_revoked_untracks_the_zones_notes() {
+    let (_, zone_walks) = shared_requests("shared-pull-revoked");
+    assert_eq!(zone_walks, 0);
+    let stdout = read_json(&expected("shared-pull-revoked/stdout.json"));
+    assert_eq!(stdout["unsharedUntracked"], 1);
+    let state = state_of("shared-pull-revoked");
+    assert!(state["notes"].get(SHARED_NOTE).is_none());
+    assert_eq!(state["sharedDatabase"]["zones"], serde_json::json!([]));
+    assert!(state["sharedZoneSyncTokens"].get(SHARER).is_none());
+    assert!(
+        expected("shared-pull-revoked/vault")
+            .join(SHARER)
+            .join("Shared Big Note.md")
+            .exists()
+    );
+}
+
+/// A rejected token, an old state without `sharedDatabase`, and a cursor
+/// older than a day each list the shared zones from scratch and walk them.
+#[test]
+fn shared_pull_lists_from_scratch_when_the_cursor_cannot_be_used() {
+    for (name, listings) in [
+        (
+            "shared-pull-token-rejected",
+            vec![serde_json::json!({ "syncToken": "AQAAAAAAAAAS" }), serde_json::json!({})],
+        ),
+        ("shared-pull-old-state", vec![serde_json::json!({})]),
+        ("shared-pull-stale-cursor", vec![serde_json::json!({})]),
+    ] {
+        assert_eq!(shared_requests(name), (listings, 1), "{name}");
+        let state = state_of(name);
+        assert_eq!(state["sharedDatabase"]["syncToken"], "AQAAAAAAAAAV", "{name}");
+        assert_eq!(state["sharedZoneSyncTokens"][SHARER], "AQAAAAAAAAAW", "{name}");
+        assert!(state["notes"].get(SHARED_NOTE).is_some(), "{name}");
+    }
+}

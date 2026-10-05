@@ -1,0 +1,79 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/changes/zone",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "zones": [
+          {
+            "zoneID": {
+              "zoneName": "Notes"
+            },
+            "desiredKeys": [
+              "TitleEncrypted",
+              "SnippetEncrypted",
+              "FirstAttachmentUTIEncrypted",
+              "FirstAttachmentThumbnail",
+              "FirstAttachmentThumbnailOrientation",
+              "CreationDate",
+              "ModificationDate",
+              "Deleted",
+              "Folders",
+              "Folder",
+              "Attachments",
+              "ParentFolder",
+              "Note",
+              "LastViewedModificationDate",
+              "MinimumSupportedNotesVersion",
+              "DisplayTextEncrypted",
+              "StandardizedContentEncrypted",
+              "TokenContentIdentifierEncrypted",
+              "AltTextEncrypted",
+              "UTIEncrypted",
+              "MergeableDataEncrypted",
+              "IsPinned",
+              "TextDataEncrypted",
+              "TextDataAsset"
+            ],
+            "desiredRecordTypes": [
+              "AccountData",
+              "Note",
+              "SearchIndexes",
+              "Folder",
+              "PasswordProtectedNote",
+              "User",
+              "Users",
+              "Note_UserSpecific",
+              "PasswordProtectedNote_UserSpecific",
+              "Folder_UserSpecific",
+              "cloudkit.share",
+              "Hashtag",
+              "InlineAttachment"
+            ],
+            "reverse": true,
+            "syncToken": "AQAAAAAAAAAB"
+          }
+        ]
+      },
+      "matched": 0
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/shared/changes/database",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "syncToken": "AQAAAAAAAAAS"
+      },
+      "matched": 1
+    }
+  ]
+}

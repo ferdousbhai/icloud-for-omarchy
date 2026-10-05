@@ -1,0 +1,19 @@
+{
+  "added": 0,
+  "updated": 0,
+  "merged": 0,
+  "removed": 0,
+  "attachmentsDownloaded": 0,
+  "unpublishable": 0,
+  "skippedNewUnsyncable": 0,
+  "droppedUnsyncable": 0,
+  "unsharedUntracked": 1,
+  "changes": [],
+  "conflicts": [],
+  "notices": [
+    {
+      "level": "warn",
+      "message": "_0123456789abcdef0123456789abcdef/Shared Big Note.md: no longer shared with you - leaving local copy in place but no longer tracking it"
+    }
+  ]
+}

@@ -7,6 +7,16 @@
   "sharedZoneSyncTokens": {
     "_0123456789abcdef0123456789abcdef": "AQAAAAAAAAAT"
   },
+  "sharedDatabase": {
+    "syncToken": "AQAAAAAAAAAS",
+    "zones": [
+      {
+        "zoneName": "Notes",
+        "ownerRecordName": "_0123456789abcdef0123456789abcdef"
+      }
+    ],
+    "listedAt": 1790000000000
+  },
   "titleMode": "in-body",
   "notes": {
     "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1": {

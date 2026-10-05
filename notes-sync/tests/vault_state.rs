@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use icloud_notes_sync::GENERATOR;
+use icloud_notes_sync::cloudkit::{SharedDatabaseCursor, ZoneId};
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::vault::state::{
     Account, AttachmentEntry, CLONE_WRITE_ORDER, CURRENT_LAYOUT_VERSION, CloneState, FOLDER_CREATE_ORDER, FolderEntry,
@@ -120,6 +121,41 @@ fn reads_a_pre_shared_notes_state_file() {
     assert_eq!(back.shared_zone_sync_tokens, None);
     assert_eq!(back.notes["REC-1"].shared_zone_owner, None);
     assert_eq!(back.notes["REC-1"].file, "Note (REC1).md");
+}
+
+#[test]
+fn round_trips_the_shared_database_cursor() {
+    let mut state = base("t", vec![]);
+    state.shared_database = Some(SharedDatabaseCursor {
+        sync_token: "db-token".into(),
+        zones: vec![ZoneId {
+            zone_name: "Notes".into(),
+            owner_record_name: Some("_owner1".into()),
+        }],
+        listed_at: 42,
+    });
+    assert_eq!(round_trip(&state).shared_database, state.shared_database);
+}
+
+/// Older vaults have no `sharedDatabase`; a malformed one is only a lost
+/// cache (the next pull lists the shared zones from scratch), not corruption.
+#[test]
+fn a_missing_or_malformed_shared_database_cursor_reads_as_none() {
+    assert_eq!(round_trip(&base("t", vec![])).shared_database, None);
+    for bad in [
+        r#""x""#,
+        r#"{"syncToken": 1, "zones": [], "listedAt": 0}"#,
+        r#"{"syncToken": "x"}"#,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write_raw(
+            dir.path(),
+            &format!(r#"{{"layoutVersion": 3, "syncToken": "t", "notes": {{}}, "sharedDatabase": {bad}}}"#),
+        );
+        let state = read_clone_state(dir.path()).unwrap().unwrap();
+        assert_eq!(state.shared_database, None, "{bad}");
+        assert_eq!(state.sync_token.as_deref(), Some("t"));
+    }
 }
 
 #[test]
@@ -300,6 +336,11 @@ fn tiny_clone_state() -> CloneState {
         title_mode: Some(TitleMode::InBody),
         sync_token: Some("AQAAAAAAAAAB".into()),
         shared_zone_sync_tokens: Some(IndexMap::new()),
+        shared_database: Some(SharedDatabaseCursor {
+            sync_token: "AQAAAAAAAAAC".into(),
+            zones: Vec::new(),
+            listed_at: 1_790_000_000_000,
+        }),
         notes: notes(vec![("03667d1d-eee8-4e98-82fb-8c5cd02fd9d1", entry)]),
         folders: Some(
             [("DefaultFolder-CloudKit".to_owned(), FolderEntry::new("Notes", "Notes"))]
@@ -344,6 +385,11 @@ fn read_modify_write_keeps_read_order() {
   }},
   "syncToken": "AQAAAAAAAAAB",
   "sharedZoneSyncTokens": {{}},
+  "sharedDatabase": {{
+    "syncToken": "AQAAAAAAAAAC",
+    "zones": [],
+    "listedAt": 1790000000000
+  }},
   "replicaId": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "notes": {{
     "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1": {{
@@ -403,6 +449,7 @@ fn pull_write_order_appends_layout_version_and_generator() {
             "account",
             "syncToken",
             "sharedZoneSyncTokens",
+            "sharedDatabase",
             "replicaId",
             "titleMode",
             "notes",

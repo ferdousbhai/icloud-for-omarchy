@@ -28,6 +28,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::cloudkit::SharedDatabaseCursor;
 use crate::cmd::errors::Error;
 use crate::js::is_record;
 
@@ -45,6 +46,7 @@ const READ_ORDER: &[&str] = &[
     "account",
     "syncToken",
     "sharedZoneSyncTokens",
+    "sharedDatabase",
     "replicaId",
     "notes",
     "folders",
@@ -60,6 +62,7 @@ pub const CLONE_WRITE_ORDER: &[&str] = &[
     "titleMode",
     "syncToken",
     "sharedZoneSyncTokens",
+    "sharedDatabase",
     "notes",
     "folders",
     "sharerHomes",
@@ -72,6 +75,7 @@ pub const PULL_WRITE_ORDER: &[&str] = &[
     "account",
     "syncToken",
     "sharedZoneSyncTokens",
+    "sharedDatabase",
     "replicaId",
     "titleMode",
     "notes",
@@ -322,6 +326,10 @@ pub struct CloneState {
     pub sync_token: Option<String>,
     /// Keyed by the zone owner's recordName.
     pub shared_zone_sync_tokens: Option<IndexMap<String, String>>,
+    /// Where the shared `changes/database` listing resumes. Not in
+    /// icloud-md; absent (an older vault, or a malformed entry) lists every
+    /// shared zone from scratch.
+    pub shared_database: Option<SharedDatabaseCursor>,
     /// base64 of 16 random bytes; set by the first push.
     pub replica_id: Option<String>,
     pub notes: IndexMap<String, NoteEntry>,
@@ -342,6 +350,7 @@ impl PartialEq for CloneState {
             && self.account == other.account
             && self.sync_token == other.sync_token
             && self.shared_zone_sync_tokens == other.shared_zone_sync_tokens
+            && self.shared_database == other.shared_database
             && self.replica_id == other.replica_id
             && self.notes == other.notes
             && self.folders == other.folders
@@ -371,6 +380,7 @@ impl CloneState {
             "account" => self.account.as_ref().map(sv),
             "syncToken" => self.sync_token.clone().map(Value::from),
             "sharedZoneSyncTokens" => map(&self.shared_zone_sync_tokens, |v| Value::from(v.clone())),
+            "sharedDatabase" => self.shared_database.as_ref().map(sv),
             "replicaId" => self.replica_id.clone().map(Value::from),
             "notes" => Some(Value::Object(
                 self.notes.iter().map(|(k, v)| (k.clone(), v.to_json())).collect(),
@@ -664,6 +674,11 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
         }
     };
 
+    // Only a cache: a malformed entry is dropped rather than refused.
+    let shared_database = root
+        .get("sharedDatabase")
+        .and_then(|v| serde_json::from_value::<SharedDatabaseCursor>(v.clone()).ok());
+
     let attachments = match root.get("attachments").and_then(obj) {
         None => None,
         Some(entries) => {
@@ -769,6 +784,7 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
         account,
         sync_token: opt_str(root, "syncToken"),
         shared_zone_sync_tokens,
+        shared_database,
         replica_id,
         notes,
         folders,

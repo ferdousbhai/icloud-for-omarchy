@@ -1,0 +1,23 @@
+{
+  "added": 2,
+  "updated": 0,
+  "merged": 0,
+  "removed": 0,
+  "attachmentsDownloaded": 2,
+  "unpublishable": 0,
+  "skippedNewUnsyncable": 0,
+  "droppedUnsyncable": 0,
+  "unsharedUntracked": 0,
+  "changes": [
+    {
+      "kind": "add",
+      "file": "Notes/Call with Janice Elkins.md"
+    },
+    {
+      "kind": "add",
+      "file": "Notes/Test Note 2.md"
+    }
+  ],
+  "conflicts": [],
+  "notices": []
+}

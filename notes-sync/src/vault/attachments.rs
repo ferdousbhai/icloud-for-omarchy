@@ -3,7 +3,7 @@
 //! `decodeAttachmentFilename` and `parseAssetField`, which only this module
 //! uses).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use indexmap::IndexMap;
@@ -11,11 +11,13 @@ use serde_json::Value;
 
 use super::layout::reference_record_name;
 use super::state::{AttachmentEntry, TableAttachmentEntry};
+use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, Database, FieldValue, NoteZone, Transport};
 use crate::cmd::errors::Error;
+use crate::doc::decode::is_deleted;
 use crate::doc::embeds::{
-    AttachmentReference, EmbedMarkerContent, EmbedSlot, format_attachment_markdown, format_embed_marker, is_table_uti,
-    render_placeholders,
+    AttachmentReference, EmbedMarkerContent, EmbedSlot, decode_note_embed_slots, format_attachment_markdown,
+    format_embed_marker, is_table_uti, render_placeholders,
 };
 use crate::doc::tables::decode_table_markdown;
 use crate::js::base64_decode;
@@ -187,6 +189,87 @@ pub struct AttachmentSyncResult {
     pub table_attachment_snapshots: Vec<TableAttachmentSnapshotSource>,
 }
 
+/// The Attachment and Media records of the notes a pull or clone resolves,
+/// looked up once per zone ([`AttachmentRecords::prefetch`]) instead of
+/// twice per note. A name is asked for at most once: one the server didn't
+/// answer stays unanswered, as a per-note lookup would have left it.
+#[derive(Debug, Default)]
+pub struct AttachmentRecords {
+    zones: HashMap<NoteZone, ZoneAttachmentRecords>,
+}
+
+#[derive(Debug, Default)]
+struct ZoneAttachmentRecords {
+    records: HashMap<String, CloudKitRecord>,
+    asked: HashSet<String>,
+}
+
+impl AttachmentRecords {
+    /// Looks up every Attachment the embeds of `notes` (all in `zone`)
+    /// name, then the Media records of the file attachments among them: two
+    /// `records/lookup` walks (200 names a request) for the whole zone.
+    /// Records that aren't live, decodable notes contribute nothing.
+    pub fn prefetch<T: Transport>(
+        &mut self,
+        db: &Database<T>,
+        zone: &NoteZone,
+        notes: &[&CloudKitRecord],
+    ) -> Result<(), Error> {
+        let mut refs: Vec<AttachmentReference> = Vec::new();
+        for note in notes {
+            if note.record_type != "Note" || is_deleted(note) {
+                continue;
+            }
+            let Some(Value::String(text)) = note.fields.get("TextDataEncrypted").map(|f| &f.value) else {
+                continue;
+            };
+            let Ok(Some(slots)) = decode_note_embed_slots(&base64_decode(text)) else {
+                continue;
+            };
+            refs.extend(slots.into_iter().filter_map(|slot| match slot {
+                EmbedSlot::Attachment(r) => Some(r),
+                EmbedSlot::Unknown { .. } => None,
+            }));
+        }
+        let names: Vec<String> = refs.iter().map(|r| r.attachment_identifier.clone()).collect();
+        self.ensure(db, zone, &names)?;
+        let file_refs: Vec<AttachmentReference> = refs.into_iter().filter(|r| !is_table_uti(&r.type_uti)).collect();
+        let media_names: Vec<String> = extract_media_record_names(&file_refs, &self.records_named(zone, &names))
+            .into_iter()
+            .flatten()
+            .collect();
+        self.ensure(db, zone, &media_names)
+    }
+
+    /// Looks up the names in `zone` not asked for yet (first occurrence
+    /// order, each once).
+    fn ensure<T: Transport>(&mut self, db: &Database<T>, zone: &NoteZone, names: &[String]) -> Result<(), Error> {
+        let cache = self.zones.entry(zone.clone()).or_default();
+        let mut missing = Vec::new();
+        for name in names {
+            if cache.asked.insert(name.clone()) {
+                missing.push(name.clone());
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        // A later duplicate wins, as `.rev().find()` over the answer did.
+        for record in db.lookup_records(zone, &missing)? {
+            cache.records.insert(record.record_name.clone(), record);
+        }
+        Ok(())
+    }
+
+    /// The records answered for `names` in `zone`, in `names` order.
+    fn records_named(&self, zone: &NoteZone, names: &[String]) -> Vec<CloudKitRecord> {
+        let Some(cache) = self.zones.get(zone) else {
+            return Vec::new();
+        };
+        names.iter().filter_map(|n| cache.records.get(n)).cloned().collect()
+    }
+}
+
 /// `decodeTableAttachment`: the table's markdown, or `None` when the record
 /// isn't a readable table.
 pub fn decode_table_attachment(record: Option<&CloudKitRecord>) -> Option<String> {
@@ -200,11 +283,15 @@ pub fn decode_table_attachment(record: Option<&CloudKitRecord>) -> Option<String
     decode_table_markdown(&base64_decode(b64)).ok()
 }
 
-/// `resolveNoteAttachments`: download file attachments, render tables
-/// inline, markers for anything unresolvable.
+/// `resolveNoteAttachments`: download file attachments (through
+/// `downloads`), render tables inline, markers for anything unresolvable.
+/// Records come from `records`; names [`AttachmentRecords::prefetch`] didn't
+/// cover are looked up here.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_note_attachments<T: Transport>(
     db: &Database<T>,
+    records: &mut AttachmentRecords,
+    downloads: &mut DownloadQueue<'_, T>,
     zone: &NoteZone,
     target_dir: &Path,
     note_record_name: &str,
@@ -242,12 +329,9 @@ pub fn resolve_note_attachments<T: Transport>(
             EmbedSlot::Unknown { .. } => None,
         })
         .collect();
-    let attachment_records = if identified.is_empty() {
-        Vec::new()
-    } else {
-        let names: Vec<String> = identified.iter().map(|r| r.attachment_identifier.clone()).collect();
-        db.lookup_records(zone, &names)?
-    };
+    let names: Vec<String> = identified.iter().map(|r| r.attachment_identifier.clone()).collect();
+    records.ensure(db, zone, &names)?;
+    let attachment_records = records.records_named(zone, &names);
     let by_name = |name: &str| attachment_records.iter().rev().find(|r| r.record_name == name);
 
     let mut replacements: Vec<Option<String>> = vec![None; slots.len()];
@@ -302,7 +386,8 @@ pub fn resolve_note_attachments<T: Transport>(
     if !file_refs.is_empty() {
         let media_record_names = extract_media_record_names(&file_refs, &attachment_records);
         let known: Vec<String> = media_record_names.iter().flatten().cloned().collect();
-        let media_records = db.lookup_records(zone, &known)?;
+        records.ensure(db, zone, &known)?;
+        let media_records = records.records_named(zone, &known);
         let matched = match_attachment_records(
             &file_refs,
             &media_record_names,
@@ -323,7 +408,7 @@ pub fn resolve_note_attachments<T: Transport>(
                 if let Some(parent) = dest.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                db.fetch_asset(&attachment.download_url, &dest)?;
+                downloads.push(attachment.download_url.clone(), dest)?;
             }
             attachments.insert(attachment.record_name.clone(), attachment.entry.clone());
             replacements[index] = Some(format_attachment_markdown(r, &attachment.link_path));

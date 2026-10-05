@@ -9,7 +9,7 @@
 //! the per-session `clientId`/`clientBuildNumber`/`clientMasteringNumber`/
 //! `dsid` parameters itself.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -23,6 +23,10 @@ const CKJS_BUILD_VERSION: &str = "2310ProjectDev27";
 const CKJS_VERSION: &str = "2.6.4";
 /// CloudKit web services cap a `records/lookup` at 200 records per request.
 const LOOKUP_BATCH_SIZE: usize = 200;
+/// How long an incremental shared `changes/database` listing is trusted:
+/// past this the shared zones are listed from scratch again, which also
+/// catches a share whose removal an incremental listing never reported.
+pub const SHARED_FULL_LISTING_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// Wider than we strictly need; matches what the real web client requests.
 const NOTE_DESIRED_KEYS: &[&str] = &[
@@ -197,8 +201,15 @@ impl<T: Transport> Database<T> {
     /// reported moreComing without a new syncToken; refusing to re-request the
     /// same page")`.
     pub fn fetch_shared_zone_ids(&self) -> Result<Vec<ZoneId>, CkError> {
+        Ok(self.walk_shared_database(None)?.zone_ids)
+    }
+
+    /// One shared `changes/database` walk from `start_token` (`None`: every
+    /// zone) until `moreComing` is false; see [`Database::fetch_shared_zone_ids`].
+    fn walk_shared_database(&self, start_token: Option<&str>) -> Result<SharedZoneListPage, CkError> {
         let mut zone_ids = Vec::new();
-        let mut sync_token: Option<String> = None;
+        let mut deleted_zone_ids = Vec::new();
+        let mut sync_token: Option<String> = start_token.map(str::to_owned);
         let mut more_coming = true;
         while more_coming {
             let mut request = Map::new();
@@ -208,6 +219,7 @@ impl<T: Transport> Database<T> {
             let body = self.post_database(DatabaseScope::Shared, "changes/database", &Value::Object(request))?;
             let page = parse_shared_zone_list(&body)?;
             zone_ids.extend(page.zone_ids);
+            deleted_zone_ids.extend(page.deleted_zone_ids);
             if page.more_coming && (page.sync_token.is_none() || page.sync_token == sync_token) {
                 return Err(CkError::RequestFailed(
                     "shared changes/database reported moreComing without a new syncToken; refusing to re-request the same page"
@@ -223,24 +235,110 @@ impl<T: Transport> Database<T> {
         // a zone listed on two pages is fetched - and its notes cloned - once.
         let mut seen = std::collections::HashSet::new();
         zone_ids.retain(|z| seen.insert((z.zone_name.clone(), z.owner_record_name.clone())));
-        Ok(zone_ids)
+        Ok(SharedZoneListPage {
+            zone_ids,
+            deleted_zone_ids,
+            more_coming: false,
+            sync_token: truthy(sync_token.as_deref()).map(str::to_owned),
+        })
+    }
+
+    /// Which shared zones exist and which of them to walk. With a `cursor`
+    /// younger than [`SHARED_FULL_LISTING_INTERVAL_MS`], `changes/database`
+    /// resumes from its token: the zones it lists are walked, the ones it
+    /// marks deleted or purged are dropped, and the cursor's other zones are
+    /// unchanged (walked anyway when there's no stored zone sync token to
+    /// resume from). A rejected or unreadable incremental answer, an old or
+    /// missing cursor, all list every zone from scratch and walk them all.
+    fn list_shared_zones(
+        &self,
+        since_sync_tokens: &IndexMap<String, String>,
+        cursor: Option<&SharedDatabaseCursor>,
+        now_ms: i64,
+    ) -> Result<SharedZoneListing, CkError> {
+        let fresh = |c: &&SharedDatabaseCursor| {
+            !c.sync_token.is_empty() && (0..SHARED_FULL_LISTING_INTERVAL_MS).contains(&(now_ms - c.listed_at))
+        };
+        if let Some(cursor) = cursor.filter(fresh) {
+            match self.walk_shared_database(Some(&cursor.sync_token)) {
+                Ok(delta) => {
+                    let mut zones: Vec<ZoneId> = cursor
+                        .zones
+                        .iter()
+                        .filter(|z| !delta.deleted_zone_ids.contains(z))
+                        .cloned()
+                        .collect();
+                    let mut walk: std::collections::HashSet<ZoneId> = std::collections::HashSet::new();
+                    for zone in delta.zone_ids {
+                        if !zones.contains(&zone) {
+                            zones.push(zone.clone());
+                        }
+                        walk.insert(zone);
+                    }
+                    for zone in &zones {
+                        if stored_zone_token(since_sync_tokens, zone).is_none() {
+                            walk.insert(zone.clone());
+                        }
+                    }
+                    return Ok(SharedZoneListing {
+                        zones,
+                        walk: Some(walk),
+                        sync_token: delta.sync_token,
+                        listed_at: cursor.listed_at,
+                    });
+                }
+                // An expired or unknown token: list from scratch.
+                Err(CkError::RequestFailed(_) | CkError::UnexpectedResponse(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let full = self.walk_shared_database(None)?;
+        Ok(SharedZoneListing {
+            zones: full.zone_ids,
+            walk: None,
+            sync_token: full.sync_token,
+            listed_at: now_ms,
+        })
     }
 
     /// `fetchSharedNoteRecords`: every shared zone's records, bodies backfilled
     /// through `records/lookup`. `since_sync_tokens` is keyed by owner
     /// recordName. ZONE_NOT_FOUND and still-missing bodies skip the zone;
-    /// any other zone-level error is fatal.
+    /// any other zone-level error is fatal. Lists the shared zones from
+    /// scratch; see [`Database::fetch_shared_note_records_since`].
     pub fn fetch_shared_note_records(
         &self,
         since_sync_tokens: &IndexMap<String, String>,
         on_page: &mut dyn FnMut(usize),
     ) -> Result<SharedNoteRecords, CkError> {
-        let zone_ids = self.fetch_shared_zone_ids()?;
+        self.fetch_shared_note_records_since(since_sync_tokens, None, 0, on_page)
+    }
+
+    /// [`Database::fetch_shared_note_records`], walking only the zones the
+    /// shared database reports changed since `cursor` (see
+    /// `list_shared_zones`). The returned cursor advances only when no zone
+    /// was skipped: otherwise it keeps the old token (or none), so the next
+    /// listing reports the skipped zone again and it is retried.
+    pub fn fetch_shared_note_records_since(
+        &self,
+        since_sync_tokens: &IndexMap<String, String>,
+        cursor: Option<&SharedDatabaseCursor>,
+        now_ms: i64,
+        on_page: &mut dyn FnMut(usize),
+    ) -> Result<SharedNoteRecords, CkError> {
+        let listing = self.list_shared_zones(since_sync_tokens, cursor, now_ms)?;
         let mut result = SharedNoteRecords::default();
-        for zone_id in zone_ids {
-            let since = truthy(zone_id.owner_record_name.as_deref())
-                .and_then(|owner| since_sync_tokens.get(owner))
-                .map(String::as_str);
+        for zone_id in listing.zones.iter().cloned() {
+            let since = stored_zone_token(since_sync_tokens, &zone_id);
+            if listing.walk.as_ref().is_some_and(|walk| !walk.contains(&zone_id)) {
+                result.zones.push(SharedZoneChanges {
+                    zone_id,
+                    records: Vec::new(),
+                    sync_token: since.map(str::to_owned),
+                    resynced_from_scratch: false,
+                });
+                continue;
+            }
             let fetched = match self.fetch_zone_note_records(DatabaseScope::Shared, &zone_id, since, on_page) {
                 Ok(fetched) => fetched,
                 Err(CkError::ZoneFetchFailed { server_error_code, .. }) if server_error_code == "ZONE_NOT_FOUND" => {
@@ -293,6 +391,19 @@ impl<T: Transport> Database<T> {
                 resynced_from_scratch,
             });
         }
+        result.cursor = if result.skipped_zones.is_empty() {
+            listing.sync_token.map(|sync_token| SharedDatabaseCursor {
+                sync_token,
+                zones: listing.zones,
+                listed_at: listing.listed_at,
+            })
+        } else {
+            cursor.map(|previous| SharedDatabaseCursor {
+                sync_token: previous.sync_token.clone(),
+                zones: listing.zones,
+                listed_at: previous.listed_at,
+            })
+        };
         Ok(result)
     }
 
@@ -437,22 +548,12 @@ impl<T: Transport> Database<T> {
     /// `RequestFailed("Attachment download failed: HTTP {status}")`. Returns
     /// the byte count.
     pub fn fetch_asset(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
-        match self.transport.download(url, dest) {
-            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
-                "Attachment download failed: HTTP {status}"
-            ))),
-            other => other,
-        }
+        self.transport.download(url, dest).map_err(asset_error)
     }
 
     /// `fetchAssetBytes`: [`Database::fetch_asset`] into memory.
     fn fetch_asset_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
-        match self.transport.download_bytes(url) {
-            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
-                "Attachment download failed: HTTP {status}"
-            ))),
-            other => other,
-        }
+        self.transport.download_bytes(url).map_err(asset_error)
     }
 
     /// `inlineAssetBodies` (upstream PR #29): moves a very large note's text
@@ -493,6 +594,165 @@ impl<T: Transport> Database<T> {
             );
         }
         Ok(())
+    }
+}
+
+/// The shared zones to fetch this run (`list_shared_zones`).
+struct SharedZoneListing {
+    /// Every live zone, in a stable order.
+    zones: Vec<ZoneId>,
+    /// The zones to walk; `None` = all of them.
+    walk: Option<std::collections::HashSet<ZoneId>>,
+    sync_token: Option<String>,
+    listed_at: i64,
+}
+
+/// The stored `changes/zone` sync token of a shared zone (keyed by owner).
+fn stored_zone_token<'a>(since_sync_tokens: &'a IndexMap<String, String>, zone_id: &ZoneId) -> Option<&'a str> {
+    truthy(zone_id.owner_record_name.as_deref())
+        .and_then(|owner| since_sync_tokens.get(owner))
+        .and_then(|t| truthy(Some(t)))
+}
+
+/// A failed asset GET: non-2xx is `RequestFailed("Attachment download
+/// failed: HTTP {status}")`.
+fn asset_error(e: CkError) -> CkError {
+    match e {
+        CkError::Http { status, .. } => CkError::RequestFailed(format!("Attachment download failed: HTTP {status}")),
+        other => other,
+    }
+}
+
+/// How many attachment downloads a [`DownloadQueue`] keeps in flight when
+/// the transport lets them overlap.
+pub const DOWNLOAD_WORKERS: usize = 4;
+
+/// Attachment downloads queued while a pull or clone goes through its notes.
+/// Over a transport with a [`Transport::shared_downloader`] they run on
+/// [`DOWNLOAD_WORKERS`] background threads; otherwise each runs when queued,
+/// in order. A destination already queued is not fetched again (it is the
+/// same attachment file). [`DownloadQueue::push`] reports a background
+/// failure as soon as it is known, so a run stops at the next attachment much
+/// as it did when every download ran in line; [`DownloadQueue::finish`]
+/// waits for the rest. Dropping the queue waits for the downloads in flight
+/// and starts no more.
+pub struct DownloadQueue<'a, T: Transport> {
+    db: &'a Database<T>,
+    queued: std::collections::HashSet<PathBuf>,
+    pool: Option<DownloadPool>,
+}
+
+struct DownloadPool {
+    jobs: Option<std::sync::mpsc::Sender<(usize, String, PathBuf)>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+    /// (queue position, error), every failure so far.
+    errors: std::sync::Arc<std::sync::Mutex<Vec<(usize, CkError)>>>,
+    next: usize,
+}
+
+impl<'a, T: Transport> DownloadQueue<'a, T> {
+    pub fn new(db: &'a Database<T>) -> Self {
+        let pool = db.transport.shared_downloader().map(|download| {
+            let (jobs, receiver) = std::sync::mpsc::channel::<(usize, String, PathBuf)>();
+            let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+            let errors: std::sync::Arc<std::sync::Mutex<Vec<(usize, CkError)>>> = Default::default();
+            let workers = (0..DOWNLOAD_WORKERS)
+                .map(|_| {
+                    let (receiver, errors, download) = (receiver.clone(), errors.clone(), download.clone());
+                    std::thread::spawn(move || {
+                        loop {
+                            let job = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                            let Ok((i, url, dest)) = job else { break };
+                            let mut errors_now = errors.lock().unwrap_or_else(|e| e.into_inner());
+                            if !errors_now.is_empty() {
+                                continue;
+                            }
+                            drop(errors_now);
+                            if let Err(e) = download(&url, &dest) {
+                                errors_now = errors.lock().unwrap_or_else(|e| e.into_inner());
+                                errors_now.push((i, asset_error(e)));
+                            }
+                        }
+                    })
+                })
+                .collect();
+            DownloadPool {
+                jobs: Some(jobs),
+                workers,
+                errors,
+                next: 0,
+            }
+        });
+        DownloadQueue {
+            db,
+            queued: std::collections::HashSet::new(),
+            pool,
+        }
+    }
+
+    /// Queues `url` into `dest`. `Err`: this download (in line) or an
+    /// earlier one (in the background) failed.
+    pub fn push(&mut self, url: String, dest: PathBuf) -> Result<(), CkError> {
+        if !self.queued.insert(dest.clone()) {
+            return Ok(());
+        }
+        let Some(pool) = &mut self.pool else {
+            return self.db.fetch_asset(&url, &dest).map(drop);
+        };
+        if let Some(e) = pool.take_error() {
+            return Err(e);
+        }
+        let job = (pool.next, url, dest);
+        pool.next += 1;
+        if let Some(jobs) = &pool.jobs {
+            // The workers only go away after `jobs` is closed.
+            let _ = jobs.send(job);
+        }
+        Ok(())
+    }
+
+    /// Waits for every queued download; the earliest failure, if any.
+    pub fn finish(mut self) -> Result<(), CkError> {
+        match &mut self.pool {
+            None => Ok(()),
+            Some(pool) => {
+                pool.join();
+                pool.take_error().map_or(Ok(()), Err)
+            }
+        }
+    }
+}
+
+impl DownloadPool {
+    fn join(&mut self) {
+        self.jobs = None;
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+
+    /// The failure earliest in queue order, if any. The workers start no
+    /// further download either way once one has failed.
+    fn take_error(&mut self) -> Option<CkError> {
+        let mut errors = self.errors.lock().unwrap_or_else(|e| e.into_inner());
+        errors.sort_by_key(|(i, _)| *i);
+        let first = (!errors.is_empty()).then(|| errors.remove(0).1);
+        if first.is_some() {
+            errors.push(stop_marker());
+        }
+        first
+    }
+}
+
+/// Recorded as an error so the workers start nothing more; never reported.
+fn stop_marker() -> (usize, CkError) {
+    (usize::MAX, CkError::Other("download queue stopped".into()))
+}
+
+impl Drop for DownloadPool {
+    fn drop(&mut self) {
+        self.errors.lock().unwrap_or_else(|e| e.into_inner()).push(stop_marker());
+        self.join();
     }
 }
 
@@ -729,6 +989,7 @@ pub fn parse_shared_zone_list(body: &Value) -> Result<SharedZoneListPage, CkErro
         )
     })?;
     let mut zone_ids = Vec::new();
+    let mut deleted_zone_ids = Vec::new();
     for zone in zones {
         let zone_name = get(zone, "zoneID").and_then(|id| get_str(id, "zoneName"));
         let Some(zone_name) = zone_name else {
@@ -736,18 +997,21 @@ pub fn parse_shared_zone_list(body: &Value) -> Result<SharedZoneListPage, CkErro
                 "Unexpected zone shape in shared changes/database response".into(),
             ));
         };
-        if get(zone, "deleted") == Some(&Value::Bool(true)) {
-            continue;
-        }
-        zone_ids.push(ZoneId {
+        let zone_id = ZoneId {
             zone_name: zone_name.to_owned(),
             owner_record_name: get(zone, "zoneID")
                 .and_then(|id| get_str(id, "ownerRecordName"))
                 .map(str::to_owned),
-        });
+        };
+        if get(zone, "deleted") == Some(&Value::Bool(true)) || get(zone, "purged") == Some(&Value::Bool(true)) {
+            deleted_zone_ids.push(zone_id);
+        } else {
+            zone_ids.push(zone_id);
+        }
     }
     Ok(SharedZoneListPage {
         zone_ids,
+        deleted_zone_ids,
         more_coming: get(body, "moreComing") == Some(&Value::Bool(true)),
         sync_token: get_str(body, "syncToken").map(str::to_owned),
     })

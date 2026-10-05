@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "private Notes zone: nothing changed since the asset clone",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/changes/zone"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [
+            {
+              "zoneID": {
+                "zoneName": "Notes",
+                "ownerRecordName": "_defaultOwner",
+                "zoneType": "REGULAR_CUSTOM_ZONE"
+              },
+              "moreComing": false,
+              "syncToken": "AQAAAAAAAAAD",
+              "records": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "note": "shared changes/database from the stored token: no zone changed",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/shared/changes/database",
+        "body": {
+          "syncToken": "AQAAAAAAAAAS"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [],
+          "moreComing": false,
+          "syncToken": "AQAAAAAAAAAU"
+        }
+      }
+    }
+  ]
+}

@@ -205,6 +205,50 @@
       "cassette": "tiny-pull-noop.json",
       "vaultFrom": "tiny-clone",
       "args": ["--json", "sync", "@VAULT@"]
+    },
+    {
+      "name": "attach-clone",
+      "cassette": "attach-clone.json",
+      "args": ["--json", "clone", "--account", "10000000001", "--non-interactive", "@VAULT@"]
+    },
+    {
+      "name": "attach-pull",
+      "cassette": "attach-pull.json",
+      "vaultFrom": "tiny-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "shared-pull-unchanged",
+      "cassette": "shared-pull-unchanged.json",
+      "vaultFrom": "asset-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "shared-pull-revoked",
+      "cassette": "shared-pull-revoked.json",
+      "vaultFrom": "asset-clone",
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "shared-pull-token-rejected",
+      "cassette": "shared-full-listing.json",
+      "vaultFrom": "asset-clone",
+      "now": 1790000600000,
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "shared-pull-old-state",
+      "cassette": "shared-full-listing.json",
+      "vaultFrom": "asset-clone",
+      "edits": [{ "file": ".icloud-md/state.json", "json": { "sharedDatabase": null } }],
+      "args": ["--json", "pull", "@VAULT@"]
+    },
+    {
+      "name": "shared-pull-stale-cursor",
+      "cassette": "shared-full-listing.json",
+      "vaultFrom": "asset-clone",
+      "now": 1790090000000,
+      "args": ["--json", "pull", "@VAULT@"]
     }
   ]
 }

@@ -180,14 +180,37 @@ pub enum SkippedSharedZone {
 /// `SharedNoteRecordsResult`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SharedNoteRecords {
+    /// Every shared zone this account has, in the cursor's order. A zone the
+    /// shared database reported unchanged since the cursor is here with no
+    /// records and its stored sync token, as an incremental `changes/zone`
+    /// walk of it would have come back.
     pub zones: Vec<SharedZoneChanges>,
     pub skipped_zones: Vec<SkippedSharedZone>,
+    /// Where the next fetch's `changes/database` listing resumes; `None`
+    /// lists every zone from scratch next time.
+    pub cursor: Option<SharedDatabaseCursor>,
+}
+
+/// Where the shared `changes/database` listing left off (state.json
+/// `sharedDatabase`): its sync token and the shared zones known as of that
+/// token, so a pull walks only the zones changed since and still knows the
+/// rest are there (and which have gone).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedDatabaseCursor {
+    pub sync_token: String,
+    pub zones: Vec<ZoneId>,
+    /// ms epoch of the last listing from scratch.
+    pub listed_at: i64,
 }
 
 /// `SharedZoneListPage`: one page of a shared `changes/database` listing.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SharedZoneListPage {
     pub zone_ids: Vec<ZoneId>,
+    /// Zones the listing marks `deleted` or `purged` (an incremental
+    /// listing's way of saying a share went away).
+    pub deleted_zone_ids: Vec<ZoneId>,
     pub more_coming: bool,
     pub sync_token: Option<String>,
 }

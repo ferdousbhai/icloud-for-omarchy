@@ -8,6 +8,11 @@
   },
   "syncToken": "AQAAAAAAAAAB",
   "sharedZoneSyncTokens": {},
+  "sharedDatabase": {
+    "syncToken": "AQAAAAAAAAAC",
+    "zones": [],
+    "listedAt": 1790000000000
+  },
   "replicaId": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "notes": {},
   "folders": {

@@ -1,0 +1,471 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "private Notes zone, one page: the default folder, the tiny note, and the two attachment notes of attach-pull",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/changes/zone"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [
+            {
+              "zoneID": {
+                "zoneName": "Notes",
+                "ownerRecordName": "_defaultOwner",
+                "zoneType": "REGULAR_CUSTOM_ZONE"
+              },
+              "moreComing": false,
+              "syncToken": "AQAAAAAAAAAB",
+              "records": [
+                {
+                  "recordName": "DefaultFolder-CloudKit",
+                  "recordType": "Folder",
+                  "fields": {
+                    "TitleEncrypted": {
+                      "value": "Tm90ZXM=",
+                      "type": "ENCRYPTED_BYTES"
+                    }
+                  },
+                  "pluginFields": {},
+                  "recordChangeTag": "1a",
+                  "created": {
+                    "timestamp": 1752500000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "modified": {
+                    "timestamp": 1752500000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "deleted": false
+                },
+                {
+                  "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+                  "recordType": "Note",
+                  "fields": {
+                    "TitleEncrypted": {
+                      "value": "VGVzdCBOb3Rl",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "SnippetEncrypted": {
+                      "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "CreationDate": {
+                      "value": 1752563940000,
+                      "type": "TIMESTAMP"
+                    },
+                    "ModificationDate": {
+                      "value": 1752564000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "Deleted": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Folder": {
+                      "value": {
+                        "recordName": "DefaultFolder-CloudKit",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes",
+                          "ownerRecordName": "_defaultOwner"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "Folders": {
+                      "value": [
+                        {
+                          "recordName": "DefaultFolder-CloudKit",
+                          "action": "VALIDATE",
+                          "zoneID": {
+                            "zoneName": "Notes",
+                            "ownerRecordName": "_defaultOwner"
+                          }
+                        }
+                      ],
+                      "type": "REFERENCE_LIST"
+                    },
+                    "TextDataEncrypted": {
+                      "value": "eJzjYBA6wMTBIMAgtZNJyD0ktbhEwS+/JJUrJCOzWAGIEhVKQGJ5QDGF0uLUFIW0/CKwUGZeukJ+aYlCQmZyTn5pii5IRbFucWVecgKXlAAXC8hMoKlgWoMRLMIIFOGWAtMaTFARcQEdqAgzVMRVgAMqwgIVCRZghIqwQkV8BdigImxSQmARZwEmiIgCowY7VIwbZhtQjAOqUwxuFqeUGBcH0HX/gYAf6FI4W0mGS4pLYFegMuu3GeHWniE5925+eFEkxMQRAsSMWhwcXEIgX7EAWbZAFrMACwANjjft",
+                      "type": "ENCRYPTED_BYTES"
+                    }
+                  },
+                  "pluginFields": {},
+                  "recordChangeTag": "25q",
+                  "created": {
+                    "timestamp": 1752563940000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "modified": {
+                    "timestamp": 1752564000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "deleted": false,
+                  "parent": {
+                    "recordName": "DefaultFolder-CloudKit"
+                  }
+                },
+                {
+                  "recordName": "a1b2c3d4-0000-4000-8000-00000000a0d1",
+                  "recordType": "Note",
+                  "fields": {
+                    "TitleEncrypted": {
+                      "value": "Q2FsbCBub3Rlcw==",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "SnippetEncrypted": {
+                      "value": "Q2FsbCBub3Rlcw==",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "CreationDate": {
+                      "value": 1752800000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "ModificationDate": {
+                      "value": 1752800000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "Deleted": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Folder": {
+                      "value": {
+                        "recordName": "DefaultFolder-CloudKit",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes",
+                          "ownerRecordName": "_defaultOwner"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "Folders": {
+                      "value": [
+                        {
+                          "recordName": "DefaultFolder-CloudKit",
+                          "action": "VALIDATE",
+                          "zoneID": {
+                            "zoneName": "Notes",
+                            "ownerRecordName": "_defaultOwner"
+                          }
+                        }
+                      ],
+                      "type": "REFERENCE_LIST"
+                    },
+                    "TextDataEncrypted": {
+                      "value": "H4sIAAAAAAAAE+NgEPrMyMEgwCD1hlFI2jkxJ0ehPLMkQ8ErMS8zOVXBNSc7M6+Y6/3+PVICXCwgdUCVYFqDESzCCBSRlALTGkxSYlwcQLn/QMAPVAdnK8lwSXEJJPhc2rlRw0G3ods/UnqB/1chJg5JIGbUkuOQEBLhYPASmH4r88mnYucbq8RWvT250oY/Y8XpVSfYtII5GIWEvAR2M+dLZK9xldxU0u6seOnrhiRrLhVzF0c3F0czN10TR2cTXRNDFwtdS0tTC10DE0tjc2MnCwMLIxMh4eT8XL3EgoKcVL1ck0TdxNKUzHwAzdJGOPgAAAA=",
+                      "type": "ENCRYPTED_BYTES"
+                    }
+                  },
+                  "pluginFields": {},
+                  "recordChangeTag": "30a",
+                  "created": {
+                    "timestamp": 1752800000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "modified": {
+                    "timestamp": 1752800000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "deleted": false,
+                  "parent": {
+                    "recordName": "DefaultFolder-CloudKit"
+                  }
+                },
+                {
+                  "recordName": "a1b2c3d4-0000-4000-8000-00000000196e",
+                  "recordType": "Note",
+                  "fields": {
+                    "TitleEncrypted": {
+                      "value": "UGhvdG8=",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "SnippetEncrypted": {
+                      "value": "UGhvdG8=",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "CreationDate": {
+                      "value": 1752800060000,
+                      "type": "TIMESTAMP"
+                    },
+                    "ModificationDate": {
+                      "value": 1752800060000,
+                      "type": "TIMESTAMP"
+                    },
+                    "Deleted": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Folder": {
+                      "value": {
+                        "recordName": "DefaultFolder-CloudKit",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes",
+                          "ownerRecordName": "_defaultOwner"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "Folders": {
+                      "value": [
+                        {
+                          "recordName": "DefaultFolder-CloudKit",
+                          "action": "VALIDATE",
+                          "zoneID": {
+                            "zoneName": "Notes",
+                            "ownerRecordName": "_defaultOwner"
+                          }
+                        }
+                      ],
+                      "type": "REFERENCE_LIST"
+                    },
+                    "TextDataEncrypted": {
+                      "value": "H4sIAAAAAAAAE23STWgTQRQH8GzSNJupNZNNmrabCENRWQIbQkybopd+2IBFDEoR6sWYZGvSxmzY7LZdP2oRoQehogeh4qGCFoWCH6AglHoRpQoitRRPPYgnlfZQetKiL9tn8NBllxl+M++/j2F4m/DDxduoTfzmEswBpaKzE6qukIF8ocLgPcf0qpXA2JCqMaOisLGCnmfpQraoGjm5ulKRK2Ypm2a6ykYVrTBkMj2vME01SjlZ1wplNqZqIxWWVTVNyepFM0JIj6KUWUZVy4RsvF4gIiV11S6gD2uUOEs4kA7RGiU7SoJyKA6UI7QBpU4ULEnS0I4wTnKiKdRZs3qr0gHpQdEaJRdmDdeyeKzLULslbqhzo+X+9QBG0DpxHw/WgHb4v3170Dpq/TdKHuuvdVSnBMxO3dJeS5zQGYcSQtFrQq0kJzVQgpDuRRtFE8EEtDG0VjAf2jhaC5gfzURrBmtCu4gWAAugXUJrAmtGu4zmB2tBu4LmA2tFm0ATwES0q2hesKDoJU6YT3LWcdppCA4gQHi4FH/g8cAFqc3bpjkiEnrgVOPgy+171+0Hj009plvdgp034CMkSGj6+PKrZ1KXPHkjNRicTW0JDv4aB4v7qoV3cm2f1+bNpffvfv1cWHSs1gph7e6o2+g64/N8XR3vebv0fA58Aj6uGvqkeGv8xf1+89PM90cfNn+vQOhkNdQdbuGJ4Odt/ZStrc/NzKYuTD/c2P4YcLvCAX5EEPrp081e282VVOT22fUHoanTzvBJntvNM4fI/kTf0c5oLBGX4/FoVI73RmNyZ6KvW062x2PJaHtHMhmNCQ1lI1MsZCPDZeV8/s38l+X6cGj3yJ3Vvzm/RsfwAwAA",
+                      "type": "ENCRYPTED_BYTES"
+                    }
+                  },
+                  "pluginFields": {},
+                  "recordChangeTag": "30b",
+                  "created": {
+                    "timestamp": 1752800060000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "modified": {
+                    "timestamp": 1752800060000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "deleted": false,
+                  "parent": {
+                    "recordName": "DefaultFolder-CloudKit"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "note": "no zones shared with this account",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/shared/changes/database"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [],
+          "moreComing": false,
+          "syncToken": "AQAAAAAAAAAC"
+        }
+      }
+    },
+    {
+      "note": "records/lookup, any batch: answers every Attachment and Media record in play (extras are ignored), so the per-note lookups of earlier versions replay as well as the batched ones",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/records/lookup"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "records": [
+            {
+              "recordName": "7DAFDA6F-4AC4-41D8-9958-049373B80824",
+              "recordType": "Attachment",
+              "fields": {
+                "UTI": {
+                  "value": "com.apple.m4a-audio",
+                  "type": "STRING"
+                },
+                "Media": {
+                  "value": {
+                    "recordName": "0B8509A3-A5FC-470B-A777-03BFFFDFB5F9",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                },
+                "Note": {
+                  "value": {
+                    "recordName": "a1b2c3d4-0000-4000-8000-00000000a0d1",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "31a",
+              "created": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false
+            },
+            {
+              "recordName": "7ED80274-4400-4C02-87EA-F542F056FF02",
+              "recordType": "Attachment",
+              "fields": {
+                "UTI": {
+                  "value": "public.jpeg",
+                  "type": "STRING"
+                },
+                "Media": {
+                  "value": {
+                    "recordName": "066C8A2E-796F-403F-AD75-A5267CBD0E18",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                },
+                "Note": {
+                  "value": {
+                    "recordName": "a1b2c3d4-0000-4000-8000-00000000196e",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  },
+                  "type": "REFERENCE"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "31b",
+              "created": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false
+            },
+            {
+              "recordName": "0B8509A3-A5FC-470B-A777-03BFFFDFB5F9",
+              "recordType": "Media",
+              "fields": {
+                "Asset": {
+                  "value": {
+                    "fileChecksum": "AUMraefNsgNffHQpfB8oQFo5P51-",
+                    "size": 11,
+                    "downloadURL": "https://cvws.icloud-content.com/B/audio-asset"
+                  },
+                  "type": "ASSETID"
+                },
+                "FilenameEncrypted": {
+                  "value": "Q2FsbCB3aXRoIEphbmljZSBFbGtpbnMubTRh",
+                  "type": "ENCRYPTED_BYTES"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "32a",
+              "created": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false
+            },
+            {
+              "recordName": "066C8A2E-796F-403F-AD75-A5267CBD0E18",
+              "recordType": "Media",
+              "fields": {
+                "Asset": {
+                  "value": {
+                    "fileChecksum": "ARKf/Vy+irL9d80LorfL6M0D7FG5",
+                    "size": 11,
+                    "downloadURL": "https://cvws.icloud-content.com/B/image-asset"
+                  },
+                  "type": "ASSETID"
+                },
+                "FilenameEncrypted": {
+                  "value": "XzcxMzAwOTMuanBlZw==",
+                  "type": "ENCRYPTED_BYTES"
+                }
+              },
+              "pluginFields": {},
+              "recordChangeTag": "32b",
+              "created": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "modified": {
+                "timestamp": 1752800000000,
+                "userRecordName": "_defaultOwner",
+                "deviceID": "2"
+              },
+              "deleted": false
+            }
+          ]
+        }
+      },
+      "repeat": true
+    },
+    {
+      "note": "the recording's bytes",
+      "request": {
+        "method": "GET",
+        "url": "https://cvws.icloud-content.com/B/audio-asset"
+      },
+      "response": {
+        "status": 200,
+        "bodyBase64": "YXVkaW8gYnl0ZXM="
+      }
+    },
+    {
+      "note": "the photo's bytes",
+      "request": {
+        "method": "GET",
+        "url": "https://cvws.icloud-content.com/B/image-asset"
+      },
+      "response": {
+        "status": 200,
+        "bodyBase64": "anBlZyAgYnl0ZXM="
+      }
+    }
+  ]
+}

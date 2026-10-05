@@ -70,7 +70,9 @@
         "ckjsBuildVersion": "2310ProjectDev27",
         "ckjsVersion": "2.6.4"
       },
-      "body": {},
+      "body": {
+        "syncToken": "AQAAAAAAAAAC"
+      },
       "matched": 1
     },
     {

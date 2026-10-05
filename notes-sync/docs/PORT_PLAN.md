@@ -253,3 +253,97 @@ token kept and a warning (lookup still without text). For clone,
 `syncToken` and a warning. tests/cmd_clone.rs covers the clone followed
 by a pull that walks from scratch and adds the note, and a shared zone still
 without text.
+
+### Note documents compressed with flate2 (not byte-identical to 0.6.2)
+
+0.6.2 sends `zlib.deflateSync(raw)` (Node's bundled Chromium zlib), and the
+port first carried a hand port of that compressor to match it byte for byte.
+`doc::text::compress_note_document` now uses flate2 (the zlib-rs backend):
+still a zlib stream (RFC 1950 header, not gzip), at the default level 6. For
+some inputs its bytes can differ from Node's, which CloudKit doesn't care
+about: Apple accepts any valid zlib or gzip stream, and the decoder reads
+both. Every request body the recorded scenarios send came out unchanged.
+
+Tests: tests/doc_deflate.rs (round trips over every real fixture and a
+synthetic corpus; the container is zlib).
+
+### Attachments: one lookup per zone, downloads overlapped (not in 0.6.2)
+
+0.6.2 resolves a note's embeds when it reaches the note: one
+`records/lookup` for its Attachment records, a second for their Media
+records, then each file downloaded in turn (icloud-session fsyncs every
+one). A pull or clone delivering N notes with attachments sent 2N lookups.
+The port (`vault::attachments::AttachmentRecords`,
+`cloudkit::client::DownloadQueue`):
+
+- Before the notes are applied, `AttachmentRecords::prefetch` decodes the
+  embeds of every note the run will apply (pull skips the ones already at
+  their change tag, as its loop does) and looks up all of a zone's
+  Attachment records in one `records/lookup` walk, then all their Media
+  records in a second: two walks of up to 200 names a request per zone. A
+  name is asked for once; one the prefetch missed is looked up when its
+  note needs it.
+- Downloads go through a `DownloadQueue`. Over the live transport (one
+  icloud-session `Session`, whose ureq agent is shared behind an `Arc`) they
+  run on 4 background threads while the notes are processed; a failure
+  surfaces at the next queued download, and the queue is drained (its first
+  failure returned) before pull moves or removes any attachment file and
+  before state is written. A destination already queued is fetched once.
+  Over a transport without `Transport::shared_downloader` (the recorded
+  scenarios' `ReplayTransport`, the test mocks) each download runs when
+  queued, in order, so request logs stay deterministic.
+
+File names, link paths and state entries are computed exactly as before,
+in the same order. Recorded: `attach-clone` and `attach-pull` (two notes,
+one file attachment each) send 2 lookups instead of 4.
+
+Tests: tests/cli_differential.rs `attach_*`, tests/cloudkit_downloads.rs.
+
+### Shared zones: the shared-database listing resumes (not in 0.6.2)
+
+0.6.2 lists the shared database from scratch (`changes/database` with no
+`syncToken`) on every pull and walks every shared zone (`changes/zone` from
+its stored token). The port stores where the listing left off in a new
+optional state.json key, `sharedDatabase`:
+`{syncToken, zones: [{zoneName, ownerRecordName}], listedAt}` (`listedAt`:
+ms of the last listing from scratch). `Database::fetch_shared_note_records_since`:
+
+- With a cursor less than a day old (`SHARED_FULL_LISTING_INTERVAL_MS`),
+  `changes/database` resumes from its token. Zones it lists are walked;
+  zones it marks `deleted` or `purged` leave the known list; the cursor's
+  other zones are unchanged since the token and are not walked (unless no
+  zone sync token is stored for one, which is walked from scratch). An
+  unchanged zone is still returned, with no records and its stored token -
+  what an incremental walk of it would have come back with - so pull keeps
+  its token, its sharer home and folders, and counts it live: a tracked
+  note is untracked as no longer shared only when its zone is gone from
+  the listing, as before.
+- The cursor is listed before any zone is walked, so a zone that changes
+  after its token was taken is reported by the next listing.
+- A skipped zone (ZONE_NOT_FOUND, or notes still without text) keeps the
+  cursor at its previous token (none after a first listing), so the next
+  listing reports that zone again and it is retried; the zone list is
+  updated.
+- From scratch, as 0.6.2: when there is no cursor (older vaults, `clone`'s
+  first listing; a malformed `sharedDatabase` reads as none), when it is a
+  day old, and when the incremental request fails with an HTTP error or an
+  answer without a `zones` array (an expired or unknown token).
+
+CloudKit's documentation doesn't spell out how an incremental shared
+listing reports a share the owner stopped (it should be a `deleted` or
+`purged` zone, as in CloudKit's native API). Hence the daily listing from
+scratch: a revocation an incremental listing missed is caught within a day,
+and until then the zone's notes simply stay tracked (its `changes/zone`, if
+it is walked, answers ZONE_NOT_FOUND, which was already handled). icloud-md
+ignores `sharedDatabase` when it reads the vault and drops it when it
+writes one; the next pull then lists from scratch.
+
+Recorded: `shared-pull-unchanged` (resumed, nothing changed: no shared
+`changes/zone` at all), `shared-pull-revoked` (the zone reported deleted:
+its note untracked), `shared-pull-token-rejected`, `shared-pull-old-state`
+and `shared-pull-stale-cursor` (from scratch). Every pull scenario now sends
+the stored token.
+
+Tests: tests/cli_differential.rs `shared_pull_*`,
+tests/cloudkit_shared_zones.rs (changed, token-less and deleted zones, a
+skipped zone holding the cursor), tests/vault_state.rs.
