@@ -14,7 +14,7 @@ arch=('x86_64')
 url='https://github.com/ferdousbhai/icloud-for-omarchy'
 license=('MIT')
 options=('!debug' '!lto')
-depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme')
+depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme' 'sqlite')
 makedepends=('rust' 'cargo' 'git')
 
 # The version is this package's newest tag, photos-v<version>: photos-v0.1.0
