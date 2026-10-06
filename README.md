@@ -3,6 +3,25 @@
 iCloud apps for [Omarchy](https://omarchy.org) (and any Arch Linux), sharing
 one Apple sign-in, published as one signed pacman repository.
 
+- **Notes**: your Apple Notes as a folder of Markdown files, synced both
+  ways. Edit, rename, move or delete them in the app, in Neovim or Obsidian,
+  or with `mv` and `rm`, and iCloud follows.
+- **Photos**: browse, download, upload and delete your iCloud Photos.
+- **Find My**: your devices on a map, with play sound, Lost Mode and a
+  location trail.
+- Every window action also works from the terminal, with `--json` output
+  for scripts and AI agents.
+
+```bash
+curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
+```
+
+![Notes](docs/screenshots/notes.png)
+![Find My](docs/screenshots/findmy.webp)
+![Photos](docs/screenshots/photos.webp)
+
+<sub>Screenshots use demo data.</sub>
+
 | Directory | Package | What it is |
 |---|---|---|
 | [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app and the `icloud-notes` command, synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
@@ -30,6 +49,24 @@ share `--json` output, one JSON error shape and one table of exit codes.
 
 Signing in is the one thing a person must do: Apple's page (password, 2FA)
 opens in a window from `icloud-session sign-in`.
+
+## Is this safe?
+
+- **You sign in on Apple's own page**, password and two-factor code
+  included, in a window opened by `icloud-session sign-in`. The apps never
+  see your password.
+- **What's kept** is the session cookies, in
+  `~/.local/state/icloud-session/account.json`, readable only by you.
+- **Your password is stored only if you choose to**, for Find My, which asks
+  for it again from time to time: `icloud-session set-password` puts it in
+  your system keyring (the Secret Service, e.g. GNOME Keyring), and
+  `icloud-session forget-password` removes it.
+- **The apps talk only to Apple**, plus OpenStreetMap for Find My's map
+  tiles.
+- **Notes deletes are recoverable**: a note you delete goes to Recently
+  Deleted in iCloud (about 30 days).
+- **It's all open source**, and the packages are signed with a key whose
+  fingerprint is pinned in [install.sh](install.sh).
 
 ## Install
 
