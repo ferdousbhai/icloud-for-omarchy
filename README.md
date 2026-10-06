@@ -89,6 +89,34 @@ with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 `omarchy refresh pacman`, and installs the packages in one `pacman -Syu`.
 Re-running it is safe. Updates then arrive with `omarchy update`.
 
+### Install by hand
+
+Rather not pipe a script into `sudo bash`? These are the same steps, one
+at a time:
+
+```bash
+# 1. Download the package-signing key and check its fingerprint is
+#    35C47A06567940B6796B4D0F9B3C7BDF85268B31
+curl -fsSLO https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/icloud-for-omarchy-signing-key.asc
+gpg --show-keys icloud-for-omarchy-signing-key.asc
+
+# 2. Let pacman trust it
+sudo pacman-key --add icloud-for-omarchy-signing-key.asc
+sudo pacman-key --lsign-key 35C47A06567940B6796B4D0F9B3C7BDF85268B31
+
+# 3. Add the signed repository
+printf '[icloud-for-omarchy]\nSigLevel = Required DatabaseRequired\nServer = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download\n' \
+  | sudo tee /etc/pacman.d/icloud-for-omarchy.conf
+echo 'Include = /etc/pacman.d/icloud-for-omarchy.conf' | sudo tee -a /etc/pacman.conf
+
+# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy)
+sudo pacman -Syu icloud-notes icloud-photos icloud-findmy
+```
+
+On Omarchy, `omarchy refresh pacman` rewrites `/etc/pacman.conf`; the
+script installs a hook that adds the `Include` line back, so by hand you
+would re-add it after a refresh.
+
 Machines set up from earlier Notes releases, which had a repository of
 their own (`[icloud-notes]`), are migrated: once `[icloud-for-omarchy]` is
 added, the script removes `/etc/pacman.d/icloud-notes.conf`, its `Include`
