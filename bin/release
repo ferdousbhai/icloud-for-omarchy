@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cut a release from this machine: bump and tag the named packages, build
-# them, carry every other package forward from the latest release, sign the
-# one [icloud-for-omarchy] pacman repository database with the local
+# all four on native CI runners, sign the architecture-specific
+# pacman repository databases with the local
 # package-signing key, and publish it all as one GitHub release. Users who
 # ran an installer get it through `omarchy update`.
 #
@@ -15,18 +15,11 @@
 # (notes-sync/) ships inside icloud-notes and is not released on its own;
 # the notes-sync-v* tags are from when it was a package.
 #
-# Only the named packages are built. The others are downloaded from the
-# latest release, their signatures checked against the pinned key, and
-# added to the new repository database unchanged, so it always lists all
-# four. The database is built afresh from them each time, so a package
-# dropped from this list (icloud-notes-sync, now inside icloud-notes)
-# leaves it, and pacman's replaces= swaps it out on the next update.
-#
-# The GitHub release hangs on the first tag named. Its assets are the
-# packages, the repository database, the signing key, install.sh and the
-# per-app installers (bin/make-installers). If icloud-session is released,
-# with PUBLISH_CRATE=1 its client crate also goes to crates.io once the
-# release is verified.
+# Native CI builds and tests every package for both architectures at the
+# release commit. bin/collect-packages checks provenance and metadata before
+# local signing. Two signed repository databases ship in one GitHub release.
+# Unnamed packages get their normal post-tag development version at HEAD.
+# Verification targets the exact tag; a failed check never deletes releases.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -53,11 +46,6 @@ for i in "${!pkgs[@]}"; do
   [[ ${versions[i]} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
   tags+=("$(tag_of "${pkgs[i]}" "${versions[i]}")")
 done
-carried=()
-for pkg in "${all[@]}"; do
-  [[ " ${pkgs[*]} " == *" $pkg "* ]] || carried+=("$pkg")
-done
-
 [[ -z $(git status --porcelain) ]] || { echo "Commit or stash your changes first." >&2; exit 1; }
 [[ $(git branch --show-current) == main ]] || { echo "Release from main." >&2; exit 1; }
 for tag in "${tags[@]}"; do
@@ -69,30 +57,6 @@ fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
 gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
   || { echo "The secret key $fingerprint pinned in install.sh is not in this keyring." >&2; exit 1; }
 export GPGKEY=$fingerprint
-
-# The packages not being released come from the latest release, checked
-# now, before anything is tagged: each must be there once and signed by
-# the pinned key.
-previous=$(mktemp -d)
-trap 'rm -rf "$previous"' EXIT
-if (( ${#carried[@]} )); then
-  gh release download --repo "$gh_repo" --dir "$previous" --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig'
-  for pkg in "${carried[@]}"; do
-    shopt -s nullglob
-    found=("$previous/$pkg"-[0-9]*.pkg.tar.zst)
-    shopt -u nullglob
-    (( ${#found[@]} == 1 )) || { echo "The latest release has ${#found[@]} $pkg packages, not one." >&2; exit 1; }
-    gpg --batch --status-fd 1 --verify "${found[0]}.sig" "${found[0]}" 2>/dev/null | grep -q "^\[GNUPG:\] VALIDSIG .*$fingerprint" \
-      || { echo "$(basename "${found[0]}") is not signed by $fingerprint; not releasing." >&2; exit 1; }
-    # An icloud-notes from before the sync engine moved into it depends on
-    # the icloud-notes-sync package, which the new database no longer lists.
-    if [[ $pkg == icloud-notes ]] && ! bsdtar -xOf "${found[0]}" .PKGINFO | grep -qx 'provides = icloud-notes-sync'; then
-      echo "The latest icloud-notes still needs the separate icloud-notes-sync package; release icloud-notes too." >&2
-      exit 1
-    fi
-    echo "Carrying forward $(basename "${found[0]}")"
-  done
-fi
 
 publish_crate=0
 session_version=''
@@ -107,7 +71,7 @@ if [[ ${PUBLISH_CRATE:-0} == 1 && -n $session_version ]] \
   publish_crate=1
 fi
 
-# No CI: the tests run here, before anything is tagged.
+# Local tests run before tags; native CI builds and tests both architectures.
 # shellcheck disable=SC2065,SC2266  # ./bin/test is a script, not test(1)
 ./bin/test >/dev/null 2>&1 || { ./bin/test 2>&1 | grep -E '^(FAIL|RESULT)|FAILED|panicked|^error' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
 # The crate is published last, after the release is verified; check now that
@@ -121,7 +85,6 @@ fi
 # packages. The client crate (session/) and the daemon (sessiond/) share one
 # version; the workspace's icloud-session dependency and the README's
 # dependency snippet pin it.
-start=$(git rev-parse HEAD)
 for i in "${!pkgs[@]}"; do
   pkg=${pkgs[i]} version=${versions[i]}
   sed -i "s/^pkgver=.*/pkgver=$version/" "packaging/$pkg/PKGBUILD"
@@ -143,65 +106,67 @@ for i in "${!pkgs[@]}"; do
   git tag -a "${tags[i]}" -m "${pkgs[i]} ${versions[i]}"
 done
 
-undo_tags() {
-  local tag
-  for tag in "${tags[@]}"; do git tag -d "$tag" >/dev/null 2>&1 || true; done
-  git reset -q --hard "$start"
-}
-
+# Push the candidate tags to trigger unsigned native CI builds. Failed builds
+# leave the candidate tags for inspection; no release has been published.
+release_tag=${tags[0]}
+source_commit=$(git rev-parse HEAD)
+git push -q origin "${tags[@]}"
+run_id=''
+for attempt in {1..60}; do
+  run_id=$(gh run list --repo "$gh_repo" --workflow packages.yml --event push \
+    --branch "$release_tag" --commit "$source_commit" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+  [[ -z $run_id ]] || break
+  sleep 10
+done
+[[ -n $run_id ]] || { echo "Native CI did not start; candidate tags remain for inspection." >&2; exit 1; }
+gh run watch "$run_id" --repo "$gh_repo" --exit-status \
+  || { echo "Native CI failed; no release was published. Inspect run $run_id." >&2; exit 1; }
+artifacts=$(mktemp -d)
+trap 'rm -rf "$artifacts"' EXIT
+gh run download "$run_id" --repo "$gh_repo" --dir "$artifacts"
 rm -rf dist
-mkdir dist
-# --nodeps: packages here depend on each other (icloud-notes on
-# icloud-session, ...), and those are built in this same run, not installed;
-# --syncdeps would try to install them with sudo. The build tools themselves
-# (rust, cargo, qt6) are this machine's, and a missing one fails the build.
-for pkg in "${pkgs[@]}"; do
-  (cd "packaging/$pkg" && PKGDEST="$PWD/../../dist" makepkg --force --nodeps --sign) \
-    || { echo "Building $pkg failed; not releasing." >&2; undo_tags; exit 1; }
+bin/collect-packages "$artifacts" "$source_commit" dist
+# Named packages must match the requested versions before any signatures.
+for i in "${!pkgs[@]}"; do
+  for arch in x86_64 aarch64; do
+    package="dist/${pkgs[i]}-${versions[i]}-1-$arch.pkg.tar.zst"
+    [[ -f $package ]] || { echo "Missing requested package: $package" >&2; exit 1; }
+  done
 done
-# makepkg writes each computed pkgver back into its PKGBUILD; keep the
-# committed ones.
-git checkout -q -- packaging
-for pkg in "${carried[@]}"; do
-  cp "$previous/$pkg"-[0-9]*.pkg.tar.zst "$previous/$pkg"-[0-9]*.pkg.tar.zst.sig dist/
+for package in dist/*.pkg.tar.zst; do
+  gpg --local-user "$fingerprint" --detach-sign --output "$package.sig" "$package"
+  gpg --verify "$package.sig" "$package"
 done
-
 (
   cd dist
-  repo-add --sign --verify "$repo.db.tar.gz" ./*.pkg.tar.zst
-  # repo-add leaves the names pacman asks for (icloud-for-omarchy.db, .files
-  # and their .sig) as symlinks, which a GitHub release cannot hold: copy them.
-  for name in db files; do
-    rm -f "$repo.$name" "$repo.$name.sig"
-    cp "$repo.$name.tar.gz" "$repo.$name"
-    cp "$repo.$name.tar.gz.sig" "$repo.$name.sig"
+  for arch in x86_64 aarch64; do
+    name=$repo
+    [[ $arch == x86_64 ]] || name+=-aarch64
+    repo-add --sign --verify "$name.db.tar.gz" ./*-"$arch.pkg.tar.zst"
+    for suffix in db files; do
+      rm -f "$name.$suffix" "$name.$suffix.sig"
+      cp "$name.$suffix.tar.gz" "$name.$suffix"
+      cp "$name.$suffix.tar.gz.sig" "$name.$suffix.sig"
+    done
+    gpg --batch --armor --export "$fingerprint" >"$name-signing-key.asc"
   done
-  gpg --batch --armor --export "$fingerprint" >"$repo-signing-key.asc"
-  # The installers ship with the release they were verified against; the
-  # ferdousbhai.com/icloud-<app>/install.sh one-liners redirect to install-<app>.sh.
   cp ../install.sh install.sh
 )
 bin/make-installers dist
 
-# Only the tags go out now (they carry the "Release" commit); main moves
-# once the release is verified, so a rollback leaves origin/main untouched.
-release_tag=${tags[0]}
-git push -q origin "${tags[@]}"
+# Candidate tags are already on origin; main moves after local verification.
+# GitHub also verifies every package on both native architectures.
 notes="Released: ${tags[*]}."
-(( ${#carried[@]} )) && notes+=" Carried forward unchanged from the previous release: ${carried[*]}."
+notes+=" All four packages built from $source_commit for x86_64 and aarch64."
 gh release create "$release_tag" dist/* --repo "$gh_repo" --title "$repo: ${tags[*]}" --notes "$notes" --latest
 echo "Published $release_tag: https://github.com/$gh_repo/releases/tag/$release_tag"
 
-# A release is shipped only once its installers install it. If they do
-# not, take the release down so "latest" never points at a dud, and drop
-# the version bumps here too.
+# Check the exact published tag. An outage or container failure must never
+# delete a valid release: leave failures available for diagnosis and retry.
 verify_args=()
 for i in "${!pkgs[@]}"; do verify_args+=("${pkgs[i]}" "${versions[i]}"); done
-if ! ./bin/verify-release "${verify_args[@]}"; then
-  echo "Rolling back ${tags[*]}." >&2
-  gh release delete "$release_tag" --repo "$gh_repo" --yes
-  git push -q origin --delete "${tags[@]}" || true
-  undo_tags
+if ! ./bin/verify-release "$release_tag" "${verify_args[@]}"; then
+  echo "Verification failed; release and tags remain. Retry bin/verify-release $release_tag with the same packages." >&2
   exit 1
 fi
 git push -q origin main

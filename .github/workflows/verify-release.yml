@@ -1,0 +1,45 @@
+name: Verify published release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Prepare ARM image
+        if: matrix.arch == 'aarch64'
+        run: |
+          curl --fail --location --retry 3 https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/archlinuxarm.tar.gz
+          docker import --platform linux/arm64 /tmp/archlinuxarm.tar.gz archlinuxarm:native
+      - name: Verify every package from this exact tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          VERIFY_ARCH: ${{ matrix.arch }}
+          ARM_BUILD_IMAGE: archlinuxarm:native
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "*-$VERIFY_ARCH.pkg.tar.zst" --dir /tmp/packages
+          args=()
+          for package in /tmp/packages/*.pkg.tar.zst; do
+            metadata=$(bsdtar -xOf "$package" .PKGINFO)
+            name=$(sed -n 's/^pkgname = //p' <<< "$metadata")
+            version=$(sed -n 's/^pkgver = //p' <<< "$metadata")
+            args+=("$name" "${version%-*}")
+          done
+          [[ ${#args[@]} == 8 ]]
+          bin/verify-release "$RELEASE_TAG" "${args[@]}"

@@ -1,42 +1,39 @@
 #!/usr/bin/env bash
-# Prove a published release installs the way users get it: for each named
-# package, a clean Arch container runs the latest release's installer and
-# must end up with that version. An app (icloud-notes, icloud-photos,
-# icloud-findmy) is installed by its own per-app installer with no
-# arguments, the asset its ferdousbhai.com one-liner redirects to; the
-# shared packages by install.sh with the package named. bin/release runs
-# this after publishing and rolls the release back if it fails.
-#
-# Usage: bin/verify-release <package> <version> [<package> <version>...]
+# Verify an exact release in native containers. Infrastructure and install
+# failures are reported without deleting a published release or tag.
+# Usage: bin/verify-release <release-tag> <package> <version> [...]
 set -euo pipefail
-
-(( $# >= 2 && $# % 2 == 0 )) || { echo "Usage: bin/verify-release <package> <version> [<package> <version>...]" >&2; exit 1; }
-command -v docker >/dev/null || { echo "docker is required to verify a release." >&2; exit 1; }
-download=https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download
-
+tag=${1:?release tag required}; shift
+[[ $tag =~ ^(session|photos|findmy|notes)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
+(( $# >= 2 && $# % 2 == 0 )) || { echo 'Expected package/version pairs' >&2; exit 1; }
+command -v docker >/dev/null || { echo 'docker is required' >&2; exit 1; }
+arch=${VERIFY_ARCH:-$(uname -m)}
+case "$arch" in
+  x86_64) image=archlinux:base-devel; platform=linux/amd64 ;;
+  aarch64) image=${ARM_BUILD_IMAGE:?Set ARM_BUILD_IMAGE to a native Arch Linux ARM image}; platform=linux/arm64 ;;
+  *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+download=https://github.com/ferdousbhai/icloud-for-omarchy/releases/download/$tag
 while (( $# )); do
-  app=$1 version=$2
-  shift 2
-  case $app in
+  app=$1 version=$2; shift 2
+  case "$app" in
     icloud-notes | icloud-photos | icloud-findmy) installer="$download/install-${app#icloud-}.sh" args='' ;;
-    *) installer="$download/install.sh" args=$app ;;
+    icloud-session) installer="$download/install.sh" args=$app ;;
+    *) echo "Invalid package: $app" >&2; exit 1 ;;
   esac
-  ok=0
-  # GitHub's "latest" redirect can lag a new release by a little; try for a while.
-  for attempt in 1 2 3 4 5 6; do
-    installed="$(docker run --rm -e APP="$app" -e INSTALLER="$installer" -e ARGS="$args" archlinux:base-devel bash -euo pipefail -c '
-      pacman-key --init >/dev/null 2>&1 || true
-      pacman -Sy --noconfirm --needed curl gnupg >/dev/null 2>&1
-      # shellcheck disable=SC2086  # ARGS is empty or one package name
-      curl -fsSL "$INSTALLER" | bash -s -- $ARGS >/dev/null 2>&1
-      pacman -Q "$APP"' 2>/dev/null || true)"
-    if [[ $installed == "$app $version-"* ]]; then
-      echo "Verified: $(basename "$installer")${args:+ $args} installs $installed"
-      ok=1
-      break
-    fi
-    echo "Attempt $attempt: got '${installed:-nothing}', wanted $app $version; retrying in 20s" >&2
-    sleep 20
-  done
-  (( ok )) || { echo "$(basename "$installer")${args:+ $args} does not install $app $version." >&2; exit 1; }
+  docker run --rm --platform "$platform" -e APP="$app" -e EXPECTED_VERSION="$version" \
+    -e INSTALLER="$installer" -e ARGS="$args" -e ICLOUD_RELEASES="$download" -e VERIFY_ARCH="$arch" \
+    "$image" bash -euo pipefail -c '
+      [[ $(uname -m) == "$VERIFY_ARCH" ]]
+      sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
+      pacman-key --init
+      if [[ $VERIFY_ARCH == aarch64 ]]; then pacman-key --populate archlinuxarm; else pacman-key --populate archlinux; fi
+      pacman -Syu --noconfirm --needed curl gnupg
+      curl -fsSL "$INSTALLER" -o /tmp/install.sh
+      # ARGS is empty or one validated package name.
+      bash /tmp/install.sh ${ARGS:+"$ARGS"}
+      installed=$(pacman -Q "$APP")
+      [[ $installed == "$APP $EXPECTED_VERSION-"* ]]
+      echo "Verified: $installed on $VERIFY_ARCH"
+    '
 done

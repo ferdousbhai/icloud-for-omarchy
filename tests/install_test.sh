@@ -61,6 +61,11 @@ cat >"$work/bin/curl" <<'STUB'
 #!/bin/sh
 while [ $# -gt 0 ]; do [ "$1" = -o ] && : >"$2"; shift; done
 STUB
+# Keep existing x86 regression cases deterministic on native ARM hosts.
+cat >"$work/bin/uname" <<'STUB'
+#!/bin/sh
+echo x86_64
+STUB
 fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
 printf '#!/bin/sh\necho "fpr:::::::::%s:"\n' "$fingerprint" >"$work/bin/gpg"
 chmod 755 "$work/bin/"*
@@ -98,7 +103,7 @@ check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" 
 # Plain Arch: no Omarchy commands anywhere on PATH, so one pacman -Syu transaction.
 setup
 mkdir -p "$work/plain"
-cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/plain/"
+cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/bin/uname" "$work/plain/"
 for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail; do
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
