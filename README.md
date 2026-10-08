@@ -211,7 +211,8 @@ later commit builds `<version>.r<count>.<sha>` (`0.0.0.r<count>` for a package
 never tagged).
 
 `bin/release` runs `bin/test`, sets the named packages' versions, commits
-and pushes their tags, then waits for the Native packages workflow. Native
+and pushes their tags, explicitly dispatches the Native packages workflow
+for that release tag, then waits for the successful run. Native
 x86_64 and ARM runners build and test all four packages from that same commit.
 Packages not named in the release receive their normal post-tag development
 versions, rather than carrying binaries from an older release. This also
@@ -223,7 +224,8 @@ across architectures. The release machine signs every package and the two
 separate databases: `[icloud-for-omarchy]` for x86_64 and
 `[icloud-for-omarchy-aarch64]` for aarch64. Both public key assets contain the
 same pinned key. The private key never enters CI. A failed build leaves
-candidate tags available for inspection and publishes no release.
+candidate tags available for inspection and publishes no release. Once published,
+main advances to the released source before installation verification.
 
 The Notes sync engine (notes-sync/) is not released on its own: it ships
 inside icloud-notes, built from the same commit, so releasing icloud-notes
@@ -241,8 +243,8 @@ failures leave the release and tags available for diagnosis; nothing deletes
 a release automatically. With `PUBLISH_CRATE=1`, releasing icloud-session also
 publishes its client crate after local verification; by default it does not.
 
-The native package workflow runs on pull requests, pushes to main and package
-tags. To build locally, run `bin/build-packages x86_64` or, on an ARM host,
+The native package workflow runs on pull requests, pushes to main and
+an explicit release dispatch. To build locally, run `bin/build-packages x86_64` or, on an ARM host,
 `ARM_BUILD_IMAGE=<image> bin/build-packages aarch64`. The workflow imports the
 Arch Linux ARM root filesystem over HTTPS for its native ARM runner.
 

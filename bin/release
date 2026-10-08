@@ -106,14 +106,17 @@ for i in "${!pkgs[@]}"; do
   git tag -a "${tags[i]}" -m "${pkgs[i]} ${versions[i]}"
 done
 
-# Push the candidate tags to trigger unsigned native CI builds. Failed builds
+# Push candidate tags, then explicitly dispatch unsigned native CI. GitHub
+# suppresses tag-push events when more than three tags are pushed together.
+# Failed builds
 # leave the candidate tags for inspection; no release has been published.
 release_tag=${tags[0]}
 source_commit=$(git rev-parse HEAD)
 git push -q origin "${tags[@]}"
+gh workflow run packages.yml --repo "$gh_repo" --ref "$release_tag"
 run_id=''
 for attempt in {1..60}; do
-  run_id=$(gh run list --repo "$gh_repo" --workflow packages.yml --event push \
+  run_id=$(gh run list --repo "$gh_repo" --workflow packages.yml --event workflow_dispatch \
     --branch "$release_tag" --commit "$source_commit" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
   [[ -z $run_id ]] || break
   sleep 10
@@ -121,6 +124,11 @@ done
 [[ -n $run_id ]] || { echo "Native CI did not start; candidate tags remain for inspection." >&2; exit 1; }
 gh run watch "$run_id" --repo "$gh_repo" --exit-status \
   || { echo "Native CI failed; no release was published. Inspect run $run_id." >&2; exit 1; }
+# Revalidate the completed run, not just its search result or filename.
+run_valid=$(gh run view "$run_id" --repo "$gh_repo" \
+  --json headSha,headBranch,event,status,conclusion \
+  --jq ".headSha == \"$source_commit\" and .headBranch == \"$release_tag\" and .event == \"workflow_dispatch\" and .status == \"completed\" and .conclusion == \"success\"")
+[[ $run_valid == true ]] || { echo "CI run provenance/status mismatch; not signing." >&2; exit 1; }
 artifacts=$(mktemp -d)
 trap 'rm -rf "$artifacts"' EXIT
 gh run download "$run_id" --repo "$gh_repo" --dir "$artifacts"
@@ -154,12 +162,13 @@ done
 )
 bin/make-installers dist
 
-# Candidate tags are already on origin; main moves after local verification.
-# GitHub also verifies every package on both native architectures.
+# Candidate tags are already on origin. Main follows the published source;
+# a later verification outage must not leave main behind its own release.
 notes="Released: ${tags[*]}."
 notes+=" All four packages built from $source_commit for x86_64 and aarch64."
 gh release create "$release_tag" dist/* --repo "$gh_repo" --title "$repo: ${tags[*]}" --notes "$notes" --latest
 echo "Published $release_tag: https://github.com/$gh_repo/releases/tag/$release_tag"
+git push -q origin main
 
 # Check the exact published tag. An outage or container failure must never
 # delete a valid release: leave failures available for diagnosis and retry.
@@ -169,7 +178,6 @@ if ! ./bin/verify-release "$release_tag" "${verify_args[@]}"; then
   echo "Verification failed; release and tags remain. Retry bin/verify-release $release_tag with the same packages." >&2
   exit 1
 fi
-git push -q origin main
 
 # crates.io cannot take a version back, so the crate goes out only after the
 # package is verified. If this fails, the release stands; rerun it by hand.
