@@ -42,6 +42,17 @@ if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
   exec env ICLOUD_INSTALL_TEST_INNER=1 unshare -rm "$root/tests/install_test.sh"
 fi
 
+# Ubuntu CI has no pacman mount targets. Prepare a scratch /etc inside the
+# private mount namespace while preserving account lookups used by hooks.
+if [[ ! -f /etc/pacman.conf || ! -d /etc/pacman.d ]]; then
+  mkdir -p "$work/etc/pacman.d"
+  for name in passwd group nsswitch.conf; do
+    [[ ! -f /etc/$name ]] || cp "/etc/$name" "$work/etc/$name"
+  done
+  touch "$work/etc/pacman.conf"
+  mount --bind "$work/etc" /etc
+fi
+
 # Stubs: pacman logs its arguments, curl "downloads" an empty key, gpg
 # reports the pinned fingerprint for it.
 mkdir -p "$work/bin"
