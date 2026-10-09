@@ -238,8 +238,10 @@ rewritten without them. When the keyring cannot be read
 (no Secret Service on the bus, a locked keyring whose unlock prompt was
 dismissed), the daemon stays signed in as the account `account.json`
 names (`SignedIn`, `AppleId`, `FullName` as before) but hands out no
-jar: `Session()` and `FindMySession()` answer `…Error.KeyringUnavailable`
-with the reason, and try the keyring again on each call. A sign-in
+jar: every method that needs the account (`Session()`, `MergeCookies()`,
+`ReportSignInRequired()`, `FindMySession()`, `MergeFindMyCookies()`,
+`ReportFindMyAuthRequired()`, `SetPassword()`) answers `…Error.KeyringUnavailable`
+with the reason, and tries the keyring again on each call. A sign-in
 whose jar cannot be stored fails. With the keyring's item gone (deleted
 in Seahorse), `account.json` alone signs nobody in: the daemon removes
 it and starts signed out.

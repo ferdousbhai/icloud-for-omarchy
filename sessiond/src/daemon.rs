@@ -784,7 +784,8 @@ impl Daemon {
         ))
     }
 
-    fn merge_cookies(&self, set_cookies: &[String]) {
+    fn merge_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.retry_keyring()?;
         let mut st = lock(&self.state);
         let changed = st
             .account
@@ -796,6 +797,7 @@ impl Daemon {
             self.write(save);
         }
         self.publish();
+        Ok(())
     }
 
     /// Confirms with Apple before signing every app out. A 2xx keeps the
@@ -803,11 +805,12 @@ impl Daemon {
     /// nothing. A `/validate` that finishes after the report arrived counts
     /// as the confirmation, so a burst of reports costs one round trip.
     /// Returns whether the account is still signed in.
-    fn report_sign_in_required(&self) -> bool {
-        match self.ensure_fresh(Fresh::Confirm) {
+    fn report_sign_in_required(&self) -> Result<bool, ServiceError> {
+        self.retry_keyring()?;
+        Ok(match self.ensure_fresh(Fresh::Confirm) {
             Ok(()) | Err(Refresh::Failed) => lock(&self.state).account.is_some(),
             Err(Refresh::SignedOut) => false,
-        }
+        })
     }
 
     /// `FindMySession()`: the Find My jar's cookie header and client params.
@@ -829,7 +832,8 @@ impl Daemon {
     }
 
     /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
-    fn merge_find_my_cookies(&self, set_cookies: &[String]) {
+    fn merge_find_my_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.retry_keyring()?;
         let mut st = lock(&self.state);
         let changed = st
             .account
@@ -842,13 +846,15 @@ impl Daemon {
             self.write(save);
         }
         self.publish();
+        Ok(())
     }
 
     /// A client got HTTP 450 from Find My: its session is spent. Forgets
     /// the Find My jar, then signs in to Find My again if a password is
     /// stored. Returns whether a new jar is held (the client retries once).
-    fn report_find_my_auth_required(&self) -> bool {
-        self.auto_find_my_login(LoginWhy::Reported)
+    fn report_find_my_auth_required(&self) -> Result<bool, ServiceError> {
+        self.retry_keyring()?;
+        Ok(self.auto_find_my_login(LoginWhy::Reported))
     }
 
     // ------------------------------------------------ Find My password
@@ -1623,7 +1629,7 @@ impl Service {
 
     /// Raw `Set-Cookie` header values a client received from Apple.
     #[zbus(name = "MergeCookies")]
-    async fn merge_cookies(&self, set_cookies: Vec<String>) {
+    async fn merge_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
         let d = self.0.clone();
         blocking::unblock(move || d.merge_cookies(&set_cookies)).await
     }
@@ -1632,7 +1638,7 @@ impl Service {
     /// with `/validate`: true = still signed in (fetch `Session()` and retry
     /// once), false = signed out.
     #[zbus(name = "ReportSignInRequired", out_args("still_signed_in"))]
-    async fn report_sign_in_required(&self) -> bool {
+    async fn report_sign_in_required(&self) -> Result<bool, ServiceError> {
         let d = self.0.clone();
         blocking::unblock(move || d.report_sign_in_required()).await
     }
@@ -1668,7 +1674,7 @@ impl Service {
 
     /// Raw `Set-Cookie` header values a client received from Find My.
     #[zbus(name = "MergeFindMyCookies")]
-    async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) {
+    async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
         let d = self.0.clone();
         blocking::unblock(move || d.merge_find_my_cookies(&set_cookies)).await
     }
@@ -1677,7 +1683,7 @@ impl Service {
     /// with a password stored, signs in to Find My again. True = a new
     /// Find My session is held (retry once).
     #[zbus(name = "ReportFindMyAuthRequired", out_args("reauthorized"))]
-    async fn report_find_my_auth_required(&self) -> bool {
+    async fn report_find_my_auth_required(&self) -> Result<bool, ServiceError> {
         let d = self.0.clone();
         blocking::unblock(move || d.report_find_my_auth_required()).await
     }

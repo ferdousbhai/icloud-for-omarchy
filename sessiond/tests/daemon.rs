@@ -1437,6 +1437,14 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
     let status = icloud_session::status_on(&conn).unwrap();
     assert!(status.signed_in);
     assert_eq!(status.apple_id.as_deref(), Some("someone@example.com"));
+    // A client's 421 report gets the same answer, not "signed out".
+    let proxy = zbus::blocking::Proxy::new(&conn, BUS_NAME, OBJECT_PATH, INTERFACE).unwrap();
+    match proxy.call::<_, _, bool>("ReportSignInRequired", &()) {
+        Err(zbus::Error::MethodError(name, _, _)) => {
+            assert_eq!(name.as_str(), icloud_session::ERROR_KEYRING_UNAVAILABLE)
+        }
+        other => panic!("{other:?}"),
+    }
     // Nothing lost: the old account.json, cookies and all, is kept.
     assert!(env.account_file().unwrap().get("cookies").is_some());
 
