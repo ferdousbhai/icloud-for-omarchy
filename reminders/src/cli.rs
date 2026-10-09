@@ -482,11 +482,14 @@ impl Cli<'_> {
     }
 
     fn background(&self, force_sync: bool) -> Outcome {
-        let last = self.svc.cache().synced_ms;
+        let store = &self.svc.store;
+        // The last sync, or the last attempt when that failed.
+        let last = self.svc.cache().synced_ms.max(store.notified().sync_attempt_ms);
         let stale = last.is_none_or(|ms| service::now_ms() - ms >= service::SYNC_EVERY.as_millis() as i64);
+        let attempted = (force_sync || stale).then(service::now_ms);
         let mut synced = false;
         let mut sync_error = None;
-        if force_sync || stale {
+        if attempted.is_some() {
             match self.svc.sync(false) {
                 Ok(_) => synced = true,
                 Err(e) => {
@@ -495,10 +498,10 @@ impl Cli<'_> {
                 }
             }
         }
-        let store = &self.svc.store;
         let _lock = store.lock().map_err(|e| Failure::Other(e.to_string()))?;
         let cache = store.cache();
         let (fire, mut state) = notify::due_now(&cache, &store.notified(), jiff::Timestamp::now(), &self.local);
+        state.sync_attempt_ms = attempted.or(state.sync_attempt_ms);
         let mut notified = Vec::new();
         for r in fire {
             let (headline, body) = notify::text(r, &cache, &self.local);

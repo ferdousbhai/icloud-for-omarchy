@@ -87,6 +87,10 @@ pub struct Notified {
     /// Reminder id to the due instant (Unix ms) it notified for.
     #[serde(default)]
     pub fired: BTreeMap<String, i64>,
+    /// When a background run last tried to sync (Unix ms), succeeded or
+    /// not: a signed-out or offline machine is not retried every minute.
+    #[serde(default)]
+    pub sync_attempt_ms: Option<i64>,
 }
 
 pub struct Store {

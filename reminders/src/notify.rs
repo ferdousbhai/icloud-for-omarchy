@@ -29,6 +29,7 @@ pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &T
     let mut next = Notified {
         started: true,
         fired: Default::default(),
+        sync_attempt_ms: state.sync_attempt_ms,
     };
     let mut fire = Vec::new();
     for r in cache.reminders.values() {
@@ -68,7 +69,7 @@ pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> (String, String) {
 
 /// Shows one notification; clicking it opens the app.
 pub fn send(headline: &str, body: &str) -> Result<(), String> {
-    if let Some(omarchy) = on_path("omarchy-notification-send") {
+    if let Some(omarchy) = omarchy_notifier() {
         let status = Command::new(omarchy)
             .args(["--app-name", APP_NAME, "-g", GLYPH, "-u", "normal", headline, body])
             .args(["--exec", "icloud-reminders-app"])
@@ -83,9 +84,16 @@ pub fn send(headline: &str, body: &str) -> Result<(), String> {
     freedesktop(headline, body)
 }
 
-fn on_path(name: &str) -> Option<std::path::PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|dir| dir.join(name))
+/// `omarchy-notification-send` on `PATH`, else in Omarchy's own `bin`
+/// (`$OMARCHY_PATH`, `~/.local/share/omarchy`): the systemd user manager
+/// that runs the timer may not have Omarchy's `PATH`.
+fn omarchy_notifier() -> Option<std::path::PathBuf> {
+    let var = |name: &str| std::env::var_os(name).map(std::path::PathBuf::from);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(var("OMARCHY_PATH").map(|p| p.join("bin")))
+        .chain(var("HOME").map(|h| h.join(".local/share/omarchy/bin")))
+        .map(|dir| dir.join("omarchy-notification-send"))
         .find(|p| p.is_file())
 }
 

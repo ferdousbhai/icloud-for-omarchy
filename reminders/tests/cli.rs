@@ -110,10 +110,11 @@ impl Env {
 }
 
 /// Stdin not a terminal, `--data-dir <tmp>/data`, a home and XDG
-/// directories in the temp dir, the stand-in notifier first on `PATH`,
-/// and no session bus.
+/// directories in the temp dir, a `PATH` of the stand-in notifier alone
+/// (Omarchy installs the real one in /usr/bin, and it must never run
+/// here), and no session bus.
 fn run_at(base: &str, tmp: &Path, tz: &str, args: &[&str]) -> Output {
-    let path = format!("{}:{}", tmp.join("bin").display(), std::env::var("PATH").unwrap_or_default());
+    let path = tmp.join("bin");
     Command::new(env!("CARGO_BIN_EXE_icloud-reminders"))
         .args(args)
         .arg("--data-dir")
@@ -124,6 +125,7 @@ fn run_at(base: &str, tmp: &Path, tz: &str, args: &[&str]) -> Output {
         .env("XDG_DATA_HOME", tmp.join("xdg"))
         .env("TZ", tz)
         .env("PATH", path)
+        .env_remove("OMARCHY_PATH")
         .env("FAKE_REMINDERS_QUIET", "1")
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
         .stdin(Stdio::null())
@@ -373,6 +375,24 @@ fn background_notifies_once_when_due() {
     assert_eq!(env.notifications().len(), 1);
 }
 
+/// The timer's systemd may not have Omarchy's `PATH`.
+#[test]
+fn the_notifier_is_found_in_omarchy_s_own_directory() {
+    let env = start();
+    let omarchy_bin = env.dir.path().join("home/.local/share/omarchy/bin");
+    std::fs::create_dir_all(&omarchy_bin).unwrap();
+    std::fs::rename(
+        env.dir.path().join("bin/omarchy-notification-send"),
+        omarchy_bin.join("omarchy-notification-send"),
+    )
+    .unwrap();
+    env.json(&["background"]);
+    let now = now_ms();
+    env.state.put(fake::reminder("REM-NOW", "List/LIST-REMINDERS", "Water plants", "", Some(now - 5_000), now - 10 * MINUTE));
+    assert_eq!(env.json(&["background", "--sync"])["notified"][0]["title"], "Water plants");
+    assert_eq!(env.notifications()[0][6], "Water plants");
+}
+
 #[test]
 fn background_without_a_session_still_notifies_from_the_cache() {
     let env = start();
@@ -385,6 +405,9 @@ fn background_without_a_session_still_notifies_from_the_cache() {
     assert_eq!(out["synced"], false);
     assert!(out["sync_error"].as_str().unwrap().contains("sign in"), "{out}");
     assert_eq!(out["notified"][0]["title"], "Stretch");
+    // A failed attempt counts: the next minute does not try again.
+    let out = env.json(&["background"]);
+    assert_eq!((out["synced"].clone(), out["sync_error"].clone()), (json!(false), Value::Null));
 }
 
 #[test]
