@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocale>
 #include <QRegularExpression>
 #include <QSet>
 #include <QString>
@@ -425,7 +426,10 @@ inline bool hasTable(const QString &text)
 // "10", each folder directly followed by its own subfolders.
 inline void sortFolders(QStringList &folders, const QString &defaultDir)
 {
-    QCollator collator;
+    // The C locale's collator is a plain code-point compare that ignores
+    // numeric mode and case folding; sort as English there instead.
+    const QLocale system = QLocale::system();
+    QCollator collator(system.language() == QLocale::C ? QLocale(QLocale::English) : system);
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);
     std::sort(folders.begin(), folders.end(), [&](const QString &a, const QString &b) {
