@@ -322,7 +322,8 @@ reminders first; LIST an ID or a name. IDs are the records' UUIDs.
 |---|---|
 | `lists` | `[{id, name, color, open}]` (`color` `#rrggbb` or null) |
 | `list`, `show` | `[{id, list:{id, name}, title, notes, completed, completed_at, due:{date, time, all_day, time_zone, at} \| null, flagged, priority, alerts}]` (`show`: one object). `due.date`/`time` are the wall clock as stored, `time` null when all day; `time_zone` the zone it is anchored to (null: floating, the local zone); `at` the UTC moment it is due (an all-day one at 09:00 local); `alerts` counts alarms set on an Apple device |
-| `add`, `edit`, `complete`, `uncomplete` | `{action, reminder}` |
+| `add`, `edit` | `{action, reminder}` |
+| `complete`, `uncomplete` | `{action, changed, reminder}`; `changed` is false when it already was |
 | `delete` | `{action:"delete", reminder:{id, title}}` |
 | `sync` | `{lists, reminders, changed, full}` |
 | `background` | `{synced, sync_error, notified:[{id, title}]}` |

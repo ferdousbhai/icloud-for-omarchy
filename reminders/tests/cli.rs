@@ -263,6 +263,32 @@ fn complete_uncomplete_edit_and_delete() {
 }
 
 #[test]
+fn complete_and_uncomplete_pick_the_one_they_can_change() {
+    // An open and a completed "Buy milk".
+    let two = || {
+        let env = start();
+        let now = now_ms();
+        env.state.put(fake::reminder("REM-OPEN", "List/LIST-GROCERIES", "Buy milk", "", None, now - MINUTE));
+        let mut done = fake::reminder("REM-DONE", "List/LIST-GROCERIES", "Buy milk", "", None, now - MINUTE);
+        done["fields"]["Completed"]["value"] = json!(1);
+        env.state.put(done);
+        env
+    };
+    let env = two();
+    let out = env.json(&["complete", "buy milk"]);
+    assert_eq!((&out["changed"], &out["reminder"]["id"]), (&json!(true), &json!("REM-OPEN")));
+    let env = two();
+    let out = env.json(&["uncomplete", "buy milk"]);
+    assert_eq!((&out["changed"], &out["reminder"]["id"]), (&json!(true), &json!("REM-DONE")));
+    // Already open: said so, nothing written.
+    let writes = env.sent("records/modify").len();
+    let out = env.run(&["uncomplete", "REM-OPEN"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "\"Buy milk\" was already open");
+    assert_eq!(env.sent("records/modify").len(), writes);
+}
+
+#[test]
 fn a_change_made_elsewhere_meanwhile_is_written_over_once() {
     let env = start();
     env.json(&["list"]);

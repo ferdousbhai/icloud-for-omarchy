@@ -419,19 +419,27 @@ impl Cli<'_> {
 
     fn set_completed(&self, query: &str, completed: bool) -> Outcome {
         let cache = self.fresh()?;
-        let r = resolve_prefer(&cache, query, !completed)?.clone();
+        // complete prefers an open match, uncomplete a completed one.
+        let r = resolve_prefer(&cache, query, completed)?.clone();
         let action = if completed { "complete" } else { "uncomplete" };
-        let after = if r.completed == completed {
-            r
-        } else {
+        let changed = r.completed != completed;
+        let after = if changed {
             self.svc.update(&r, &[Change::Completed(completed)])?.expect("not a delete")
-        };
-        let text = if completed {
-            format!("Completed \"{}\"", after.title)
         } else {
-            format!("Reopened \"{}\"", after.title)
+            r
         };
-        self.done(action, &after, &text)
+        let text = match (completed, changed) {
+            (true, true) => format!("Completed \"{}\"", after.title),
+            (false, true) => format!("Reopened \"{}\"", after.title),
+            (true, false) => format!("\"{}\" was already completed", after.title),
+            (false, false) => format!("\"{}\" was already open", after.title),
+        };
+        let cache = self.svc.cache()?;
+        self.print(
+            json!({ "action": action, "changed": changed, "reminder": reminder_json(&after, &cache, &self.local) }),
+            || format!("{text}\n"),
+        );
+        Ok(())
     }
 
     fn delete(&self, query: &str, yes: bool) -> Outcome {
