@@ -101,11 +101,12 @@ count_include() { grep -cxF "Include = /etc/pacman.d/$1.conf" /etc/pacman.conf |
 
 setup
 bash install.sh >"$work/out" 2>&1
-check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy" ]
+check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-reminders" ]
 check "the repository config is written" grep -qx 'Server = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download' /etc/pacman.d/icloud-for-omarchy.conf
 check "the Include line is added" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "the Omarchy hook is installed" [ -x "$hooks/icloud-for-omarchy" ]
 check "Notes' background sync is mentioned" grep -q 'Background sync' "$work/out"
+check "Reminders' notifications are mentioned" grep -q 'Reminder notifications' "$work/out"
 bash install.sh >/dev/null 2>&1
 check "re-running keeps one Include line" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "on Omarchy it installs with omarchy-pkg-add" grep -q '^omarchy-pkg-add icloud-notes' "$PACMAN_LOG"
@@ -119,14 +120,18 @@ for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
-check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy' "$PACMAN_LOG"
+check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-reminders' "$PACMAN_LOG"
 
-for app in notes photos findmy; do
+for app in notes photos findmy reminders; do
   setup
   bash "$work/dist/install-$app.sh" >"$work/out" 2>&1
   check "install-$app.sh installs only icloud-$app" [ "$(installed)" = "icloud-$app" ]
 done
-check "install-findmy.sh does not start Notes' sync" not grep -q 'Background sync' "$work/out"
+check "install-reminders.sh does not start Notes' sync" not grep -q 'Background sync' "$work/out"
+check "install-reminders.sh starts its notifications" grep -q 'Reminder notifications' "$work/out"
+setup
+bash "$work/dist/install-findmy.sh" >"$work/out" 2>&1
+check "install-findmy.sh starts neither timer" not grep -qE 'Background sync|Reminder notifications' "$work/out"
 
 setup
 bash "$work/dist/install-photos.sh" icloud-session icloud-notes >/dev/null 2>&1

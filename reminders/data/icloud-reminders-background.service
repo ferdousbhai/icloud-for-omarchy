@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync iCloud Reminders and notify about due ones (icloud-reminders)
+Documentation=https://github.com/ferdousbhai/icloud-for-omarchy/tree/main/reminders#notifications
+
+[Service]
+Type=oneshot
+# Syncs when the last attempt is over 4 minutes old (skipped, and reported,
+# when signed out or offline), then shows a notification for each reminder
+# that just fell due, from the cache. Between syncs it reads only files.
+ExecStart=/usr/bin/icloud-reminders background
+TimeoutStartSec=2min
+Nice=10

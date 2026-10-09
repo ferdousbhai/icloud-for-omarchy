@@ -6,15 +6,16 @@
 #   curl -fsSL .../install.sh | sudo bash -s -- icloud-photos        # just one app
 #
 # With no arguments it installs DEFAULT_PACKAGES below: every app
-# (icloud-notes, icloud-photos, icloud-findmy). Name packages to install
-# only those; icloud-session (the Apple sign-in every app shares) can be
-# named too, and comes in as a dependency anyway. Each release also carries install-notes.sh,
-# install-photos.sh and install-findmy.sh: this script with
+# (icloud-notes, icloud-photos, icloud-findmy, icloud-reminders). Name
+# packages to install only those; icloud-session (the Apple sign-in every
+# app shares) can be named too, and comes in as a dependency anyway. Each
+# release also carries install-notes.sh, install-photos.sh,
+# install-findmy.sh and install-reminders.sh: this script with
 # DEFAULT_PACKAGES set to that one app (bin/make-installers writes them).
 #
 # Every step is idempotent, so re-running is safe. It trusts the
 # package-signing key (checked against the fingerprint pinned below), adds
-# the one [icloud-for-omarchy] repository that holds all four packages,
+# the one [icloud-for-omarchy] repository that holds all five packages,
 # installs an Omarchy hook that restores it after `omarchy refresh pacman`
 # rewrites /etc/pacman.conf, removes the [icloud-notes] repository earlier
 # Notes releases used, and installs the packages.
@@ -23,10 +24,10 @@ set -euo pipefail
 REPO=icloud-for-omarchy
 RELEASES=${ICLOUD_RELEASES:-https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download}
 SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
-PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy)
+PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-reminders)
 # What a run with no arguments installs. bin/make-installers rewrites this
 # one line for the per-app installers.
-DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy)
+DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy icloud-reminders)
 # Repositories of earlier releases: Notes had one of its own.
 OLD_REPOS=(icloud-notes)
 
@@ -156,27 +157,34 @@ else
   fi
 fi
 
-# Notes' background sync: a systemd user timer syncs every 15 minutes while
-# Notes is closed. The package enables it for every user from their next
+# The apps' systemd user timers: Notes' background sync (every 15 minutes
+# while Notes is closed) and Reminders' due-time notifications (every
+# minute). Each package enables its timer for every user from their next
 # login; this starts it now in the desktop user's systemd, not root's.
-start_background_sync() {
-  local user uid
-  local start_cmd='systemctl --user daemon-reload && systemctl --user start icloud-notes-background.timer'
+# Usage: start_timer <timer> <what> <is on, ...>
+start_timer() {
+  local timer=$1 what=$2 on=$3 user uid
+  local start_cmd="systemctl --user daemon-reload && systemctl --user start $timer"
   user="${SUDO_USER:-${USER:-$(id -un)}}"
   uid="$(id -u "$user" 2>/dev/null)" || return 0
   if (( uid == 0 )) || [[ ! -S /run/user/$uid/bus ]]; then
-    echo "Background sync starts at your next login (or now: $start_cmd)."
+    echo "$what starts at your next login (or now: $start_cmd)."
     return 0
   fi
   local ctl=(env "XDG_RUNTIME_DIR=/run/user/$uid" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" systemctl --user)
   (( EUID == 0 )) && ctl=(runuser -u "$user" -- "${ctl[@]}")
-  if "${ctl[@]}" daemon-reload && "${ctl[@]}" start icloud-notes-background.timer; then
-    echo "Background sync is on (every 15 minutes while Notes is closed)."
+  if "${ctl[@]}" daemon-reload && "${ctl[@]}" start "$timer"; then
+    echo "$what is on ($on)."
   else
-    echo "Could not start background sync now; it starts at your next login." >&2
+    echo "Could not start $what now; it starts at your next login." >&2
   fi
 }
-[[ " ${wanted[*]} " == *" icloud-notes "* ]] && start_background_sync
+if [[ " ${wanted[*]} " == *" icloud-notes "* ]]; then
+  start_timer icloud-notes-background.timer "Background sync" "every 15 minutes while Notes is closed"
+fi
+if [[ " ${wanted[*]} " == *" icloud-reminders "* ]]; then
+  start_timer icloud-reminders-background.timer "Reminder notifications" "checked every minute"
+fi
 
 echo
 echo "Done."
@@ -185,6 +193,7 @@ for pkg in "${wanted[@]}"; do
     icloud-notes) echo 'Launch "Notes (iCloud)" from the app launcher (Super + Space).' ;;
     icloud-photos) echo 'Launch "Photos (iCloud)" from the app launcher (Super + Space).' ;;
     icloud-findmy) echo 'Launch "Find My (iCloud)" from the app launcher (Super + Space).' ;;
+    icloud-reminders) echo 'Launch "Reminders (iCloud)" from the app launcher (Super + Space).' ;;
   esac
 done
 cat <<EOT

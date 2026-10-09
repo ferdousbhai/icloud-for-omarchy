@@ -17,7 +17,7 @@ download=https://github.com/ferdousbhai/icloud-for-omarchy/releases/download/$ta
 while (( $# )); do
   app=$1 version=$2; shift 2
   case "$app" in
-    icloud-notes | icloud-photos | icloud-findmy) installer="$download/install-${app#icloud-}.sh" args='' ;;
+    icloud-notes | icloud-photos | icloud-findmy | icloud-reminders) installer="$download/install-${app#icloud-}.sh" args='' ;;
     icloud-session) installer="$download/install.sh" args=$app ;;
     *) echo "Invalid package: $app" >&2; exit 1 ;;
   esac
