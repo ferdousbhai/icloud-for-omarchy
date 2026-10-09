@@ -600,8 +600,14 @@ impl Daemon {
                 st.account = account;
                 st.unread = None;
                 st.generation += 1;
+                let restored = st.account.is_some();
                 drop(st);
                 drop(written);
+                if restored {
+                    // Unknown until now: FindMyPasswordStored, and the
+                    // automatic Find My sign-in, depend on it.
+                    self.look_for_password();
+                }
                 self.publish();
                 Ok(())
             }
@@ -1252,15 +1258,22 @@ impl Daemon {
             if let Some(old) = st.account.as_ref().filter(|old| old.dsid == account.dsid) {
                 account.find_my = old.find_my.clone();
             }
-            st.account.is_none() && st.unread.as_ref().is_some_and(|u| u.stored.dsid == account.dsid)
+            // Its jars were never read (keyring locked at start): still in
+            // an account.json the migration could not move, or in the
+            // keyring.
+            st.unread
+                .as_ref()
+                .filter(|u| st.account.is_none() && u.stored.dsid == account.dsid)
+                .map(|u| u.stored.legacy_secret())
         };
-        if unread_same {
-            // Its jars were never read (keyring locked at start); it is
-            // unlocked if this sign-in is to be kept, so read them now.
-            if let Ok(Some(text)) = self.secrets.get_session()
-                && let Ok(old) = serde_json::from_str::<SessionSecret>(&text)
-                && old.dsid == account.dsid
-            {
+        if let Some(legacy) = unread_same {
+            // The keyring is unlocked if this sign-in is to be kept, so it
+            // can be read now.
+            let old = legacy.or_else(|| {
+                let text = self.secrets.get_session().ok().flatten()?;
+                serde_json::from_str::<SessionSecret>(&text).ok()
+            });
+            if let Some(old) = old.filter(|old| old.dsid == account.dsid) {
                 account.find_my = old.find_my;
             }
         }

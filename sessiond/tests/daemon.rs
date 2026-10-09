@@ -1440,10 +1440,15 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
     // Nothing lost: the old account.json, cookies and all, is kept.
     assert!(env.account_file().unwrap().get("cookies").is_some());
 
-    // The keyring answers again: the next Session() moves the cookies.
+    assert!(!prop::<bool>(&conn, "FindMyPasswordStored"));
+
+    // The keyring answers again (with a password stored): the next
+    // Session() moves the cookies, and finds the password.
     fs::remove_dir(env.secrets_path()).unwrap();
+    env.store_password("hunter2");
     session(&conn).unwrap();
     assert!(prop::<bool>(&conn, "SignedIn"));
+    assert!(prop::<bool>(&conn, "FindMyPasswordStored"));
     assert!(env.account_file().unwrap().get("cookies").is_none());
     assert!(env.session_secret().is_some());
 }
