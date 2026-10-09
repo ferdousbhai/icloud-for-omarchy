@@ -305,6 +305,15 @@ fn a_change_made_elsewhere_meanwhile_is_written_over_once() {
         env.ops()[env.ops().len() - 3..],
         ["records/modify", "records/lookup", "records/modify"]
     );
+
+    // The phone already completed it: after the CONFLICT nothing is left
+    // to write.
+    let mut phone = env.state.record("Reminder/REM-EGGS").unwrap();
+    phone["fields"]["Completed"]["value"] = json!(1);
+    env.state.put(phone);
+    let out = env.json(&["--cached", "complete", "eggs"]);
+    assert_eq!(out["reminder"]["completed"], true);
+    assert_eq!(env.ops()[env.ops().len() - 2..], ["records/modify", "records/lookup"]);
 }
 
 #[test]

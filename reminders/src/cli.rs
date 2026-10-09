@@ -375,10 +375,11 @@ impl Cli<'_> {
                 usage(format!("add needs --list LIST (iCloud records no default list); lists:{names}"))
             })?,
         };
-        let r = self
+        let saved = self
             .svc
             .add(&list.id, title.trim(), notes.as_deref().unwrap_or(""), due.as_ref())?;
-        self.done("add", &r, &format!("Added \"{}\" to {}", r.title, list.name))
+        let r = saved.value;
+        self.done("add", &r, &format!("Added \"{}\" to {}", r.title, list.name), saved.warning)
     }
 
     fn when(&self, w: &str) -> Result<Due, Failure> {
@@ -413,8 +414,9 @@ impl Cli<'_> {
                 r.title, r.alarms
             );
         }
-        let after = self.svc.update(&r, &changes)?.expect("not a delete");
-        self.done("edit", &after, &format!("Changed \"{}\"", after.title))
+        let saved = self.svc.update(&r, &changes)?;
+        let after = saved.value.ok_or_else(|| gone(&r))?;
+        self.done("edit", &after, &format!("Changed \"{}\"", after.title), saved.warning)
     }
 
     fn set_completed(&self, query: &str, completed: bool) -> Outcome {
@@ -423,10 +425,11 @@ impl Cli<'_> {
         let r = resolve_prefer(&cache, query, completed)?.clone();
         let action = if completed { "complete" } else { "uncomplete" };
         let changed = r.completed != completed;
-        let after = if changed {
-            self.svc.update(&r, &[Change::Completed(completed)])?.expect("not a delete")
+        let (after, warning) = if changed {
+            let saved = self.svc.update(&r, &[Change::Completed(completed)])?;
+            (saved.value.ok_or_else(|| gone(&r))?, saved.warning)
         } else {
-            r
+            (r, None)
         };
         let text = match (completed, changed) {
             (true, true) => format!("Completed \"{}\"", after.title),
@@ -435,10 +438,9 @@ impl Cli<'_> {
             (false, false) => format!("\"{}\" was already open", after.title),
         };
         let cache = self.svc.cache()?;
-        self.print(
-            json!({ "action": action, "changed": changed, "reminder": reminder_json(&after, &cache, &self.local) }),
-            || format!("{text}\n"),
-        );
+        let mut out = json!({ "action": action, "changed": changed, "reminder": reminder_json(&after, &cache, &self.local) });
+        warn(&mut out, warning);
+        self.print(out, || format!("{text}\n"));
         Ok(())
     }
 
@@ -446,20 +448,18 @@ impl Cli<'_> {
         let cache = self.fresh()?;
         let r = resolve(&cache, query)?.clone();
         confirm(yes, &format!("Delete \"{}\"?", r.title))?;
-        self.svc.update(&r, &[Change::Deleted])?;
-        self.print(
-            json!({ "action": "delete", "reminder": { "id": bare(&r.id), "title": r.title } }),
-            || format!("Deleted \"{}\"\n", r.title),
-        );
+        let saved = self.svc.update(&r, &[Change::Deleted])?;
+        let mut out = json!({ "action": "delete", "reminder": { "id": bare(&r.id), "title": r.title } });
+        warn(&mut out, saved.warning);
+        self.print(out, || format!("Deleted \"{}\"\n", r.title));
         Ok(())
     }
 
-    fn done(&self, action: &str, r: &Reminder, text: &str) -> Outcome {
+    fn done(&self, action: &str, r: &Reminder, text: &str, warning: Option<String>) -> Outcome {
         let cache = self.svc.cache()?;
-        self.print(
-            json!({ "action": action, "reminder": reminder_json(r, &cache, &self.local) }),
-            || format!("{text}\n"),
-        );
+        let mut out = json!({ "action": action, "reminder": reminder_json(r, &cache, &self.local) });
+        warn(&mut out, warning);
+        self.print(out, || format!("{text}\n"));
         Ok(())
     }
 
@@ -545,6 +545,20 @@ fn confirm(yes: bool, question: &str) -> Outcome {
 /// `List/ABC` and `Reminder/ABC` as `ABC`.
 fn bare(id: &str) -> &str {
     id.split_once('/').map_or(id, |(_, rest)| rest)
+}
+
+/// A write that happened but left a problem behind: on stderr, and as
+/// `warning` in the JSON. The command still succeeds.
+fn warn(out: &mut Value, warning: Option<String>) {
+    if let Some(w) = warning {
+        eprintln!("{TOOL}: {w}");
+        out["warning"] = Value::String(w);
+    }
+}
+
+/// The reminder was deleted elsewhere before the write could land.
+fn gone(r: &Reminder) -> Failure {
+    Failure::Coded("not_found", format!("\"{}\" has been deleted", r.title))
 }
 
 /// Lowercase, with typographic apostrophes as plain ones.

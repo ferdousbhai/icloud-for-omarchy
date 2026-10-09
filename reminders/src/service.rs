@@ -126,47 +126,94 @@ impl<'a> Service<'a> {
         self.store.save_cache(&cache).map_err(io)
     }
 
-    /// A fresh copy of one reminder from iCloud.
-    fn fetch(&self, id: &str) -> Result<Reminder> {
+    /// A fresh copy of one reminder from iCloud; `None` when it is gone.
+    fn fetch(&self, id: &str) -> Result<Option<Reminder>> {
         let ck = CloudKit::connect(self.t)?;
         let records = ck.lookup(&[id])?;
         let live = saved_reminder(id, &records)?;
         self.store_records(&records)?;
-        live.ok_or_else(|| Error::Other(format!("{id} has been deleted")))
+        Ok(live)
+    }
+
+    /// Folds a successful write's records into the cache. The write
+    /// happened, so a failure here is a warning, not an error: reporting
+    /// it as failed would invite writing it again.
+    fn cache_written(&self, records: &[Record]) -> Option<String> {
+        self.store_records(records)
+            .err()
+            .map(|e| format!("saved in iCloud; local cache not updated: {e}"))
     }
 
     /// Adds a reminder to `list_id`.
-    pub fn add(&self, list_id: &str, title: &str, notes: &str, due: Option<&Due>) -> Result<Reminder> {
+    pub fn add(&self, list_id: &str, title: &str, notes: &str, due: Option<&Due>) -> Result<Saved<Reminder>> {
         let replica = self.store.replica().map_err(io)?;
         let uuid = uuid::Uuid::new_v4().to_string().to_uppercase();
         let ck = CloudKit::connect(self.t)?;
         let op = model::create_op(&uuid, list_id, title, notes, due, &replica, now_ms());
         let records = ck.modify(vec![op])?;
         let id = format!("Reminder/{uuid}");
-        let live = saved_reminder(&id, &records)?;
-        self.store_records(&records)?;
-        live.ok_or_else(|| Error::Other(format!("CloudKit answered the new {id} as deleted")))
+        let live = saved_reminder(&id, &records)?
+            .ok_or_else(|| Error::Other(format!("CloudKit answered the new {id} as deleted")))?;
+        Ok(Saved {
+            warning: self.cache_written(&records),
+            value: live,
+        })
     }
 
     /// Writes `changes` to the reminder `r` (as cached). When it changed on
     /// another device since (CloudKit's CONFLICT), the change is written
     /// once more over the fresh copy: these are field-level intents (this
-    /// title, completed), so they win over what they did not touch.
-    /// Returns the reminder as saved; `None` after a delete.
-    pub fn update(&self, r: &Reminder, changes: &[Change]) -> Result<Option<Reminder>> {
+    /// title, completed), so they win over what they did not touch; those
+    /// the fresh copy already has are dropped, and when none is left
+    /// nothing is written. Returns the reminder as saved; `None` after a
+    /// delete.
+    pub fn update(&self, r: &Reminder, changes: &[Change]) -> Result<Saved<Option<Reminder>>> {
         let replica = self.store.replica().map_err(io)?;
         let ck = CloudKit::connect(self.t)?;
-        let write = |r: &Reminder| {
+        let write = |r: &Reminder, changes: &[Change]| {
             let op = model::update_op(r, changes, &replica, now_ms()).map_err(Error::Other)?;
             ck.modify(vec![op])
         };
-        let records = match write(r) {
-            Err(e) if e.is_conflict() => write(&self.fetch(&r.id)?)?,
+        let records = match write(r, changes) {
+            Err(e) if e.is_conflict() => {
+                let Some(fresh) = self.fetch(&r.id)? else {
+                    return if changes.contains(&Change::Deleted) {
+                        Ok(Saved { value: None, warning: None })
+                    } else {
+                        Err(Error::Other(format!("\"{}\" has been deleted", r.title)))
+                    };
+                };
+                let left: Vec<Change> = changes.iter().filter(|c| !has(&fresh, c)).cloned().collect();
+                if left.is_empty() {
+                    return Ok(Saved { value: Some(fresh), warning: None });
+                }
+                write(&fresh, &left)?
+            }
             other => other?,
         };
         let live = saved_reminder(&r.id, &records)?;
-        self.store_records(&records)?;
-        Ok(live)
+        Ok(Saved {
+            warning: self.cache_written(&records),
+            value: live,
+        })
+    }
+}
+
+/// What a write saved, and why the local cache may not show it.
+#[derive(Debug)]
+pub struct Saved<T> {
+    pub value: T,
+    pub warning: Option<String>,
+}
+
+/// Whether `r` already is as `change` would make it.
+fn has(r: &Reminder, change: &Change) -> bool {
+    match change {
+        Change::Title(t) => r.title == *t,
+        Change::Notes(n) => r.notes == *n,
+        Change::Completed(c) => r.completed == *c,
+        Change::Due(d) => r.due == *d,
+        Change::Deleted => false,
     }
 }
 

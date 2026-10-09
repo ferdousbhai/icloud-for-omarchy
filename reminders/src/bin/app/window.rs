@@ -224,13 +224,18 @@ impl Window {
                 let dir = dir.ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))?;
                 let svc = Service::new(&*t, Store::new(dir));
                 let out = f(&svc)?;
-                Ok::<_, Error>((out, svc.cache()?))
+                // The write happened: a cache that can't be read is shown
+                // as a warning, not as a failed write.
+                Ok::<_, Error>((out, svc.cache().map_err(|e| e.to_string())))
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
                 match result {
                     Ok(Ok((out, cache))) => {
-                        *this.cache.borrow_mut() = cache;
+                        match cache {
+                            Ok(cache) => *this.cache.borrow_mut() = cache,
+                            Err(e) => this.toast(&format!("Saved in iCloud; cannot read the local cache: {e}")),
+                        }
                         this.show_lists();
                         done(&this, out);
                     }
@@ -262,8 +267,10 @@ impl Window {
     ) {
         self.write(
             move |svc| svc.update(&r, &changes),
-            move |this, _| {
-                if let Some(t) = toast {
+            move |this, saved| {
+                if let Some(w) = saved.warning {
+                    this.toast(&w);
+                } else if let Some(t) = toast {
                     this.toast(&t);
                 }
             },
@@ -295,8 +302,11 @@ impl Window {
         self.adding.set(true);
         self.write(
             move |svc| svc.add(&list, &title, "", due.as_ref()),
-            move |this, _| {
+            move |this, saved| {
                 this.adding.set(false);
+                if let Some(w) = saved.warning {
+                    this.toast(&w);
+                }
                 if this.new_title.text() == sent_title && this.new_due.text() == sent_due {
                     this.new_title.set_text("");
                     this.new_due.set_text("");
