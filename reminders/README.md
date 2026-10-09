@@ -77,7 +77,7 @@ has some.
 ```bash
 systemctl --user status icloud-reminders-background.timer
 journalctl --user -u icloud-reminders-background     # what each run did
-systemctl --user disable --now icloud-reminders-background.timer   # no notifications
+systemctl --user mask --now icloud-reminders-background.timer      # no notifications (unmask undoes it)
 ```
 
 ### What is kept on this computer

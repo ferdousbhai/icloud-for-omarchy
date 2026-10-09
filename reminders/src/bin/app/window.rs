@@ -45,6 +45,8 @@ pub struct Window {
     selected: RefCell<String>,
     syncing: Cell<bool>,
     last_error: RefCell<Option<String>>,
+    /// A new reminder is being saved: a second Enter waits for it.
+    adding: Cell<bool>,
 }
 
 impl Window {
@@ -271,7 +273,7 @@ impl Window {
 
     fn add(self: &Rc<Self>) {
         let title = self.new_title.text().trim().to_owned();
-        if title.is_empty() {
+        if title.is_empty() || self.adding.get() {
             return;
         }
         let due = match self.parse_due(&self.new_due.text()) {
@@ -290,15 +292,17 @@ impl Window {
         };
         // Cleared once it's saved (unless typed over meanwhile); kept on failure.
         let (sent_title, sent_due) = (self.new_title.text(), self.new_due.text());
+        self.adding.set(true);
         self.write(
             move |svc| svc.add(&list, &title, "", due.as_ref()),
             move |this, _| {
+                this.adding.set(false);
                 if this.new_title.text() == sent_title && this.new_due.text() == sent_due {
                     this.new_title.set_text("");
                     this.new_due.set_text("");
                 }
             },
-            |_| {},
+            |this| this.adding.set(false),
         );
     }
 
@@ -695,5 +699,6 @@ fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Windo
         selected: RefCell::new(UPCOMING.to_owned()),
         syncing: Cell::new(false),
         last_error: RefCell::default(),
+        adding: Cell::default(),
     }
 }
