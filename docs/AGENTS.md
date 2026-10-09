@@ -183,7 +183,7 @@ $ icloud-reminders --json list
 $ icloud-reminders --json add "Call the dentist" --list Reminders --due "tomorrow 9:00"
 {"action":"add","reminder":{"id":"...","title":"Call the dentist",...}}
 $ icloud-reminders --json complete "dentist"
-{"action":"complete","reminder":{...,"completed":true,"completed_at":"2026-10-09T11:02:41Z"}}
+{"action":"complete","changed":true,"reminder":{...,"completed":true,"completed_at":"2026-10-09T11:02:41Z"}}
 ```
 
 | Command | Does |

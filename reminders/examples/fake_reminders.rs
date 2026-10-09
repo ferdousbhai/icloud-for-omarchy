@@ -2,7 +2,7 @@
 //! command line without an Apple account.
 //!
 //!     cargo run -p icloud-reminders --example fake_reminders   # 127.0.0.1:8765
-//!     ICLOUD_SESSION_MOCK=1 cargo run -p icloud-reminders       # the app
+//!     ICLOUD_SESSION_MOCK=1 cargo run -p icloud-reminders --bin icloud-reminders-app   # the app
 //!
 //! It holds the `Reminders` zone in memory, seeded with two lists and a few
 //! reminders due around now, and answers the four calls the app makes as
@@ -335,6 +335,6 @@ fn main() -> std::io::Result<()> {
     let now = jiff::Timestamp::now();
     let offset_ms = i64::from(local.to_offset(now).seconds()) * 1000;
     eprintln!("Fake iCloud Reminders on {base}");
-    eprintln!("Run the app with: ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL={base} cargo run -p icloud-reminders");
+    eprintln!("Run the app with: ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL={base} cargo run -p icloud-reminders --bin icloud-reminders-app");
     serve_with(listener, Arc::new(State::seeded(now.as_millisecond(), offset_ms)))
 }

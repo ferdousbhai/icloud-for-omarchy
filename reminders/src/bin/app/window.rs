@@ -207,11 +207,13 @@ impl Window {
     }
 
     /// Runs one write on a worker thread; shows the cache afterwards (the
-    /// write updated it), or the error and a sync.
+    /// write updated it) and calls `done`, or shows the error and calls
+    /// `failed`, which gives back what the user typed.
     fn write<T: Send + 'static>(
         self: &Rc<Self>,
         f: impl FnOnce(&Service) -> icloud_reminders::cloudkit::Result<T> + Send + 'static,
         done: impl FnOnce(&Rc<Self>, T) + 'static,
+        failed: impl FnOnce(&Rc<Self>) + 'static,
     ) {
         let (t, dir) = (self.transport.clone(), self.dir.clone());
         let weak = Rc::downgrade(self);
@@ -233,18 +235,29 @@ impl Window {
                     Ok(Err(Error::SignInRequired)) => {
                         this.banner.show();
                         this.show_reminders();
+                        failed(&this);
                     }
                     Ok(Err(e)) => {
                         this.toast(&e.to_string());
                         this.show_reminders();
+                        failed(&this);
                     }
-                    Err(e) => this.toast(&e),
+                    Err(e) => {
+                        this.toast(&e);
+                        failed(&this);
+                    }
                 }
             },
         );
     }
 
-    fn update(self: &Rc<Self>, r: Reminder, changes: Vec<Change>, toast: Option<String>) {
+    fn update(
+        self: &Rc<Self>,
+        r: Reminder,
+        changes: Vec<Change>,
+        toast: Option<String>,
+        failed: impl FnOnce(&Rc<Self>) + 'static,
+    ) {
         self.write(
             move |svc| svc.update(&r, &changes),
             move |this, _| {
@@ -252,6 +265,7 @@ impl Window {
                     this.toast(&t);
                 }
             },
+            failed,
         );
     }
 
@@ -274,9 +288,18 @@ impl Window {
         let Some(list) = list else {
             return self.toast("Choose a list in the sidebar first: iCloud records no default list");
         };
-        self.new_title.set_text("");
-        self.new_due.set_text("");
-        self.write(move |svc| svc.add(&list, &title, "", due.as_ref()), |_, _| {});
+        // Cleared once it's saved (unless typed over meanwhile); kept on failure.
+        let (sent_title, sent_due) = (self.new_title.text(), self.new_due.text());
+        self.write(
+            move |svc| svc.add(&list, &title, "", due.as_ref()),
+            move |this, _| {
+                if this.new_title.text() == sent_title && this.new_due.text() == sent_due {
+                    this.new_title.set_text("");
+                    this.new_due.set_text("");
+                }
+            },
+            |_| {},
+        );
     }
 
     /// An empty text is no due date.
@@ -289,16 +312,27 @@ impl Window {
     }
 
     fn edit(self: &Rc<Self>, r: Reminder) {
+        let draft = Draft {
+            title: r.title.clone(),
+            due: r.due.as_ref().map(|d| d.display(&self.local)).unwrap_or_default(),
+            notes: r.notes.clone(),
+        };
+        self.edit_draft(r, draft);
+    }
+
+    /// The edit dialog, filled from `draft`: the reminder's values, or what
+    /// was typed before a save that failed.
+    fn edit_draft(self: &Rc<Self>, r: Reminder, draft: Draft) {
         let dialog = adw::AlertDialog::new(Some("Edit Reminder"), None);
         let fields = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
-        let title = adw::EntryRow::builder().title("Title").text(&r.title).build();
+        let title = adw::EntryRow::builder().title("Title").text(&draft.title).build();
         let due_text = r.due.as_ref().map(|d| d.display(&self.local)).unwrap_or_default();
         let due = adw::EntryRow::builder()
             .title("Due (2026-10-10 09:00, tomorrow 9:00, +2h; empty for none)")
-            .text(&due_text)
+            .text(&draft.due)
             .build();
         fields.append(&title);
         fields.append(&due);
@@ -309,13 +343,22 @@ impl Window {
             .left_margin(8)
             .right_margin(8)
             .build();
-        notes.buffer().set_text(&r.notes);
+        notes.buffer().set_text(&draft.notes);
         let notes_frame = gtk::Frame::builder()
             .child(&gtk::ScrolledWindow::builder().child(&notes).min_content_height(90).build())
             .margin_top(12)
             .build();
+        // What's wrong with the title or due date, while it is.
+        let problem = gtk::Label::builder()
+            .css_classes(["error", "caption"])
+            .xalign(0.0)
+            .wrap(true)
+            .margin_top(8)
+            .visible(false)
+            .build();
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.append(&fields);
+        body.append(&problem);
         body.append(&notes_frame);
         if r.alarms > 0 {
             body.append(
@@ -334,33 +377,71 @@ impl Window {
         dialog.set_default_response(Some("save"));
         dialog.set_close_response("cancel");
 
+        // Save is enabled only while the title and due date are valid, so
+        // a mistake never closes the dialog and loses the edits.
+        let weak = Rc::downgrade(self);
+        let validate = {
+            let (dialog, title, due, problem, due_text) = (dialog.clone(), title.clone(), due.clone(), problem.clone(), due_text.clone());
+            move || {
+                let Some(this) = weak.upgrade() else { return };
+                let title_problem = title.text().trim().is_empty().then(|| "A reminder needs a title.".to_owned());
+                let due_problem = (due.text().trim() != due_text)
+                    .then(|| this.parse_due(&due.text()).err())
+                    .flatten();
+                for (row, bad) in [(&title, title_problem.is_some()), (&due, due_problem.is_some())] {
+                    if bad {
+                        row.add_css_class("error");
+                    } else {
+                        row.remove_css_class("error");
+                    }
+                }
+                let text = title_problem.or(due_problem);
+                problem.set_visible(text.is_some());
+                problem.set_label(text.as_deref().unwrap_or(""));
+                dialog.set_response_enabled("save", text.is_none());
+            }
+        };
+        let validate = Rc::new(validate);
+        for row in [&title, &due] {
+            let validate = validate.clone();
+            row.connect_changed(move |_| validate());
+        }
+        validate();
+
         let weak = Rc::downgrade(self);
         dialog.connect_response(None, move |_, response| {
             let Some(this) = weak.upgrade() else { return };
             match response {
                 "delete" => {
                     let name = r.title.clone();
-                    this.update(r.clone(), vec![Change::Deleted], Some(format!("Deleted \"{name}\"")));
+                    this.update(r.clone(), vec![Change::Deleted], Some(format!("Deleted \"{name}\"")), |_| {});
                 }
                 "save" => {
-                    let mut changes = Vec::new();
-                    let new_title = title.text().trim().to_owned();
-                    if !new_title.is_empty() && new_title != r.title {
-                        changes.push(Change::Title(new_title));
-                    }
                     let buffer = notes.buffer();
-                    let new_notes = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
-                    if new_notes != r.notes {
-                        changes.push(Change::Notes(new_notes));
+                    let draft = Draft {
+                        title: title.text().to_string(),
+                        due: due.text().to_string(),
+                        notes: buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string(),
+                    };
+                    let mut changes = Vec::new();
+                    let new_title = draft.title.trim();
+                    if new_title != r.title {
+                        changes.push(Change::Title(new_title.to_owned()));
                     }
-                    if due.text().trim() != due_text {
-                        match this.parse_due(&due.text()) {
+                    if draft.notes != r.notes {
+                        changes.push(Change::Notes(draft.notes.clone()));
+                    }
+                    if draft.due.trim() != due_text {
+                        // Validated while the dialog was open.
+                        match this.parse_due(&draft.due) {
                             Ok(d) => changes.push(Change::Due(d)),
                             Err(e) => return this.toast(&e),
                         }
                     }
                     if !changes.is_empty() {
-                        this.update(r.clone(), changes, None);
+                        // A failed save opens the dialog again with what was typed.
+                        let r2 = r.clone();
+                        this.update(r.clone(), changes, None, move |this| this.edit_draft(r2, draft));
                     }
                 }
                 _ => {}
@@ -455,11 +536,18 @@ impl Window {
                 return;
             }
             let toast = done.then(|| format!("Completed \"{}\"", reminder.title));
-            this.update(reminder.clone(), vec![Change::Completed(done)], toast);
+            this.update(reminder.clone(), vec![Change::Completed(done)], toast, |_| {});
         });
         row.add_prefix(&check);
         row
     }
+}
+
+/// The edit dialog's fields as typed.
+struct Draft {
+    title: String,
+    due: String,
+    notes: String,
 }
 
 fn sidebar_row(id: &str, name: &str, open: usize) -> gtk::ListBoxRow {

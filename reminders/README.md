@@ -143,7 +143,7 @@ Reminders zone (sync tokens, paging, partial updates, change tags and
 
 ```bash
 cargo run -p icloud-reminders --example fake_reminders &     # 127.0.0.1:8765
-ICLOUD_SESSION_MOCK=1 XDG_DATA_HOME=/tmp/reminders-dev cargo run -p icloud-reminders
+ICLOUD_SESSION_MOCK=1 XDG_DATA_HOME=/tmp/reminders-dev cargo run -p icloud-reminders --bin icloud-reminders-app
 ICLOUD_SESSION_MOCK=1 cargo run -p icloud-reminders -- list --data-dir /tmp/reminders-dev
 curl -s http://127.0.0.1:8765/fake/requests                    # what was sent
 ```

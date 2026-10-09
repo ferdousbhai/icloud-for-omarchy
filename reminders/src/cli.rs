@@ -138,7 +138,7 @@ enum Command {
     },
     /// Mark a reminder completed.
     ///
-    /// JSON: {action: "complete", reminder}
+    /// JSON: {action: "complete", changed, reminder}; changed is false when it already was
     #[command(after_help = AFTER_HELP)]
     Complete {
         #[arg(value_name = "REMINDER")]
@@ -146,7 +146,7 @@ enum Command {
     },
     /// Mark a completed reminder open again.
     ///
-    /// JSON: {action: "uncomplete", reminder}
+    /// JSON: {action: "uncomplete", changed, reminder}; changed is false when it already was
     #[command(after_help = AFTER_HELP)]
     Uncomplete {
         #[arg(value_name = "REMINDER")]
