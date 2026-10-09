@@ -98,7 +98,13 @@ impl Transport for SessionTransport {
     }
 
     fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        self.with(|s| s.post_json(url, body)?.json::<Value>())
+        let response = self.with(|s| s.post_json(url, body))?;
+        // A 200 that isn't JSON is CloudKit misbehaving, not the network:
+        // parsed here so it isn't reported as offline.
+        serde_json::from_slice(&response.body).map_err(|e| {
+            let endpoint = url.split('?').next().unwrap_or(url);
+            Error::Other(format!("CloudKit answered {endpoint} with something that isn't JSON: {e}"))
+        })
     }
 
     fn account(&self) -> Result<String> {

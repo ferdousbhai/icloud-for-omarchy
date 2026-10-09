@@ -80,8 +80,9 @@ pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> (String, String) {
 /// systemd user manager that runs the timer has Omarchy's `PATH`);
 /// clicking it opens the app.
 pub fn send(headline: &str, body: &str) -> Result<(), String> {
+    let (headline, body) = (positional(headline), positional(body));
     let status = Command::new("omarchy-notification-send")
-        .args(["--app-name", APP_NAME, "-g", GLYPH, "-u", "normal", headline, body])
+        .args(["--app-name", APP_NAME, "-g", GLYPH, "-u", "normal", &headline, &body])
         .args(["--exec", "icloud-reminders-app"])
         .status()
         .map_err(|e| format!("cannot run omarchy-notification-send (is Omarchy installed?): {e}"))?;
@@ -92,9 +93,22 @@ pub fn send(headline: &str, body: &str) -> Result<(), String> {
     }
 }
 
+/// Text the notifier reads as a value, never an option: a title such as
+/// `-u` gets an invisible word joiner (U+2060) in front.
+fn positional(text: &str) -> String {
+    if text.starts_with('-') { format!("\u{2060}{text}") } else { text.to_owned() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_title_like_an_option_stays_a_title() {
+        assert_eq!(positional("-u"), "\u{2060}-u");
+        assert_eq!(positional("Milk -2"), "Milk -2");
+    }
+
     use crate::due::Due;
     use crate::model::List;
 

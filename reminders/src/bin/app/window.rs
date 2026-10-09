@@ -536,7 +536,12 @@ impl Window {
                 return;
             }
             let toast = done.then(|| format!("Completed \"{}\"", reminder.title));
-            this.update(reminder.clone(), vec![Change::Completed(done)], toast, |_| {});
+            // One write at a time per box: a quick second click would compare
+            // against the state this row was built with and be dropped. The
+            // rebuild after the write (or its failure) brings a fresh box
+            // showing the cached state.
+            c.set_sensitive(false);
+            this.update(reminder.clone(), vec![Change::Completed(done)], toast, |this| this.show_reminders());
         });
         row.add_prefix(&check);
         row
