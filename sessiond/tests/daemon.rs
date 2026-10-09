@@ -39,7 +39,10 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
+/// Waits for `cond`. `timeout` only bounds a failure, so it is at least
+/// 30 s: a loaded CI runner can be that slow, a passing test never waits.
 fn wait_until(what: &str, timeout: Duration, mut cond: impl FnMut() -> bool) {
+    let timeout = timeout.max(Duration::from_secs(30));
     let start = Instant::now();
     while !cond() {
         assert!(start.elapsed() < timeout, "timed out waiting for {what}");
@@ -235,6 +238,19 @@ fn findme_url(base: &str) -> String {
     base.replace("127.0.0.1", "localhost")
 }
 
+/// Waits until every `/validate` the server has had (answered by
+/// [`validate_ok`], token `rotated<n>`) is stored: the daemon answers
+/// callers from memory and writes to disk and the keyring after.
+fn wait_stored(env: &Env, server: &Server) {
+    wait_until("the last /validate to be stored", Duration::from_secs(30), || {
+        let token = match server.count(VALIDATE) {
+            0 => "original".to_string(),
+            n => format!("rotated{n}"),
+        };
+        env.account_cookie("X-APPLE-WEBAUTH-TOKEN") == Some(token)
+    });
+}
+
 fn signed_out() -> Reply {
     Reply::json(421, json!({"error": "Misdirected Request"}))
 }
@@ -369,10 +385,34 @@ impl Env {
         self.root().join("state/icloud-session/account.json")
     }
 
-    fn account(&self) -> Option<Value> {
+    /// `account.json` as written.
+    fn account_file(&self) -> Option<Value> {
         fs::read(self.account_path())
             .ok()
             .map(|b| serde_json::from_slice(&b).unwrap())
+    }
+
+    /// The test keyring's session item, parsed.
+    fn session_secret(&self) -> Option<Value> {
+        let items = self.all_secrets();
+        let item = items
+            .as_array()?
+            .iter()
+            .find(|i| i["attributes"]["kind"] == "session")?;
+        Some(serde_json::from_str(item["secret"].as_str()?).unwrap())
+    }
+
+    /// The account as stored: `account.json` with the jars (`cookies`,
+    /// `find_my`) from the keyring's session item, as the daemon reads it.
+    fn account(&self) -> Option<Value> {
+        let mut account = self.account_file()?;
+        if let Some(secret) = self.session_secret() {
+            account["cookies"] = secret["cookies"].clone();
+            if let Some(fm) = secret.get("find_my") {
+                account["find_my"] = fm.clone();
+            }
+        }
+        Some(account)
     }
 
     /// The value of cookie `name` in `account.json`'s main jar.
@@ -416,20 +456,36 @@ impl Env {
     }
 
     /// The test keyring's items.
-    fn secrets(&self) -> Value {
+    fn all_secrets(&self) -> Value {
         fs::read(self.secrets_path())
             .ok()
             .map_or(json!([]), |b| serde_json::from_slice(&b).unwrap())
     }
 
+    /// The test keyring's stored passwords (every item but the session).
+    fn secrets(&self) -> Value {
+        let items = self.all_secrets();
+        Value::Array(
+            items
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|i| i["attributes"]["kind"] != "session")
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Puts a password in the test keyring, as `set-password` would.
     fn store_password(&self, password: &str) {
-        let items = json!([{
+        let mut items: Vec<Value> = self.all_secrets().as_array().unwrap().clone();
+        items.retain(|i| i["attributes"]["kind"] == "session");
+        items.push(json!({
             "label": "iCloud (icloud-session): someone@example.com",
             "attributes": {"application": "icloud-session", "apple-id": "someone@example.com"},
             "secret": password,
-        }]);
-        fs::write(self.secrets_path(), items.to_string()).unwrap();
+        }));
+        fs::write(self.secrets_path(), Value::Array(items).to_string()).unwrap();
     }
 
     /// Sets the seeded account's last `/validate`, as an earlier daemon
@@ -457,6 +513,7 @@ impl Env {
     /// SIGKILLs the running daemon and waits until it has left the bus.
     fn kill_daemon(&self, conn: &Connection) {
         let dbus = zbus::blocking::fdo::DBusProxy::new(conn).unwrap();
+        let owner = dbus.get_name_owner(BUS_NAME.try_into().unwrap()).unwrap();
         let pid = dbus
             .get_connection_unix_process_id(BUS_NAME.try_into().unwrap())
             .unwrap();
@@ -467,8 +524,12 @@ impl Env {
                 .unwrap()
                 .success()
         );
-        wait_until("the daemon to die", Duration::from_secs(5), || {
-            !Path::new(&format!("/proc/{pid}")).exists() || !self.daemon_running(conn)
+        // Gone from the bus, not just dead: until the bus has noticed, a
+        // call to the name still goes to the dead connection. (A client may
+        // have started the next daemon already.)
+        wait_until("the daemon to leave the bus", Duration::from_secs(30), || {
+            dbus.get_name_owner(BUS_NAME.try_into().unwrap())
+                .map_or(true, |now| now != owner)
         });
     }
 
@@ -531,8 +592,17 @@ fn write_script(dir: &Path, name: &str, body: &str) -> String {
 
 #[test]
 fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
+    // Validates after the first wait for `later`: on a slow machine the
+    // heartbeat would otherwise revalidate (1 s) while this checks the first.
+    let later = Arc::new(AtomicBool::new(false));
+    let open = later.clone();
+    let server = Server::start(move |s, n, base| match s.path() {
+        VALIDATE => {
+            while n > 1 && !open.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            validate_ok(n, base)
+        }
         _ => Reply::json(404, json!({})),
     });
     let env = Env::start(Opts {
@@ -575,6 +645,7 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     assert!(v.header("Cookie").unwrap().contains("X-APPLE-WEBAUTH-TOKEN=original"));
 
     // Persisted.
+    wait_stored(&env, &server);
     let account = env.account().unwrap();
     assert!(account["validated_at"].as_u64().unwrap() >= now() - 5);
     assert_eq!(account["webservices"]["findme"], findme_url(&server.url));
@@ -587,6 +658,7 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     assert!(prop::<u64>(&conn, "ExpiresAt") >= now() + 2_592_000 - 10);
 
     // Stale after a second: the next Session() validates again first.
+    later.store(true, Ordering::SeqCst);
     thread::sleep(Duration::from_millis(2100));
     let (cookie, _, _) = session(&conn).unwrap();
     // (The heartbeat may validate too while this client is active.)
@@ -835,6 +907,7 @@ EOF"#
         icloud_session::Status {
             signed_in: false,
             apple_id: None,
+            full_name: None,
             dsid: None,
             expires_at: None,
             signing_in: false,
@@ -957,6 +1030,7 @@ fn sign_out_forgets_account_and_profile() {
     icloud_session::sign_out_on(&conn).unwrap();
     watch.until("SignedIn false", |s| !s.signed_in);
     assert!(env.account().is_none());
+    assert!(env.session_secret().is_none(), "the keyring's session is gone too");
     assert!(!webkit_data.exists());
     assert!(!webkit_cache.exists());
     assert!(matches!(Session::connect_on(&conn), Err(Error::SignInRequired)));
@@ -1178,7 +1252,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         status,
-        json!({"signed_in": false, "apple_id": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false})
+        json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false})
     );
 
     let out = env.cli(&["validate"]);
@@ -1329,6 +1403,144 @@ fn an_unreadable_account_file_is_set_aside() {
 }
 
 #[test]
+fn the_cookies_move_to_the_keyring_and_account_json_keeps_none() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    // The seeded account.json is the old kind, cookies and all.
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    env.seed_stale_find_my();
+    assert!(env.account_file().unwrap().get("cookies").is_some());
+    let conn = env.conn();
+    let (cookie, _, _) = session(&conn).unwrap();
+    assert!(cookie.contains("X-APPLE-WEBAUTH-USER"));
+
+    let file = env.account_file().unwrap();
+    assert!(file.get("cookies").is_none() && file.get("find_my").is_none(), "{file}");
+    let secret = env.session_secret().expect("a session item");
+    assert_eq!(secret["dsid"], DSID);
+    assert!(cookie_named(&secret["cookies"], "X-APPLE-WEBAUTH-USER").is_some());
+    assert!(cookie_named(&secret["find_my"]["cookies"], "X-APPLE-WEBAUTH-FMIP").is_some());
+
+    // dsInfo's name, once validated.
+    wait_until("FullName", Duration::from_secs(5), || {
+        prop::<String>(&conn, "FullName") == "Some One"
+    });
+    assert_eq!(env.account_file().unwrap()["full_name"], "Some One");
+
+    // Restarted, the daemon reads the jar back from the keyring.
+    env.kill_daemon(&conn);
+    let (again, _, _) = session(&conn).unwrap();
+    assert_eq!(
+        cookie_of(&again, "X-APPLE-WEBAUTH-USER"),
+        cookie_of(&cookie, "X-APPLE-WEBAUTH-USER")
+    );
+    assert_eq!(prop::<String>(&conn, "FullName"), "Some One");
+
+    // With the keyring's item gone, account.json alone signs nobody in.
+    env.kill_daemon(&conn);
+    fs::write(env.secrets_path(), "[]").unwrap();
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(env.account_file().is_none());
+}
+
+#[test]
+fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    // The test keyring cannot be read: a directory where its file goes.
+    fs::create_dir(env.secrets_path()).unwrap();
+    let conn = env.conn();
+    // Still signed in (no sign-in would help), but no jar to hand out.
+    match Session::connect_on(&conn) {
+        Err(Error::KeyringUnavailable(why)) => assert!(why.contains("keyring"), "{why}"),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(status.signed_in);
+    assert_eq!(status.apple_id.as_deref(), Some("someone@example.com"));
+    // A client's 421 report gets the same answer, not "signed out".
+    let proxy = zbus::blocking::Proxy::new(&conn, BUS_NAME, OBJECT_PATH, INTERFACE).unwrap();
+    match proxy.call::<_, _, bool>("ReportSignInRequired", &()) {
+        Err(zbus::Error::MethodError(name, _, _)) => {
+            assert_eq!(name.as_str(), icloud_session::ERROR_KEYRING_UNAVAILABLE)
+        }
+        other => panic!("{other:?}"),
+    }
+    // Nothing lost: the old account.json, cookies and all, is kept.
+    assert!(env.account_file().unwrap().get("cookies").is_some());
+
+    assert!(!prop::<bool>(&conn, "FindMyPasswordStored"));
+
+    // The keyring answers again (with a password stored): the next
+    // Session() moves the cookies, and finds the password.
+    fs::remove_dir(env.secrets_path()).unwrap();
+    env.store_password("hunter2");
+    session(&conn).unwrap();
+    assert!(prop::<bool>(&conn, "SignedIn"));
+    assert!(prop::<bool>(&conn, "FindMyPasswordStored"));
+    assert!(env.account_file().unwrap().get("cookies").is_none());
+    assert!(env.session_secret().is_some());
+}
+
+#[test]
+fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    assert!(env.session_secret().is_some());
+
+    // The keyring stops answering, and the user signs out.
+    let keyring = fs::read(env.secrets_path()).unwrap();
+    fs::remove_file(env.secrets_path()).unwrap();
+    fs::create_dir(env.secrets_path()).unwrap();
+    match icloud_session::sign_out_on(&conn) {
+        Err(Error::KeyringUnavailable(why)) => assert!(why.contains("signed out"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(env.account_file().is_none());
+    let pending = env.root().join("state/icloud-session/session-removal-pending");
+    assert!(pending.exists());
+
+    // Signing out again while it still refuses says so again.
+    assert!(matches!(icloud_session::sign_out_on(&conn), Err(Error::KeyringUnavailable(_))));
+
+    // It answers again: signing out again removes the live cookies it kept.
+    fs::remove_dir(env.secrets_path()).unwrap();
+    fs::write(env.secrets_path(), &keyring).unwrap();
+    assert!(env.session_secret().is_some());
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(env.session_secret().is_none());
+    assert!(!pending.exists());
+
+    // So does the next start, when a sign-out still owes the removal.
+    fs::write(env.secrets_path(), &keyring).unwrap();
+    fs::write(&pending, "").unwrap();
+    env.kill_daemon(&conn);
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    wait_until("the session's removal", Duration::from_secs(5), || env.session_secret().is_none());
+    assert!(!pending.exists());
+}
+
+#[test]
 fn offline_session_hands_out_the_cached_session_and_backs_off() {
     let server = Server::start(|s, _, _| match s.path() {
         VALIDATE => {
@@ -1430,18 +1642,31 @@ fn reports_that_arrive_together_share_one_validate() {
 #[test]
 fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
     // The start-up /validate of the stored jar is slow and ends in 421; the
-    // sign-in that finishes meanwhile must survive it.
-    let server = Server::start(|s, n, base| match s.path() {
+    // sign-in that finishes meanwhile must survive it. The window finishes
+    // only once that /validate has arrived, and the 421 is checked for only
+    // once it has been answered.
+    let dir = tempfile::tempdir().unwrap();
+    let (seen, answered) = (dir.path().join("seen"), dir.path().join("answered"));
+    let (seen_by_server, answered_by_server) = (seen.clone(), answered.clone());
+    let server = Server::start(move |s, n, base| match s.path() {
         VALIDATE if s.header("Cookie").unwrap_or_default().contains("=original") => {
+            fs::write(&seen_by_server, "").unwrap();
             thread::sleep(Duration::from_millis(1500));
+            fs::write(&answered_by_server, "").unwrap();
             signed_out()
         }
         VALIDATE => validate_ok(n, base),
         _ => Reply::json(404, json!({})),
     });
-    let dir = tempfile::tempdir().unwrap();
     let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com"}]});
-    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!(
+            "i=0; while [ ! -e '{}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\ncat <<'EOF'\n{capture}\nEOF",
+            seen.display()
+        ),
+    );
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1452,13 +1677,11 @@ fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
     icloud_session::sign_in_on(&conn).unwrap();
     watch.window_opened();
     watch.window_closed();
-    wait_until("the old jar's validate", Duration::from_secs(5), || {
-        server
-            .requests(VALIDATE)
-            .iter()
-            .any(|r| r.header("Cookie").unwrap_or_default().contains("=original"))
-    });
-    thread::sleep(Duration::from_millis(1800));
+    assert!(seen.exists(), "the old jar's /validate came first");
+    wait_until("the old jar's 421", Duration::from_secs(10), || answered.exists());
+    // The daemon's handling of that 421 (a forget, if it were wrong) is
+    // immediate; give it a moment to land before checking it did not.
+    thread::sleep(Duration::from_millis(300));
     assert!(prop::<bool>(&conn, "SignedIn"), "the 421 was about the old jar");
     let account = env.account().expect("the new account stays");
     assert!(!account.to_string().contains("\"original\""));
@@ -1733,6 +1956,7 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), 0);
     assert!(!dir.path().join("count").exists(), "no window run");
+    wait_stored(&env, &server);
     let validates = server.count(VALIDATE);
     let before = env.account().unwrap();
 
@@ -2044,11 +2268,33 @@ fn accepting(fmip: &str) -> (Arc<Mutex<String>>, Server) {
 
 #[test]
 fn a_450_signs_in_with_the_stored_password_and_retries_once() {
-    let (_accepted, server) = accepting("auto1");
+    // Both requests' stale tries are answered 450 only once both have
+    // arrived: neither can start late enough to pick up the new jar.
+    let stale = Arc::new(Mutex::new(0usize));
+    let server = Server::start(move |s, n, base| {
+        let cookie = s.header("Cookie").unwrap_or_default().to_string();
+        match s.path() {
+            VALIDATE => validate_ok(n, base),
+            INIT_CLIENT if cookie.split("; ").any(|c| c == "X-APPLE-WEBAUTH-FMIP=auto1") => {
+                Reply::json(200, json!({"content": []})).cookie("FMIP-ROTATED=r; Path=/")
+            }
+            INIT_CLIENT => {
+                *stale.lock().unwrap() += 1;
+                wait_until("both stale requests", Duration::from_secs(30), || *stale.lock().unwrap() >= 2);
+                Reply {
+                    status: 450,
+                    body: String::new(),
+                    set_cookies: vec![],
+                }
+            }
+            _ => Reply::json(404, json!({})),
+        }
+    });
     let (env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
     autofill.set_delay("0.3");
     let s = Session::connect_on(&conn).unwrap();
     let init = init_client_url(&s);
+    wait_stored(&env, &server);
     let before = env.account().unwrap();
     let validates = server.count(VALIDATE);
 

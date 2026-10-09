@@ -6,7 +6,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,8 +18,9 @@ use zbus::zvariant::Value;
 
 use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
-use crate::files::{self, Account, FindMyJar, Paths};
+use crate::files::{self, Account, FindMyJar, Paths, SessionSecret, Stored};
 use crate::secrets::{self, Password, SecretStore};
+use zeroize::Zeroizing;
 
 /// Heartbeat keeps running while a client called within this window
 /// (the browser's own heartbeat is 14 minutes).
@@ -27,6 +28,9 @@ const ACTIVE_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// How long start-up waits for the keyring's answer before taking the bus
 /// name (well inside D-Bus's activation timeout).
 const KEYRING_LOOK_WAIT: Duration = Duration::from_secs(3);
+/// The idle exit's longest wait for calls already sent to be read and
+/// answered.
+const FLUSH_WAIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -95,6 +99,10 @@ enum ServiceError {
     PasswordRejected(String),
     /// `SetPassword()`/`ForgetPassword()`: Apple unreachable, keyring failed.
     Failed(String),
+    /// `Session()`: `account.json` names an account, but its cookies, kept
+    /// in the keyring, cannot be read (no Secret Service, locked, prompt
+    /// dismissed). The message says why.
+    KeyringUnavailable(String),
 }
 
 fn sign_in_required() -> ServiceError {
@@ -110,6 +118,7 @@ fn find_my_auth_required() -> ServiceError {
 struct Props {
     signed_in: bool,
     apple_id: String,
+    full_name: String,
     dsid: String,
     expires_at: u64,
     signing_in: bool,
@@ -167,6 +176,10 @@ enum LoginWhy {
 
 struct State {
     account: Option<Account>,
+    /// `account.json` names an account whose cookies the keyring would not
+    /// give: still signed in as it, but with no jar to hand out until a
+    /// `Session()` reads them.
+    unread: Option<Box<Unread>>,
     /// Bumped by every `SignIn()` or `AuthorizeFindMy()` that opens the window and by `SignOut()`,
     /// so a window that was signed out from under drops its late result.
     signin_seq: u64,
@@ -191,23 +204,38 @@ struct State {
     /// Bumped by every [`Daemon::save_account`], so the writes done after
     /// the lock is dropped never put an older account over a newer one.
     save_seq: u64,
+    /// When the last keyring read for `unread` failed, and why: callers
+    /// that were already waiting share that answer rather than each
+    /// asking (and prompting) again.
+    keyring_failed: Option<(Instant, String)>,
 }
 
-/// An `account.json` write, taken under the state lock and done after it
-/// with [`Daemon::write`]: the account as it was then (`None`: removed).
+/// A write of the account (`account.json` and its keyring item), taken
+/// under the state lock and done after it with [`Daemon::write`]: the
+/// account as it was then (`None`: removed).
 #[must_use = "write it once the state lock is dropped"]
 struct Save {
     seq: u64,
     account: Option<Account>,
 }
 
+/// An account whose cookies the keyring would not give, and why.
+#[derive(Debug, Clone)]
+struct Unread {
+    stored: Stored,
+    why: String,
+}
+
 impl State {
     fn props(&self) -> Props {
         let account = self.account.as_ref();
+        let unread = self.unread.as_ref().map(|u| &u.stored);
+        let text = |a: Option<&String>, u: Option<&String>| a.or(u).cloned().unwrap_or_default();
         Props {
-            signed_in: account.is_some(),
-            apple_id: account.map(|a| a.apple_id.clone()).unwrap_or_default(),
-            dsid: account.map(|a| a.dsid.clone()).unwrap_or_default(),
+            signed_in: account.is_some() || unread.is_some(),
+            apple_id: text(account.map(|a| &a.apple_id), unread.map(|u| &u.apple_id)),
+            full_name: text(account.map(|a| &a.full_name), unread.map(|u| &u.full_name)),
+            dsid: text(account.map(|a| &a.dsid), unread.map(|u| &u.dsid)),
             expires_at: account.map_or(0, |a| cookies::token_expiry(&a.cookies)),
             signing_in: self.signing_in,
             find_my_authorized: account.is_some_and(|a| a.find_my_ready(time::now_secs())),
@@ -240,8 +268,85 @@ pub struct Daemon {
     find_my_login_lock: Mutex<()>,
     /// Keys the in-memory password fingerprints (never stored or logged).
     fingerprint_key: RandomState,
-    /// The `save_seq` of the last `account.json` write; held while writing.
-    written: Mutex<u64>,
+    /// The last account write; held while writing.
+    written: Mutex<Written>,
+    /// Method calls being answered (see [`Busy`]); the idle exit waits for
+    /// them.
+    in_flight: AtomicUsize,
+    /// Pings this daemon sent itself that `track_clients` has seen: every
+    /// call sent before such a ping has been seen too.
+    pings_seen: AtomicU64,
+}
+
+/// Counts a method call as in flight while it is answered.
+struct Busy(Arc<Daemon>);
+
+impl Busy {
+    fn new(d: &Arc<Daemon>) -> Busy {
+        d.in_flight.fetch_add(1, Ordering::SeqCst);
+        Busy(d.clone())
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// What [`Daemon::write`] last wrote.
+#[derive(Default)]
+struct Written {
+    /// The `save_seq` of the last write.
+    seq: u64,
+    /// The session secret the keyring holds, as far as we know (`None`:
+    /// unknown, or nothing), so an unchanged jar is not stored again.
+    secret: Option<Zeroizing<String>>,
+}
+
+/// The account `account.json` names, with its cookies from the keyring.
+/// A file from before the cookies moved to the keyring has them moved
+/// there, and is rewritten without them. `Err`: the keyring would not
+/// answer, so the account is neither restored nor forgotten. It writes
+/// both stores, so it runs only with [`Daemon::written`] held.
+fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Option<Account>, Box<Unread>> {
+    let Some(stored) = Stored::load_or_set_aside(path) else {
+        return Ok(None);
+    };
+    let secret = match stored.legacy_secret() {
+        Some(legacy) => {
+            let text = Zeroizing::new(serde_json::to_string(&legacy).expect("the session secret serializes"));
+            if let Err(e) = secrets.set_session(&stored.apple_id, &text) {
+                let why = format!("moving the session's cookies to the keyring: {e}");
+                return Err(Box::new(Unread { stored, why }));
+            }
+            match stored.save(path) {
+                Ok(()) => eprintln!("icloud-sessiond: moved the session's cookies from account.json to the keyring"),
+                Err(e) => eprintln!("icloud-sessiond: rewriting {} without its cookies: {e}", path.display()),
+            }
+            Some(legacy)
+        }
+        None => {
+            let text = match secrets.get_session() {
+                Ok(text) => text,
+                Err(e) => {
+                    let why = format!("reading the session's cookies from the keyring: {e}");
+                    return Err(Box::new(Unread { stored, why }));
+                }
+            };
+            text.and_then(|t| serde_json::from_str::<SessionSecret>(&t).ok())
+        }
+    };
+    let account = secret.and_then(|s| Account::join(stored, s));
+    if account.is_none() {
+        // The keyring item was removed (or is another account's): nothing
+        // to sign in with.
+        eprintln!("icloud-sessiond: the keyring holds no session for account.json; signed out");
+        if let Err(e) = files::remove(path) {
+            eprintln!("icloud-sessiond: removing {}: {e}", path.display());
+        }
+    }
+    Ok(account)
 }
 
 /// How fresh the session must be before `ensure_fresh` skips `/validate`.
@@ -267,9 +372,18 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Daemon {
     pub fn new(cfg: Config) -> Arc<Daemon> {
-        let account = Account::load_or_set_aside(&cfg.paths.account);
+        let secrets = secrets::from_env();
+        // Only account.json here: the keyring may prompt to unlock, and
+        // `run` reads it with a bounded wait before taking the bus name.
+        let unread = Stored::load_or_set_aside(&cfg.paths.account).map(|stored| {
+            Box::new(Unread {
+                stored,
+                why: "the session's cookies are not read from the keyring yet".into(),
+            })
+        });
         let state = State {
-            account,
+            account: None,
+            unread,
             generation: 0,
             last_attempt: None,
             signin_seq: 0,
@@ -282,6 +396,7 @@ impl Daemon {
             find_my_last_login: None,
             find_my_last_ok: None,
             save_seq: 0,
+            keyring_failed: None,
         };
         let props = state.props();
         Arc::new(Daemon {
@@ -294,10 +409,12 @@ impl Daemon {
             refreshing: AtomicBool::new(false),
             windows: AtomicUsize::new(0),
             signin_child: Mutex::new(None),
-            secrets: secrets::from_env(),
+            secrets,
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
-            written: Mutex::new(0),
+            written: Mutex::new(Written::default()),
+            in_flight: AtomicUsize::new(0),
+            pings_seen: AtomicU64::new(0),
         })
     }
 
@@ -318,9 +435,15 @@ impl Daemon {
         // as soon as we own it, and must not see FindMyPasswordStored
         // false for want of a look. A keyring slower than that is still
         // announced when it answers.
+        // The session's cookies are read the same way: an unlocked keyring
+        // answers at once, a locked one's prompt never holds up the name.
         let (looked, keyring_looked) = std::sync::mpsc::channel();
         let me = self.clone();
         thread::spawn(move || {
+            me.settle_removal();
+            if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
+                eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
+            }
             me.look_for_password();
             let _ = looked.send(());
             me.publish();
@@ -370,6 +493,9 @@ impl Daemon {
         if all || published.apple_id != now.apple_id {
             changed.insert("AppleId", now.apple_id.as_str().into());
         }
+        if all || published.full_name != now.full_name {
+            changed.insert("FullName", now.full_name.as_str().into());
+        }
         if all || published.dsid != now.dsid {
             changed.insert("Dsid", now.dsid.as_str().into());
         }
@@ -403,14 +529,15 @@ impl Daemon {
     // ------------------------------------------------------------- store
 
     /// Forgets the account (confirmed 421/401 or `SignOut`); the returned
-    /// [`Save`] removes `account.json`.
+    /// [`Save`] removes `account.json` and the keyring's session.
     fn forget(&self, st: &mut State) -> Save {
         st.account = None;
+        st.unread = None;
         st.generation += 1;
         self.save_account(st)
     }
 
-    /// Takes `account.json`'s next contents (the account now, or none):
+    /// Takes the account's next stored state (the account now, or none):
     /// cheap, under the state lock. [`Daemon::write`] it once the lock is
     /// dropped, so no caller waits on the disk for the state.
     fn save_account(&self, st: &mut State) -> Save {
@@ -421,22 +548,146 @@ impl Daemon {
         }
     }
 
-    /// Writes (or removes) `account.json` as `save` says, unless a later
-    /// [`Save`] got there first. Errors are logged: the session in memory
-    /// is still right, and the next change retries.
+    /// Writes (or removes) `account.json` and the keyring's session as
+    /// `save` says, unless a later [`Save`] got there first. The keyring is
+    /// written only when the jars changed. Errors are logged: the session
+    /// in memory is still right, and the next change retries.
     fn write(&self, save: Save) {
         let mut written = lock(&self.written);
-        if save.seq <= *written {
+        if save.seq <= written.seq {
             return;
         }
-        *written = save.seq;
+        written.seq = save.seq;
         let path = &self.cfg.paths.account;
-        let result = match &save.account {
-            Some(a) => a.save(path).map_err(|e| format!("saving {}: {e}", path.display())),
-            None => files::remove(path).map_err(|e| format!("removing {}: {e}", path.display())),
-        };
-        if let Err(e) = result {
+        let mut errors = Vec::new();
+        match &save.account {
+            Some(a) => {
+                if let Err(e) = a.stored().save(path) {
+                    errors.push(format!("saving {}: {e}", path.display()));
+                }
+                let secret = a.secret();
+                if written.secret.as_ref() != Some(&secret) {
+                    written.secret = None;
+                    match self.secrets.set_session(&a.apple_id, &secret) {
+                        Ok(()) => {
+                            written.secret = Some(secret);
+                            self.clear_removal_pending();
+                        }
+                        Err(e) => errors.push(format!("storing the session's cookies in the keyring: {e}")),
+                    }
+                }
+            }
+            None => {
+                if let Err(e) = files::remove(path) {
+                    errors.push(format!("removing {}: {e}", path.display()));
+                }
+                written.secret = None;
+                match self.secrets.remove_session() {
+                    Ok(_) => self.clear_removal_pending(),
+                    Err(e) => {
+                        errors.push(format!("removing the session from the keyring (retried at the next start): {e}"));
+                        let marker = &self.cfg.paths.removal_pending;
+                        if let Err(e) = files::touch(marker) {
+                            errors.push(format!("writing {}: {e}", marker.display()));
+                        }
+                    }
+                }
+            }
+        }
+        for e in errors {
             eprintln!("icloud-sessiond: {e}");
+        }
+    }
+
+    /// With the cookies of the account `account.json` names unread (the
+    /// keyring failed before), tries the keyring again: `Ok` once they are
+    /// read (or the account is gone), else why not.
+    ///
+    /// It holds [`Daemon::written`] throughout, so a sign-in or sign-out
+    /// meanwhile writes after it (lock order: `written`, then `state`), and
+    /// a result for an account replaced meanwhile is dropped.
+    fn retry_keyring(&self) -> Result<(), ServiceError> {
+        if lock(&self.state).unread.is_none() {
+            return Ok(());
+        }
+        let arrived = Instant::now();
+        let mut written = lock(&self.written);
+        let generation = {
+            let st = lock(&self.state);
+            if st.unread.is_none() {
+                return Ok(());
+            }
+            // Waited behind a read that failed meanwhile (a dismissed
+            // prompt, say): its answer is ours, not another prompt.
+            if let Some((at, why)) = &st.keyring_failed
+                && *at >= arrived
+            {
+                return Err(ServiceError::KeyringUnavailable(why.clone()));
+            }
+            st.generation
+        };
+        let result = load_account(&self.cfg.paths.account, self.secrets.as_ref());
+        let mut st = lock(&self.state);
+        if st.generation != generation || st.unread.is_none() {
+            return Ok(());
+        }
+        match result {
+            Ok(account) => {
+                written.secret = account.as_ref().map(Account::secret);
+                if account.is_some() {
+                    eprintln!("icloud-sessiond: read the session's cookies from the keyring");
+                }
+                st.account = account;
+                st.unread = None;
+                st.generation += 1;
+                let restored = st.account.is_some();
+                drop(st);
+                drop(written);
+                if restored {
+                    // Unknown until now: FindMyPasswordStored, and the
+                    // automatic Find My sign-in, depend on it.
+                    self.look_for_password();
+                }
+                self.publish();
+                Ok(())
+            }
+            Err(unread) => {
+                let why = unread.why.clone();
+                st.unread = Some(unread);
+                st.keyring_failed = Some((Instant::now(), why.clone()));
+                Err(ServiceError::KeyringUnavailable(why))
+            }
+        }
+    }
+
+    /// Removes the session from the keyring for a sign-out that could not
+    /// (see `removal_pending`), unless an account was stored since: at
+    /// start, and on a `SignOut()` with nothing else to forget.
+    fn settle_removal(&self) {
+        if !self.cfg.paths.removal_pending.exists() {
+            return;
+        }
+        let _written = lock(&self.written);
+        {
+            let st = lock(&self.state);
+            if st.account.is_some() || st.unread.is_some() {
+                return;
+            }
+        }
+        match self.secrets.remove_session() {
+            Ok(_) => {
+                eprintln!("icloud-sessiond: removed the signed-out session from the keyring");
+                self.clear_removal_pending();
+            }
+            Err(e) => eprintln!("icloud-sessiond: removing the signed-out session from the keyring: {e}"),
+        }
+    }
+
+    /// The keyring's session item was replaced or removed: nothing owed.
+    fn clear_removal_pending(&self) {
+        let marker = &self.cfg.paths.removal_pending;
+        if let Err(e) = files::remove(marker) {
+            eprintln!("icloud-sessiond: removing {}: {e}", marker.display());
         }
     }
 
@@ -493,6 +744,7 @@ impl Daemon {
                     cookies::merge_set_cookies(&mut a.cookies, &v.set_cookies, time::now_secs());
                     a.webservices = v.webservices;
                     a.apple_id = v.apple_id;
+                    a.full_name = v.full_name;
                     a.validated_at = time::now_secs();
                     save = Some(self.save_account(&mut st));
                 }
@@ -550,6 +802,7 @@ impl Daemon {
     /// and if not, the app's request gets 421/401 and
     /// `ReportSignInRequired()` confirms. An older one is validated first.
     fn session(self: &Arc<Daemon>) -> Result<SessionReply, ServiceError> {
+        self.retry_keyring()?;
         let validated_at = lock(&self.state).account.as_ref().map(|a| a.validated_at);
         let age = time::now_secs().saturating_sub(validated_at.ok_or_else(sign_in_required)?);
         if age >= whole_secs(self.cfg.handout_max_age) {
@@ -572,7 +825,8 @@ impl Daemon {
         ))
     }
 
-    fn merge_cookies(&self, set_cookies: &[String]) {
+    fn merge_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.retry_keyring()?;
         let mut st = lock(&self.state);
         let changed = st
             .account
@@ -584,6 +838,7 @@ impl Daemon {
             self.write(save);
         }
         self.publish();
+        Ok(())
     }
 
     /// Confirms with Apple before signing every app out. A 2xx keeps the
@@ -591,16 +846,18 @@ impl Daemon {
     /// nothing. A `/validate` that finishes after the report arrived counts
     /// as the confirmation, so a burst of reports costs one round trip.
     /// Returns whether the account is still signed in.
-    fn report_sign_in_required(&self) -> bool {
-        match self.ensure_fresh(Fresh::Confirm) {
+    fn report_sign_in_required(&self) -> Result<bool, ServiceError> {
+        self.retry_keyring()?;
+        Ok(match self.ensure_fresh(Fresh::Confirm) {
             Ok(()) | Err(Refresh::Failed) => lock(&self.state).account.is_some(),
             Err(Refresh::SignedOut) => false,
-        }
+        })
     }
 
     /// `FindMySession()`: the Find My jar's cookie header and client params.
     /// With no jar, and a password stored, signs in to Find My first.
     fn find_my_session(&self) -> Result<FindMyReply, ServiceError> {
+        self.retry_keyring()?;
         let held = |st: &State| -> Result<Option<FindMyReply>, ServiceError> {
             let a = st.account.as_ref().ok_or_else(sign_in_required)?;
             Ok(a.find_my.as_ref().map(|f| {
@@ -616,7 +873,8 @@ impl Daemon {
     }
 
     /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
-    fn merge_find_my_cookies(&self, set_cookies: &[String]) {
+    fn merge_find_my_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.retry_keyring()?;
         let mut st = lock(&self.state);
         let changed = st
             .account
@@ -629,13 +887,15 @@ impl Daemon {
             self.write(save);
         }
         self.publish();
+        Ok(())
     }
 
     /// A client got HTTP 450 from Find My: its session is spent. Forgets
     /// the Find My jar, then signs in to Find My again if a password is
     /// stored. Returns whether a new jar is held (the client retries once).
-    fn report_find_my_auth_required(&self) -> bool {
-        self.auto_find_my_login(LoginWhy::Reported)
+    fn report_find_my_auth_required(&self) -> Result<bool, ServiceError> {
+        self.retry_keyring()?;
+        Ok(self.auto_find_my_login(LoginWhy::Reported))
     }
 
     // ------------------------------------------------ Find My password
@@ -821,6 +1081,9 @@ impl Daemon {
         if password.is_empty() {
             return Err(ServiceError::Failed("the password is empty".into()));
         }
+        // Signed in with the jars unread (keyring locked at start): read
+        // them now, or say why not.
+        self.retry_keyring()?;
         let _one = lock(&self.find_my_login_lock);
         let (apple_id, dsid, generation) = {
             let st = lock(&self.state);
@@ -859,10 +1122,11 @@ impl Daemon {
         }
     }
 
-    /// `ForgetPassword()`: removes every icloud-session keyring item.
+    /// `ForgetPassword()`: removes the stored password(s); the session's
+    /// keyring item stays.
     fn forget_password(&self) -> Result<(), ServiceError> {
         let _one = lock(&self.find_my_login_lock);
-        let n = self.secrets.forget_all().map_err(ServiceError::Failed)?;
+        let n = self.secrets.forget_passwords().map_err(ServiceError::Failed)?;
         eprintln!("icloud-sessiond: removed {n} stored password(s) from the keyring");
         let mut st = lock(&self.state);
         st.password_stored = false;
@@ -1001,7 +1265,14 @@ impl Daemon {
             return Err(format!("{} exited with {status} (window closed?)", bin.display()));
         }
         if find {
-            return self.store_find_my(seq, find_my_capture(&out)?);
+            let capture = find_my_capture(&out)?;
+            // The account it joins may still be unread (keyring locked at
+            // start); the window's sign-in unlocked nothing for it.
+            self.retry_keyring().map_err(|e| match e {
+                ServiceError::KeyringUnavailable(why) => format!("the keyring is unavailable: {why}"),
+                e => e.to_string(),
+            })?;
+            return self.store_find_my(seq, capture);
         }
         let (mut jar, params) = parse_capture(&out)?.into_parts();
         if jar.is_empty() {
@@ -1021,9 +1292,10 @@ impl Daemon {
             ValidateError::Failed(m) => m,
         })?;
         cookies::merge_set_cookies(&mut jar, &v.set_cookies, now);
-        let account = Account {
+        let mut account = Account {
             apple_id: v.apple_id,
             dsid: v.dsid,
+            full_name: v.full_name,
             cookies: jar,
             client_params: params,
             webservices: v.webservices,
@@ -1031,20 +1303,72 @@ impl Daemon {
             captured_at: time::rfc3339_millis(time::now_ms()),
             find_my: None,
         };
+        // The keyring write is serialized with every other (`written`, then
+        // `state`), so no older jar's write lands after this one.
+        let mut written = lock(&self.written);
+        let unread_same = {
+            let st = lock(&self.state);
+            if st.signin_seq != seq {
+                return Err(cancelled());
+            }
+            // Signing in again as the same Apple ID keeps its Find My
+            // session, which Apple judges on its own.
+            if let Some(old) = st.account.as_ref().filter(|old| old.dsid == account.dsid) {
+                account.find_my = old.find_my.clone();
+            }
+            // Its jars were never read (keyring locked at start): still in
+            // an account.json the migration could not move, or in the
+            // keyring.
+            st.unread
+                .as_ref()
+                .filter(|u| st.account.is_none() && u.stored.dsid == account.dsid)
+                .map(|u| u.stored.legacy_secret())
+        };
+        if let Some(legacy) = unread_same {
+            // The keyring is unlocked if this sign-in is to be kept, so it
+            // can be read now.
+            let old = legacy.or_else(|| {
+                let text = self.secrets.get_session().ok().flatten()?;
+                serde_json::from_str::<SessionSecret>(&text).ok()
+            });
+            if let Some(old) = old.filter(|old| old.dsid == account.dsid) {
+                account.find_my = old.find_my;
+            }
+        }
+        // Into the keyring first: a sign-in that cannot be kept fails, and
+        // says why, rather than lasting only until the daemon exits.
+        let secret = account.secret();
+        self.secrets
+            .set_session(&account.apple_id, &secret)
+            .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
+        written.secret = Some(secret);
+        self.clear_removal_pending();
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
+            drop(st);
+            // A SignOut came in meanwhile, and may have removed the session
+            // before this one was stored.
+            written.secret = None;
+            match self.secrets.remove_session() {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
+                    let _ = files::touch(&self.cfg.paths.removal_pending);
+                }
+            }
             return Err(cancelled());
         }
-        let mut account = account;
-        // Signing in again as the same Apple ID keeps its Find My session,
-        // which Apple judges on its own.
-        if let Some(old) = st.account.as_mut().filter(|old| old.dsid == account.dsid) {
-            account.find_my = old.find_my.take();
+        // The Find My jar as it is now: a merge or Find My sign-in may have
+        // changed it while the keyring was written (`write` below stores it).
+        if let Some(now) = st.account.as_ref().filter(|now| now.dsid == account.dsid) {
+            account.find_my = now.find_my.clone();
         }
         st.account = Some(account);
+        st.unread = None;
         st.generation += 1;
         let save = self.save_account(&mut st);
         drop(st);
+        drop(written);
         self.write(save);
         Ok(())
     }
@@ -1075,7 +1399,10 @@ impl Daemon {
 
     /// Forgets the account, closes an open sign-in window (its result is
     /// dropped), then deletes the window's WebKit profile.
-    fn sign_out(&self) {
+    ///
+    /// `KeyringUnavailable`: signed out, but the keyring would not remove
+    /// the session's cookies; the next start removes them.
+    fn sign_out(&self) -> Result<(), ServiceError> {
         let save = {
             let mut slot = lock(&self.signin_child);
             if let Some((_, mut child)) = slot.take() {
@@ -1086,10 +1413,13 @@ impl Daemon {
             st.signin_seq += 1;
             st.signing_in = false;
             st.last_activity = Instant::now();
-            st.account.is_some().then(|| self.forget(&mut st))
+            (st.account.is_some() || st.unread.is_some()).then(|| self.forget(&mut st))
         };
-        if let Some(save) = save {
-            self.write(save);
+        match save {
+            Some(save) => self.write(save),
+            // Already signed out: a removal an earlier SignOut owed is
+            // tried again (the keyring may answer now).
+            None => self.settle_removal(),
         }
         for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
             if let Err(e) = files::remove_dir(dir) {
@@ -1097,6 +1427,14 @@ impl Daemon {
             }
         }
         self.publish();
+        if self.cfg.paths.removal_pending.exists() {
+            return Err(ServiceError::KeyringUnavailable(
+                "signed out, but the keyring would not remove the session's cookies; \
+                 icloud-session removes them at its next start or sign-out with the keyring available"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     // ------------------------------------------------ clients, heartbeat
@@ -1118,6 +1456,9 @@ impl Daemon {
                 continue;
             };
             if Some(&sender) == own.as_ref() {
+                if header.member().is_some_and(|m| m.as_str() == "Ping") {
+                    self.pings_seen.fetch_add(1, Ordering::SeqCst);
+                }
                 continue;
             }
             let mut st = lock(&self.state);
@@ -1154,15 +1495,75 @@ impl Daemon {
                 for name in &gone {
                     st.clients.remove(name);
                 }
-                if st.clients.is_empty() && !st.signing_in && st.last_activity.elapsed() >= self.cfg.idle {
-                    return;
+                let idle = st.clients.is_empty() && !st.signing_in && st.last_activity.elapsed() >= self.cfg.idle;
+                if !idle {
+                    st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
+                } else {
+                    drop(st);
+                    if self.wind_down() {
+                        return;
+                    }
+                    false
                 }
-                st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
             };
             if heartbeat {
                 self.refresh_in_background();
             }
         }
+    }
+}
+
+impl Daemon {
+    /// Idle: gives up the bus name, so later calls start a new daemon, and
+    /// answers every call already sent to this one. A ping to itself, seen
+    /// after every message sent before it, says when they have all been
+    /// read. Returns false (serve on) if one came meanwhile and the name
+    /// could be taken back.
+    fn wind_down(&self) -> bool {
+        let Some(conn) = self.conn() else {
+            return true;
+        };
+        let decided = Instant::now();
+        if let Err(e) = conn.release_name(icloud_session::BUS_NAME) {
+            eprintln!("icloud-sessiond: releasing the bus name: {e}");
+        }
+        let pings = self.pings_seen.load(Ordering::SeqCst);
+        let own = conn.unique_name().map(|n| n.to_string()).unwrap_or_default();
+        match conn.call_method(Some(own.as_str()), OBJECT_PATH, Some("org.freedesktop.DBus.Peer"), "Ping", &()) {
+            Ok(_) => {
+                let start = Instant::now();
+                while self.pings_seen.load(Ordering::SeqCst) == pings && start.elapsed() < FLUSH_WAIT {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            Err(e) => eprintln!("icloud-sessiond: pinging itself before exiting: {e}"),
+        }
+        if lock(&self.state).last_call >= decided {
+            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+            if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
+                conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
+            {
+                return false;
+            }
+        }
+        let start = Instant::now();
+        while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
+            thread::sleep(Duration::from_millis(5));
+        }
+        // A sign-in window opened by one of those calls: serve on if the
+        // name is still free, else let it finish storing what it captures.
+        if lock(&self.state).signing_in {
+            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+            if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
+                conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
+            {
+                return false;
+            }
+            while lock(&self.state).signing_in {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+        true
     }
 }
 
@@ -1303,6 +1704,13 @@ impl Service {
         self.props().apple_id
     }
 
+    /// The account's name as Apple has it (`dsInfo`); empty when signed
+    /// out or unknown.
+    #[zbus(property, name = "FullName")]
+    fn full_name(&self) -> String {
+        self.props().full_name
+    }
+
     #[zbus(property, name = "Dsid")]
     fn dsid(&self) -> String {
         self.props().dsid
@@ -1324,13 +1732,15 @@ impl Service {
     #[zbus(name = "Session", out_args("cookie_header", "client_params", "webservices"))]
     // The literal tuple (not `SessionReply`) lets the macro see three out args.
     async fn session(&self) -> Result<(String, HashMap<String, String>, HashMap<String, String>), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.session()).await
     }
 
     /// Raw `Set-Cookie` header values a client received from Apple.
     #[zbus(name = "MergeCookies")]
-    async fn merge_cookies(&self, set_cookies: Vec<String>) {
+    async fn merge_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.merge_cookies(&set_cookies)).await
     }
@@ -1339,7 +1749,8 @@ impl Service {
     /// with `/validate`: true = still signed in (fetch `Session()` and retry
     /// once), false = signed out.
     #[zbus(name = "ReportSignInRequired", out_args("still_signed_in"))]
-    async fn report_sign_in_required(&self) -> bool {
+    async fn report_sign_in_required(&self) -> Result<bool, ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.report_sign_in_required()).await
     }
@@ -1352,6 +1763,7 @@ impl Service {
     /// Opens the sign-in window unless it is open; returns at once.
     #[zbus(name = "SignIn")]
     async fn sign_in(&self) {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.sign_in(false)).await
     }
@@ -1361,6 +1773,7 @@ impl Service {
     /// once. The captured jar becomes the Find My session.
     #[zbus(name = "AuthorizeFindMy")]
     async fn authorize_find_my(&self) {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.sign_in(true)).await
     }
@@ -1369,13 +1782,15 @@ impl Service {
     /// `findme` host only; error `FindMyAuthRequired` when there is none.
     #[zbus(name = "FindMySession", out_args("cookie_header", "client_params"))]
     async fn find_my_session(&self) -> Result<(String, HashMap<String, String>), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.find_my_session()).await
     }
 
     /// Raw `Set-Cookie` header values a client received from Find My.
     #[zbus(name = "MergeFindMyCookies")]
-    async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) {
+    async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.merge_find_my_cookies(&set_cookies)).await
     }
@@ -1384,7 +1799,8 @@ impl Service {
     /// with a password stored, signs in to Find My again. True = a new
     /// Find My session is held (retry once).
     #[zbus(name = "ReportFindMyAuthRequired", out_args("reauthorized"))]
-    async fn report_find_my_auth_required(&self) -> bool {
+    async fn report_find_my_auth_required(&self) -> Result<bool, ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.report_find_my_auth_required()).await
     }
@@ -1398,6 +1814,7 @@ impl Service {
     /// it in the keyring for automatic Find My re-authorization.
     #[zbus(name = "SetPassword")]
     async fn set_password(&self, password: String) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         let password = Password::new(password);
         blocking::unblock(move || d.set_password(password)).await
@@ -1406,13 +1823,15 @@ impl Service {
     /// Removes the stored password(s) from the keyring.
     #[zbus(name = "ForgetPassword")]
     async fn forget_password(&self) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.forget_password()).await
     }
 
     /// Forgets the account and the sign-in window's WebKit profile.
     #[zbus(name = "SignOut")]
-    async fn sign_out(&self) {
+    async fn sign_out(&self) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.sign_out()).await
     }
