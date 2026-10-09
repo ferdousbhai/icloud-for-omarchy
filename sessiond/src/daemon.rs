@@ -204,6 +204,10 @@ struct State {
     /// Bumped by every [`Daemon::save_account`], so the writes done after
     /// the lock is dropped never put an older account over a newer one.
     save_seq: u64,
+    /// When the last keyring read for `unread` failed, and why: callers
+    /// that were already waiting share that answer rather than each
+    /// asking (and prompting) again.
+    keyring_failed: Option<(Instant, String)>,
 }
 
 /// A write of the account (`account.json` and its keyring item), taken
@@ -392,6 +396,7 @@ impl Daemon {
             find_my_last_login: None,
             find_my_last_ok: None,
             save_seq: 0,
+            keyring_failed: None,
         };
         let props = state.props();
         Arc::new(Daemon {
@@ -605,11 +610,19 @@ impl Daemon {
         if lock(&self.state).unread.is_none() {
             return Ok(());
         }
+        let arrived = Instant::now();
         let mut written = lock(&self.written);
         let generation = {
             let st = lock(&self.state);
             if st.unread.is_none() {
                 return Ok(());
+            }
+            // Waited behind a read that failed meanwhile (a dismissed
+            // prompt, say): its answer is ours, not another prompt.
+            if let Some((at, why)) = &st.keyring_failed
+                && *at >= arrived
+            {
+                return Err(ServiceError::KeyringUnavailable(why.clone()));
             }
             st.generation
         };
@@ -641,6 +654,7 @@ impl Daemon {
             Err(unread) => {
                 let why = unread.why.clone();
                 st.unread = Some(unread);
+                st.keyring_failed = Some((Instant::now(), why.clone()));
                 Err(ServiceError::KeyringUnavailable(why))
             }
         }
@@ -1530,6 +1544,19 @@ impl Daemon {
         let start = Instant::now();
         while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
             thread::sleep(Duration::from_millis(5));
+        }
+        // A sign-in window opened by one of those calls: serve on if the
+        // name is still free, else let it finish storing what it captures.
+        if lock(&self.state).signing_in {
+            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+            if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
+                conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
+            {
+                return false;
+            }
+            while lock(&self.state).signing_in {
+                thread::sleep(Duration::from_millis(50));
+            }
         }
         true
     }
