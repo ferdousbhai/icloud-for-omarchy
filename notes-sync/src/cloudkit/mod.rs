@@ -72,6 +72,7 @@ impl From<icloud_session::Error> for CkError {
             icloud_session::Error::SignInRequired => CkError::SignInRequired,
             icloud_session::Error::Http { status, body } => CkError::Http { status, body },
             icloud_session::Error::Network(m) => CkError::Network(m),
+            icloud_session::Error::BadResponse(m) => CkError::UnexpectedResponse(m),
             icloud_session::Error::Offline(m) => CkError::Offline(m),
             icloud_session::Error::Io(e) => CkError::Io(e),
             other => CkError::Other(other.to_string()),

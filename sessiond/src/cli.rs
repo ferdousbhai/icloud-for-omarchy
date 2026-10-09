@@ -47,7 +47,7 @@ struct Args {
 enum Command {
     /// The daemon's properties.
     ///
-    /// The daemon's properties: signed_in, apple_id, dsid, expires_at (Unix
+    /// The daemon's properties: signed_in, apple_id, full_name, dsid, expires_at (Unix
     /// seconds; null for a sign-in without "Keep me signed in"), signing_in,
     /// find_my_authorized, find_my_password_stored.
     #[command(after_help = AFTER_HELP)]
@@ -236,8 +236,15 @@ fn fail(e: Error) -> ExitCode {
             &message,
             Some("run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)"),
         ),
+        Error::KeyringUnavailable(_) => fail_with(
+            "keyring_unavailable",
+            EXIT_ERROR,
+            &message,
+            Some("unlock the keyring (GNOME Keyring), then try again"),
+        ),
         Error::Service(_) => fail_with("session_service", EXIT_ERROR, &message, None),
         Error::Network(_) => fail_with("network", EXIT_ERROR, &message, None),
+        Error::BadResponse(_) => fail_with("bad_response", EXIT_ERROR, &message, None),
         Error::Offline(_) => fail_with("offline", EXIT_ERROR, &message, None),
         Error::Http { .. } => fail_with("http", EXIT_ERROR, &message, None),
         Error::Io(_) => fail_with("io", EXIT_ERROR, &message, None),

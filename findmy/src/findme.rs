@@ -81,7 +81,9 @@ impl SessionTransport {
     fn drop_on_lost_session(&mut self, e: &icloud_session::Error) {
         if matches!(
             e,
-            icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)
+            icloud_session::Error::SignInRequired
+                | icloud_session::Error::KeyringUnavailable(_)
+                | icloud_session::Error::Service(_)
         ) {
             self.session = None;
         }

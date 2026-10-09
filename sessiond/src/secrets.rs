@@ -1,10 +1,15 @@
-//! Where the Apple ID password for automatic Find My re-authorization
-//! lives: the Secret Service (GNOME Keyring), and nowhere else. Only the
-//! daemon reads or writes it.
+//! The daemon's secrets, in the Secret Service (GNOME Keyring) and nowhere
+//! else; only the daemon reads or writes them. Both kinds of item are in
+//! the default collection:
 //!
-//! Items carry the attributes `application=icloud-session` and
-//! `apple-id=<apple id>`, labelled `iCloud (icloud-session): <apple id>`,
-//! in the default collection.
+//! - The session: the signed-in account's cookie jars (the main one and
+//!   Find My's), as JSON. Attributes `application=icloud-session`,
+//!   `kind=session`; one at a time, labelled `iCloud session
+//!   (icloud-session): <apple id>`.
+//! - The Apple ID password for automatic Find My re-authorization, only
+//!   if the user stores it. Attributes `application=icloud-session`,
+//!   `apple-id=<apple id>` (no `kind`: as items stored before sessions
+//!   moved here have it), labelled `iCloud (icloud-session): <apple id>`.
 //!
 //! `ICLOUD_SESSION_TEST_SECRET_FILE` swaps the keyring for a JSON file, for
 //! the tests only: they run on a private bus with no Secret Service, and
@@ -19,6 +24,8 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zeroize::Zeroizing;
 
 const APPLICATION: &str = "icloud-session";
+const KIND: &str = "kind";
+const SESSION: &str = "session";
 
 pub type Password = Zeroizing<String>;
 
@@ -29,12 +36,23 @@ pub trait SecretStore: Send + Sync {
     fn contains(&self, apple_id: &str) -> Result<bool, String>;
     /// Stores (or replaces) the password for `apple_id`.
     fn set(&self, apple_id: &str, password: &str) -> Result<(), String>;
-    /// Removes every icloud-session item; returns how many.
-    fn forget_all(&self) -> Result<usize, String>;
+    /// Removes every stored password (every icloud-session item but the
+    /// session); returns how many.
+    fn forget_passwords(&self) -> Result<usize, String>;
+    /// The session's jars, as stored.
+    fn get_session(&self) -> Result<Option<Zeroizing<String>>, String>;
+    /// Stores (or replaces) the session's jars.
+    fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String>;
+    /// Removes the session item.
+    fn remove_session(&self) -> Result<(), String>;
 }
 
 pub fn label(apple_id: &str) -> String {
     format!("iCloud (icloud-session): {apple_id}")
+}
+
+pub fn session_label(apple_id: &str) -> String {
+    format!("iCloud session (icloud-session): {apple_id}")
 }
 
 fn attributes(apple_id: &str) -> HashMap<&'static str, String> {
@@ -42,6 +60,10 @@ fn attributes(apple_id: &str) -> HashMap<&'static str, String> {
         ("application", APPLICATION.to_string()),
         ("apple-id", apple_id.to_string()),
     ])
+}
+
+fn session_attributes() -> HashMap<&'static str, String> {
+    HashMap::from([("application", APPLICATION.to_string()), (KIND, SESSION.to_string())])
 }
 
 /// The keyring, or the test file when `ICLOUD_SESSION_TEST_SECRET_FILE` is set.
@@ -209,22 +231,83 @@ impl Open {
     }
 }
 
+impl Open {
+    /// The default collection, unlocked: a locked one's items need not be
+    /// searchable (KeePassXC finds none), and "none" would read as "deleted".
+    fn unlocked_default(&self) -> zbus::Result<OwnedObjectPath> {
+        let collection = self.default_collection()?;
+        if self.locked(&collection, COLLECTION)? {
+            self.unlock(&collection)?;
+        }
+        Ok(collection)
+    }
+
+    /// The secret of the first item in the default collection matching
+    /// `attributes`, unlocking them first if need be.
+    fn read(&self, attributes: &HashMap<&str, String>) -> zbus::Result<Option<Zeroizing<String>>> {
+        for item in self.search(&self.unlocked_default()?, attributes)? {
+            if self.locked(&item, ITEM)? {
+                // Normally unlocked at login; otherwise the keyring asks.
+                self.unlock(&item)?;
+            }
+            let (_, _, value, _): Secret = self.call(&item, ITEM, "GetSecret", &(&self.session,))?;
+            let value = Zeroizing::new(value);
+            if let Ok(text) = std::str::from_utf8(&value) {
+                return Ok(Some(Zeroizing::new(text.to_string())));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Stores `secret` in the default collection, replacing the item with
+    /// the same attributes.
+    fn store(&self, label: String, attributes: HashMap<&str, String>, secret: &str) -> zbus::Result<()> {
+        let collection = self.unlocked_default()?;
+        let properties = HashMap::from([
+            ("org.freedesktop.Secret.Item.Label", Value::from(label)),
+            ("org.freedesktop.Secret.Item.Attributes", Value::from(attributes)),
+        ]);
+        let secret = (&self.session, Vec::<u8>::new(), secret.as_bytes(), CONTENT_TYPE);
+        let (_, prompt): (OwnedObjectPath, OwnedObjectPath) =
+            self.call(&collection, COLLECTION, "CreateItem", &(properties, secret, true))?;
+        self.prompt(&prompt)?;
+        Ok(())
+    }
+
+    /// Deletes, in every collection, the items matching `attributes` but
+    /// not `keep`; returns how many. The default collection, where ours are
+    /// stored, is unlocked first, so a removal never reports none for want
+    /// of seeing them.
+    fn delete(&self, attributes: &HashMap<&str, String>, keep: Option<&HashMap<&str, String>>) -> zbus::Result<usize> {
+        self.unlocked_default()?;
+        let mut n = 0;
+        let collections: OwnedValue = self.call(
+            SERVICE_PATH,
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            &(SERVICE, "Collections"),
+        )?;
+        for collection in Vec::<OwnedObjectPath>::try_from(collections)? {
+            let kept = match keep {
+                Some(keep) => self.search(&collection, keep)?,
+                None => Vec::new(),
+            };
+            for item in self.search(&collection, attributes)? {
+                if kept.contains(&item) {
+                    continue;
+                }
+                let prompt: OwnedObjectPath = self.call(&item, ITEM, "Delete", &())?;
+                self.prompt(&prompt)?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+}
+
 impl SecretStore for Keyring {
     fn get(&self, apple_id: &str) -> Result<Option<Password>, String> {
-        self.run(|k| {
-            for item in k.search(&k.default_collection()?, &attributes(apple_id))? {
-                if k.locked(&item, ITEM)? {
-                    // Normally unlocked at login; otherwise the keyring asks.
-                    k.unlock(&item)?;
-                }
-                let (_, _, value, _): Secret = k.call(&item, ITEM, "GetSecret", &(&k.session,))?;
-                let value = Zeroizing::new(value);
-                if let Ok(text) = std::str::from_utf8(&value) {
-                    return Ok(Some(Zeroizing::new(text.to_string())));
-                }
-            }
-            Ok(None)
-        })
+        self.run(|k| k.read(&attributes(apple_id)))
     }
 
     fn contains(&self, apple_id: &str) -> Result<bool, String> {
@@ -232,45 +315,24 @@ impl SecretStore for Keyring {
     }
 
     fn set(&self, apple_id: &str, password: &str) -> Result<(), String> {
-        self.run(|k| {
-            let collection = k.default_collection()?;
-            if k.locked(&collection, COLLECTION)? {
-                k.unlock(&collection)?;
-            }
-            let properties = HashMap::from([
-                ("org.freedesktop.Secret.Item.Label", Value::from(label(apple_id))),
-                (
-                    "org.freedesktop.Secret.Item.Attributes",
-                    Value::from(attributes(apple_id)),
-                ),
-            ]);
-            let secret = (&k.session, Vec::<u8>::new(), password.as_bytes(), CONTENT_TYPE);
-            let (_, prompt): (OwnedObjectPath, OwnedObjectPath) =
-                k.call(&collection, COLLECTION, "CreateItem", &(properties, secret, true))?;
-            k.prompt(&prompt)?;
-            Ok(())
-        })
+        self.run(|k| k.store(label(apple_id), attributes(apple_id), password))
     }
 
-    fn forget_all(&self) -> Result<usize, String> {
-        self.run(|k| {
-            let mut n = 0;
-            let ours = HashMap::from([("application", APPLICATION.to_string())]);
-            let collections: OwnedValue = k.call(
-                SERVICE_PATH,
-                "org.freedesktop.DBus.Properties",
-                "Get",
-                &(SERVICE, "Collections"),
-            )?;
-            for collection in Vec::<OwnedObjectPath>::try_from(collections)? {
-                for item in k.search(&collection, &ours)? {
-                    let prompt: OwnedObjectPath = k.call(&item, ITEM, "Delete", &())?;
-                    k.prompt(&prompt)?;
-                    n += 1;
-                }
-            }
-            Ok(n)
-        })
+    fn forget_passwords(&self) -> Result<usize, String> {
+        let ours = HashMap::from([("application", APPLICATION.to_string())]);
+        self.run(|k| k.delete(&ours, Some(&session_attributes())))
+    }
+
+    fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
+        self.run(|k| k.read(&session_attributes()))
+    }
+
+    fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
+        self.run(|k| k.store(session_label(apple_id), session_attributes(), secret))
+    }
+
+    fn remove_session(&self) -> Result<(), String> {
+        self.run(|k| k.delete(&session_attributes(), None).map(drop))
     }
 }
 
@@ -301,45 +363,67 @@ impl TestFile {
         crate::files::write_json(&self.0, &value).map_err(|e| format!("{}: {e}", self.0.display()))
     }
 
-    fn matches(item: &TestItem, apple_id: &str) -> bool {
-        item.attributes.get("application").map(String::as_str) == Some(APPLICATION)
-            && item.attributes.get("apple-id").map(String::as_str) == Some(apple_id)
+    fn has(item: &TestItem, attributes: &HashMap<&str, String>) -> bool {
+        attributes.iter().all(|(k, v)| item.attributes.get(*k) == Some(v))
+    }
+
+    fn put(&self, label: String, attributes: HashMap<&str, String>, secret: &str) -> Result<(), String> {
+        let mut items = self.load()?;
+        let attributes: HashMap<String, String> = attributes.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        items.retain(|i| i.attributes != attributes);
+        items.push(TestItem {
+            label,
+            attributes,
+            secret: secret.to_string(),
+        });
+        self.save(&items)
+    }
+
+    fn find(&self, attributes: &HashMap<&str, String>) -> Result<Option<Zeroizing<String>>, String> {
+        Ok(self
+            .load()?
+            .into_iter()
+            .find(|i| TestFile::has(i, attributes))
+            .map(|i| Zeroizing::new(i.secret)))
+    }
+
+    fn remove(&self, attributes: &HashMap<&str, String>, keep: Option<&HashMap<&str, String>>) -> Result<usize, String> {
+        let mut items = self.load()?;
+        let before = items.len();
+        items.retain(|i| !TestFile::has(i, attributes) || keep.is_some_and(|k| TestFile::has(i, k)));
+        let n = before - items.len();
+        self.save(&items)?;
+        Ok(n)
     }
 }
 
 impl SecretStore for TestFile {
     fn get(&self, apple_id: &str) -> Result<Option<Password>, String> {
-        Ok(self
-            .load()?
-            .into_iter()
-            .find(|i| TestFile::matches(i, apple_id))
-            .map(|i| Zeroizing::new(i.secret)))
+        self.find(&attributes(apple_id))
     }
 
     fn contains(&self, apple_id: &str) -> Result<bool, String> {
-        Ok(self.load()?.iter().any(|i| TestFile::matches(i, apple_id)))
+        Ok(self.find(&attributes(apple_id))?.is_some())
     }
 
     fn set(&self, apple_id: &str, password: &str) -> Result<(), String> {
-        let mut items = self.load()?;
-        items.retain(|i| !TestFile::matches(i, apple_id));
-        items.push(TestItem {
-            label: label(apple_id),
-            attributes: attributes(apple_id)
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
-            secret: password.to_string(),
-        });
-        self.save(&items)
+        self.put(label(apple_id), attributes(apple_id), password)
     }
 
-    fn forget_all(&self) -> Result<usize, String> {
-        let mut items = self.load()?;
-        let before = items.len();
-        items.retain(|i| i.attributes.get("application").map(String::as_str) != Some(APPLICATION));
-        let n = before - items.len();
-        self.save(&items)?;
-        Ok(n)
+    fn forget_passwords(&self) -> Result<usize, String> {
+        let ours = HashMap::from([("application", APPLICATION.to_string())]);
+        self.remove(&ours, Some(&session_attributes()))
+    }
+
+    fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
+        self.find(&session_attributes())
+    }
+
+    fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
+        self.put(session_label(apple_id), session_attributes(), secret)
+    }
+
+    fn remove_session(&self) -> Result<(), String> {
+        self.remove(&session_attributes(), None).map(drop)
     }
 }

@@ -24,6 +24,8 @@ pub fn setup_url() -> String {
 pub struct Validated {
     pub dsid: String,
     pub apple_id: String,
+    /// `dsInfo.fullName`, else `firstName lastName`; empty when neither.
+    pub full_name: String,
     pub webservices: BTreeMap<String, String>,
     pub set_cookies: Vec<String>,
 }
@@ -144,6 +146,13 @@ pub fn validate(
     let (Some(dsid), Some(apple_id)) = (text("dsid"), text("appleId")) else {
         return Err(failed("/validate response lacks dsid or appleId".into()));
     };
+    let full_name = text("fullName").map(str::to_string).unwrap_or_else(|| {
+        [text("firstName"), text("lastName")]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
     let webservices = body
         .get("webservices")
         .and_then(Value::as_object)
@@ -157,6 +166,7 @@ pub fn validate(
     Ok(Validated {
         dsid: dsid.to_string(),
         apple_id: apple_id.to_string(),
+        full_name,
         webservices,
         set_cookies,
     })

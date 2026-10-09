@@ -205,6 +205,7 @@ mod tests {
         icloud_session::Status {
             signed_in,
             apple_id: None,
+            full_name: None,
             dsid: None,
             expires_at: None,
             signing_in,
@@ -296,6 +297,7 @@ mod password_hint_tests {
         let mut status = icloud_session::Status {
             signed_in: true,
             apple_id: None,
+            full_name: None,
             dsid: None,
             expires_at: None,
             signing_in: false,
