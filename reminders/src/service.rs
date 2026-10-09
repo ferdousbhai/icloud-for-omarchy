@@ -10,6 +10,7 @@
 //! (CloudKit Web Services returns the saved records). There is no offline
 //! queue: a change made without a network fails and says so.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::cloudkit::{CloudKit, Error, Record, Result, Transport};
@@ -72,7 +73,11 @@ impl<'a> Service<'a> {
         let (records, new_token, full) = match token {
             Some(t) => match ck.all_changes(&["Reminder"], Some(&t)) {
                 Ok((records, token)) => (records, token, false),
-                Err(Error::CloudKit { code, .. }) if code == "CHANGE_TOKEN_EXPIRED" => {
+                // CloudKit refuses a stale token with CHANGE_TOKEN_EXPIRED, or at
+                // zone level with BAD_REQUEST ("Unknown sync continuation type");
+                // the Notes engine recovers from the latter the same way
+                // (notes-sync/src/cloudkit/client.rs, fetch_zone_changes).
+                Err(Error::CloudKit { code, .. }) if code == "CHANGE_TOKEN_EXPIRED" || code == "BAD_REQUEST" => {
                     let (records, token) = ck.all_changes(&["Reminder"], None)?;
                     (records, token, true)
                 }
@@ -87,13 +92,22 @@ impl<'a> Service<'a> {
         let _lock = self.store.lock().map_err(io)?;
         // Re-read under the lock: a write may have landed meanwhile.
         let mut cache = self.cache()?;
-        if full || cache.account != account {
+        // What a write saved while the changes were being fetched is newer
+        // than the fetched copy: keep it (see apply_record).
+        let previous = if cache.account != account {
+            Default::default()
+        } else if full {
+            std::mem::take(&mut cache.reminders)
+        } else {
+            cache.reminders.clone()
+        };
+        if cache.account != account {
             cache.reminders.clear();
         }
         cache.account = account;
         let changed = records.len();
         for r in &records {
-            apply_record(&mut cache, r)?;
+            apply_record(&mut cache, r, &previous)?;
         }
         cache.lists = lists;
         cache.sync_token = Some(new_token);
@@ -107,12 +121,13 @@ impl<'a> Service<'a> {
         })
     }
 
-    /// Folds what CloudKit answered into the cache.
+    /// Folds what CloudKit answered to a write into the cache: the server's
+    /// copy, as saved.
     fn store_records(&self, records: &[Record]) -> Result<()> {
         let _lock = self.store.lock().map_err(io)?;
         let mut cache = self.cache()?;
         for r in records {
-            apply_record(&mut cache, r)?;
+            apply_record(&mut cache, r, &BTreeMap::new())?;
         }
         self.store.save_cache(&cache).map_err(io)
     }
@@ -182,10 +197,17 @@ fn saved_reminder(id: &str, records: &[Record]) -> Result<Option<Reminder>> {
 }
 
 /// Folds one changes/zone, lookup or modify record into the cache.
-fn apply_record(cache: &mut Cache, r: &Record) -> Result<()> {
+/// Applies one fetched record. A cached copy modified later than the
+/// fetched one (a write that landed during the fetch) is kept; a deletion
+/// always applies.
+fn apply_record(cache: &mut Cache, r: &Record, previous: &BTreeMap<String, Reminder>) -> Result<()> {
     match Reminder::from_record(r).map_err(Error::Other)? {
         Parsed::Live(rem) => {
-            cache.reminders.insert(rem.id.clone(), *rem);
+            let newer = previous
+                .get(&rem.id)
+                .filter(|c| matches!((c.modified_ms, rem.modified_ms), (Some(a), Some(b)) if a > b));
+            let kept = newer.cloned().unwrap_or(*rem);
+            cache.reminders.insert(kept.id.clone(), kept);
         }
         Parsed::Gone(id) => {
             cache.reminders.remove(&id);

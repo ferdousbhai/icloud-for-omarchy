@@ -25,8 +25,13 @@ const APP_NAME: &str = "iCloud Reminders";
 /// that records them (and forgets reminders that no longer wait).
 pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &TimeZone) -> (Vec<&'c Reminder>, Notified) {
     let now_ms = now.as_millisecond();
+    // A run is the first until the cache has synced for this account: one
+    // that saw an empty cache (signed out, offline) or another account's
+    // marks nothing, so the backlog would otherwise fire after sign-in.
+    let started = state.started && state.account == cache.account;
     let mut next = Notified {
-        started: true,
+        started: cache.synced_ms.is_some(),
+        account: cache.account.clone(),
         fired: Default::default(),
         sync_attempt_ms: state.sync_attempt_ms,
     };
@@ -40,7 +45,7 @@ pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &T
             continue;
         }
         let already = state.fired.get(&r.id) == Some(&at);
-        let fresh = state.started
+        let fresh = started
             && !already
             && at > now_ms - CATCH_UP_MS
             && r.modified_ms.is_none_or(|m| m < at);
@@ -119,7 +124,10 @@ mod tests {
     }
 
     fn cache(rs: Vec<Reminder>) -> Cache {
-        let mut c = Cache::default();
+        let mut c = Cache {
+            synced_ms: Some(0),
+            ..Cache::default()
+        };
         c.lists.push(List {
             id: "List/A".into(),
             name: "Groceries".into(),

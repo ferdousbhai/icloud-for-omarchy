@@ -4,7 +4,7 @@
 # Usage: bin/verify-release <release-tag> <package> <version> [...]
 set -euo pipefail
 tag=${1:?release tag required}; shift
-[[ $tag =~ ^(session|photos|findmy|notes)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
+[[ $tag =~ ^(session|photos|findmy|notes|reminders)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
 (( $# >= 2 && $# % 2 == 0 )) || { echo 'Expected package/version pairs' >&2; exit 1; }
 command -v docker >/dev/null || { echo 'docker is required' >&2; exit 1; }
 arch=${VERIFY_ARCH:-$(uname -m)}

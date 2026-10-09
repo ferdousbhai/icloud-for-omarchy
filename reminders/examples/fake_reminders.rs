@@ -108,6 +108,15 @@ impl State {
             None => 0,
             Some(t) => match t.strip_prefix("tok-").and_then(|n| n.parse().ok()) {
                 Some(n) => n,
+                // Apple answers an expired token with CHANGE_TOKEN_EXPIRED and
+                // one it can't parse with BAD_REQUEST.
+                None if t.starts_with("garbled") => {
+                    return json!({ "zones": [{
+                        "zoneID": zone_req["zoneID"],
+                        "serverErrorCode": "BAD_REQUEST",
+                        "reason": "Unknown sync continuation type",
+                    }] });
+                }
                 None => {
                     return json!({ "zones": [{
                         "zoneID": zone_req["zoneID"],

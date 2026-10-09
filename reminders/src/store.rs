@@ -80,9 +80,12 @@ impl Cache {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Notified {
-    /// False until the first background run, which marks what is already
-    /// due as notified instead of showing every overdue reminder at once.
+    /// False until a background run has seen a synced cache, which marks
+    /// what is already due as notified instead of showing every overdue
+    /// reminder at once.
     pub started: bool,
+    /// The dsid `started` and `fired` are for; another account starts over.
+    pub account: String,
     /// Reminder id to the due instant (Unix ms) it notified for.
     pub fired: BTreeMap<String, i64>,
     /// When a background run last tried to sync (Unix ms), succeeded or

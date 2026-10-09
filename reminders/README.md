@@ -201,5 +201,7 @@ read.
 
 Released with the other packages from the repository root; see the root
 [README](../README.md#releasing). Its tags are `reminders-v<version>`.
-The first release must name it (`bin/release icloud-reminders 0.1.0`),
-since a release carries forward only packages an earlier one published.
+Name it in its first release (`bin/release icloud-reminders 0.1.0`) so
+it gets a real version: every release builds all packages, and an unnamed
+one ships as its post-tag development version (`0.0.0.r<count>` before
+its first tag).

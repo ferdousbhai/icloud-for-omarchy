@@ -293,12 +293,14 @@ fn sync_pages_and_recovers_from_an_expired_token() {
     assert_eq!(out["changed"], 0);
     assert_eq!(out["full"], false);
 
-    // A token the server no longer knows: everything again.
+    // A token the server no longer knows, or can't read: everything again.
     let cache = env.data().join("cache.json");
-    let mut c: Value = serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
-    c["sync_token"] = json!("stale");
-    std::fs::write(&cache, c.to_string()).unwrap();
-    assert_eq!(env.json(&["sync"])["full"], true);
+    for token in ["stale", "garbled"] {
+        let mut c: Value = serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+        c["sync_token"] = json!(token);
+        std::fs::write(&cache, c.to_string()).unwrap();
+        assert_eq!(env.json(&["sync"])["full"], true, "{token}");
+    }
     assert_eq!(env.json(&["sync", "--full"])["reminders"], 5);
 }
 
@@ -333,8 +335,13 @@ fn offline_is_an_error_and_cached_reads_need_no_network() {
 #[test]
 fn background_notifies_once_when_due() {
     let env = start();
-    // First run: Milk (due a minute ago) is the backlog, marked silently.
-    let out = env.json(&["background"]);
+    // Installed before signing in: that run syncs nothing, so it can't mark
+    // the backlog; the first synced run after sign-in does.
+    *env.state.signed_out.lock().unwrap() = true;
+    assert_eq!(env.json(&["background"])["synced"], false);
+    *env.state.signed_out.lock().unwrap() = false;
+    // First synced run: Milk (due a minute ago) is the backlog, marked silently.
+    let out = env.json(&["background", "--sync"]);
     assert_eq!(out["synced"], true);
     assert_eq!(out["notified"], json!([]));
     assert!(env.notifications().is_empty());
