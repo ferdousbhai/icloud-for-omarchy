@@ -34,7 +34,7 @@ tool takes its session from it and none signs in by itself.
 
 ```console
 $ icloud-session status
-{"signed_in":true,"apple_id":"you@example.com","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false}
+{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false}
 ```
 
 Needs a human, always:

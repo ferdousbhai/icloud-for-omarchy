@@ -421,12 +421,41 @@ fn keyring_speaks_the_secret_service() {
     assert!(!st().items.iter().any(|i| i.secret == b"nope"));
     st().collections.get_mut(&made).unwrap().1 = false;
 
-    // Forgetting removes every icloud-session item in every collection,
-    // and nobody else's.
-    assert_eq!(keyring.forget_all().unwrap(), 2);
-    let left: Vec<String> = st().items.iter().map(|i| i.attributes["application"].clone()).collect();
-    assert_eq!(left, ["something-else"]);
+    // The session's jars: their own item, replaced in place.
+    assert_eq!(keyring.get_session().unwrap(), None);
+    keyring.set_session("someone@example.com", r#"{"v":1}"#).unwrap();
+    keyring.set_session("someone@example.com", r#"{"v":2}"#).unwrap();
+    let sessions: Vec<FakeItem> = st()
+        .items
+        .iter()
+        .filter(|i| i.attributes.get("kind").map(String::as_str) == Some("session"))
+        .cloned()
+        .collect();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].label, "iCloud session (icloud-session): someone@example.com");
+    assert_eq!(
+        keyring.get_session().unwrap().as_deref().map(String::as_str),
+        Some(r#"{"v":2}"#)
+    );
+    assert_eq!(
+        keyring.get("someone@example.com").unwrap().as_deref().map(String::as_str),
+        Some("correct horse"),
+        "the password is not the session"
+    );
+
+    // Forgetting passwords removes every other icloud-session item in every
+    // collection, and nobody else's, but not the session.
+    assert_eq!(keyring.forget_passwords().unwrap(), 2);
+    let mut left: Vec<String> = st().items.iter().map(|i| i.attributes["application"].clone()).collect();
+    left.sort();
+    assert_eq!(left, ["icloud-session", "something-else"]);
     assert!(!keyring.contains("someone@example.com").unwrap());
+    assert!(keyring.get_session().unwrap().is_some());
     // The error above dropped the session; the next call opened another.
     assert_eq!(st().sessions.len(), 2);
+
+    keyring.remove_session().unwrap();
+    assert_eq!(keyring.get_session().unwrap(), None);
+    let left: Vec<String> = st().items.iter().map(|i| i.attributes["application"].clone()).collect();
+    assert_eq!(left, ["something-else"]);
 }

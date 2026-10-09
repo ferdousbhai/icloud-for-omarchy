@@ -57,6 +57,9 @@ pub const ERROR_SIGN_IN_REQUIRED: &str = "io.github.ferdousbhai.ICloudSession.Er
 /// D-Bus error name the daemon returns from `FindMySession()` when Find My
 /// has not been authorized.
 pub const ERROR_FIND_MY_AUTH_REQUIRED: &str = "io.github.ferdousbhai.ICloudSession.Error.FindMyAuthRequired";
+/// D-Bus error name the daemon returns from `Session()` when an account is
+/// signed in but the keyring holding its cookies cannot be read.
+pub const ERROR_KEYRING_UNAVAILABLE: &str = "io.github.ferdousbhai.ICloudSession.Error.KeyringUnavailable";
 
 /// `Session()`'s reply: cookie header, client params, webservices.
 pub type SessionReply = (String, HashMap<String, String>, HashMap<String, String>);
@@ -67,6 +70,8 @@ pub const DEFAULT_MOCK_URL: &str = "http://127.0.0.1:8765";
 pub const MOCK_DSID: &str = "mock";
 /// The Apple ID of the mock session.
 pub const MOCK_APPLE_ID: &str = "mock@example.com";
+/// The account name of the mock session.
+pub const MOCK_FULL_NAME: &str = "Mock User";
 /// Webservices keys the mock session reports, all pointing at the mock URL.
 pub const MOCK_WEBSERVICES: &[&str] = &[
     "account",
@@ -122,6 +127,11 @@ pub enum Error {
     /// rather than try each one.
     #[error("offline: {0}")]
     Offline(String),
+    /// The daemon has an account, but the keyring, which holds its
+    /// cookies, would not give them (no Secret Service, locked, prompt
+    /// dismissed). Not a sign-in: unlock the keyring and try again.
+    #[error("the keyring holding the iCloud session cannot be read: {0}")]
+    KeyringUnavailable(String),
     /// `icloud-sessiond` could not be reached or failed.
     #[error("icloud-sessiond: {0}")]
     Service(String),
@@ -137,6 +147,9 @@ impl From<zbus::Error> for Error {
             zbus::Error::MethodError(name, _, _) if name.as_str() == ERROR_SIGN_IN_REQUIRED => Error::SignInRequired,
             zbus::Error::MethodError(name, _, _) if name.as_str() == ERROR_FIND_MY_AUTH_REQUIRED => {
                 Error::FindMyAuthRequired
+            }
+            zbus::Error::MethodError(name, msg, _) if name.as_str() == ERROR_KEYRING_UNAVAILABLE => {
+                Error::KeyringUnavailable(msg.clone().unwrap_or_default())
             }
             zbus::Error::MethodError(name, Some(msg), _) => Error::Service(format!("{}: {msg}", name.as_str())),
             _ => Error::Service(e.to_string()),
@@ -179,6 +192,9 @@ impl Response {
 pub struct Status {
     pub signed_in: bool,
     pub apple_id: Option<String>,
+    /// The account's name as Apple has it; `None` when unknown, signed
+    /// out, or when the daemon predates it.
+    pub full_name: Option<String>,
     pub dsid: Option<String>,
     /// Unix seconds when the X-APPLE-WEBAUTH-TOKEN cookie expires; `None`
     /// for a session-only cookie or when unknown.
@@ -212,6 +228,7 @@ fn mock_status() -> Status {
     Status {
         signed_in: true,
         apple_id: Some(MOCK_APPLE_ID.to_string()),
+        full_name: Some(MOCK_FULL_NAME.to_string()),
         dsid: Some(MOCK_DSID.to_string()),
         expires_at: Some(time::now_secs() + 30 * 24 * 3600),
         signing_in: false,
@@ -274,6 +291,7 @@ fn status_from(all: &HashMap<String, OwnedValue>) -> Status {
     Status {
         signed_in: bool_of("SignedIn"),
         apple_id: str_of("AppleId"),
+        full_name: str_of("FullName"),
         dsid: str_of("Dsid"),
         expires_at: all
             .get("ExpiresAt")
@@ -505,6 +523,7 @@ fn apply_property(status: &mut Status, name: &str, value: &OwnedValue) {
     match name {
         "SignedIn" => status.signed_in = parsed.signed_in,
         "AppleId" => status.apple_id = parsed.apple_id,
+        "FullName" => status.full_name = parsed.full_name,
         "Dsid" => status.dsid = parsed.dsid,
         "ExpiresAt" => status.expires_at = parsed.expires_at,
         "SigningIn" => status.signing_in = parsed.signing_in,

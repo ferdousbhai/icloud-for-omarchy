@@ -55,7 +55,9 @@ opens in a window from `icloud-session sign-in`.
 - **You sign in on Apple's own page**, password and two-factor code
   included, in a window opened by `icloud-session sign-in`. The apps never
   see your password.
-- **What's kept** is the session cookies, in
+- **What's kept** is the session cookies, in your system keyring (the
+  Secret Service, e.g. GNOME Keyring). Only who is signed in and when the
+  session was last checked are in a file,
   `~/.local/state/icloud-session/account.json`, readable only by you.
 - **Your password is stored only if you choose to**, for Find My, which asks
   for it again from time to time: `icloud-session set-password` puts it in

@@ -369,10 +369,34 @@ impl Env {
         self.root().join("state/icloud-session/account.json")
     }
 
-    fn account(&self) -> Option<Value> {
+    /// `account.json` as written.
+    fn account_file(&self) -> Option<Value> {
         fs::read(self.account_path())
             .ok()
             .map(|b| serde_json::from_slice(&b).unwrap())
+    }
+
+    /// The test keyring's session item, parsed.
+    fn session_secret(&self) -> Option<Value> {
+        let items = self.all_secrets();
+        let item = items
+            .as_array()?
+            .iter()
+            .find(|i| i["attributes"]["kind"] == "session")?;
+        Some(serde_json::from_str(item["secret"].as_str()?).unwrap())
+    }
+
+    /// The account as stored: `account.json` with the jars (`cookies`,
+    /// `find_my`) from the keyring's session item, as the daemon reads it.
+    fn account(&self) -> Option<Value> {
+        let mut account = self.account_file()?;
+        if let Some(secret) = self.session_secret() {
+            account["cookies"] = secret["cookies"].clone();
+            if let Some(fm) = secret.get("find_my") {
+                account["find_my"] = fm.clone();
+            }
+        }
+        Some(account)
     }
 
     /// The value of cookie `name` in `account.json`'s main jar.
@@ -416,20 +440,36 @@ impl Env {
     }
 
     /// The test keyring's items.
-    fn secrets(&self) -> Value {
+    fn all_secrets(&self) -> Value {
         fs::read(self.secrets_path())
             .ok()
             .map_or(json!([]), |b| serde_json::from_slice(&b).unwrap())
     }
 
+    /// The test keyring's stored passwords (every item but the session).
+    fn secrets(&self) -> Value {
+        let items = self.all_secrets();
+        Value::Array(
+            items
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|i| i["attributes"]["kind"] != "session")
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Puts a password in the test keyring, as `set-password` would.
     fn store_password(&self, password: &str) {
-        let items = json!([{
+        let mut items: Vec<Value> = self.all_secrets().as_array().unwrap().clone();
+        items.retain(|i| i["attributes"]["kind"] == "session");
+        items.push(json!({
             "label": "iCloud (icloud-session): someone@example.com",
             "attributes": {"application": "icloud-session", "apple-id": "someone@example.com"},
             "secret": password,
-        }]);
-        fs::write(self.secrets_path(), items.to_string()).unwrap();
+        }));
+        fs::write(self.secrets_path(), Value::Array(items).to_string()).unwrap();
     }
 
     /// Sets the seeded account's last `/validate`, as an earlier daemon
@@ -835,6 +875,7 @@ EOF"#
         icloud_session::Status {
             signed_in: false,
             apple_id: None,
+            full_name: None,
             dsid: None,
             expires_at: None,
             signing_in: false,
@@ -957,6 +998,7 @@ fn sign_out_forgets_account_and_profile() {
     icloud_session::sign_out_on(&conn).unwrap();
     watch.until("SignedIn false", |s| !s.signed_in);
     assert!(env.account().is_none());
+    assert!(env.session_secret().is_none(), "the keyring's session is gone too");
     assert!(!webkit_data.exists());
     assert!(!webkit_cache.exists());
     assert!(matches!(Session::connect_on(&conn), Err(Error::SignInRequired)));
@@ -1178,7 +1220,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         status,
-        json!({"signed_in": false, "apple_id": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false})
+        json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false})
     );
 
     let out = env.cli(&["validate"]);
@@ -1326,6 +1368,84 @@ fn an_unreadable_account_file_is_set_aside() {
         fs::read_to_string(env.account_path().with_extension("json.bad")).unwrap(),
         "{\"dsid\": truncated"
     );
+}
+
+#[test]
+fn the_cookies_move_to_the_keyring_and_account_json_keeps_none() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    // The seeded account.json is the old kind, cookies and all.
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    env.seed_stale_find_my();
+    assert!(env.account_file().unwrap().get("cookies").is_some());
+    let conn = env.conn();
+    let (cookie, _, _) = session(&conn).unwrap();
+    assert!(cookie.contains("X-APPLE-WEBAUTH-USER"));
+
+    let file = env.account_file().unwrap();
+    assert!(file.get("cookies").is_none() && file.get("find_my").is_none(), "{file}");
+    let secret = env.session_secret().expect("a session item");
+    assert_eq!(secret["dsid"], DSID);
+    assert!(cookie_named(&secret["cookies"], "X-APPLE-WEBAUTH-USER").is_some());
+    assert!(cookie_named(&secret["find_my"]["cookies"], "X-APPLE-WEBAUTH-FMIP").is_some());
+
+    // dsInfo's name, once validated.
+    wait_until("FullName", Duration::from_secs(5), || {
+        prop::<String>(&conn, "FullName") == "Some One"
+    });
+    assert_eq!(env.account_file().unwrap()["full_name"], "Some One");
+
+    // Restarted, the daemon reads the jar back from the keyring.
+    env.kill_daemon(&conn);
+    let (again, _, _) = session(&conn).unwrap();
+    assert_eq!(
+        cookie_of(&again, "X-APPLE-WEBAUTH-USER"),
+        cookie_of(&cookie, "X-APPLE-WEBAUTH-USER")
+    );
+    assert_eq!(prop::<String>(&conn, "FullName"), "Some One");
+
+    // With the keyring's item gone, account.json alone signs nobody in.
+    env.kill_daemon(&conn);
+    fs::write(env.secrets_path(), "[]").unwrap();
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(env.account_file().is_none());
+}
+
+#[test]
+fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    // The test keyring cannot be read: a directory where its file goes.
+    fs::create_dir(env.secrets_path()).unwrap();
+    let conn = env.conn();
+    // Still signed in (no sign-in would help), but no jar to hand out.
+    match Session::connect_on(&conn) {
+        Err(Error::KeyringUnavailable(why)) => assert!(why.contains("keyring"), "{why}"),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(status.signed_in);
+    assert_eq!(status.apple_id.as_deref(), Some("someone@example.com"));
+    // Nothing lost: the old account.json, cookies and all, is kept.
+    assert!(env.account_file().unwrap().get("cookies").is_some());
+
+    // The keyring answers again: the next Session() moves the cookies.
+    fs::remove_dir(env.secrets_path()).unwrap();
+    session(&conn).unwrap();
+    assert!(prop::<bool>(&conn, "SignedIn"));
+    assert!(env.account_file().unwrap().get("cookies").is_none());
+    assert!(env.session_secret().is_some());
 }
 
 #[test]
