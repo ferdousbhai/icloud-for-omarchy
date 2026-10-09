@@ -4,14 +4,14 @@
 set -euo pipefail
 root=${1:?artifact root required} commit=${2:?source commit required} output=${3:?output required}
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid source commit' >&2; exit 1; }
-packages=(icloud-session icloud-photos icloud-findmy icloud-notes)
+packages=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders)
 files=()
 for arch in x86_64 aarch64; do
   directory=$root/icloud-$arch
   [[ $(cat "$directory/source-commit.txt") == "$commit" ]] || { echo "Wrong $arch source commit" >&2; exit 1; }
   shopt -s nullglob
   candidates=("$directory/"*.pkg.tar.zst)
-  (( ${#candidates[@]} == ${#packages[@]} )) || { echo "Expected four $arch packages" >&2; exit 1; }
+  (( ${#candidates[@]} == ${#packages[@]} )) || { echo "Expected ${#packages[@]} $arch packages" >&2; exit 1; }
   for pkg in "${packages[@]}"; do
     found=("$directory/$pkg"-[0-9]*-"$arch.pkg.tar.zst")
     (( ${#found[@]} == 1 )) || { echo "Expected exactly one $pkg for $arch" >&2; exit 1; }

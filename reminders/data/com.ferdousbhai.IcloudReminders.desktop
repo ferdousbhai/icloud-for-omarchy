@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Reminders (iCloud)
+GenericName=Reminders
+Comment=Your iCloud reminders and lists, with notifications when they are due
+Exec=icloud-reminders-app
+Icon=com.ferdousbhai.IcloudReminders
+Terminal=false
+Categories=Office;ProjectManagement;
+Keywords=reminders;todo;tasks;icloud;apple;due;
+StartupNotify=true
+StartupWMClass=com.ferdousbhai.IcloudReminders

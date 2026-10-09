@@ -1,5 +1,5 @@
 [workspace]
-members = ["session", "sessiond", "notes-sync", "photos", "findmy"]
+members = ["session", "sessiond", "notes-sync", "photos", "findmy", "reminders"]
 resolver = "3"
 
 [workspace.package]

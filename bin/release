@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a release from this machine: bump and tag the named packages, build
-# all four on native CI runners, sign the architecture-specific
+# all five on native CI runners, sign the architecture-specific
 # pacman repository databases with the local
 # package-signing key, and publish it all as one GitHub release. Users who
 # ran an installer get it through `omarchy update`.
@@ -10,7 +10,8 @@
 #               bin/release icloud-session 0.3.0 icloud-notes 0.6.0
 #
 # Tags are per package: <name>-v<version>, where <name> is the package name
-# without "icloud-" (session, photos, findmy, notes), e.g. notes-v0.4.1.
+# without "icloud-" (session, photos, findmy, notes, reminders), e.g.
+# notes-v0.4.1.
 # Each PKGBUILD takes its version from its newest tag. The Notes sync engine
 # (notes-sync/) ships inside icloud-notes and is not released on its own;
 # the notes-sync-v* tags are from when it was a package.
@@ -25,7 +26,7 @@ cd "$(dirname "$0")/.."
 
 repo=icloud-for-omarchy
 gh_repo=ferdousbhai/$repo
-all=(icloud-session icloud-photos icloud-findmy icloud-notes)
+all=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders)
 usage() {
   echo "Usage: bin/release <package> <major.minor.patch> [<package> <version>...]" >&2
   echo "Packages: ${all[*]}" >&2
@@ -165,7 +166,7 @@ bin/make-installers dist
 # Candidate tags are already on origin. Main follows the published source;
 # a later verification outage must not leave main behind its own release.
 notes="Released: ${tags[*]}."
-notes+=" All four packages built from $source_commit for x86_64 and aarch64."
+notes+=" All five packages built from $source_commit for x86_64 and aarch64."
 gh release create "$release_tag" dist/* --repo "$gh_repo" --title "$repo: ${tags[*]}" --notes "$notes" --latest
 echo "Published $release_tag: https://github.com/$gh_repo/releases/tag/$release_tag"
 git push -q origin main

@@ -12,13 +12,16 @@ to the command that does it, then fixes the conventions all the tools share.
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
+| `icloud-reminders <command>` | icloud-reminders | the Reminders app: lists, reminders, due dates; `background` is its notification timer |
 
-`icloud-notes`, `icloud-photos` and `icloud-findmy` open their window when
-run with no arguments, and run a command without GTK/Qt GUI initialization
-when given one. `icloud-photos` and `icloud-findmy` go further: each is a
-command-line binary with no GTK linked in (a command starts in milliseconds,
-not after loading the GTK stack), and with no arguments it runs the window,
-`icloud-photos-app` or `icloud-findmy-app`, which the desktop entry also runs.
+`icloud-notes`, `icloud-photos`, `icloud-findmy` and `icloud-reminders` open
+their window when run with no arguments, and run a command without GTK/Qt GUI
+initialization when given one. `icloud-photos`, `icloud-findmy` and
+`icloud-reminders` go further: each is a command-line binary with no GTK
+linked in (a command starts in milliseconds, not after loading the GTK
+stack), and with no arguments it runs the window, `icloud-photos-app`,
+`icloud-findmy-app` or `icloud-reminders-app`, which the desktop entry also
+runs.
 
 ## The audit: GUI feature → command
 
@@ -100,6 +103,24 @@ timer's sync). All of it is new, in the app binary: see
 | Find My password banner (Enter Password) | exit 4, then `icloud-session authorize-find-my` (or `set-password` once) | existed |
 | Old positions dropped after 30 days | `icloud-findmy prune-history` | existed |
 
+### Reminders (`reminders/src/bin/app`)
+
+The app and its command line were written together; every window action
+has its command.
+
+| In the window | Command |
+|---|---|
+| Sidebar: lists with open counts | `icloud-reminders lists` |
+| Upcoming, a list's reminders, Show Completed | `icloud-reminders list [LIST] [--completed \| --all]` |
+| Click a reminder (its notes, due date) | `icloud-reminders show REMINDER` |
+| New reminder line (title, due) | `icloud-reminders add TITLE --list L [--due WHEN] [--notes T]` |
+| Edit dialog: title, due date, notes | `icloud-reminders edit REMINDER [--title T] [--due WHEN \| --no-due] [--notes T]` |
+| Check box | `icloud-reminders complete REMINDER`, `uncomplete REMINDER` |
+| Edit dialog: Delete | `icloud-reminders delete REMINDER --yes` |
+| Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` |
+| Notifications (the timer, window open or not) | `icloud-reminders background` |
+| Sign-in banner | exit 2, then `icloud-session sign-in` |
+
 ### Sign-in (`sessiond`)
 
 | In the window / daemon | Command | |
@@ -171,35 +192,38 @@ PATH (a development build).
   JSON shape where it has one; `TOOL help` or `TOOL --help` lists them all.
 - **Nothing asks unless stdin is a terminal.** Destructive commands
   (`icloud-notes delete`, `delete-folder`, `restore`; `icloud-photos
-  delete`; `icloud-findmy play-sound`, `lost-mode`) ask on a terminal and,
-  without one, refuse with a usage error (64) unless `--yes` is given.
+  delete`; `icloud-findmy play-sound`, `lost-mode`; `icloud-reminders
+  delete`) ask on a terminal and, without one, refuse with a usage error
+  (64) unless `--yes` is given.
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
-  `ICLOUD_SESSION_MOCK_URL` (photos, findmy: a fake Apple server),
-  `icloud-photos --data-dir DIR`, `icloud-findmy --data-dir DIR`,
+  `ICLOUD_SESSION_MOCK_URL` (photos, findmy, reminders: a fake Apple
+  server), `icloud-photos --data-dir DIR`, `icloud-findmy --data-dir DIR`,
+  `icloud-reminders --data-dir DIR`,
   `icloud-notes --vault DIR` (or `ICLOUD_NOTES_VAULT`).
 
 ### Exit codes
 
-| Code | Meaning | session | notes | notes-sync (engine) | photos | findmy |
-|---|---|---|---|---|---|---|
-| 0 | ok | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 1 | error (the JSON `code` says which) | ✓ | ✓ | ✓ | ✓ (also: some items of a batch failed) | ✓ |
-| 2 | iCloud sign-in required: `icloud-session sign-in` | ✓ (also: the window closed without a sign-in) | ✓ (`status` too, when signed out) | ✓ | ✓ (`status` too, when signed out) | ✓ |
-| 3 | has changes / differences (not an error) | | `push --dry-run`, `diff` | `status`, `push --dry-run`, `diff` | | |
-| 4 | Find My needs the Apple password: `icloud-session authorize-find-my` | ✓ (also: authorization not completed) | | | | ✓ |
-| 64 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 70 | internal error, a bug | | (passed through from the engine) | ✓ | | |
+| Code | Meaning | session | notes | notes-sync (engine) | photos | findmy | reminders |
+|---|---|---|---|---|---|---|---|
+| 0 | ok | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1 | error (the JSON `code` says which) | ✓ | ✓ | ✓ | ✓ (also: some items of a batch failed) | ✓ | ✓ |
+| 2 | iCloud sign-in required: `icloud-session sign-in` | ✓ (also: the window closed without a sign-in) | ✓ (`status` too, when signed out) | ✓ | ✓ (`status` too, when signed out) | ✓ | ✓ |
+| 3 | has changes / differences (not an error) | | `push --dry-run`, `diff` | `status`, `push --dry-run`, `diff` | | | |
+| 4 | Find My needs the Apple password: `icloud-session authorize-find-my` | ✓ (also: authorization not completed) | | | | ✓ | |
+| 64 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 70 | internal error, a bug | | (passed through from the engine) | ✓ | | | |
 
 ### Error codes
 
 | Tool | `error.code` values |
 |---|---|
 | all | `usage`, `sign_in_required` |
-| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `session_service` (daemon unreachable), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
+| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `session_service` (daemon unreachable), `network`, `bad_response` (Apple answered with something unreadable), `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
 | icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 64), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` |
 | icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
 | icloud-photos | `not_found`, `cancelled`, `error` |
 | icloud-findmy | `find_my_auth_required`, `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
+| icloud-reminders | `offline` (no network; `--cached` reads the last sync), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `bad_response` (iCloud answered with something unreadable), `not_found`, `ambiguous`, `cancelled`, `error` |
 
 ## JSON shapes
 
@@ -288,3 +312,19 @@ notes-sync/docs/DESIGN.md §1). With `--json`, progress goes to stderr as
 | `play-sound`, `lost-mode` | `{ok:true, action:"play_sound"\|"lost_mode", device:{id, name}}` |
 | `history` | `{device:{id, name}, since, points:[{time, timestamp, lat, lon, accuracy_m, battery_percent}]}` |
 | `prune-history` | `{deleted, remaining, retention_days}` |
+
+### icloud-reminders
+
+REMINDER is an ID, a title (ignoring case) or a unique part of one, open
+reminders first; LIST an ID or a name. IDs are the records' UUIDs.
+
+| Command | stdout JSON |
+|---|---|
+| `lists` | `[{id, name, color, open}]` (`color` `#rrggbb` or null) |
+| `list`, `show` | `[{id, list:{id, name}, title, notes, completed, completed_at, due:{date, time, all_day, time_zone, at} \| null, flagged, priority, alerts}]` (`show`: one object). `due.date`/`time` are the wall clock as stored, `time` null when all day; `time_zone` the zone it is anchored to (null: floating, the local zone); `at` the UTC moment it is due (an all-day one at 09:00 local); `alerts` counts alarms set on an Apple device |
+| `add`, `edit` | `{action, reminder}` |
+| `complete`, `uncomplete` | `{action, changed, reminder}`; `changed` is false when it already was |
+| `delete` | `{action:"delete", reminder:{id, title}}` |
+| (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
+| `sync` | `{lists, reminders, changed, full}` |
+| `background` | `{synced, sync_error, notified:[{id, title}]}` |

@@ -3,7 +3,8 @@ Copyright (c) 2026 Ferdous Bhai. MIT License, see LICENSE.
 
 This repository holds icloud-session (session/, sessiond/), icloud-notes
 (notes/, and its sync engine icloud-notes-sync in notes-sync/),
-icloud-photos (photos/) and icloud-findmy (findmy/). The third-party
+icloud-photos (photos/), icloud-findmy (findmy/) and icloud-reminders
+(reminders/). The third-party
 credits below apply to the parts named; everything else is the author's
 own work.
 
@@ -88,7 +89,12 @@ copied or adapted from its tests/fixtures. The read-side request shapes
 and fixtures follow timlaing/pyicloud and picklepete/pyicloud
 (https://github.com/picklepete/pyicloud) services/photos.py. Find My
 (findmy/) and the sign-in (sessiond/) follow pyicloud's documented
-endpoints too. Both pyicloud repositories are under the MIT License:
+endpoints too. Reminders (reminders/) follows timlaing/pyicloud's
+services/reminders/: its CloudKit request shapes, record fields and the
+topotext document it writes (reminders/src/{cloudkit,model,topotext}.rs),
+and reminders/tests/fixtures/pyicloud/ is copied from its
+tests/fixtures/reminders/. Both pyicloud repositories are under the MIT
+License:
 
 The MIT License (MIT)
 

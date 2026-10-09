@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
-PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes")
+PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes", "icloud-reminders")
 
 
 class Packaging(unittest.TestCase):
@@ -52,7 +52,7 @@ class Packaging(unittest.TestCase):
         self.populate()
         result = self.collect()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(list((self.work / "out").glob("*"))), 8)
+        self.assertEqual(len(list((self.work / "out").glob("*"))), 2 * len(PACKAGES))
 
     def test_wrong_source_never_copies_packages(self):
         self.populate()

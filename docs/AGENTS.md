@@ -1,7 +1,7 @@
 # Driving the iCloud apps as an agent
 
 A compact reference for an AI agent (or a script) using iCloud Notes,
-Photos and Find My on this computer through their command lines. The full
+Photos, Find My and Reminders on this computer through their command lines. The full
 audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
 ## The rules that always hold
@@ -23,8 +23,9 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
 - Nothing prompts when stdin is not a terminal. Destructive commands refuse
   (exit 64) unless given `--yes`: `icloud-notes delete | delete-folder |
-  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`.
-  Pass `--yes` only when the user asked for that exact action.
+  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`,
+  `icloud-reminders delete`. Pass `--yes` only when the user asked for that
+  exact action.
 - `TOOL COMMAND --help` describes any command and its JSON.
 
 ## Auth: icloud-session owns the sign-in
@@ -165,6 +166,43 @@ lists the candidates: use the ID). Locations are personal: print
 coordinates only when the user asked for them. Lost Mode locks the device;
 never turn it on without an explicit request.
 
+## Reminders: `icloud-reminders`
+
+iCloud Reminders (the CloudKit ones every iPhone has used since iOS 13).
+Reading commands sync first (`--cached` skips that and reads the last
+sync). Without a network every command but a `--cached` read fails with
+`offline`; nothing is queued.
+
+```console
+$ icloud-reminders --json lists
+[{"id":"6F0A...","name":"Groceries","color":"#FF9500","open":2}]
+$ icloud-reminders --json list
+[{"id":"9B1C...","list":{"id":"6F0A...","name":"Groceries"},"title":"Milk","notes":"Oat","completed":false,
+  "completed_at":null,"due":{"date":"2026-10-09","time":"17:30","all_day":false,"time_zone":"Europe/Helsinki",
+  "at":"2026-10-09T14:30:00Z"},"flagged":false,"priority":0,"alerts":0}]
+$ icloud-reminders --json add "Call the dentist" --list Reminders --due "tomorrow 9:00"
+{"action":"add","reminder":{"id":"...","title":"Call the dentist",...}}
+$ icloud-reminders --json complete "dentist"
+{"action":"complete","changed":true,"reminder":{...,"completed":true,"completed_at":"2026-10-09T11:02:41Z"}}
+```
+
+| Command | Does |
+|---|---|
+| `lists`, `list [LIST] [--completed \| --all]`, `show REMINDER` | read (open reminders, soonest due first) |
+| `add TITLE [--list LIST] [--notes T] [--due WHEN]` | create; `--list` is required unless the account has one list (iCloud records no default list) |
+| `edit REMINDER [--title T] [--notes T] [--due WHEN \| --no-due]` | change |
+| `complete REMINDER`, `uncomplete REMINDER`, `delete REMINDER --yes` | as in the window (a delete goes to Recently Deleted) |
+| `sync [--full]` | fetch what changed |
+| `background` | what the systemd timer runs every minute: sync if stale, notify about due ones |
+
+REMINDER is an ID, an exact title, or a unique part of one (open
+reminders first; `ambiguous` lists the candidates). WHEN: `2026-10-10`
+(all day), `"2026-10-10 17:30"`, `today`/`tomorrow` with an optional time,
+`17:30`, or `+30m`/`+2h`/`+3d`. `due.at` is the moment it is due, in UTC.
+`alerts` counts alerts set on an Apple device: they keep their own time
+when `--due` changes, so say so if it is not 0. Due reminders notify on
+their own (the timer); never run `background` to notify on purpose.
+
 ## Recipes
 
 **Sync notes and read one**
@@ -215,10 +253,18 @@ icloud-findmy --json locate "iPhone" --wait 30      # exit 4: ask for icloud-ses
 icloud-findmy --json play-sound "iPhone" --yes
 ```
 
+**Remind the user of something**
+
+```bash
+icloud-reminders --json add "Renew passport" --list Personal --due "2026-11-01 09:00"   # a list from `lists`
+icloud-reminders --json list --all | jq '.[] | select(.title | test("passport"; "i"))'
+```
+
 ## Testing without the real account
 
 `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:PORT`
-points photos and findmy at a local fake server (`cargo run -p
+points photos, findmy and reminders at a local fake server (`cargo run -p
 icloud-photos --example fake_cloudkit -- --port PORT`, `cargo run -p
-icloud-findmy --example fake_findme`; their READMEs say more); `--data-dir DIR` keeps their catalog, cache and history
-there; `icloud-notes --vault DIR` works on a scratch vault.
+icloud-findmy --example fake_findme`, `cargo run -p icloud-reminders
+--example fake_reminders -- 127.0.0.1:PORT`; their READMEs say more);
+`--data-dir DIR` keeps their catalog, cache and history there; `icloud-notes --vault DIR` works on a scratch vault.

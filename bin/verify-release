@@ -4,7 +4,7 @@
 # Usage: bin/verify-release <release-tag> <package> <version> [...]
 set -euo pipefail
 tag=${1:?release tag required}; shift
-[[ $tag =~ ^(session|photos|findmy|notes)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
+[[ $tag =~ ^(session|photos|findmy|notes|reminders)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
 (( $# >= 2 && $# % 2 == 0 )) || { echo 'Expected package/version pairs' >&2; exit 1; }
 command -v docker >/dev/null || { echo 'docker is required' >&2; exit 1; }
 arch=${VERIFY_ARCH:-$(uname -m)}
@@ -17,7 +17,7 @@ download=https://github.com/ferdousbhai/icloud-for-omarchy/releases/download/$ta
 while (( $# )); do
   app=$1 version=$2; shift 2
   case "$app" in
-    icloud-notes | icloud-photos | icloud-findmy) installer="$download/install-${app#icloud-}.sh" args='' ;;
+    icloud-notes | icloud-photos | icloud-findmy | icloud-reminders) installer="$download/install-${app#icloud-}.sh" args='' ;;
     icloud-session) installer="$download/install.sh" args=$app ;;
     *) echo "Invalid package: $app" >&2; exit 1 ;;
   esac
