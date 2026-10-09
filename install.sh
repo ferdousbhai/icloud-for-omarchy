@@ -21,7 +21,7 @@
 set -euo pipefail
 
 REPO=icloud-for-omarchy
-RELEASES=https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download
+RELEASES=${ICLOUD_RELEASES:-https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download}
 SIGNING_KEY_FINGERPRINT=35C47A06567940B6796B4D0F9B3C7BDF85268B31
 PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy)
 # What a run with no arguments installs. bin/make-installers rewrites this
@@ -93,8 +93,15 @@ for pkg in "${wanted[@]}"; do
   fi
 done
 
-echo "Adding the [$REPO] repository"
-add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
+# Keep the existing x86 repository name; ARM needs a separate database.
+case "$(uname -m)" in
+  x86_64) ;;
+  aarch64)
+    OLD_REPOS+=("$REPO")
+    REPO+=-aarch64
+    ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
 
 # Earlier releases of Notes came from a repository of its own,
 # [icloud-notes], with its own /etc/pacman.d/<name>.conf, Include line and
@@ -117,16 +124,19 @@ remove_old_repos() {
     echo "Removing the old [$name] repository"
     if grep -qxF "$include" /etc/pacman.conf; then
       # Rewritten in place (not sed -i), so the file keeps its owner and mode.
-      rest="$(grep -vxF "$include" /etc/pacman.conf)"
+      rest="$(grep -vxF "$include" /etc/pacman.conf || true)"
       printf '%s\n' "$rest" | $sudo tee /etc/pacman.conf >/dev/null
     fi
     $sudo rm -f "$conf"
     if [[ -n $hook ]]; then
-      rm -f "$hook"
+      $sudo rm -f "$hook"
     fi
   done
 }
 remove_old_repos
+
+echo "Adding the [$REPO] repository"
+add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
 echo "Installing ${wanted[*]}"
 if command -v omarchy-pkg-add >/dev/null; then

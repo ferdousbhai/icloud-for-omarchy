@@ -120,6 +120,10 @@ int main(int argc, char *argv[])
     // The sync locks go to the runtime directory: the scratch one, so the
     // tests never meet the real app's (or leave lock files behind).
     qputenv("XDG_RUNTIME_DIR", scratch.path().toUtf8());
+    // Qt trashes into $XDG_DATA_HOME/Trash only when that directory exists,
+    // which a fresh home (a CI build user's) lacks: trash into the scratch.
+    QDir().mkpath(scratch.path() + QStringLiteral("/xdg-data"));
+    qputenv("XDG_DATA_HOME", (scratch.path() + QStringLiteral("/xdg-data")).toUtf8());
 
     writeFile(QStringLiteral(".icloud-notes/state.json"),
               stateJson(QStringLiteral("in-body"), { { "id-a", "A.md" },

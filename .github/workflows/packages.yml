@@ -1,0 +1,48 @@
+name: Native packages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packaging-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          bash -n install.sh bin/build-packages bin/collect-packages bin/release bin/verify-release
+          tests/install_test.sh
+          python3 tests/packaging_test.py
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare native ARM image
+        if: matrix.arch == 'aarch64'
+        run: |
+          curl --fail --location --retry 3 https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/archlinuxarm.tar.gz
+          docker import --platform linux/arm64 /tmp/archlinuxarm.tar.gz archlinuxarm:native
+      - name: Build and test packages
+        env:
+          ARM_BUILD_IMAGE: archlinuxarm:native
+        run: bin/build-packages '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icloud-${{ matrix.arch }}
+          path: |
+            dist/${{ matrix.arch }}/*.pkg.tar.zst
+            dist/${{ matrix.arch }}/source-commit.txt
+          if-no-files-found: error

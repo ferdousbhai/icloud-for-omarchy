@@ -42,6 +42,17 @@ if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
   exec env ICLOUD_INSTALL_TEST_INNER=1 unshare -rm "$root/tests/install_test.sh"
 fi
 
+# Ubuntu CI has no pacman mount targets. Prepare a scratch /etc inside the
+# private mount namespace while preserving account lookups used by hooks.
+if [[ ! -f /etc/pacman.conf || ! -d /etc/pacman.d ]]; then
+  mkdir -p "$work/etc/pacman.d"
+  for name in passwd group nsswitch.conf; do
+    [[ ! -f /etc/$name ]] || cp "/etc/$name" "$work/etc/$name"
+  done
+  touch "$work/etc/pacman.conf"
+  mount --bind "$work/etc" /etc
+fi
+
 # Stubs: pacman logs its arguments, curl "downloads" an empty key, gpg
 # reports the pinned fingerprint for it.
 mkdir -p "$work/bin"
@@ -60,6 +71,11 @@ STUB
 cat >"$work/bin/curl" <<'STUB'
 #!/bin/sh
 while [ $# -gt 0 ]; do [ "$1" = -o ] && : >"$2"; shift; done
+STUB
+# Keep existing x86 regression cases deterministic on native ARM hosts.
+cat >"$work/bin/uname" <<'STUB'
+#!/bin/sh
+echo x86_64
 STUB
 fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
 printf '#!/bin/sh\necho "fpr:::::::::%s:"\n' "$fingerprint" >"$work/bin/gpg"
@@ -98,7 +114,7 @@ check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" 
 # Plain Arch: no Omarchy commands anywhere on PATH, so one pacman -Syu transaction.
 setup
 mkdir -p "$work/plain"
-cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/plain/"
+cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/bin/uname" "$work/plain/"
 for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail; do
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done

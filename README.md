@@ -83,7 +83,8 @@ curl -fsSL .../install.sh | sudo bash -s -- icloud-photos icloud-findmy
 
 The script ([install.sh](install.sh)) trusts the package-signing key (after
 checking it against the fingerprint pinned in the script), adds the signed
-`[icloud-for-omarchy]` repository as `/etc/pacman.d/icloud-for-omarchy.conf`
+`[icloud-for-omarchy]` repository on x86_64, or `[icloud-for-omarchy-aarch64]`
+on aarch64, with the matching `/etc/pacman.d/<repository>.conf`
 with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 `pre-refresh-pacman` hook that restores the repository after
 `omarchy refresh pacman`, and installs the packages in one `pacman -Syu`.
@@ -97,6 +98,8 @@ at a time:
 ```bash
 # 1. Download the package-signing key and check its fingerprint is
 #    35C47A06567940B6796B4D0F9B3C7BDF85268B31
+# These manual steps use the x86_64 repository. On ARM, use the installer above
+# or replace icloud-for-omarchy with icloud-for-omarchy-aarch64 in repository/key names.
 curl -fsSLO https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/icloud-for-omarchy-signing-key.asc
 gpg --show-keys icloud-for-omarchy-signing-key.asc
 
@@ -116,6 +119,10 @@ sudo pacman -Syu icloud-notes icloud-photos icloud-findmy
 On Omarchy, `omarchy refresh pacman` rewrites `/etc/pacman.conf`; the
 script installs a hook that adds the `Include` line back, so by hand you
 would re-add it after a refresh.
+
+On ARM, rerunning the installer removes the incompatible x86_64 repository
+include, config and refresh hook before synchronizing the ARM repository.
+Unsupported architectures stop before changing repository configuration.
 
 Machines set up from earlier Notes releases, which had a repository of
 their own (`[icloud-notes]`), are migrated: once `[icloud-for-omarchy]` is
@@ -189,7 +196,7 @@ from the current code (see notes-sync/README.md).
 ## Releasing
 
 Releases are cut from a checkout with the package-signing key in its
-keyring, no CI involved:
+keyring. Native CI builds unsigned packages; signing stays on your machine:
 
 ```bash
 bin/release icloud-notes 0.4.1
@@ -203,33 +210,43 @@ Versions are per package and so are the tags: `<name>-v<version>`, where
 later commit builds `<version>.r<count>.<sha>` (`0.0.0.r<count>` for a package
 never tagged).
 
-`bin/release` runs `bin/test`, sets the named packages' versions (PKGBUILD,
-and Cargo.toml for the Rust ones), commits and tags them, and builds only
-those packages with `makepkg` from `packaging/`, each from the committed
-HEAD via `git archive`. Every other package is downloaded from the latest
-release, its signature checked against the pinned key, and carried forward
-unchanged, so the new repository database, `icloud-for-omarchy.db`, always
-lists all four. It signs the database with the key whose fingerprint
-`install.sh` pins and publishes it, the packages, the public key,
-`install.sh` and the per-app installers as one GitHub release on the first
-tag named; `releases/latest/download` resolves to it.
+`bin/release` runs `bin/test`, sets the named packages' versions, commits
+and pushes their tags, explicitly dispatches the Native packages workflow
+for that release tag, then waits for the successful run. Native
+x86_64 and ARM runners build and test all four packages from that same commit.
+Packages not named in the release receive their normal post-tag development
+versions, rather than carrying binaries from an older release. This also
+bootstraps ARM without requiring ARM assets in a previous release.
+
+Before signing, `bin/collect-packages` checks each artifact's source commit,
+package names, architecture, filename/version metadata and matching versions
+across architectures. The release machine signs every package and the two
+separate databases: `[icloud-for-omarchy]` for x86_64 and
+`[icloud-for-omarchy-aarch64]` for aarch64. Both public key assets contain the
+same pinned key. The private key never enters CI. A failed build leaves
+candidate tags available for inspection and publishes no release. Once published,
+main advances to the released source before installation verification.
 
 The Notes sync engine (notes-sync/) is not released on its own: it ships
 inside icloud-notes, built from the same commit, so releasing icloud-notes
 releases it, and its Cargo.toml version only names the engine
 (`icloud-notes-sync --version`). The `notes-sync-v*` tags are historical,
 from when it was the separate icloud-notes-sync package (last
-`notes-sync-v0.2.0`); the first icloud-notes that carries it must be
-released before any other package, and `bin/release` refuses to carry
-forward an icloud-notes that still depends on the old package.
+`notes-sync-v0.2.0`). Every new release rebuilds Notes with its embedded sync engine.
 
-A release counts as shipped only once `bin/verify-release` has installed
-each named package in a clean Arch container, the apps through their
-per-app installers and the shared packages through `install.sh`, and found
-that version installed; otherwise `bin/release` deletes the release and the
-tags. With `PUBLISH_CRATE=1`, releasing icloud-session also publishes its client
-crate to crates.io after the release is verified, unless crates.io already has
-that version; by default it does not.
+`bin/verify-release <release-tag> <package> <version> [...]` checks the
+specified tag's installer and repository in a native Arch container, rather
+than following `latest`. Set `VERIFY_ARCH=aarch64` and `ARM_BUILD_IMAGE` to a
+native Arch Linux ARM image on ARM. The published-release workflow verifies
+all four packages on both architectures. Infrastructure or installation
+failures leave the release and tags available for diagnosis; nothing deletes
+a release automatically. With `PUBLISH_CRATE=1`, releasing icloud-session also
+publishes its client crate after local verification; by default it does not.
+
+The native package workflow runs on pull requests, pushes to main and
+an explicit release dispatch. To build locally, run `bin/build-packages x86_64` or, on an ARM host,
+`ARM_BUILD_IMAGE=<image> bin/build-packages aarch64`. The workflow imports the
+Arch Linux ARM root filesystem over HTTPS for its native ARM runner.
 
 The `add_signed_repo` function in `install.sh` is shared verbatim with the
 Ghost installer (ferdousbhai/ghost), and both repositories pin its hash in

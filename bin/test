@@ -22,3 +22,5 @@ notes/bin/test
 
 bash -n install.sh
 tests/install_test.sh
+
+python3 tests/packaging_test.py
