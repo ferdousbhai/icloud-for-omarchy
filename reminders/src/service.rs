@@ -69,6 +69,7 @@ impl<'a> Service<'a> {
         lists.sort_by_key(|l| l.name.to_lowercase());
 
         let start = self.cache()?;
+        let before = if start.account == account { snapshot(&start) } else { Snapshot::new() };
         let token = start.sync_token.filter(|_| start.account == account && !full);
         let (records, new_token, full) = match token {
             Some(t) => match ck.all_changes(&["Reminder"], Some(&t)) {
@@ -89,26 +90,19 @@ impl<'a> Service<'a> {
             }
         };
 
+        let fetched = records
+            .iter()
+            .map(|r| Reminder::from_record(r).map_err(Error::Other))
+            .collect::<Result<Vec<_>>>()?;
         let _lock = self.store.lock().map_err(io)?;
         // Re-read under the lock: a write may have landed meanwhile.
         let mut cache = self.cache()?;
-        // What a write saved while the changes were being fetched is newer
-        // than the fetched copy: keep it (see apply_record).
-        let previous = if cache.account != account {
-            Default::default()
-        } else if full {
-            std::mem::take(&mut cache.reminders)
-        } else {
-            cache.reminders.clone()
-        };
         if cache.account != account {
             cache.reminders.clear();
         }
         cache.account = account;
         let changed = records.len();
-        for r in &records {
-            apply_record(&mut cache, r, &previous)?;
-        }
+        cache.reminders = merge(&before, std::mem::take(&mut cache.reminders), fetched, full);
         cache.lists = lists;
         cache.sync_token = Some(new_token);
         cache.synced_ms = Some(now_ms());
@@ -127,7 +121,7 @@ impl<'a> Service<'a> {
         let _lock = self.store.lock().map_err(io)?;
         let mut cache = self.cache()?;
         for r in records {
-            apply_record(&mut cache, r, &BTreeMap::new())?;
+            apply_record(&mut cache, r)?;
         }
         self.store.save_cache(&cache).map_err(io)
     }
@@ -196,18 +190,12 @@ fn saved_reminder(id: &str, records: &[Record]) -> Result<Option<Reminder>> {
     }
 }
 
-/// Folds one changes/zone, lookup or modify record into the cache.
-/// Applies one fetched record. A cached copy modified later than the
-/// fetched one (a write that landed during the fetch) is kept; a deletion
-/// always applies.
-fn apply_record(cache: &mut Cache, r: &Record, previous: &BTreeMap<String, Reminder>) -> Result<()> {
+/// Folds a lookup or modify record into the cache: the server's copy, as
+/// saved.
+fn apply_record(cache: &mut Cache, r: &Record) -> Result<()> {
     match Reminder::from_record(r).map_err(Error::Other)? {
         Parsed::Live(rem) => {
-            let newer = previous
-                .get(&rem.id)
-                .filter(|c| matches!((c.modified_ms, rem.modified_ms), (Some(a), Some(b)) if a > b));
-            let kept = newer.cloned().unwrap_or(*rem);
-            cache.reminders.insert(kept.id.clone(), kept);
+            cache.reminders.insert(rem.id.clone(), *rem);
         }
         Parsed::Gone(id) => {
             cache.reminders.remove(&id);
@@ -215,4 +203,108 @@ fn apply_record(cache: &mut Cache, r: &Record, previous: &BTreeMap<String, Remin
         Parsed::NotAReminder => {}
     }
     Ok(())
+}
+
+/// Each cached reminder's change tag when a sync began. A write that lands
+/// while the sync fetches changes it: a new tag, a new id, or a gone one.
+type Snapshot = BTreeMap<String, Option<String>>;
+
+fn snapshot(cache: &Cache) -> Snapshot {
+    cache.reminders.iter().map(|(id, r)| (id.clone(), r.change_tag.clone())).collect()
+}
+
+/// A sync's fetched reminders merged into the cache as it is now (`current`,
+/// read under the lock). A reminder a write touched during the fetch keeps
+/// its cached state, present or deleted, unless the fetched copy was
+/// modified later; everything else takes the fetched state. A `full` fetch
+/// is the whole set, so untouched reminders it lacks are gone.
+fn merge(before: &Snapshot, current: BTreeMap<String, Reminder>, fetched: Vec<Parsed>, full: bool) -> BTreeMap<String, Reminder> {
+    let touched = |id: &str| before.get(id) != current.get(id).map(|r| &r.change_tag);
+    let mut out: BTreeMap<String, Reminder> = if full {
+        current.iter().filter(|(id, _)| touched(id)).map(|(id, r)| (id.clone(), r.clone())).collect()
+    } else {
+        current.clone()
+    };
+    for p in fetched {
+        match p {
+            Parsed::Live(rem) => {
+                if touched(&rem.id) {
+                    let later = |c: &Reminder| matches!((rem.modified_ms, c.modified_ms), (Some(a), Some(b)) if a > b);
+                    if !current.get(&rem.id).is_some_and(later) {
+                        continue;
+                    }
+                }
+                out.insert(rem.id.clone(), *rem);
+            }
+            Parsed::Gone(id) => {
+                out.remove(&id);
+            }
+            Parsed::NotAReminder => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rem(id: &str, tag: &str, modified_ms: i64) -> Reminder {
+        Reminder {
+            id: id.into(),
+            list_id: "List/A".into(),
+            title: id.into(),
+            notes: String::new(),
+            completed: false,
+            completed_ms: None,
+            due: None,
+            priority: 0,
+            flagged: false,
+            parent_id: None,
+            alarms: 0,
+            created_ms: None,
+            modified_ms: Some(modified_ms),
+            change_tag: Some(tag.into()),
+            tokens: None,
+        }
+    }
+
+    fn map(rs: Vec<Reminder>) -> BTreeMap<String, Reminder> {
+        rs.into_iter().map(|r| (r.id.clone(), r)).collect()
+    }
+
+    fn live(r: &Reminder) -> Parsed {
+        Parsed::Live(Box::new(r.clone()))
+    }
+
+    #[test]
+    fn a_delete_during_the_fetch_stays_deleted() {
+        let a = rem("Reminder/a", "t1", 10);
+        let before = snapshot(&Cache { reminders: map(vec![a.clone()]), ..Cache::default() });
+        for full in [false, true] {
+            let out = merge(&before, BTreeMap::new(), vec![live(&a)], full);
+            assert!(out.is_empty(), "full={full}");
+        }
+    }
+
+    #[test]
+    fn an_add_during_a_full_fetch_is_kept_and_untouched_absentees_go() {
+        let (a, b, c) = (rem("Reminder/a", "t1", 10), rem("Reminder/b", "t1", 20), rem("Reminder/c", "t1", 5));
+        // c was cached and unchanged; the server no longer has it.
+        let before = snapshot(&Cache { reminders: map(vec![c.clone()]), ..Cache::default() });
+        let out = merge(&before, map(vec![b.clone(), c]), vec![live(&a)], true);
+        assert_eq!(out.keys().collect::<Vec<_>>(), ["Reminder/a", "Reminder/b"]);
+    }
+
+    #[test]
+    fn an_edit_during_the_fetch_wins_unless_the_fetched_copy_is_later() {
+        let old = rem("Reminder/a", "t1", 10);
+        let mine = rem("Reminder/a", "t2", 20);
+        let before = snapshot(&Cache { reminders: map(vec![old.clone()]), ..Cache::default() });
+        let out = merge(&before, map(vec![mine.clone()]), vec![live(&old)], false);
+        assert_eq!(out["Reminder/a"].change_tag.as_deref(), Some("t2"));
+        let theirs = rem("Reminder/a", "t3", 30);
+        let out = merge(&before, map(vec![mine]), vec![live(&theirs)], false);
+        assert_eq!(out["Reminder/a"].change_tag.as_deref(), Some("t3"));
+    }
 }

@@ -476,7 +476,18 @@ fn no_command_runs_the_app_beside_it() {
         &tmp.path().join("icloud-reminders-app"),
         &format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display()),
     );
-    let out = Command::new(&cli).stdin(Stdio::null()).output().unwrap();
+    // A test thread forking while the copy was open for writing holds its
+    // fd until that child execs: "Text file busy" (ETXTBSY) for a moment.
+    let mut tries = 0;
+    let out = loop {
+        match Command::new(&cli).stdin(Stdio::null()).output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            r => break r.unwrap(),
+        }
+    };
     assert_eq!(code(&out), 7, "{}", stderr(&out));
     assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "0");
 }
