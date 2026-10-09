@@ -243,7 +243,7 @@ from when it was the separate icloud-notes-sync package (last
 specified tag's installer and repository in a native Arch container, rather
 than following `latest`. Set `VERIFY_ARCH=aarch64` and `ARM_BUILD_IMAGE` to a
 native Arch Linux ARM image on ARM. The published-release workflow verifies
-all four packages on both architectures. Infrastructure or installation
+all five packages on both architectures. Infrastructure or installation
 failures leave the release and tags available for diagnosis; nothing deletes
 a release automatically. With `PUBLISH_CRATE=1`, releasing icloud-session also
 publishes its client crate after local verification; by default it does not.

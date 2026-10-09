@@ -41,5 +41,5 @@ jobs:
             version=$(sed -n 's/^pkgver = //p' <<< "$metadata")
             args+=("$name" "${version%-*}")
           done
-          [[ ${#args[@]} == 8 ]]
+          [[ ${#args[@]} == 10 ]]
           bin/verify-release "$RELEASE_TAG" "${args[@]}"
