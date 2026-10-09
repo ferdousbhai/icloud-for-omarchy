@@ -56,8 +56,8 @@ so, and nothing is queued.
 
 A systemd user timer, `icloud-reminders-background.timer`, runs
 `icloud-reminders background` every minute. That syncs when the last
-attempt is over 4 minutes old (skipped when signed out or offline; the
-journal says why), then shows a notification for each open reminder that
+attempt is over 4 minutes old (skipped when signed out, offline or the keyring is
+locked; the journal says why), then shows a notification for each open reminder that
 has just fallen due:
 
 - through Omarchy's own `omarchy-notification-send` (its look, a
@@ -117,7 +117,9 @@ $ icloud-reminders background                 # what the timer runs
 - `delete` asks on a terminal and needs `--yes` without one.
 - `--json` prints JSON on stdout and an error as one JSON line on stderr,
   `{"error":{"code":"not_found","message":…,"exit_code":1}}` (codes:
-  `usage`, `sign_in_required`, `offline`, `not_found`, `ambiguous`,
+  `usage`, `sign_in_required`, `offline`, `keyring_unavailable` (the
+  keyring holding the session is locked: unlock it), `bad_response` (iCloud
+  answered with something unreadable), `not_found`, `ambiguous`,
   `cancelled`, `error`); `--data-dir DIR` keeps the cache elsewhere.
 - `icloud-reminders COMMAND --help` describes one command and its JSON.
 

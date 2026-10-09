@@ -40,7 +40,9 @@ Reading commands sync first and fail with offline without a network;
 
 With --json, stdout is only the JSON result and an error is one JSON line
 on stderr: {\"error\":{\"code\",\"message\",\"exit_code\"}}; codes: usage,
-sign_in_required, offline, not_found, ambiguous, cancelled, error.
+sign_in_required, offline, keyring_unavailable (the keyring holding the
+session is locked: unlock it), bad_response (iCloud answered with something
+unreadable), not_found, ambiguous, cancelled, error.
 
 Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in),
 64 usage.";
