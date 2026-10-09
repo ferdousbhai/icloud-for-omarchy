@@ -278,7 +278,8 @@ struct Written {
 /// The account `account.json` names, with its cookies from the keyring.
 /// A file from before the cookies moved to the keyring has them moved
 /// there, and is rewritten without them. `Err`: the keyring would not
-/// answer, so the account is neither restored nor forgotten.
+/// answer, so the account is neither restored nor forgotten. It writes
+/// both stores, so it runs only with [`Daemon::written`] held.
 fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Option<Account>, Box<Unread>> {
     let Some(stored) = Stored::load_or_set_aside(path) else {
         return Ok(None);
@@ -343,19 +344,16 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Daemon {
     pub fn new(cfg: Config) -> Arc<Daemon> {
         let secrets = secrets::from_env();
-        let (account, unread) = match load_account(&cfg.paths.account, secrets.as_ref()) {
-            Ok(account) => (account, None),
-            Err(unread) => {
-                eprintln!("icloud-sessiond: {}; no session to hand out until it answers", unread.why);
-                (None, Some(unread))
-            }
-        };
-        let written = Written {
-            seq: 0,
-            secret: account.as_ref().map(Account::secret),
-        };
+        // Only account.json here: the keyring may prompt to unlock, and
+        // `run` reads it with a bounded wait before taking the bus name.
+        let unread = Stored::load_or_set_aside(&cfg.paths.account).map(|stored| {
+            Box::new(Unread {
+                stored,
+                why: "the session's cookies are not read from the keyring yet".into(),
+            })
+        });
         let state = State {
-            account,
+            account: None,
             unread,
             generation: 0,
             last_attempt: None,
@@ -384,7 +382,7 @@ impl Daemon {
             secrets,
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
-            written: Mutex::new(written),
+            written: Mutex::new(Written::default()),
         })
     }
 
@@ -405,9 +403,15 @@ impl Daemon {
         // as soon as we own it, and must not see FindMyPasswordStored
         // false for want of a look. A keyring slower than that is still
         // announced when it answers.
+        // The session's cookies are read the same way: an unlocked keyring
+        // answers at once, a locked one's prompt never holds up the name.
         let (looked, keyring_looked) = std::sync::mpsc::channel();
         let me = self.clone();
         thread::spawn(move || {
+            me.settle_removal();
+            if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
+                eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
+            }
             me.look_for_password();
             let _ = looked.send(());
             me.publish();
@@ -533,7 +537,10 @@ impl Daemon {
                 if written.secret.as_ref() != Some(&secret) {
                     written.secret = None;
                     match self.secrets.set_session(&a.apple_id, &secret) {
-                        Ok(()) => written.secret = Some(secret),
+                        Ok(()) => {
+                            written.secret = Some(secret);
+                            self.clear_removal_pending();
+                        }
                         Err(e) => errors.push(format!("storing the session's cookies in the keyring: {e}")),
                     }
                 }
@@ -543,8 +550,15 @@ impl Daemon {
                     errors.push(format!("removing {}: {e}", path.display()));
                 }
                 written.secret = None;
-                if let Err(e) = self.secrets.remove_session() {
-                    errors.push(format!("removing the session from the keyring: {e}"));
+                match self.secrets.remove_session() {
+                    Ok(_) => self.clear_removal_pending(),
+                    Err(e) => {
+                        errors.push(format!("removing the session from the keyring (retried at the next start): {e}"));
+                        let marker = &self.cfg.paths.removal_pending;
+                        if let Err(e) = files::touch(marker) {
+                            errors.push(format!("writing {}: {e}", marker.display()));
+                        }
+                    }
                 }
             }
         }
@@ -556,7 +570,15 @@ impl Daemon {
     /// With the cookies of the account `account.json` names unread (the
     /// keyring failed before), tries the keyring again: `Ok` once they are
     /// read (or the account is gone), else why not.
+    ///
+    /// It holds [`Daemon::written`] throughout, so a sign-in or sign-out
+    /// meanwhile writes after it (lock order: `written`, then `state`), and
+    /// a result for an account replaced meanwhile is dropped.
     fn retry_keyring(&self) -> Result<(), ServiceError> {
+        if lock(&self.state).unread.is_none() {
+            return Ok(());
+        }
+        let mut written = lock(&self.written);
         let generation = {
             let st = lock(&self.state);
             if st.unread.is_none() {
@@ -571,14 +593,15 @@ impl Daemon {
         }
         match result {
             Ok(account) => {
-                if let Some(a) = &account {
-                    lock(&self.written).secret = Some(a.secret());
+                written.secret = account.as_ref().map(Account::secret);
+                if account.is_some() {
                     eprintln!("icloud-sessiond: read the session's cookies from the keyring");
                 }
                 st.account = account;
                 st.unread = None;
                 st.generation += 1;
                 drop(st);
+                drop(written);
                 self.publish();
                 Ok(())
             }
@@ -587,6 +610,36 @@ impl Daemon {
                 st.unread = Some(unread);
                 Err(ServiceError::KeyringUnavailable(why))
             }
+        }
+    }
+
+    /// Removes the session from the keyring for a sign-out that could not
+    /// (see `removal_pending`), unless an account was stored since.
+    fn settle_removal(&self) {
+        if !self.cfg.paths.removal_pending.exists() {
+            return;
+        }
+        let _written = lock(&self.written);
+        {
+            let st = lock(&self.state);
+            if st.account.is_some() || st.unread.is_some() {
+                return;
+            }
+        }
+        match self.secrets.remove_session() {
+            Ok(_) => {
+                eprintln!("icloud-sessiond: removed the signed-out session from the keyring");
+                self.clear_removal_pending();
+            }
+            Err(e) => eprintln!("icloud-sessiond: removing the signed-out session from the keyring: {e}"),
+        }
+    }
+
+    /// The keyring's session item was replaced or removed: nothing owed.
+    fn clear_removal_pending(&self) {
+        let marker = &self.cfg.paths.removal_pending;
+        if let Err(e) = files::remove(marker) {
+            eprintln!("icloud-sessiond: removing {}: {e}", marker.display());
         }
     }
 
@@ -1012,7 +1065,8 @@ impl Daemon {
         }
     }
 
-    /// `ForgetPassword()`: removes every icloud-session keyring item.
+    /// `ForgetPassword()`: removes the stored password(s); the session's
+    /// keyring item stays.
     fn forget_password(&self) -> Result<(), ServiceError> {
         let _one = lock(&self.find_my_login_lock);
         let n = self.secrets.forget_passwords().map_err(ServiceError::Failed)?;
@@ -1185,7 +1239,10 @@ impl Daemon {
             captured_at: time::rfc3339_millis(time::now_ms()),
             find_my: None,
         };
-        {
+        // The keyring write is serialized with every other (`written`, then
+        // `state`), so no older jar's write lands after this one.
+        let mut written = lock(&self.written);
+        let unread_same = {
             let st = lock(&self.state);
             if st.signin_seq != seq {
                 return Err(cancelled());
@@ -1195,6 +1252,17 @@ impl Daemon {
             if let Some(old) = st.account.as_ref().filter(|old| old.dsid == account.dsid) {
                 account.find_my = old.find_my.clone();
             }
+            st.account.is_none() && st.unread.as_ref().is_some_and(|u| u.stored.dsid == account.dsid)
+        };
+        if unread_same {
+            // Its jars were never read (keyring locked at start); it is
+            // unlocked if this sign-in is to be kept, so read them now.
+            if let Ok(Some(text)) = self.secrets.get_session()
+                && let Ok(old) = serde_json::from_str::<SessionSecret>(&text)
+                && old.dsid == account.dsid
+            {
+                account.find_my = old.find_my;
+            }
         }
         // Into the keyring first: a sign-in that cannot be kept fails, and
         // says why, rather than lasting only until the daemon exits.
@@ -1202,16 +1270,21 @@ impl Daemon {
         self.secrets
             .set_session(&account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
-        lock(&self.written).secret = Some(secret);
+        written.secret = Some(secret);
+        self.clear_removal_pending();
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
             drop(st);
             // A SignOut came in meanwhile, and may have removed the session
             // before this one was stored.
-            if let Err(e) = self.secrets.remove_session() {
-                eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
+            written.secret = None;
+            match self.secrets.remove_session() {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
+                    let _ = files::touch(&self.cfg.paths.removal_pending);
+                }
             }
-            lock(&self.written).secret = None;
             return Err(cancelled());
         }
         st.account = Some(account);
@@ -1219,6 +1292,7 @@ impl Daemon {
         st.generation += 1;
         let save = self.save_account(&mut st);
         drop(st);
+        drop(written);
         self.write(save);
         Ok(())
     }
@@ -1249,7 +1323,10 @@ impl Daemon {
 
     /// Forgets the account, closes an open sign-in window (its result is
     /// dropped), then deletes the window's WebKit profile.
-    fn sign_out(&self) {
+    ///
+    /// `KeyringUnavailable`: signed out, but the keyring would not remove
+    /// the session's cookies; the next start removes them.
+    fn sign_out(&self) -> Result<(), ServiceError> {
         let save = {
             let mut slot = lock(&self.signin_child);
             if let Some((_, mut child)) = slot.take() {
@@ -1271,6 +1348,14 @@ impl Daemon {
             }
         }
         self.publish();
+        if self.cfg.paths.removal_pending.exists() {
+            return Err(ServiceError::KeyringUnavailable(
+                "signed out, but the keyring would not remove the session's cookies; \
+                 icloud-session removes them when it next starts with the keyring available"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     // ------------------------------------------------ clients, heartbeat
@@ -1593,7 +1678,7 @@ impl Service {
 
     /// Forgets the account and the sign-in window's WebKit profile.
     #[zbus(name = "SignOut")]
-    async fn sign_out(&self) {
+    async fn sign_out(&self) -> Result<(), ServiceError> {
         let d = self.0.clone();
         blocking::unblock(move || d.sign_out()).await
     }

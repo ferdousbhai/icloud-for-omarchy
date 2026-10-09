@@ -1449,6 +1449,43 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
 }
 
 #[test]
+fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    assert!(env.session_secret().is_some());
+
+    // The keyring stops answering, and the user signs out.
+    let keyring = fs::read(env.secrets_path()).unwrap();
+    fs::remove_file(env.secrets_path()).unwrap();
+    fs::create_dir(env.secrets_path()).unwrap();
+    match icloud_session::sign_out_on(&conn) {
+        Err(Error::KeyringUnavailable(why)) => assert!(why.contains("signed out"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(env.account_file().is_none());
+    let pending = env.root().join("state/icloud-session/session-removal-pending");
+    assert!(pending.exists());
+
+    // It answers again: the next start removes the live cookies it kept.
+    fs::remove_dir(env.secrets_path()).unwrap();
+    fs::write(env.secrets_path(), keyring).unwrap();
+    assert!(env.session_secret().is_some());
+    env.kill_daemon(&conn);
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    wait_until("the session's removal", Duration::from_secs(5), || env.session_secret().is_none());
+    assert!(!pending.exists());
+}
+
+#[test]
 fn offline_session_hands_out_the_cached_session_and_backs_off() {
     let server = Server::start(|s, _, _| match s.path() {
         VALIDATE => {

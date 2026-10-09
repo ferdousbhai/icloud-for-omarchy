@@ -27,6 +27,9 @@ pub const DEFAULT_CLIENT_MASTERING_NUMBER: &str = "2624Build27";
 pub struct Paths {
     /// `$XDG_STATE_HOME/icloud-session/account.json`
     pub account: PathBuf,
+    /// `$XDG_STATE_HOME/icloud-session/session-removal-pending`: a sign-out
+    /// could not remove the session from the keyring; removed once it does.
+    pub removal_pending: PathBuf,
     /// `$XDG_DATA_HOME/icloud-session/webkit` (the sign-in window's profile)
     pub webkit_data: PathBuf,
     /// `$XDG_CACHE_HOME/icloud-session/webkit`
@@ -48,8 +51,10 @@ impl Paths {
                 .unwrap_or_else(|| home.join(fallback))
                 .join("icloud-session")
         };
+        let state = xdg("XDG_STATE_HOME", ".local/state");
         Paths {
-            account: xdg("XDG_STATE_HOME", ".local/state").join("account.json"),
+            account: state.join("account.json"),
+            removal_pending: state.join("session-removal-pending"),
             webkit_data: xdg("XDG_DATA_HOME", ".local/share").join("webkit"),
             webkit_cache: xdg("XDG_CACHE_HOME", ".cache").join("webkit"),
         }
@@ -266,6 +271,15 @@ pub fn write_json(path: &Path, value: &Value) -> io::Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value).expect("JSON serializes");
     bytes.push(b'\n');
     write_atomic(path, &bytes)
+}
+
+/// Creates `path` empty (a marker), mode 0600, creating the parent
+/// directory 0700.
+pub fn touch(path: &Path) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        create_private_dir(dir)?;
+    }
+    write_atomic(path, b"")
 }
 
 /// Writes `bytes` to a temp file (mode 0600) beside `path`, then renames it

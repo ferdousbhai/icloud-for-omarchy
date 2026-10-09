@@ -176,8 +176,8 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `ReportFindMyAuthRequired()` | method | `→ b reauthorized`. A client got HTTP 450 from Find My: the Find My jar is forgotten; with a password stored, the daemon signs in to Find My again (see below) and answers true, so the client retries once |
 | `FindMyPasswordStored` | property | `b`, the keyring holds the Apple ID password for the signed-in account (false when signed out) |
 | `SetPassword(s)` | method | signs in to Find My once with the password (the autofill window, below). If Apple refuses it, nothing is stored (`…Error.PasswordRejected`); otherwise it is stored in the keyring, and a sign-in that failed for another reason is reported as `…Error.Failed` ("stored the password, but the Find My sign-in with it failed: …"). Also `…Error.Failed` (keyring), `…Error.SignInRequired` |
-| `ForgetPassword()` | method | removes every icloud-session item from the keyring |
-| `SignOut()` | method | forgets the account (and its Find My jar) and the WebKit profile |
+| `ForgetPassword()` | method | removes the stored password(s) from the keyring; the session's item stays |
+| `SignOut()` | method | forgets the account (and its Find My jar) and the WebKit profile. `…Error.KeyringUnavailable`: signed out, but the keyring would not remove the session's item; the next start removes it |
 
 Property changes are announced with the standard
 `org.freedesktop.DBus.Properties.PropertiesChanged` signal, one signal per
@@ -221,6 +221,7 @@ output is JSON anyway) an error is one line on stderr,
 |---|---|---|
 | `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | What is not a secret: `apple_id`, `full_name`, `dsid`, `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | Secret Service (keyring), default collection | daemon | The cookie jars: one item labelled `iCloud session (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=session`, its secret JSON `{dsid, cookies, find_my}`: the main jar (name, value, domain, path, expires; session-only cookies too) and, once authorized, the Find My jar (`cookies`, `client_params`, `captured_at`). Written only when a jar changes. |
+| `$XDG_STATE_HOME/icloud-session/session-removal-pending` (0600, empty) | daemon | Present while a sign-out still owes the keyring's session item a removal (the keyring was unavailable); the next start removes the item, then this file. A sign-in replacing the item removes it too. |
 | `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
 | `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache; its HTTP cache (`WebKitCache`) is deleted when the last sign-in window closes |
 
@@ -229,9 +230,11 @@ output is JSON anyway) an error is one line on stderr,
 write is atomic: temp file in the same directory, mode 0600, fsync, rename.
 One account at a time; signing in with another Apple ID replaces it.
 
-The cookies are never written to a file. An `account.json` from an
-older daemon that still holds them has them moved into the keyring at
-start, and is rewritten without them. When the keyring cannot be read
+The cookies are never written to a file. The daemon reads them from the
+keyring off its start path, so a locked keyring's unlock prompt never
+holds up its bus name; a `Session()` meanwhile waits for that read. An `account.json` from an older daemon
+that still holds them has them moved into the keyring then, and is
+rewritten without them. When the keyring cannot be read
 (no Secret Service on the bus, a locked keyring whose unlock prompt was
 dismissed), the daemon stays signed in as the account `account.json`
 names (`SignedIn`, `AppleId`, `FullName` as before) but hands out no
