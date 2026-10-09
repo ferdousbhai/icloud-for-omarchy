@@ -1358,6 +1358,11 @@ impl Daemon {
             }
             return Err(cancelled());
         }
+        // The Find My jar as it is now: a merge or Find My sign-in may have
+        // changed it while the keyring was written (`write` below stores it).
+        if let Some(now) = st.account.as_ref().filter(|now| now.dsid == account.dsid) {
+            account.find_my = now.find_my.clone();
+        }
         st.account = Some(account);
         st.unread = None;
         st.generation += 1;
