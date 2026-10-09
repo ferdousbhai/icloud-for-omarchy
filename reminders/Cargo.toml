@@ -1,0 +1,58 @@
+[package]
+name = "icloud-reminders"
+version = "0.1.0"
+edition.workspace = true
+description = "iCloud Reminders on Omarchy: lists, due dates and desktop notifications"
+license.workspace = true
+repository.workspace = true
+publish = false
+default-run = "icloud-reminders"
+
+[lib]
+name = "icloud_reminders"
+
+# The command line, and the background sync the systemd timer runs. It never
+# calls into GTK, so it links without GTK and starts fast; with no command
+# it runs icloud-reminders-app.
+[[bin]]
+name = "icloud-reminders"
+path = "src/main.rs"
+
+# The window (and, given a command, the command line too). Its code is in
+# the binary, so none of it can reach the library the command line links.
+[[bin]]
+name = "icloud-reminders-app"
+path = "src/bin/app/main.rs"
+required-features = ["ui"]
+
+# The library (CloudKit, the cache, notifications, the command line) needs
+# no GTK, so `cargo test --no-default-features` runs on a machine without
+# the GTK stack.
+[features]
+default = ["ui"]
+ui = ["dep:gtk", "dep:adw", "dep:async-channel"]
+
+[dependencies]
+# The workspace's session/ crate.
+icloud-session = { workspace = true, features = ["clap"] }
+base64 = "0.22"
+clap.workspace = true
+# TitleDocument/NotesDocument are zlib-compressed protobufs.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+# Due dates are wall-clock times in a named zone (or the system's).
+jiff = "0.2"
+# flock(2) on the cache, shared by the app, the CLI and the timer.
+rustix = { version = "1", features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+# org.freedesktop.Notifications, when omarchy-notification-send is absent.
+zbus.workspace = true
+gtk = { workspace = true, optional = true }
+adw = { workspace = true, optional = true }
+async-channel = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+tiny_http.workspace = true
