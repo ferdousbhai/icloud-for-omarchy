@@ -1602,18 +1602,31 @@ fn reports_that_arrive_together_share_one_validate() {
 #[test]
 fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
     // The start-up /validate of the stored jar is slow and ends in 421; the
-    // sign-in that finishes meanwhile must survive it.
-    let server = Server::start(|s, n, base| match s.path() {
+    // sign-in that finishes meanwhile must survive it. The window finishes
+    // only once that /validate has arrived, and the 421 is checked for only
+    // once it has been answered.
+    let dir = tempfile::tempdir().unwrap();
+    let (seen, answered) = (dir.path().join("seen"), dir.path().join("answered"));
+    let (seen_by_server, answered_by_server) = (seen.clone(), answered.clone());
+    let server = Server::start(move |s, n, base| match s.path() {
         VALIDATE if s.header("Cookie").unwrap_or_default().contains("=original") => {
+            fs::write(&seen_by_server, "").unwrap();
             thread::sleep(Duration::from_millis(1500));
+            fs::write(&answered_by_server, "").unwrap();
             signed_out()
         }
         VALIDATE => validate_ok(n, base),
         _ => Reply::json(404, json!({})),
     });
-    let dir = tempfile::tempdir().unwrap();
     let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com"}]});
-    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!(
+            "i=0; while [ ! -e '{}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\ncat <<'EOF'\n{capture}\nEOF",
+            seen.display()
+        ),
+    );
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1624,13 +1637,11 @@ fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
     icloud_session::sign_in_on(&conn).unwrap();
     watch.window_opened();
     watch.window_closed();
-    wait_until("the old jar's validate", Duration::from_secs(5), || {
-        server
-            .requests(VALIDATE)
-            .iter()
-            .any(|r| r.header("Cookie").unwrap_or_default().contains("=original"))
-    });
-    thread::sleep(Duration::from_millis(1800));
+    assert!(seen.exists(), "the old jar's /validate came first");
+    wait_until("the old jar's 421", Duration::from_secs(10), || answered.exists());
+    // The daemon's handling of that 421 (a forget, if it were wrong) is
+    // immediate; give it a moment to land before checking it did not.
+    thread::sleep(Duration::from_millis(300));
     assert!(prop::<bool>(&conn, "SignedIn"), "the 421 was about the old jar");
     let account = env.account().expect("the new account stays");
     assert!(!account.to_string().contains("\"original\""));

@@ -1034,6 +1034,9 @@ impl Daemon {
         if password.is_empty() {
             return Err(ServiceError::Failed("the password is empty".into()));
         }
+        // Signed in with the jars unread (keyring locked at start): read
+        // them now, or say why not.
+        self.retry_keyring()?;
         let _one = lock(&self.find_my_login_lock);
         let (apple_id, dsid, generation) = {
             let st = lock(&self.state);
@@ -1215,7 +1218,14 @@ impl Daemon {
             return Err(format!("{} exited with {status} (window closed?)", bin.display()));
         }
         if find {
-            return self.store_find_my(seq, find_my_capture(&out)?);
+            let capture = find_my_capture(&out)?;
+            // The account it joins may still be unread (keyring locked at
+            // start); the window's sign-in unlocked nothing for it.
+            self.retry_keyring().map_err(|e| match e {
+                ServiceError::KeyringUnavailable(why) => format!("the keyring is unavailable: {why}"),
+                e => e.to_string(),
+            })?;
+            return self.store_find_my(seq, capture);
         }
         let (mut jar, params) = parse_capture(&out)?.into_parts();
         if jar.is_empty() {
