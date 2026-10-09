@@ -12,7 +12,7 @@
 
 use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::TimeZone;
-use jiff::{Timestamp, ToSpan, Zoned};
+use jiff::{Timestamp, Zoned};
 
 /// When an all-day reminder notifies, in local time (Reminders' own
 /// default for all-day alerts is 09:00).
@@ -90,29 +90,21 @@ impl Due {
     }
 
     /// A timed reminder at `wall` in `zone` (anchored to it when it has an
-    /// IANA name).
-    pub fn at(wall: DateTime, zone: &TimeZone) -> Due {
-        Due {
-            wall_ms: wall_as_utc(wall),
-            all_day: false,
-            time_zone: zone.iana_name().map(str::to_owned),
-        }
+    /// IANA name). Held to the same range as [`Due::read`], so whatever is
+    /// written reads back.
+    pub fn at(wall: DateTime, zone: &TimeZone) -> Result<Due, String> {
+        Due::read(wall_as_utc(wall)?, false, zone.iana_name().map(str::to_owned))
     }
 
-    pub fn on(date: Date) -> Due {
-        Due {
-            wall_ms: wall_as_utc(date.at(0, 0, 0, 0)),
-            all_day: true,
-            time_zone: None,
-        }
+    pub fn on(date: Date) -> Result<Due, String> {
+        Due::read(wall_as_utc(date.at(0, 0, 0, 0))?, true, None)
     }
 }
 
-fn wall_as_utc(wall: DateTime) -> i64 {
+fn wall_as_utc(wall: DateTime) -> Result<i64, String> {
     wall.to_zoned(TimeZone::UTC)
-        .expect("a parsed date is in range")
-        .timestamp()
-        .as_millisecond()
+        .map(|z| z.timestamp().as_millisecond())
+        .map_err(|e| format!("due date {wall} out of range: {e}"))
 }
 
 /// Parses `--due`: `2026-10-10`, `2026-10-10 17:30` (or `T17:30`),
@@ -129,15 +121,17 @@ pub fn parse_when(s: &str, now: &Zoned) -> Result<Due, String> {
     if let Some(rel) = s.strip_prefix('+') {
         let (num, unit) = rel.split_at(rel.find(|c: char| !c.is_ascii_digit()).ok_or_else(bad)?);
         let n: i64 = num.parse().map_err(|_| bad())?;
+        let span = jiff::Span::new();
         let span = match unit {
-            "m" | "min" => n.minutes(),
-            "h" => n.hours(),
-            "d" => n.days(),
+            "m" | "min" => span.try_minutes(n),
+            "h" => span.try_hours(n),
+            "d" => span.try_days(n),
             _ => return Err(bad()),
-        };
+        }
+        .map_err(|_| bad())?;
         let at = now.checked_add(span).map_err(|_| bad())?;
         let wall = at.datetime().round(jiff::Unit::Minute).map_err(|_| bad())?;
-        return Ok(Due::at(wall, zone));
+        return Due::at(wall, zone);
     }
     // "2026-10-10T17:30" is two words.
     let iso = s
@@ -156,8 +150,8 @@ pub fn parse_when(s: &str, now: &Zoned) -> Result<Due, String> {
         return Err(bad());
     }
     match time {
-        None => Ok(Due::on(date)),
-        Some(t) => Ok(Due::at(date.to_datetime(parse_time(t).ok_or_else(bad)?), zone)),
+        None => Due::on(date),
+        Some(t) => Due::at(date.to_datetime(parse_time(t).ok_or_else(bad)?), zone),
     }
 }
 
@@ -186,6 +180,14 @@ mod tests {
     fn now() -> Zoned {
         // Friday 2026-10-09 14:20 in Helsinki (UTC+3).
         "2026-10-09T14:20:00+03:00[Europe/Helsinki]".parse().unwrap()
+    }
+
+    #[test]
+    fn out_of_range_is_an_error_not_a_panic() {
+        for s in ["+8000000d", "+99999999999999999h", "9999-12-31", "9999-12-31 23:59", "0000-01-01"] {
+            assert!(parse_when(s, &now()).is_err(), "{s}");
+        }
+        assert!(parse_when("9998-12-31", &now()).is_ok());
     }
 
     #[test]
