@@ -121,6 +121,10 @@ pub enum Error {
     Http { status: u16, body: String },
     #[error("network: {0}")]
     Network(String),
+    /// The service answered, but with a body this version cannot read
+    /// (e.g. an HTML maintenance page instead of JSON). Not offline.
+    #[error("unexpected response: {0}")]
+    BadResponse(String),
     /// The host's name did not resolve, or nothing answered the connect
     /// (refused, or no answer within 10 s): most likely no network. Every
     /// other request would fail the same way, so a sync can skip its run
@@ -183,7 +187,7 @@ pub struct Response {
 
 impl Response {
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
-        serde_json::from_slice(&self.body).map_err(|e| Error::Network(format!("bad JSON: {e}")))
+        serde_json::from_slice(&self.body).map_err(|e| Error::BadResponse(format!("bad JSON: {e}")))
     }
 }
 
@@ -887,7 +891,7 @@ impl Session {
             Sent::Unauthorized { .. } => match self.send_once(request)? {
                 Sent::Ok(response) => Ok(*response),
                 Sent::FindMyAuth { .. } => {
-                    self.report_find_my_auth_required();
+                    self.report_find_my_auth_required()?;
                     Err(Error::FindMyAuthRequired)
                 }
                 Sent::Unauthorized { status, body } => {
@@ -918,14 +922,14 @@ impl Session {
             Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == ERROR_FIND_MY_AUTH_REQUIRED => false,
             Err(e) => return Err(e.into()),
         };
-        if !changed && !self.report_find_my_auth_required() {
+        if !changed && !self.report_find_my_auth_required()? {
             return Err(Error::FindMyAuthRequired);
         }
         match self.send_once(request)? {
             Sent::Ok(response) => Ok(*response),
             Sent::Unauthorized { status, body } => Err(Error::Http { status, body }),
             Sent::FindMyAuth { .. } => {
-                self.report_find_my_auth_required();
+                self.report_find_my_auth_required()?;
                 Err(Error::FindMyAuthRequired)
             }
         }
@@ -933,14 +937,12 @@ impl Session {
 
     /// `ReportFindMyAuthRequired()`: true when the daemon holds a new Find
     /// My jar (it signed in again with the stored password). False in mock
-    /// mode or when the report fails.
-    fn report_find_my_auth_required(&self) -> bool {
-        let Some(conn) = &self.inner.conn else {
-            return false;
-        };
-        proxy(conn)
-            .and_then(|p| Ok(p.report_find_my_auth_required()?))
-            .unwrap_or(false)
+    /// mode. Its errors (e.g. `KeyringUnavailable`) are the caller's.
+    fn report_find_my_auth_required(&self) -> Result<bool> {
+        match &self.inner.conn {
+            Some(conn) => Ok(proxy(conn)?.report_find_my_auth_required()?),
+            None => Ok(false),
+        }
     }
 
     /// `ReportSignInRequired()`: true when the daemon still has a session.

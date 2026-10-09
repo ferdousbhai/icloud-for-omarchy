@@ -244,6 +244,7 @@ fn fail(e: Error) -> ExitCode {
         ),
         Error::Service(_) => fail_with("session_service", EXIT_ERROR, &message, None),
         Error::Network(_) => fail_with("network", EXIT_ERROR, &message, None),
+        Error::BadResponse(_) => fail_with("bad_response", EXIT_ERROR, &message, None),
         Error::Offline(_) => fail_with("offline", EXIT_ERROR, &message, None),
         Error::Http { .. } => fail_with("http", EXIT_ERROR, &message, None),
         Error::Io(_) => fail_with("io", EXIT_ERROR, &message, None),

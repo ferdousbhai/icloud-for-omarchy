@@ -6,7 +6,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,6 +28,9 @@ const ACTIVE_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// How long start-up waits for the keyring's answer before taking the bus
 /// name (well inside D-Bus's activation timeout).
 const KEYRING_LOOK_WAIT: Duration = Duration::from_secs(3);
+/// The idle exit's longest wait for calls already sent to be read and
+/// answered.
+const FLUSH_WAIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -263,6 +266,28 @@ pub struct Daemon {
     fingerprint_key: RandomState,
     /// The last account write; held while writing.
     written: Mutex<Written>,
+    /// Method calls being answered (see [`Busy`]); the idle exit waits for
+    /// them.
+    in_flight: AtomicUsize,
+    /// Pings this daemon sent itself that `track_clients` has seen: every
+    /// call sent before such a ping has been seen too.
+    pings_seen: AtomicU64,
+}
+
+/// Counts a method call as in flight while it is answered.
+struct Busy(Arc<Daemon>);
+
+impl Busy {
+    fn new(d: &Arc<Daemon>) -> Busy {
+        d.in_flight.fetch_add(1, Ordering::SeqCst);
+        Busy(d.clone())
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// What [`Daemon::write`] last wrote.
@@ -383,6 +408,8 @@ impl Daemon {
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
             written: Mutex::new(Written::default()),
+            in_flight: AtomicUsize::new(0),
+            pings_seen: AtomicU64::new(0),
         })
     }
 
@@ -1410,6 +1437,9 @@ impl Daemon {
                 continue;
             };
             if Some(&sender) == own.as_ref() {
+                if header.member().is_some_and(|m| m.as_str() == "Ping") {
+                    self.pings_seen.fetch_add(1, Ordering::SeqCst);
+                }
                 continue;
             }
             let mut st = lock(&self.state);
@@ -1446,15 +1476,62 @@ impl Daemon {
                 for name in &gone {
                     st.clients.remove(name);
                 }
-                if st.clients.is_empty() && !st.signing_in && st.last_activity.elapsed() >= self.cfg.idle {
-                    return;
+                let idle = st.clients.is_empty() && !st.signing_in && st.last_activity.elapsed() >= self.cfg.idle;
+                if !idle {
+                    st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
+                } else {
+                    drop(st);
+                    if self.wind_down() {
+                        return;
+                    }
+                    false
                 }
-                st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
             };
             if heartbeat {
                 self.refresh_in_background();
             }
         }
+    }
+}
+
+impl Daemon {
+    /// Idle: gives up the bus name, so later calls start a new daemon, and
+    /// answers every call already sent to this one. A ping to itself, seen
+    /// after every message sent before it, says when they have all been
+    /// read. Returns false (serve on) if one came meanwhile and the name
+    /// could be taken back.
+    fn wind_down(&self) -> bool {
+        let Some(conn) = self.conn() else {
+            return true;
+        };
+        let decided = Instant::now();
+        if let Err(e) = conn.release_name(icloud_session::BUS_NAME) {
+            eprintln!("icloud-sessiond: releasing the bus name: {e}");
+        }
+        let pings = self.pings_seen.load(Ordering::SeqCst);
+        let own = conn.unique_name().map(|n| n.to_string()).unwrap_or_default();
+        match conn.call_method(Some(own.as_str()), OBJECT_PATH, Some("org.freedesktop.DBus.Peer"), "Ping", &()) {
+            Ok(_) => {
+                let start = Instant::now();
+                while self.pings_seen.load(Ordering::SeqCst) == pings && start.elapsed() < FLUSH_WAIT {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            Err(e) => eprintln!("icloud-sessiond: pinging itself before exiting: {e}"),
+        }
+        if lock(&self.state).last_call >= decided {
+            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+            if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
+                conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
+            {
+                return false;
+            }
+        }
+        let start = Instant::now();
+        while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
+            thread::sleep(Duration::from_millis(5));
+        }
+        true
     }
 }
 
@@ -1623,6 +1700,7 @@ impl Service {
     #[zbus(name = "Session", out_args("cookie_header", "client_params", "webservices"))]
     // The literal tuple (not `SessionReply`) lets the macro see three out args.
     async fn session(&self) -> Result<(String, HashMap<String, String>, HashMap<String, String>), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.session()).await
     }
@@ -1630,6 +1708,7 @@ impl Service {
     /// Raw `Set-Cookie` header values a client received from Apple.
     #[zbus(name = "MergeCookies")]
     async fn merge_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.merge_cookies(&set_cookies)).await
     }
@@ -1639,6 +1718,7 @@ impl Service {
     /// once), false = signed out.
     #[zbus(name = "ReportSignInRequired", out_args("still_signed_in"))]
     async fn report_sign_in_required(&self) -> Result<bool, ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.report_sign_in_required()).await
     }
@@ -1651,6 +1731,7 @@ impl Service {
     /// Opens the sign-in window unless it is open; returns at once.
     #[zbus(name = "SignIn")]
     async fn sign_in(&self) {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.sign_in(false)).await
     }
@@ -1660,6 +1741,7 @@ impl Service {
     /// once. The captured jar becomes the Find My session.
     #[zbus(name = "AuthorizeFindMy")]
     async fn authorize_find_my(&self) {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.sign_in(true)).await
     }
@@ -1668,6 +1750,7 @@ impl Service {
     /// `findme` host only; error `FindMyAuthRequired` when there is none.
     #[zbus(name = "FindMySession", out_args("cookie_header", "client_params"))]
     async fn find_my_session(&self) -> Result<(String, HashMap<String, String>), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.find_my_session()).await
     }
@@ -1675,6 +1758,7 @@ impl Service {
     /// Raw `Set-Cookie` header values a client received from Find My.
     #[zbus(name = "MergeFindMyCookies")]
     async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.merge_find_my_cookies(&set_cookies)).await
     }
@@ -1684,6 +1768,7 @@ impl Service {
     /// Find My session is held (retry once).
     #[zbus(name = "ReportFindMyAuthRequired", out_args("reauthorized"))]
     async fn report_find_my_auth_required(&self) -> Result<bool, ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.report_find_my_auth_required()).await
     }
@@ -1697,6 +1782,7 @@ impl Service {
     /// it in the keyring for automatic Find My re-authorization.
     #[zbus(name = "SetPassword")]
     async fn set_password(&self, password: String) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         let password = Password::new(password);
         blocking::unblock(move || d.set_password(password)).await
@@ -1705,6 +1791,7 @@ impl Service {
     /// Removes the stored password(s) from the keyring.
     #[zbus(name = "ForgetPassword")]
     async fn forget_password(&self) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.forget_password()).await
     }
@@ -1712,6 +1799,7 @@ impl Service {
     /// Forgets the account and the sign-in window's WebKit profile.
     #[zbus(name = "SignOut")]
     async fn sign_out(&self) -> Result<(), ServiceError> {
+        let _busy = Busy::new(&self.0);
         let d = self.0.clone();
         blocking::unblock(move || d.sign_out()).await
     }

@@ -39,7 +39,10 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
+/// Waits for `cond`. `timeout` only bounds a failure, so it is at least
+/// 30 s: a loaded CI runner can be that slow, a passing test never waits.
 fn wait_until(what: &str, timeout: Duration, mut cond: impl FnMut() -> bool) {
+    let timeout = timeout.max(Duration::from_secs(30));
     let start = Instant::now();
     while !cond() {
         assert!(start.elapsed() < timeout, "timed out waiting for {what}");
@@ -233,6 +236,19 @@ fn validate_ok(n: usize, base: &str) -> Reply {
 /// jar).
 fn findme_url(base: &str) -> String {
     base.replace("127.0.0.1", "localhost")
+}
+
+/// Waits until every `/validate` the server has had (answered by
+/// [`validate_ok`], token `rotated<n>`) is stored: the daemon answers
+/// callers from memory and writes to disk and the keyring after.
+fn wait_stored(env: &Env, server: &Server) {
+    wait_until("the last /validate to be stored", Duration::from_secs(30), || {
+        let token = match server.count(VALIDATE) {
+            0 => "original".to_string(),
+            n => format!("rotated{n}"),
+        };
+        env.account_cookie("X-APPLE-WEBAUTH-TOKEN") == Some(token)
+    });
 }
 
 fn signed_out() -> Reply {
@@ -497,6 +513,7 @@ impl Env {
     /// SIGKILLs the running daemon and waits until it has left the bus.
     fn kill_daemon(&self, conn: &Connection) {
         let dbus = zbus::blocking::fdo::DBusProxy::new(conn).unwrap();
+        let owner = dbus.get_name_owner(BUS_NAME.try_into().unwrap()).unwrap();
         let pid = dbus
             .get_connection_unix_process_id(BUS_NAME.try_into().unwrap())
             .unwrap();
@@ -507,8 +524,12 @@ impl Env {
                 .unwrap()
                 .success()
         );
-        wait_until("the daemon to die", Duration::from_secs(5), || {
-            !Path::new(&format!("/proc/{pid}")).exists() || !self.daemon_running(conn)
+        // Gone from the bus, not just dead: until the bus has noticed, a
+        // call to the name still goes to the dead connection. (A client may
+        // have started the next daemon already.)
+        wait_until("the daemon to leave the bus", Duration::from_secs(30), || {
+            dbus.get_name_owner(BUS_NAME.try_into().unwrap())
+                .map_or(true, |now| now != owner)
         });
     }
 
@@ -571,8 +592,17 @@ fn write_script(dir: &Path, name: &str, body: &str) -> String {
 
 #[test]
 fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
+    // Validates after the first wait for `later`: on a slow machine the
+    // heartbeat would otherwise revalidate (1 s) while this checks the first.
+    let later = Arc::new(AtomicBool::new(false));
+    let open = later.clone();
+    let server = Server::start(move |s, n, base| match s.path() {
+        VALIDATE => {
+            while n > 1 && !open.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            validate_ok(n, base)
+        }
         _ => Reply::json(404, json!({})),
     });
     let env = Env::start(Opts {
@@ -615,6 +645,7 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     assert!(v.header("Cookie").unwrap().contains("X-APPLE-WEBAUTH-TOKEN=original"));
 
     // Persisted.
+    wait_stored(&env, &server);
     let account = env.account().unwrap();
     assert!(account["validated_at"].as_u64().unwrap() >= now() - 5);
     assert_eq!(account["webservices"]["findme"], findme_url(&server.url));
@@ -627,6 +658,7 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
     assert!(prop::<u64>(&conn, "ExpiresAt") >= now() + 2_592_000 - 10);
 
     // Stale after a second: the next Session() validates again first.
+    later.store(true, Ordering::SeqCst);
     thread::sleep(Duration::from_millis(2100));
     let (cookie, _, _) = session(&conn).unwrap();
     // (The heartbeat may validate too while this client is active.)
@@ -1924,6 +1956,7 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert_eq!(server.count(INIT_CLIENT), 0);
     assert!(!dir.path().join("count").exists(), "no window run");
+    wait_stored(&env, &server);
     let validates = server.count(VALIDATE);
     let before = env.account().unwrap();
 
@@ -2235,11 +2268,33 @@ fn accepting(fmip: &str) -> (Arc<Mutex<String>>, Server) {
 
 #[test]
 fn a_450_signs_in_with_the_stored_password_and_retries_once() {
-    let (_accepted, server) = accepting("auto1");
+    // Both requests' stale tries are answered 450 only once both have
+    // arrived: neither can start late enough to pick up the new jar.
+    let stale = Arc::new(Mutex::new(0usize));
+    let server = Server::start(move |s, n, base| {
+        let cookie = s.header("Cookie").unwrap_or_default().to_string();
+        match s.path() {
+            VALIDATE => validate_ok(n, base),
+            INIT_CLIENT if cookie.split("; ").any(|c| c == "X-APPLE-WEBAUTH-FMIP=auto1") => {
+                Reply::json(200, json!({"content": []})).cookie("FMIP-ROTATED=r; Path=/")
+            }
+            INIT_CLIENT => {
+                *stale.lock().unwrap() += 1;
+                wait_until("both stale requests", Duration::from_secs(30), || *stale.lock().unwrap() >= 2);
+                Reply {
+                    status: 450,
+                    body: String::new(),
+                    set_cookies: vec![],
+                }
+            }
+            _ => Reply::json(404, json!({})),
+        }
+    });
     let (env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
     autofill.set_delay("0.3");
     let s = Session::connect_on(&conn).unwrap();
     let init = init_client_url(&s);
+    wait_stored(&env, &server);
     let before = env.account().unwrap();
     let validates = server.count(VALIDATE);
 
