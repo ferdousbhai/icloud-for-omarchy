@@ -428,8 +428,10 @@ impl Window {
                         notes: buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string(),
                     };
                     let mut changes = Vec::new();
+                    // Written (trimmed) only when edited: an untouched "Milk "
+                    // stays as Apple has it.
                     let new_title = draft.title.trim();
-                    if new_title != r.title {
+                    if draft.title != r.title && new_title != r.title {
                         changes.push(Change::Title(new_title.to_owned()));
                     }
                     if draft.notes != r.notes {

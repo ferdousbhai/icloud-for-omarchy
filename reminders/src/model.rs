@@ -252,9 +252,12 @@ pub fn bump_tokens(existing: Option<&str>, keys: &[&str], replica: &str, now_ms:
                 .and_then(Value::as_u64)
                 .ok_or_else(|| format!("ResolutionTokenMap's {key} has no counter"))?,
         };
+        let counter = counter
+            .checked_add(1)
+            .ok_or_else(|| format!("ResolutionTokenMap's {key} counter is at its maximum"))?;
         map.insert(
             (*key).to_owned(),
-            json!({ "counter": counter + 1, "modificationTime": time, "replicaID": replica }),
+            json!({ "counter": counter, "modificationTime": time, "replicaID": replica }),
         );
     }
     Ok(serde_json::to_string(&root).expect("JSON values serialize"))
@@ -335,6 +338,12 @@ pub fn create_op(uuid: &str, list_id: &str, title: &str, notes: &str, due: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_counter_at_its_maximum_is_an_error() {
+        let map = format!("{{\"map\":{{\"title\":{{\"counter\":{}}}}}}}", u64::MAX);
+        assert!(bump_tokens(Some(&map), &["title"], "r", 0).unwrap_err().contains("title"));
+    }
 
     fn record(v: Value) -> Record {
         Record::from_value(&v).unwrap()
