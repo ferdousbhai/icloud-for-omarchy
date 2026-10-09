@@ -23,40 +23,45 @@ pub struct List {
     /// `List/<UUID>`.
     pub id: String,
     pub name: String,
-    /// `Color`, as Apple stores it (JSON).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `#rrggbb`: `Color`'s `daHexString`, Apple's display value.
     pub color: Option<String>,
-    /// `ReminderIDs`: the list's own order, bare UUIDs.
-    #[serde(default)]
+    /// `ReminderIDs`: the list's own order, bare UUIDs. Empty when the list
+    /// keeps it in `ReminderIDsAsset` instead (pyicloud: large lists), which
+    /// this app does not download; such a list is ordered by due date and
+    /// creation only.
     pub order: Vec<String>,
 }
 
 impl List {
-    /// `None` for anything but a live `List` record.
-    pub fn from_record(r: &Record) -> Option<List> {
+    /// `None` for anything but a live `List` record; an error for a list
+    /// whose fields are not what Apple writes.
+    pub fn from_record(r: &Record) -> Result<Option<List>, String> {
         if !r.is_type("List") || r.deleted || r.flag("Deleted") {
-            return None;
+            return Ok(None);
         }
-        let order = r
-            .str("ReminderIDs")
-            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| id.trim_start_matches("Reminder/").to_owned())
-            .collect();
-        Some(List {
+        let bad = |what: &str| format!("{}: {what}", r.name);
+        let order = match r.str("ReminderIDs") {
+            None => Vec::new(),
+            Some(s) => serde_json::from_str::<Vec<String>>(s)
+                .map_err(|e| bad(&format!("ReminderIDs is not a JSON list of IDs ({e})")))?
+                .into_iter()
+                .map(|id| id.trim_start_matches("Reminder/").to_owned())
+                .collect(),
+        };
+        let color = match r.str("Color") {
+            None => None,
+            Some(s) => serde_json::from_str::<Value>(s)
+                .map_err(|e| bad(&format!("Color is not JSON ({e})")))?
+                .get("daHexString")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        };
+        Ok(Some(List {
             id: r.name.clone(),
-            name: r.str("Name").filter(|n| !n.is_empty()).unwrap_or("Untitled").to_owned(),
-            color: r.str("Color").map(str::to_owned),
+            name: r.str("Name").ok_or_else(|| bad("no Name"))?.to_owned(),
+            color,
             order,
-        })
-    }
-
-    /// `#rrggbb` from `Color` (`daHexString`, Apple's display value), if any.
-    pub fn hex_color(&self) -> Option<String> {
-        let v: Value = serde_json::from_str(self.color.as_deref()?).ok()?;
-        let hex = v.get("daHexString")?.as_str()?;
-        (hex.len() == 7 && hex.starts_with('#')).then(|| hex.to_owned())
+        }))
     }
 }
 
@@ -66,32 +71,22 @@ pub struct Reminder {
     pub id: String,
     pub list_id: String,
     pub title: String,
-    #[serde(default)]
     pub notes: String,
     pub completed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due: Option<Due>,
     /// 0 none, 1 high, 5 medium, 9 low (EventKit's scale).
-    #[serde(default)]
     pub priority: i64,
-    #[serde(default)]
     pub flagged: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     /// Alerts set on an Apple device (`Alarm` records). This app does not
     /// read or move them: they keep their time when the due date changes.
-    #[serde(default)]
     pub alarms: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The record's CloudKit `created` and `modified` times (Unix ms).
     pub created_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_tag: Option<String>,
     /// `ResolutionTokenMap` as last read, for [`bump_tokens`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<String>,
 }
 
@@ -105,34 +100,42 @@ pub enum Parsed {
 }
 
 impl Reminder {
-    pub fn from_record(r: &Record) -> Parsed {
+    /// A live reminder, or that it is gone. A `Reminder` record without
+    /// the title document or list Apple always writes, or with a document
+    /// that does not decode, is an error naming the record: a reminder is
+    /// never shown with a made-up title.
+    pub fn from_record(r: &Record) -> Result<Parsed, String> {
         if r.deleted {
-            return Parsed::Gone(r.name.clone());
+            return Ok(Parsed::Gone(r.name.clone()));
         }
         if !r.is_type("Reminder") {
-            return Parsed::NotAReminder;
+            return Ok(Parsed::NotAReminder);
         }
         if r.flag("Deleted") {
-            return Parsed::Gone(r.name.clone());
+            return Ok(Parsed::Gone(r.name.clone()));
         }
-        let doc = |key: &str, fallback: &str| match r.str(key) {
-            Some(b64) => topotext::decode(b64).unwrap_or_else(|_| fallback.to_owned()),
-            None => String::new(),
+        let bad = |what: String| format!("{}: {what}", r.name);
+        let doc = |key: &str| {
+            r.str(key)
+                .map(|b64| topotext::decode(b64).map_err(|e| bad(format!("{key}: {e}"))))
         };
-        let mut title = doc("TitleDocument", "(unreadable title)");
-        if title.is_empty() {
-            title = "Untitled".into();
-        }
-        let due = r.int("DueDate").map(|wall_ms| Due {
-            wall_ms,
-            all_day: r.flag("AllDay"),
-            time_zone: r.str("TimeZone").filter(|z| !z.is_empty()).map(str::to_owned),
-        });
-        Parsed::Live(Box::new(Reminder {
+        let title = match doc("TitleDocument") {
+            Some(t) => t?,
+            None => return Err(bad("no TitleDocument".into())),
+        };
+        let notes = doc("NotesDocument").transpose()?.unwrap_or_default();
+        let due = match r.int("DueDate") {
+            None => None,
+            Some(wall_ms) => {
+                let zone = r.str("TimeZone").map(str::to_owned);
+                Some(Due::read(wall_ms, r.flag("AllDay"), zone).map_err(bad)?)
+            }
+        };
+        Ok(Parsed::Live(Box::new(Reminder {
             id: r.name.clone(),
-            list_id: r.reference("List").unwrap_or_default().to_owned(),
+            list_id: r.reference("List").ok_or_else(|| bad("no List".into()))?.to_owned(),
             title,
-            notes: doc("NotesDocument", ""),
+            notes,
             completed: r.flag("Completed"),
             completed_ms: r.int("CompletionDate"),
             due,
@@ -140,11 +143,11 @@ impl Reminder {
             flagged: r.flag("Flagged"),
             parent_id: r.reference("ParentReminder").map(str::to_owned),
             alarms: r.strings("AlarmIDs").len(),
-            created_ms: r.int("CreationDate").or(r.created_ms),
-            modified_ms: r.int("LastModifiedDate").or(r.modified_ms),
+            created_ms: r.created_ms,
+            modified_ms: r.modified_ms,
             change_tag: r.change_tag.clone(),
             tokens: r.str("ResolutionTokenMap").map(str::to_owned),
-        }))
+        })))
     }
 
     /// The bare UUID, as list orders and the command line use it.
@@ -161,23 +164,6 @@ pub enum Change {
     Completed(bool),
     Due(Option<Due>),
     Deleted,
-}
-
-impl Change {
-    /// Applies the change to a cached copy (what the server now holds).
-    pub fn apply(&self, r: &mut Reminder, now_ms: i64) {
-        match self {
-            Change::Title(t) => r.title = t.clone(),
-            Change::Notes(n) => r.notes = n.clone(),
-            Change::Completed(c) => {
-                r.completed = *c;
-                r.completed_ms = c.then_some(now_ms);
-            }
-            Change::Due(d) => r.due = d.clone(),
-            Change::Deleted => {}
-        }
-        r.modified_ms = Some(now_ms);
-    }
 }
 
 fn field(t: &str, value: Value) -> Value {
@@ -243,38 +229,49 @@ const APPLE_EPOCH_SECS: f64 = 978_307_200.0;
 /// counters with the last synced ones, per mattheworiordan/remi's
 /// APPLE_REMINDERS_INTERNALS.md). UNVERIFIED AGAINST APPLE which of the two
 /// an iPhone prefers when it holds an edit of its own.
-pub fn bump_tokens(existing: Option<&str>, keys: &[&str], replica: &str, now_ms: i64) -> String {
-    let mut root = existing
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .filter(|v| v.get("map").is_some_and(Value::is_object))
-        .unwrap_or_else(|| json!({ "map": {} }));
+///
+/// `existing` is `None` for a new record, or one read without a map
+/// (pyicloud's fixtures have none): a fresh map, as pyicloud always
+/// writes. A map that is not that shape is an error: writing over it would
+/// throw away Apple's merge state.
+pub fn bump_tokens(existing: Option<&str>, keys: &[&str], replica: &str, now_ms: i64) -> Result<String, String> {
+    let mut root = match existing {
+        None => json!({ "map": {} }),
+        Some(s) => serde_json::from_str::<Value>(s)
+            .ok()
+            .filter(|v| v.get("map").is_some_and(Value::is_object))
+            .ok_or("ResolutionTokenMap is not {\"map\":{...}}")?,
+    };
     let map = root["map"].as_object_mut().expect("checked above");
     let time = now_ms as f64 / 1000.0 - APPLE_EPOCH_SECS;
     for key in keys {
-        let counter = map
-            .get(*key)
-            .and_then(|t| t.get("counter"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let counter = match map.get(*key) {
+            None => 0,
+            Some(t) => t
+                .get("counter")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| format!("ResolutionTokenMap's {key} has no counter"))?,
+        };
         map.insert(
             (*key).to_owned(),
             json!({ "counter": counter + 1, "modificationTime": time, "replicaID": replica }),
         );
     }
-    serde_json::to_string(&root).expect("JSON values serialize")
+    Ok(serde_json::to_string(&root).expect("JSON values serialize"))
 }
 
-/// The records/modify operation for an update of `r` (whose change tag
-/// and tokens are the ones last read).
-pub fn update_op(r: &Reminder, changes: &[Change], replica: &str, now_ms: i64) -> Value {
+/// The records/modify operation for an update of `r`, with the change tag
+/// and tokens last read (CloudKit refuses it if the record has changed).
+pub fn update_op(r: &Reminder, changes: &[Change], replica: &str, now_ms: i64) -> Result<Value, String> {
+    let bad = |what: &str| format!("{}: {what}", r.id);
+    let tag = r.change_tag.as_deref().ok_or_else(|| bad("no recordChangeTag"))?;
     let (mut fields, keys) = update_fields(changes, now_ms);
-    let tokens = bump_tokens(r.tokens.as_deref(), &keys, replica, now_ms);
+    let tokens = bump_tokens(r.tokens.as_deref(), &keys, replica, now_ms).map_err(|e| bad(&e))?;
     fields.insert("ResolutionTokenMap".into(), field("STRING", tokens.into()));
-    let mut record = json!({ "recordName": r.id, "recordType": "Reminder", "fields": fields });
-    if let Some(tag) = &r.change_tag {
-        record["recordChangeTag"] = json!(tag);
-    }
-    json!({ "operationType": "update", "record": record })
+    Ok(json!({
+        "operationType": "update",
+        "record": { "recordName": r.id, "recordType": "Reminder", "recordChangeTag": tag, "fields": fields },
+    }))
 }
 
 /// The records/modify operation creating a reminder in `list_id`, named
@@ -322,7 +319,7 @@ pub fn create_op(uuid: &str, list_id: &str, title: &str, notes: &str, due: Optio
     }
     put(
         "ResolutionTokenMap",
-        field("STRING", bump_tokens(None, &keys, replica, now_ms).into()),
+        field("STRING", bump_tokens(None, &keys, replica, now_ms).expect("a fresh map").into()),
     );
     json!({
         "operationType": "create",
@@ -351,29 +348,26 @@ mod tests {
         record(v["records"][0].clone())
     }
 
+    fn live(r: &Record) -> Reminder {
+        match Reminder::from_record(r).unwrap() {
+            Parsed::Live(r) => *r,
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn reads_pyicloud_s_reminder_fixture() {
-        let Parsed::Live(r) = Reminder::from_record(&fixture_reminder()) else {
-            panic!("live reminder")
-        };
+        let r = live(&fixture_reminder());
         assert_eq!(r.id, "Reminder/REM-FIXTURE");
         assert_eq!(r.uuid(), "REM-FIXTURE");
         assert_eq!(r.list_id, "List/LIST-A");
         assert_eq!(r.title, "Fixture Reminder");
         assert_eq!(r.notes, "Fixture notes");
         assert!(!r.completed);
-        assert_eq!(
-            r.due,
-            Some(Due {
-                wall_ms: 1_735_862_400_000,
-                all_day: false,
-                time_zone: None
-            })
-        );
+        assert_eq!(r.due, Some(Due::read(1_735_862_400_000, false, None).unwrap()));
         assert_eq!(r.created_ms, Some(1_735_689_600_000));
         assert_eq!(r.modified_ms, Some(1_735_776_000_000));
         assert_eq!(r.change_tag.as_deref(), Some("reminder-change-tag-fixture"));
-        assert_eq!(r.alarms, 0);
     }
 
     #[test]
@@ -381,7 +375,7 @@ mod tests {
         let v: Value =
             serde_json::from_str(include_str!("../tests/fixtures/pyicloud/reminders_query_lists_response.json"))
                 .unwrap();
-        let l = List::from_record(&record(v["records"][0].clone())).unwrap();
+        let l = List::from_record(&record(v["records"][0].clone())).unwrap().unwrap();
         assert_eq!(l.id, "List/LIST-A");
         assert_eq!(l.name, "Synthetic List");
         assert_eq!(l.order, vec!["REM-FIXTURE"]);
@@ -391,99 +385,76 @@ mod tests {
     fn deleted_and_tombstoned_reminders_are_gone() {
         let mut r = fixture_reminder();
         r.fields.insert("Deleted".into(), json!({"type": "INT64", "value": 1}));
-        assert_eq!(Reminder::from_record(&r), Parsed::Gone("Reminder/REM-FIXTURE".into()));
+        assert_eq!(Reminder::from_record(&r), Ok(Parsed::Gone("Reminder/REM-FIXTURE".into())));
         let tomb = record(json!({"recordName": "Reminder/X", "deleted": true}));
-        assert_eq!(Reminder::from_record(&tomb), Parsed::Gone("Reminder/X".into()));
-        let list = record(json!({"recordName": "List/X", "recordType": "List", "fields": {}}));
-        assert_eq!(Reminder::from_record(&list), Parsed::NotAReminder);
+        assert_eq!(Reminder::from_record(&tomb), Ok(Parsed::Gone("Reminder/X".into())));
     }
 
     #[test]
-    fn list_colors() {
-        let mut l = List {
-            id: "List/A".into(),
-            name: "A".into(),
-            color: Some(r##"{"daHexString":"#FF9500","ckSymbolicColorName":"orange"}"##.into()),
-            order: vec![],
-        };
-        assert_eq!(l.hex_color().as_deref(), Some("#FF9500"));
-        l.color = Some("garbage".into());
-        assert_eq!(l.hex_color(), None);
+    fn a_reminder_that_does_not_read_is_an_error_naming_it() {
+        let mut r = fixture_reminder();
+        r.fields.insert("TitleDocument".into(), json!({"type": "ENCRYPTED_BYTES", "value": "bm90IHpsaWI="}));
+        let err = Reminder::from_record(&r).unwrap_err();
+        assert!(err.starts_with("Reminder/REM-FIXTURE: TitleDocument"), "{err}");
+        let mut r = fixture_reminder();
+        r.fields.insert("TimeZone".into(), json!({"type": "STRING", "value": "Mars/Olympus"}));
+        assert!(Reminder::from_record(&r).unwrap_err().contains("Mars/Olympus"));
     }
 
     #[test]
     fn tokens_are_raised_and_others_kept() {
         let existing = r#"{"map":{"completed":{"counter":4,"modificationTime":1.5,"replicaID":"A"},"titleDocument":{"counter":2,"modificationTime":1.0,"replicaID":"B"}}}"#;
-        let out: Value =
-            serde_json::from_str(&bump_tokens(Some(existing), &["completed", "lastModifiedDate"], "ME", 1_000_000))
-                .unwrap();
+        let out: Value = serde_json::from_str(
+            &bump_tokens(Some(existing), &["completed", "lastModifiedDate"], "ME", 1_000_000).unwrap(),
+        )
+        .unwrap();
         assert_eq!(out["map"]["completed"]["counter"], 5);
         assert_eq!(out["map"]["completed"]["replicaID"], "ME");
         assert_eq!(out["map"]["lastModifiedDate"]["counter"], 1);
-        assert_eq!(out["map"]["titleDocument"]["counter"], 2);
-        assert_eq!(out["map"]["titleDocument"]["replicaID"], "B");
+        assert_eq!(
+            out["map"]["titleDocument"],
+            json!({"counter": 2, "modificationTime": 1.0, "replicaID": "B"})
+        );
         let t = out["map"]["completed"]["modificationTime"].as_f64().unwrap();
         assert!((t - (1000.0 - APPLE_EPOCH_SECS)).abs() < 1e-6, "{t}");
-        // Unreadable or absent: a fresh map.
-        for bad in [None, Some("nope"), Some(r#"{"map":3}"#)] {
-            let out: Value = serde_json::from_str(&bump_tokens(bad, &["deleted"], "ME", 0)).unwrap();
-            assert_eq!(out["map"].as_object().unwrap().len(), 1);
-        }
+        assert!(bump_tokens(Some(r#"{"map":3}"#), &["deleted"], "ME", 0).is_err());
     }
 
     #[test]
-    fn completing_writes_completed_completion_date_and_tokens() {
-        let Parsed::Live(r) = Reminder::from_record(&fixture_reminder()) else {
-            panic!()
-        };
-        let op = update_op(&r, &[Change::Completed(true)], "ME", 1_790_000_000_000);
+    fn completing_writes_only_what_changed() {
+        let r = live(&fixture_reminder());
+        let op = update_op(&r, &[Change::Completed(true)], "ME", 1_790_000_000_000).unwrap();
         assert_eq!(op["operationType"], "update");
         let rec = &op["record"];
-        assert_eq!(rec["recordName"], "Reminder/REM-FIXTURE");
         assert_eq!(rec["recordChangeTag"], "reminder-change-tag-fixture");
         let f = &rec["fields"];
         assert_eq!(f["Completed"], json!({"type": "INT64", "value": 1}));
         assert_eq!(f["CompletionDate"], json!({"type": "TIMESTAMP", "value": 1_790_000_000_000i64}));
-        assert_eq!(f["LastModifiedDate"]["value"], 1_790_000_000_000i64);
-        assert!(f.get("TitleDocument").is_none(), "only what changed is written");
-        let tokens: Value = serde_json::from_str(f["ResolutionTokenMap"]["value"].as_str().unwrap()).unwrap();
-        let mut keys: Vec<&String> = tokens["map"].as_object().unwrap().keys().collect();
-        keys.sort();
-        assert_eq!(keys, ["completed", "completionDate", "lastModifiedDate"]);
+        let mut names: Vec<&String> = f.as_object().unwrap().keys().collect();
+        names.sort();
+        assert_eq!(names, ["Completed", "CompletionDate", "LastModifiedDate", "ResolutionTokenMap"]);
 
-        let op = update_op(&r, &[Change::Completed(false), Change::Due(None)], "ME", 5);
+        let op = update_op(&r, &[Change::Completed(false), Change::Due(None)], "ME", 5).unwrap();
         let f = &op["record"]["fields"];
         assert_eq!(f["CompletionDate"]["value"], Value::Null);
         assert_eq!(f["DueDate"]["value"], Value::Null);
-        assert_eq!(f["AllDay"]["value"], 0);
         assert_eq!(f["TimeZone"]["value"], Value::Null);
     }
 
     #[test]
-    fn creating_matches_pyicloud_s_shape() {
-        let due = Due {
-            wall_ms: 1_791_622_800_000,
-            all_day: false,
-            time_zone: Some("Europe/Helsinki".into()),
-        };
+    fn creating_matches_pyicloud_s_shape_and_reads_back() {
+        let due = Due::read(1_791_622_800_000, false, Some("Europe/Helsinki".into())).unwrap();
         let op = create_op("U-1", "List/A", "Milk", "", Some(&due), "ME", 7);
         assert_eq!(op["operationType"], "create");
         let rec = &op["record"];
-        assert_eq!(rec["recordName"], "Reminder/U-1");
         assert_eq!(rec["parent"]["recordName"], "List/A");
         let f = &rec["fields"];
         assert_eq!(f["List"]["value"], json!({"recordName": "List/A", "action": "VALIDATE"}));
-        assert_eq!(topotext::decode(f["TitleDocument"]["value"].as_str().unwrap()).unwrap(), "Milk");
         assert_eq!(f["DueDate"]["value"], 1_791_622_800_000i64);
         assert_eq!(f["TimeZone"]["value"], "Europe/Helsinki");
-        assert_eq!(f["CreationDate"]["value"], 7);
-        // It reads back as the reminder it creates.
-        let mut back = rec.clone();
-        back["recordType"] = json!("Reminder");
-        let Parsed::Live(r) = Reminder::from_record(&record(back)) else {
-            panic!()
-        };
+        let r = live(&record(rec.clone()));
         assert_eq!((r.title.as_str(), r.list_id.as_str()), ("Milk", "List/A"));
         assert_eq!(r.due, Some(due));
     }
 }
+

@@ -223,7 +223,7 @@ PATH (a development build).
 | icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
 | icloud-photos | `not_found`, `cancelled`, `error` |
 | icloud-findmy | `find_my_auth_required`, `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
-| icloud-reminders | `offline` (no network: reads fall back to the cache, writes fail), `not_found`, `ambiguous`, `cancelled`, `error` |
+| icloud-reminders | `offline` (no network; `--cached` reads the last sync), `not_found`, `ambiguous`, `cancelled`, `error` |
 
 ## JSON shapes
 

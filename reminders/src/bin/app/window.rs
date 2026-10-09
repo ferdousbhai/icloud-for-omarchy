@@ -20,7 +20,7 @@ use icloud_reminders::cloudkit::{Error, SessionTransport};
 use icloud_reminders::due::{self, Due};
 use icloud_reminders::model::{Change, Reminder};
 use icloud_reminders::service::Service;
-use icloud_reminders::store::{Cache, Store};
+use icloud_reminders::store::{Cache, DEFAULT_LIST, Store};
 
 const SYNC_SECS: u32 = 60;
 /// The sidebar row of every list's open reminders.
@@ -48,7 +48,7 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(app: &adw::Application) -> Rc<Self> {
+    pub fn new(app: &adw::Application, local: TimeZone) -> Rc<Self> {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let (w1, w2) = (weak.clone(), weak.clone());
             let banner = SignInBanner::new(
@@ -63,7 +63,7 @@ impl Window {
                     }
                 },
             );
-            build(app, banner)
+            build(app, banner, local)
         });
         let keep_alive = RefCell::new(Some(this.clone()));
         this.window.connect_close_request(move |_| {
@@ -72,7 +72,10 @@ impl Window {
         });
         this.connect();
         if let Some(store) = this.store() {
-            *this.cache.borrow_mut() = store.cache();
+            match store.cache() {
+                Ok(cache) => *this.cache.borrow_mut() = cache,
+                Err(e) => this.error(&e.to_string()),
+            }
         }
         this.show_lists();
         this.sync();
@@ -168,7 +171,7 @@ impl Window {
                 let dir = dir.ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))?;
                 let svc = Service::new(&*t, Store::new(dir));
                 svc.sync(false)?;
-                Ok::<_, Error>(svc.cache())
+                svc.cache()
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
@@ -210,7 +213,7 @@ impl Window {
                 let dir = dir.ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))?;
                 let svc = Service::new(&*t, Store::new(dir));
                 let out = f(&svc)?;
-                Ok::<_, Error>((out, svc.cache()))
+                Ok::<_, Error>((out, svc.cache()?))
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
@@ -262,7 +265,7 @@ impl Window {
             .map(|l| l.id.clone());
         drop(cache);
         let Some(list) = list else {
-            return self.toast("This account has no reminder lists yet");
+            return self.toast(&format!("Choose a list first: none is named \"{DEFAULT_LIST}\""));
         };
         self.new_title.set_text("");
         self.new_due.set_text("");
@@ -472,7 +475,7 @@ fn sidebar_row(id: &str, name: &str, open: usize) -> gtk::ListBoxRow {
 
 const CSS: &str = "row.overdue .subtitle { color: var(--error-color); opacity: 1; }";
 
-fn build(app: &adw::Application, banner: SignInBanner) -> Window {
+fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Window {
     let css = gtk::CssProvider::new();
     css.load_from_string(CSS);
     if let Some(display) = gtk::gdk::Display::default() {
@@ -586,7 +589,7 @@ fn build(app: &adw::Application, banner: SignInBanner) -> Window {
         show_completed,
         transport: Arc::default(),
         dir: Store::default_dir(),
-        local: due::local_zone(),
+        local,
         cache: RefCell::default(),
         selected: RefCell::new(UPCOMING.to_owned()),
         syncing: Cell::new(false),

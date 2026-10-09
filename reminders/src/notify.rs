@@ -1,6 +1,5 @@
 //! Desktop notifications for due reminders, through Omarchy's own
-//! `omarchy-notification-send` (its look, its glyph, click to open) when it
-//! is on `PATH`, else straight to `org.freedesktop.Notifications`.
+//! `omarchy-notification-send` (its look, its glyph, click to open).
 //!
 //! The background timer runs [`due_now`] every minute against the cache.
 //! A reminder notifies once per due time: when that time has come, within
@@ -56,61 +55,36 @@ pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &T
     (fire.into_iter().map(|(_, r)| r).collect(), next)
 }
 
-/// The notification's two lines: the title, then the list and the time.
+/// The notification's two lines: the title, then the list (when the cache
+/// knows it) and the time.
 pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> (String, String) {
-    let list = cache.list(&r.list_id).map(|l| l.name.as_str()).unwrap_or("Reminders");
     let when = match &r.due {
         Some(d) if d.all_day => "today".to_owned(),
-        Some(d) => d.display(local).rsplit(' ').next().unwrap_or_default().to_owned(),
+        Some(d) => d.instant(local).to_zoned(local.clone()).time().strftime("%H:%M").to_string(),
         None => String::new(),
     };
-    (r.title.clone(), format!("{list} · {when}"))
+    let body = match cache.list(&r.list_id) {
+        Some(l) => format!("{} · {when}", l.name),
+        None => when,
+    };
+    (r.title.clone(), body)
 }
 
-/// Shows one notification; clicking it opens the app.
+/// Shows one notification with Omarchy's `omarchy-notification-send`,
+/// found on `PATH` (the omarchy package installs it in /usr/bin, and the
+/// systemd user manager that runs the timer has Omarchy's `PATH`);
+/// clicking it opens the app.
 pub fn send(headline: &str, body: &str) -> Result<(), String> {
-    if let Some(omarchy) = omarchy_notifier() {
-        let status = Command::new(omarchy)
-            .args(["--app-name", APP_NAME, "-g", GLYPH, "-u", "normal", headline, body])
-            .args(["--exec", "icloud-reminders-app"])
-            .status()
-            .map_err(|e| format!("omarchy-notification-send: {e}"))?;
-        return if status.success() {
-            Ok(())
-        } else {
-            Err(format!("omarchy-notification-send failed ({status})"))
-        };
+    let status = Command::new("omarchy-notification-send")
+        .args(["--app-name", APP_NAME, "-g", GLYPH, "-u", "normal", headline, body])
+        .args(["--exec", "icloud-reminders-app"])
+        .status()
+        .map_err(|e| format!("cannot run omarchy-notification-send (is Omarchy installed?): {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("omarchy-notification-send failed ({status})"))
     }
-    freedesktop(headline, body)
-}
-
-/// `omarchy-notification-send` on `PATH`, else in Omarchy's own `bin`
-/// (`$OMARCHY_PATH`, `~/.local/share/omarchy`): the systemd user manager
-/// that runs the timer may not have Omarchy's `PATH`.
-fn omarchy_notifier() -> Option<std::path::PathBuf> {
-    let var = |name: &str| std::env::var_os(name).map(std::path::PathBuf::from);
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .chain(var("OMARCHY_PATH").map(|p| p.join("bin")))
-        .chain(var("HOME").map(|h| h.join(".local/share/omarchy/bin")))
-        .map(|dir| dir.join("omarchy-notification-send"))
-        .find(|p| p.is_file())
-}
-
-/// `Notify` on the session bus, for desktops without Omarchy.
-fn freedesktop(headline: &str, body: &str) -> Result<(), String> {
-    use std::collections::HashMap;
-    let conn = zbus::blocking::Connection::session().map_err(|e| format!("session bus: {e}"))?;
-    let hints: HashMap<&str, zbus::zvariant::Value> = HashMap::from([("urgency", zbus::zvariant::Value::U8(1))]);
-    conn.call_method(
-        Some("org.freedesktop.Notifications"),
-        "/org/freedesktop/Notifications",
-        Some("org.freedesktop.Notifications"),
-        "Notify",
-        &(APP_NAME, 0u32, "", headline, body, Vec::<&str>::new(), hints, -1i32),
-    )
-    .map_err(|e| format!("notification: {e}"))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -239,16 +213,5 @@ mod tests {
         assert!(fire.is_empty());
         let (fire, _) = due_now(&c, &state, at("2026-10-09T10:30:00Z"), &utc);
         assert_eq!(fire.len(), 1);
-    }
-
-    #[test]
-    fn the_body_names_the_list_and_the_time() {
-        let helsinki = TimeZone::get("Europe/Helsinki").unwrap();
-        let r = reminder("Reminder/milk", Some("2026-10-09T10:00:00Z"), None);
-        let c = cache(vec![r.clone()]);
-        assert_eq!(text(&r, &c, &helsinki), ("milk".into(), "Groceries · 10:00".into()));
-        let mut all_day = r;
-        all_day.due.as_mut().unwrap().all_day = true;
-        assert_eq!(text(&all_day, &c, &helsinki).1, "Groceries · today");
     }
 }

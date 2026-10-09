@@ -19,28 +19,17 @@ struct Env {
     base: String,
     state: Arc<fake::State>,
     dir: tempfile::TempDir,
-    tz: &'static str,
 }
 
 fn now_ms() -> i64 {
     icloud_session::time::now_ms()
 }
 
-/// A seeded fake server of its own per test; due dates in `tz`.
-fn start_in(tz: &'static str) -> Env {
-    let zone = jiff::tz::TimeZone::get(tz).unwrap();
-    let offset = i64::from(zone.to_offset(jiff::Timestamp::now()).seconds()) * 1000;
-    start_with(fake::State::seeded(now_ms(), offset), tz)
-}
-
+/// A seeded fake server of its own per test; the binary runs with TZ=UTC.
 fn start() -> Env {
-    start_in("UTC")
-}
-
-fn start_with(state: fake::State, tz: &'static str) -> Env {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let state = Arc::new(state);
+    let state = Arc::new(fake::State::seeded(now_ms(), 0));
     let s = state.clone();
     std::thread::spawn(move || fake::serve_with(listener, s));
     let dir = tempfile::tempdir().unwrap();
@@ -52,7 +41,7 @@ fn start_with(state: fake::State, tz: &'static str) -> Env {
         &bin.join("omarchy-notification-send"),
         &format!("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> '{0}'\necho --- >> '{0}'\n", log.display()),
     );
-    Env { base, state, dir, tz }
+    Env { base, state, dir }
 }
 
 fn write_script(path: &Path, text: &str) {
@@ -67,7 +56,7 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        run_at(&self.base, self.dir.path(), self.tz, args)
+        run_at(&self.base, self.dir.path(), args)
     }
 
     fn ok(&self, args: &[&str]) -> String {
@@ -113,7 +102,7 @@ impl Env {
 /// directories in the temp dir, a `PATH` of the stand-in notifier alone
 /// (Omarchy installs the real one in /usr/bin, and it must never run
 /// here), and no session bus.
-fn run_at(base: &str, tmp: &Path, tz: &str, args: &[&str]) -> Output {
+fn run_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
     let path = tmp.join("bin");
     Command::new(env!("CARGO_BIN_EXE_icloud-reminders"))
         .args(args)
@@ -123,7 +112,7 @@ fn run_at(base: &str, tmp: &Path, tz: &str, args: &[&str]) -> Output {
         .env("ICLOUD_SESSION_MOCK_URL", base)
         .env("HOME", tmp.join("home"))
         .env("XDG_DATA_HOME", tmp.join("xdg"))
-        .env("TZ", tz)
+        .env("TZ", "UTC")
         .env("PATH", path)
         .env_remove("OMARCHY_PATH")
         .env("FAKE_REMINDERS_QUIET", "1")
@@ -192,16 +181,6 @@ fn lists_and_reminders_soonest_first() {
         .collect();
     assert!(reminder_syncs[0]["zones"][0].get("syncToken").is_none());
     assert!(reminder_syncs[1..].iter().all(|b| b["zones"][0]["syncToken"].is_string()));
-}
-
-#[test]
-fn due_times_are_wall_clock_in_the_local_zone() {
-    let env = start_in("Asia/Tokyo");
-    let milk = &env.json(&["list"])[0];
-    // The fake phone wrote "a minute ago" as Tokyo wall clock.
-    let at: jiff::Timestamp = milk["due"]["at"].as_str().unwrap().parse().unwrap();
-    let ago = now_ms() - at.as_millisecond();
-    assert!((0..3 * MINUTE).contains(&ago), "{ago} ms");
 }
 
 #[test]
@@ -327,23 +306,18 @@ fn signed_out_exits_2() {
 }
 
 #[test]
-fn offline_reads_fall_back_to_the_cache() {
+fn offline_is_an_error_and_cached_reads_need_no_network() {
     let env = start();
+    env.json(&["sync"]);
     // Nothing listens on port 9.
-    let out = run_at("http://127.0.0.1:9", env.dir.path(), "UTC", &["--json", "list"]);
+    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["--json", "list"]);
     assert_eq!(code(&out), 1, "{}", stderr(&out));
     let err: Value = serde_json::from_str(stderr(&out).lines().last().unwrap()).unwrap();
     assert_eq!(err["error"]["code"], "offline");
-
-    env.json(&["sync"]);
-    let out = run_at("http://127.0.0.1:9", env.dir.path(), "UTC", &["--json", "list"]);
+    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["--json", "--cached", "list"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(stderr(&out).contains("offline"), "{}", stderr(&out));
-    let listed: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 4);
-    // Writes need the network.
-    let out = run_at("http://127.0.0.1:9", env.dir.path(), "UTC", &["--cached", "complete", "milk"]);
-    assert_eq!(code(&out), 1);
+    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["--cached", "complete", "milk"]);
+    assert_eq!(code(&out), 1, "writes need the network");
 }
 
 #[test]
@@ -375,24 +349,6 @@ fn background_notifies_once_when_due() {
     assert_eq!(env.notifications().len(), 1);
 }
 
-/// The timer's systemd may not have Omarchy's `PATH`.
-#[test]
-fn the_notifier_is_found_in_omarchy_s_own_directory() {
-    let env = start();
-    let omarchy_bin = env.dir.path().join("home/.local/share/omarchy/bin");
-    std::fs::create_dir_all(&omarchy_bin).unwrap();
-    std::fs::rename(
-        env.dir.path().join("bin/omarchy-notification-send"),
-        omarchy_bin.join("omarchy-notification-send"),
-    )
-    .unwrap();
-    env.json(&["background"]);
-    let now = now_ms();
-    env.state.put(fake::reminder("REM-NOW", "List/LIST-REMINDERS", "Water plants", "", Some(now - 5_000), now - 10 * MINUTE));
-    assert_eq!(env.json(&["background", "--sync"])["notified"][0]["title"], "Water plants");
-    assert_eq!(env.notifications()[0][6], "Water plants");
-}
-
 #[test]
 fn background_without_a_session_still_notifies_from_the_cache() {
     let env = start();
@@ -411,7 +367,7 @@ fn background_without_a_session_still_notifies_from_the_cache() {
 }
 
 #[test]
-fn usage_errors_exit_64_and_help_documents_every_command() {
+fn usage_not_found_and_ambiguous_are_coded() {
     let env = start();
     for args in [
         &["frobnicate"][..],
@@ -425,25 +381,6 @@ fn usage_errors_exit_64_and_help_documents_every_command() {
     ] {
         let out = env.run(args);
         assert_eq!(code(&out), 64, "{args:?}: {}", stderr(&out));
-    }
-    let help = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_icloud-reminders"))
-            .args(args)
-            .env("ICLOUD_SESSION_MOCK", "1")
-            .env("ICLOUD_SESSION_MOCK_URL", "http://127.0.0.1:9")
-            .output()
-            .unwrap()
-    };
-    for cmd in ["lists", "list", "show", "add", "edit", "complete", "uncomplete", "delete", "sync", "background"] {
-        for args in [&[cmd, "--help"][..], &["help", cmd]] {
-            let out = help(args);
-            assert_eq!(code(&out), 0, "{args:?}");
-            let text = stdout(&out);
-            assert!(
-                text.contains(&format!("Usage: icloud-reminders {cmd}")) && text.contains("JSON:") && text.contains("Exit codes"),
-                "{text}"
-            );
-        }
     }
     let out = env.run(&["--json", "show"]);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();

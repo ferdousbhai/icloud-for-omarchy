@@ -1006,7 +1006,6 @@ dependencies = [
  "thiserror",
  "tiny_http",
  "uuid",
- "zbus",
 ]
 
 [[package]]

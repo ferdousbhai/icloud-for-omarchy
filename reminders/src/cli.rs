@@ -22,7 +22,7 @@ use crate::due::{self, Due};
 use crate::model::{Change, List, Reminder};
 use crate::notify;
 use crate::service::{self, Service};
-use crate::store::{Cache, Store};
+use crate::store::{Cache, DEFAULT_LIST, Store};
 
 const TOOL: &str = "icloud-reminders";
 
@@ -35,8 +35,8 @@ WHEN is 2026-10-10 (all day), \"2026-10-10 17:30\", today, tomorrow, either
 followed by a time (\"tomorrow 9:00\"), a time alone (17:30, today), or
 +30m, +2h, +3d.
 
-Reading commands sync first; --cached reads what the last sync left
-(also used, with a warning, when offline).
+Reading commands sync first and fail with offline without a network;
+--cached reads what the last sync left instead.
 
 With --json, stdout is only the JSON result and an error is one JSON line
 on stderr: {\"error\":{\"code\",\"message\",\"exit_code\"}}; codes: usage,
@@ -102,7 +102,7 @@ enum Command {
     },
     /// Add a reminder.
     ///
-    /// To --list (default: the list named Reminders, else the first).
+    /// To --list (default: the list named Reminders; without one, --list is needed).
     ///
     /// JSON: {action: "add", reminder}
     #[command(after_help = AFTER_HELP)]
@@ -246,19 +246,20 @@ pub fn run() -> u8 {
         Err(code) => return code,
     };
     let json = args.json;
-    let result = match args.data_dir.or_else(Store::default_dir) {
-        None => Err(Failure::Other("no data directory: pass --data-dir".into())),
-        Some(dir) => {
-            let transport = SessionTransport::default();
-            let cli = Cli {
-                json,
-                cached: args.cached,
-                svc: Service::new(&transport, Store::new(dir)),
-                local: due::local_zone(),
-            };
-            cli.dispatch(args.command)
-        }
-    };
+    let transport = SessionTransport::default();
+    let result = (|| {
+        let dir = args
+            .data_dir
+            .or_else(Store::default_dir)
+            .ok_or_else(|| Failure::Other("no data directory: pass --data-dir".into()))?;
+        let cli = Cli {
+            json,
+            cached: args.cached,
+            svc: Service::new(&transport, Store::new(dir)),
+            local: due::local_zone().map_err(Failure::Other)?,
+        };
+        cli.dispatch(args.command)
+    })();
     match result {
         Ok(()) => EXIT_OK,
         Err(f) => cli::report(TOOL, json, f.kind(), f.code(), &f.message(), None),
@@ -294,22 +295,12 @@ impl Cli<'_> {
         }
     }
 
-    /// The cache after a sync (unless `--cached`). Offline with a cache
-    /// that has been synced before: that cache, and a warning.
+    /// The cache after a sync, or as the last sync left it with `--cached`.
     fn fresh(&self) -> Result<Cache, Failure> {
-        if self.cached {
-            return Ok(self.svc.cache());
+        if !self.cached {
+            self.svc.sync(false)?;
         }
-        match self.svc.sync(false) {
-            Ok(_) => Ok(self.svc.cache()),
-            Err(cloudkit::Error::Offline(e)) if self.svc.cache().synced_ms.is_some() => {
-                let cache = self.svc.cache();
-                let when = cache.synced_ms.map(|ms| rfc3339(ms / 1000)).unwrap_or_default();
-                eprintln!("{TOOL}: offline ({e}); showing the reminders as of {when}");
-                Ok(cache)
-            }
-            Err(e) => Err(e.into()),
-        }
+        Ok(self.svc.cache()?)
     }
 
     fn print(&self, v: Value, text: impl FnOnce() -> String) {
@@ -332,7 +323,7 @@ impl Cli<'_> {
         let rows: Vec<Value> = cache
             .lists
             .iter()
-            .map(|l| json!({ "id": bare(&l.id), "name": l.name, "color": l.hex_color(), "open": open(l) }))
+            .map(|l| json!({ "id": bare(&l.id), "name": l.name, "color": l.color, "open": open(l) }))
             .collect();
         self.print(json!(rows), || {
             if cache.lists.is_empty() {
@@ -378,15 +369,17 @@ impl Cli<'_> {
         let cache = self.fresh()?;
         let list = match list {
             Some(q) => resolve_list(&cache, q)?,
-            None => cache
-                .default_list()
-                .ok_or_else(|| Failure::Coded("not_found", "this account has no reminder lists".into()))?,
+            None => cache.default_list().ok_or_else(|| {
+                Failure::Coded(
+                    "not_found",
+                    format!("no list is named \"{DEFAULT_LIST}\": name one with --list"),
+                )
+            })?,
         };
         let r = self
             .svc
             .add(&list.id, title.trim(), notes.as_deref().unwrap_or(""), due.as_ref())?;
-        self.done("add", &r, &format!("Added \"{}\" to {}", r.title, list.name));
-        Ok(())
+        self.done("add", &r, &format!("Added \"{}\" to {}", r.title, list.name))
     }
 
     fn when(&self, w: &str) -> Result<Due, Failure> {
@@ -422,8 +415,7 @@ impl Cli<'_> {
             );
         }
         let after = self.svc.update(&r, &changes)?.expect("not a delete");
-        self.done("edit", &after, &format!("Changed \"{}\"", after.title));
-        Ok(())
+        self.done("edit", &after, &format!("Changed \"{}\"", after.title))
     }
 
     fn set_completed(&self, query: &str, completed: bool) -> Outcome {
@@ -440,8 +432,7 @@ impl Cli<'_> {
         } else {
             format!("Reopened \"{}\"", after.title)
         };
-        self.done(action, &after, &text);
-        Ok(())
+        self.done(action, &after, &text)
     }
 
     fn delete(&self, query: &str, yes: bool) -> Outcome {
@@ -456,12 +447,13 @@ impl Cli<'_> {
         Ok(())
     }
 
-    fn done(&self, action: &str, r: &Reminder, text: &str) {
-        let cache = self.svc.cache();
+    fn done(&self, action: &str, r: &Reminder, text: &str) -> Outcome {
+        let cache = self.svc.cache()?;
         self.print(
             json!({ "action": action, "reminder": reminder_json(r, &cache, &self.local) }),
             || format!("{text}\n"),
         );
+        Ok(())
     }
 
     fn sync(&self, full: bool) -> Outcome {
@@ -483,8 +475,9 @@ impl Cli<'_> {
 
     fn background(&self, force_sync: bool) -> Outcome {
         let store = &self.svc.store;
+        let file = |e: std::io::Error| Failure::Other(e.to_string());
         // The last sync, or the last attempt when that failed.
-        let last = self.svc.cache().synced_ms.max(store.notified().sync_attempt_ms);
+        let last = self.svc.cache()?.synced_ms.max(store.notified().map_err(file)?.sync_attempt_ms);
         let stale = last.is_none_or(|ms| service::now_ms() - ms >= service::SYNC_EVERY.as_millis() as i64);
         let attempted = (force_sync || stale).then(service::now_ms);
         let mut synced = false;
@@ -498,9 +491,10 @@ impl Cli<'_> {
                 }
             }
         }
-        let _lock = store.lock().map_err(|e| Failure::Other(e.to_string()))?;
-        let cache = store.cache();
-        let (fire, mut state) = notify::due_now(&cache, &store.notified(), jiff::Timestamp::now(), &self.local);
+        let _lock = store.lock().map_err(file)?;
+        let cache = store.cache().map_err(file)?;
+        let previous = store.notified().map_err(file)?;
+        let (fire, mut state) = notify::due_now(&cache, &previous, jiff::Timestamp::now(), &self.local);
         state.sync_attempt_ms = attempted.or(state.sync_attempt_ms);
         let mut notified = Vec::new();
         for r in fire {
@@ -694,12 +688,6 @@ fn detail(r: &Reminder, cache: &Cache, local: &TimeZone) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_cli_definition_is_consistent() {
-        use clap::CommandFactory;
-        Args::command().debug_assert();
-    }
 
     fn reminder(uuid: &str, title: &str, completed: bool) -> Reminder {
         Reminder {

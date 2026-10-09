@@ -20,26 +20,20 @@ use base64::engine::general_purpose::STANDARD;
 #[error("unreadable text document: {0}")]
 pub struct DecodeError(&'static str);
 
-/// The text of a `TitleDocument` / `NotesDocument` field value.
+/// The text of a `TitleDocument` / `NotesDocument` field value: base64 of
+/// a zlib-compressed `Document { version: [Version { data: String }] }`,
+/// the layout pyicloud writes and its fixtures hold. Anything else is an
+/// error.
 pub fn decode(b64: &str) -> Result<String, DecodeError> {
-    // Apple's base64 sometimes arrives unpadded.
-    let trimmed = b64.trim().trim_end_matches('=');
-    let raw = base64::engine::general_purpose::STANDARD_NO_PAD
-        .decode(trimmed)
-        .map_err(|_| DecodeError("not base64"))?;
-    let data = inflate(&raw).unwrap_or(raw);
-    // Document { version: [Version { data: String }] }, then a bare
-    // Version, then a bare String: pyicloud's three fallbacks, in order.
-    if let Some(text) = field(&data, 2)
+    let raw = STANDARD.decode(b64).map_err(|_| DecodeError("not base64"))?;
+    let mut data = Vec::new();
+    flate2::read::ZlibDecoder::new(raw.as_slice())
+        .read_to_end(&mut data)
+        .map_err(|_| DecodeError("not zlib-compressed"))?;
+    field(&data, 2)
         .and_then(|version| field(version, 3))
         .and_then(text_of)
-    {
-        return Ok(text);
-    }
-    if let Some(text) = field(&data, 3).and_then(text_of) {
-        return Ok(text);
-    }
-    text_of(&data).ok_or(DecodeError("no text in the document"))
+        .ok_or(DecodeError("not a versioned topotext document"))
 }
 
 /// The base64 field value for `text`.
@@ -104,15 +98,6 @@ pub fn encode(text: &str) -> String {
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     z.write_all(&document).expect("writing to memory");
     STANDARD.encode(z.finish().expect("writing to memory"))
-}
-
-fn inflate(raw: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    if flate2::read::ZlibDecoder::new(raw).read_to_end(&mut out).is_ok() {
-        return Some(out);
-    }
-    out.clear();
-    flate2::read::GzDecoder::new(raw).read_to_end(&mut out).ok().map(|_| out)
 }
 
 /// `topotext.String.string` (field 2) of a serialized String.
@@ -187,8 +172,8 @@ mod tests {
 
     #[test]
     fn decodes_pyicloud_fixture_documents() {
-        // timlaing/pyicloud tests/fixtures/reminders: a Version wrapping a
-        // String, zlib-compressed.
+        // timlaing/pyicloud tests/fixtures/reminders: a Document holding
+        // one Version, zlib-compressed.
         assert_eq!(
             decode("eJzjYBCS4GAQYJASEhJwy6woKS1KVQhKzc3MS0ktAgBBdwbW").unwrap(),
             "Fixture Reminder"
@@ -212,7 +197,10 @@ mod tests {
         // serialized by protoc (`--encode=topotext.String` on its
         // reminders.proto) and wrapped in Version and Document.
         let encoded = STANDARD.decode(encode("Milk")).unwrap();
-        let doc = inflate(&encoded).unwrap();
+        let mut doc = Vec::new();
+        flate2::read::ZlibDecoder::new(encoded.as_slice())
+            .read_to_end(&mut doc)
+            .unwrap();
         let hex: String = doc.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             hex,
@@ -226,16 +214,6 @@ mod tests {
                 "2a020804",
             )
         );
-    }
-
-    #[test]
-    fn unpadded_and_gzip_documents_decode() {
-        let padded = encode("Eggs");
-        assert_eq!(decode(padded.trim_end_matches('=')).unwrap(), "Eggs");
-        let doc = inflate(&STANDARD.decode(&padded).unwrap()).unwrap();
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(&doc).unwrap();
-        assert_eq!(decode(&STANDARD.encode(gz.finish().unwrap())).unwrap(), "Eggs");
     }
 
     #[test]

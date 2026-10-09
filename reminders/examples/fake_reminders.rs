@@ -208,6 +208,12 @@ impl State {
             z.seq += 1;
             z.tags += 1;
             stored["recordChangeTag"] = json!(format!("tag-{}", z.tags));
+            // CloudKit's own record times, as every record carries them.
+            let now = json!({ "timestamp": icloud_session::time::now_ms(), "userRecordName": "_fake" });
+            if stored.get("created").is_none() {
+                stored["created"] = now.clone();
+            }
+            stored["modified"] = now;
             let seq = z.seq;
             out.push(stored.clone());
             z.records.insert(name, Stored { seq, record: stored });
@@ -267,8 +273,6 @@ pub fn reminder(uuid: &str, list_id: &str, title: &str, notes: &str, due_wall: O
     fields.insert("AllDay".into(), int(0));
     fields.insert("Priority".into(), int(0));
     fields.insert("AlarmIDs".into(), json!({ "type": "STRING_LIST", "value": [] }));
-    fields.insert("CreationDate".into(), json!({ "type": "TIMESTAMP", "value": modified_ms }));
-    fields.insert("LastModifiedDate".into(), json!({ "type": "TIMESTAMP", "value": modified_ms }));
     fields.insert(
         "ResolutionTokenMap".into(),
         json!({ "type": "STRING", "value": r#"{"map":{"completed":{"counter":3,"modificationTime":1.0,"replicaID":"PHONE"}}}"# }),
@@ -276,10 +280,13 @@ pub fn reminder(uuid: &str, list_id: &str, title: &str, notes: &str, due_wall: O
     if let Some(due) = due_wall {
         fields.insert("DueDate".into(), json!({ "type": "TIMESTAMP", "value": due }));
     }
+    let at = json!({ "timestamp": modified_ms, "userRecordName": "_fake" });
     json!({
         "recordName": format!("Reminder/{uuid}"),
         "recordType": "Reminder",
         "fields": fields,
+        "created": at,
+        "modified": at,
     })
 }
 
@@ -315,7 +322,7 @@ fn main() -> std::io::Result<()> {
     let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8765".into());
     let listener = TcpListener::bind(&addr)?;
     let base = format!("http://{}", listener.local_addr()?);
-    let local = icloud_reminders::due::local_zone();
+    let local = icloud_reminders::due::local_zone().map_err(std::io::Error::other)?;
     let now = jiff::Timestamp::now();
     let offset_ms = i64::from(local.to_offset(now).seconds()) * 1000;
     eprintln!("Fake iCloud Reminders on {base}");

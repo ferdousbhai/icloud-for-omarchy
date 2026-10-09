@@ -98,11 +98,7 @@ impl Transport for SessionTransport {
     }
 
     fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        let resp = self.with(|s| s.post_json(url, body))?;
-        if resp.body.is_empty() {
-            return Ok(Value::Null);
-        }
-        resp.json::<Value>().map_err(Error::from)
+        self.with(|s| s.post_json(url, body)?.json::<Value>())
     }
 
     fn account(&self) -> Result<String> {
@@ -152,9 +148,9 @@ impl Record {
         self.fields.get(key).and_then(|f| f.get("value")).filter(|v| !v.is_null())
     }
 
+    /// An INT64 or TIMESTAMP field.
     pub fn int(&self, key: &str) -> Option<i64> {
-        let v = self.value(key)?;
-        v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))
+        self.value(key)?.as_i64()
     }
 
     pub fn str(&self, key: &str) -> Option<&str> {
@@ -241,17 +237,13 @@ impl<'t> CloudKit<'t> {
     /// Every record of `types` changed since `token` (all of them without
     /// one), page by page, and the token to ask from next time.
     pub fn all_changes(&self, types: &[&str], token: Option<&str>) -> Result<(Vec<Record>, String)> {
-        let mut token = token.map(str::to_owned);
-        let mut records = Vec::new();
-        loop {
-            let page = self.zone_changes(types, token.as_deref())?;
-            records.extend(page.records);
-            let more = page.more_coming && Some(&page.sync_token) != token.as_ref();
-            token = Some(page.sync_token);
-            if !more {
-                return Ok((records, token.expect("set above")));
-            }
+        let mut page = self.zone_changes(types, token)?;
+        let mut records = std::mem::take(&mut page.records);
+        while page.more_coming {
+            page = self.zone_changes(types, Some(&page.sync_token))?;
+            records.append(&mut page.records);
         }
+        Ok((records, page.sync_token))
     }
 
     /// Records by name (missing ones come back with an error code).

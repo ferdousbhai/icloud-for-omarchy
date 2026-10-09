@@ -45,13 +45,20 @@ fn run() -> glib::ExitCode {
     // `icloud-reminders-app` binary's.
     glib::set_prgname(Some("icloud-reminders"));
     glib::set_application_name("Reminders");
+    let local = match icloud_reminders::due::local_zone() {
+        Ok(zone) => zone,
+        Err(e) => {
+            eprintln!("icloud-reminders: {e}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
     let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(|app| {
+    app.connect_activate(move |app| {
         if let Some(win) = app.active_window() {
             win.present();
             return;
         }
-        window::Window::new(app).present();
+        window::Window::new(app, local.clone()).present();
     });
     app.set_accels_for_action("win.refresh", &["<Ctrl>r", "F5"]);
     app.set_accels_for_action("win.new", &["<Ctrl>n"]);

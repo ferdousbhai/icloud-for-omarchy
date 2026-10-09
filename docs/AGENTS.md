@@ -169,9 +169,9 @@ never turn it on without an explicit request.
 ## Reminders: `icloud-reminders`
 
 iCloud Reminders (the CloudKit ones every iPhone has used since iOS 13).
-Reading commands sync first (`--cached` skips that; offline they fall back
-to the cache with a warning on stderr). Changes go straight to iCloud:
-without a network they fail with `offline`, nothing is queued.
+Reading commands sync first (`--cached` skips that and reads the last
+sync). Without a network every command but a `--cached` read fails with
+`offline`; nothing is queued.
 
 ```console
 $ icloud-reminders --json lists

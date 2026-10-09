@@ -61,8 +61,8 @@ journal says why), then shows a notification for each open reminder that
 has just fallen due:
 
 - through Omarchy's own `omarchy-notification-send` (its look, a
-  reminder glyph, click to open the app); on other desktops, straight to
-  the notification service (`org.freedesktop.Notifications`);
+  reminder glyph, click to open the app); without Omarchy the journal
+  says it is missing and nothing is shown;
 - once per due time: moving a reminder's due time makes it notify again;
 - a timed reminder at its time; an all-day one at 09:00;
 - up to 12 hours late, for a machine that slept through the time;
@@ -112,8 +112,8 @@ $ icloud-reminders background                 # what the timer runs
 - A reminder is named by its ID, its title (ignoring case) or a unique
   part of it; open reminders are matched before completed ones. A list by
   its ID or name.
-- Reading commands sync first; `--cached` reads the last sync's cache,
-  which is also used, with a warning, when offline.
+- Reading commands sync first and fail with `offline` without a network;
+  `--cached` reads what the last sync left instead.
 - `delete` asks on a terminal and needs `--yes` without one.
 - `--json` prints JSON on stdout and an error as one JSON line on stderr,
   `{"error":{"code":"not_found","message":…,"exit_code":1}}` (codes:

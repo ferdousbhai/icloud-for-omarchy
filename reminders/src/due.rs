@@ -29,10 +29,32 @@ pub struct Due {
 }
 
 impl Due {
+    /// A due date as a record holds it. Refuses a time zone this machine's
+    /// time zone database does not know and a date out of range, so every
+    /// `Due` there is converts without failing.
+    pub fn read(wall_ms: i64, all_day: bool, time_zone: Option<String>) -> Result<Due, String> {
+        if let Some(name) = &time_zone {
+            TimeZone::get(name).map_err(|e| format!("unknown time zone \"{name}\": {e}"))?;
+        }
+        let wall = Timestamp::from_millisecond(wall_ms)
+            .map_err(|e| format!("due date {wall_ms} out of range: {e}"))?
+            .to_zoned(TimeZone::UTC)
+            .datetime();
+        // Leaves room for any zone's offset at either end of jiff's range.
+        if !(1..=9998).contains(&wall.year()) {
+            return Err(format!("due date {wall} out of range"));
+        }
+        Ok(Due {
+            wall_ms,
+            all_day,
+            time_zone,
+        })
+    }
+
     /// The stored wall clock.
     pub fn wall(&self) -> DateTime {
         Timestamp::from_millisecond(self.wall_ms)
-            .unwrap_or(Timestamp::UNIX_EPOCH)
+            .expect("checked by Due::read")
             .to_zoned(TimeZone::UTC)
             .datetime()
     }
@@ -41,24 +63,20 @@ impl Due {
         self.wall().date()
     }
 
-    /// The zone the wall clock is read in: `TimeZone`, else `local`. An
-    /// unknown zone name floats too.
-    fn zone(&self, local: &TimeZone) -> TimeZone {
-        self.time_zone
-            .as_deref()
-            .and_then(|name| TimeZone::get(name).ok())
-            .unwrap_or_else(|| local.clone())
-    }
-
     /// The moment it is due (an all-day one at [`ALL_DAY_HOUR`] local),
-    /// which is when it notifies.
+    /// which is when it notifies. The wall clock is read in `TimeZone`, or
+    /// in `local` when it floats.
     pub fn instant(&self, local: &TimeZone) -> Timestamp {
         let at = if self.all_day {
             self.date().at(ALL_DAY_HOUR, 0, 0, 0).to_zoned(local.clone())
         } else {
-            self.wall().to_zoned(self.zone(local))
+            let zone = match &self.time_zone {
+                Some(name) => TimeZone::get(name).expect("checked by Due::read"),
+                None => local.clone(),
+            };
+            self.wall().to_zoned(zone)
         };
-        at.map(|z| z.timestamp()).unwrap_or(Timestamp::UNIX_EPOCH)
+        at.expect("checked by Due::read").timestamp()
     }
 
     /// A date, or a date and time in `local` ("2026-10-10 09:00"): how the
@@ -92,8 +110,9 @@ impl Due {
 
 fn wall_as_utc(wall: DateTime) -> i64 {
     wall.to_zoned(TimeZone::UTC)
-        .map(|z| z.timestamp().as_millisecond())
-        .unwrap_or(0)
+        .expect("a parsed date is in range")
+        .timestamp()
+        .as_millisecond()
 }
 
 /// Parses `--due`: `2026-10-10`, `2026-10-10 17:30` (or `T17:30`),
@@ -151,9 +170,9 @@ fn parse_time(s: &str) -> Option<Time> {
     Time::new(h.parse().ok()?, m.parse().ok()?, 0, 0).ok()
 }
 
-/// The machine's zone (`TZ`, else `/etc/localtime`), UTC if neither.
-pub fn local_zone() -> TimeZone {
-    TimeZone::try_system().unwrap_or(TimeZone::UTC)
+/// The machine's zone (`TZ`, else `/etc/localtime`).
+pub fn local_zone() -> Result<TimeZone, String> {
+    TimeZone::try_system().map_err(|e| format!("cannot tell this machine's time zone (set TZ or /etc/localtime): {e}"))
 }
 
 #[cfg(test)]

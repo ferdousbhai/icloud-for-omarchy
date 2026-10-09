@@ -47,8 +47,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-# org.freedesktop.Notifications, when omarchy-notification-send is absent.
-zbus.workspace = true
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
 async-channel = { workspace = true, optional = true }
