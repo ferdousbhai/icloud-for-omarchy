@@ -218,7 +218,7 @@ PATH (a development build).
 | Tool | `error.code` values |
 |---|---|
 | all | `usage`, `sign_in_required` |
-| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `session_service` (daemon unreachable), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
+| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `session_service` (daemon unreachable), `network`, `bad_response` (Apple answered with something unreadable), `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
 | icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 64), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` |
 | icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
 | icloud-photos | `not_found`, `cancelled`, `error` |
