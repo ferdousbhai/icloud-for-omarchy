@@ -1480,10 +1480,20 @@ fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
     let pending = env.root().join("state/icloud-session/session-removal-pending");
     assert!(pending.exists());
 
-    // It answers again: the next start removes the live cookies it kept.
+    // Signing out again while it still refuses says so again.
+    assert!(matches!(icloud_session::sign_out_on(&conn), Err(Error::KeyringUnavailable(_))));
+
+    // It answers again: signing out again removes the live cookies it kept.
     fs::remove_dir(env.secrets_path()).unwrap();
-    fs::write(env.secrets_path(), keyring).unwrap();
+    fs::write(env.secrets_path(), &keyring).unwrap();
     assert!(env.session_secret().is_some());
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(env.session_secret().is_none());
+    assert!(!pending.exists());
+
+    // So does the next start, when a sign-out still owes the removal.
+    fs::write(env.secrets_path(), &keyring).unwrap();
+    fs::write(&pending, "").unwrap();
     env.kill_daemon(&conn);
     assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
     wait_until("the session's removal", Duration::from_secs(5), || env.session_secret().is_none());

@@ -185,6 +185,10 @@ struct Collection(Shared, String);
 impl Collection {
     fn search_items(&self, attributes: HashMap<String, String>) -> Vec<OwnedObjectPath> {
         let st = self.0.lock().unwrap();
+        // As KeePassXC: a locked collection's items are not found.
+        if st.collections.get(&self.1).is_some_and(|c| c.1) {
+            return Vec::new();
+        }
         st.items
             .iter()
             .filter(|i| i.collection == self.1 && attributes.iter().all(|(k, v)| i.attributes.get(k) == Some(v)))
@@ -453,6 +457,20 @@ fn keyring_speaks_the_secret_service() {
     assert!(keyring.get_session().unwrap().is_some());
     // The error above dropped the session; the next call opened another.
     assert_eq!(st().sessions.len(), 2);
+
+    // A locked collection is unlocked before it is searched: never "no
+    // session" for want of seeing it, and an error if it stays locked.
+    st().collections.get_mut(&made).unwrap().1 = true;
+    let prompts = st().prompts;
+    assert!(keyring.get_session().unwrap().is_some());
+    assert_eq!(st().prompts, prompts + 1);
+    st().collections.get_mut(&made).unwrap().1 = true;
+    st().dismiss = true;
+    assert!(keyring.get_session().unwrap_err().contains("dismissed"));
+    st().collections.get_mut(&made).unwrap().1 = true;
+    st().dismiss = true;
+    assert!(keyring.remove_session().unwrap_err().contains("dismissed"));
+    assert!(keyring.get_session().unwrap().is_some());
 
     keyring.remove_session().unwrap();
     assert_eq!(keyring.get_session().unwrap(), None);

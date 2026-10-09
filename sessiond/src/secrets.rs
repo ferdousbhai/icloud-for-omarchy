@@ -232,10 +232,20 @@ impl Open {
 }
 
 impl Open {
+    /// The default collection, unlocked: a locked one's items need not be
+    /// searchable (KeePassXC finds none), and "none" would read as "deleted".
+    fn unlocked_default(&self) -> zbus::Result<OwnedObjectPath> {
+        let collection = self.default_collection()?;
+        if self.locked(&collection, COLLECTION)? {
+            self.unlock(&collection)?;
+        }
+        Ok(collection)
+    }
+
     /// The secret of the first item in the default collection matching
-    /// `attributes`, unlocking it first if need be.
+    /// `attributes`, unlocking them first if need be.
     fn read(&self, attributes: &HashMap<&str, String>) -> zbus::Result<Option<Zeroizing<String>>> {
-        for item in self.search(&self.default_collection()?, attributes)? {
+        for item in self.search(&self.unlocked_default()?, attributes)? {
             if self.locked(&item, ITEM)? {
                 // Normally unlocked at login; otherwise the keyring asks.
                 self.unlock(&item)?;
@@ -252,10 +262,7 @@ impl Open {
     /// Stores `secret` in the default collection, replacing the item with
     /// the same attributes.
     fn store(&self, label: String, attributes: HashMap<&str, String>, secret: &str) -> zbus::Result<()> {
-        let collection = self.default_collection()?;
-        if self.locked(&collection, COLLECTION)? {
-            self.unlock(&collection)?;
-        }
+        let collection = self.unlocked_default()?;
         let properties = HashMap::from([
             ("org.freedesktop.Secret.Item.Label", Value::from(label)),
             ("org.freedesktop.Secret.Item.Attributes", Value::from(attributes)),
@@ -268,8 +275,11 @@ impl Open {
     }
 
     /// Deletes, in every collection, the items matching `attributes` but
-    /// not `keep`; returns how many.
+    /// not `keep`; returns how many. The default collection, where ours are
+    /// stored, is unlocked first, so a removal never reports none for want
+    /// of seeing them.
     fn delete(&self, attributes: &HashMap<&str, String>, keep: Option<&HashMap<&str, String>>) -> zbus::Result<usize> {
+        self.unlocked_default()?;
         let mut n = 0;
         let collections: OwnedValue = self.call(
             SERVICE_PATH,

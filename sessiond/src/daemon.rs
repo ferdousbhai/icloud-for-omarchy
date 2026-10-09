@@ -620,7 +620,8 @@ impl Daemon {
     }
 
     /// Removes the session from the keyring for a sign-out that could not
-    /// (see `removal_pending`), unless an account was stored since.
+    /// (see `removal_pending`), unless an account was stored since: at
+    /// start, and on a `SignOut()` with nothing else to forget.
     fn settle_removal(&self) {
         if !self.cfg.paths.removal_pending.exists() {
             return;
@@ -1352,8 +1353,11 @@ impl Daemon {
             st.last_activity = Instant::now();
             (st.account.is_some() || st.unread.is_some()).then(|| self.forget(&mut st))
         };
-        if let Some(save) = save {
-            self.write(save);
+        match save {
+            Some(save) => self.write(save),
+            // Already signed out: a removal an earlier SignOut owed is
+            // tried again (the keyring may answer now).
+            None => self.settle_removal(),
         }
         for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
             if let Err(e) = files::remove_dir(dir) {
@@ -1364,7 +1368,7 @@ impl Daemon {
         if self.cfg.paths.removal_pending.exists() {
             return Err(ServiceError::KeyringUnavailable(
                 "signed out, but the keyring would not remove the session's cookies; \
-                 icloud-session removes them when it next starts with the keyring available"
+                 icloud-session removes them at its next start or sign-out with the keyring available"
                     .into(),
             ));
         }
