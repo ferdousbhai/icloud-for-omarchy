@@ -208,11 +208,21 @@ fn add_writes_a_reminder_apple_can_read() {
     let title = stored["fields"]["TitleDocument"]["value"].as_str().unwrap();
     assert_eq!(icloud_reminders::topotext::decode(title).unwrap(), "Buy bread");
 
-    // Default list: "Reminders"; an all-day due date.
-    let out = env.json(&["add", "Pay rent", "--due", "2030-02-01"]);
-    assert_eq!(out["reminder"]["list"]["name"], "Reminders");
+    // An all-day due date.
+    let out = env.json(&["add", "Pay rent", "--list", "Reminders", "--due", "2030-02-01"]);
     assert_eq!(out["reminder"]["due"], json!({"date": "2030-02-01", "time": null, "all_day": true, "time_zone": null, "at": "2030-02-01T09:00:00Z"}));
-    assert!(titles(&env.json(&["list", "--cached"])).contains(&"Pay rent".to_owned()));
+}
+
+/// iCloud records no default list: with several, `add` names one, even
+/// when one of them is called "Reminders".
+#[test]
+fn add_without_a_list_needs_one_and_names_them() {
+    let env = start();
+    let out = env.run(&["add", "Pay rent"]);
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("--list") && err.contains("\n  Groceries") && err.contains("\n  Reminders"), "{err}");
+    assert!(env.sent("records/modify").is_empty());
 }
 
 #[test]

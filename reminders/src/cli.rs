@@ -22,7 +22,7 @@ use crate::due::{self, Due};
 use crate::model::{Change, List, Reminder};
 use crate::notify;
 use crate::service::{self, Service};
-use crate::store::{Cache, DEFAULT_LIST, Store};
+use crate::store::{Cache, Store};
 
 const TOOL: &str = "icloud-reminders";
 
@@ -102,7 +102,8 @@ enum Command {
     },
     /// Add a reminder.
     ///
-    /// To --list (default: the list named Reminders; without one, --list is needed).
+    /// To --list, which is required unless the account has only one list:
+    /// iCloud records no default list.
     ///
     /// JSON: {action: "add", reminder}
     #[command(after_help = AFTER_HELP)]
@@ -369,11 +370,9 @@ impl Cli<'_> {
         let cache = self.fresh()?;
         let list = match list {
             Some(q) => resolve_list(&cache, q)?,
-            None => cache.default_list().ok_or_else(|| {
-                Failure::Coded(
-                    "not_found",
-                    format!("no list is named \"{DEFAULT_LIST}\": name one with --list"),
-                )
+            None => cache.only_list().ok_or_else(|| {
+                let names: String = cache.lists.iter().map(|l| format!("\n  {}", l.name)).collect();
+                usage(format!("add needs --list LIST (iCloud records no default list); lists:{names}"))
             })?,
         };
         let r = self

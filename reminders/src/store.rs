@@ -40,17 +40,22 @@ pub struct Cache {
     pub reminders: BTreeMap<String, Reminder>,
 }
 
-/// The name Apple gives every account's first list.
-pub const DEFAULT_LIST: &str = "Reminders";
-
 impl Cache {
     pub fn list(&self, id: &str) -> Option<&List> {
         self.lists.iter().find(|l| l.id == id)
     }
 
-    /// The list named [`DEFAULT_LIST`], where an add without a list goes.
-    pub fn default_list(&self) -> Option<&List> {
-        self.lists.iter().find(|l| l.name == DEFAULT_LIST)
+    /// Where an add that names no list goes: the account's only list, if
+    /// it has just one. The records hold no "default list": pyicloud's
+    /// `Account` record has only `Name`, and neither it, go-icloud's wire
+    /// contracts nor any other client reads one (Tooker/icloud-reminders-cli
+    /// makes `--list` required). So with several lists the caller must name
+    /// one; a list's name is never taken as a sign that it is the default.
+    pub fn only_list(&self) -> Option<&List> {
+        match self.lists.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
     }
 
     /// The reminders `keep` takes: due ones by due time, then undated ones

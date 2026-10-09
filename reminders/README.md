@@ -41,8 +41,8 @@ once; otherwise it starts at your next login.
   shows completed ones too, so you can untick them.
 - Type a title in **New reminder** (Ctrl+N), and optionally a due time in
   the box beside it (`tomorrow 9:00`, `2026-10-12`, `17:30`, `+2h`), then
-  Enter. It goes to the list on screen, or under Upcoming to the list
-  named Reminders.
+  Enter. It goes to the list on screen (under Upcoming, choose a list
+  first, unless you have only one: iCloud records no default list).
 - Click a reminder to change its title, notes or due date, or delete it.
   A deleted reminder goes to **Recently Deleted** on your Apple devices.
 - The window syncs on opening, every minute while it is on screen, and on

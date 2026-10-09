@@ -75,7 +75,7 @@ Lost Mode without an explicit request.
 ## Reminders: `icloud-reminders`
 
 `lists` · `list [LIST] [--completed|--all]` · `show REMINDER` ·
-`add TITLE [--list L] [--notes T] [--due WHEN]` ·
+`add TITLE --list L [--notes T] [--due WHEN]` ·
 `edit REMINDER [--title T] [--notes T] [--due WHEN|--no-due]` ·
 `complete|uncomplete REMINDER` · `delete REMINDER --yes` · `sync`.
 REMINDER: ID, title or unique part (open ones first). WHEN: `2026-10-10`
@@ -91,5 +91,5 @@ icloud-notes --json sync && icloud-notes --json read "Groceries"
 icloud-notes --json new "Meeting" --folder Work --body "- agenda" --push
 icloud-photos --json sync; icloud-photos --json list --album "$ID" | jq -r '.[].id' | xargs icloud-photos --json download --out ~/Downloads/album
 icloud-findmy --json locate "iPhone" && icloud-findmy --json play-sound "iPhone" --yes
-icloud-reminders --json add "Call the dentist" --due "tomorrow 9:00" && icloud-reminders --json list
+icloud-reminders --json add "Call the dentist" --list Reminders --due "tomorrow 9:00" && icloud-reminders --json list
 ```

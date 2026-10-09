@@ -20,7 +20,7 @@ use icloud_reminders::cloudkit::{Error, SessionTransport};
 use icloud_reminders::due::{self, Due};
 use icloud_reminders::model::{Change, Reminder};
 use icloud_reminders::service::Service;
-use icloud_reminders::store::{Cache, DEFAULT_LIST, Store};
+use icloud_reminders::store::{Cache, Store};
 
 const SYNC_SECS: u32 = 60;
 /// The sidebar row of every list's open reminders.
@@ -261,11 +261,11 @@ impl Window {
         let selected = self.selected.borrow().clone();
         let list = cache
             .list(&selected)
-            .or_else(|| cache.default_list())
+            .or_else(|| cache.only_list())
             .map(|l| l.id.clone());
         drop(cache);
         let Some(list) = list else {
-            return self.toast(&format!("Choose a list first: none is named \"{DEFAULT_LIST}\""));
+            return self.toast("Choose a list in the sidebar first: iCloud records no default list");
         };
         self.new_title.set_text("");
         self.new_due.set_text("");

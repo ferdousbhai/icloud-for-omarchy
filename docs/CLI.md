@@ -113,7 +113,7 @@ has its command.
 | Sidebar: lists with open counts | `icloud-reminders lists` |
 | Upcoming, a list's reminders, Show Completed | `icloud-reminders list [LIST] [--completed \| --all]` |
 | Click a reminder (its notes, due date) | `icloud-reminders show REMINDER` |
-| New reminder line (title, due) | `icloud-reminders add TITLE [--list L] [--due WHEN] [--notes T]` |
+| New reminder line (title, due) | `icloud-reminders add TITLE --list L [--due WHEN] [--notes T]` |
 | Edit dialog: title, due date, notes | `icloud-reminders edit REMINDER [--title T] [--due WHEN \| --no-due] [--notes T]` |
 | Check box | `icloud-reminders complete REMINDER`, `uncomplete REMINDER` |
 | Edit dialog: Delete | `icloud-reminders delete REMINDER --yes` |

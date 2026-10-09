@@ -189,7 +189,7 @@ $ icloud-reminders --json complete "dentist"
 | Command | Does |
 |---|---|
 | `lists`, `list [LIST] [--completed \| --all]`, `show REMINDER` | read (open reminders, soonest due first) |
-| `add TITLE [--list LIST] [--notes T] [--due WHEN]` | create (default list: the one named Reminders) |
+| `add TITLE [--list LIST] [--notes T] [--due WHEN]` | create; `--list` is required unless the account has one list (iCloud records no default list) |
 | `edit REMINDER [--title T] [--notes T] [--due WHEN \| --no-due]` | change |
 | `complete REMINDER`, `uncomplete REMINDER`, `delete REMINDER --yes` | as in the window (a delete goes to Recently Deleted) |
 | `sync [--full]` | fetch what changed |
@@ -256,7 +256,7 @@ icloud-findmy --json play-sound "iPhone" --yes
 **Remind the user of something**
 
 ```bash
-icloud-reminders --json add "Renew passport" --due "2026-11-01 09:00"   # notifies here, and on their iPhone if it has an alert
+icloud-reminders --json add "Renew passport" --list Personal --due "2026-11-01 09:00"   # a list from `lists`
 icloud-reminders --json list --all | jq '.[] | select(.title | test("passport"; "i"))'
 ```
 
