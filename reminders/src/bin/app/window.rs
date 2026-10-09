@@ -113,7 +113,14 @@ impl Window {
                 *this.selected.borrow_mut() = id;
                 this.show_reminders();
             }
-            this.split.set_show_content(true);
+        });
+        // Only a click (or Enter) opens the content page in the narrow
+        // layout: show_lists re-selects a row after every sync and write.
+        let weak = Rc::downgrade(self);
+        self.lists.connect_row_activated(move |_, _| {
+            if let Some(this) = weak.upgrade() {
+                this.split.set_show_content(true);
+            }
         });
         let weak = Rc::downgrade(self);
         self.show_completed.connect_toggled(move |_| {
@@ -485,6 +492,7 @@ fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Windo
     // Sidebar: the lists.
     let lists = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
+        .activate_on_single_click(true)
         .css_classes(["navigation-sidebar"])
         .build();
     let sidebar_header = adw::HeaderBar::new();
