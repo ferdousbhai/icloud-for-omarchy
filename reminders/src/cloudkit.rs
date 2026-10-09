@@ -26,6 +26,14 @@ pub enum Error {
     /// No network (or Apple unreachable): a background run skips its sync.
     #[error("offline: {0}")]
     Offline(String),
+    /// Signed in, but the keyring holding the iCloud session won't give it
+    /// (locked, no Secret Service): unlock it and try again. Not a sign-in.
+    #[error("the keyring holding the iCloud session cannot be read ({0}): unlock it and try again")]
+    KeyringUnavailable(String),
+    /// The service answered, but with a body this version can't read (an
+    /// HTML maintenance page instead of JSON, say). Not offline.
+    #[error("unexpected response: {0}")]
+    BadResponse(String),
     #[error("iCloud answered HTTP {status}: {body}")]
     Http { status: u16, body: String },
     /// CloudKit answered 200 but refused a record or the zone.
@@ -43,6 +51,8 @@ impl From<icloud_session::Error> for Error {
             icloud_session::Error::SignInRequired => Error::SignInRequired,
             icloud_session::Error::Http { status, body } => Error::Http { status, body },
             icloud_session::Error::Offline(m) | icloud_session::Error::Network(m) => Error::Offline(m),
+            icloud_session::Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m),
+            icloud_session::Error::BadResponse(m) => Error::BadResponse(m),
             other => Error::Other(other.to_string()),
         }
     }
@@ -103,7 +113,7 @@ impl Transport for SessionTransport {
         // parsed here so it isn't reported as offline.
         serde_json::from_slice(&response.body).map_err(|e| {
             let endpoint = url.split('?').next().unwrap_or(url);
-            Error::Other(format!("CloudKit answered {endpoint} with something that isn't JSON: {e}"))
+            Error::BadResponse(format!("CloudKit answered {endpoint} with something that isn't JSON: {e}"))
         })
     }
 

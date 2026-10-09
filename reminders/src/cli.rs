@@ -218,6 +218,8 @@ impl Failure {
             Failure::Usage(_) => "usage",
             Failure::Cloud(cloudkit::Error::SignInRequired) => "sign_in_required",
             Failure::Cloud(cloudkit::Error::Offline(_)) => "offline",
+            Failure::Cloud(cloudkit::Error::KeyringUnavailable(_)) => "keyring_unavailable",
+            Failure::Cloud(cloudkit::Error::BadResponse(_)) => "bad_response",
             Failure::Coded(code, _) => code,
             _ => "error",
         }
