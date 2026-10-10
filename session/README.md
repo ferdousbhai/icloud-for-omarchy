@@ -247,12 +247,12 @@ jar: every method that needs the account (`Session()`, `MergeCookies()`,
 with the reason, and tries the keyring again on each call. A sign-in
 whose jar cannot be stored fails.
 
-Every write of the session item is read back: what the keyring returns
-must be, byte for byte, what was written. A difference is logged ("the
-keyring returned a different session than was stored (N bytes, expected
-M); writing again") and the item written once more; a second difference
-is a failed write, logged, retried at the next change of the jars (the
-session in memory stays as it was), and fails a sign-in.
+Both items' secrets are stored base64-encoded, marked `base64:`.
+GNOME Keyring's unencrypted keyring file, which Omarchy's password-less
+keyring is, writes a secret as it is but reads it back unescaping
+backslashes ([gnome-keyring#158](https://gitlab.gnome.org/GNOME/gnome-keyring/-/issues/158)):
+the session's JSON, with its `\"`, came back empty. A password stored
+unmarked by icloud-session 0.6 is read as it is.
 
 At start, an `account.json` without its jars in the keyring signs nobody
 in, and the daemon says which case it is on stderr:
