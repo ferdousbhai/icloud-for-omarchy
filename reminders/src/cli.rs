@@ -286,7 +286,12 @@ impl Cli<'_> {
             Command::Lists => self.lists(),
             Command::List { list, completed, all } => self.list(list.as_deref(), completed, all),
             Command::Show { reminder } => self.show(&reminder),
-            Command::Add { title, list, notes, due } => self.add(&title, list.as_deref(), notes, due.as_deref()),
+            Command::Add {
+                title,
+                list,
+                notes,
+                due,
+            } => self.add(&title, list.as_deref(), notes, due.as_deref()),
             Command::Edit {
                 reminder,
                 title,
@@ -358,7 +363,9 @@ impl Cli<'_> {
             if rows.is_empty() {
                 return "No reminders.\n".into();
             }
-            rows.iter().map(|r| line(r, &cache, &self.local, list.is_none())).collect()
+            rows.iter()
+                .map(|r| line(r, &cache, &self.local, list.is_none()))
+                .collect()
         });
         Ok(())
     }
@@ -380,21 +387,35 @@ impl Cli<'_> {
             Some(q) => resolve_list(&cache, q)?,
             None => cache.only_list().ok_or_else(|| {
                 let names: String = cache.lists.iter().map(|l| format!("\n  {}", l.name)).collect();
-                usage(format!("add needs --list LIST (iCloud records no default list); lists:{names}"))
+                usage(format!(
+                    "add needs --list LIST (iCloud records no default list); lists:{names}"
+                ))
             })?,
         };
         let saved = self
             .svc
             .add(&list.id, title.trim(), notes.as_deref().unwrap_or(""), due.as_ref())?;
         let r = saved.value;
-        self.done("add", &r, &format!("Added \"{}\" to {}", r.title, list.name), saved.warning)
+        self.done(
+            "add",
+            &r,
+            &format!("Added \"{}\" to {}", r.title, list.name),
+            saved.warning,
+        )
     }
 
     fn when(&self, w: &str) -> Result<Due, Failure> {
         due::parse_when(w, &jiff::Zoned::now().with_time_zone(self.local.clone())).map_err(Failure::Usage)
     }
 
-    fn edit(&self, query: &str, title: Option<String>, notes: Option<String>, due: Option<&str>, no_due: bool) -> Outcome {
+    fn edit(
+        &self,
+        query: &str,
+        title: Option<String>,
+        notes: Option<String>,
+        due: Option<&str>,
+        no_due: bool,
+    ) -> Outcome {
         let mut changes = Vec::new();
         if let Some(t) = title {
             if t.trim().is_empty() {
@@ -446,7 +467,8 @@ impl Cli<'_> {
             (false, false) => format!("\"{}\" was already open", after.title),
         };
         let cache = self.svc.cache()?;
-        let mut out = json!({ "action": action, "changed": changed, "reminder": reminder_json(&after, &cache, &self.local) });
+        let mut out =
+            json!({ "action": action, "changed": changed, "reminder": reminder_json(&after, &cache, &self.local) });
         warn(&mut out, warning);
         self.print(out, || format!("{text}\n"));
         Ok(())
@@ -491,7 +513,11 @@ impl Cli<'_> {
         let store = &self.svc.store;
         let file = |e: std::io::Error| Failure::Other(e.to_string());
         // The last sync, or the last attempt when that failed.
-        let last = self.svc.cache()?.synced_ms.max(store.notified().map_err(file)?.sync_attempt_ms);
+        let last = self
+            .svc
+            .cache()?
+            .synced_ms
+            .max(store.notified().map_err(file)?.sync_attempt_ms);
         let stale = last.is_none_or(|ms| service::now_ms() - ms >= service::SYNC_EVERY.as_millis() as i64);
         let attempted = (force_sync || stale).then(service::now_ms);
         let mut synced = false;
@@ -532,7 +558,13 @@ impl Cli<'_> {
         let count = notified.len();
         let mut out = json!({ "synced": synced, "sync_error": sync_error, "notified": notified });
         warn(&mut out, warning);
-        self.print(out, || if count > 0 { format!("Notified about {count} reminder(s)\n") } else { String::new() });
+        self.print(out, || {
+            if count > 0 {
+                format!("Notified about {count} reminder(s)\n")
+            } else {
+                String::new()
+            }
+        });
         Ok(())
     }
 }
@@ -543,7 +575,9 @@ fn confirm(yes: bool, question: &str) -> Outcome {
         return Ok(());
     }
     if !io::stdin().is_terminal() {
-        return Err(usage("delete asks before it acts: pass --yes when stdin is not a terminal"));
+        return Err(usage(
+            "delete asks before it acts: pass --yes when stdin is not a terminal",
+        ));
     }
     if cli::confirm(question) {
         Ok(())
@@ -677,7 +711,11 @@ fn reminder_json(r: &Reminder, cache: &Cache, local: &TimeZone) -> Value {
 
 fn line(r: &Reminder, cache: &Cache, local: &TimeZone, with_list: bool) -> String {
     let check = if r.completed { "[x]" } else { "[ ]" };
-    let due = r.due.as_ref().map(|d| format!("  due {}", d.display(local))).unwrap_or_default();
+    let due = r
+        .due
+        .as_ref()
+        .map(|d| format!("  due {}", d.display(local)))
+        .unwrap_or_default();
     let list = if with_list {
         cache
             .list(&r.list_id)

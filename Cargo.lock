@@ -1028,6 +1028,7 @@ dependencies = [
 name = "icloud-sessiond"
 version = "0.6.0"
 dependencies = [
+ "base64",
  "blocking",
  "clap",
  "icloud-session",

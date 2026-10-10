@@ -480,12 +480,6 @@ impl Env {
         fs::write(self.secrets_path(), items.to_string()).unwrap();
     }
 
-    /// Arms the test keyring's hook: its next `n` session writes store an
-    /// empty secret, without an error.
-    fn empty_next_session_writes(&self, n: u32) {
-        fs::write(self.root().join("secrets.json.empty-session-writes"), n.to_string()).unwrap();
-    }
-
     fn secrets_path(&self) -> PathBuf {
         self.root().join("secrets.json")
     }
@@ -1542,67 +1536,6 @@ fn a_corrupt_session_item_is_reported_and_account_json_moved_aside() {
 }
 
 #[test]
-fn a_session_write_the_keyring_loses_is_written_again() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
-    let env = Env::start(Opts {
-        setup_url: &server.url,
-        log: true,
-        ..Default::default()
-    });
-    let conn = env.conn();
-    session(&conn).unwrap();
-    let merge = |value: &str| {
-        conn.call_method(
-            Some(BUS_NAME),
-            OBJECT_PATH,
-            Some(INTERFACE),
-            "MergeCookies",
-            &(vec![format!(
-                "X-APPLE-WEBAUTH-TOKEN={value}; Domain=.icloud.com; Path=/"
-            )],),
-        )
-        .unwrap();
-    };
-    let stored_token = || {
-        let secret = env.session_secret()?;
-        cookie_named(&secret["cookies"], "X-APPLE-WEBAUTH-TOKEN")?["value"]
-            .as_str()
-            .map(str::to_string)
-    };
-
-    // The keyring loses the first write: read back, it is written again.
-    env.empty_next_session_writes(1);
-    merge("first");
-    assert_eq!(stored_token().as_deref(), Some("first"));
-    let log = env.log();
-    assert!(
-        log.contains("the keyring returned a different session than was stored (0 bytes, expected"),
-        "{log}"
-    );
-    assert!(log.contains("writing again"), "{log}");
-
-    // It loses both: a failed write, said so; the session in memory is
-    // still right, and the next change writes it.
-    env.empty_next_session_writes(2);
-    merge("second");
-    let log = env.log();
-    assert!(log.contains("after writing it twice"), "{log}");
-    let (cookie, _, _) = session(&conn).unwrap();
-    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("second"));
-    merge("third");
-    assert_eq!(stored_token().as_deref(), Some("third"));
-
-    // A restart reads back what was stored.
-    env.kill_daemon(&conn);
-    let (cookie, _, _) = session(&conn).unwrap();
-    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("third"));
-    assert!(env.account_path().exists());
-}
-
-#[test]
 fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
     let server = Server::start(|s, n, base| match s.path() {
         VALIDATE => validate_ok(n, base),
@@ -1675,7 +1608,10 @@ fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
     assert!(pending.exists());
 
     // Signing out again while it still refuses says so again.
-    assert!(matches!(icloud_session::sign_out_on(&conn), Err(Error::KeyringUnavailable(_))));
+    assert!(matches!(
+        icloud_session::sign_out_on(&conn),
+        Err(Error::KeyringUnavailable(_))
+    ));
 
     // It answers again: signing out again removes the live cookies it kept.
     fs::remove_dir(env.secrets_path()).unwrap();
@@ -1690,7 +1626,9 @@ fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
     fs::write(&pending, "").unwrap();
     env.kill_daemon(&conn);
     assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
-    wait_until("the session's removal", Duration::from_secs(5), || env.session_secret().is_none());
+    wait_until("the session's removal", Duration::from_secs(5), || {
+        env.session_secret().is_none()
+    });
     assert!(!pending.exists());
 }
 
@@ -2434,7 +2372,9 @@ fn a_450_signs_in_with_the_stored_password_and_retries_once() {
             }
             INIT_CLIENT => {
                 *stale.lock().unwrap() += 1;
-                wait_until("both stale requests", Duration::from_secs(30), || *stale.lock().unwrap() >= 2);
+                wait_until("both stale requests", Duration::from_secs(30), || {
+                    *stale.lock().unwrap() >= 2
+                });
                 Reply {
                     status: 450,
                     body: String::new(),

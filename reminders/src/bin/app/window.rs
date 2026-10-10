@@ -109,7 +109,9 @@ impl Window {
     fn connect(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         self.lists.connect_row_selected(move |_, row| {
-            let (Some(this), Some(row)) = (weak.upgrade(), row) else { return };
+            let (Some(this), Some(row)) = (weak.upgrade(), row) else {
+                return;
+            };
             let id = row.widget_name().to_string();
             if *this.selected.borrow() != id {
                 *this.selected.borrow_mut() = id;
@@ -363,7 +365,12 @@ impl Window {
             .build();
         notes.buffer().set_text(&draft.notes);
         let notes_frame = gtk::Frame::builder()
-            .child(&gtk::ScrolledWindow::builder().child(&notes).min_content_height(90).build())
+            .child(
+                &gtk::ScrolledWindow::builder()
+                    .child(&notes)
+                    .min_content_height(90)
+                    .build(),
+            )
             .margin_top(12)
             .build();
         // What's wrong with the title or due date, while it is.
@@ -399,10 +406,20 @@ impl Window {
         // a mistake never closes the dialog and loses the edits.
         let weak = Rc::downgrade(self);
         let validate = {
-            let (dialog, title, due, problem, due_text) = (dialog.clone(), title.clone(), due.clone(), problem.clone(), due_text.clone());
+            let (dialog, title, due, problem, due_text) = (
+                dialog.clone(),
+                title.clone(),
+                due.clone(),
+                problem.clone(),
+                due_text.clone(),
+            );
             move || {
                 let Some(this) = weak.upgrade() else { return };
-                let title_problem = title.text().trim().is_empty().then(|| "A reminder needs a title.".to_owned());
+                let title_problem = title
+                    .text()
+                    .trim()
+                    .is_empty()
+                    .then(|| "A reminder needs a title.".to_owned());
                 let due_problem = (due.text().trim() != due_text)
                     .then(|| this.parse_due(&due.text()).err())
                     .flatten();
@@ -432,7 +449,12 @@ impl Window {
             match response {
                 "delete" => {
                     let name = r.title.clone();
-                    this.update(r.clone(), vec![Change::Deleted], Some(format!("Deleted \"{name}\"")), |_| {});
+                    this.update(
+                        r.clone(),
+                        vec![Change::Deleted],
+                        Some(format!("Deleted \"{name}\"")),
+                        |_| {},
+                    );
                 }
                 "save" => {
                     let buffer = notes.buffer();
@@ -514,11 +536,18 @@ impl Window {
         self.rows.remove_all();
         let now = jiff::Timestamp::now();
         for r in rows {
-            self.rows.append(&self.reminder_row(r, &cache, selected == UPCOMING, now));
+            self.rows
+                .append(&self.reminder_row(r, &cache, selected == UPCOMING, now));
         }
     }
 
-    fn reminder_row(self: &Rc<Self>, r: &Reminder, cache: &Cache, with_list: bool, now: jiff::Timestamp) -> adw::ActionRow {
+    fn reminder_row(
+        self: &Rc<Self>,
+        r: &Reminder,
+        cache: &Cache,
+        with_list: bool,
+        now: jiff::Timestamp,
+    ) -> adw::ActionRow {
         let mut parts = Vec::new();
         let overdue = !r.completed && r.due.as_ref().is_some_and(|d| d.instant(&self.local) < now);
         if let Some(d) = &r.due {
@@ -544,7 +573,11 @@ impl Window {
         let check = gtk::CheckButton::builder()
             .active(r.completed)
             .valign(gtk::Align::Center)
-            .tooltip_text(if r.completed { "Mark as Not Completed" } else { "Mark as Completed" })
+            .tooltip_text(if r.completed {
+                "Mark as Not Completed"
+            } else {
+                "Mark as Completed"
+            })
             .build();
         check.add_css_class("selection-mode");
         let weak = Rc::downgrade(self);
@@ -561,7 +594,9 @@ impl Window {
             // rebuild after the write (or its failure) brings a fresh box
             // showing the cached state.
             c.set_sensitive(false);
-            this.update(reminder.clone(), vec![Change::Completed(done)], toast, |this| this.show_reminders());
+            this.update(reminder.clone(), vec![Change::Completed(done)], toast, |this| {
+                this.show_reminders()
+            });
         });
         row.add_prefix(&check);
         row
@@ -586,7 +621,12 @@ fn sidebar_row(id: &str, name: &str, open: usize) -> gtk::ListBoxRow {
             .build(),
     );
     if open > 0 {
-        b.append(&gtk::Label::builder().label(open.to_string()).css_classes(["dim-label"]).build());
+        b.append(
+            &gtk::Label::builder()
+                .label(open.to_string())
+                .css_classes(["dim-label"])
+                .build(),
+        );
     }
     let row = gtk::ListBoxRow::builder().child(&b).build();
     row.set_widget_name(id);
@@ -618,7 +658,9 @@ fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Windo
     );
     let sidebar_tv = adw::ToolbarView::new();
     sidebar_tv.add_top_bar(&sidebar_header);
-    sidebar_tv.set_content(Some(&gtk::ScrolledWindow::builder().child(&lists).vexpand(true).build()));
+    sidebar_tv.set_content(Some(
+        &gtk::ScrolledWindow::builder().child(&lists).vexpand(true).build(),
+    ));
     let sidebar_page = adw::NavigationPage::builder().title("Lists").child(&sidebar_tv).build();
 
     // Content: the add line and the reminders.
@@ -667,8 +709,13 @@ fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Windo
         .build();
     let content_tv = adw::ToolbarView::new();
     content_tv.add_top_bar(&content_header);
-    content_tv.set_content(Some(&gtk::ScrolledWindow::builder().child(&clamp).vexpand(true).build()));
-    let content_page = adw::NavigationPage::builder().title("Reminders").child(&content_tv).build();
+    content_tv.set_content(Some(
+        &gtk::ScrolledWindow::builder().child(&clamp).vexpand(true).build(),
+    ));
+    let content_page = adw::NavigationPage::builder()
+        .title("Reminders")
+        .child(&content_tv)
+        .build();
 
     let split = adw::NavigationSplitView::builder()
         .sidebar(&sidebar_page)

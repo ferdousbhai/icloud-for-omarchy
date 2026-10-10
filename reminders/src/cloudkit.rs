@@ -113,7 +113,9 @@ impl Transport for SessionTransport {
         // parsed here so it isn't reported as offline.
         serde_json::from_slice(&response.body).map_err(|e| {
             let endpoint = url.split('?').next().unwrap_or(url);
-            Error::BadResponse(format!("CloudKit answered {endpoint} with something that isn't JSON: {e}"))
+            Error::BadResponse(format!(
+                "CloudKit answered {endpoint} with something that isn't JSON: {e}"
+            ))
         })
     }
 
@@ -161,7 +163,10 @@ impl Record {
 
     /// A field's `value` (`None` when absent or null).
     pub fn value(&self, key: &str) -> Option<&Value> {
-        self.fields.get(key).and_then(|f| f.get("value")).filter(|v| !v.is_null())
+        self.fields
+            .get(key)
+            .and_then(|f| f.get("value"))
+            .filter(|v| !v.is_null())
     }
 
     /// An INT64 or TIMESTAMP field.

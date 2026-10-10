@@ -64,13 +64,58 @@ impl State {
         let s = State::default();
         let wall = |offset_ms: i64| now_ms + local_offset_ms + offset_ms;
         let minute = 60_000;
-        s.put(list("List/LIST-REMINDERS", "Reminders", &["REM-CALL", "REM-PASSPORT"], "#007AFF"));
-        s.put(list("List/LIST-GROCERIES", "Groceries", &["REM-MILK", "REM-EGGS"], "#FF9500"));
-        s.put(reminder("REM-MILK", "List/LIST-GROCERIES", "Milk", "Oat, 2 cartons", Some(wall(-minute)), now_ms - 60 * minute));
-        s.put(reminder("REM-EGGS", "List/LIST-GROCERIES", "Eggs", "", None, now_ms - 60 * minute));
-        s.put(reminder("REM-CALL", "List/LIST-REMINDERS", "Call the dentist", "", Some(wall(90 * minute)), now_ms - 60 * minute));
-        s.put(reminder("REM-PASSPORT", "List/LIST-REMINDERS", "Renew passport", "Photos first", Some(wall(3 * 24 * 60 * minute)), now_ms - 60 * minute));
-        let mut done = reminder("REM-PAINT", "List/LIST-REMINDERS", "Buy paint", "", None, now_ms - 120 * minute);
+        s.put(list(
+            "List/LIST-REMINDERS",
+            "Reminders",
+            &["REM-CALL", "REM-PASSPORT"],
+            "#007AFF",
+        ));
+        s.put(list(
+            "List/LIST-GROCERIES",
+            "Groceries",
+            &["REM-MILK", "REM-EGGS"],
+            "#FF9500",
+        ));
+        s.put(reminder(
+            "REM-MILK",
+            "List/LIST-GROCERIES",
+            "Milk",
+            "Oat, 2 cartons",
+            Some(wall(-minute)),
+            now_ms - 60 * minute,
+        ));
+        s.put(reminder(
+            "REM-EGGS",
+            "List/LIST-GROCERIES",
+            "Eggs",
+            "",
+            None,
+            now_ms - 60 * minute,
+        ));
+        s.put(reminder(
+            "REM-CALL",
+            "List/LIST-REMINDERS",
+            "Call the dentist",
+            "",
+            Some(wall(90 * minute)),
+            now_ms - 60 * minute,
+        ));
+        s.put(reminder(
+            "REM-PASSPORT",
+            "List/LIST-REMINDERS",
+            "Renew passport",
+            "Photos first",
+            Some(wall(3 * 24 * 60 * minute)),
+            now_ms - 60 * minute,
+        ));
+        let mut done = reminder(
+            "REM-PAINT",
+            "List/LIST-REMINDERS",
+            "Buy paint",
+            "",
+            None,
+            now_ms - 120 * minute,
+        );
         done["fields"]["Completed"] = int(1);
         done["fields"]["CompletionDate"] = json!({ "type": "TIMESTAMP", "value": now_ms - 100 * minute });
         s.put(done);
@@ -146,7 +191,11 @@ impl State {
         let more = changed.len() > page;
         changed.truncate(page);
         // Up to the last record sent; everything, when nothing is left.
-        let token = if more { changed.last().map_or(since, |s| s.seq) } else { z.seq };
+        let token = if more {
+            changed.last().map_or(since, |s| s.seq)
+        } else {
+            z.seq
+        };
         json!({ "zones": [{
             "zoneID": zone_req["zoneID"],
             "syncToken": format!("tok-{token}"),
@@ -189,14 +238,18 @@ impl State {
                 (Some("update"), Some(_)) => None,
                 _ => Some(("BAD_REQUEST", "unsupported operation")),
             };
-            errors.push(error.map(|(code, reason)| json!({ "recordName": name, "serverErrorCode": code, "reason": reason })));
+            errors.push(
+                error.map(|(code, reason)| json!({ "recordName": name, "serverErrorCode": code, "reason": reason })),
+            );
         }
         if errors.iter().any(Option::is_some) {
             let records: Vec<Value> = errors
                 .into_iter()
                 .zip(&ops)
                 .map(|(e, op)| {
-                    e.unwrap_or_else(|| json!({ "recordName": op["record"]["recordName"], "serverErrorCode": "ATOMIC_ERROR" }))
+                    e.unwrap_or_else(
+                        || json!({ "recordName": op["record"]["recordName"], "serverErrorCode": "ATOMIC_ERROR" }),
+                    )
                 })
                 .collect();
             return json!({ "records": records });
@@ -305,11 +358,23 @@ fn handle(mut request: tiny_http::Request, state: &State) -> std::io::Result<()>
     let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let (status, reply) = state.route(request.url(), &sent);
     if std::env::var_os("FAKE_REMINDERS_QUIET").is_none() {
-        eprintln!("{} {} -> {status}", request.method(), request.url().split('?').next().unwrap_or(""));
+        eprintln!(
+            "{} {} -> {status}",
+            request.method(),
+            request.url().split('?').next().unwrap_or("")
+        );
     }
     let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("header");
-    let data = if reply.is_null() { Vec::new() } else { serde_json::to_vec(&reply)? };
-    request.respond(tiny_http::Response::from_data(data).with_status_code(status).with_header(header))
+    let data = if reply.is_null() {
+        Vec::new()
+    } else {
+        serde_json::to_vec(&reply)?
+    };
+    request.respond(
+        tiny_http::Response::from_data(data)
+            .with_status_code(status)
+            .with_header(header),
+    )
 }
 
 /// Serves requests on `listener` forever, one thread per request.
@@ -335,6 +400,8 @@ fn main() -> std::io::Result<()> {
     let now = jiff::Timestamp::now();
     let offset_ms = i64::from(local.to_offset(now).seconds()) * 1000;
     eprintln!("Fake iCloud Reminders on {base}");
-    eprintln!("Run the app with: ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL={base} cargo run -p icloud-reminders --bin icloud-reminders-app");
+    eprintln!(
+        "Run the app with: ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL={base} cargo run -p icloud-reminders --bin icloud-reminders-app"
+    );
     serve_with(listener, Arc::new(State::seeded(now.as_millisecond(), offset_ms)))
 }

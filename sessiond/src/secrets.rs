@@ -11,6 +11,8 @@
 //!   `apple-id=<apple id>` (no `kind`: as items stored before sessions
 //!   moved here have it), labelled `iCloud (icloud-session): <apple id>`.
 //!
+//! Both are stored base64-encoded (see [`ENCODED`]).
+//!
 //! `ICLOUD_SESSION_TEST_SECRET_FILE` swaps the keyring for a JSON file, for
 //! the tests only: they run on a private bus with no Secret Service, and
 //! must never reach the real one.
@@ -19,6 +21,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use zbus::blocking::Connection;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zeroize::Zeroizing;
@@ -93,6 +97,31 @@ const DEFAULT_ALIAS: &str = "default";
 /// The label of the collection made when there is no default one.
 const DEFAULT_LABEL: &str = "Default";
 const CONTENT_TYPE: &str = "text/plain";
+/// The mark of a stored value that is base64: what follows it decodes to
+/// the secret. GNOME Keyring's unencrypted keyring file (Omarchy's, with
+/// no password) writes a secret unescaped but reads it back unescaping,
+/// so `\"` in the session's JSON loaded as an empty secret, `\\` as `\`,
+/// and a newline broke the file
+/// (<https://gitlab.gnome.org/GNOME/gnome-keyring/-/issues/158>); base64
+/// has none of them. A value without the mark is read as it is: a
+/// password stored by icloud-session 0.6, rewritten marked when next set.
+const ENCODED: &str = "base64:";
+
+/// What is stored for `secret`.
+fn encode(secret: &str) -> Zeroizing<Vec<u8>> {
+    let mut value = Zeroizing::new(ENCODED.as_bytes().to_vec());
+    value.extend_from_slice(Zeroizing::new(STANDARD.encode(secret)).as_bytes());
+    value
+}
+
+/// The secret a stored value holds. A marked value that does not decode
+/// is returned as stored, to be found damaged by whoever reads it.
+fn decode(value: Zeroizing<Vec<u8>>) -> Zeroizing<Vec<u8>> {
+    match value.strip_prefix(ENCODED.as_bytes()).map(|b64| STANDARD.decode(b64)) {
+        Some(Ok(secret)) => Zeroizing::new(secret),
+        _ => value,
+    }
+}
 
 /// The Secret Service's `(session, parameters, value, content_type)`.
 type Secret = (OwnedObjectPath, Vec<u8>, Vec<u8>, String);
@@ -255,7 +284,7 @@ impl Open {
                 self.unlock(&item)?;
             }
             let (_, _, value, _): Secret = self.call(&item, ITEM, "GetSecret", &(&self.session,))?;
-            let value = Zeroizing::new(value);
+            let value = decode(Zeroizing::new(value));
             if let Some(taken) = take(&value) {
                 return Ok(Some(taken));
             }
@@ -271,7 +300,8 @@ impl Open {
             ("org.freedesktop.Secret.Item.Label", Value::from(label)),
             ("org.freedesktop.Secret.Item.Attributes", Value::from(attributes)),
         ]);
-        let secret = (&self.session, Vec::<u8>::new(), secret.as_bytes(), CONTENT_TYPE);
+        let value = encode(secret);
+        let secret = (&self.session, Vec::<u8>::new(), value.as_slice(), CONTENT_TYPE);
         let (_, prompt): (OwnedObjectPath, OwnedObjectPath) =
             self.call(&collection, COLLECTION, "CreateItem", &(properties, secret, true))?;
         self.prompt(&prompt)?;
@@ -355,12 +385,6 @@ impl SecretStore for Keyring {
 
 /// A JSON file standing in for the keyring in the tests:
 /// `[{"label", "attributes": {..}, "secret"}]`.
-///
-/// Test hook, for the tests only: while `<file>.empty-session-writes`
-/// holds a number N > 0, the next `set_session` stores an empty secret
-/// instead (as GNOME Keyring was once seen to) and the number goes down
-/// by one. It stands in for a keyring that loses a write without an
-/// error, so the tests can check that every write is read back.
 struct TestFile(PathBuf);
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -400,24 +424,6 @@ impl TestFile {
         self.save(&items)
     }
 
-    /// Takes one write from `<file>.empty-session-writes` (see
-    /// [`TestFile`]): true if this one is to store an empty secret.
-    fn drop_session_write(&self) -> Result<bool, String> {
-        let mut path = self.0.clone().into_os_string();
-        path.push(".empty-session-writes");
-        let path = PathBuf::from(path);
-        let n: u32 = match std::fs::read_to_string(&path) {
-            Ok(text) => text.trim().parse().map_err(|e| format!("{}: {e}", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        };
-        if n == 0 {
-            return Ok(false);
-        }
-        std::fs::write(&path, (n - 1).to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(true)
-    }
-
     fn find(&self, attributes: &HashMap<&str, String>) -> Result<Option<Zeroizing<String>>, String> {
         Ok(self
             .load()?
@@ -426,7 +432,11 @@ impl TestFile {
             .map(|i| Zeroizing::new(i.secret)))
     }
 
-    fn remove(&self, attributes: &HashMap<&str, String>, keep: Option<&HashMap<&str, String>>) -> Result<usize, String> {
+    fn remove(
+        &self,
+        attributes: &HashMap<&str, String>,
+        keep: Option<&HashMap<&str, String>>,
+    ) -> Result<usize, String> {
         let mut items = self.load()?;
         let before = items.len();
         items.retain(|i| !TestFile::has(i, attributes) || keep.is_some_and(|k| TestFile::has(i, k)));
@@ -459,7 +469,6 @@ impl SecretStore for TestFile {
     }
 
     fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
-        let secret = if self.drop_session_write()? { "" } else { secret };
         self.put(session_label(apple_id), session_attributes(), secret)
     }
 

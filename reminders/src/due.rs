@@ -184,7 +184,13 @@ mod tests {
 
     #[test]
     fn out_of_range_is_an_error_not_a_panic() {
-        for s in ["+8000000d", "+99999999999999999h", "9999-12-31", "9999-12-31 23:59", "0000-01-01"] {
+        for s in [
+            "+8000000d",
+            "+99999999999999999h",
+            "9999-12-31",
+            "9999-12-31 23:59",
+            "0000-01-01",
+        ] {
             assert!(parse_when(s, &now()).is_err(), "{s}");
         }
         assert!(parse_when("9998-12-31", &now()).is_ok());
@@ -238,7 +244,17 @@ mod tests {
         assert_eq!(show("+30m"), "2026-10-09 14:50");
         assert_eq!(show("+2h"), "2026-10-09 16:20");
         assert_eq!(show("+3d"), "2026-10-12 14:20");
-        for bad in ["", "soon", "2026-13-01", "25:00", "9", "today 9", "+2y", "+h", "today 9:00 x"] {
+        for bad in [
+            "",
+            "soon",
+            "2026-13-01",
+            "25:00",
+            "9",
+            "today 9",
+            "+2y",
+            "+h",
+            "today 9:00 x",
+        ] {
             assert!(parse_when(bad, &n).is_err(), "{bad}");
         }
     }

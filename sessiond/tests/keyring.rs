@@ -375,7 +375,8 @@ fn keyring_speaks_the_secret_service() {
             ("apple-id".to_string(), "someone@example.com".to_string()),
         ])
     );
-    assert_eq!(ours[0].secret, b"hunter2");
+    // Stored base64: GNOME Keyring's unencrypted file mangles backslashes.
+    assert_eq!(ours[0].secret, b"base64:aHVudGVyMg==");
     assert_eq!(ours[0].content_type, "text/plain");
 
     assert!(keyring.contains("someone@example.com").unwrap());
@@ -414,6 +415,18 @@ fn keyring_speaks_the_secret_service() {
         Some("correct horse")
     );
 
+    // A password stored by icloud-session 0.6, unencoded, reads as it is.
+    st().items.iter_mut().find(|i| i.collection == made).unwrap().secret = b"legacy".to_vec();
+    assert_eq!(
+        keyring
+            .get("someone@example.com")
+            .unwrap()
+            .as_deref()
+            .map(String::as_str),
+        Some("legacy")
+    );
+    keyring.set("someone@example.com", "correct horse").unwrap();
+
     // One connection, one session, however many calls.
     assert_eq!(st().sessions.len(), 1);
 
@@ -436,15 +449,39 @@ fn keyring_speaks_the_secret_service() {
         .cloned()
         .collect();
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].label, "iCloud session (icloud-session): someone@example.com");
+    assert_eq!(
+        sessions[0].label,
+        "iCloud session (icloud-session): someone@example.com"
+    );
     assert_eq!(
         keyring.get_session().unwrap().as_deref().map(String::as_str),
         Some(r#"{"v":2}"#)
     );
     assert_eq!(
-        keyring.get("someone@example.com").unwrap().as_deref().map(String::as_str),
+        keyring
+            .get("someone@example.com")
+            .unwrap()
+            .as_deref()
+            .map(String::as_str),
         Some("correct horse"),
         "the password is not the session"
+    );
+
+    // What the keyring's file would mangle is stored without a backslash
+    // or a newline, and read back exactly.
+    let awkward = "{\"a\":\"q\\\"x\\\\y\"}\nend";
+    keyring.set_session("someone@example.com", awkward).unwrap();
+    let stored = st()
+        .items
+        .iter()
+        .find(|i| i.attributes.get("kind").map(String::as_str) == Some("session"))
+        .unwrap()
+        .secret
+        .clone();
+    assert!(!stored.contains(&b'\\') && !stored.contains(&b'\n'), "{stored:?}");
+    assert_eq!(
+        keyring.get_session().unwrap().as_deref().map(String::as_str),
+        Some(awkward)
     );
 
     // Forgetting passwords removes every other icloud-session item in every

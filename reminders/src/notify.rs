@@ -23,7 +23,12 @@ const APP_NAME: &str = "iCloud Reminders";
 
 /// The reminders to notify about now, oldest due first, and the state
 /// that records them (and forgets reminders that no longer wait).
-pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &TimeZone) -> (Vec<&'c Reminder>, Notified) {
+pub fn due_now<'c>(
+    cache: &'c Cache,
+    state: &Notified,
+    now: Timestamp,
+    local: &TimeZone,
+) -> (Vec<&'c Reminder>, Notified) {
     let now_ms = now.as_millisecond();
     // A run is the first until the cache has synced for this account: one
     // that saw an empty cache (signed out, offline) or another account's
@@ -45,10 +50,7 @@ pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &T
             continue;
         }
         let already = state.fired.get(&r.id) == Some(&at);
-        let fresh = started
-            && !already
-            && at > now_ms - CATCH_UP_MS
-            && r.modified_ms.is_none_or(|m| m < at);
+        let fresh = started && !already && at > now_ms - CATCH_UP_MS && r.modified_ms.is_none_or(|m| m < at);
         if fresh {
             fire.push((at, r));
         }
@@ -65,7 +67,12 @@ pub fn due_now<'c>(cache: &'c Cache, state: &Notified, now: Timestamp, local: &T
 pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> (String, String) {
     let when = match &r.due {
         Some(d) if d.all_day => "today".to_owned(),
-        Some(d) => d.instant(local).to_zoned(local.clone()).time().strftime("%H:%M").to_string(),
+        Some(d) => d
+            .instant(local)
+            .to_zoned(local.clone())
+            .time()
+            .strftime("%H:%M")
+            .to_string(),
         None => String::new(),
     };
     let body = match cache.list(&r.list_id) {
@@ -96,7 +103,11 @@ pub fn send(headline: &str, body: &str) -> Result<(), String> {
 /// Text the notifier reads as a value, never an option: a title such as
 /// `-u` gets an invisible word joiner (U+2060) in front.
 fn positional(text: &str) -> String {
-    if text.starts_with('-') { format!("\u{2060}{text}") } else { text.to_owned() }
+    if text.starts_with('-') {
+        format!("\u{2060}{text}")
+    } else {
+        text.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -166,7 +177,11 @@ mod tests {
     fn fires_once_when_due_and_not_before() {
         let utc = TimeZone::UTC;
         let c = cache(vec![
-            reminder("Reminder/milk", Some("2026-10-09T10:00:00Z"), Some("2026-10-09T08:00:00Z")),
+            reminder(
+                "Reminder/milk",
+                Some("2026-10-09T10:00:00Z"),
+                Some("2026-10-09T08:00:00Z"),
+            ),
             reminder("Reminder/later", Some("2026-10-09T18:00:00Z"), None),
             reminder("Reminder/undated", None, None),
         ]);
@@ -203,9 +218,17 @@ mod tests {
             // Due 13 h ago: past the catch-up window.
             reminder("Reminder/stale", Some("2026-10-08T21:00:00Z"), None),
             // Made after its due time had passed.
-            reminder("Reminder/backdated", Some("2026-10-09T09:00:00Z"), Some("2026-10-09T09:30:00Z")),
+            reminder(
+                "Reminder/backdated",
+                Some("2026-10-09T09:00:00Z"),
+                Some("2026-10-09T09:30:00Z"),
+            ),
             // Synced late, but set ahead of time: still news.
-            reminder("Reminder/late", Some("2026-10-09T09:58:00Z"), Some("2026-10-09T09:57:00Z")),
+            reminder(
+                "Reminder/late",
+                Some("2026-10-09T09:58:00Z"),
+                Some("2026-10-09T09:57:00Z"),
+            ),
         ]);
         let started = Notified {
             started: true,
@@ -219,7 +242,11 @@ mod tests {
     #[test]
     fn moving_the_due_time_makes_it_news_again() {
         let utc = TimeZone::UTC;
-        let mut r = reminder("Reminder/call", Some("2026-10-09T10:00:00Z"), Some("2026-10-09T08:00:00Z"));
+        let mut r = reminder(
+            "Reminder/call",
+            Some("2026-10-09T10:00:00Z"),
+            Some("2026-10-09T08:00:00Z"),
+        );
         let started = Notified {
             started: true,
             ..Notified::default()

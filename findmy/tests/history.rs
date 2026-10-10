@@ -246,7 +246,10 @@ fn lazy_history_backs_off_after_a_failed_open() {
     let t0 = Instant::now();
     assert!(lazy.get_or_open(t0, fail).is_none());
     assert!(lazy.get_or_open(t0 + Duration::from_secs(60), fail).is_none());
-    assert!(lazy.get_or_open(t0 + REOPEN_AFTER - Duration::from_secs(1), fail).is_none());
+    assert!(
+        lazy.get_or_open(t0 + REOPEN_AFTER - Duration::from_secs(1), fail)
+            .is_none()
+    );
     assert_eq!(attempts.get(), 1);
     assert!(lazy.get_or_open(t0 + REOPEN_AFTER, fail).is_none());
     assert_eq!(attempts.get(), 2);

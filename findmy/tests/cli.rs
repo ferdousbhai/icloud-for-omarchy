@@ -431,7 +431,11 @@ fn needed_libs(path: &str) -> Vec<String> {
 fn the_command_line_binary_does_not_link_gtk() {
     let ui = |libs: Vec<String>| {
         libs.into_iter()
-            .filter(|l| ["libgtk-4.", "libadwaita-1.", "libshumate-1.0."].iter().any(|p| l.starts_with(p)))
+            .filter(|l| {
+                ["libgtk-4.", "libadwaita-1.", "libshumate-1.0."]
+                    .iter()
+                    .any(|p| l.starts_with(p))
+            })
             .count()
     };
     let cli = needed_libs(env!("CARGO_BIN_EXE_icloud-findmy"));

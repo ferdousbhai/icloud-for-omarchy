@@ -447,9 +447,11 @@ impl Window {
     /// device, a new fix (which the refresh just stored), or a trail loaded
     /// [`TRAIL_RELOAD`] ago (the 24 h window has moved). Not on every tick.
     fn load_trail_if_needed(self: &Rc<Self>, device: &Device) {
-        let shown = self.trail_shown.borrow().as_ref().is_some_and(|t| {
-            t.id == device.id && t.fix == device.location && t.at.elapsed() < TRAIL_RELOAD
-        });
+        let shown = self
+            .trail_shown
+            .borrow()
+            .as_ref()
+            .is_some_and(|t| t.id == device.id && t.fix == device.location && t.at.elapsed() < TRAIL_RELOAD);
         if !shown {
             *self.trail_shown.borrow_mut() = Some(TrailShown {
                 id: device.id.clone(),
@@ -473,10 +475,7 @@ impl Window {
         background(
             move || -> Vec<Point> {
                 let history = lock(&history);
-                history
-                    .get()
-                    .and_then(|h| h.trail(&id, since).ok())
-                    .unwrap_or_default()
+                history.get().and_then(|h| h.trail(&id, since).ok()).unwrap_or_default()
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
