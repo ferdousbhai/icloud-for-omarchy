@@ -91,13 +91,20 @@ public:
     // The engine's state directory in the vault: .icloud-notes, or a layout 3
     // vault's .icloud-md until its next sync moves it.
     static QString stateDir();
-    // The vault on disk (ICLOUD_NOTES_VAULT, or ~/Documents/icloud-notes).
+    // The vault on disk (ICLOUD_NOTES_VAULT, or ~/Documents/Notes).
     static QString rootPath();
+    // The default vault in documents, <documents>/Notes, after moving the
+    // <documents>/icloud-notes of earlier releases there, once, when Notes
+    // does not exist yet (when both do: Notes, and a warning). Logs what it
+    // did. The old folder only while it cannot be moved (busy past
+    // busyWaitMs, or the rename failed), so that a later start tries again.
+    static QString moveOldVault(const QString &documents, int busyWaitMs = 2000);
     // The lock the app, background syncs, command line changes and
     // icloud-notes-sync share for the vault: $XDG_RUNTIME_DIR/
     // icloud-notes-<FNV-1a 64 of the vault's canonical path>.lock (see
     // notes-sync/src/cmd/lock.rs, which must agree).
     static QString lockPath();
+    static QString lockPathFor(const QString &vault);
     // Take the vault's lock now (the app does at start, and retries).
     VaultLock::Result lockVault();
     // Let it go again (a command line run done with the vault).

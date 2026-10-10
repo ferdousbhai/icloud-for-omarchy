@@ -1669,7 +1669,7 @@ ApplicationWindow {
             Label {
                 Layout.preferredWidth: 380
                 wrapMode: Text.WordWrap
-                text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
+                text: "This downloads all your Apple Notes into ~/Documents/Notes as Markdown, one file per note with the title as its first line, like in Notes. "
                       + (backend.signedIn ? "It uses the iCloud account signed in on this computer, " + backend.appleId + ". "
                                           : "Apple's own sign-in window opens first (password and 2FA stay on Apple's pages); the sign-in is shared with the other iCloud apps. ")
                       + "Apple Notes must not use Advanced Data Protection, because icloud-notes-sync cannot decrypt it."

@@ -1,8 +1,18 @@
 # Notes (icloud-notes)
 
 Apple Notes for Omarchy. Your notes live as plain Markdown files in
-`~/Documents/icloud-notes` — same folders as in Apple Notes — and sync
-both ways with iCloud.
+`~/Documents/Notes` — same folders as in Apple Notes — and sync
+both ways with iCloud. (`~/Documents` is your documents folder,
+`XDG_DOCUMENTS_DIR`, wherever that is.)
+
+**Upgrading from an earlier release:** the notes folder used to be
+`~/Documents/icloud-notes`. The first start after the update (the app,
+`icloud-notes`, or the background sync) renames it to `~/Documents/Notes`
+in place, once; nothing is copied or downloaded again. If a
+`~/Documents/Notes` already exists, neither folder is touched: Notes uses
+`~/Documents/Notes` and logs a warning naming the old folder, for you to
+merge by hand. While a Notes window of the earlier release is still open,
+the move waits for a later start.
 
 ## Requirements
 
@@ -85,7 +95,7 @@ icloud-session's window opens Apple's real sign-in; your password and
 2FA stay on Apple's own pages. To stay signed in, use your Apple ID
 and password rather than the iPhone QR code, tick **Keep me signed in**,
 and click **Trust** when asked: that sign-in lasts about 30 days, while a
-QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/icloud-notes`,
+QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/Notes`,
 one Markdown file per note with the title as its first line, just like
 in Notes (the sync engine clones icloud-session's account; from a
 terminal, `icloud-notes clone`). If the vault is ever missing while the computer is

@@ -8,7 +8,7 @@ to the command that does it, then fixes the conventions all the tools share.
 | Tool | Package | What it drives |
 |---|---|---|
 | `icloud-session` | icloud-session | the one Apple sign-in every app uses (D-Bus daemon, sign-in window) |
-| `icloud-notes <command>` | icloud-notes | the Notes app: the vault `~/Documents/icloud-notes`, its rules and its lock |
+| `icloud-notes <command>` | icloud-notes | the Notes app: the vault `~/Documents/Notes`, its rules and its lock |
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
