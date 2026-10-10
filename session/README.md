@@ -242,9 +242,30 @@ jar: every method that needs the account (`Session()`, `MergeCookies()`,
 `ReportSignInRequired()`, `FindMySession()`, `MergeFindMyCookies()`,
 `ReportFindMyAuthRequired()`, `SetPassword()`) answers `…Error.KeyringUnavailable`
 with the reason, and tries the keyring again on each call. A sign-in
-whose jar cannot be stored fails. With the keyring's item gone (deleted
-in Seahorse), `account.json` alone signs nobody in: the daemon removes
-it and starts signed out.
+whose jar cannot be stored fails.
+
+Every write of the session item is read back: what the keyring returns
+must be, byte for byte, what was written. A difference is logged ("the
+keyring returned a different session than was stored (N bytes, expected
+M); writing again") and the item written once more; a second difference
+is a failed write, logged, retried at the next change of the jars (the
+session in memory stays as it was), and fails a sign-in.
+
+At start, an `account.json` without its jars in the keyring signs nobody
+in, and the daemon says which case it is on stderr:
+
+- No session item (deleted in Seahorse, a sign-out elsewhere): it
+  removes `account.json` and starts signed out.
+- An item whose secret is empty or not a session: an error naming the
+  secret's length (never its content). It moves `account.json` to
+  `account.json.bad`, leaves the item as it is, so both can be looked
+  at, and starts signed out. The next sign-in replaces the item.
+- An item holding another account's session: it removes `account.json`
+  and starts signed out.
+
+No second copy of the session is kept: a copy in the same keyring does
+not survive the keyring losing data, and reading it instead would hide
+the failure.
 
 ## Automatic Find My re-authorization
 
@@ -329,7 +350,7 @@ never yields and `watch_forever` returns at once.
 | `ICLOUD_SESSION_SIGNIN_TRACE` | sign-in window | off; `1` reports the page's form fields, buttons and requests (never values) on stderr |
 | `ICLOUD_SESSION_SIGNIN_UA` | sign-in window | WebKitGTK's own user agent; `safari` for a macOS Safari one, anything else verbatim |
 | `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
-| `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring |
+| `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring. While `<file>.empty-session-writes` holds a number N > 0, the next session write stores an empty secret and N goes down by one (a keyring losing a write, for the read-back tests) |
 | `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS`, `ICLOUD_SESSIOND_HANDOUT_SECS`, `ICLOUD_SESSIOND_RETRY_SECS` | daemon (tests) | 300, 600, 21600, 60 |
 
 ## The sign-in spike

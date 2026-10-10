@@ -271,6 +271,9 @@ struct Opts<'a> {
     handout_secs: f64,
     retry_secs: f64,
     seed: bool,
+    /// The daemon's stderr goes to a file, for [`Env::log`], rather than
+    /// to the test's.
+    log: bool,
 }
 
 impl Default for Opts<'_> {
@@ -283,6 +286,7 @@ impl Default for Opts<'_> {
             handout_secs: 6.0 * 3600.0,
             retry_secs: 60.0,
             seed: true,
+            log: false,
         }
     }
 }
@@ -342,6 +346,11 @@ impl Env {
         let signin = opts
             .signin
             .map_or_else(|| "/nonexistent-signin".into(), |s| s.to_string());
+        let stderr = if opts.log {
+            Stdio::from(fs::File::create(root.join("daemon.log")).unwrap())
+        } else {
+            Stdio::inherit()
+        };
         let mut bus = Command::new("dbus-daemon")
             .arg(format!("--config-file={}", root.join("bus.conf").display()))
             .args(["--nofork", "--print-address=1"])
@@ -361,6 +370,7 @@ impl Env {
             // Never the real Secret Service: a file in the temp dir.
             .env("ICLOUD_SESSION_TEST_SECRET_FILE", root.join("secrets.json"))
             .stdout(Stdio::piped())
+            .stderr(stderr)
             .spawn()
             .expect("dbus-daemon runs");
         let mut line = String::new();
@@ -449,6 +459,31 @@ impl Env {
             .unwrap();
         child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
         child.wait_with_output().unwrap()
+    }
+
+    /// What the daemon wrote to stderr (with `Opts::log`).
+    fn log(&self) -> String {
+        fs::read_to_string(self.root().join("daemon.log")).unwrap_or_default()
+    }
+
+    /// Replaces the test keyring's session item's secret, as a keyring
+    /// that damaged it would leave it.
+    fn damage_session_secret(&self, secret: &str) {
+        let mut items = self.all_secrets();
+        let item = items
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|i| i["attributes"]["kind"] == "session")
+            .expect("a session item");
+        item["secret"] = json!(secret);
+        fs::write(self.secrets_path(), items.to_string()).unwrap();
+    }
+
+    /// Arms the test keyring's hook: its next `n` session writes store an
+    /// empty secret, without an error.
+    fn empty_next_session_writes(&self, n: u32) {
+        fs::write(self.root().join("secrets.json.empty-session-writes"), n.to_string()).unwrap();
     }
 
     fn secrets_path(&self) -> PathBuf {
@@ -1446,6 +1481,125 @@ fn the_cookies_move_to_the_keyring_and_account_json_keeps_none() {
     fs::write(env.secrets_path(), "[]").unwrap();
     assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
     assert!(env.account_file().is_none());
+}
+
+/// A session item whose secret is `damaged` (empty, or not a session)
+/// signs out at the next start, and says so; `account.json` is moved
+/// aside, not deleted, and the item is left for inspection.
+fn a_damaged_session_item_is_reported_and_kept(damaged: &str, says: &str) {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        log: true,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    assert!(env.session_secret().is_some());
+    let account = fs::read_to_string(env.account_path()).unwrap();
+
+    env.kill_daemon(&conn);
+    env.damage_session_secret(damaged);
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(matches!(Session::connect_on(&conn), Err(Error::SignInRequired)));
+
+    assert!(!env.account_path().exists());
+    assert_eq!(
+        fs::read_to_string(env.account_path().with_extension("json.bad")).unwrap(),
+        account
+    );
+    let items = env.all_secrets();
+    let item = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["attributes"]["kind"] == "session")
+        .expect("the damaged item is kept");
+    assert_eq!(item["secret"], damaged);
+    let log = env.log();
+    assert!(log.contains(says), "{log}");
+    assert!(log.contains("account.json.bad"), "{log}");
+    assert!(!log.contains("holds no session item"), "{log}");
+    if !damaged.is_empty() {
+        assert!(!log.contains(damaged), "the log shows the secret: {log}");
+    }
+}
+
+#[test]
+fn an_empty_session_item_is_reported_and_account_json_moved_aside() {
+    a_damaged_session_item_is_reported_and_kept("", "the keyring's session item is empty (0 bytes)");
+}
+
+#[test]
+fn a_corrupt_session_item_is_reported_and_account_json_moved_aside() {
+    a_damaged_session_item_is_reported_and_kept(
+        "{\"dsid\": \"12345\", \"cook",
+        "the keyring's session item is not a session (23 bytes",
+    );
+}
+
+#[test]
+fn a_session_write_the_keyring_loses_is_written_again() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        log: true,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    let merge = |value: &str| {
+        conn.call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "MergeCookies",
+            &(vec![format!(
+                "X-APPLE-WEBAUTH-TOKEN={value}; Domain=.icloud.com; Path=/"
+            )],),
+        )
+        .unwrap();
+    };
+    let stored_token = || {
+        let secret = env.session_secret()?;
+        cookie_named(&secret["cookies"], "X-APPLE-WEBAUTH-TOKEN")?["value"]
+            .as_str()
+            .map(str::to_string)
+    };
+
+    // The keyring loses the first write: read back, it is written again.
+    env.empty_next_session_writes(1);
+    merge("first");
+    assert_eq!(stored_token().as_deref(), Some("first"));
+    let log = env.log();
+    assert!(
+        log.contains("the keyring returned a different session than was stored (0 bytes, expected"),
+        "{log}"
+    );
+    assert!(log.contains("writing again"), "{log}");
+
+    // It loses both: a failed write, said so; the session in memory is
+    // still right, and the next change writes it.
+    env.empty_next_session_writes(2);
+    merge("second");
+    let log = env.log();
+    assert!(log.contains("after writing it twice"), "{log}");
+    let (cookie, _, _) = session(&conn).unwrap();
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("second"));
+    merge("third");
+    assert_eq!(stored_token().as_deref(), Some("third"));
+
+    // A restart reads back what was stored.
+    env.kill_daemon(&conn);
+    let (cookie, _, _) = session(&conn).unwrap();
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("third"));
+    assert!(env.account_path().exists());
 }
 
 #[test]

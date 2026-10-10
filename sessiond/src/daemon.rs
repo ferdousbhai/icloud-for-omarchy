@@ -304,11 +304,63 @@ struct Written {
     secret: Option<Zeroizing<String>>,
 }
 
+/// How a session item read back after a write differs from what was
+/// written (`None`: it is what was written). Never its content.
+fn read_back_mismatch(written: &str, read: Option<&str>) -> Option<String> {
+    match read {
+        None => Some("the keyring has no session item after storing one".into()),
+        Some(read) if read != written => Some(format!(
+            "the keyring returned a different session than was stored ({} bytes, expected {})",
+            read.len(),
+            written.len()
+        )),
+        Some(read) => serde_json::from_str::<SessionSecret>(read)
+            .err()
+            .map(|e| format!("the session stored in the keyring does not parse: {e}")),
+    }
+}
+
+/// Stores the session's jars in the keyring and reads them back: what the
+/// keyring returns must be byte for byte what was written. A difference
+/// is logged and the write done once more; a second difference is an
+/// error, as a failed write is. (GNOME Keyring was seen to keep an empty
+/// secret after a replace that reported no error.)
+fn store_session(secrets: &dyn SecretStore, apple_id: &str, secret: &str) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..2 {
+        secrets.set_session(apple_id, secret)?;
+        let read = secrets
+            .get_session()
+            .map_err(|e| format!("stored the session, but reading it back failed: {e}"))?;
+        let Some(why) = read_back_mismatch(secret, read.as_deref().map(String::as_str)) else {
+            if attempt > 0 {
+                eprintln!("icloud-sessiond: the keyring holds the session as stored after writing it again");
+            }
+            return Ok(());
+        };
+        if attempt == 0 {
+            eprintln!("icloud-sessiond: {why}; writing again");
+        }
+        last = why;
+    }
+    Err(format!("{last}, after writing it twice"))
+}
+
 /// The account `account.json` names, with its cookies from the keyring.
 /// A file from before the cookies moved to the keyring has them moved
 /// there, and is rewritten without them. `Err`: the keyring would not
 /// answer, so the account is neither restored nor forgotten. It writes
 /// both stores, so it runs only with [`Daemon::written`] held.
+///
+/// `Ok(None)`, signed out, when the keyring answers without the account's
+/// cookies, each case logged as itself:
+/// - no session item: it was removed (a sign-out elsewhere), and
+///   `account.json` is removed with it;
+/// - an item whose secret is empty or not a session: damaged.
+///   `account.json` is moved aside to `account.json.bad` and the item is
+///   left as it is, so both can be looked at (the next sign-in replaces
+///   the item);
+/// - another account's session: `account.json` is removed.
 fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Option<Account>, Box<Unread>> {
     let Some(stored) = Stored::load_or_set_aside(path) else {
         return Ok(None);
@@ -316,7 +368,7 @@ fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Opt
     let secret = match stored.legacy_secret() {
         Some(legacy) => {
             let text = Zeroizing::new(serde_json::to_string(&legacy).expect("the session secret serializes"));
-            if let Err(e) = secrets.set_session(&stored.apple_id, &text) {
+            if let Err(e) = store_session(secrets, &stored.apple_id, &text) {
                 let why = format!("moving the session's cookies to the keyring: {e}");
                 return Err(Box::new(Unread { stored, why }));
             }
@@ -324,7 +376,7 @@ fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Opt
                 Ok(()) => eprintln!("icloud-sessiond: moved the session's cookies from account.json to the keyring"),
                 Err(e) => eprintln!("icloud-sessiond: rewriting {} without its cookies: {e}", path.display()),
             }
-            Some(legacy)
+            legacy
         }
         None => {
             let text = match secrets.get_session() {
@@ -334,19 +386,49 @@ fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Opt
                     return Err(Box::new(Unread { stored, why }));
                 }
             };
-            text.and_then(|t| serde_json::from_str::<SessionSecret>(&t).ok())
+            let Some(text) = text else {
+                // Removed on purpose (a sign-out elsewhere): nothing to
+                // sign in with.
+                eprintln!("icloud-sessiond: the keyring holds no session item for account.json; signed out");
+                remove_account_file(path);
+                return Ok(None);
+            };
+            match serde_json::from_str::<SessionSecret>(&text) {
+                Ok(secret) => secret,
+                Err(e) => {
+                    let bad = path.with_extension("json.bad");
+                    let what = if text.is_empty() {
+                        "is empty (0 bytes)".to_string()
+                    } else {
+                        // serde_json's error names a line and column, never the text.
+                        format!("is not a session ({} bytes: {e})", text.len())
+                    };
+                    eprintln!(
+                        "icloud-sessiond: error: the keyring's session item {what}; the cookies are lost, \
+                         signed out. Moved {} to {} and left the keyring item as it is, for inspection",
+                        path.display(),
+                        bad.display()
+                    );
+                    if let Err(e) = std::fs::rename(path, &bad) {
+                        eprintln!("icloud-sessiond: moving {} aside: {e}", path.display());
+                    }
+                    return Ok(None);
+                }
+            }
         }
     };
-    let account = secret.and_then(|s| Account::join(stored, s));
+    let account = Account::join(stored, secret);
     if account.is_none() {
-        // The keyring item was removed (or is another account's): nothing
-        // to sign in with.
-        eprintln!("icloud-sessiond: the keyring holds no session for account.json; signed out");
-        if let Err(e) = files::remove(path) {
-            eprintln!("icloud-sessiond: removing {}: {e}", path.display());
-        }
+        eprintln!("icloud-sessiond: the keyring's session is another account's, not account.json's; signed out");
+        remove_account_file(path);
     }
     Ok(account)
+}
+
+fn remove_account_file(path: &std::path::Path) {
+    if let Err(e) = files::remove(path) {
+        eprintln!("icloud-sessiond: removing {}: {e}", path.display());
+    }
 }
 
 /// How fresh the session must be before `ensure_fresh` skips `/validate`.
@@ -568,7 +650,7 @@ impl Daemon {
                 let secret = a.secret();
                 if written.secret.as_ref() != Some(&secret) {
                     written.secret = None;
-                    match self.secrets.set_session(&a.apple_id, &secret) {
+                    match store_session(self.secrets.as_ref(), &a.apple_id, &secret) {
                         Ok(()) => {
                             written.secret = Some(secret);
                             self.clear_removal_pending();
@@ -1338,8 +1420,9 @@ impl Daemon {
         // Into the keyring first: a sign-in that cannot be kept fails, and
         // says why, rather than lasting only until the daemon exits.
         let secret = account.secret();
-        self.secrets
-            .set_session(&account.apple_id, &secret)
+        // Unknown until the write is read back as written.
+        written.secret = None;
+        store_session(self.secrets.as_ref(), &account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
         written.secret = Some(secret);
         self.clear_removal_pending();

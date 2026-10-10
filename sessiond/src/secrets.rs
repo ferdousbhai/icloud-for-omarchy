@@ -243,8 +243,12 @@ impl Open {
     }
 
     /// The secret of the first item in the default collection matching
-    /// `attributes`, unlocking them first if need be.
-    fn read(&self, attributes: &HashMap<&str, String>) -> zbus::Result<Option<Zeroizing<String>>> {
+    /// `attributes` that `take` accepts, unlocking them first if need be.
+    fn read<T>(
+        &self,
+        attributes: &HashMap<&str, String>,
+        take: impl Fn(&[u8]) -> Option<T>,
+    ) -> zbus::Result<Option<T>> {
         for item in self.search(&self.unlocked_default()?, attributes)? {
             if self.locked(&item, ITEM)? {
                 // Normally unlocked at login; otherwise the keyring asks.
@@ -252,8 +256,8 @@ impl Open {
             }
             let (_, _, value, _): Secret = self.call(&item, ITEM, "GetSecret", &(&self.session,))?;
             let value = Zeroizing::new(value);
-            if let Ok(text) = std::str::from_utf8(&value) {
-                return Ok(Some(Zeroizing::new(text.to_string())));
+            if let Some(taken) = take(&value) {
+                return Ok(Some(taken));
             }
         }
         Ok(None)
@@ -305,9 +309,13 @@ impl Open {
     }
 }
 
+fn utf8(value: &[u8]) -> Option<Zeroizing<String>> {
+    std::str::from_utf8(value).ok().map(|t| Zeroizing::new(t.to_string()))
+}
+
 impl SecretStore for Keyring {
     fn get(&self, apple_id: &str) -> Result<Option<Password>, String> {
-        self.run(|k| k.read(&attributes(apple_id)))
+        self.run(|k| k.read(&attributes(apple_id), utf8))
     }
 
     fn contains(&self, apple_id: &str) -> Result<bool, String> {
@@ -324,7 +332,14 @@ impl SecretStore for Keyring {
     }
 
     fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
-        self.run(|k| k.read(&session_attributes()))
+        // Whatever the item holds: one that is not UTF-8 is a damaged
+        // session (not JSON either, so the daemon reports it as such),
+        // never "no session".
+        self.run(|k| {
+            k.read(&session_attributes(), |v| {
+                Some(Zeroizing::new(String::from_utf8_lossy(v).into_owned()))
+            })
+        })
     }
 
     fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
@@ -340,6 +355,12 @@ impl SecretStore for Keyring {
 
 /// A JSON file standing in for the keyring in the tests:
 /// `[{"label", "attributes": {..}, "secret"}]`.
+///
+/// Test hook, for the tests only: while `<file>.empty-session-writes`
+/// holds a number N > 0, the next `set_session` stores an empty secret
+/// instead (as GNOME Keyring was once seen to) and the number goes down
+/// by one. It stands in for a keyring that loses a write without an
+/// error, so the tests can check that every write is read back.
 struct TestFile(PathBuf);
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -377,6 +398,24 @@ impl TestFile {
             secret: secret.to_string(),
         });
         self.save(&items)
+    }
+
+    /// Takes one write from `<file>.empty-session-writes` (see
+    /// [`TestFile`]): true if this one is to store an empty secret.
+    fn drop_session_write(&self) -> Result<bool, String> {
+        let mut path = self.0.clone().into_os_string();
+        path.push(".empty-session-writes");
+        let path = PathBuf::from(path);
+        let n: u32 = match std::fs::read_to_string(&path) {
+            Ok(text) => text.trim().parse().map_err(|e| format!("{}: {e}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        if n == 0 {
+            return Ok(false);
+        }
+        std::fs::write(&path, (n - 1).to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(true)
     }
 
     fn find(&self, attributes: &HashMap<&str, String>) -> Result<Option<Zeroizing<String>>, String> {
@@ -420,6 +459,7 @@ impl SecretStore for TestFile {
     }
 
     fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
+        let secret = if self.drop_session_write()? { "" } else { secret };
         self.put(session_label(apple_id), session_attributes(), secret)
     }
 
