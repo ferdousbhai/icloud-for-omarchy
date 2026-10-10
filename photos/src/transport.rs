@@ -81,10 +81,13 @@ pub trait Transport: Send + Sync {
     }
 }
 
-/// The sign-in banner's inputs: icloud-sessiond's `SignedIn` and `SigningIn`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The sign-in banner's inputs: icloud-sessiond's `SignedIn`, `SigningIn`
+/// and `SignOutReason`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignInState {
     pub signed_in: bool,
     /// The sign-in window is open.
     pub signing_in: bool,
+    /// Why the account was signed out, when the daemon says.
+    pub sign_out_reason: Option<String>,
 }

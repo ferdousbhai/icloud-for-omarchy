@@ -73,7 +73,7 @@ struct Spec {
 const char *const kFooter =
     "Global options: --json (JSON on stdout; an error is one JSON line on stderr,\n"
     "{\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}), --vault DIR (a vault other than\n"
-    "~/Documents/icloud-notes), --wait SECS (how long to wait for the vault's lock; 30 when\n"
+    "~/Documents/Notes), --wait SECS (how long to wait for the vault's lock; 30 when\n"
     "a background sync holds it, none while the Notes window holds it).\n"
     "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 3 push --dry-run\n"
     "has changes or diff found differences, 64 usage.";

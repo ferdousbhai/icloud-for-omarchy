@@ -8,7 +8,7 @@ to the command that does it, then fixes the conventions all the tools share.
 | Tool | Package | What it drives |
 |---|---|---|
 | `icloud-session` | icloud-session | the one Apple sign-in every app uses (D-Bus daemon, sign-in window) |
-| `icloud-notes <command>` | icloud-notes | the Notes app: the vault `~/Documents/icloud-notes`, its rules and its lock |
+| `icloud-notes <command>` | icloud-notes | the Notes app: the vault `~/Documents/Notes`, its rules and its lock |
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
@@ -234,7 +234,7 @@ Stable: fields are added, never renamed or removed without a note here.
 `status`, `sign-in`, `authorize-find-my`, `forget-password`, `sign-out`:
 
 ```json
-{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false}
+{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false,"sign_out_reason":null}
 ```
 
 `validate`: `{"dsid","apple_id","webservices":{"findme":"https://...",...}}`.

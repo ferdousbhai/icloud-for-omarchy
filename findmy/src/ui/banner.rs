@@ -1,7 +1,8 @@
 //! The "sign in" banner. It follows `icloud-sessiond`'s status through
 //! `icloud_session::watch_forever()` on one background thread: shown while signed
-//! out, "Signing in…" while the daemon's sign-in window is open, hidden (and
-//! the window refreshed) once the account is signed in. Its button calls
+//! out (saying why, when the daemon knows), "Signing in…" while the
+//! daemon's sign-in window is open, hidden (and the window refreshed) once
+//! the account is signed in. Its button calls
 //! `icloud_session::sign_in()`, which only asks the daemon to open the window.
 //!
 //! Find My can also want the Apple password again (HTTP 450) while the
@@ -46,7 +47,7 @@ struct State {
 /// How the banner looks: `None` hidden, else title, button and its action.
 #[derive(Debug, PartialEq, Eq)]
 struct View {
-    title: &'static str,
+    title: String,
     button: Option<(&'static str, Action)>,
 }
 
@@ -57,17 +58,20 @@ impl State {
         let find_my = self.find_my_needed && signed_in != Some(false);
         if signing_in {
             let title = if find_my { FIND_MY_WAITING } else { SIGNING_IN };
-            return Some(View { title, button: None });
+            return Some(View {
+                title: title.into(),
+                button: None,
+            });
         }
         if signed_in == Some(false) || self.sign_in_needed {
             return Some(View {
-                title: TITLE,
+                title: self.status.as_ref().map_or(TITLE.into(), |s| s.sign_in_prompt(TITLE)),
                 button: Some((BUTTON, Action::SignIn)),
             });
         }
         let stored = self.status.as_ref().is_some_and(|s| s.find_my_password_stored);
         find_my.then_some(View {
-            title: if stored { FIND_MY_TITLE } else { FIND_MY_TITLE_HINT },
+            title: if stored { FIND_MY_TITLE } else { FIND_MY_TITLE_HINT }.into(),
             button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
         })
     }
@@ -189,7 +193,7 @@ impl SignInBanner {
 fn render(banner: &adw::Banner, state: &State) {
     match state.view() {
         Some(view) => {
-            banner.set_title(view.title);
+            banner.set_title(&view.title);
             banner.set_button_label(view.button.map(|(label, _)| label));
             banner.set_revealed(true);
         }
@@ -211,6 +215,7 @@ mod tests {
             signing_in,
             find_my_authorized,
             find_my_password_stored: true,
+            sign_out_reason: None,
         }
     }
 
@@ -225,7 +230,7 @@ mod tests {
         assert_eq!(
             state.view(),
             Some(View {
-                title: FIND_MY_TITLE,
+                title: FIND_MY_TITLE.into(),
                 button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
             })
         );
@@ -234,7 +239,7 @@ mod tests {
         assert_eq!(
             state.view(),
             Some(View {
-                title: FIND_MY_WAITING,
+                title: FIND_MY_WAITING.into(),
                 button: None
             })
         );
@@ -256,10 +261,15 @@ mod tests {
         assert_eq!(
             state.view(),
             Some(View {
-                title: TITLE,
+                title: TITLE.into(),
                 button: Some((BUTTON, Action::SignIn)),
             })
         );
+        state.update(icloud_session::Status {
+            sign_out_reason: Some("Signed out of iCloud".into()),
+            ..status(false, false, false)
+        });
+        assert_eq!(state.view().unwrap().title, format!("Signed out of iCloud. {TITLE}"));
         state.update(status(false, true, false));
         assert_eq!(state.view().unwrap().title, SIGNING_IN);
         assert_eq!(state.update(status(true, false, false)), Change::SignedIn);
@@ -303,6 +313,7 @@ mod password_hint_tests {
             signing_in: false,
             find_my_authorized: false,
             find_my_password_stored: false,
+            sign_out_reason: None,
         };
         state.update(status.clone());
         state.find_my_needed = true;

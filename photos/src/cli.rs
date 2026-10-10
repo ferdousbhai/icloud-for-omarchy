@@ -218,7 +218,8 @@ pub fn main() -> ExitCode {
                     EXIT_SIGN_IN,
                     "sign_in_required",
                     format!(
-                        "{e}; run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)"
+                        "{}; run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)",
+                        icloud_session::sign_in_required_message()
                     ),
                 ),
                 Fail::Err(e) => (EXIT_ERROR, "error", e.to_string()),

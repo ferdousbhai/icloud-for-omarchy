@@ -35,7 +35,7 @@ tool takes its session from it and none signs in by itself.
 
 ```console
 $ icloud-session status
-{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false}
+{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false,"sign_out_reason":null}
 ```
 
 Needs a human, always:
@@ -59,7 +59,7 @@ few days ahead.
 
 ## Notes: `icloud-notes`
 
-Notes are Markdown files in `~/Documents/icloud-notes`, one folder per
+Notes are Markdown files in `~/Documents/Notes`, one folder per
 Notes folder, synced with iCloud. Always go through `icloud-notes`, never
 edit the files or run the sync engine (`icloud-notes-sync`, inside the
 icloud-notes package, off PATH) yourself: `icloud-notes` applies the app's

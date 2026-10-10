@@ -49,7 +49,8 @@ enum Command {
     ///
     /// The daemon's properties: signed_in, apple_id, full_name, dsid, expires_at (Unix
     /// seconds; null for a sign-in without "Keep me signed in"), signing_in,
-    /// find_my_authorized, find_my_password_stored.
+    /// find_my_authorized, find_my_password_stored, sign_out_reason (why the
+    /// account was last signed out; null while signed in or never signed in).
     #[command(after_help = AFTER_HELP)]
     Status,
     /// Open the sign-in window and wait for it, then print status.
@@ -227,7 +228,7 @@ fn fail(e: Error) -> ExitCode {
         Error::SignInRequired => fail_with(
             "sign_in_required",
             EXIT_SIGN_IN,
-            &message,
+            &icloud_session::sign_in_required_message(),
             Some("run `icloud-session sign-in` (a person signs in in the window)"),
         ),
         Error::FindMyAuthRequired => fail_with(
