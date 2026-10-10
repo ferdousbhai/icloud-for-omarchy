@@ -304,48 +304,6 @@ struct Written {
     secret: Option<Zeroizing<String>>,
 }
 
-/// How a session item read back after a write differs from what was
-/// written (`None`: it is what was written). Never its content.
-fn read_back_mismatch(written: &str, read: Option<&str>) -> Option<String> {
-    match read {
-        None => Some("the keyring has no session item after storing one".into()),
-        Some(read) if read != written => Some(format!(
-            "the keyring returned a different session than was stored ({} bytes, expected {})",
-            read.len(),
-            written.len()
-        )),
-        Some(read) => serde_json::from_str::<SessionSecret>(read)
-            .err()
-            .map(|e| format!("the session stored in the keyring does not parse: {e}")),
-    }
-}
-
-/// Stores the session's jars in the keyring and reads them back: what the
-/// keyring returns must be byte for byte what was written. A difference
-/// is logged and the write done once more; a second difference is an
-/// error, as a failed write is. (GNOME Keyring was seen to keep an empty
-/// secret after a replace that reported no error.)
-fn store_session(secrets: &dyn SecretStore, apple_id: &str, secret: &str) -> Result<(), String> {
-    let mut last = String::new();
-    for attempt in 0..2 {
-        secrets.set_session(apple_id, secret)?;
-        let read = secrets
-            .get_session()
-            .map_err(|e| format!("stored the session, but reading it back failed: {e}"))?;
-        let Some(why) = read_back_mismatch(secret, read.as_deref().map(String::as_str)) else {
-            if attempt > 0 {
-                eprintln!("icloud-sessiond: the keyring holds the session as stored after writing it again");
-            }
-            return Ok(());
-        };
-        if attempt == 0 {
-            eprintln!("icloud-sessiond: {why}; writing again");
-        }
-        last = why;
-    }
-    Err(format!("{last}, after writing it twice"))
-}
-
 /// The account `account.json` names, with its cookies from the keyring.
 /// A file from before the cookies moved to the keyring has them moved
 /// there, and is rewritten without them. `Err`: the keyring would not
@@ -368,7 +326,7 @@ fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Opt
     let secret = match stored.legacy_secret() {
         Some(legacy) => {
             let text = Zeroizing::new(serde_json::to_string(&legacy).expect("the session secret serializes"));
-            if let Err(e) = store_session(secrets, &stored.apple_id, &text) {
+            if let Err(e) = secrets.set_session(&stored.apple_id, &text) {
                 let why = format!("moving the session's cookies to the keyring: {e}");
                 return Err(Box::new(Unread { stored, why }));
             }
@@ -650,7 +608,7 @@ impl Daemon {
                 let secret = a.secret();
                 if written.secret.as_ref() != Some(&secret) {
                     written.secret = None;
-                    match store_session(self.secrets.as_ref(), &a.apple_id, &secret) {
+                    match self.secrets.set_session(&a.apple_id, &secret) {
                         Ok(()) => {
                             written.secret = Some(secret);
                             self.clear_removal_pending();
@@ -1420,9 +1378,9 @@ impl Daemon {
         // Into the keyring first: a sign-in that cannot be kept fails, and
         // says why, rather than lasting only until the daemon exits.
         let secret = account.secret();
-        // Unknown until the write is read back as written.
         written.secret = None;
-        store_session(self.secrets.as_ref(), &account.apple_id, &secret)
+        self.secrets
+            .set_session(&account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
         written.secret = Some(secret);
         self.clear_removal_pending();
