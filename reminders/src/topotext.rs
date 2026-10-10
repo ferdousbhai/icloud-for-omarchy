@@ -1,7 +1,8 @@
 //! A reminder's `TitleDocument` and `NotesDocument`: Apple's "topotext"
 //! mergeable string (the CRDT Notes uses too), as a protobuf
 //! `versioned_document.Document` whose first `Version.data` is a
-//! `topotext.String`, zlib-compressed and base64-encoded.
+//! `topotext.String`, compressed and base64-encoded: gzip as Apple's apps
+//! write it, or zlib as pyicloud does.
 //!
 //! The message layouts are timlaing/pyicloud's
 //! `services/reminders/protobuf/{versioned_document,reminders}.proto`
@@ -9,27 +10,32 @@
 //! plain text (`String.string`, field 2) and ignores the merge history;
 //! encoding writes the one-replica document pyicloud's
 //! `_encode_crdt_document` writes, which is what icloud.com accepts for a
-//! whole-text replacement.
+//! whole-text replacement, gzipped as Apple's are.
 
 use std::io::{Read, Write};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
+const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("unreadable text document: {0}")]
 pub struct DecodeError(&'static str);
 
 /// The text of a `TitleDocument` / `NotesDocument` field value: base64 of
-/// a zlib-compressed `Document { version: [Version { data: String }] }`,
-/// the layout pyicloud writes and its fixtures hold. Anything else is an
+/// a `Document { version: [Version { data: String }] }`, gzip-compressed
+/// (its magic number first) or else zlib-compressed. Anything else is an
 /// error.
 pub fn decode(b64: &str) -> Result<String, DecodeError> {
     let raw = STANDARD.decode(b64).map_err(|_| DecodeError("not base64"))?;
     let mut data = Vec::new();
-    flate2::read::ZlibDecoder::new(raw.as_slice())
-        .read_to_end(&mut data)
-        .map_err(|_| DecodeError("not zlib-compressed"))?;
+    let read = if raw.starts_with(GZIP_MAGIC) {
+        flate2::read::GzDecoder::new(raw.as_slice()).read_to_end(&mut data)
+    } else {
+        flate2::read::ZlibDecoder::new(raw.as_slice()).read_to_end(&mut data)
+    };
+    read.map_err(|_| DecodeError("neither gzip- nor zlib-compressed"))?;
     field(&data, 2)
         .and_then(|version| field(version, 3))
         .and_then(text_of)
@@ -95,7 +101,7 @@ pub fn encode(text: &str) -> String {
     put_varint_field(&mut document, 1, 0);
     put_bytes_field(&mut document, 2, &version);
 
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut z = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     z.write_all(&document).expect("writing to memory");
     STANDARD.encode(z.finish().expect("writing to memory"))
 }
@@ -185,6 +191,24 @@ mod tests {
     }
 
     #[test]
+    fn decodes_gzipped_documents() {
+        // Apple's apps gzip the same Document pyicloud zlib-compresses.
+        let zlib = STANDARD
+            .decode("eJzjYBCS4GAQYJASEhJwy6woKS1KVQhKzc3MS0ktAgBBdwbW")
+            .unwrap();
+        let mut doc = Vec::new();
+        flate2::read::ZlibDecoder::new(zlib.as_slice())
+            .read_to_end(&mut doc)
+            .unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&doc).unwrap();
+        assert_eq!(
+            decode(&STANDARD.encode(gz.finish().unwrap())).unwrap(),
+            "Fixture Reminder"
+        );
+    }
+
+    #[test]
     fn round_trips_any_text() {
         for text in ["", "Milk", "Call Ånne 📞 at 5", "two\nlines", &"x".repeat(5000)] {
             assert_eq!(decode(&encode(text)).unwrap(), text, "{text:?}");
@@ -197,8 +221,9 @@ mod tests {
         // serialized by protoc (`--encode=topotext.String` on its
         // reminders.proto) and wrapped in Version and Document.
         let encoded = STANDARD.decode(encode("Milk")).unwrap();
+        assert!(encoded.starts_with(GZIP_MAGIC));
         let mut doc = Vec::new();
-        flate2::read::ZlibDecoder::new(encoded.as_slice())
+        flate2::read::GzDecoder::new(encoded.as_slice())
             .read_to_end(&mut doc)
             .unwrap();
         let hex: String = doc.iter().map(|b| format!("{b:02x}")).collect();

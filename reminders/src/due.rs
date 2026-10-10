@@ -164,8 +164,15 @@ fn parse_time(s: &str) -> Option<Time> {
     Time::new(h.parse().ok()?, m.parse().ok()?, 0, 0).ok()
 }
 
-/// The machine's zone (`TZ`, else `/etc/localtime`).
+/// The machine's zone: `TZ`, else `/etc/localtime`, else UTC, as for every
+/// other program (localtime(5): no `/etc/localtime` is UTC; Omarchy leaves
+/// it out until a zone is picked).
 pub fn local_zone() -> Result<TimeZone, String> {
+    let unset = std::env::var_os("TZ").is_none()
+        && std::fs::symlink_metadata("/etc/localtime").is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+    if unset {
+        return Ok(TimeZone::UTC);
+    }
     TimeZone::try_system().map_err(|e| format!("cannot tell this machine's time zone (set TZ or /etc/localtime): {e}"))
 }
 

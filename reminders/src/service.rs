@@ -42,8 +42,17 @@ pub struct SyncReport {
 impl SyncReport {
     /// The skipped records as one line, for stderr, a toast or `warning`.
     pub fn warning(&self) -> Option<String> {
-        (!self.skipped.is_empty())
-            .then(|| format!("skipped {} unreadable record(s): {}", self.skipped.len(), self.skipped.join("; ")))
+        // A few to look up, not one per record: a format change can skip
+        // them all.
+        const SHOWN: usize = 3;
+        (!self.skipped.is_empty()).then(|| {
+            let more = match self.skipped.len().saturating_sub(SHOWN) {
+                0 => String::new(),
+                n => format!("; and {n} more"),
+            };
+            let shown = &self.skipped[..self.skipped.len().min(SHOWN)];
+            format!("skipped {} unreadable record(s): {}{more}", self.skipped.len(), shown.join("; "))
+        })
     }
 }
 
