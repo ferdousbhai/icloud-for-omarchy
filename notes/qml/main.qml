@@ -587,6 +587,30 @@ ApplicationWindow {
             }
         }
 
+        // The notes folder could not move to ~/Documents/Notes: a folder of
+        // the user's own is there. Gone once they move it and restart.
+        Rectangle {
+            visible: backend.vaultNotice.length > 0
+            Layout.fillWidth: true
+            Layout.margins: 10
+            implicitHeight: vaultNoticeRow.implicitHeight + 20
+            radius: 8
+            color: root.colRaised
+            RowLayout {
+                id: vaultNoticeRow
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 12
+                Glyph { text: ""; color: root.colYellow }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: root.colTextDim
+                    text: backend.vaultNotice
+                }
+            }
+        }
+
         // One banner for the sign-in: expired, too short to last (a phone QR
         // sign-in never offers "Keep me signed in"), or lapsing within days.
         Rectangle {
@@ -1669,7 +1693,7 @@ ApplicationWindow {
             Label {
                 Layout.preferredWidth: 380
                 wrapMode: Text.WordWrap
-                text: "This downloads all your Apple Notes into ~/Documents/icloud-notes as Markdown, one file per note with the title as its first line, like in Notes. "
+                text: "This downloads all your Apple Notes into ~/Documents/Notes as Markdown, one file per note with the title as its first line, like in Notes. "
                       + (backend.signedIn ? "It uses the iCloud account signed in on this computer, " + backend.appleId + ". "
                                           : "Apple's own sign-in window opens first (password and 2FA stay on Apple's pages); the sign-in is shared with the other iCloud apps. ")
                       + "Apple Notes must not use Advanced Data Protection, because icloud-notes-sync cannot decrypt it."

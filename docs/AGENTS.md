@@ -59,7 +59,7 @@ few days ahead.
 
 ## Notes: `icloud-notes`
 
-Notes are Markdown files in `~/Documents/icloud-notes`, one folder per
+Notes are Markdown files in `~/Documents/Notes`, one folder per
 Notes folder, synced with iCloud. Always go through `icloud-notes`, never
 edit the files or run the sync engine (`icloud-notes-sync`, inside the
 icloud-notes package, off PATH) yourself: `icloud-notes` applies the app's

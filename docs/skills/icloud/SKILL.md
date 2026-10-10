@@ -32,7 +32,7 @@ asking (it prompts on a terminal, or reads stdin: `bw get password "Apple
 ID" | icloud-session set-password`, or `op read "op://…/password" |
 icloud-session set-password`). Never try to sign in yourself.
 
-## Notes: `icloud-notes` (vault `~/Documents/icloud-notes`)
+## Notes: `icloud-notes` (vault `~/Documents/Notes`)
 
 Go through `icloud-notes`, not the files or its sync engine (`icloud-notes-sync`,
 off PATH). NOTE = vault

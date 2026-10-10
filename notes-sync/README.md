@@ -86,7 +86,7 @@ a snapshot a kept epoch names is never dropped. Pruning happens when a
 version is recorded, and touches only that note's directories. Recording
 reads only the latest snapshot's file. status and push --dry-run record no
 history. `vault-info` prints what the app reads from the vault's state,
-`stateDir` included. In the vault Notes syncs (`~/Documents/icloud-notes`),
+`stateDir` included. In the vault Notes syncs (`~/Documents/Notes`),
 use `icloud-notes` (see [docs/AGENTS.md](../docs/AGENTS.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the
