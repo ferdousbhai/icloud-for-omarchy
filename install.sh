@@ -190,10 +190,10 @@ echo
 echo "Done."
 for pkg in "${wanted[@]}"; do
   case $pkg in
-    icloud-notes) echo 'Launch "Notes (iCloud)" from the app launcher (Super + Space).' ;;
-    icloud-photos) echo 'Launch "Photos (iCloud)" from the app launcher (Super + Space).' ;;
-    icloud-findmy) echo 'Launch "Find My (iCloud)" from the app launcher (Super + Space).' ;;
-    icloud-reminders) echo 'Launch "Reminders (iCloud)" from the app launcher (Super + Space).' ;;
+    icloud-notes) echo 'Launch "Notes" from the app launcher (Super + Space).' ;;
+    icloud-photos) echo 'Launch "Photos" from the app launcher (Super + Space).' ;;
+    icloud-findmy) echo 'Launch "Find My" from the app launcher (Super + Space).' ;;
+    icloud-reminders) echo 'Launch "Reminders" from the app launcher (Super + Space).' ;;
   esac
 done
 cat <<EOT

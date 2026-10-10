@@ -1,4 +1,4 @@
-//! `icloud-photos-app`: the iCloud Photos window (`src/ui/`, GTK 4 and
+//! `icloud-photos-app`: the Photos window (`src/ui/`, GTK 4 and
 //! libadwaita). `icloud-photos` with no arguments runs this; the desktop
 //! entry starts it directly. Commands live in `icloud-photos` (`src/cli.rs`).
 
@@ -10,7 +10,7 @@ const APP_ID: &str = "com.ferdousbhai.IcloudPhotos";
 
 fn main() -> gtk::glib::ExitCode {
     gtk::glib::set_prgname(Some("icloud-photos"));
-    gtk::glib::set_application_name("iCloud Photos");
+    gtk::glib::set_application_name("Photos");
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {
         let css = gtk::CssProvider::new();

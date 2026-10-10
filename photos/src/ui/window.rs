@@ -139,7 +139,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
 
     let window = adw::ApplicationWindow::builder()
         .application(application)
-        .title("iCloud Photos")
+        .title("Photos")
         .default_width(1100)
         .default_height(760)
         .build();
@@ -170,7 +170,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     menu.append(Some("Sync Now"), Some("win.refresh"));
     menu.append(Some("Upload…"), Some("win.upload"));
     menu.append(Some("Preferences"), Some("win.preferences"));
-    menu.append(Some("About iCloud Photos"), Some("win.about"));
+    menu.append(Some("About Photos"), Some("win.about"));
     sidebar_header.pack_end(
         &gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -353,7 +353,7 @@ impl App {
             "about",
             Box::new(move || {
                 adw::AboutDialog::builder()
-                    .application_name("iCloud Photos")
+                    .application_name("Photos")
                     .application_icon("com.ferdousbhai.IcloudPhotos")
                     .developer_name("Ferdous Bhai")
                     .version(env!("CARGO_PKG_VERSION"))
