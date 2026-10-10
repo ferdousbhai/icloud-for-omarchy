@@ -19,8 +19,8 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
 
 /// The XDG Pictures directory, read from `user-dirs.dirs` as Qt's
 /// PicturesLocation reads it (Notes' vault sits in DocumentsLocation the
-/// same way); `~/Pictures` without one.
-fn pictures() -> PathBuf {
+/// same way); `~/Pictures` without one. The library's default home.
+pub fn pictures() -> PathBuf {
     let file = xdg("XDG_CONFIG_HOME", ".config").join("user-dirs.dirs");
     std::fs::read_to_string(file)
         .ok()
@@ -103,24 +103,31 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            library_dir: pictures().join("icloud-photos"),
+            library_dir: pictures(),
             download: DownloadMode::OnDemand,
         }
     }
 }
 
 impl Settings {
+    /// The saved settings, or the defaults; first moving a library still
+    /// in the old default folder into the Pictures folder (`migrate`), so
+    /// the app and the command line never use the old place.
     pub fn load(dirs: &Dirs) -> Settings {
-        Settings::load_or(dirs, Settings::default())
+        crate::migrate::run(dirs, &pictures())
+    }
+
+    /// The saved settings, if any could be read.
+    pub fn saved(dirs: &Dirs) -> Option<Settings> {
+        std::fs::read(dirs.settings())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
     }
 
     /// The saved settings, or `fallback` when there are none (the CLI's
     /// `--data-dir` keeps the library under that directory too).
     pub fn load_or(dirs: &Dirs, fallback: Settings) -> Settings {
-        std::fs::read(dirs.settings())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(fallback)
+        Settings::saved(dirs).unwrap_or(fallback)
     }
 
     pub fn save(&self, dirs: &Dirs) -> std::io::Result<()> {

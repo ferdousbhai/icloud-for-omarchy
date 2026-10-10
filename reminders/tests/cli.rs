@@ -424,7 +424,7 @@ fn background_notifies_once_when_due() {
     let shown = env.notifications();
     assert_eq!(shown.len(), 1);
     let args = &shown[0];
-    assert_eq!(args[..6], ["--app-name", "iCloud Reminders", "-g", "󰢌", "-u", "normal"]);
+    assert_eq!(args[..6], ["--app-name", "Reminders", "-g", "󰢌", "-u", "normal"]);
     assert_eq!(args[6], "Bread");
     assert!(args[7].starts_with("Groceries · "), "{args:?}");
     assert_eq!(args[8..], ["--exec", "icloud-reminders-app"]);

@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod cloudkit;
 pub mod config;
+pub mod migrate;
 pub mod session;
 pub mod sync;
 pub mod thumbs;

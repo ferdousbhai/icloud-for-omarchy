@@ -47,9 +47,12 @@ target/release/icloud-photos       # or target/release/icloud-photos-app
   between photos. The viewer shows iCloud's large preview; Live Photos and
   videos are marked.
 - **Download** (`Ctrl+S` in the viewer) saves the original to
-  `~/Pictures/icloud-photos/<year>/<month>/`, keeping Apple's file name (a second
+  `~/Pictures/<year>/<month>/`, keeping Apple's file name (a second
   `IMG_0001.HEIC` from the same month becomes `IMG_0001 (2).HEIC`). A Live
-  Photo brings its video half along as the matching `.MOV`.
+  Photo brings its video half along as the matching `.MOV`. A download never
+  replaces a file already there, and the app never deletes, renames or
+  uploads anything in the folder that it did not download (your screenshots,
+  for one).
 - **Open** (`Ctrl+O`) downloads the original if needed and opens it in your
   default app. Videos play this way.
 - **Delete** (`Del`) moves the photo to Recently Deleted in iCloud, on every
@@ -113,12 +116,22 @@ window, when given no arguments; the desktop entry starts
 
 | what | where |
 |---|---|
-| originals you downloaded | `~/Pictures/icloud-photos/` (changeable in Preferences) |
+| originals you downloaded | `~/Pictures/<year>/<month>/` (the folder is changeable in Preferences) |
 | catalog (what is in your library) | `~/.local/share/icloud-photos/catalog.db` |
 | thumbnails and viewer previews | `~/.cache/icloud-photos/{thumbs,medium}/` |
 | preferences | `~/.config/icloud-photos/settings.json` |
 
 Deleting the cache or the catalog is safe: the next sync fetches them again.
+
+**Upgrading**: originals used to go to
+`~/Pictures/icloud-photos/`. The first start after the update (app or
+command line) moves what is there up into `~/Pictures/`, by renaming only
+(nothing is copied or replaced), and updates the catalog to match. Where a
+folder already exists in `~/Pictures` (a year folder, say) the two are
+merged; a file whose name is already taken stays in
+`~/Pictures/icloud-photos/` and is listed on stderr. The old folder is
+removed once empty. A library folder you chose yourself in Preferences is
+left where it is.
 
 ## What has and has not been checked against Apple
 

@@ -41,7 +41,7 @@ fn browse_download_delete_upload_and_resync() {
     // A thumb is a real JPEG from the fake content host.
     let targets = Targets {
         dirs: dirs.clone(),
-        library: root.join("Pictures/icloud-photos"),
+        library: root.join("Pictures"),
     };
     let thumb = fetch(&t, &cat, &targets, &newest.id, Job::Thumb).unwrap();
     assert_eq!(&std::fs::read(&thumb).unwrap()[..2], b"\xFF\xD8");

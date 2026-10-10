@@ -19,7 +19,7 @@ use crate::store::{Cache, Notified};
 /// How late a notification may still come.
 pub const CATCH_UP_MS: i64 = 12 * 3600 * 1000;
 const GLYPH: &str = "󰢌";
-const APP_NAME: &str = "iCloud Reminders";
+const APP_NAME: &str = "Reminders";
 
 /// The reminders to notify about now, oldest due first, and the state
 /// that records them (and forgets reminders that no longer wait).
