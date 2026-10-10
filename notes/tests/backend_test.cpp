@@ -1136,6 +1136,40 @@ int main(int argc, char *argv[])
         check(g_logged.size() == 1 && g_logged.first().contains(docs + QStringLiteral("/icloud-notes"))
                   && g_logged.first().contains(QStringLiteral("by hand")),
               "vault move: both, a warning names the old folder");
+        check(NotesBackend::vaultNotice().isEmpty(), "vault move: both vaults, no banner");
+
+        // An empty Notes (made by hand, or by another app): replaced by the vault.
+        docs = documents();
+        writeFile(vaultFile, QStringLiteral("old"), docs + QStringLiteral("/icloud-notes"));
+        QDir().mkpath(docs + QStringLiteral("/Notes"));
+        g_logged.clear();
+        vault = NotesBackend::moveOldVault(docs);
+        check(vault == docs + QStringLiteral("/Notes") && readFile(vaultFile, vault) == QStringLiteral("old")
+                  && !QFileInfo::exists(docs + QStringLiteral("/icloud-notes")) && g_logged.size() == 1
+                  && g_logged.first().contains(QStringLiteral("moved")),
+              "vault move: an empty Notes is replaced by the old vault");
+
+        // A Notes of the user's own (not a vault): the old vault stays in
+        // use, nothing is touched, and the banner and log say what to do.
+        docs = documents();
+        writeFile(vaultFile, QStringLiteral("old"), docs + QStringLiteral("/icloud-notes"));
+        writeFile(QStringLiteral("shopping.txt"), QStringLiteral("eggs"), docs + QStringLiteral("/Notes"));
+        g_logged.clear();
+        vault = NotesBackend::moveOldVault(docs);
+        check(vault == docs + QStringLiteral("/icloud-notes") && readFile(vaultFile, vault) == QStringLiteral("old")
+                  && readFile(QStringLiteral("shopping.txt"), docs + QStringLiteral("/Notes")) == QStringLiteral("eggs")
+                  && !QFileInfo::exists(docs + QStringLiteral("/Notes/.icloud-notes")),
+              "vault move: Notes not a vault, the old vault kept and both untouched");
+        check(g_logged.size() == 1 && g_logged.first().contains(QStringLiteral("isn't a Notes vault"))
+                  && NotesBackend::vaultNotice().contains(docs + QStringLiteral("/icloud-notes"))
+                  && NotesBackend::vaultNotice().contains(QStringLiteral("restart")),
+              "vault move: Notes not a vault, warned and shown in the banner");
+        QFile::remove(docs + QStringLiteral("/Notes/shopping.txt"));
+        QDir().rmdir(docs + QStringLiteral("/Notes"));
+        check(NotesBackend::moveOldVault(docs) == docs + QStringLiteral("/Notes")
+                  && readFile(vaultFile, docs + QStringLiteral("/Notes")) == QStringLiteral("old")
+                  && NotesBackend::vaultNotice().isEmpty(),
+              "vault move: done by the restart once that folder is moved away");
 
         // Only Notes (and neither): nothing moved, made or logged.
         docs = documents();

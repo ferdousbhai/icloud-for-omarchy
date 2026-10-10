@@ -587,6 +587,30 @@ ApplicationWindow {
             }
         }
 
+        // The notes folder could not move to ~/Documents/Notes: a folder of
+        // the user's own is there. Gone once they move it and restart.
+        Rectangle {
+            visible: backend.vaultNotice.length > 0
+            Layout.fillWidth: true
+            Layout.margins: 10
+            implicitHeight: vaultNoticeRow.implicitHeight + 20
+            radius: 8
+            color: root.colRaised
+            RowLayout {
+                id: vaultNoticeRow
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 12
+                Glyph { text: ""; color: root.colYellow }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: root.colTextDim
+                    text: backend.vaultNotice
+                }
+            }
+        }
+
         // One banner for the sign-in: expired, too short to last (a phone QR
         // sign-in never offers "Keep me signed in"), or lapsing within days.
         Rectangle {

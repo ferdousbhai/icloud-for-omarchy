@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -349,19 +350,41 @@ QString NotesBackend::rootPath()
 // never pulls the vault from under a run that has it open: a Notes window
 // of the earlier release still running after the update, its engine, or a
 // second process moving it at the same moment (which, once it has the
-// lock, finds the old folder gone). While the old vault stays busy past
-// busyWaitMs, or the rename fails, this process keeps to the old folder and
-// the next start tries again: the move is put off, never half done.
-// RENAME_NOREPLACE leaves a Notes folder that appeared meanwhile alone.
+// lock, finds the old folder gone). "Notes" is a common folder name, so one
+// already there is looked at: empty, it is removed and the vault takes its
+// place; a folder of the user's own (not a vault) while the old folder is
+// one, the vault stays where it is, and the window shows why (the
+// vaultNotice banner); both vaults, Notes wins and the old one is named for
+// merging by hand. While the old vault stays busy past busyWaitMs, Notes
+// is someone else's folder, or the rename fails, this process keeps to the
+// old folder and the next start tries again: the move is put off, never
+// half done. RENAME_NOREPLACE leaves a Notes folder that appeared meanwhile
+// alone.
 QString NotesBackend::moveOldVault(const QString &documents, int busyWaitMs)
 {
+    s_vaultNotice.clear();
     const QString oldVault = documents + QStringLiteral("/icloud-notes");
     const QString newVault = documents + QStringLiteral("/Notes");
-    const auto newExists = [&] {
-        const QFileInfo info(newVault);
-        return info.exists() || info.isSymLink();
+    const auto isVault = [](const QString &dir) {
+        return QFileInfo(dir + QStringLiteral("/.icloud-notes")).isDir()
+            || QFileInfo(dir + QStringLiteral("/.icloud-md")).isDir(); // layout 3
     };
-    const auto both = [&] {
+    // What is at Notes: nothing (or an empty directory, which the move
+    // replaces), or a folder that stops it. For the latter, the vault to use.
+    const auto blockedBy = [&]() -> std::optional<QString> {
+        const QFileInfo info(newVault);
+        if (!info.exists() && !info.isSymLink())
+            return std::nullopt;
+        if (info.isDir() && !info.isSymLink()
+            && QDir(newVault).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System))
+            return std::nullopt;
+        if (!isVault(newVault) && isVault(oldVault)) {
+            s_vaultNotice = QStringLiteral("%1 already exists and isn't a Notes vault; keeping %2. Move or rename "
+                                           "that folder and restart to finish the move.")
+                                .arg(newVault, oldVault);
+            qWarning("icloud-notes: %s", qPrintable(s_vaultNotice));
+            return oldVault;
+        }
         qWarning("icloud-notes: both %s and %s exist; using %s. %s is the notes folder of an earlier "
                  "release, left untouched: merge it into %s by hand, then remove it.",
                  qPrintable(oldVault), qPrintable(newVault), qPrintable(newVault), qPrintable(oldVault),
@@ -370,8 +393,8 @@ QString NotesBackend::moveOldVault(const QString &documents, int busyWaitMs)
     };
     if (!QFileInfo(oldVault).isDir())
         return newVault;
-    if (newExists())
-        return both();
+    if (const auto use = blockedBy())
+        return *use;
 
     VaultLock lock(lockPathFor(oldVault));
     const QString owner = QStringLiteral("Notes moving its folder (pid %1)").arg(QCoreApplication::applicationPid());
@@ -394,16 +417,18 @@ QString NotesBackend::moveOldVault(const QString &documents, int busyWaitMs)
     // Whoever held the lock may have moved it, or made Notes, meanwhile.
     if (!QFileInfo(oldVault).isDir())
         return newVault;
-    if (newExists())
-        return both();
+    if (const auto use = blockedBy())
+        return *use;
     const QByteArray from = QFile::encodeName(oldVault);
     const QByteArray to = QFile::encodeName(newVault);
+    ::rmdir(to.constData()); // an empty Notes; one that filled meanwhile stays, and stops the rename
     int moved = ::renameat2(AT_FDCWD, from.constData(), AT_FDCWD, to.constData(), RENAME_NOREPLACE);
     if (moved != 0 && errno == EINVAL) // a filesystem without RENAME_NOREPLACE
         moved = ::rename(from.constData(), to.constData());
     if (moved != 0) {
         if (errno == EEXIST || errno == ENOTEMPTY)
-            return both();
+            if (const auto use = blockedBy())
+                return *use;
         qWarning("icloud-notes: cannot move %s to %s (%s). Using %s until a later start moves it.",
                  qPrintable(oldVault), qPrintable(newVault), strerror(errno), qPrintable(oldVault));
         return oldVault;

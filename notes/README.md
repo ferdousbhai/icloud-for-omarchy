@@ -8,11 +8,14 @@ both ways with iCloud. (`~/Documents` is your documents folder,
 **Upgrading from an earlier release:** the notes folder used to be
 `~/Documents/icloud-notes`. The first start after the update (the app,
 `icloud-notes`, or the background sync) renames it to `~/Documents/Notes`
-in place, once; nothing is copied or downloaded again. If a
-`~/Documents/Notes` already exists, neither folder is touched: Notes uses
-`~/Documents/Notes` and logs a warning naming the old folder, for you to
-merge by hand. While a Notes window of the earlier release is still open,
-the move waits for a later start.
+in place, once; nothing is copied or downloaded again. An empty
+`~/Documents/Notes` is replaced. A `~/Documents/Notes` of your own (not a
+notes vault) stops the move: Notes keeps using `~/Documents/icloud-notes`
+and says so in a banner until you move that folder away and restart. If
+both are vaults, neither is touched: Notes uses `~/Documents/Notes` and
+logs a warning naming the old folder, for you to merge by hand. While a
+Notes window of the earlier release is still open, the move waits for a
+later start.
 
 ## Requirements
 

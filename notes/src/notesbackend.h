@@ -42,6 +42,7 @@ class NotesBackend : public QObject
     // editable. A read-only note opens locked: edits could never sync.
     Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY noteContentChanged)
     Q_PROPERTY(QString syncMessage READ syncMessage NOTIFY syncMessageChanged)
+    Q_PROPERTY(QString vaultNotice READ vaultNotice CONSTANT)
     Q_PROPERTY(QString syncLog READ syncLog NOTIFY syncLogChanged)
     Q_PROPERTY(bool syncRunning READ syncRunning NOTIFY syncRunningChanged)
     // The iCloud sign-in is gone (icloud-session says signed out, or
@@ -95,10 +96,18 @@ public:
     static QString rootPath();
     // The default vault in documents, <documents>/Notes, after moving the
     // <documents>/icloud-notes of earlier releases there, once, when Notes
-    // does not exist yet (when both do: Notes, and a warning). Logs what it
-    // did. The old folder only while it cannot be moved (busy past
-    // busyWaitMs, or the rename failed), so that a later start tries again.
+    // does not exist yet or is an empty directory (when both are vaults:
+    // Notes, and a warning). Logs what it did. The old folder only while it
+    // cannot be moved (busy past busyWaitMs, Notes is a folder of the
+    // user's own, or the rename failed), so that a later start tries again.
     static QString moveOldVault(const QString &documents, int busyWaitMs = 2000);
+    // Why the vault was not moved, when the user has to act (Notes is a
+    // folder of their own): one line for the window's banner, else empty.
+    static QString vaultNotice()
+    {
+        rootPath();
+        return s_vaultNotice;
+    }
     // The lock the app, background syncs, command line changes and
     // icloud-notes-sync share for the vault: $XDG_RUNTIME_DIR/
     // icloud-notes-<FNV-1a 64 of the vault's canonical path>.lock (see
@@ -292,6 +301,7 @@ signals:
     void themeChanged();
 
 private:
+    static inline QString s_vaultNotice;
     // Sync: runSync's `--json sync`, whose stdout holds both halves.
     enum class Mode { Plain, Preview, History, Diff, Sync };
 
