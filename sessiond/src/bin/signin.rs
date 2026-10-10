@@ -618,9 +618,17 @@ fn main() -> ExitCode {
         decision.ignore();
         true
     });
-    view.connect_web_process_terminated(|_, reason| {
-        eprintln!("icloud-session-signin: the web process ended ({reason:?})");
-    });
+    {
+        // A dead web process leaves a blank window that can never finish:
+        // end with failure so the caller reports it rather than waiting.
+        let capture = capture.clone();
+        view.connect_web_process_terminated(move |_, reason| {
+            eprintln!("icloud-session-signin: the web process ended ({reason:?})");
+            if !capture.done.replace(true) {
+                capture.main_loop.quit();
+            }
+        });
+    }
     {
         let capture = capture.clone();
         view.connect_load_changed(move |view, event| {
