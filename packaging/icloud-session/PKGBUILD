@@ -18,7 +18,9 @@ options=('!debug' '!lto')
 # glibc and gcc-libs; the session bus itself is every desktop's. The sign-in
 # window links gtk4, webkitgtk-6.0 and glib2. The session's cookies live in
 # the Secret Service, so one must be installed (gnome-keyring provides it).
-depends=('gtk4' 'webkitgtk-6.0' 'glib2' 'gcc-libs' 'glibc' 'org.freedesktop.secrets')
+# WebKitGTK's web process aborts on icloud.com without GStreamer's
+# autoaudiosink, which webkitgtk-6.0 leaves optional (gst-plugins-good).
+depends=('gtk4' 'webkitgtk-6.0' 'gst-plugins-good' 'glib2' 'gcc-libs' 'glibc' 'org.freedesktop.secrets')
 makedepends=('rust' 'cargo' 'git')
 checkdepends=('dbus')
 
