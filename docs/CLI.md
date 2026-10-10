@@ -328,3 +328,4 @@ reminders first; LIST an ID or a name. IDs are the records' UUIDs.
 | (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
 | `sync` | `{lists, reminders, changed, full}` |
 | `background` | `{synced, sync_error, notified:[{id, title}]}` |
+| (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; still exit 0 |

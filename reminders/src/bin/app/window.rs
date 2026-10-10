@@ -179,18 +179,22 @@ impl Window {
             move || {
                 let dir = dir.ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))?;
                 let svc = Service::new(&*t, Store::new(dir));
-                svc.sync(false)?;
-                svc.cache()
+                let warning = svc.sync(false)?.warning();
+                Ok::<_, Error>((svc.cache()?, warning))
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
                 this.syncing.set(false);
                 match result {
-                    Ok(Ok(cache)) => {
+                    Ok(Ok((cache, warning))) => {
                         this.banner.hide();
-                        *this.last_error.borrow_mut() = None;
                         *this.cache.borrow_mut() = cache;
                         this.show_lists();
+                        // Skipped records: toasted once, like an error.
+                        match warning {
+                            Some(w) => this.error(&w),
+                            None => *this.last_error.borrow_mut() = None,
+                        }
                     }
                     Ok(Err(Error::SignInRequired)) => this.banner.show(),
                     Ok(Err(e)) => this.error(&e.to_string()),

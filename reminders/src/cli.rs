@@ -36,7 +36,9 @@ followed by a time (\"tomorrow 9:00\"), a time alone (17:30, today), or
 +30m, +2h, +3d.
 
 Reading commands sync first and fail with offline without a network;
---cached reads what the last sync left instead.
+--cached reads what the last sync left instead. A record this version
+cannot read is skipped, named on stderr (and as warning in sync's and
+background's JSON), and kept as last synced; the rest syncs.
 
 With --json, stdout is only the JSON result and an error is one JSON line
 on stderr: {\"error\":{\"code\",\"message\",\"exit_code\"}}; codes: usage,
@@ -169,7 +171,7 @@ enum Command {
     },
     /// Fetch what changed in iCloud.
     ///
-    /// JSON: {lists, reminders, changed, full}
+    /// JSON: {lists, reminders, changed, full, warning?}
     #[command(after_help = AFTER_HELP)]
     Sync {
         /// Fetch every reminder again, not only the changes.
@@ -182,7 +184,7 @@ enum Command {
     /// A sync that cannot run (signed out, offline) is reported and the
     /// notifications still come from the cache; that exits 0.
     ///
-    /// JSON: {synced, sync_error, notified: [{id, title}]}
+    /// JSON: {synced, sync_error, notified: [{id, title}], warning?}
     #[command(after_help = AFTER_HELP)]
     Background {
         /// Sync even if the last sync is recent.
@@ -302,8 +304,10 @@ impl Cli<'_> {
 
     /// The cache after a sync, or as the last sync left it with `--cached`.
     fn fresh(&self) -> Result<Cache, Failure> {
-        if !self.cached {
-            self.svc.sync(false)?;
+        if !self.cached
+            && let Some(w) = self.svc.sync(false)?.warning()
+        {
+            eprintln!("{TOOL}: {w}");
         }
         Ok(self.svc.cache()?)
     }
@@ -469,18 +473,17 @@ impl Cli<'_> {
 
     fn sync(&self, full: bool) -> Outcome {
         let report = self.svc.sync(full)?;
-        self.print(
-            json!({ "lists": report.lists, "reminders": report.reminders, "changed": report.changed, "full": report.full }),
-            || {
-                format!(
-                    "Synced: {} lists, {} reminders ({} changed{})\n",
-                    report.lists,
-                    report.reminders,
-                    report.changed,
-                    if report.full { ", full" } else { "" }
-                )
-            },
-        );
+        let mut out = json!({ "lists": report.lists, "reminders": report.reminders, "changed": report.changed, "full": report.full });
+        warn(&mut out, report.warning());
+        self.print(out, || {
+            format!(
+                "Synced: {} lists, {} reminders ({} changed{})\n",
+                report.lists,
+                report.reminders,
+                report.changed,
+                if report.full { ", full" } else { "" }
+            )
+        });
         Ok(())
     }
 
@@ -493,9 +496,13 @@ impl Cli<'_> {
         let attempted = (force_sync || stale).then(service::now_ms);
         let mut synced = false;
         let mut sync_error = None;
+        let mut warning = None;
         if attempted.is_some() {
             match self.svc.sync(false) {
-                Ok(_) => synced = true,
+                Ok(report) => {
+                    synced = true;
+                    warning = report.warning();
+                }
                 Err(e) => {
                     eprintln!("{TOOL}: not synced: {e}");
                     sync_error = Some(e.to_string());
@@ -523,10 +530,9 @@ impl Cli<'_> {
             .save_notified(&state)
             .map_err(|e| Failure::Other(format!("cannot save notified.json: {e}")))?;
         let count = notified.len();
-        self.print(
-            json!({ "synced": synced, "sync_error": sync_error, "notified": notified }),
-            || if count > 0 { format!("Notified about {count} reminder(s)\n") } else { String::new() },
-        );
+        let mut out = json!({ "synced": synced, "sync_error": sync_error, "notified": notified });
+        warn(&mut out, warning);
+        self.print(out, || if count > 0 { format!("Notified about {count} reminder(s)\n") } else { String::new() });
         Ok(())
     }
 }
@@ -551,8 +557,8 @@ fn bare(id: &str) -> &str {
     id.split_once('/').map_or(id, |(_, rest)| rest)
 }
 
-/// A write that happened but left a problem behind: on stderr, and as
-/// `warning` in the JSON. The command still succeeds.
+/// A write or sync that happened but left a problem behind: on stderr, and
+/// as `warning` in the JSON. The command still succeeds.
 fn warn(out: &mut Value, warning: Option<String>) {
     if let Some(w) = warning {
         eprintln!("{TOOL}: {w}");

@@ -340,6 +340,39 @@ fn sync_pages_and_recovers_from_an_expired_token() {
 }
 
 #[test]
+fn an_unreadable_reminder_is_skipped_kept_and_named() {
+    let env = start();
+    env.json(&["sync"]);
+    // A phone writes a title this version can't decode, and renames another.
+    let mut bad = env.state.record("Reminder/REM-CALL").unwrap();
+    bad["fields"]["TitleDocument"]["value"] = json!("bm90IHpsaWI=");
+    env.state.put(bad);
+    let mut eggs = env.state.record("Reminder/REM-EGGS").unwrap();
+    eggs["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("A dozen eggs"));
+    env.state.put(eggs);
+
+    // A delta, then a full fetch, which drops whatever it lacks: either way
+    // the good change lands and the bad reminder stays as last synced.
+    for args in [&["sync"][..], &["sync", "--full"]] {
+        let out = env.run(&[&["--json"][..], args].concat());
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(report["reminders"], 5, "{args:?}");
+        let warning = report["warning"].as_str().unwrap();
+        assert!(warning.contains("Reminder/REM-CALL: TitleDocument"), "{warning}");
+        assert!(stderr(&out).contains("Reminder/REM-CALL"), "{}", stderr(&out));
+        let open = titles(&env.json(&["--cached", "list"]));
+        assert!(
+            open.contains(&"Call the dentist".into()) && open.contains(&"A dozen eggs".into()),
+            "{open:?}"
+        );
+    }
+    // The token stayed put, so a plain sync fetches the bad record again.
+    assert!(env.json(&["sync"])["warning"].is_string());
+    assert!(env.sent("records/modify").is_empty());
+}
+
+#[test]
 fn signed_out_exits_2() {
     let env = start();
     *env.state.signed_out.lock().unwrap() = true;

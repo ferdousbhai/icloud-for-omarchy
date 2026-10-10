@@ -182,7 +182,11 @@ protocol notes.
   in a protobuf, zlib-compressed (`src/topotext.rs`).
 - **Sync** (`src/service.rs`): every `List` through `changes/zone`, then
   the `Reminder` records changed since the stored sync token (all of them
-  without one, or when CloudKit refuses it).
+  without one, or when CloudKit refuses it). A record that does not read
+  (a title that does not decode, an unknown time zone) is skipped, named
+  on stderr, as `warning` in the JSON and in a toast in the window, and
+  kept as last synced: never taken as deleted. The sync token then stays
+  where it was, so each sync fetches it again until it reads.
 - **Writes**: `records/modify` with the record's change tag. An update
   writes only the fields it changes, and raises those fields' counters in
   `ResolutionTokenMap` (Apple's per-field merge tokens) with this
