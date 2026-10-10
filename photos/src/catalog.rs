@@ -523,6 +523,26 @@ impl Catalog {
         Ok(())
     }
 
+    /// A file or folder of downloaded originals moved from `from` to `to`:
+    /// point every original and Live Photo video at or under `from` there.
+    /// Returns the paths changed.
+    pub fn move_paths(&self, from: &Path, to: &Path) -> Result<usize> {
+        let from = from.to_string_lossy();
+        let under = format!("{from}/");
+        let to = to.to_string_lossy();
+        let mut n = 0;
+        for col in ["local_path", "live_path"] {
+            n += self
+                .conn
+                .prepare_cached(&format!(
+                    "UPDATE assets SET {col} = ?3 || substr({col}, length(?1) + 1)
+                     WHERE {col} = ?1 OR substr({col}, 1, length(?2)) = ?2"
+                ))?
+                .execute(params![from, under, to])?;
+        }
+        Ok(n)
+    }
+
     /// Is `path` already the original of an asset other than `id`?
     /// Two indexed lookups (one per partial index), not a scan.
     pub fn path_taken(&self, path: &Path, id: &str) -> Result<bool> {

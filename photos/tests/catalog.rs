@@ -115,6 +115,34 @@ fn live_paths_count_as_taken_and_forget_medium_matches_exactly() {
 }
 
 #[test]
+fn move_paths_moves_what_is_under_the_folder_only() {
+    let cat = Catalog::open_in_memory().unwrap();
+    for (id, path) in [
+        ("A", "/P/icloud-photos/2025/09/A.JPG"),
+        ("B", "/P/icloud-photos-old/2025/09/B.JPG"),
+        ("C", "/P/icloud-photos/2024/C.JPG"),
+    ] {
+        cat.upsert_asset(&asset(id, 10)).unwrap();
+        cat.set_path(id, PathKind::Original, Some(Path::new(path))).unwrap();
+    }
+    cat.set_path("A", PathKind::Live, Some(Path::new("/P/icloud-photos/2025/09/A.MOV")))
+        .unwrap();
+    let moved = cat
+        .move_paths(Path::new("/P/icloud-photos/2025"), Path::new("/P/2025"))
+        .unwrap();
+    assert_eq!(moved, 2);
+    let a = cat.asset("A").unwrap().unwrap();
+    assert_eq!(a.local_path.as_deref(), Some(Path::new("/P/2025/09/A.JPG")));
+    assert_eq!(a.live_path.as_deref(), Some(Path::new("/P/2025/09/A.MOV")));
+    let path = |id: &str| cat.asset(id).unwrap().unwrap().local_path;
+    assert_eq!(
+        path("B").as_deref(),
+        Some(Path::new("/P/icloud-photos-old/2025/09/B.JPG"))
+    );
+    assert_eq!(path("C").as_deref(), Some(Path::new("/P/icloud-photos/2024/C.JPG")));
+}
+
+#[test]
 fn mark_missing_deleted_marks_exactly_the_unseen() {
     let mut cat = Catalog::open_in_memory().unwrap();
     // More than one batch of ids.

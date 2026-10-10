@@ -21,7 +21,7 @@ fn synced(t: &FixtureTransport, root: &std::path::Path) -> (Catalog, Targets) {
         cat,
         Targets {
             dirs,
-            library: root.join("Pictures/icloud-photos"),
+            library: root.join("Pictures"),
         },
     )
 }
@@ -58,13 +58,10 @@ fn original_of_a_live_photo_brings_its_video() {
     t.serve(&url(&cat, "ASSET-001", |r| r.live_url.clone()), b"mov");
 
     let path = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
-    assert_eq!(path, root.join("Pictures/icloud-photos/2025/09/IMG_0001.HEIC"));
+    assert_eq!(path, root.join("Pictures/2025/09/IMG_0001.HEIC"));
     let row = cat.asset("ASSET-001").unwrap().unwrap();
     assert_eq!(row.local_path, Some(path.clone()));
-    assert_eq!(
-        row.live_path,
-        Some(root.join("Pictures/icloud-photos/2025/09/IMG_0001.MOV"))
-    );
+    assert_eq!(row.live_path, Some(root.join("Pictures/2025/09/IMG_0001.MOV")));
     assert_eq!(std::fs::read(row.live_path.unwrap()).unwrap(), b"mov");
 }
 
@@ -80,10 +77,10 @@ fn same_filename_in_the_same_month_gets_a_suffix() {
     t.serve(&url(&cat, "ASSET-004", |r| r.orig_url.clone()), b"four");
     fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
     let second = fetch(&t, &cat, &targets, "ASSET-004", Job::Original).unwrap();
-    assert_eq!(second, root.join("Pictures/icloud-photos/2025/09/IMG_0001 (2).HEIC"));
+    assert_eq!(second, root.join("Pictures/2025/09/IMG_0001 (2).HEIC"));
     // The first asset keeps its own name on a re-plan (its file removed,
     // the catalog's record of that name is its own, not another asset's).
-    let first = root.join("Pictures/icloud-photos/2025/09/IMG_0001.HEIC");
+    let first = root.join("Pictures/2025/09/IMG_0001.HEIC");
     std::fs::remove_file(&first).unwrap();
     std::fs::remove_file(first.with_extension("MOV")).unwrap();
     assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap(), first);

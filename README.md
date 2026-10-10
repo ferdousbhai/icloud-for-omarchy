@@ -96,6 +96,12 @@ with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 `omarchy refresh pacman`, and installs the packages in one `pacman -Syu`.
 Re-running it is safe. Updates then arrive with `omarchy update`.
 
+In the app launcher they are Notes, Photos, Find My and Reminders; searching
+"iCloud" finds them all. Photos saves originals straight into
+`~/Pictures/<year>/<month>/`; after updating from a version that used
+`~/Pictures/icloud-photos/`, its first start moves that folder's contents
+up into `~/Pictures/` ([details](photos/README.md#your-files)).
+
 ### Install by hand
 
 Rather not pipe a script into `sudo bash`? These are the same steps, one

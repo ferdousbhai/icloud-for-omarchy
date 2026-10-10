@@ -651,7 +651,7 @@ fn without_data_dir_it_uses_the_xdg_directories() {
     assert_eq!(s["assets"], 3);
     assert_eq!(
         s["library_dir"].as_str().map(PathBuf::from),
-        Some(home.join("Pictures/icloud-photos"))
+        Some(home.join("Pictures"))
     );
     assert_eq!(
         s["cache_dir"].as_str().map(PathBuf::from),
@@ -681,8 +681,25 @@ fn the_library_sits_in_the_xdg_pictures_directory() {
     )
     .unwrap();
     let s: Value = serde_json::from_str(&env.bare(&["--json", "status"]).stdout).unwrap();
+    assert_eq!(s["library_dir"].as_str().map(PathBuf::from), Some(home.join("Photos")));
+}
+
+#[test]
+fn a_library_in_the_old_default_folder_moves_into_pictures() {
+    let env = Env::new("move-library", 0);
+    let home = env.root.join("home");
+    let old = home.join("Pictures/icloud-photos/2025/09/IMG_0001.HEIC");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, b"heic").unwrap();
+    let r = env.bare(&["--json", "status"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stderr.contains("moved the photo library"), "{}", r.stderr);
     assert_eq!(
-        s["library_dir"].as_str().map(PathBuf::from),
-        Some(home.join("Photos/icloud-photos"))
+        r.json()["library_dir"].as_str().map(PathBuf::from),
+        Some(home.join("Pictures"))
     );
+    assert!(home.join("Pictures/2025/09/IMG_0001.HEIC").exists());
+    assert!(!home.join("Pictures/icloud-photos").exists());
+    // Once only.
+    assert!(!env.bare(&["status"]).stderr.contains("moved"));
 }
