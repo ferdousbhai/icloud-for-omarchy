@@ -10,7 +10,7 @@
 //! (CloudKit Web Services returns the saved records). There is no offline
 //! queue: a change made without a network fails and says so.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::cloudkit::{CloudKit, Error, Record, Result, Transport};
@@ -34,6 +34,17 @@ pub struct SyncReport {
     pub changed: usize,
     /// The token was refused (or missing) and every reminder was fetched.
     pub full: bool,
+    /// Records this version could not read, each `<recordName>: <why>`.
+    /// The sync went on without them; see [`Service::sync`].
+    pub skipped: Vec<String>,
+}
+
+impl SyncReport {
+    /// The skipped records as one line, for stderr, a toast or `warning`.
+    pub fn warning(&self) -> Option<String> {
+        (!self.skipped.is_empty())
+            .then(|| format!("skipped {} unreadable record(s): {}", self.skipped.len(), self.skipped.join("; ")))
+    }
 }
 
 pub fn now_ms() -> i64 {
@@ -56,23 +67,36 @@ impl<'a> Service<'a> {
     }
 
     /// Fetches what changed and saves it. `full` ignores the sync token.
+    ///
+    /// A record whose fields do not read (the errors of
+    /// [`Reminder::from_record`] and [`List::from_record`]: a title document
+    /// that does not decode, an unknown time zone) is skipped and named in
+    /// [`SyncReport::skipped`]; any other failure fails the sync. A skipped
+    /// record is never taken as gone: its cached copy, if any, stays as it
+    /// was. The sync token is then not advanced, so the next sync fetches it
+    /// again (and says so again) instead of losing it until it next changes.
     pub fn sync(&self, full: bool) -> Result<SyncReport> {
         let account = self.t.account()?;
         let ck = CloudKit::connect(self.t)?;
         let (list_records, _) = ck.all_changes(&["List"], None)?;
         let mut lists = Vec::new();
+        let mut skipped = Vec::new();
+        let mut skipped_ids = BTreeSet::new();
         for r in &list_records {
-            if let Some(l) = List::from_record(r).map_err(Error::Other)? {
-                lists.push(l);
+            match List::from_record(r) {
+                Ok(l) => lists.extend(l),
+                Err(e) => {
+                    skipped.push(e);
+                    skipped_ids.insert(r.name.clone());
+                }
             }
         }
-        lists.sort_by_key(|l| l.name.to_lowercase());
 
         let start = self.cache()?;
         let before = if start.account == account { snapshot(&start) } else { Snapshot::new() };
         let token = start.sync_token.filter(|_| start.account == account && !full);
-        let (records, new_token, full) = match token {
-            Some(t) => match ck.all_changes(&["Reminder"], Some(&t)) {
+        let (records, new_token, full) = match &token {
+            Some(t) => match ck.all_changes(&["Reminder"], Some(t)) {
                 Ok((records, token)) => (records, token, false),
                 // CloudKit refuses a stale token with CHANGE_TOKEN_EXPIRED, or at
                 // zone level with BAD_REQUEST ("Unknown sync continuation type");
@@ -90,21 +114,32 @@ impl<'a> Service<'a> {
             }
         };
 
-        let fetched = records
-            .iter()
-            .map(|r| Reminder::from_record(r).map_err(Error::Other))
-            .collect::<Result<Vec<_>>>()?;
+        let mut fetched = Vec::new();
+        for r in &records {
+            match Reminder::from_record(r) {
+                Ok(p) => fetched.push(p),
+                Err(e) => {
+                    skipped.push(e);
+                    skipped_ids.insert(r.name.clone());
+                }
+            }
+        }
         let _lock = self.store.lock().map_err(io)?;
         // Re-read under the lock: a write may have landed meanwhile.
         let mut cache = self.cache()?;
         if cache.account != account {
             cache.reminders.clear();
+            cache.lists.clear();
         }
         cache.account = account;
         let changed = records.len();
-        cache.reminders = merge(&before, std::mem::take(&mut cache.reminders), fetched, full);
+        cache.reminders = merge(&before, std::mem::take(&mut cache.reminders), fetched, full, &skipped_ids);
+        // Lists come whole each time: a skipped one keeps its cached copy.
+        lists.extend(cache.lists.drain(..).filter(|l| skipped_ids.contains(&l.id)));
+        lists.sort_by_key(|l| l.name.to_lowercase());
         cache.lists = lists;
-        cache.sync_token = Some(new_token);
+        // With a record skipped, the next sync asks from the same token.
+        cache.sync_token = if skipped.is_empty() { Some(new_token) } else { token };
         cache.synced_ms = Some(now_ms());
         self.store.save_cache(&cache).map_err(io)?;
         Ok(SyncReport {
@@ -112,6 +147,7 @@ impl<'a> Service<'a> {
             reminders: cache.reminders.len(),
             changed,
             full,
+            skipped,
         })
     }
 
@@ -264,11 +300,19 @@ fn snapshot(cache: &Cache) -> Snapshot {
 /// read under the lock). A reminder a write touched during the fetch keeps
 /// its cached state, present or deleted, unless the fetched copy was
 /// modified later; everything else takes the fetched state. A `full` fetch
-/// is the whole set, so untouched reminders it lacks are gone.
-fn merge(before: &Snapshot, current: BTreeMap<String, Reminder>, fetched: Vec<Parsed>, full: bool) -> BTreeMap<String, Reminder> {
+/// is the whole set, so untouched reminders it lacks are gone, but not the
+/// `skipped` ones: it has those, unread, and they keep their cached copy.
+fn merge(
+    before: &Snapshot,
+    current: BTreeMap<String, Reminder>,
+    fetched: Vec<Parsed>,
+    full: bool,
+    skipped: &BTreeSet<String>,
+) -> BTreeMap<String, Reminder> {
     let touched = |id: &str| before.get(id) != current.get(id).map(|r| &r.change_tag);
+    let keep = |id: &str| touched(id) || skipped.contains(id);
     let mut out: BTreeMap<String, Reminder> = if full {
-        current.iter().filter(|(id, _)| touched(id)).map(|(id, r)| (id.clone(), r.clone())).collect()
+        current.iter().filter(|(id, _)| keep(id)).map(|(id, r)| (id.clone(), r.clone())).collect()
     } else {
         current.clone()
     };
@@ -329,7 +373,7 @@ mod tests {
         let a = rem("Reminder/a", "t1", 10);
         let before = snapshot(&Cache { reminders: map(vec![a.clone()]), ..Cache::default() });
         for full in [false, true] {
-            let out = merge(&before, BTreeMap::new(), vec![live(&a)], full);
+            let out = merge(&before, BTreeMap::new(), vec![live(&a)], full, &BTreeSet::new());
             assert!(out.is_empty(), "full={full}");
         }
     }
@@ -339,7 +383,7 @@ mod tests {
         let (a, b, c) = (rem("Reminder/a", "t1", 10), rem("Reminder/b", "t1", 20), rem("Reminder/c", "t1", 5));
         // c was cached and unchanged; the server no longer has it.
         let before = snapshot(&Cache { reminders: map(vec![c.clone()]), ..Cache::default() });
-        let out = merge(&before, map(vec![b.clone(), c]), vec![live(&a)], true);
+        let out = merge(&before, map(vec![b.clone(), c]), vec![live(&a)], true, &BTreeSet::new());
         assert_eq!(out.keys().collect::<Vec<_>>(), ["Reminder/a", "Reminder/b"]);
     }
 
@@ -348,10 +392,10 @@ mod tests {
         let old = rem("Reminder/a", "t1", 10);
         let mine = rem("Reminder/a", "t2", 20);
         let before = snapshot(&Cache { reminders: map(vec![old.clone()]), ..Cache::default() });
-        let out = merge(&before, map(vec![mine.clone()]), vec![live(&old)], false);
+        let out = merge(&before, map(vec![mine.clone()]), vec![live(&old)], false, &BTreeSet::new());
         assert_eq!(out["Reminder/a"].change_tag.as_deref(), Some("t2"));
         let theirs = rem("Reminder/a", "t3", 30);
-        let out = merge(&before, map(vec![mine]), vec![live(&theirs)], false);
+        let out = merge(&before, map(vec![mine]), vec![live(&theirs)], false, &BTreeSet::new());
         assert_eq!(out["Reminder/a"].change_tag.as_deref(), Some("t3"));
     }
 }
