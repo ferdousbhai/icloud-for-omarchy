@@ -30,6 +30,9 @@ pub struct Paths {
     /// `$XDG_STATE_HOME/icloud-session/session-removal-pending`: a sign-out
     /// could not remove the session from the keyring; removed once it does.
     pub removal_pending: PathBuf,
+    /// `$XDG_STATE_HOME/icloud-session/sign-out-reason`: why the account was
+    /// last signed out (`SignOutReason`); removed by a sign-in.
+    pub sign_out_reason: PathBuf,
     /// `$XDG_DATA_HOME/icloud-session/webkit` (the sign-in window's profile)
     pub webkit_data: PathBuf,
     /// `$XDG_CACHE_HOME/icloud-session/webkit`
@@ -55,6 +58,7 @@ impl Paths {
         Paths {
             account: state.join("account.json"),
             removal_pending: state.join("session-removal-pending"),
+            sign_out_reason: state.join("sign-out-reason"),
             webkit_data: xdg("XDG_DATA_HOME", ".local/share").join("webkit"),
             webkit_cache: xdg("XDG_CACHE_HOME", ".cache").join("webkit"),
         }
@@ -210,10 +214,10 @@ impl Stored {
 
     /// [`Stored::load`], but a file that cannot be read or parsed is moved
     /// aside to `account.json.bad` and treated as signed out, so one bad
-    /// write never keeps the daemon from starting.
-    pub fn load_or_set_aside(path: &Path) -> Option<Stored> {
+    /// write never keeps the daemon from starting. `Err`: it was (logged).
+    pub fn load_or_set_aside(path: &Path) -> io::Result<Option<Stored>> {
         match Stored::load(path) {
-            Ok(stored) => stored,
+            Ok(stored) => Ok(stored),
             Err(e) => {
                 let bad = path.with_extension("json.bad");
                 eprintln!(
@@ -224,7 +228,7 @@ impl Stored {
                 if let Err(e) = fs::rename(path, &bad) {
                     eprintln!("icloud-sessiond: moving {} aside: {e}", path.display());
                 }
-                None
+                Err(e)
             }
         }
     }
@@ -276,10 +280,16 @@ pub fn write_json(path: &Path, value: &Value) -> io::Result<()> {
 /// Creates `path` empty (a marker), mode 0600, creating the parent
 /// directory 0700.
 pub fn touch(path: &Path) -> io::Result<()> {
+    write_text(path, "")
+}
+
+/// `text`, written atomically, mode 0600, creating the parent directory
+/// 0700.
+pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         create_private_dir(dir)?;
     }
-    write_atomic(path, b"")
+    write_atomic(path, text.as_bytes())
 }
 
 /// Writes `bytes` to a temp file (mode 0600) beside `path`, then renames it
@@ -348,7 +358,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("account.json");
         fs::write(&path, "{not json").unwrap();
-        assert_eq!(Stored::load_or_set_aside(&path), None);
+        assert!(Stored::load_or_set_aside(&path).is_err());
         assert!(!path.exists());
         assert_eq!(
             fs::read_to_string(dir.path().join("account.json.bad")).unwrap(),

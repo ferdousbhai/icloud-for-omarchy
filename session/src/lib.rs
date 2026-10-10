@@ -212,6 +212,33 @@ pub struct Status {
     /// re-authorizes Find My by itself (`icloud-session set-password`).
     /// False when signed out, or when the daemon predates it.
     pub find_my_password_stored: bool,
+    /// Why the account was last signed out, worded for a sign-in banner
+    /// (e.g. "Apple ended the iCloud session (…)"); `None` while signed
+    /// in, before anyone ever signed in, or when the daemon predates it.
+    pub sign_out_reason: Option<String>,
+}
+
+impl Status {
+    /// `prompt` with why the account was signed out before it, when the
+    /// daemon says: "{reason}. {prompt}".
+    pub fn sign_in_prompt(&self, prompt: &str) -> String {
+        match &self.sign_out_reason {
+            Some(reason) => format!("{reason}. {prompt}"),
+            None => prompt.to_string(),
+        }
+    }
+}
+
+/// "sign in to iCloud required", with why when the daemon says (one
+/// D-Bus round trip): "sign in to iCloud required: {reason}". For a
+/// command line reporting [`Error::SignInRequired`], which carries no
+/// reason. Never a reason in mock mode.
+pub fn sign_in_required_message() -> String {
+    let required = Error::SignInRequired.to_string();
+    match status().ok().filter(|s| !s.signed_in).and_then(|s| s.sign_out_reason) {
+        Some(reason) => format!("{required}: {reason}"),
+        None => required,
+    }
 }
 
 /// The mock base URL when mock mode is on (`ICLOUD_SESSION_MOCK` set to
@@ -238,6 +265,7 @@ fn mock_status() -> Status {
         signing_in: false,
         find_my_authorized: true,
         find_my_password_stored: false,
+        sign_out_reason: None,
     }
 }
 
@@ -304,6 +332,7 @@ fn status_from(all: &HashMap<String, OwnedValue>) -> Status {
         signing_in: bool_of("SigningIn"),
         find_my_authorized: bool_of("FindMyAuthorized"),
         find_my_password_stored: bool_of("FindMyPasswordStored"),
+        sign_out_reason: str_of("SignOutReason"),
     }
 }
 
@@ -533,6 +562,7 @@ fn apply_property(status: &mut Status, name: &str, value: &OwnedValue) {
         "SigningIn" => status.signing_in = parsed.signing_in,
         "FindMyAuthorized" => status.find_my_authorized = parsed.find_my_authorized,
         "FindMyPasswordStored" => status.find_my_password_stored = parsed.find_my_password_stored,
+        "SignOutReason" => status.sign_out_reason = parsed.sign_out_reason,
         _ => {}
     }
 }

@@ -1,8 +1,9 @@
 //! The sign-in banner, driven by icloud-sessiond's state.
 //!
 //! A long-lived thread (`session::watch_sign_in`) reports every change:
-//! signed out shows the banner, an open sign-in window shows "Signing in…",
-//! and signing back in hides it and syncs. A call that returns
+//! signed out shows the banner (saying why, when the daemon knows), an
+//! open sign-in window shows "Signing in…", and signing back in hides it
+//! and syncs. A call that returns
 //! `SignInRequired` also shows it. The button asks the daemon to open
 //! Apple's sign-in page in its own window and returns at once.
 
@@ -24,7 +25,11 @@ impl App {
 
     pub fn show_sign_in_banner(&self) {
         if !self.signing_in.get() {
-            self.banner.set_title("iCloud needs you to sign in again");
+            let title = "iCloud needs you to sign in again";
+            match self.sign_out_reason.borrow().as_deref() {
+                Some(reason) => self.banner.set_title(&format!("{reason}. {title}")),
+                None => self.banner.set_title(title),
+            }
             self.banner.set_button_label(Some("Sign In"));
         }
         self.banner.set_revealed(true);
@@ -61,6 +66,7 @@ impl App {
             return;
         }
         let was_signing_in = self.signing_in.replace(false);
+        self.sign_out_reason.replace(s.sign_out_reason);
         if !s.signed_in {
             if was_signing_in {
                 self.banner.set_title("Sign-in did not finish");

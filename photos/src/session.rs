@@ -94,10 +94,12 @@ pub fn sign_in_state() -> Result<SignInState> {
             Ok(_) => Ok(SignInState {
                 signed_in: true,
                 signing_in: false,
+                sign_out_reason: None,
             }),
             Err(Error::SignInRequired) => Ok(SignInState {
                 signed_in: false,
                 signing_in: false,
+                sign_out_reason: None,
             }),
             Err(e) => Err(e),
         };
@@ -106,6 +108,7 @@ pub fn sign_in_state() -> Result<SignInState> {
     Ok(SignInState {
         signed_in: s.signed_in,
         signing_in: s.signing_in,
+        sign_out_reason: s.sign_out_reason,
     })
 }
 
@@ -119,6 +122,7 @@ pub fn start_sign_in(notify: &dyn Fn(SignInState)) -> Result<()> {
         notify(SignInState {
             signed_in: true,
             signing_in: false,
+            sign_out_reason: None,
         });
     }
     Ok(())
@@ -135,6 +139,7 @@ pub fn watch_sign_in(notify: Box<dyn Fn(SignInState) + Send>) {
                 notify(SignInState {
                     signed_in: s.signed_in,
                     signing_in: s.signing_in,
+                    sign_out_reason: s.sign_out_reason,
                 });
                 true
             })

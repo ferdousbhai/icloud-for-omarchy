@@ -890,6 +890,104 @@ fn report_sign_in_required_confirms_with_validate() {
     }
 }
 
+const SESSION_ENDED: &str =
+    "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)";
+
+/// The `SignInRequired` error's message, from `Session()`.
+fn sign_in_required_message(conn: &Connection) -> String {
+    match session(conn) {
+        Err(zbus::Error::MethodError(name, msg, _)) if name.as_str() == ERROR_SIGN_IN_REQUIRED => msg.unwrap(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn apple_ending_the_session_says_why_until_a_sign_in_even_across_a_restart() {
+    let expired = Arc::new(AtomicBool::new(false));
+    let flag = expired.clone();
+    let server = Server::start(move |s, n, base| match s.path() {
+        VALIDATE if flag.load(Ordering::SeqCst) => signed_out(),
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let capture =
+        json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null}]});
+    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let reason_file = env.root().join("state/icloud-session/sign-out-reason");
+    let conn = env.conn();
+    session(&conn).unwrap();
+    assert_eq!(prop::<String>(&conn, "SignOutReason"), "");
+
+    let watch = changes(&conn);
+    expired.store(true, Ordering::SeqCst);
+    assert!(!call::<bool>(&conn, "ReportSignInRequired").unwrap());
+    let change = watch.until("SignedIn false", |s| !s.signed_in);
+    assert_eq!(change.sign_out_reason.as_deref(), Some(SESSION_ENDED));
+    assert_eq!(prop::<String>(&conn, "SignOutReason"), SESSION_ENDED);
+    assert_eq!(sign_in_required_message(&conn), SESSION_ENDED);
+    let out = env.cli(&["validate", "--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(
+        err["error"]["message"],
+        format!("sign in to iCloud required: {SESSION_ENDED}")
+    );
+
+    // The daemon exits when idle: the next one still says why.
+    env.kill_daemon(&conn);
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(!status.signed_in);
+    assert_eq!(status.sign_out_reason.as_deref(), Some(SESSION_ENDED));
+    assert_eq!(sign_in_required_message(&conn), SESSION_ENDED);
+
+    // A sign-in clears it, in memory and on disk.
+    expired.store(false, Ordering::SeqCst);
+    let watch = changes(&conn);
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    let done = watch.window_closed();
+    assert!(done.signed_in, "{done:?}");
+    assert_eq!(done.sign_out_reason, None);
+    assert_eq!(prop::<String>(&conn, "SignOutReason"), "");
+    assert!(!reason_file.exists());
+    env.kill_daemon(&conn);
+    assert_eq!(icloud_session::status_on(&conn).unwrap().sign_out_reason, None);
+}
+
+#[test]
+fn a_session_item_removed_while_the_daemon_was_away_says_so() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    assert!(env.session_secret().is_some());
+
+    // Deleted in Seahorse, or a sign-out elsewhere, before the next start.
+    env.kill_daemon(&conn);
+    fs::write(env.secrets_path(), "[]").unwrap();
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(!status.signed_in);
+    let removed = "The iCloud session was removed from the keyring";
+    assert_eq!(status.sign_out_reason.as_deref(), Some(removed));
+    assert_eq!(sign_in_required_message(&conn), removed);
+
+    // A sign-out with nobody signed in leaves the reason as it was.
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert_eq!(prop::<String>(&conn, "SignOutReason"), removed);
+}
+
 #[test]
 fn sign_in_with_a_fake_window_stores_the_account() {
     let server = Server::start(|s, n, base| match s.path() {
@@ -942,6 +1040,7 @@ EOF"#
             signing_in: false,
             find_my_authorized: false,
             find_my_password_stored: false,
+            sign_out_reason: None,
         }
     );
     match session(&conn) {
@@ -1065,6 +1164,7 @@ fn sign_out_forgets_account_and_profile() {
     assert!(matches!(Session::connect_on(&conn), Err(Error::SignInRequired)));
     let status = icloud_session::status_on(&conn).unwrap();
     assert!(!status.signed_in);
+    assert_eq!(status.sign_out_reason.as_deref(), Some("Signed out of iCloud"));
 }
 
 #[test]
@@ -1281,7 +1381,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         status,
-        json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false})
+        json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false, "sign_out_reason": null})
     );
 
     let out = env.cli(&["validate"]);

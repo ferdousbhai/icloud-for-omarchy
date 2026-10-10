@@ -1,6 +1,6 @@
 //! The "sign in" banner. It follows `icloud-sessiond`'s status through
 //! `icloud_session::watch_forever()` on one background thread: shown while
-//! signed out, "Signing in…" while the daemon's sign-in window is open,
+//! signed out (saying why, when the daemon knows), "Signing in…" while the daemon's sign-in window is open,
 //! hidden (and the window synced) once the account is signed in. Its button
 //! calls `icloud_session::sign_in()`, which only asks the daemon to open the
 //! window. (Find My's banner, without its password page.)
@@ -23,12 +23,13 @@ struct State {
 
 impl State {
     /// `None` hidden, else the title and whether the button shows.
-    fn view(&self) -> Option<(&'static str, bool)> {
+    fn view(&self) -> Option<(String, bool)> {
         let signed_in = self.status.as_ref().map(|s| s.signed_in);
         if self.status.as_ref().is_some_and(|s| s.signing_in) {
-            return Some((SIGNING_IN, false));
+            return Some((SIGNING_IN.into(), false));
         }
-        (signed_in == Some(false) || self.sign_in_needed).then_some((TITLE, true))
+        let title = self.status.as_ref().map_or(TITLE.into(), |s| s.sign_in_prompt(TITLE));
+        (signed_in == Some(false) || self.sign_in_needed).then_some((title, true))
     }
 
     /// Takes a new status; true when the account just signed in.
@@ -108,7 +109,7 @@ impl SignInBanner {
 fn render(banner: &adw::Banner, state: &State) {
     match state.view() {
         Some((title, button)) => {
-            banner.set_title(title);
+            banner.set_title(&title);
             banner.set_button_label(button.then_some(BUTTON));
             banner.set_revealed(true);
         }
@@ -122,6 +123,7 @@ mod tests {
 
     fn status(signed_in: bool, signing_in: bool) -> icloud_session::Status {
         icloud_session::Status {
+            sign_out_reason: None,
             signed_in,
             apple_id: None,
             full_name: None,
@@ -137,11 +139,21 @@ mod tests {
     fn signed_out_signing_in_signed_in() {
         let mut state = State::default();
         assert!(!state.update(status(false, false)));
-        assert_eq!(state.view(), Some((TITLE, true)));
+        assert_eq!(state.view(), Some((TITLE.into(), true)));
         state.update(status(false, true));
-        assert_eq!(state.view(), Some((SIGNING_IN, false)));
+        assert_eq!(state.view(), Some((SIGNING_IN.into(), false)));
         assert!(state.update(status(true, false)));
         assert_eq!(state.view(), None);
+    }
+
+    #[test]
+    fn signed_out_says_why_when_the_daemon_knows() {
+        let mut state = State::default();
+        state.update(icloud_session::Status {
+            sign_out_reason: Some("Signed out of iCloud".into()),
+            ..status(false, false)
+        });
+        assert_eq!(state.view(), Some((format!("Signed out of iCloud. {TITLE}"), true)));
     }
 
     #[test]
@@ -149,7 +161,7 @@ mod tests {
         let mut state = State::default();
         state.update(status(true, false));
         state.sign_in_needed = true;
-        assert_eq!(state.view(), Some((TITLE, true)));
+        assert_eq!(state.view(), Some((TITLE.into(), true)));
         state.update(status(true, true));
         assert!(state.update(status(true, false)));
         assert_eq!(state.view(), None);

@@ -194,9 +194,10 @@ impl Failure {
     fn message(&self) -> String {
         match self {
             Failure::Usage(m) | Failure::Other(m) | Failure::Coded(_, m) => m.clone(),
-            Failure::Find(findme::Error::SignInRequired) => {
-                "sign in to iCloud required: run `icloud-session sign-in` (or Sign In in the app)".into()
-            }
+            Failure::Find(findme::Error::SignInRequired) => format!(
+                "{}; run `icloud-session sign-in` (or Sign In in the app)",
+                icloud_session::sign_in_required_message()
+            ),
             Failure::Find(findme::Error::FindMyAuthRequired) => {
                 "Find My needs your Apple password: run `icloud-session authorize-find-my` \
                  (to stop being asked: `icloud-session set-password`)"

@@ -232,9 +232,10 @@ impl Failure {
     fn message(&self) -> String {
         match self {
             Failure::Usage(m) | Failure::Other(m) | Failure::Coded(_, m) => m.clone(),
-            Failure::Cloud(cloudkit::Error::SignInRequired) => {
-                "sign in to iCloud required: run `icloud-session sign-in` (or Sign In in the app)".into()
-            }
+            Failure::Cloud(cloudkit::Error::SignInRequired) => format!(
+                "{}; run `icloud-session sign-in` (or Sign In in the app)",
+                icloud_session::sign_in_required_message()
+            ),
             Failure::Cloud(e) => e.to_string(),
         }
     }
