@@ -56,13 +56,22 @@ impl OutputContext {
     /// `emitError`: report on stderr (icloud-session's shared form: with
     /// `--json` one line, `{"error":{"code","message","exit_code","hint"?}}`),
     /// return the exit code.
+    /// A sign-in error says why the account was signed out, when the
+    /// daemon knows.
     pub fn emit_error(&self, error: &Error) -> u8 {
+        let message = match error {
+            Error::SignInRequired => match icloud_session::status().ok().filter(|s| !s.signed_in) {
+                Some(status) => status.sign_in_prompt(&error.to_string()),
+                None => error.to_string(),
+            },
+            _ => error.to_string(),
+        };
         icloud_session::cli::report(
             TOOL,
             self.json,
             &error.code(),
             error.exit_code(),
-            &error.to_string(),
+            &message,
             error.hint().as_deref(),
         )
     }

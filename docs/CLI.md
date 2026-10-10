@@ -234,7 +234,7 @@ Stable: fields are added, never renamed or removed without a note here.
 `status`, `sign-in`, `authorize-find-my`, `forget-password`, `sign-out`:
 
 ```json
-{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false}
+{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false,"sign_out_reason":null}
 ```
 
 `validate`: `{"dsid","apple_id","webservices":{"findme":"https://...",...}}`.

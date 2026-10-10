@@ -120,6 +120,8 @@ pub struct App {
     reload_gen: Cell<u64>,
     /// The sign-in window is open (or was just asked for).
     pub signing_in: Cell<bool>,
+    /// Why the account was signed out, as the daemon last said.
+    pub sign_out_reason: RefCell<Option<String>>,
     pub upload: RefCell<Option<super::upload::UploadUi>>,
 }
 
@@ -271,6 +273,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         reloading: Cell::new(false),
         reload_gen: Cell::new(0),
         signing_in: Cell::new(false),
+        sign_out_reason: RefCell::new(None),
         upload: RefCell::new(None),
     });
 

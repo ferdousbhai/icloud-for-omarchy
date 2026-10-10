@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -105,8 +105,47 @@ enum ServiceError {
     KeyringUnavailable(String),
 }
 
-fn sign_in_required() -> ServiceError {
-    ServiceError::SignInRequired("sign in to iCloud required".into())
+// The `SignOutReason`s: why the account was signed out, worded for an
+// app's sign-in banner. Never anything of the session itself.
+/// `SignOut()`, from the user or an app.
+const SIGNED_OUT: &str = "Signed out of iCloud";
+/// A `/validate` answered 421/401.
+const SESSION_ENDED: &str =
+    "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)";
+/// At start, the keyring had no session item (a sign-out elsewhere, or
+/// deleted by hand).
+const SESSION_REMOVED: &str = "The iCloud session was removed from the keyring";
+const SESSION_DAMAGED: &str = "The iCloud session in the keyring was damaged";
+const SESSION_OF_ANOTHER: &str = "The keyring held another Apple ID's iCloud session";
+const ACCOUNT_FILE_UNREADABLE: &str = "The iCloud account file could not be read";
+
+/// `sign-out-reason`'s text; empty when there is none.
+fn read_reason(path: &Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(text) => text.trim().to_string(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            eprintln!("icloud-sessiond: reading {}: {e}", path.display());
+            String::new()
+        }
+    }
+}
+
+/// Writes `reason` to `sign-out-reason` (empty: removes it), unless that
+/// is what it holds. An error is logged; the next write tries again.
+fn store_reason(path: &Path, written: &mut Written, reason: &str) {
+    if written.reason == reason {
+        return;
+    }
+    let result = if reason.is_empty() {
+        files::remove(path)
+    } else {
+        files::write_text(path, &format!("{reason}\n"))
+    };
+    match result {
+        Ok(()) => written.reason = reason.to_string(),
+        Err(e) => eprintln!("icloud-sessiond: writing {}: {e}", path.display()),
+    }
 }
 
 fn find_my_auth_required() -> ServiceError {
@@ -124,6 +163,7 @@ struct Props {
     signing_in: bool,
     find_my_authorized: bool,
     find_my_password_stored: bool,
+    sign_out_reason: String,
 }
 
 /// How the last `/validate` of an account ended.
@@ -208,6 +248,10 @@ struct State {
     /// that were already waiting share that answer rather than each
     /// asking (and prompting) again.
     keyring_failed: Option<(Instant, String)>,
+    /// Why the account was last signed out (a `SignOutReason`), as
+    /// `sign-out-reason` keeps it; empty once signed in, and before anyone
+    /// ever was.
+    sign_out_reason: String,
 }
 
 /// A write of the account (`account.json` and its keyring item), taken
@@ -217,6 +261,7 @@ struct State {
 struct Save {
     seq: u64,
     account: Option<Account>,
+    sign_out_reason: String,
 }
 
 /// An account whose cookies the keyring would not give, and why.
@@ -240,7 +285,21 @@ impl State {
             signing_in: self.signing_in,
             find_my_authorized: account.is_some_and(|a| a.find_my_ready(time::now_secs())),
             find_my_password_stored: account.is_some() && self.password_stored,
+            sign_out_reason: if account.is_some() || unread.is_some() {
+                String::new()
+            } else {
+                self.sign_out_reason.clone()
+            },
         }
+    }
+
+    /// `SignInRequired`, saying why when the account was signed out.
+    fn sign_in_required(&self) -> ServiceError {
+        let why = match self.sign_out_reason.as_str() {
+            "" => "sign in to iCloud required",
+            why => why,
+        };
+        ServiceError::SignInRequired(why.into())
     }
 }
 
@@ -302,6 +361,8 @@ struct Written {
     /// The session secret the keyring holds, as far as we know (`None`:
     /// unknown, or nothing), so an unchanged jar is not stored again.
     secret: Option<Zeroizing<String>>,
+    /// What `sign-out-reason` holds (empty: no file).
+    reason: String,
 }
 
 /// How a session item read back after a write differs from what was
@@ -346,14 +407,25 @@ fn store_session(secrets: &dyn SecretStore, apple_id: &str, secret: &str) -> Res
     Err(format!("{last}, after writing it twice"))
 }
 
+/// What [`load_account`] found.
+#[derive(Debug)]
+enum Loaded {
+    /// No `account.json`: nobody is signed in.
+    Nobody,
+    Account(Box<Account>),
+    /// Signed out, and why (a `SignOutReason`).
+    SignedOut(&'static str),
+}
+
 /// The account `account.json` names, with its cookies from the keyring.
 /// A file from before the cookies moved to the keyring has them moved
 /// there, and is rewritten without them. `Err`: the keyring would not
 /// answer, so the account is neither restored nor forgotten. It writes
 /// both stores, so it runs only with [`Daemon::written`] held.
 ///
-/// `Ok(None)`, signed out, when the keyring answers without the account's
-/// cookies, each case logged as itself:
+/// [`Loaded::SignedOut`] when `account.json` cannot be read, or the
+/// keyring answers without the account's cookies, each case logged as
+/// itself:
 /// - no session item: it was removed (a sign-out elsewhere), and
 ///   `account.json` is removed with it;
 /// - an item whose secret is empty or not a session: damaged.
@@ -361,9 +433,11 @@ fn store_session(secrets: &dyn SecretStore, apple_id: &str, secret: &str) -> Res
 ///   left as it is, so both can be looked at (the next sign-in replaces
 ///   the item);
 /// - another account's session: `account.json` is removed.
-fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Option<Account>, Box<Unread>> {
-    let Some(stored) = Stored::load_or_set_aside(path) else {
-        return Ok(None);
+fn load_account(path: &Path, secrets: &dyn SecretStore) -> Result<Loaded, Box<Unread>> {
+    let stored = match Stored::load_or_set_aside(path) {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return Ok(Loaded::Nobody),
+        Err(_) => return Ok(Loaded::SignedOut(ACCOUNT_FILE_UNREADABLE)),
     };
     let secret = match stored.legacy_secret() {
         Some(legacy) => {
@@ -391,7 +465,7 @@ fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Opt
                 // sign in with.
                 eprintln!("icloud-sessiond: the keyring holds no session item for account.json; signed out");
                 remove_account_file(path);
-                return Ok(None);
+                return Ok(Loaded::SignedOut(SESSION_REMOVED));
             };
             match serde_json::from_str::<SessionSecret>(&text) {
                 Ok(secret) => secret,
@@ -412,20 +486,22 @@ fn load_account(path: &std::path::Path, secrets: &dyn SecretStore) -> Result<Opt
                     if let Err(e) = std::fs::rename(path, &bad) {
                         eprintln!("icloud-sessiond: moving {} aside: {e}", path.display());
                     }
-                    return Ok(None);
+                    return Ok(Loaded::SignedOut(SESSION_DAMAGED));
                 }
             }
         }
     };
-    let account = Account::join(stored, secret);
-    if account.is_none() {
-        eprintln!("icloud-sessiond: the keyring's session is another account's, not account.json's; signed out");
-        remove_account_file(path);
+    match Account::join(stored, secret) {
+        Some(account) => Ok(Loaded::Account(Box::new(account))),
+        None => {
+            eprintln!("icloud-sessiond: the keyring's session is another account's, not account.json's; signed out");
+            remove_account_file(path);
+            Ok(Loaded::SignedOut(SESSION_OF_ANOTHER))
+        }
     }
-    Ok(account)
 }
 
-fn remove_account_file(path: &std::path::Path) {
+fn remove_account_file(path: &Path) {
     if let Err(e) = files::remove(path) {
         eprintln!("icloud-sessiond: removing {}: {e}", path.display());
     }
@@ -457,12 +533,24 @@ impl Daemon {
         let secrets = secrets::from_env();
         // Only account.json here: the keyring may prompt to unlock, and
         // `run` reads it with a bounded wait before taking the bus name.
-        let unread = Stored::load_or_set_aside(&cfg.paths.account).map(|stored| {
-            Box::new(Unread {
-                stored,
-                why: "the session's cookies are not read from the keyring yet".into(),
-            })
-        });
+        let mut written = Written {
+            reason: read_reason(&cfg.paths.sign_out_reason),
+            ..Written::default()
+        };
+        let mut sign_out_reason = written.reason.clone();
+        let unread = match Stored::load_or_set_aside(&cfg.paths.account) {
+            Ok(stored) => stored.map(|stored| {
+                Box::new(Unread {
+                    stored,
+                    why: "the session's cookies are not read from the keyring yet".into(),
+                })
+            }),
+            Err(_) => {
+                sign_out_reason = ACCOUNT_FILE_UNREADABLE.into();
+                store_reason(&cfg.paths.sign_out_reason, &mut written, &sign_out_reason);
+                None
+            }
+        };
         let state = State {
             account: None,
             unread,
@@ -479,6 +567,7 @@ impl Daemon {
             find_my_last_ok: None,
             save_seq: 0,
             keyring_failed: None,
+            sign_out_reason,
         };
         let props = state.props();
         Arc::new(Daemon {
@@ -494,7 +583,7 @@ impl Daemon {
             secrets,
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
-            written: Mutex::new(Written::default()),
+            written: Mutex::new(written),
             in_flight: AtomicUsize::new(0),
             pings_seen: AtomicU64::new(0),
         })
@@ -593,6 +682,9 @@ impl Daemon {
         if all || published.find_my_password_stored != now.find_my_password_stored {
             changed.insert("FindMyPasswordStored", now.find_my_password_stored.into());
         }
+        if all || published.sign_out_reason != now.sign_out_reason {
+            changed.insert("SignOutReason", now.sign_out_reason.as_str().into());
+        }
         if let Some(conn) = self.conn() {
             let body = (INTERFACE, changed, Vec::<&str>::new());
             if let Err(e) = conn.emit_signal(
@@ -610,12 +702,14 @@ impl Daemon {
 
     // ------------------------------------------------------------- store
 
-    /// Forgets the account (confirmed 421/401 or `SignOut`); the returned
-    /// [`Save`] removes `account.json` and the keyring's session.
-    fn forget(&self, st: &mut State) -> Save {
+    /// Forgets the account (confirmed 421/401 or `SignOut`) for `reason`
+    /// (a `SignOutReason`); the returned [`Save`] removes `account.json`
+    /// and the keyring's session, and keeps the reason.
+    fn forget(&self, st: &mut State, reason: &str) -> Save {
         st.account = None;
         st.unread = None;
         st.generation += 1;
+        st.sign_out_reason = reason.into();
         self.save_account(st)
     }
 
@@ -627,13 +721,15 @@ impl Daemon {
         Save {
             seq: st.save_seq,
             account: st.account.clone(),
+            sign_out_reason: st.sign_out_reason.clone(),
         }
     }
 
-    /// Writes (or removes) `account.json` and the keyring's session as
-    /// `save` says, unless a later [`Save`] got there first. The keyring is
-    /// written only when the jars changed. Errors are logged: the session
-    /// in memory is still right, and the next change retries.
+    /// Writes (or removes) `account.json`, the keyring's session and
+    /// `sign-out-reason` as `save` says, unless a later [`Save`] got there
+    /// first. The keyring is written only when the jars changed. Errors are
+    /// logged: the session in memory is still right, and the next change
+    /// retries.
     fn write(&self, save: Save) {
         let mut written = lock(&self.written);
         if save.seq <= written.seq {
@@ -679,6 +775,7 @@ impl Daemon {
         for e in errors {
             eprintln!("icloud-sessiond: {e}");
         }
+        store_reason(&self.cfg.paths.sign_out_reason, &mut written, &save.sign_out_reason);
     }
 
     /// With the cookies of the account `account.json` names unread (the
@@ -714,7 +811,12 @@ impl Daemon {
             return Ok(());
         }
         match result {
-            Ok(account) => {
+            Ok(loaded) => {
+                let (account, reason) = match loaded {
+                    Loaded::Nobody => (None, None),
+                    Loaded::Account(account) => (Some(*account), None),
+                    Loaded::SignedOut(reason) => (None, Some(reason)),
+                };
                 written.secret = account.as_ref().map(Account::secret);
                 if account.is_some() {
                     eprintln!("icloud-sessiond: read the session's cookies from the keyring");
@@ -722,8 +824,14 @@ impl Daemon {
                 st.account = account;
                 st.unread = None;
                 st.generation += 1;
+                if let Some(reason) = reason {
+                    st.sign_out_reason = reason.into();
+                }
                 let restored = st.account.is_some();
                 drop(st);
+                if let Some(reason) = reason {
+                    store_reason(&self.cfg.paths.sign_out_reason, &mut written, reason);
+                }
                 drop(written);
                 if restored {
                     // Unknown until now: FindMyPasswordStored, and the
@@ -835,7 +943,7 @@ impl Daemon {
             Err(ValidateError::SignedOut) => {
                 if same {
                     eprintln!("icloud-sessiond: Apple ended the session; signed out");
-                    save = Some(self.forget(&mut st));
+                    save = Some(self.forget(&mut st, SESSION_ENDED));
                 }
                 Err(Refresh::SignedOut)
             }
@@ -886,10 +994,13 @@ impl Daemon {
     fn session(self: &Arc<Daemon>) -> Result<SessionReply, ServiceError> {
         self.retry_keyring()?;
         let validated_at = lock(&self.state).account.as_ref().map(|a| a.validated_at);
-        let age = time::now_secs().saturating_sub(validated_at.ok_or_else(sign_in_required)?);
+        let Some(validated_at) = validated_at else {
+            return Err(lock(&self.state).sign_in_required());
+        };
+        let age = time::now_secs().saturating_sub(validated_at);
         if age >= whole_secs(self.cfg.handout_max_age) {
             match self.ensure_fresh(self.fresh_enough()) {
-                Err(Refresh::SignedOut) => return Err(sign_in_required()),
+                Err(Refresh::SignedOut) => return Err(lock(&self.state).sign_in_required()),
                 // Apple unreachable: hand out what we have; the app's own
                 // request will fail the same way and say so.
                 Err(Refresh::Failed) | Ok(()) => {}
@@ -898,7 +1009,7 @@ impl Daemon {
             self.refresh_in_background();
         }
         let st = lock(&self.state);
-        let a = st.account.as_ref().ok_or_else(sign_in_required)?;
+        let a = st.account.as_ref().ok_or_else(|| st.sign_in_required())?;
         let map = |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         Ok((
             a.cookie_header(time::now_secs()),
@@ -941,7 +1052,7 @@ impl Daemon {
     fn find_my_session(&self) -> Result<FindMyReply, ServiceError> {
         self.retry_keyring()?;
         let held = |st: &State| -> Result<Option<FindMyReply>, ServiceError> {
-            let a = st.account.as_ref().ok_or_else(sign_in_required)?;
+            let a = st.account.as_ref().ok_or_else(|| st.sign_in_required())?;
             Ok(a.find_my.as_ref().map(|f| {
                 let params = f.client_params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 (cookies::header(&f.cookies, time::now_secs()), params)
@@ -1169,7 +1280,7 @@ impl Daemon {
         let _one = lock(&self.find_my_login_lock);
         let (apple_id, dsid, generation) = {
             let st = lock(&self.state);
-            let a = st.account.as_ref().ok_or_else(sign_in_required)?;
+            let a = st.account.as_ref().ok_or_else(|| st.sign_in_required())?;
             (a.apple_id.clone(), a.dsid.clone(), st.generation)
         };
         let result = self.find_my_login(generation, &apple_id, &dsid, &password);
@@ -1449,6 +1560,7 @@ impl Daemon {
         st.account = Some(account);
         st.unread = None;
         st.generation += 1;
+        st.sign_out_reason.clear();
         let save = self.save_account(&mut st);
         drop(st);
         drop(written);
@@ -1496,7 +1608,7 @@ impl Daemon {
             st.signin_seq += 1;
             st.signing_in = false;
             st.last_activity = Instant::now();
-            (st.account.is_some() || st.unread.is_some()).then(|| self.forget(&mut st))
+            (st.account.is_some() || st.unread.is_some()).then(|| self.forget(&mut st, SIGNED_OUT))
         };
         match save {
             Some(save) => self.write(save),
@@ -1807,6 +1919,13 @@ impl Service {
     #[zbus(property, name = "SigningIn")]
     fn signing_in(&self) -> bool {
         self.props().signing_in
+    }
+
+    /// Why the account was last signed out, worded for a sign-in banner;
+    /// empty while signed in, and before anyone ever signed in.
+    #[zbus(property, name = "SignOutReason")]
+    fn sign_out_reason(&self) -> String {
+        self.props().sign_out_reason
     }
 
     /// `(cookie_header, client_params, webservices)`; validates first only

@@ -104,7 +104,7 @@ match s.get(url) {
 
 icloud_session::sign_in()?;            // SignIn(), returns at once
 icloud_session::authorize_find_my()?;  // AuthorizeFindMy(), returns at once
-icloud_session::status()?;             // Status { signed_in, apple_id, full_name, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored }
+icloud_session::status()?;             // Status { signed_in, apple_id, full_name, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored, sign_out_reason }
 for status in icloud_session::watch()? { /* on its own thread: one Status per change */ }
 icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconnecting; false stops it
 ```
@@ -120,9 +120,10 @@ icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconne
 | `s.apple_id()`, `s.dsid()` | The account the session belongs to. If the daemon later holds another account, the session's calls return `SignInRequired`; connect again. |
 | `sign_in()`, `sign_out()` | `SignIn()` / `SignOut()`; both return at once. |
 | `authorize_find_my()` | `AuthorizeFindMy()`, returns at once: `signing_in` while its window is open, then `find_my_authorized`. No-op in mock mode. |
-| `status()` | `Status { signed_in, apple_id, full_name, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored }`, one `GetAll`. `expires_at` is unix seconds or `None`; `find_my_authorized` is false from a daemon without the property. Mock mode reports it true. |
+| `status()` | `Status { signed_in, apple_id, full_name, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored, sign_out_reason }`, one `GetAll`. `expires_at` is unix seconds or `None`; `find_my_authorized` is false from a daemon without the property. Mock mode reports it true. |
 | `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`, and after the daemon dies or restarts (re-read from the new instance). |
 | `watch_forever(f)` | What a sign-in banner wants: calls `f` with the current `Status` on every (re)connect and after each change, until `f` returns false. When the watch ends (the daemon idle-exited or restarted) or cannot start, it reconnects after 2 s, doubling up to 60 s; an outage is reported once on stderr. Returns at once in mock mode. |
+| `status.sign_in_prompt(p)`, `sign_in_required_message()` | A banner's prompt `p` after `sign_out_reason` ("{reason}. {p}"); and, for a command line reporting `SignInRequired` (which carries no reason), "sign in to iCloud required: {reason}" read from the daemon. |
 | `Session::connect_on(&conn)`, `status_on`, `watch_on`, `sign_in_on`, `authorize_find_my_on`, `sign_out_on` | The same on a given `zbus::blocking::Connection` (tests, tools). |
 | `Session::mock(base_url)` | What mock mode gives `Session::connect()`. |
 
@@ -166,7 +167,8 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `ExpiresAt` | property | `t` unix seconds, 0 = session-only or unknown |
 | `SigningIn` | property | `b`, the sign-in window is open (also for `AuthorizeFindMy()`) |
 | `FindMyAuthorized` | property | `b`, a Find My jar is held and has `X-APPLE-WEBAUTH-FMIP` |
-| `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out, `…Error.KeyringUnavailable` when the keyring holding the account's cookies cannot be read (see [Files](#files)). `webservices` is Apple's map as `/validate` gave it, key to `url`. Answers at once when the last validate is within 6 hours, revalidating in the background if it is older than 10 minutes; validates first only when it is older than 6 hours (if Apple is unreachable it answers with what it has) |
+| `SignOutReason` | property | `s`, why the account was last signed out, worded for an app's sign-in banner; empty while signed in and before anyone ever signed in, cleared by a sign-in, kept across restarts (`sign-out-reason`, see [Files](#files)). One of: `Signed out of iCloud` (`SignOut()`); `Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)` (a `/validate` answered 421/401); at start, `The iCloud session was removed from the keyring`, `The iCloud session in the keyring was damaged`, `The keyring held another Apple ID's iCloud session` (see below) or `The iCloud account file could not be read` |
+| `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out (its message is `SignOutReason`, else "sign in to iCloud required"), `…Error.KeyringUnavailable` when the keyring holding the account's cookies cannot be read (see [Files](#files)). `webservices` is Apple's map as `/validate` gave it, key to `url`. Answers at once when the last validate is within 6 hours, revalidating in the background if it is older than 10 minutes; validates first only when it is older than 6 hours (if Apple is unreachable it answers with what it has) |
 | `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
 | `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it keeps the fresh jar and answers true (fetch `Session()` and retry once); on 421/401 it signs out and answers false |
 | `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
@@ -222,6 +224,7 @@ output is JSON anyway) an error is one line on stderr,
 | `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | What is not a secret: `apple_id`, `full_name`, `dsid`, `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | Secret Service (keyring), default collection | daemon | The cookie jars: one item labelled `iCloud session (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=session`, its secret JSON `{dsid, cookies, find_my}`: the main jar (name, value, domain, path, expires; session-only cookies too) and, once authorized, the Find My jar (`cookies`, `client_params`, `captured_at`). Written only when a jar changes. |
 | `$XDG_STATE_HOME/icloud-session/session-removal-pending` (0600, empty) | daemon | Present while a sign-out still owes the keyring's session item a removal (the keyring was unavailable); the next start removes the item, then this file. A sign-in replacing the item removes it too. |
+| `$XDG_STATE_HOME/icloud-session/sign-out-reason` (0600) | daemon | `SignOutReason` as text, written at a sign-out, removed by a sign-in; absent before anyone ever signed in. |
 | `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
 | `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache; its HTTP cache (`WebKitCache`) is deleted when the last sign-in window closes |
 
