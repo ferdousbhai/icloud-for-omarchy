@@ -1764,7 +1764,14 @@ void NotesBackend::clearLog()
     emit syncLogChanged();
 }
 
-NotesBackend::~NotesBackend() = default;
+// Closing while icloud-notes-sync runs: ~QProcess stops it and waits, and
+// that wait delivers finished(). By then the members declared after
+// m_syncProcess are gone, so finishSync ran on them (a crash on quit).
+// Nothing a run reports matters once Notes closes.
+NotesBackend::~NotesBackend()
+{
+    m_syncProcess.disconnect(this);
+}
 
 QDBusMessage NotesBackend::sessionCall(const QString &method) const
 {
