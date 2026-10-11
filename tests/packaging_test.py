@@ -99,7 +99,7 @@ class Packaging(unittest.TestCase):
         self.stub("omarchy-pkg-add", 'echo "$*" >>"$LOG"')
         self.stub("pacman-key", "exit 0")
         self.stub("curl", 'while (($#)); do if [[ $1 == -o ]]; then touch "$2"; fi; shift; done')
-        self.stub("gpg", "echo fpr:::::::::35C47A06567940B6796B4D0F9B3C7BDF85268B31:")
+        self.stub("gpg", "echo fpr:::::::::52130299581DAD685226900CA89CA1A6A1E74251:")
         self.env.update(LOG=str(self.work / "calls"), SUDO_USER=user)
         result = subprocess.run(["bash", str(script), "icloud-photos"], env=self.env, capture_output=True)
         return result, etc, hooks
