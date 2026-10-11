@@ -209,6 +209,40 @@ fn decode_attachment_filename_falls_back_to_a_synthesized_name_when_absent() {
     assert_eq!(decode_attachment_filename(None, "REC3", "some.unknown.uti"), "REC3");
 }
 
+#[test]
+fn decode_attachment_filename_makes_a_path_one_file_name() {
+    let field = filename_field(json!(base64_encode(b"../../../../outside.jpeg")));
+    assert_eq!(
+        decode_attachment_filename(Some(&field), "REC1", "public.jpeg"),
+        ".._.._.._.._outside.jpeg"
+    );
+    let field = filename_field(json!(base64_encode(b"/abs/x.jpeg\0")));
+    assert_eq!(
+        decode_attachment_filename(Some(&field), "REC1", "public.jpeg"),
+        "_abs_x.jpeg_"
+    );
+}
+
+#[test]
+fn decode_attachment_filename_falls_back_for_a_dot_name() {
+    for name in [&b"."[..], b".."] {
+        let field = filename_field(json!(base64_encode(name)));
+        assert_eq!(
+            decode_attachment_filename(Some(&field), "REC1", "public.jpeg"),
+            "REC1.jpeg"
+        );
+    }
+}
+
+#[test]
+fn decode_attachment_filename_makes_the_record_name_one_file_name() {
+    assert_eq!(
+        decode_attachment_filename(None, "../../x", "public.jpeg"),
+        ".._.._x.jpeg"
+    );
+    assert_eq!(decode_attachment_filename(None, "..", ""), "attachment");
+}
+
 fn asset(value: serde_json::Value, type_: &str) -> FieldValue {
     FieldValue {
         value,

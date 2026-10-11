@@ -419,6 +419,12 @@ fn num(v: Option<&Value>) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))
 }
 
+/// Whether `path` stays inside the vault: relative, with no empty, `.` or
+/// `..` segment and no NUL.
+fn is_vault_relative(path: &str) -> bool {
+    !path.is_empty() && !path.contains('\0') && path.split('/').all(|segment| !matches!(segment, "" | "." | ".."))
+}
+
 /// The layout version check for a state file read without migrating.
 fn check_layout_version(root: &Map<String, Value>, file_path: &Path, target_dir: &Path) -> Result<u32, Error> {
     let version = root.get("layoutVersion").and_then(Value::as_f64).unwrap_or(0.0);
@@ -605,6 +611,13 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                         )));
                     }
                 };
+                // Earlier releases took an attachment's file name from the
+                // server as it was, so a file can point outside the vault.
+                // Dropped: the attachment downloads again under a safe name,
+                // and sync never writes, moves or removes the file outside.
+                if !opt_str(m, "file").is_some_and(|file| is_vault_relative(&file)) {
+                    continue;
+                }
                 out.insert(
                     record_name,
                     AttachmentEntry {
