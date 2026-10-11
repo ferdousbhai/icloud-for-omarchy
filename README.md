@@ -109,7 +109,7 @@ at a time:
 
 ```bash
 # 1. Download the package-signing key and check its fingerprint is
-#    35C47A06567940B6796B4D0F9B3C7BDF85268B31
+#    52130299581DAD685226900CA89CA1A6A1E74251
 # These manual steps use the x86_64 repository. On ARM, use the installer above
 # or replace icloud-for-omarchy with icloud-for-omarchy-aarch64 in repository/key names.
 curl -fsSLO https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/icloud-for-omarchy-signing-key.asc
@@ -117,7 +117,7 @@ gpg --show-keys icloud-for-omarchy-signing-key.asc
 
 # 2. Let pacman trust it
 sudo pacman-key --add icloud-for-omarchy-signing-key.asc
-sudo pacman-key --lsign-key 35C47A06567940B6796B4D0F9B3C7BDF85268B31
+sudo pacman-key --lsign-key 52130299581DAD685226900CA89CA1A6A1E74251
 
 # 3. Add the signed repository
 printf '[icloud-for-omarchy]\nSigLevel = Required DatabaseRequired\nServer = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download\n' \
@@ -268,25 +268,17 @@ and both hashes, together.
 
 ### The signing key
 
-One key signs these packages and Ghost's; its fingerprint is pinned in both
-installers and it lives only in the releasing machine's keyring, protected
-by a passphrase. Losing it would break the trust chain on every machine
-that installed from these repositories, so keep an encrypted backup
-somewhere off this machine:
+One key signs these packages and those of Ghost, Cloudmail, Cloud Calendar
+and Omacloud ("Omacloud (package signing)",
+52130299581DAD685226900CA89CA1A6A1E74251); its fingerprint is pinned in
+each installer and it lives in the releasing machine's keyring, protected by
+a passphrase, with a backup kept off the machine.
 
-```bash
-gpg --armor --export-secret-keys 35C47A06567940B6796B4D0F9B3C7BDF85268B31 \
-  | gpg --symmetric --armor --output package-signing-key.backup.asc
-```
-
-Restoring is `gpg --decrypt package-signing-key.backup.asc | gpg --import`.
-
-To rotate the key: generate the new one, publish one release from each
-project signed with the old key that also ships the new public key as
-`<repository>-signing-key.asc`, update the pinned fingerprint in both
-installers and the tests, then sign the next releases with the new key.
-Machines that installed earlier pick up the new key by re-running the
-one-liner, which is idempotent.
+Releases before October 2026 were signed with
+35C47A06567940B6796B4D0F9B3C7BDF85268B31, which is no longer used. A
+machine that installed from those releases trusts only the old key, so its
+next update fails with "unknown trust"; running the one-liner again trusts
+the current key, and it is idempotent.
 
 ## License
 
