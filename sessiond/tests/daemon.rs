@@ -1708,7 +1708,10 @@ fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
     assert!(pending.exists());
 
     // Signing out again while it still refuses says so again.
-    assert!(matches!(icloud_session::sign_out_on(&conn), Err(Error::KeyringUnavailable(_))));
+    assert!(matches!(
+        icloud_session::sign_out_on(&conn),
+        Err(Error::KeyringUnavailable(_))
+    ));
 
     // It answers again: signing out again removes the live cookies it kept.
     fs::remove_dir(env.secrets_path()).unwrap();
@@ -1723,7 +1726,9 @@ fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
     fs::write(&pending, "").unwrap();
     env.kill_daemon(&conn);
     assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
-    wait_until("the session's removal", Duration::from_secs(5), || env.session_secret().is_none());
+    wait_until("the session's removal", Duration::from_secs(5), || {
+        env.session_secret().is_none()
+    });
     assert!(!pending.exists());
 }
 
@@ -2467,7 +2472,9 @@ fn a_450_signs_in_with_the_stored_password_and_retries_once() {
             }
             INIT_CLIENT => {
                 *stale.lock().unwrap() += 1;
-                wait_until("both stale requests", Duration::from_secs(30), || *stale.lock().unwrap() >= 2);
+                wait_until("both stale requests", Duration::from_secs(30), || {
+                    *stale.lock().unwrap() >= 2
+                });
                 Reply {
                     status: 450,
                     body: String::new(),

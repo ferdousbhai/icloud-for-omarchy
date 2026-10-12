@@ -432,7 +432,11 @@ impl TestFile {
             .map(|i| Zeroizing::new(i.secret)))
     }
 
-    fn remove(&self, attributes: &HashMap<&str, String>, keep: Option<&HashMap<&str, String>>) -> Result<usize, String> {
+    fn remove(
+        &self,
+        attributes: &HashMap<&str, String>,
+        keep: Option<&HashMap<&str, String>>,
+    ) -> Result<usize, String> {
         let mut items = self.load()?;
         let before = items.len();
         items.retain(|i| !TestFile::has(i, attributes) || keep.is_some_and(|k| TestFile::has(i, k)));

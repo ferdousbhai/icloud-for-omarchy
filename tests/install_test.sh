@@ -101,7 +101,7 @@ count_include() { grep -cxF "Include = /etc/pacman.d/$1.conf" /etc/pacman.conf |
 
 setup
 bash install.sh >"$work/out" 2>&1
-check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-reminders" ]
+check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-reminders icloud-contacts" ]
 check "the repository config is written" grep -qx 'Server = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download' /etc/pacman.d/icloud-for-omarchy.conf
 check "the Include line is added" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "the Omarchy hook is installed" [ -x "$hooks/icloud-for-omarchy" ]
@@ -120,9 +120,10 @@ for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
-check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-reminders' "$PACMAN_LOG"
+check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-reminders icloud-contacts' "$PACMAN_LOG"
 
-for app in notes photos findmy reminders; do
+# Reminders last: the checks after the loop read its output.
+for app in notes photos findmy contacts reminders; do
   setup
   bash "$work/dist/install-$app.sh" >"$work/out" 2>&1
   check "install-$app.sh installs only icloud-$app" [ "$(installed)" = "icloud-$app" ]

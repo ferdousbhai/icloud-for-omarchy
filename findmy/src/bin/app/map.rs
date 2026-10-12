@@ -9,8 +9,8 @@ use adw::prelude::*;
 use shumate::prelude::*;
 
 use super::devices::set_class;
-use crate::history::Point;
-use crate::models::{Device, Fix};
+use icloud_findmy::history::Point;
+use icloud_findmy::models::{Device, Fix};
 
 /// Zoom used when centering on a device.
 const DEVICE_ZOOM: f64 = 16.0;

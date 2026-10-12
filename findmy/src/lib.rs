@@ -1,12 +1,9 @@
-//! Find My devices for Omarchy. The core ([`findme`], [`history`],
-//! [`models`]) has no GTK dependency and is tested on its own; the widgets
-//! live in [`ui`] behind the `ui` feature, and the command line
-//! ([`cli`]) runs the core without GTK.
+//! Find My devices for Omarchy. This library is the core ([`findme`],
+//! [`history`], [`models`]) and the command line ([`cli`]), with no GTK
+//! anywhere; the window is the `icloud-findmy-app` binary (`src/bin/app/`),
+//! behind the `ui` feature.
 
 pub mod cli;
 pub mod findme;
 pub mod history;
 pub mod models;
-
-#[cfg(feature = "ui")]
-pub mod ui;

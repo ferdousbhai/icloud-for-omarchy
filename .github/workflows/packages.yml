@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
+          cargo fmt --all -- --check
           bash -n install.sh bin/build-packages bin/collect-packages bin/release bin/verify-release
           tests/install_test.sh
           python3 tests/packaging_test.py

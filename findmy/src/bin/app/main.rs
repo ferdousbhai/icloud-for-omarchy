@@ -1,11 +1,25 @@
-//! GTK4 + libadwaita + libshumate front end (the `ui` feature).
+//! `icloud-findmy-app` opens the Find My window (GTK4, libadwaita,
+//! libshumate); the desktop entry runs it, and so does `icloud-findmy` with
+//! no command. Given a command it runs the command line, like
+//! `icloud-findmy`.
+//!
+//! The window's code lives in this binary, not in the library: the command
+//! line links the library, so no GTK code may reach it (not even through
+//! generic code a debug build shares between modules of one crate).
 
-pub mod banner;
-pub mod devices;
-pub mod map;
-pub mod window;
+mod banner;
+mod devices;
+mod map;
+mod window;
 
 use gtk::{gio, glib};
+
+fn main() {
+    if std::env::args_os().len() > 1 {
+        std::process::exit(icloud_findmy::cli::run().into());
+    }
+    std::process::exit(i32::from(run().get()));
+}
 
 pub const APP_ID: &str = "com.ferdousbhai.IcloudFindMy";
 
@@ -25,7 +39,7 @@ where
     });
 }
 
-pub fn run() -> glib::ExitCode {
+fn run() -> glib::ExitCode {
     use adw::prelude::*;
 
     // The name the app had as one binary (X11 WM_CLASS, logs), not the

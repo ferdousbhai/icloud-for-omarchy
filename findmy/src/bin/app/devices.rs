@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
-use crate::models::{self, Device};
+use icloud_findmy::models::{self, Device};
 
 pub struct DeviceList {
     pub widget: gtk::ScrolledWindow,

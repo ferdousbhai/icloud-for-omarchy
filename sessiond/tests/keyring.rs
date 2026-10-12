@@ -449,13 +449,20 @@ fn keyring_speaks_the_secret_service() {
         .cloned()
         .collect();
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].label, "iCloud session (icloud-session): someone@example.com");
+    assert_eq!(
+        sessions[0].label,
+        "iCloud session (icloud-session): someone@example.com"
+    );
     assert_eq!(
         keyring.get_session().unwrap().as_deref().map(String::as_str),
         Some(r#"{"v":2}"#)
     );
     assert_eq!(
-        keyring.get("someone@example.com").unwrap().as_deref().map(String::as_str),
+        keyring
+            .get("someone@example.com")
+            .unwrap()
+            .as_deref()
+            .map(String::as_str),
         Some("correct horse"),
         "the password is not the session"
     );

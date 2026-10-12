@@ -39,7 +39,10 @@ fn start() -> Env {
     let log = dir.path().join("notifications.log");
     write_script(
         &bin.join("omarchy-notification-send"),
-        &format!("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> '{0}'\necho --- >> '{0}'\n", log.display()),
+        &format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> '{0}'\necho --- >> '{0}'\n",
+            log.display()
+        ),
     );
     Env { base, state, dir }
 }
@@ -171,7 +174,10 @@ fn lists_and_reminders_soonest_first() {
     assert!(text.starts_with("[ ] Milk  due "), "{text}");
     assert!(text.contains("(Groceries)"), "{text}");
     let shown = env.ok(&["show", "passport"]);
-    assert!(shown.contains("Renew passport\n") && shown.contains("  Photos first"), "{shown}");
+    assert!(
+        shown.contains("Renew passport\n") && shown.contains("  Photos first"),
+        "{shown}"
+    );
 
     // Only the first read fetched every reminder; the rest asked for changes.
     let syncs = env.sent("changes/zone");
@@ -180,13 +186,26 @@ fn lists_and_reminders_soonest_first() {
         .filter(|b| b["zones"][0]["desiredRecordTypes"] == json!(["Reminder"]))
         .collect();
     assert!(reminder_syncs[0]["zones"][0].get("syncToken").is_none());
-    assert!(reminder_syncs[1..].iter().all(|b| b["zones"][0]["syncToken"].is_string()));
+    assert!(
+        reminder_syncs[1..]
+            .iter()
+            .all(|b| b["zones"][0]["syncToken"].is_string())
+    );
 }
 
 #[test]
 fn add_writes_a_reminder_apple_can_read() {
     let env = start();
-    let out = env.json(&["add", "Buy bread", "--list", "Groceries", "--notes", "rye", "--due", "2030-01-02 08:15"]);
+    let out = env.json(&[
+        "add",
+        "Buy bread",
+        "--list",
+        "Groceries",
+        "--notes",
+        "rye",
+        "--due",
+        "2030-01-02 08:15",
+    ]);
     assert_eq!(out["action"], "add");
     let r = &out["reminder"];
     assert_eq!(r["title"], "Buy bread");
@@ -210,7 +229,10 @@ fn add_writes_a_reminder_apple_can_read() {
 
     // An all-day due date.
     let out = env.json(&["add", "Pay rent", "--list", "Reminders", "--due", "2030-02-01"]);
-    assert_eq!(out["reminder"]["due"], json!({"date": "2030-02-01", "time": null, "all_day": true, "time_zone": null, "at": "2030-02-01T09:00:00Z"}));
+    assert_eq!(
+        out["reminder"]["due"],
+        json!({"date": "2030-02-01", "time": null, "all_day": true, "time_zone": null, "at": "2030-02-01T09:00:00Z"})
+    );
 }
 
 /// iCloud records no default list: with several, `add` names one, even
@@ -221,7 +243,10 @@ fn add_without_a_list_needs_one_and_names_them() {
     let out = env.run(&["add", "Pay rent"]);
     assert_eq!(code(&out), 64, "{}", stderr(&out));
     let err = stderr(&out);
-    assert!(err.contains("--list") && err.contains("\n  Groceries") && err.contains("\n  Reminders"), "{err}");
+    assert!(
+        err.contains("--list") && err.contains("\n  Groceries") && err.contains("\n  Reminders"),
+        "{err}"
+    );
     assert!(env.sent("records/modify").is_empty());
 }
 
@@ -234,11 +259,19 @@ fn complete_uncomplete_edit_and_delete() {
     let update = &env.sent("records/modify")[0]["operations"][0];
     assert_eq!(update["operationType"], "update");
     assert_eq!(update["record"]["recordName"], "Reminder/REM-MILK");
-    assert!(update["record"]["recordChangeTag"].as_str().unwrap().starts_with("tag-"));
+    assert!(
+        update["record"]["recordChangeTag"]
+            .as_str()
+            .unwrap()
+            .starts_with("tag-")
+    );
     let fields = update["record"]["fields"].as_object().unwrap();
     let mut names: Vec<&String> = fields.keys().collect();
     names.sort();
-    assert_eq!(names, ["Completed", "CompletionDate", "LastModifiedDate", "ResolutionTokenMap"]);
+    assert_eq!(
+        names,
+        ["Completed", "CompletionDate", "LastModifiedDate", "ResolutionTokenMap"]
+    );
     // The phone's counter for `completed` was 3.
     let tokens: Value = serde_json::from_str(fields["ResolutionTokenMap"]["value"].as_str().unwrap()).unwrap();
     assert_eq!(tokens["map"]["completed"]["counter"], 4);
@@ -256,7 +289,10 @@ fn complete_uncomplete_edit_and_delete() {
     let out = env.run(&["delete", "eggs"]);
     assert_eq!(code(&out), 64, "{}", stderr(&out));
     let out = env.json(&["delete", "eggs", "--yes"]);
-    assert_eq!(out, json!({"action": "delete", "reminder": {"id": "REM-EGGS", "title": "Eggs"}}));
+    assert_eq!(
+        out,
+        json!({"action": "delete", "reminder": {"id": "REM-EGGS", "title": "Eggs"}})
+    );
     let eggs = env.state.record("Reminder/REM-EGGS").unwrap();
     assert_eq!(eggs["fields"]["Deleted"]["value"], 1);
     assert!(!titles(&env.json(&["list", "--all"])).contains(&"Eggs".to_owned()));
@@ -268,7 +304,14 @@ fn complete_and_uncomplete_pick_the_one_they_can_change() {
     let two = || {
         let env = start();
         let now = now_ms();
-        env.state.put(fake::reminder("REM-OPEN", "List/LIST-GROCERIES", "Buy milk", "", None, now - MINUTE));
+        env.state.put(fake::reminder(
+            "REM-OPEN",
+            "List/LIST-GROCERIES",
+            "Buy milk",
+            "",
+            None,
+            now - MINUTE,
+        ));
         let mut done = fake::reminder("REM-DONE", "List/LIST-GROCERIES", "Buy milk", "", None, now - MINUTE);
         done["fields"]["Completed"]["value"] = json!(1);
         env.state.put(done);
@@ -276,10 +319,16 @@ fn complete_and_uncomplete_pick_the_one_they_can_change() {
     };
     let env = two();
     let out = env.json(&["complete", "buy milk"]);
-    assert_eq!((&out["changed"], &out["reminder"]["id"]), (&json!(true), &json!("REM-OPEN")));
+    assert_eq!(
+        (&out["changed"], &out["reminder"]["id"]),
+        (&json!(true), &json!("REM-OPEN"))
+    );
     let env = two();
     let out = env.json(&["uncomplete", "buy milk"]);
-    assert_eq!((&out["changed"], &out["reminder"]["id"]), (&json!(true), &json!("REM-DONE")));
+    assert_eq!(
+        (&out["changed"], &out["reminder"]["id"]),
+        (&json!(true), &json!("REM-DONE"))
+    );
     // Already open: said so, nothing written.
     let writes = env.sent("records/modify").len();
     let out = env.run(&["uncomplete", "REM-OPEN"]);
@@ -416,7 +465,14 @@ fn background_notifies_once_when_due() {
 
     // The phone adds one due right now, set ahead of time.
     let now = now_ms();
-    env.state.put(fake::reminder("REM-NOW", "List/LIST-GROCERIES", "Bread", "", Some(now - 5_000), now - 10 * MINUTE));
+    env.state.put(fake::reminder(
+        "REM-NOW",
+        "List/LIST-GROCERIES",
+        "Bread",
+        "",
+        Some(now - 5_000),
+        now - 10 * MINUTE,
+    ));
     let out = env.json(&["background"]);
     assert_eq!(out["synced"], false, "synced a moment ago");
     let out = env.json(&["background", "--sync"]);
@@ -439,7 +495,14 @@ fn background_without_a_session_still_notifies_from_the_cache() {
     let env = start();
     env.json(&["background"]);
     let now = now_ms();
-    env.state.put(fake::reminder("REM-NOW", "List/LIST-REMINDERS", "Stretch", "", Some(now - 5_000), now - 10 * MINUTE));
+    env.state.put(fake::reminder(
+        "REM-NOW",
+        "List/LIST-REMINDERS",
+        "Stretch",
+        "",
+        Some(now - 5_000),
+        now - 10 * MINUTE,
+    ));
     env.json(&["sync"]);
     *env.state.signed_out.lock().unwrap() = true;
     let out = env.json(&["background", "--sync"]);
@@ -448,7 +511,10 @@ fn background_without_a_session_still_notifies_from_the_cache() {
     assert_eq!(out["notified"][0]["title"], "Stretch");
     // A failed attempt counts: the next minute does not try again.
     let out = env.json(&["background"]);
-    assert_eq!((out["synced"].clone(), out["sync_error"].clone()), (json!(false), Value::Null));
+    assert_eq!(
+        (out["synced"].clone(), out["sync_error"].clone()),
+        (json!(false), Value::Null)
+    );
 }
 
 #[test]

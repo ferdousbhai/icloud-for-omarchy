@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
-PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes", "icloud-reminders")
+PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes", "icloud-reminders", "icloud-contacts")
 
 
 class Packaging(unittest.TestCase):

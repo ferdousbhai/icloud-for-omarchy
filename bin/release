@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a release from this machine: bump and tag the named packages, build
-# all five on native CI runners, sign the architecture-specific
+# every package on native CI runners, sign the architecture-specific
 # pacman repository databases with the local
 # package-signing key, and publish it all as one GitHub release. Users who
 # ran an installer get it through `omarchy update`.
@@ -10,7 +10,7 @@
 #               bin/release icloud-session 0.3.0 icloud-notes 0.6.0
 #
 # Tags are per package: <name>-v<version>, where <name> is the package name
-# without "icloud-" (session, photos, findmy, notes, reminders), e.g.
+# without "icloud-" (session, photos, findmy, notes, reminders, contacts), e.g.
 # notes-v0.4.1.
 # Each PKGBUILD takes its version from its newest tag. The Notes sync engine
 # (notes-sync/) ships inside icloud-notes and is not released on its own;
@@ -26,7 +26,7 @@ cd "$(dirname "$0")/.."
 
 repo=icloud-for-omarchy
 gh_repo=ferdousbhai/$repo
-all=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders)
+all=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts)
 usage() {
   echo "Usage: bin/release <package> <major.minor.patch> [<package> <version>...]" >&2
   echo "Packages: ${all[*]}" >&2
@@ -74,7 +74,11 @@ fi
 
 # Local tests run before tags; native CI builds and tests both architectures.
 # shellcheck disable=SC2065,SC2266  # ./bin/test is a script, not test(1)
-./bin/test >/dev/null 2>&1 || { ./bin/test 2>&1 | grep -E '^(FAIL|RESULT)|FAILED|panicked|^error' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
+test_output=$(./bin/test 2>&1) || {
+  grep -E '^(FAIL|RESULT)|FAILED|panicked|^error|^Diff in' <<<"$test_output" >&2
+  echo "Tests failed; not releasing." >&2
+  exit 1
+}
 # The crate is published last, after the release is verified; check now that
 # it packages, so a packaging problem stops the release before the tag.
 if (( publish_crate )); then
@@ -166,7 +170,7 @@ bin/make-installers dist
 # Candidate tags are already on origin. Main follows the published source;
 # a later verification outage must not leave main behind its own release.
 notes="Released: ${tags[*]}."
-notes+=" All five packages built from $source_commit for x86_64 and aarch64."
+notes+=" All ${#all[@]} packages built from $source_commit for x86_64 and aarch64."
 gh release create "$release_tag" dist/* --repo "$gh_repo" --title "$repo: ${tags[*]}" --notes "$notes" --latest
 echo "Published $release_tag: https://github.com/$gh_repo/releases/tag/$release_tag"
 git push -q origin main

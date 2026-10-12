@@ -6,16 +6,17 @@
 #   curl -fsSL .../install.sh | sudo bash -s -- icloud-photos        # just one app
 #
 # With no arguments it installs DEFAULT_PACKAGES below: every app
-# (icloud-notes, icloud-photos, icloud-findmy, icloud-reminders). Name
-# packages to install only those; icloud-session (the Apple sign-in every
-# app shares) can be named too, and comes in as a dependency anyway. Each
-# release also carries install-notes.sh, install-photos.sh,
-# install-findmy.sh and install-reminders.sh: this script with
-# DEFAULT_PACKAGES set to that one app (bin/make-installers writes them).
+# (icloud-notes, icloud-photos, icloud-findmy, icloud-reminders,
+# icloud-contacts). Name packages to install only those; icloud-session
+# (the Apple sign-in every app shares) can be named too, and comes in as a
+# dependency anyway. Each release also carries install-notes.sh,
+# install-photos.sh, install-findmy.sh, install-reminders.sh and
+# install-contacts.sh: this script with DEFAULT_PACKAGES set to that one
+# app (bin/make-installers writes them).
 #
 # Every step is idempotent, so re-running is safe. It trusts the
 # package-signing key (checked against the fingerprint pinned below), adds
-# the one [icloud-for-omarchy] repository that holds all five packages,
+# the one [icloud-for-omarchy] repository that holds every package,
 # installs an Omarchy hook that restores it after `omarchy refresh pacman`
 # rewrites /etc/pacman.conf, removes the [icloud-notes] repository earlier
 # Notes releases used, and installs the packages.
@@ -24,10 +25,10 @@ set -euo pipefail
 REPO=icloud-for-omarchy
 RELEASES=${ICLOUD_RELEASES:-https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download}
 SIGNING_KEY_FINGERPRINT=52130299581DAD685226900CA89CA1A6A1E74251
-PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-reminders)
+PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-reminders icloud-contacts)
 # What a run with no arguments installs. bin/make-installers rewrites this
 # one line for the per-app installers.
-DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy icloud-reminders)
+DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy icloud-reminders icloud-contacts)
 # Repositories of earlier releases: Notes had one of its own.
 OLD_REPOS=(icloud-notes)
 
@@ -194,6 +195,7 @@ for pkg in "${wanted[@]}"; do
     icloud-photos) echo 'Launch "Photos" from the app launcher (Super + Space).' ;;
     icloud-findmy) echo 'Launch "Find My" from the app launcher (Super + Space).' ;;
     icloud-reminders) echo 'Launch "Reminders" from the app launcher (Super + Space).' ;;
+    icloud-contacts) echo 'Launch "Contacts" from the app launcher (Super + Space).' ;;
   esac
 done
 cat <<EOT

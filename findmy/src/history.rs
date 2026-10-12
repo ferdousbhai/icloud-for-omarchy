@@ -222,11 +222,7 @@ pub struct LazyHistory {
 impl LazyHistory {
     /// The open history, opening it with `open` if it is not open and no
     /// failed attempt is more recent than [`REOPEN_AFTER`] before `now`.
-    pub fn get_or_open(
-        &mut self,
-        now: Instant,
-        open: impl FnOnce() -> rusqlite::Result<History>,
-    ) -> Option<&History> {
+    pub fn get_or_open(&mut self, now: Instant, open: impl FnOnce() -> rusqlite::Result<History>) -> Option<&History> {
         if self.db.is_none() && self.retry_at.is_none_or(|at| now >= at) {
             match open() {
                 Ok(h) => {
