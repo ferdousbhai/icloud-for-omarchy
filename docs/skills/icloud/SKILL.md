@@ -18,7 +18,7 @@ describes any command and its JSON.
   (not an error) · 4 Find My needs the Apple password · 64 usage.
 - Nothing prompts without a terminal. Destructive commands need `--yes`
   (else exit 64): `icloud-notes delete|delete-folder|restore`,
-  `icloud-photos delete`, `icloud-findmy play-sound|lost-mode`,
+  `icloud-photos delete`, `icloud-findmy play-sound|lost-mode`.
   Use `--yes` only for
   the exact action the user asked for.
 - iCloud Calendar and iCloud Mail are not these tools: they are

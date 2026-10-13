@@ -88,11 +88,7 @@ copied or adapted from its tests/fixtures. The read-side request shapes
 and fixtures follow timlaing/pyicloud and picklepete/pyicloud
 (https://github.com/picklepete/pyicloud) services/photos.py. Find My
 (findmy/) and the sign-in (sessiond/) follow pyicloud's documented
-endpoints too. Reminders (reminders/) follows timlaing/pyicloud's
-services/reminders/: its CloudKit request shapes, record fields and the
-topotext document it writes (reminders/src/{cloudkit,model,topotext}.rs),
-and reminders/tests/fixtures/pyicloud/ is copied from its
-tests/fixtures/reminders/. Both pyicloud repositories are under the MIT
+endpoints too. Both pyicloud repositories are under the MIT
 License:
 
 The MIT License (MIT)

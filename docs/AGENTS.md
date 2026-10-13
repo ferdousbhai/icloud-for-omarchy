@@ -1,7 +1,7 @@
 # Driving the iCloud apps as an agent
 
 A compact reference for an AI agent (or a script) using iCloud Notes,
-Photos, Find My, remaining tools on this computer through their
+Photos, and Find My on this computer through their
 command lines. The full
 audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
@@ -24,7 +24,7 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
 - Nothing prompts when stdin is not a terminal. Destructive commands refuse
   (exit 64) unless given `--yes`: `icloud-notes delete | delete-folder |
-  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`,
+  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`.
   Pass `--yes` only
   when the user asked for that exact action.
 - `TOOL COMMAND --help` describes any command and its JSON.
@@ -176,10 +176,52 @@ invoke the retired standalone CLIs.
 
 ## Recipes
 
+**Sync notes and read one**
+
 ```bash
-icloud-notes --json read 'Groceries'
-icloud-photos --json list --limit 20
-icloud-findmy --json devices
+icloud-notes --json sync                       # exit 2: ask the user to sign in
+icloud-notes --json search "dentist"           # find it
+icloud-notes --json read "Notes/Dentist.md"    # .body is the text
+```
+
+**Add a note and push it**
+
+```bash
+icloud-notes --json new "Meeting 30 Sep" --folder Work --body "- agenda" --push
+# exit 1 with error.code "vault_busy": Notes is open; ask the user to quit it or add it there
+# exit 2: written locally; after the user signs in: icloud-notes --json sync
+```
+
+**Append to a checklist and tick an item**
+
+```bash
+icloud-notes --json write Groceries --append --body "- [ ] jam"
+icloud-notes --json read Groceries             # find the line number in .body (first line is 1)
+icloud-notes --json toggle Groceries 3 --push
+```
+
+**Resolve a conflict**
+
+```bash
+icloud-notes --json list --flag conflict
+icloud-notes --json read "Work/Plan.md"        # .conflicts[i].local / .remote
+icloud-notes --json resolve "Work/Plan.md" --choices local,both --push
+# .conflicts_unreadable true instead: icloud-notes recover "Work/Plan.md" --strip
+```
+
+**Download the photos of an album**
+
+```bash
+icloud-photos --json sync
+icloud-photos --json albums                    # pick the album's id
+icloud-photos --json list --album "$ID" | jq -r '.[].id' | xargs icloud-photos --json download --out ~/Downloads/album
+```
+
+**Locate a device and play a sound**
+
+```bash
+icloud-findmy --json locate "iPhone" --wait 30      # exit 4: ask for icloud-session authorize-find-my
+icloud-findmy --json play-sound "iPhone" --yes
 ```
 
 ## Testing without the real account

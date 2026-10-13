@@ -156,10 +156,9 @@ else
   fi
 fi
 
-# The apps' systemd user timers: Notes' background sync (every 15 minutes
-# while Notes is closed) and Reminders' due-time notifications (every
-# minute). Each package enables its timer for every user from their next
-# login; this starts it now in the desktop user's systemd, not root's.
+# Notes' background sync runs every 15 minutes while Notes is closed.
+# The package enables its timer for every user from their next login;
+# this starts it now in the desktop user's systemd, not root's.
 # Usage: start_timer <timer> <what> <is on, ...>
 start_timer() {
   local timer=$1 what=$2 on=$3 user uid

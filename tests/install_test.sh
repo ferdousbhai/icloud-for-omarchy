@@ -120,7 +120,6 @@ done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
 check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy' "$PACMAN_LOG"
 
-# Reminders last: the checks after the loop read its output.
 for app in notes photos findmy; do
   setup
   bash "$work/dist/install-$app.sh" >"$work/out" 2>&1
@@ -164,13 +163,6 @@ check "migration: unrelated hooks are kept" [ -e "$hooks/unrelated" ]
 check "migration: says what it removed" grep -q 'Removing the old \[icloud-notes\] repository' "$work/out"
 check "migration: then installs" [ "$(installed)" = "icloud-notes" ]
 
-umount -q /etc/pacman.conf /etc/pacman.d /root 2>/dev/null || true
-if (( fail )); then
-  echo "FAIL install_test" >&2
-  exit 1
-fi
-echo "ok install_test"
-
 for retired in contacts reminders; do
   setup
   status=0
@@ -178,3 +170,10 @@ for retired in contacts reminders; do
   check "retired icloud-$retired is refused" [ "$status" = 64 ]
   check "retired $retired installer is not generated" [ ! -e "$work/dist/install-$retired.sh" ]
 done
+
+umount -q /etc/pacman.conf /etc/pacman.d /root 2>/dev/null || true
+if (( fail )); then
+  echo "FAIL install_test" >&2
+  exit 1
+fi
+echo "ok install_test"
