@@ -424,6 +424,10 @@ QList<Note> scanNotes(NotesBackend &b, const QStringList &folders = {})
     for (const QString &folder : folders.isEmpty() ? b.folders() : folders) {
         b.setCurrentFolder(folder);
         for (const QString &file : b.notes()) {
+            // The root's All Notes view includes descendants; this scan visits
+            // each folder separately to retain the CLI's folder/file shape.
+            if (folder.isEmpty() && file.contains(u'/'))
+                continue;
             const QVariantMap d = b.noteDetails().value(file).toMap();
             notes << Note{ folder,
                            file,

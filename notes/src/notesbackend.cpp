@@ -233,6 +233,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         }
         rebuildFolders();
         rebuildNotes();
+        rewatch();
         if (!m_syncRunning) // a pull's own writes are not local changes
             emit vaultChanged();
     });
@@ -775,14 +776,25 @@ void NotesBackend::rebuildFolders()
 
 void NotesBackend::rebuildNotes()
 {
-    QFileInfoList entries =
-        QDir(folderAbsolutePath(m_currentFolder)).entryInfoList({ QStringLiteral("*.md") }, QDir::Files);
+    const QDir dir(folderAbsolutePath(m_currentFolder));
+    QFileInfoList entries;
+    if (m_currentFolder.isEmpty()) {
+        QDirIterator files(dir.absolutePath(), { QStringLiteral("*.md") }, QDir::Files,
+                           QDirIterator::Subdirectories);
+        while (files.hasNext()) {
+            const QFileInfo info(files.next());
+            if (!isHidden(dir.relativeFilePath(info.filePath())))
+                entries << info;
+        }
+    } else {
+        entries = dir.entryInfoList({ QStringLiteral("*.md") }, QDir::Files);
+    }
     // The sync tool syncs note mtimes, so newest-first matches Notes.app ordering.
     std::sort(entries.begin(), entries.end(),
               [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
     QStringList found;
     for (const QFileInfo &info : entries)
-        found << info.fileName();
+        found << dir.relativeFilePath(info.filePath());
     // The open note's file is gone (a pull moved, renamed or deleted it):
     // follow it by its id, which rebuilds the list where it went.
     if (!m_currentNote.isEmpty() && !found.contains(m_currentNote)
@@ -822,7 +834,7 @@ void NotesBackend::classifyNotes()
             || scan.mode != mode) {
             const QString text = readText(path, kScanLimit + 1);
             const bool huge = text.size() > kScanLimit;
-            const SyncModel::NotePreview preview = SyncModel::previewNote(text, name.chopped(3), mode);
+            const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
             scan = { info.lastModified().toMSecsSinceEpoch(), info.size(), mode, preview.title, preview.snippet,
                      SyncModel::extractNoteId(text), !huge && SyncModel::hasConflictMarkers(text),
                      !huge && SyncModel::hasTable(text) };
@@ -958,6 +970,12 @@ void NotesBackend::rewatch()
     if (!watched.isEmpty())
         m_watcher.removePaths(watched);
     m_watcher.addPath(rootPath());
+    if (m_currentFolder.isEmpty()) {
+        for (const QString &folder : m_folders) {
+            if (!folder.isEmpty())
+                m_watcher.addPath(folderAbsolutePath(folder));
+        }
+    }
     if (QDir(folderAbsolutePath(m_currentFolder)).exists())
         m_watcher.addPath(folderAbsolutePath(m_currentFolder));
     if (QFile::exists(noteAbsolutePath()))
@@ -987,6 +1005,13 @@ void NotesBackend::openNote(const QString &name)
 {
     if (!m_notes.contains(name))
         return;
+    // All Notes uses vault-relative paths so identical filenames in different
+    // folders remain distinct. Open the note in its actual folder.
+    if (m_currentFolder.isEmpty() && name.contains(u'/')) {
+        setCurrentFolder(name.section(u'/', 0, -2));
+        openNote(name.section(u'/', -1));
+        return;
+    }
     m_lostNote = {};
     if (m_currentNote != name) {
         m_currentNote = name;
@@ -1389,7 +1414,7 @@ QVariantList NotesBackend::searchVault(const QString &query)
         }
         const QString folder = rel.section(u'/', 0, -2);
         const QString name = rel.section(u'/', -1);
-        const SyncModel::NotePreview preview = SyncModel::previewNote(text, name.chopped(3), mode);
+        const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
         out << QVariantMap{ { QStringLiteral("folder"), folder },
                             { QStringLiteral("file"), name },
                             { QStringLiteral("title"), preview.title },

@@ -161,6 +161,23 @@ int main(int argc, char *argv[])
     check(b.folderNoteCounts().value(QString()).toInt() == 8
               && b.folderNoteCounts().value(QStringLiteral("Sub")).toInt() == 1,
           "backend folder counts");
+    check(b.notes().size() == 8 && b.notes().contains(QStringLiteral("Sub/H.md")),
+          "backend All Notes includes notes in subfolders");
+    b.openNote(QStringLiteral("Sub/H.md"));
+    check(b.currentFolder() == QStringLiteral("Sub") && b.currentNote() == QStringLiteral("H.md")
+              && b.noteBody().contains(QStringLiteral("Nested")),
+          "backend All Notes opens a nested note in its folder");
+    b.setCurrentFolder(QString());
+    writeFile(QStringLiteral("Sub/A.md"), QStringLiteral("# Different Alpha\nnested duplicate filename\n"));
+    b.refresh();
+    check(b.notes().contains(QStringLiteral("A.md")) && b.notes().contains(QStringLiteral("Sub/A.md")),
+          "backend All Notes distinguishes identical filenames in different folders");
+    b.openNote(QStringLiteral("Sub/A.md"));
+    check(b.noteBody().contains(QStringLiteral("nested duplicate filename")),
+          "backend All Notes opens the correct duplicate filename");
+    QFile::remove(QDir(NotesBackend::rootPath()).filePath(QStringLiteral("Sub/A.md")));
+    b.setCurrentFolder(QString());
+    b.refresh();
     check(!b.noteStates().contains(QStringLiteral("A.md")), "backend clean note unflagged");
     check(hasFlag(b, QStringLiteral("B.md"), "conflict"), "backend conflict flagged");
     check(hasFlag(b, QStringLiteral("C.md"), "new"), "backend new flagged");
