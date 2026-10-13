@@ -266,9 +266,15 @@ for arch in ("x86_64", "aarch64"):
                 # Model arch-chroot's PID namespace with its inherited /proc.
                 # The command must give it a matching proc mount before use.
                 [[ $2 == --mount && $3 == --mount-proc ]]
-                unshare --pid --fork "${@:1:3}" bash -euc '
+                namespace=("${@:1:3}")
+                shift 3
+                environment=()
+                while [[ $1 != bash ]]; do environment+=("$1"); shift; done
+                unshare --pid --fork "${namespace[@]}" "${environment[@]}" bash -euc '
                     [[ $$ == 1 ]]
                     [[ $(cat /proc/1/comm) == bash ]]
+                    [[ -z ${SUDO_USER+x}${SUDO_UID+x}${SUDO_GID+x} ]]
+                    [[ $USER == root && $HOME == /root ]]
                     echo proc-matches >>"$LOG"
                 '
             fi
@@ -276,7 +282,8 @@ for arch in ("x86_64", "aarch64"):
         result = subprocess.run([
             "unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork",
             str(root / "bin/arch-run"), "true",
-        ], env=dict(self.env, BOOTSTRAP=str(archive), RESOLVER=str(resolver), LOG=str(self.work / "chroot.log")), capture_output=True)
+        ], env=dict(self.env, BOOTSTRAP=str(archive), RESOLVER=str(resolver), LOG=str(self.work / "chroot.log"),
+                    SUDO_USER="ubuntu-runner", SUDO_UID="1001", SUDO_GID="1001"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.work / "chroot.log").read_text().splitlines(), ["isolated", "isolated", "proc-matches"])
         self.assertEqual((runtime.st_dev, runtime.st_ino), (os.stat("/run").st_dev, os.stat("/run").st_ino))

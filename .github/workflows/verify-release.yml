@@ -2,6 +2,12 @@ name: Verify published release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published suite tag to verify
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
@@ -19,11 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
       - name: Verify every installer from this exact suite tag
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         run: |
+          [[ $RELEASE_TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git checkout "$RELEASE_TAG" -- install.sh bin/make-installers packaging/PKGBUILD Cargo.toml
           sudo apt-get update
           sudo apt-get install -y arch-install-scripts zstd
           bin/verify-release "$RELEASE_TAG"
