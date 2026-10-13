@@ -255,10 +255,10 @@ for arch in ("x86_64", "aarch64"):
         self.stub("curl", 'cp "$BOOTSTRAP" "${@: -1}"')
         self.stub("arch-chroot", r'''
             set -e
-            [[ $1 == -r ]]
+            [[ $1 != -* ]]
             [[ -z $(ls -A /run) ]]
-            cmp "$2/etc/resolv.conf" "$RESOLVER"
-            [[ ,$(findmnt -no OPTIONS "$2/source"), == *,ro,* ]]
+            cmp "$1/etc/resolv.conf" "$RESOLVER"
+            [[ ,$(findmnt -no OPTIONS "$1/source"), == *,ro,* ]]
             echo isolated >>"$LOG"
         ''')
         result = subprocess.run([

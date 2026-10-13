@@ -35,7 +35,7 @@ fi
 rm -f "$root/etc/resolv.conf"
 cp -L /etc/resolv.conf "$root/etc/resolv.conf"
 mount -t tmpfs -o mode=0755 tmpfs /run
-arch-chroot -r "$root" bash -euc '
+arch-chroot "$root" bash -euc '
   sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
   pacman-key --init
   if [[ $(uname -m) == aarch64 ]]; then pacman-key --populate archlinuxarm; else pacman-key --populate archlinux; fi
@@ -43,6 +43,6 @@ arch-chroot -r "$root" bash -euc '
   useradd -m builder
   chown -R builder:builder /output /cargo
 '
-arch-chroot -r "$root" env ICLOUD_ARCH_ROOT=1 CARGO_HOME=/cargo HOME=/root USER=root \
+arch-chroot "$root" env ICLOUD_ARCH_ROOT=1 CARGO_HOME=/cargo HOME=/root USER=root \
   bash -c 'cd /source; exec "$@"' arch-run "$@"
 CHROOT
