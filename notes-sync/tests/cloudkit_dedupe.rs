@@ -239,3 +239,18 @@ fn a_shared_zone_listed_on_two_pages_is_fetched_once() {
         .collect();
     assert_eq!(owners, ["_ownerA", "_ownerB"]);
 }
+
+#[test]
+fn zone_walk_rejects_missing_or_repeated_tokens_while_more_pages_remain() {
+    for token in [Some("old"), None] {
+        let mut stalled = page(vec![note("A", "1", None, "YQ==")], true, "old");
+        if token.is_none() {
+            stalled["zones"][0].as_object_mut().unwrap().remove("syncToken");
+        }
+        let database = db(scripted(vec![stalled]));
+        let error = database
+            .fetch_all_note_records(Some("old"), &mut no_pages())
+            .unwrap_err();
+        assert!(error.to_string().contains("without a new syncToken"), "{error}");
+    }
+}

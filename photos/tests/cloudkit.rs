@@ -388,3 +388,21 @@ fn hidden_assets_count_as_removed() {
     assert!(icloud_photos::cloudkit::AssetPart::from_record(&rec).unwrap().deleted);
     assert!(icloud_photos::cloudkit::DESIRED_KEYS.contains(&"isHidden"));
 }
+
+#[test]
+fn album_listing_rejects_repeated_continuation_instead_of_a_partial_list() {
+    let t = FixtureTransport::new(|call| {
+        if call.op == "records/query" {
+            return Ok(json!({"records": [], "continuationMarker": "stuck"}));
+        }
+        library(call)
+    });
+    let ck = CloudKit::connect(&t).unwrap();
+    assert!(
+        ck.albums()
+            .unwrap_err()
+            .to_string()
+            .contains("repeated an album continuation")
+    );
+    assert_eq!(t.ops().iter().filter(|op| op.as_str() == "records/query").count(), 2);
+}

@@ -146,6 +146,12 @@ impl<T: Transport> Database<T> {
             let page = zone.records.unwrap_or_default();
             let count = page.len();
             records.extend(page);
+            if zone.more_coming == Some(true) && (zone.sync_token.is_none() || zone.sync_token == sync_token) {
+                return Err(CkError::RequestFailed(
+                    "changes/zone reported moreComing without a new syncToken; refusing to re-request the same page"
+                        .into(),
+                ));
+            }
             if zone.sync_token.is_some() {
                 sync_token = zone.sync_token;
             }

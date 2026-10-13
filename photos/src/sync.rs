@@ -184,11 +184,16 @@ pub fn incremental(ck: &CloudKit, cat: &mut Catalog, token: &str, progress: &dyn
         progress(Progress::Changes(records.len()));
         let advanced = page.sync_token != token;
         token = page.sync_token;
-        if !page.more_coming || !advanced {
-            break;
+        if !page.more_coming {
+            return apply_changes(ck, cat, records, &token);
+        }
+        if !advanced {
+            return Err(Error::Other(
+                "iCloud reported more changes without advancing the sync token".into(),
+            ));
         }
     }
-    apply_changes(ck, cat, records, &token)
+    Err(Error::Other("incremental sync did not end".into()))
 }
 
 /// Apply one batch of changed records and store the new token, atomically.

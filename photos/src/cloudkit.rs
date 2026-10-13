@@ -7,7 +7,7 @@
 //! Every call is a POST of a JSON body to
 //! `{ckdatabasews}/database/1/com.apple.photos.cloud/production/private/<op>`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -475,12 +475,14 @@ impl<'t> CloudKit<'t> {
         let filters = parent.map(|p| vec![string_filter("parentId", p)]).unwrap_or_default();
         let mut records = Vec::new();
         let mut cont: Option<String> = None;
+        let mut seen = HashSet::new();
         loop {
             let page = self.query(LIST_ALBUMS, filters.clone(), cont.as_deref())?;
             records.extend(page.records);
             match page.continuation {
-                Some(c) if Some(&c) != cont.as_ref() => cont = Some(c),
-                _ => break,
+                Some(c) if seen.insert(c.clone()) => cont = Some(c),
+                Some(_) => return Err(Error::Other("iCloud repeated an album continuation marker".into())),
+                None => break,
             }
         }
         for album in records.iter().filter_map(Album::from_record).filter(|a| !a.deleted) {

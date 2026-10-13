@@ -231,3 +231,57 @@ fn a_failed_full_sync_writes_nothing() {
     assert_eq!(cat.count().unwrap(), 0);
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap(), None);
 }
+
+#[test]
+fn membership_only_sync_changes_album_contents_without_record_counts() {
+    let t = FixtureTransport::new(|call| {
+        if call.op == "changes/zone" {
+            return Ok(serde_json::json!({"zones": [{
+                "syncToken": "TOKEN-RELATION", "moreComing": false,
+                "records": [{
+                    "recordName": "ASSET-004-IN-A-FAMILY", "recordType": "CPLContainerRelation",
+                    "fields": {
+                        "containerId": {"value": "A-FAMILY", "type": "STRING"},
+                        "itemId": {"value": "ASSET-004", "type": "STRING"}
+                    }
+                }]
+            }]}));
+        }
+        library(call)
+    });
+    let ck = CloudKit::connect(&t).unwrap();
+    let mut cat = Catalog::open_in_memory().unwrap();
+    sync(&ck, &mut cat, &|_| {}).unwrap();
+    assert_eq!(ids(&cat, Some("A-FAMILY")).len(), 2);
+    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    assert_eq!((report.assets, report.removed, report.albums), (0, 0, 0));
+    assert_eq!(ids(&cat, Some("A-FAMILY")).len(), 3);
+    assert_eq!(
+        cat.albums().unwrap().iter().find(|a| a.id == "A-FAMILY").unwrap().count,
+        3
+    );
+}
+
+#[test]
+fn stalled_change_token_rejects_partial_changes_and_falls_back_to_full_sync() {
+    let t = FixtureTransport::new(|call| {
+        if call.op == "changes/zone" {
+            return Ok(serde_json::json!({"zones": [{
+                "syncToken": "TOKEN-FULL", "moreComing": true,
+                "records": [{"recordName": "ASSET-001", "deleted": true}]
+            }]}));
+        }
+        library(call)
+    });
+    let ck = CloudKit::connect(&t).unwrap();
+    let mut cat = Catalog::open_in_memory().unwrap();
+    sync(&ck, &mut cat, &|_| {}).unwrap();
+    let before = ids(&cat, None);
+    assert!(icloud_photos::sync::incremental(&ck, &mut cat, "TOKEN-FULL", &|_| {}).is_err());
+    assert_eq!(ids(&cat, None), before, "partial deletion must not be committed");
+    assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-FULL"));
+    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    assert_eq!(report.mode, Mode::Full);
+    assert!(report.fell_back.unwrap().contains("without advancing"));
+    assert_eq!(ids(&cat, None), before);
+}
