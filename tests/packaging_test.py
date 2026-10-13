@@ -181,7 +181,7 @@ for arch in ("x86_64", "aarch64"):
         self.stub("uname", "echo x86_64")
         self.stub("cargo", "exit 0")
         self.stub("rustc", "exit 0")
-        self.stub("makepkg", 'printf "%s %s %s\\n" "$PWD" "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS" >>"$LOG"')
+        self.stub("makepkg", 'printf "%s %s %s %s %s\\n" "$PWD" "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS" "$CARGO_PROFILE_DEV_DEBUG" "$CARGO_INCREMENTAL" >>"$LOG"')
         self.stub("dbus-run-session", "exit 0")
         output = self.work / "packages"
         result = subprocess.run(
@@ -193,6 +193,7 @@ for arch in ("x86_64", "aarch64"):
         self.assertEqual(len(calls), 1)
         self.assertEqual(len({call[1] for call in calls}), 1)
         self.assertEqual({call[2] for call in calls}, {"3"})
+        self.assertEqual({tuple(call[3:]) for call in calls}, {("0", "0")})
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True)
         self.assertEqual((output / "source-commit.txt").read_text(), commit)
         self.assertFalse(Path(calls[0][1]).exists())
@@ -286,6 +287,9 @@ for arch in ("x86_64", "aarch64"):
                         pkgdir="$3/staging"
                         export CARGO_TARGET_DIR="$4"
                         _cargo_env
+                        first=$RUSTFLAGS
+                        _cargo_env
+                        [[ $RUSTFLAGS == "$first" ]]
                         printf '%s\n' "$RUSTFLAGS"
                         install() {
                           if [[ $1 == -Dm755 && $2 != build/icloud-notes ]]; then

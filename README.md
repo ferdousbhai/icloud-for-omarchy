@@ -280,7 +280,9 @@ above plus `base-devel`, `cargo` and `git`, then run
 HEAD in scratch space and writes packages to `dist/<arch>/`.
 Cargo uses available cores by default; `CARGO_BUILD_JOBS` overrides this.
 CI caches downloads in `dist/cargo-<arch>/` by architecture and `Cargo.lock`;
-compiled artifacts are reused within a run only.
+compiled artifacts are reused within a run only. Scratch package builds omit
+test debug symbols and incremental state; the chroot discards package downloads
+after installing build dependencies.
 
 The installer retains its pinned `add_signed_repo` hash as a regression
 check. Ghost no longer carries this function; iCloud installer changes

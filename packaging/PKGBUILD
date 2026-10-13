@@ -4,6 +4,7 @@ pkgbase=icloud-for-omarchy
 pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts)
 _root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 _suite_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_root/Cargo.toml")
+_rustflags=${RUSTFLAGS:-}
 pkgver=$_suite_version
 pkgrel=1
 arch=('x86_64' 'aarch64')
@@ -31,7 +32,7 @@ prepare() {
 
 _cargo_env() {
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$_root=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+  export RUSTFLAGS="$_rustflags --remap-path-prefix=$_root=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
 }
 
 build() {

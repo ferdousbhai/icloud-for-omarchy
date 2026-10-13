@@ -9,6 +9,7 @@ architecture=${1:?Usage: bin/build-packages <x86_64|aarch64> [output-directory]}
 if (( EUID == 0 )); then
   [[ ${ICLOUD_ARCH_ROOT:-} == 1 ]] || { echo 'Run as a regular Arch user.' >&2; exit 1; }
   pacman -S --noconfirm --needed base-devel "${makedepends[@]}"
+  pacman -Scc --noconfirm
   exec runuser -u builder -- "$PWD/bin/build-packages" "$@"
 fi
 for tool in makepkg cargo rustc; do
@@ -22,6 +23,7 @@ source_commit=$(git -c safe.directory="$PWD" rev-parse HEAD)
 git -c safe.directory="$PWD/.git" clone --quiet --no-hardlinks "$PWD" "$work/source"
 [[ $(git -C "$work/source" rev-parse HEAD) == "$source_commit" ]]
 export CARGO_TARGET_DIR="$work/target"
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)}
 (cd "$work/source/packaging" && PKGDEST="$output" PKGEXT=.pkg.tar.zst makepkg --force --nodeps)
 printf '%s\n' "$source_commit" > "$output/source-commit.txt"
