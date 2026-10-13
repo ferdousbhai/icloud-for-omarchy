@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and test all five packages natively; signing keys never enter CI.
+# Build and test every package natively; signing keys never enter CI.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 architecture=${1:?Usage: bin/build-packages <x86_64|aarch64> [output-directory]}
@@ -29,12 +29,12 @@ docker run --rm --platform "$platform" -e BUILD_ARCH="$architecture" \
     [[ $(git -C /build rev-parse HEAD) == "$source_commit" ]]
     useradd -m builder
     chown -R builder:builder /build /output
-    for pkg in icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders; do
+    for pkg in icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts; do
       # Intra-repo dependencies are built together; --nodeps skips their
       # installation only. All system/build/check dependencies are above.
       su builder -c "cd /build/packaging/$pkg && PKGDEST=/output PKGEXT=.pkg.tar.zst makepkg --force --nodeps"
       # Each PKGBUILD archives its own workspace; discard build trees so
-      # four Rust debug/release target directories do not fill CI disks.
+      # several Rust debug/release target directories do not fill CI disks.
       rm -rf "/build/packaging/$pkg/src" "/build/packaging/$pkg/pkg"
     done
     su builder -c "cd /build && dbus-run-session -- notes/bin/test"

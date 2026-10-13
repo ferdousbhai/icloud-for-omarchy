@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Write the per-app installers into a directory: install-notes.sh,
-# install-photos.sh, install-findmy.sh and install-reminders.sh. Each is
+# install-photos.sh, install-findmy.sh, install-reminders.sh and install-contacts.sh. Each is
 # install.sh with its
 # DEFAULT_PACKAGES line set to that one app, so a bare
 # `curl .../install-photos.sh | sudo bash` installs only Photos; install.sh
@@ -12,7 +12,7 @@ out="${1:?Usage: bin/make-installers <directory>}"
 src="$(dirname "$0")/../install.sh"
 mkdir -p "$out"
 
-for app in notes photos findmy reminders; do
+for app in notes photos findmy reminders contacts; do
   dest="$out/install-$app.sh"
   {
     sed -n '1p' "$src"
@@ -25,4 +25,4 @@ for app in notes photos findmy reminders; do
   fi
   chmod 755 "$dest"
 done
-echo "Wrote install-notes.sh, install-photos.sh, install-findmy.sh and install-reminders.sh to $out"
+echo "Wrote install-notes.sh, install-photos.sh, install-findmy.sh, install-reminders.sh and install-contacts.sh to $out"

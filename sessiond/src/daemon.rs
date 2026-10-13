@@ -721,7 +721,9 @@ impl Daemon {
                 match self.secrets.remove_session() {
                     Ok(_) => self.clear_removal_pending(),
                     Err(e) => {
-                        errors.push(format!("removing the session from the keyring (retried at the next start): {e}"));
+                        errors.push(format!(
+                            "removing the session from the keyring (retried at the next start): {e}"
+                        ));
                         let marker = &self.cfg.paths.removal_pending;
                         if let Err(e) = files::touch(marker) {
                             errors.push(format!("writing {}: {e}", marker.display()));
@@ -1682,7 +1684,13 @@ impl Daemon {
         }
         let pings = self.pings_seen.load(Ordering::SeqCst);
         let own = conn.unique_name().map(|n| n.to_string()).unwrap_or_default();
-        match conn.call_method(Some(own.as_str()), OBJECT_PATH, Some("org.freedesktop.DBus.Peer"), "Ping", &()) {
+        match conn.call_method(
+            Some(own.as_str()),
+            OBJECT_PATH,
+            Some("org.freedesktop.DBus.Peer"),
+            "Ping",
+            &(),
+        ) {
             Ok(_) => {
                 let start = Instant::now();
                 while self.pings_seen.load(Ordering::SeqCst) == pings && start.elapsed() < FLUSH_WAIT {

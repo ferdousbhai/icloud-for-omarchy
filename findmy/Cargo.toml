@@ -17,10 +17,11 @@ name = "icloud_findmy"
 name = "icloud-findmy"
 path = "src/main.rs"
 
-# The window (and, given a command, the command line too).
+# The window (and, given a command, the command line too). Its code is in
+# the binary, so none of it can reach the library the command line links.
 [[bin]]
 name = "icloud-findmy-app"
-path = "src/bin/app.rs"
+path = "src/bin/app/main.rs"
 required-features = ["ui"]
 
 # The core (findme, history, models) needs no GTK, so `cargo test

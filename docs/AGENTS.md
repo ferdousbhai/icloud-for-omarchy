@@ -1,7 +1,8 @@
 # Driving the iCloud apps as an agent
 
 A compact reference for an AI agent (or a script) using iCloud Notes,
-Photos, Find My and Reminders on this computer through their command lines. The full
+Photos, Find My, Reminders and Contacts on this computer through their
+command lines. The full
 audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
 ## The rules that always hold
@@ -24,8 +25,8 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 - Nothing prompts when stdin is not a terminal. Destructive commands refuse
   (exit 64) unless given `--yes`: `icloud-notes delete | delete-folder |
   restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`,
-  `icloud-reminders delete`. Pass `--yes` only when the user asked for that
-  exact action.
+  `icloud-reminders delete`, `icloud-contacts delete`. Pass `--yes` only
+  when the user asked for that exact action.
 - `TOOL COMMAND --help` describes any command and its JSON.
 
 ## Auth: icloud-session owns the sign-in
@@ -203,6 +204,37 @@ reminders first; `ambiguous` lists the candidates). WHEN: `2026-10-10`
 when `--due` changes, so say so if it is not 0. Due reminders notify on
 their own (the timer); never run `background` to notify on purpose.
 
+## Contacts: `icloud-contacts`
+
+The iCloud address book. Reading commands sync first (`--cached` skips that
+and reads the last sync). Without a network every command but a `--cached`
+read fails with `offline`; nothing is queued.
+
+```console
+$ icloud-contacts --json list "ann"
+[{"id":"3C9E...","name":"Ann Lee","first":"Ann","last":"Lee","company":"Acme","is_company":false,"me":false,
+  "phones":[{"label":"mobile","value":"+1 (555) 010-0100"}],"emails":[{"label":"work","value":"ann@acme.example"}],
+  "urls":[],"addresses":[...],"birthday":"1990-05-01","notes":null,"has_photo":true,...}]
+$ icloud-contacts --json show me
+$ icloud-contacts --json add --first Cleo --last Park --phone work=+44 20 7946 0000 --email cleo@example.org
+{"action":"add","contact":{"id":"...","name":"Cleo Park",...}}
+$ icloud-contacts --json edit "cleo park" --job-title Designer --remove-phone "20 7946 0000"
+```
+
+| Command | Does |
+|---|---|
+| `list [QUERY]`, `show CONTACT` | read (sorted by last name; QUERY matches names, companies, emails, or phone digits) |
+| `add [--first N] [--last N] [--company C [--is-company]] [--phone [LABEL=]P]... [--email ...]... [--url ...]... [--birthday D] [--notes T]` | create; needs a name, company, phone or email |
+| `edit CONTACT [--FIELD V]... [--phone/--email/--url V]... [--remove-phone/--remove-email/--remove-url V]...` | change only what is named; `--FIELD ""` removes a field |
+| `delete CONTACT --yes` | delete on every device: there is no Recently Deleted for contacts, so be sure |
+| `export [CONTACT]... [--output FILE]` | vCard 3.0 |
+| `sync` | fetch everything |
+
+CONTACT is an ID, `me`, a name, an email, a phone number (by its digits)
+or a unique part of a name (`ambiguous` lists the candidates). To find
+someone's number or email, `show` them and read `phones`/`emails`; don't
+guess between several matches, ask.
+
 ## Recipes
 
 **Sync notes and read one**
@@ -260,11 +292,19 @@ icloud-reminders --json add "Renew passport" --list Personal --due "2026-11-01 0
 icloud-reminders --json list --all | jq '.[] | select(.title | test("passport"; "i"))'
 ```
 
+**Look someone up**
+
+```bash
+icloud-contacts --json show "ann lee" | jq -r '.phones[0].value'
+icloud-contacts --json list "@acme.example" | jq -r '.[].name'
+```
+
 ## Testing without the real account
 
 `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:PORT`
-points photos, findmy and reminders at a local fake server (`cargo run -p
-icloud-photos --example fake_cloudkit -- --port PORT`, `cargo run -p
-icloud-findmy --example fake_findme`, `cargo run -p icloud-reminders
---example fake_reminders -- 127.0.0.1:PORT`; their READMEs say more);
+points photos, findmy, reminders and contacts at a local fake server
+(`cargo run -p icloud-photos --example fake_cloudkit -- --port PORT`, `cargo
+run -p icloud-findmy --example fake_findme`, `cargo run -p icloud-reminders
+--example fake_reminders -- 127.0.0.1:PORT`, `cargo run -p icloud-contacts
+--example fake_contacts -- 127.0.0.1:PORT`; their READMEs say more);
 `--data-dir DIR` keeps their catalog, cache and history there; `icloud-notes --vault DIR` works on a scratch vault.

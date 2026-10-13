@@ -254,7 +254,11 @@ mod tests {
         assert!(d.can_play_sound);
         assert_eq!(d.location, None);
         assert!(Device::from_json(&serde_json::json!({"name": "no id"})).is_none());
-        assert!(!Device::from_json(&serde_json::json!({"id": "y"})).unwrap().can_play_sound);
+        assert!(
+            !Device::from_json(&serde_json::json!({"id": "y"}))
+                .unwrap()
+                .can_play_sound
+        );
     }
 
     #[test]

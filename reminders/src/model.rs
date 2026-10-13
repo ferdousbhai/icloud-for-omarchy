@@ -201,7 +201,10 @@ pub fn update_fields(changes: &[Change], now_ms: i64) -> (Map<String, Value>, Ve
                     "AllDay".into(),
                     field("INT64", i64::from(due.as_ref().is_some_and(|d| d.all_day)).into()),
                 );
-                fields.insert("TimeZone".into(), field("STRING", zone.map_or(Value::Null, Value::from)));
+                fields.insert(
+                    "TimeZone".into(),
+                    field("STRING", zone.map_or(Value::Null, Value::from)),
+                );
                 keys.extend(["dueDate", "allDay", "timeZone"]);
             }
             Change::Deleted => {
@@ -280,7 +283,15 @@ pub fn update_op(r: &Reminder, changes: &[Change], replica: &str, now_ms: i64) -
 /// The records/modify operation creating a reminder in `list_id`, named
 /// `Reminder/<uuid>`: pyicloud's `create` (its fields, its token map keys,
 /// the list as the record's parent).
-pub fn create_op(uuid: &str, list_id: &str, title: &str, notes: &str, due: Option<&Due>, replica: &str, now_ms: i64) -> Value {
+pub fn create_op(
+    uuid: &str,
+    list_id: &str,
+    title: &str,
+    notes: &str,
+    due: Option<&Due>,
+    replica: &str,
+    now_ms: i64,
+) -> Value {
     let mut keys = vec![
         "allDay",
         "titleDocument",
@@ -300,7 +311,10 @@ pub fn create_op(uuid: &str, list_id: &str, title: &str, notes: &str, due: Optio
     let mut put = |k: &str, v: Value| {
         fields.insert(k.to_owned(), v);
     };
-    put("AllDay", field("INT64", i64::from(due.is_some_and(|d| d.all_day)).into()));
+    put(
+        "AllDay",
+        field("INT64", i64::from(due.is_some_and(|d| d.all_day)).into()),
+    );
     put("Completed", field("INT64", 0.into()));
     put("CompletionDate", timestamp(None));
     put("CreationDate", timestamp(Some(now_ms)));
@@ -308,7 +322,10 @@ pub fn create_op(uuid: &str, list_id: &str, title: &str, notes: &str, due: Optio
     put("Flagged", field("INT64", 0.into()));
     put("Imported", field("INT64", 0.into()));
     put("LastModifiedDate", timestamp(Some(now_ms)));
-    put("List", field("REFERENCE", json!({ "recordName": list_id, "action": "VALIDATE" })));
+    put(
+        "List",
+        field("REFERENCE", json!({ "recordName": list_id, "action": "VALIDATE" })),
+    );
     put("NotesDocument", field("STRING", topotext::encode(notes).into()));
     put("Priority", field("INT64", 0.into()));
     put("TitleDocument", field("STRING", topotext::encode(title).into()));
@@ -322,7 +339,10 @@ pub fn create_op(uuid: &str, list_id: &str, title: &str, notes: &str, due: Optio
     }
     put(
         "ResolutionTokenMap",
-        field("STRING", bump_tokens(None, &keys, replica, now_ms).expect("a fresh map").into()),
+        field(
+            "STRING",
+            bump_tokens(None, &keys, replica, now_ms).expect("a fresh map").into(),
+        ),
     );
     json!({
         "operationType": "create",
@@ -342,7 +362,11 @@ mod tests {
     #[test]
     fn a_counter_at_its_maximum_is_an_error() {
         let map = format!("{{\"map\":{{\"title\":{{\"counter\":{}}}}}}}", u64::MAX);
-        assert!(bump_tokens(Some(&map), &["title"], "r", 0).unwrap_err().contains("title"));
+        assert!(
+            bump_tokens(Some(&map), &["title"], "r", 0)
+                .unwrap_err()
+                .contains("title")
+        );
     }
 
     fn record(v: Value) -> Record {
@@ -351,9 +375,10 @@ mod tests {
 
     /// timlaing/pyicloud tests/fixtures/reminders/reminders_query_reminders_response.json
     fn fixture_reminder() -> Record {
-        let v: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/pyicloud/reminders_query_reminders_response.json"))
-                .unwrap();
+        let v: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/pyicloud/reminders_query_reminders_response.json"
+        ))
+        .unwrap();
         record(v["records"][0].clone())
     }
 
@@ -381,9 +406,10 @@ mod tests {
 
     #[test]
     fn reads_pyicloud_s_list_fixture() {
-        let v: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/pyicloud/reminders_query_lists_response.json"))
-                .unwrap();
+        let v: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/pyicloud/reminders_query_lists_response.json"
+        ))
+        .unwrap();
         let l = List::from_record(&record(v["records"][0].clone())).unwrap().unwrap();
         assert_eq!(l.id, "List/LIST-A");
         assert_eq!(l.name, "Synthetic List");
@@ -394,7 +420,10 @@ mod tests {
     fn deleted_and_tombstoned_reminders_are_gone() {
         let mut r = fixture_reminder();
         r.fields.insert("Deleted".into(), json!({"type": "INT64", "value": 1}));
-        assert_eq!(Reminder::from_record(&r), Ok(Parsed::Gone("Reminder/REM-FIXTURE".into())));
+        assert_eq!(
+            Reminder::from_record(&r),
+            Ok(Parsed::Gone("Reminder/REM-FIXTURE".into()))
+        );
         let tomb = record(json!({"recordName": "Reminder/X", "deleted": true}));
         assert_eq!(Reminder::from_record(&tomb), Ok(Parsed::Gone("Reminder/X".into())));
     }
@@ -402,11 +431,15 @@ mod tests {
     #[test]
     fn a_reminder_that_does_not_read_is_an_error_naming_it() {
         let mut r = fixture_reminder();
-        r.fields.insert("TitleDocument".into(), json!({"type": "ENCRYPTED_BYTES", "value": "bm90IHpsaWI="}));
+        r.fields.insert(
+            "TitleDocument".into(),
+            json!({"type": "ENCRYPTED_BYTES", "value": "bm90IHpsaWI="}),
+        );
         let err = Reminder::from_record(&r).unwrap_err();
         assert!(err.starts_with("Reminder/REM-FIXTURE: TitleDocument"), "{err}");
         let mut r = fixture_reminder();
-        r.fields.insert("TimeZone".into(), json!({"type": "STRING", "value": "Mars/Olympus"}));
+        r.fields
+            .insert("TimeZone".into(), json!({"type": "STRING", "value": "Mars/Olympus"}));
         assert!(Reminder::from_record(&r).unwrap_err().contains("Mars/Olympus"));
     }
 
@@ -438,10 +471,16 @@ mod tests {
         assert_eq!(rec["recordChangeTag"], "reminder-change-tag-fixture");
         let f = &rec["fields"];
         assert_eq!(f["Completed"], json!({"type": "INT64", "value": 1}));
-        assert_eq!(f["CompletionDate"], json!({"type": "TIMESTAMP", "value": 1_790_000_000_000i64}));
+        assert_eq!(
+            f["CompletionDate"],
+            json!({"type": "TIMESTAMP", "value": 1_790_000_000_000i64})
+        );
         let mut names: Vec<&String> = f.as_object().unwrap().keys().collect();
         names.sort();
-        assert_eq!(names, ["Completed", "CompletionDate", "LastModifiedDate", "ResolutionTokenMap"]);
+        assert_eq!(
+            names,
+            ["Completed", "CompletionDate", "LastModifiedDate", "ResolutionTokenMap"]
+        );
 
         let op = update_op(&r, &[Change::Completed(false), Change::Due(None)], "ME", 5).unwrap();
         let f = &op["record"]["fields"];
@@ -458,7 +497,10 @@ mod tests {
         let rec = &op["record"];
         assert_eq!(rec["parent"]["recordName"], "List/A");
         let f = &rec["fields"];
-        assert_eq!(f["List"]["value"], json!({"recordName": "List/A", "action": "VALIDATE"}));
+        assert_eq!(
+            f["List"]["value"],
+            json!({"recordName": "List/A", "action": "VALIDATE"})
+        );
         assert_eq!(f["DueDate"]["value"], 1_791_622_800_000i64);
         assert_eq!(f["TimeZone"]["value"], "Europe/Helsinki");
         let r = live(&record(rec.clone()));
@@ -466,4 +508,3 @@ mod tests {
         assert_eq!(r.due, Some(due));
     }
 }
-
