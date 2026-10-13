@@ -1,7 +1,7 @@
 # Driving the iCloud apps as an agent
 
 A compact reference for an AI agent (or a script) using iCloud Notes,
-Photos, Find My, Reminders and Contacts on this computer through their
+Photos, and Find My on this computer through their
 command lines. The full
 audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
@@ -24,8 +24,8 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
 - Nothing prompts when stdin is not a terminal. Destructive commands refuse
   (exit 64) unless given `--yes`: `icloud-notes delete | delete-folder |
-  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`,
-  `icloud-reminders delete`, `icloud-contacts delete`. Pass `--yes` only
+  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`.
+  Pass `--yes` only
   when the user asked for that exact action.
 - `TOOL COMMAND --help` describes any command and its JSON.
 
@@ -167,73 +167,12 @@ lists the candidates: use the ID). Locations are personal: print
 coordinates only when the user asked for them. Lost Mode locks the device;
 never turn it on without an explicit request.
 
-## Reminders: `icloud-reminders`
+## Contacts and tasks
 
-iCloud Reminders (the CloudKit ones every iPhone has used since iOS 13).
-Reading commands sync first (`--cached` skips that and reads the last
-sync). Without a network every command but a `--cached` read fails with
-`offline`; nothing is queued.
-
-```console
-$ icloud-reminders --json lists
-[{"id":"6F0A...","name":"Groceries","color":"#FF9500","open":2}]
-$ icloud-reminders --json list
-[{"id":"9B1C...","list":{"id":"6F0A...","name":"Groceries"},"title":"Milk","notes":"Oat","completed":false,
-  "completed_at":null,"due":{"date":"2026-10-09","time":"17:30","all_day":false,"time_zone":"Europe/Helsinki",
-  "at":"2026-10-09T14:30:00Z"},"flagged":false,"priority":0,"alerts":0}]
-$ icloud-reminders --json add "Call the dentist" --list Reminders --due "tomorrow 9:00"
-{"action":"add","reminder":{"id":"...","title":"Call the dentist",...}}
-$ icloud-reminders --json complete "dentist"
-{"action":"complete","changed":true,"reminder":{...,"completed":true,"completed_at":"2026-10-09T11:02:41Z"}}
-```
-
-| Command | Does |
-|---|---|
-| `lists`, `list [LIST] [--completed \| --all]`, `show REMINDER` | read (open reminders, soonest due first) |
-| `add TITLE [--list LIST] [--notes T] [--due WHEN]` | create; `--list` is required unless the account has one list (iCloud records no default list) |
-| `edit REMINDER [--title T] [--notes T] [--due WHEN \| --no-due]` | change |
-| `complete REMINDER`, `uncomplete REMINDER`, `delete REMINDER --yes` | as in the window (a delete goes to Recently Deleted) |
-| `sync [--full]` | fetch what changed |
-| `background` | what the systemd timer runs every minute: sync if stale, notify about due ones |
-
-REMINDER is an ID, an exact title, or a unique part of one (open
-reminders first; `ambiguous` lists the candidates). WHEN: `2026-10-10`
-(all day), `"2026-10-10 17:30"`, `today`/`tomorrow` with an optional time,
-`17:30`, or `+30m`/`+2h`/`+3d`. `due.at` is the moment it is due, in UTC.
-`alerts` counts alerts set on an Apple device: they keep their own time
-when `--due` changes, so say so if it is not 0. Due reminders notify on
-their own (the timer); never run `background` to notify on purpose.
-
-## Contacts: `icloud-contacts`
-
-The iCloud address book. Reading commands sync first (`--cached` skips that
-and reads the last sync). Without a network every command but a `--cached`
-read fails with `offline`; nothing is queued.
-
-```console
-$ icloud-contacts --json list "ann"
-[{"id":"3C9E...","name":"Ann Lee","first":"Ann","last":"Lee","company":"Acme","is_company":false,"me":false,
-  "phones":[{"label":"mobile","value":"+1 (555) 010-0100"}],"emails":[{"label":"work","value":"ann@acme.example"}],
-  "urls":[],"addresses":[...],"birthday":"1990-05-01","notes":null,"has_photo":true,...}]
-$ icloud-contacts --json show me
-$ icloud-contacts --json add --first Cleo --last Park --phone work=+44 20 7946 0000 --email cleo@example.org
-{"action":"add","contact":{"id":"...","name":"Cleo Park",...}}
-$ icloud-contacts --json edit "cleo park" --job-title Designer --remove-phone "20 7946 0000"
-```
-
-| Command | Does |
-|---|---|
-| `list [QUERY]`, `show CONTACT` | read (sorted by last name; QUERY matches names, companies, emails, or phone digits) |
-| `add [--first N] [--last N] [--company C [--is-company]] [--phone [LABEL=]P]... [--email ...]... [--url ...]... [--birthday D] [--notes T]` | create; needs a name, company, phone or email |
-| `edit CONTACT [--FIELD V]... [--phone/--email/--url V]... [--remove-phone/--remove-email/--remove-url V]...` | change only what is named; `--FIELD ""` removes a field |
-| `delete CONTACT --yes` | delete on every device: there is no Recently Deleted for contacts, so be sure |
-| `export [CONTACT]... [--output FILE]` | vCard 3.0 |
-| `sync` | fetch everything |
-
-CONTACT is an ID, `me`, a name, an email, a phone number (by its digits)
-or a unique part of a name (`ambiguous` lists the candidates). To find
-someone's number or email, `show` them and read `phones`/`emails`; don't
-guess between several matches, ask.
+The standalone Contacts and Reminders apps are retired. Use Cloud Contacts and
+Cloud Tasks and their skills from ferdousbhai/ghost-skills. They own the iCloud
+backends and preserve the legacy caches/notification history. Do not install or
+invoke the retired standalone CLIs.
 
 ## Recipes
 
@@ -285,26 +224,9 @@ icloud-findmy --json locate "iPhone" --wait 30      # exit 4: ask for icloud-ses
 icloud-findmy --json play-sound "iPhone" --yes
 ```
 
-**Remind the user of something**
-
-```bash
-icloud-reminders --json add "Renew passport" --list Personal --due "2026-11-01 09:00"   # a list from `lists`
-icloud-reminders --json list --all | jq '.[] | select(.title | test("passport"; "i"))'
-```
-
-**Look someone up**
-
-```bash
-icloud-contacts --json show "ann lee" | jq -r '.phones[0].value'
-icloud-contacts --json list "@acme.example" | jq -r '.[].name'
-```
-
 ## Testing without the real account
 
-`ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:PORT`
-points photos, findmy, reminders and contacts at a local fake server
-(`cargo run -p icloud-photos --example fake_cloudkit -- --port PORT`, `cargo
-run -p icloud-findmy --example fake_findme`, `cargo run -p icloud-reminders
---example fake_reminders -- 127.0.0.1:PORT`, `cargo run -p icloud-contacts
---example fake_contacts -- 127.0.0.1:PORT`; their READMEs say more);
-`--data-dir DIR` keeps their catalog, cache and history there; `icloud-notes --vault DIR` works on a scratch vault.
+Photos and Find My support ICLOUD_SESSION_MOCK and fake Apple servers; see their
+READMEs. Use a temporary --data-dir and a scratch Notes vault. Contacts/Reminders
+provider tests moved to the unified product repos; do not restore their old
+workspace packages just to run those tests.

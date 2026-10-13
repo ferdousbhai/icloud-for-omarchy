@@ -1,6 +1,6 @@
 # icloud-for-omarchy
 
-Native iCloud apps for Omarchy/Arch — Notes, Photos, Find My, Reminders, Contacts — sharing one
+Native iCloud apps for Omarchy/Arch — Notes, Photos, Find My — sharing one
 Apple web sign-in held by the `icloud-session` D-Bus daemon. Each app is a GUI plus a
 scriptable `--json` CLI.
 
@@ -24,12 +24,12 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   icloud-notes-sync`. Ships inside the icloud-notes package, not on its own.
 - `notes/` — `icloud-notes`, the Qt6/QML app and CLI (C++ in `src/`, QML in `qml/`,
   `notes/bin/build`, `notes/bin/test`).
-- `photos/`, `findmy/`, `reminders/`, `contacts/` — one crate per app: a library, a GTK-free CLI
+- `photos/`, `findmy/` — one crate per app: a library, a GTK-free CLI
   binary (`src/main.rs` + `cli.rs`), and the GTK/libadwaita window as a separate `*-app` binary
   (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`). Each has a fake Apple server
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
-- `packaging/PKGBUILD` — one split recipe for all six packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
+- `packaging/PKGBUILD` — one split recipe for all four packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
 - `bin/` — `build`, `test`, `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
   `make-installers`, `release`, `verify-release`, `dev-install`/`dev-uninstall` (puts a release
   sessiond in `~/.local/bin` with a user D-Bus activation file).
@@ -71,3 +71,7 @@ packaging tests, then native x86_64/aarch64 package builds.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.
+
+Contacts and Reminders are retired standalone products. Their backends and tests
+now belong to cloud-contacts and cloud-tasks respectively; never restore their
+old packages, installers, desktop entries, or notification timer here.

@@ -18,7 +18,7 @@ notes=0
 for pkg in "${pkgs[@]}"; do
   case $pkg in
     icloud-session) cargo_args+=(-p icloud-sessiond) ;;
-    icloud-photos | icloud-findmy | icloud-reminders | icloud-contacts) cargo_args+=(-p "$pkg") ;;
+    icloud-photos | icloud-findmy) cargo_args+=(-p "$pkg") ;;
     # The app and its sync engine, one package.
     icloud-notes) cargo_args+=(-p icloud-notes-sync) notes=1 ;;
     *) echo "Unknown package '$pkg'. Choose from: ${pkgname[*]}" >&2; exit 64 ;;
