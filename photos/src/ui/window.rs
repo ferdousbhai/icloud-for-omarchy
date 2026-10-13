@@ -15,7 +15,7 @@ use gtk::{gdk, gio, glib};
 use icloud_photos::catalog::Catalog;
 use icloud_photos::cloudkit::{CloudKit, Modified};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
-use icloud_photos::sync::{self, Mode, Progress, Report};
+use icloud_photos::sync::{self, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority};
 use icloud_photos::transport::{Error, Result, SignInState, Transport};
 
@@ -83,6 +83,15 @@ struct Snapshot {
     rows: Vec<super::grid::RowItem>,
     columns: usize,
     first_sync: bool,
+}
+
+impl Snapshot {
+    fn title(&self) -> &str {
+        self.album
+            .as_ref()
+            .and_then(|id| self.albums.iter().find(|album| &album.id == id))
+            .map_or("All Photos", |album| album.name.as_str())
+    }
 }
 
 /// How often a focused window re-syncs, and the background cadence.
@@ -564,9 +573,9 @@ impl App {
                 if let Some(why) = &report.fell_back {
                     eprintln!("icloud-photos: incremental sync failed ({why}); did a full sync");
                 }
-                if report.mode == Mode::Full || report.assets + report.removed + report.albums > 0 {
-                    self.reload();
-                }
+                // Relationship and master-only changes do not increment the
+                // report's asset/album counts, but still change the view.
+                self.reload();
                 self.update_status();
                 if self.settings.borrow().download == DownloadMode::All {
                     self.queue_all_originals();
@@ -589,48 +598,40 @@ impl App {
 
     /// Re-read albums and the current grid from the catalog.
     fn reload(self: &Rc<Self>) {
-        self.load_snapshot(true);
+        self.load_snapshot();
     }
 
     fn show_assets(self: &Rc<Self>) {
-        self.load_snapshot(false);
+        self.load_snapshot();
     }
 
     /// Query the catalog (and chunk the grid rows) on a worker thread with
     /// its own connection, then apply the result on the main loop. Falls back
     /// to the main-loop connection when the catalog is not on disk.
-    fn load_snapshot(self: &Rc<Self>, albums: bool) {
+    fn load_snapshot(self: &Rc<Self>) {
         let generation = self.reload_gen.get() + 1;
         self.reload_gen.set(generation);
         let (path, album, columns) = (self.dirs.catalog(), self.album.borrow().clone(), self.grid.columns());
         let a = self.clone();
         glib::spawn_future_local(async move {
-            let snap = gio::spawn_blocking(move || {
-                Catalog::open(&path)
-                    .ok()
-                    .map(|cat| snapshot(&cat, album, albums, columns))
-            })
-            .await
-            .ok()
-            .flatten();
+            let snap = gio::spawn_blocking(move || Catalog::open(&path).ok().map(|cat| snapshot(&cat, album, columns)))
+                .await
+                .ok()
+                .flatten();
             if a.reload_gen.get() != generation {
                 return;
             }
-            let snap = snap.unwrap_or_else(|| snapshot(&a.cat, a.album.borrow().clone(), albums, columns));
-            a.apply_snapshot(snap, albums);
+            let snap = snap.unwrap_or_else(|| snapshot(&a.cat, a.album.borrow().clone(), columns));
+            a.apply_snapshot(snap);
         });
     }
 
-    fn apply_snapshot(&self, snap: Snapshot, albums: bool) {
-        if albums {
-            if snap.album.is_none() && self.album.borrow().is_some() {
-                *self.album.borrow_mut() = None;
-                self.grid_page.set_title("All Photos");
-            }
-            self.reloading.set(true);
-            self.albums.set(snap.total, &snap.albums, snap.album.as_deref());
-            self.reloading.set(false);
-        }
+    fn apply_snapshot(&self, snap: Snapshot) {
+        *self.album.borrow_mut() = snap.album.clone();
+        self.grid_page.set_title(snap.title());
+        self.reloading.set(true);
+        self.albums.set(snap.total, &snap.albums, snap.album.as_deref());
+        self.reloading.set(false);
         let first = snap.first_sync;
         self.grid
             .empty
@@ -850,15 +851,11 @@ impl App {
     }
 }
 
-/// Albums (when `with_albums`), the total, and the grid rows for `album`,
-/// which falls back to All Photos when that album is gone.
-fn snapshot(cat: &Catalog, mut album: Option<String>, with_albums: bool, columns: usize) -> Snapshot {
-    let albums = if with_albums {
-        cat.albums().unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    if with_albums && album.as_ref().is_some_and(|c| !albums.iter().any(|a| &a.id == c)) {
+/// Keep the sidebar and grid in the same snapshot, including when an album
+/// switch supersedes a sync reload. Fall back to All Photos for a deleted album.
+fn snapshot(cat: &Catalog, mut album: Option<String>, columns: usize) -> Snapshot {
+    let albums = cat.albums().unwrap_or_default();
+    if album.as_ref().is_some_and(|c| !albums.iter().any(|a| &a.id == c)) {
         album = None;
     }
     let assets = cat.grid_assets(album.as_deref()).unwrap_or_default();
@@ -872,11 +869,49 @@ fn snapshot(cat: &Catalog, mut album: Option<String>, with_albums: bool, columns
     let rows = super::grid::rows_of(&tiles, columns);
     Snapshot {
         albums,
-        total: if with_albums { cat.count().unwrap_or(0) } else { 0 },
+        total: cat.count().unwrap_or(0),
         album,
         tiles,
         rows,
         columns,
         first_sync,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use icloud_photos::cloudkit::Album;
+
+    #[test]
+    fn album_switch_snapshot_carries_sidebar_changes_and_deleted_album_fallback() {
+        let cat = Catalog::open_in_memory().unwrap();
+        let mut album = Album {
+            id: "album-1".into(),
+            name: "Before".into(),
+            position: 0,
+            is_folder: false,
+            deleted: false,
+        };
+        cat.upsert_album(&album).unwrap();
+        let before = snapshot(&cat, Some(album.id.clone()), 4);
+        assert_eq!(before.album.as_deref(), Some("album-1"));
+        assert_eq!(before.albums[0].name, "Before");
+
+        // A sync updates the sidebar while the user switches albums. The
+        // newer snapshot must carry those changes even if it supersedes
+        // the sync's pending snapshot.
+        album.name = "After".into();
+        cat.upsert_album(&album).unwrap();
+        let switched = snapshot(&cat, Some(album.id.clone()), 4);
+        assert_eq!(switched.albums[0].name, "After");
+        assert_eq!(switched.title(), "After");
+
+        album.deleted = true;
+        cat.upsert_album(&album).unwrap();
+        let deleted = snapshot(&cat, Some(album.id), 4);
+        assert!(deleted.album.is_none());
+        assert!(deleted.albums.is_empty());
+        assert_eq!(deleted.title(), "All Photos");
     }
 }
