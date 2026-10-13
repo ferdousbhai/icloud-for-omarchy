@@ -261,13 +261,24 @@ for arch in ("x86_64", "aarch64"):
             cmp "$1/etc/resolv.conf" "$RESOLVER"
             [[ ,$(findmnt -no OPTIONS "$1/source"), == *,ro,* ]]
             echo isolated >>"$LOG"
+            shift
+            if [[ $1 == unshare ]]; then
+                # Model arch-chroot's PID namespace with its inherited /proc.
+                # The command must give it a matching proc mount before use.
+                [[ $2 == --mount && $3 == --mount-proc ]]
+                unshare --pid --fork "${@:1:3}" bash -euc '
+                    [[ $$ == 1 ]]
+                    [[ $(cat /proc/1/comm) == bash ]]
+                    echo proc-matches >>"$LOG"
+                '
+            fi
         ''')
         result = subprocess.run([
             "unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork",
             str(root / "bin/arch-run"), "true",
         ], env=dict(self.env, BOOTSTRAP=str(archive), RESOLVER=str(resolver), LOG=str(self.work / "chroot.log")), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.work / "chroot.log").read_text().splitlines(), ["isolated", "isolated"])
+        self.assertEqual((self.work / "chroot.log").read_text().splitlines(), ["isolated", "isolated", "proc-matches"])
         self.assertEqual((runtime.st_dev, runtime.st_ino), (os.stat("/run").st_dev, os.stat("/run").st_ino))
 
     def test_recipes_share_flags_and_package_selected_target(self):

@@ -44,6 +44,8 @@ arch-chroot "$root" bash -euc '
   useradd -m builder
   chown -R builder:builder /output /cargo
 '
-arch-chroot "$root" env ICLOUD_ARCH_ROOT=1 CARGO_HOME=/cargo HOME=/root USER=root \
+# arch-chroot creates a PID namespace after mounting /proc. D-Bus needs the
+# process IDs in /proc to match that namespace, notably for daemon tests.
+arch-chroot "$root" unshare --mount --mount-proc env ICLOUD_ARCH_ROOT=1 CARGO_HOME=/cargo HOME=/root USER=root \
   bash -c 'cd /source; exec "$@"' arch-run "$@"
 CHROOT
