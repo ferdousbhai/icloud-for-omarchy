@@ -149,8 +149,8 @@ printf '[icloud-for-omarchy]\nSigLevel = Required DatabaseRequired\nServer = htt
   | sudo tee /etc/pacman.d/icloud-for-omarchy.conf
 echo 'Include = /etc/pacman.d/icloud-for-omarchy.conf' | sudo tee -a /etc/pacman.conf
 
-# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy icloud-reminders)
-sudo pacman -Syu icloud-notes icloud-photos icloud-findmy icloud-reminders
+# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy icloud-reminders icloud-contacts)
+sudo pacman -Syu icloud-notes icloud-photos icloud-findmy icloud-reminders icloud-contacts
 ```
 
 On Omarchy, `omarchy refresh pacman` rewrites `/etc/pacman.conf`; the
