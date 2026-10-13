@@ -194,7 +194,7 @@ notes-sync/              icloud-notes-sync, the sync engine the icloud-notes pac
 photos/  findmy/         icloud-photos, icloud-findmy
 reminders/               icloud-reminders (its systemd timer in reminders/data/)
 contacts/                icloud-contacts
-packaging/<package>/     one PKGBUILD per package
+packaging/PKGBUILD        one split recipe builds all six packages
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, test, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh, the installers against stubbed pacman
@@ -238,63 +238,57 @@ Releases are cut from a checkout with the package-signing key in its
 keyring. Native CI builds unsigned packages; signing stays on your machine:
 
 ```bash
-bin/release icloud-notes 0.4.1
-bin/release icloud-session 0.3.0 icloud-notes 0.6.0   # several at once
+bin/release 0.8.1
 ```
 
-Versions are per package and so are the tags: `<name>-v<version>`, where
-`<name>` is the package name without `icloud-` (`session`, `photos`,
-`findmy`, `notes`, `reminders`), e.g. `notes-v0.4.1`. Each PKGBUILD takes its
-`pkgver` from its own newest tag: at the tag it is the plain version, and a
-later commit builds `<version>.r<count>.<sha>` (`0.0.0.r<count>` for a package
-never tagged).
+One suite version in `[workspace.package]` of `Cargo.toml` is inherited by
+all Rust crates and the six packages. Releases use `v<version>` tags;
+older per-app tags remain historical. Development packages add
+`.r<count>.<commit>` to the suite version. The first suite release must be
+newer than the current 0.8.0 baseline so existing installations upgrade.
 
-`bin/release` runs `bin/test`, sets the named packages' versions, commits
-and pushes their tags, explicitly dispatches the Native packages workflow
-for that release tag, then waits for the successful run. Native
-x86_64 and ARM runners build and test every package from that same commit.
-Packages not named in the release receive their normal post-tag development
-versions, rather than carrying binaries from an older release. This also
-bootstraps ARM without requiring ARM assets in a previous release.
+`bin/release` updates that one version and the lockfile, runs `bin/test`,
+commits and tags, then dispatches native x86_64 and ARM CI at that commit.
+One split `packaging/PKGBUILD` builds and tests the workspace once and emits
+all six independently installable packages. Before signing,
+`bin/collect-packages` checks the complete package set, source commit,
+architectures, filenames and exact suite version. Failed builds publish
+nothing and leave the candidate tag for inspection.
 
-Before signing, `bin/collect-packages` checks each artifact's source commit,
-package names, architecture, filename/version metadata and matching versions
-across architectures. The release machine signs every package and the two
-separate databases: `[icloud-for-omarchy]` for x86_64 and
-`[icloud-for-omarchy-aarch64]` for aarch64. Both public key assets contain the
-same pinned key. The private key never enters CI. A failed build leaves
-candidate tags available for inspection and publishes no release. Once published,
-main advances to the released source before installation verification.
+Signing stays on the release machine. It signs each package and the
+`[icloud-for-omarchy]` (x86_64) and `[icloud-for-omarchy-aarch64]` databases
+with the same pinned key. Output goes to `dist/release/`, separately from
+build artifacts and download caches.
 
-The Notes sync engine (notes-sync/) is not released on its own: it ships
-inside icloud-notes, built from the same commit, so releasing icloud-notes
-releases it, and its Cargo.toml version only names the engine
-(`icloud-notes-sync --version`). The `notes-sync-v*` tags are historical,
-from when it was the separate icloud-notes-sync package (last
-`notes-sync-v0.2.0`). Every new release rebuilds Notes with its embedded sync engine.
+After publication, CI alone runs `bin/verify-release <tag>` on both
+architectures. It compares all six published installers with the tagged
+source, installs the complete suite once in a fresh Arch root, then checks
+every installed version. Per-app installer behavior is covered by
+`tests/install_test.sh`. Failures leave releases available for diagnosis;
+retry the workflow or run `bin/verify-release v<version>` on a matching
+native host with `sudo` and `arch-install-scripts`.
 
-`bin/verify-release <release-tag> <package> <version> [...]` checks the
-specified tag's installer and repository in a native Arch container, rather
-than following `latest`. Set `VERIFY_ARCH=aarch64` and `ARM_BUILD_IMAGE` to a
-native Arch Linux ARM image on ARM. The published-release workflow verifies
-every package on both architectures. Infrastructure or installation
-failures leave the release and tags available for diagnosis; nothing deletes
-a release automatically. With `PUBLISH_CRATE=1`, releasing icloud-session also
-publishes its client crate after local verification; by default it does not.
+The client library's crates.io publication is separate: from a verified
+release checkout, run `cargo publish --locked -p icloud-session` when needed.
+It is never an automatic side effect of publishing the app suite.
 
-The native package workflow runs on pull requests, pushes to main and
-an explicit release dispatch. To build locally, run `bin/build-packages x86_64` or, on an ARM host,
-`ARM_BUILD_IMAGE=<image> bin/build-packages aarch64`. The workflow imports the
-Arch Linux ARM root filesystem over HTTPS for its native ARM runner.
+GitHub's Ubuntu runners use `bin/arch-run` to bootstrap a disposable native
+Arch chroot, without Docker. The host needs `arch-install-scripts`, `curl`,
+`tar` and `zstd`. On Arch/Omarchy, install the build dependencies listed
+above plus `base-devel`, `cargo` and `git`, then run
+`bin/build-packages "$(uname -m)"` as a regular user. It builds committed
+HEAD in scratch space and writes packages to `dist/<arch>/`.
+Cargo uses available cores by default; `CARGO_BUILD_JOBS` overrides this.
+CI caches downloads in `dist/cargo-<arch>/` by architecture and `Cargo.lock`;
+compiled artifacts are reused within a run only.
 
-The `add_signed_repo` function in `install.sh` is shared verbatim with the
-Ghost installer (ferdousbhai/ghost), and both repositories pin its hash in
-their tests (`tests/add_signed_repo.sha256` here): change it in both places,
-and both hashes, together.
+The installer retains its pinned `add_signed_repo` hash as a regression
+check. Ghost no longer carries this function; iCloud installer changes
+are tested here.
 
 ### The signing key
 
-One key signs these packages and those of Ghost, Cloudmail, Cloud Calendar
+One key signs these packages and those of Cloudmail, Cloud Calendar
 and Omacloud ("Omacloud (package signing)",
 52130299581DAD685226900CA89CA1A6A1E74251); its fingerprint is pinned in
 each installer and it lives in the releasing machine's keyring, protected by

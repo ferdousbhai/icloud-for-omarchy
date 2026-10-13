@@ -8,11 +8,14 @@
 #
 # Usage: bin/make-installers <directory>
 set -euo pipefail
+source "$(dirname "$0")/../packaging/PKGBUILD"
 out="${1:?Usage: bin/make-installers <directory>}"
 src="$(dirname "$0")/../install.sh"
 mkdir -p "$out"
 
-for app in notes photos findmy reminders contacts; do
+for package in "${pkgname[@]}"; do
+  [[ $package != icloud-session ]] || continue
+  app=${package#icloud-}
   dest="$out/install-$app.sh"
   {
     sed -n '1p' "$src"
@@ -25,4 +28,4 @@ for app in notes photos findmy reminders contacts; do
   fi
   chmod 755 "$dest"
 done
-echo "Wrote install-notes.sh, install-photos.sh, install-findmy.sh, install-reminders.sh and install-contacts.sh to $out"
+echo "Wrote per-app installers to $out"

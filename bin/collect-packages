@@ -1,37 +1,29 @@
 #!/usr/bin/env bash
-# Validate both native CI artifacts before copying anything for signing.
-# Usage: bin/collect-packages <artifact-root> <source-commit> <output>
+# Validate the complete suite for both architectures before copying for signing.
 set -euo pipefail
 root=${1:?artifact root required} commit=${2:?source commit required} output=${3:?output required}
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid source commit' >&2; exit 1; }
-packages=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts)
+source "$(dirname "$0")/../packaging/PKGBUILD"
 files=()
-for arch in x86_64 aarch64; do
-  directory=$root/icloud-$arch
-  [[ $(cat "$directory/source-commit.txt") == "$commit" ]] || { echo "Wrong $arch source commit" >&2; exit 1; }
-  shopt -s nullglob
+version=${4:-}
+shopt -s nullglob
+for architecture in "${arch[@]}"; do
+  directory=$root/icloud-$architecture
+  [[ $(cat "$directory/source-commit.txt") == "$commit" ]] || { echo "Wrong $architecture source commit" >&2; exit 1; }
   candidates=("$directory/"*.pkg.tar.zst)
-  (( ${#candidates[@]} == ${#packages[@]} )) || { echo "Expected ${#packages[@]} $arch packages" >&2; exit 1; }
-  for pkg in "${packages[@]}"; do
-    found=("$directory/$pkg"-[0-9]*-"$arch.pkg.tar.zst")
-    (( ${#found[@]} == 1 )) || { echo "Expected exactly one $pkg for $arch" >&2; exit 1; }
+  (( ${#candidates[@]} == ${#pkgname[@]} )) || { echo "Expected ${#pkgname[@]} $architecture packages" >&2; exit 1; }
+  for package in "${pkgname[@]}"; do
+    found=("$directory/$package"-[0-9]*-"$architecture.pkg.tar.zst")
+    (( ${#found[@]} == 1 )) || { echo "Expected exactly one $package for $architecture" >&2; exit 1; }
     metadata=$(bsdtar -xOf "${found[0]}" .PKGINFO)
-    grep -qxF "pkgname = $pkg" <<< "$metadata"
-    grep -qxF "arch = $arch" <<< "$metadata"
-    version=$(sed -n 's/^pkgver = //p' <<< "$metadata")
-    [[ $(basename "${found[0]}") == "$pkg-$version-$arch.pkg.tar.zst" ]]
+    grep -qxF "pkgname = $package" <<< "$metadata"
+    grep -qxF "arch = $architecture" <<< "$metadata"
+    actual_version=$(sed -n 's/^pkgver = //p' <<< "$metadata")
+    version=${version:-$actual_version}
+    [[ $actual_version == "$version" ]] || { echo "Suite versions differ for $package" >&2; exit 1; }
+    [[ $(basename "${found[0]}") == "$package-$version-$architecture.pkg.tar.zst" ]]
     files+=("${found[0]}")
   done
-  shopt -u nullglob
-done
-# Dependencies must resolve to the same version on both architectures.
-for pkg in "${packages[@]}"; do
-  versions=()
-  for arch in x86_64 aarch64; do
-    candidate=("$root/icloud-$arch/$pkg"-[0-9]*-"$arch.pkg.tar.zst")
-    versions+=("$(bsdtar -xOf "${candidate[0]}" .PKGINFO | sed -n 's/^pkgver = //p')")
-  done
-  [[ ${versions[0]} == "${versions[1]}" ]] || { echo "Architecture versions differ for $pkg" >&2; exit 1; }
 done
 mkdir -p "$output"
 cp "${files[@]}" "$output/"

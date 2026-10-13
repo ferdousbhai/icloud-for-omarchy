@@ -1,6 +1,6 @@
 [package]
 name = "icloud-contacts"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 description = "iCloud Contacts on Omarchy: browse, search, add, edit and delete contacts"
 license.workspace = true

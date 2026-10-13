@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Run a command in a disposable native Arch root (CI and installer checks).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+(( EUID == 0 )) || { echo 'Run with sudo; arch-chroot needs mount privileges.' >&2; exit 1; }
+command -v arch-chroot >/dev/null || { echo 'Install arch-install-scripts first.' >&2; exit 1; }
+(( $# )) || { echo 'Usage: bin/arch-run <command> [arguments...]' >&2; exit 1; }
+architecture=$(uname -m)
+case "$architecture" in
+  x86_64) url=https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst ;;
+  aarch64) url=https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz ;;
+  *) echo "Unsupported architecture: $architecture" >&2; exit 1 ;;
+esac
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+curl --fail --location --retry 3 "$url" -o "$work/root.tar"
+mkdir "$work/root"
+tar --extract --file "$work/root.tar" --directory "$work/root" --numeric-owner
+root="$work/root"
+[[ $architecture != x86_64 ]] || root+=/root.x86_64
+# Mounts exist only in this namespace and vanish before the root is removed.
+unshare --mount --propagation private bash -euo pipefail -s -- "$root" "$PWD" "$architecture" "$@" <<'CHROOT'
+root=$1 source=$2 architecture=$3; shift 3
+mount --bind "$root" "$root"
+mkdir -p "$root/source" "$root/output" "$root/cargo"
+mkdir -p "$source/dist/$architecture" "$source/dist/cargo-$architecture"
+mount --bind "$source" "$root/source"
+mount -o remount,bind,ro "$root/source"
+mount --bind "$source/dist/$architecture" "$root/output"
+mount --bind "$source/dist/cargo-$architecture" "$root/cargo"
+if [[ $architecture == x86_64 ]]; then
+  printf 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n' > "$root/etc/pacman.d/mirrorlist"
+fi
+# arch-chroot otherwise bind-mounts the host /run, including its live buses.
+rm -f "$root/etc/resolv.conf"
+cp -L /etc/resolv.conf "$root/etc/resolv.conf"
+mount -t tmpfs -o mode=0755 tmpfs /run
+arch-chroot -r "$root" bash -euc '
+  sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
+  pacman-key --init
+  if [[ $(uname -m) == aarch64 ]]; then pacman-key --populate archlinuxarm; else pacman-key --populate archlinux; fi
+  pacman -Syu --noconfirm --needed curl gnupg shadow
+  useradd -m builder
+  chown -R builder:builder /output /cargo
+'
+arch-chroot -r "$root" env ICLOUD_ARCH_ROOT=1 CARGO_HOME=/cargo HOME=/root USER=root \
+  bash -c 'cd /source; exec "$@"' arch-run "$@"
+CHROOT

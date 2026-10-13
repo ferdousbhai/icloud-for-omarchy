@@ -1,43 +1,27 @@
 #!/usr/bin/env bash
-# Build and test every package natively; signing keys never enter CI.
+# Build committed source with native Arch tools; never install the built apps.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source packaging/PKGBUILD
 architecture=${1:?Usage: bin/build-packages <x86_64|aarch64> [output-directory]}
-case "$architecture" in
-  x86_64) platform=linux/amd64; image=archlinux:base-devel ;;
-  aarch64) platform=linux/arm64; image=${ARM_BUILD_IMAGE:?Set ARM_BUILD_IMAGE to a native Arch Linux ARM image} ;;
-  *) echo "Unsupported architecture: $architecture" >&2; exit 1 ;;
-esac
+[[ " ${arch[*]} " == *" $architecture "* ]] || { echo "Unsupported architecture: $architecture" >&2; exit 1; }
+[[ $(uname -m) == "$architecture" ]] || { echo 'Build on a host of the requested architecture.' >&2; exit 1; }
+if (( EUID == 0 )); then
+  [[ ${ICLOUD_ARCH_ROOT:-} == 1 ]] || { echo 'Run as a regular Arch user.' >&2; exit 1; }
+  pacman -S --noconfirm --needed base-devel "${makedepends[@]}"
+  exec runuser -u builder -- "$PWD/bin/build-packages" "$@"
+fi
+for tool in makepkg cargo rustc; do
+  command -v "$tool" >/dev/null || { echo "Native Arch build requires $tool on PATH." >&2; exit 1; }
+done
 output=$(realpath -m "${2:-dist/$architecture}")
 mkdir -p "$output"
-docker run --rm --platform "$platform" -e BUILD_ARCH="$architecture" \
-  -e CARGO_BUILD_JOBS=2 -e OUTPUT_UID="$(id -u)" -e OUTPUT_GID="$(id -g)" \
-  -v "$PWD:/source:ro" -v "$output:/output" "$image" bash -euo pipefail -c '
-    [[ $(uname -m) == "$BUILD_ARCH" ]]
-    sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
-    pacman-key --init
-    if [[ $BUILD_ARCH == aarch64 ]]; then
-      pacman-key --populate archlinuxarm
-    else
-      pacman-key --populate archlinux
-    fi
-    pacman -Syu --noconfirm --needed base-devel rust cargo git dbus gtk4 libadwaita libshumate webkitgtk-6.0 qt6-base qt6-declarative
-    git config --global --add safe.directory /source
-    git config --global --add safe.directory /source/.git
-    git clone --no-hardlinks /source /build
-    source_commit=$(git -C /source rev-parse HEAD)
-    [[ $(git -C /build rev-parse HEAD) == "$source_commit" ]]
-    useradd -m builder
-    chown -R builder:builder /build /output
-    for pkg in icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts; do
-      # Intra-repo dependencies are built together; --nodeps skips their
-      # installation only. All system/build/check dependencies are above.
-      su builder -c "cd /build/packaging/$pkg && PKGDEST=/output PKGEXT=.pkg.tar.zst makepkg --force --nodeps"
-      # Each PKGBUILD archives its own workspace; discard build trees so
-      # several Rust debug/release target directories do not fill CI disks.
-      rm -rf "/build/packaging/$pkg/src" "/build/packaging/$pkg/pkg"
-    done
-    su builder -c "cd /build && dbus-run-session -- notes/bin/test"
-    printf "%s\n" "$source_commit" > /output/source-commit.txt
-    chown -R "$OUTPUT_UID:$OUTPUT_GID" /output
-  '
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+source_commit=$(git -c safe.directory="$PWD" rev-parse HEAD)
+git -c safe.directory="$PWD/.git" clone --quiet --no-hardlinks "$PWD" "$work/source"
+[[ $(git -C "$work/source" rev-parse HEAD) == "$source_commit" ]]
+export CARGO_TARGET_DIR="$work/target"
+export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)}
+(cd "$work/source/packaging" && PKGDEST="$output" PKGEXT=.pkg.tar.zst makepkg --force --nodeps)
+printf '%s\n' "$source_commit" > "$output/source-commit.txt"

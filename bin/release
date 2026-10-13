@@ -1,128 +1,31 @@
 #!/usr/bin/env bash
-# Cut a release from this machine: bump and tag the named packages, build
-# every package on native CI runners, sign the architecture-specific
-# pacman repository databases with the local
-# package-signing key, and publish it all as one GitHub release. Users who
-# ran an installer get it through `omarchy update`.
-#
-# Usage: bin/release <package> <version> [<package> <version>...]
-#          e.g. bin/release icloud-notes 0.4.1
-#               bin/release icloud-session 0.3.0 icloud-notes 0.6.0
-#
-# Tags are per package: <name>-v<version>, where <name> is the package name
-# without "icloud-" (session, photos, findmy, notes, reminders, contacts), e.g.
-# notes-v0.4.1.
-# Each PKGBUILD takes its version from its newest tag. The Notes sync engine
-# (notes-sync/) ships inside icloud-notes and is not released on its own;
-# the notes-sync-v* tags are from when it was a package.
-#
-# Native CI builds and tests every package for both architectures at the
-# release commit. bin/collect-packages checks provenance and metadata before
-# local signing. Two signed repository databases ship in one GitHub release.
-# Unnamed packages get their normal post-tag development version at HEAD.
-# Verification targets the exact tag; a failed check never deletes releases.
+# Build one suite tag on both architectures, sign locally, and publish.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-repo=icloud-for-omarchy
-gh_repo=ferdousbhai/$repo
-all=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts)
-usage() {
-  echo "Usage: bin/release <package> <major.minor.patch> [<package> <version>...]" >&2
-  echo "Packages: ${all[*]}" >&2
-  exit 1
-}
-tag_of() { echo "${1#icloud-}-v$2"; }
-
-pkgs=() versions=()
-(( $# >= 2 && $# % 2 == 0 )) || usage
-while (( $# )); do
-  [[ " ${all[*]} " == *" $1 "* ]] || usage
-  [[ " ${pkgs[*]} " != *" $1 "* ]] || { echo "$1 is named twice." >&2; exit 1; }
-  pkgs+=("$1") versions+=("$2")
-  shift 2
-done
-tags=()
-for i in "${!pkgs[@]}"; do
-  [[ ${versions[i]} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
-  tags+=("$(tag_of "${pkgs[i]}" "${versions[i]}")")
-done
-[[ -z $(git status --porcelain) ]] || { echo "Commit or stash your changes first." >&2; exit 1; }
-[[ $(git branch --show-current) == main ]] || { echo "Release from main." >&2; exit 1; }
-for tag in "${tags[@]}"; do
-  ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "$tag already exists." >&2; exit 1; }
-done
-
-# install.sh pins the fingerprint users trust; the key that signs must be it.
+source packaging/PKGBUILD
+[[ $# == 1 && $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Usage: bin/release <major.minor.patch>' >&2; exit 1; }
+version=$1 tag=v$1
+[[ $(vercmp "$version" "$pkgver") -gt 0 ]] || { echo "Choose a version newer than $pkgver." >&2; exit 1; }
+[[ -z $(git status --porcelain) ]] || { echo 'Commit your changes first.' >&2; exit 1; }
+[[ $(git branch --show-current) == main ]] || { echo 'Release from main.' >&2; exit 1; }
+! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "$tag already exists." >&2; exit 1; }
+gh_repo=${url#https://github.com/}
 fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
-gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
-  || { echo "The secret key $fingerprint pinned in install.sh is not in this keyring." >&2; exit 1; }
+gpg --batch --list-secret-keys "$fingerprint" >/dev/null
 export GPGKEY=$fingerprint
 
-publish_crate=0
-session_version=''
-for i in "${!pkgs[@]}"; do
-  [[ ${pkgs[i]} == icloud-session ]] && session_version=${versions[i]}
-done
-# crates.io is opt-in (PUBLISH_CRATE=1): a published version can be yanked
-# but never removed, and nothing outside this repository needs the crate yet.
-# A version crates.io already has is not published again.
-if [[ ${PUBLISH_CRATE:-0} == 1 && -n $session_version ]] \
-  && ! curl -fsS -o /dev/null -A "$repo release (github.com/$gh_repo)" "https://crates.io/api/v1/crates/icloud-session/$session_version"; then
-  publish_crate=1
-fi
-
-# Local tests run before tags; native CI builds and tests both architectures.
-# shellcheck disable=SC2065,SC2266  # ./bin/test is a script, not test(1)
-test_output=$(./bin/test 2>&1) || {
-  grep -E '^(FAIL|RESULT)|FAILED|panicked|^error|^Diff in' <<<"$test_output" >&2
-  echo "Tests failed; not releasing." >&2
-  exit 1
-}
-# The crate is published last, after the release is verified; check now that
-# it packages, so a packaging problem stops the release before the tag.
-if (( publish_crate )); then
-  cargo publish --dry-run --locked -p icloud-session >/dev/null 2>&1 \
-    || { cargo publish --dry-run --locked -p icloud-session >&2; echo "The crate does not package; not releasing." >&2; exit 1; }
-fi
-
-# Version bumps: the PKGBUILD's pkgver, and the crate versions for the Rust
-# packages. The client crate (session/) and the daemon (sessiond/) share one
-# version; the workspace's icloud-session dependency and the README's
-# dependency snippet pin it.
-for i in "${!pkgs[@]}"; do
-  pkg=${pkgs[i]} version=${versions[i]}
-  sed -i "s/^pkgver=.*/pkgver=$version/" "packaging/$pkg/PKGBUILD"
-  case $pkg in
-    icloud-session)
-      sed -i "0,/^version = .*/s//version = \"$version\"/" session/Cargo.toml sessiond/Cargo.toml
-      sed -i "s/^icloud-session = { version = \"[0-9.]*\"/icloud-session = { version = \"$version\"/" Cargo.toml
-      sed -i "s/^icloud-session = \"=[0-9.]*\"$/icloud-session = \"=$version\"/" session/README.md
-      ;;
-    icloud-notes) ;;
-    *) sed -i "0,/^version = .*/s//version = \"$version\"/" "${pkg#icloud-}/Cargo.toml" ;;
-  esac
-done
-cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace
-if [[ -n $(git status --porcelain) ]]; then
-  git commit -q -a -m "Release ${tags[*]}"
-fi
-for i in "${!pkgs[@]}"; do
-  git tag -a "${tags[i]}" -m "${pkgs[i]} ${versions[i]}"
-done
-
-# Push candidate tags, then explicitly dispatch unsigned native CI. GitHub
-# suppresses tag-push events when more than three tags are pushed together.
-# Failed builds
-# leave the candidate tags for inspection; no release has been published.
-release_tag=${tags[0]}
+sed -i "s/^version = .*/version = \"$version\"/" Cargo.toml
+cargo update --workspace --offline
+bin/test
+git commit -q -a -m "Release $tag"
+git tag -a "$tag" -m "iCloud suite $version"
 source_commit=$(git rev-parse HEAD)
-git push -q origin "${tags[@]}"
-gh workflow run packages.yml --repo "$gh_repo" --ref "$release_tag"
+git push -q origin "$tag"
+gh workflow run packages.yml --repo "$gh_repo" --ref "$tag"
 run_id=''
 for attempt in {1..60}; do
   run_id=$(gh run list --repo "$gh_repo" --workflow packages.yml --event workflow_dispatch \
-    --branch "$release_tag" --commit "$source_commit" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+    --branch "$tag" --commit "$source_commit" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
   [[ -z $run_id ]] || break
   sleep 10
 done
@@ -132,30 +35,23 @@ gh run watch "$run_id" --repo "$gh_repo" --exit-status \
 # Revalidate the completed run, not just its search result or filename.
 run_valid=$(gh run view "$run_id" --repo "$gh_repo" \
   --json headSha,headBranch,event,status,conclusion \
-  --jq ".headSha == \"$source_commit\" and .headBranch == \"$release_tag\" and .event == \"workflow_dispatch\" and .status == \"completed\" and .conclusion == \"success\"")
+  --jq ".headSha == \"$source_commit\" and .headBranch == \"$tag\" and .event == \"workflow_dispatch\" and .status == \"completed\" and .conclusion == \"success\"")
 [[ $run_valid == true ]] || { echo "CI run provenance/status mismatch; not signing." >&2; exit 1; }
 artifacts=$(mktemp -d)
 trap 'rm -rf "$artifacts"' EXIT
 gh run download "$run_id" --repo "$gh_repo" --dir "$artifacts"
-rm -rf dist
-bin/collect-packages "$artifacts" "$source_commit" dist
-# Named packages must match the requested versions before any signatures.
-for i in "${!pkgs[@]}"; do
-  for arch in x86_64 aarch64; do
-    package="dist/${pkgs[i]}-${versions[i]}-1-$arch.pkg.tar.zst"
-    [[ -f $package ]] || { echo "Missing requested package: $package" >&2; exit 1; }
-  done
-done
-for package in dist/*.pkg.tar.zst; do
+rm -rf dist/release
+bin/collect-packages "$artifacts" "$source_commit" dist/release "$version-$pkgrel"
+for package in dist/release/*.pkg.tar.zst; do
   gpg --local-user "$fingerprint" --detach-sign --output "$package.sig" "$package"
   gpg --verify "$package.sig" "$package"
 done
 (
-  cd dist
-  for arch in x86_64 aarch64; do
-    name=$repo
-    [[ $arch == x86_64 ]] || name+=-aarch64
-    repo-add --sign --verify "$name.db.tar.gz" ./*-"$arch.pkg.tar.zst"
+  cd dist/release
+  for architecture in "${arch[@]}"; do
+    name=$pkgbase
+    [[ $architecture == x86_64 ]] || name+=-aarch64
+    repo-add --sign --verify "$name.db.tar.gz" ./*-"$architecture.pkg.tar.zst"
     for suffix in db files; do
       rm -f "$name.$suffix" "$name.$suffix.sig"
       cp "$name.$suffix.tar.gz" "$name.$suffix"
@@ -163,32 +59,11 @@ done
     done
     gpg --batch --armor --export "$fingerprint" >"$name-signing-key.asc"
   done
-  cp ../install.sh install.sh
+  cp ../../install.sh install.sh
 )
-bin/make-installers dist
+bin/make-installers dist/release
 
-# Candidate tags are already on origin. Main follows the published source;
-# a later verification outage must not leave main behind its own release.
-notes="Released: ${tags[*]}."
-notes+=" All ${#all[@]} packages built from $source_commit for x86_64 and aarch64."
-gh release create "$release_tag" dist/* --repo "$gh_repo" --title "$repo: ${tags[*]}" --notes "$notes" --latest
-echo "Published $release_tag: https://github.com/$gh_repo/releases/tag/$release_tag"
+gh release create "$tag" dist/release/* --repo "$gh_repo" --title "iCloud suite $version" \
+  --notes "All ${#pkgname[@]} packages built from $source_commit for ${arch[*]}." --latest
 git push -q origin main
-
-# Check the exact published tag. An outage or container failure must never
-# delete a valid release: leave failures available for diagnosis and retry.
-verify_args=()
-for i in "${!pkgs[@]}"; do verify_args+=("${pkgs[i]}" "${versions[i]}"); done
-if ! ./bin/verify-release "$release_tag" "${verify_args[@]}"; then
-  echo "Verification failed; release and tags remain. Retry bin/verify-release $release_tag with the same packages." >&2
-  exit 1
-fi
-
-# crates.io cannot take a version back, so the crate goes out only after the
-# package is verified. If this fails, the release stands; rerun it by hand.
-if (( publish_crate )); then
-  tag=$(tag_of icloud-session "$session_version")
-  cargo publish --locked -p icloud-session \
-    || { echo "cargo publish failed; the release stands. Retry: git checkout $tag && cargo publish --locked -p icloud-session" >&2; exit 1; }
-  echo "Published icloud-session $session_version to crates.io"
-fi
+echo "Published https://github.com/$gh_repo/releases/tag/$tag; installation verification runs in CI."

@@ -929,7 +929,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "icloud-contacts"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "clap",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-findmy"
-version = "0.5.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "clap",
@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-notes-sync"
-version = "0.2.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "flate2",
@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-photos"
-version = "0.5.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "base64",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-reminders"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "base64",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-session"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "futures-lite",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-sessiond"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "blocking",

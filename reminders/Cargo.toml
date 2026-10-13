@@ -1,6 +1,6 @@
 [package]
 name = "icloud-reminders"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 description = "iCloud Reminders on Omarchy: lists, due dates and desktop notifications"
 license.workspace = true

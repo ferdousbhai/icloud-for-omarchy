@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           cargo fmt --all -- --check
-          bash -n install.sh bin/build-packages bin/collect-packages bin/release bin/verify-release
+          bash -n install.sh packaging/PKGBUILD bin/build-packages bin/arch-run bin/collect-packages bin/release bin/verify-release
           tests/install_test.sh
           python3 tests/packaging_test.py
   build:
@@ -32,15 +32,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Prepare native ARM image
-        if: matrix.arch == 'aarch64'
+      - name: Cache Cargo downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/cargo-${{ matrix.arch }}/registry/index
+            dist/cargo-${{ matrix.arch }}/registry/cache
+            dist/cargo-${{ matrix.arch }}/git/db
+          key: cargo-downloads-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-downloads-${{ matrix.arch }}-
+      - name: Install Arch chroot tools
         run: |
-          curl --fail --location --retry 3 https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/archlinuxarm.tar.gz
-          docker import --platform linux/arm64 /tmp/archlinuxarm.tar.gz archlinuxarm:native
+          sudo apt-get update
+          sudo apt-get install -y arch-install-scripts zstd
       - name: Build and test packages
-        env:
-          ARM_BUILD_IMAGE: archlinuxarm:native
-        run: bin/build-packages '${{ matrix.arch }}'
+        run: sudo bin/arch-run bin/build-packages '${{ matrix.arch }}' /output
       - uses: actions/upload-artifact@v4
         with:
           name: icloud-${{ matrix.arch }}

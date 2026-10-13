@@ -22,16 +22,14 @@ check() { # check <description> <command...>
 not() { ! "$@"; }
 
 if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
-  # add_signed_repo is shared verbatim with Ghost's installer
-  # (ferdousbhai/ghost); both repositories pin its hash, so a change to one
-  # copy fails here until the twin matches.
+  # Generated installers must preserve the reviewed repository setup.
   bin/make-installers "$work/dist" >/dev/null
   hash_of() { sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' "$1" | sed '1d;$d' | sha256sum | cut -d' ' -f1; }
   for f in install.sh "$work"/dist/install-*.sh; do
     check "add_signed_repo hash in $(basename "$f")" [ "$(hash_of "$f")" = "$(cat tests/add_signed_repo.sha256)" ]
   done
   if ((fail)); then
-    echo "add_signed_repo drifted from its pinned hash: update tests/add_signed_repo.sha256 here and the twin in ferdousbhai/ghost together" >&2
+    echo "add_signed_repo drifted from its pinned hash: review the change and update tests/add_signed_repo.sha256" >&2
     exit 1
   fi
   if ! unshare -rm true 2>/dev/null; then

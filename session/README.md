@@ -388,8 +388,9 @@ The iCloud apps pull the package in as a dependency from the signed
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash -s -- icloud-session
 ```
 
-or build the package from this checkout: `cd packaging/icloud-session &&
-makepkg -si`. Either installs the daemon (also the CLI, through the `icloud-session`
+or build from this checkout with `bin/build-packages "$(uname -m)"`, then
+install `dist/<arch>/icloud-session-*.pkg.tar.zst` with `sudo pacman -U`.
+Either installs the daemon (also the CLI, through the `icloud-session`
 symlink), the sign-in window and the D-Bus activation
 file. Nothing to enable; the bus starts the daemon on first use. Updates
 arrive through `omarchy update`.
@@ -436,13 +437,11 @@ keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`).
 
 ## Releasing
 
-Released with the other packages from the repository root; see the root
-[README](../README.md#releasing). Its tags are `session-v<version>`.
-Releasing icloud-session also sets the version in both crates, the
-workspace's `icloud-session` dependency and the snippet above. With
-`PUBLISH_CRATE=1` it also publishes the client crate to crates.io once the
-release is verified (so it then needs a crates.io token); by default the
-crate is not published.
+The client and daemon inherit the suite version from the root Cargo workspace;
+see [Releasing](../README.md#releasing). Historical `session-v*` tags remain.
+Publishing the app suite does not publish the client crate. When a crates.io
+release is needed, run `cargo publish --locked -p icloud-session` explicitly
+from the verified suite checkout. The dependency example above is independent of suite releases.
 
 ## License
 

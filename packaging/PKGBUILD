@@ -1,0 +1,140 @@
+# Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
+# One committed workspace build emits the six independently installable packages.
+pkgbase=icloud-for-omarchy
+pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-reminders icloud-contacts)
+_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+_suite_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_root/Cargo.toml")
+pkgver=$_suite_version
+pkgrel=1
+arch=('x86_64' 'aarch64')
+url='https://github.com/ferdousbhai/icloud-for-omarchy'
+license=('MIT')
+options=('!debug' '!lto')
+makedepends=('rust' 'cargo' 'git' 'dbus' 'gtk4' 'libadwaita' 'libshumate' 'webkitgtk-6.0' 'qt6-base' 'qt6-declarative')
+
+pkgver() {
+  local description
+  if description=$(git -C "$_root" describe --tags --long --match 'v[0-9]*' 2>/dev/null); then
+    sed 's/^v//; s/-\([0-9]*\)-g\([0-9a-f]*\)$/\.r\1.\2/; s/\.r0\.[0-9a-f]*$//' <<< "$description"
+  else
+    printf '%s.r%s.%s\n' "$_suite_version" "$(git -C "$_root" rev-list --count HEAD)" "$(git -C "$_root" rev-parse --short HEAD)"
+  fi
+}
+
+prepare() {
+  rm -rf "$srcdir/icloud-for-omarchy"
+  mkdir -p "$srcdir/icloud-for-omarchy"
+  git -C "$_root" archive HEAD | tar -x -C "$srcdir/icloud-for-omarchy"
+  cd "$srcdir/icloud-for-omarchy"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+_cargo_env() {
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$_root=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+}
+
+build() {
+  cd "$srcdir/icloud-for-omarchy"
+  _cargo_env
+  cargo build --frozen --release --workspace --bins
+  ICLOUD_NOTES_VERSION="$pkgver" notes/bin/build
+}
+
+check() {
+  cd "$srcdir/icloud-for-omarchy"
+  _cargo_env
+  cargo test --frozen --workspace
+  notes/bin/test
+}
+
+_package_gtk_app() {
+  local app=${pkgname#icloud-} desktop=com.ferdousbhai.$1 binary
+  cd "$srcdir/icloud-for-omarchy"
+  for binary in "$pkgname" "$pkgname-app"; do
+    install -Dm755 "${CARGO_TARGET_DIR:-target}/release/$binary" "$pkgdir/usr/bin/$binary"
+  done
+  install -Dm644 "$app/data/$desktop.desktop" "$pkgdir/usr/share/applications/$desktop.desktop"
+  install -Dm644 "$app/data/$desktop.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$desktop.svg"
+  install -Dm644 "$app/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
+
+package_icloud-session() {
+  pkgdesc='D-Bus service, sign-in window and CLI that own one iCloud web sign-in for all apps'
+  depends=('gtk4' 'webkitgtk-6.0' 'gst-plugins-good' 'glib2' 'gcc-libs' 'glibc' 'org.freedesktop.secrets')
+  cd "$srcdir/icloud-for-omarchy"
+  local bin
+  for bin in icloud-sessiond icloud-session-signin; do
+    install -Dm755 "${CARGO_TARGET_DIR:-target}/release/$bin" "$pkgdir/usr/bin/$bin"
+  done
+  # One executable: run as icloud-session it is the CLI.
+  ln -s icloud-sessiond "$pkgdir/usr/bin/icloud-session"
+  # D-Bus activation, no systemd unit: the bus starts the daemon on the
+  # first call and it exits when idle.
+  install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.service \
+    "$pkgdir/usr/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service"
+  install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.desktop \
+    "$pkgdir/usr/share/applications/io.github.ferdousbhai.ICloudSession.desktop"
+  install -Dm644 session/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
+
+package_icloud-photos() {
+  pkgdesc='iCloud Photos on Omarchy: browse, download, upload and delete'
+  depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme' 'sqlite')
+  _package_gtk_app IcloudPhotos
+}
+
+package_icloud-findmy() {
+  pkgdesc='Find My devices on Omarchy: locate, play a sound, Lost Mode, history trail'
+  depends=('gtk4' 'libadwaita' 'libshumate' 'icloud-session' 'hicolor-icon-theme' 'sqlite')
+  _package_gtk_app IcloudFindMy
+}
+
+package_icloud-notes() {
+  pkgdesc='Apple Notes on Omarchy, synced with iCloud'
+  depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'icloud-session' 'qt6-base' 'qt6-declarative')
+  provides=('icloud-notes-sync')
+  replaces=('icloud-notes-sync')
+  conflicts=('icloud-notes-sync')
+  cd "$srcdir/icloud-for-omarchy"
+  # The engine, run by the app and by `icloud-notes`; not a command of its own.
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/icloud-notes-sync" "$pkgdir/usr/lib/icloud-notes/icloud-notes-sync"
+  install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
+  cd notes
+  install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
+  install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
+  install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
+  install -Dm644 ../LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 ../NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+  # Background sync while the app is closed, enabled just below; install.sh
+  # only starts it at once instead of at the next login.
+  install -Dm644 data/icloud-notes-background.service "$pkgdir/usr/lib/systemd/user/icloud-notes-background.service"
+  install -Dm644 data/icloud-notes-background.timer "$pkgdir/usr/lib/systemd/user/icloud-notes-background.timer"
+  # Enabled for every user by the package itself, so an update through pacman
+  # turns it on too; it does nothing for a user with no cloned notes.
+  install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
+  ln -s ../icloud-notes-background.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-notes-background.timer"
+}
+
+package_icloud-reminders() {
+  pkgdesc='iCloud Reminders on Omarchy: lists, due dates and desktop notifications'
+  depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme')
+  _package_gtk_app IcloudReminders
+  # Sync and due-time notifications every minute, window open or not.
+  install -Dm644 reminders/data/icloud-reminders-background.service "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.service"
+  install -Dm644 reminders/data/icloud-reminders-background.timer "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.timer"
+  # Enabled for every user by the package itself, like Notes' background
+  # sync; install.sh only starts it at once instead of at the next login.
+  install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
+  ln -s ../icloud-reminders-background.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-reminders-background.timer"
+}
+
+package_icloud-contacts() {
+  pkgdesc='iCloud Contacts on Omarchy: browse, search, add, edit and delete contacts'
+  depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme')
+  _package_gtk_app IcloudContacts
+}
