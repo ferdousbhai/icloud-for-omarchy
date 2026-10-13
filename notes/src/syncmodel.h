@@ -717,9 +717,9 @@ inline QString toggleCheckbox(const QString &text, qsizetype lineIndex)
         return text;
     const qsizetype at = lead + marker;
     const QString rest = line.mid(at);
-    const QString box = rest.startsWith(u"[ ] ") ? QStringLiteral("[x] ") : QStringLiteral("[ ] ");
-    const bool hadBox = checkboxLength(rest) == 3 && rest.size() > 3;
-    lines[lineIndex] = line.left(at) + box + (hadBox ? rest.mid(4) : rest);
+    const bool hadBox = checkboxLength(rest) == 3;
+    const QString box = hadBox && rest.at(1) == u' ' ? QStringLiteral("[x]") : QStringLiteral("[ ]");
+    lines[lineIndex] = line.left(at) + box + (hadBox ? rest.mid(3) : u' ' + rest);
     return lines.join(u'\n');
 }
 

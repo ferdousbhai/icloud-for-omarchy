@@ -93,6 +93,12 @@ bool isHidden(const QString &relativePath)
     return false;
 }
 
+// Attachment bundles are data owned by notes, even when a file ends in .md.
+bool isNotePath(const QString &relativePath)
+{
+    return !isHidden(relativePath) && !relativePath.split(u'/').contains(QStringLiteral("attachments"));
+}
+
 QString sanitized(const QString &name)
 {
     QString clean = name.trimmed();
@@ -740,7 +746,7 @@ void NotesBackend::rebuildFolders()
     while (dirs.hasNext()) {
         const QString rel = root.relativeFilePath(dirs.next());
         // Downloaded attachment bundles are not folders either.
-        if (!isHidden(rel) && !rel.split(u'/').contains(QStringLiteral("attachments")))
+        if (isNotePath(rel))
             folders << rel;
     }
     SyncModel::sortFolders(folders, defaultFolder());
@@ -752,7 +758,7 @@ void NotesBackend::rebuildFolders()
     QDirIterator files(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
     while (files.hasNext()) {
         QString rel = root.relativeFilePath(files.next());
-        if (isHidden(rel))
+        if (!isNotePath(rel))
             continue;
         do {
             rel = rel.section(u'/', 0, -2);
@@ -778,16 +784,12 @@ void NotesBackend::rebuildNotes()
 {
     const QDir dir(folderAbsolutePath(m_currentFolder));
     QFileInfoList entries;
-    if (m_currentFolder.isEmpty()) {
-        QDirIterator files(dir.absolutePath(), { QStringLiteral("*.md") }, QDir::Files,
-                           QDirIterator::Subdirectories);
-        while (files.hasNext()) {
-            const QFileInfo info(files.next());
-            if (!isHidden(dir.relativeFilePath(info.filePath())))
-                entries << info;
-        }
-    } else {
-        entries = dir.entryInfoList({ QStringLiteral("*.md") }, QDir::Files);
+    QDirIterator files(dir.absolutePath(), { QStringLiteral("*.md") }, QDir::Files,
+                       QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QFileInfo info(files.next());
+        if (isNotePath(dir.relativeFilePath(info.filePath())))
+            entries << info;
     }
     // The sync tool syncs note mtimes, so newest-first matches Notes.app ordering.
     std::sort(entries.begin(), entries.end(),
@@ -890,7 +892,7 @@ QString NotesBackend::findNoteById(const QString &id) const
     QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString rel = root.relativeFilePath(it.next());
-        if (isHidden(rel) || rel.split(u'/').contains(QStringLiteral("attachments")))
+        if (!isNotePath(rel))
             continue;
         if (SyncModel::extractNoteId(readText(it.filePath(), 64 * 1024)) == id)
             return rel;
@@ -970,11 +972,9 @@ void NotesBackend::rewatch()
     if (!watched.isEmpty())
         m_watcher.removePaths(watched);
     m_watcher.addPath(rootPath());
-    if (m_currentFolder.isEmpty()) {
-        for (const QString &folder : m_folders) {
-            if (!folder.isEmpty())
-                m_watcher.addPath(folderAbsolutePath(folder));
-        }
+    for (const QString &folder : m_folders) {
+        if (!folder.isEmpty() && (m_currentFolder.isEmpty() || folder.startsWith(m_currentFolder + u'/')))
+            m_watcher.addPath(folderAbsolutePath(folder));
     }
     if (QDir(folderAbsolutePath(m_currentFolder)).exists())
         m_watcher.addPath(folderAbsolutePath(m_currentFolder));
@@ -1007,8 +1007,9 @@ void NotesBackend::openNote(const QString &name)
         return;
     // All Notes uses vault-relative paths so identical filenames in different
     // folders remain distinct. Open the note in its actual folder.
-    if (m_currentFolder.isEmpty() && name.contains(u'/')) {
-        setCurrentFolder(name.section(u'/', 0, -2));
+    if (name.contains(u'/')) {
+        const QString folder = vaultRelative(name).section(u'/', 0, -2);
+        setCurrentFolder(folder);
         openNote(name.section(u'/', -1));
         return;
     }
@@ -1400,10 +1401,12 @@ QVariantList NotesBackend::searchVault(const QString &query)
     QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
     for (int scanned = 0; it.hasNext() && out.size() < 100 && scanned < 2000; ++scanned) {
         const QString rel = root.relativeFilePath(it.next());
-        if (isHidden(rel))
+        if (!isNotePath(rel))
             continue;
         const QString text = readText(it.filePath(), 1024 * 1024);
-        if (!text.contains(q, Qt::CaseInsensitive))
+        const QString name = rel.section(u'/', -1);
+        const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
+        if (!text.contains(q, Qt::CaseInsensitive) && !preview.title.contains(q, Qt::CaseInsensitive))
             continue;
         QString snippet;
         for (const QString &line : text.split(u'\n')) {
@@ -1413,8 +1416,6 @@ QVariantList NotesBackend::searchVault(const QString &query)
                 break;
         }
         const QString folder = rel.section(u'/', 0, -2);
-        const QString name = rel.section(u'/', -1);
-        const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
         out << QVariantMap{ { QStringLiteral("folder"), folder },
                             { QStringLiteral("file"), name },
                             { QStringLiteral("title"), preview.title },

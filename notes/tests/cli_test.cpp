@@ -236,6 +236,16 @@ int main(int argc, char *argv[])
               "cli list JSON");
         check(paths(cliJson({ QStringLiteral("list"), QStringLiteral("--folder"), QStringLiteral("work") }).json().toArray()).size() == 4,
               "cli list --folder (any case)");
+        writeFile(QStringLiteral("Work/Child/Alpha.md"), QStringLiteral("# Nested Alpha\n"));
+        writeFile(QStringLiteral("Work/attachments/document.md"), QStringLiteral("# Not a note\n"));
+        const QJsonArray subtree = cliJson({ QStringLiteral("list"), QStringLiteral("--folder"), QStringLiteral("Work") }).json().toArray();
+        check(subtree.size() == 5 && paths(subtree).contains(QStringLiteral("Work/Child/Alpha.md")),
+              "cli folder list includes descendants and excludes Markdown attachments");
+        const QJsonArray withNested = cliJson({ QStringLiteral("list") }).json().toArray();
+        check(withNested.size() == 8 && paths(withNested).count(QStringLiteral("Work/Child/Alpha.md")) == 1,
+              "cli All Notes lists each descendant once with its actual path");
+        QDir(g_vault + QStringLiteral("/Work/Child")).removeRecursively();
+        QFile::remove(g_vault + QStringLiteral("/Work/attachments/document.md"));
         check(paths(cliJson({ QStringLiteral("list"), QStringLiteral("--flag"), QStringLiteral("conflict") }).json().toArray())
                   == QStringList{ QStringLiteral("Work/Beta.md"), QStringLiteral("Work/Tangle.md") }
                   || paths(cliJson({ QStringLiteral("list"), QStringLiteral("--flag"), QStringLiteral("conflict") }).json().toArray())

@@ -33,7 +33,7 @@ timer's sync). All of it is new, in the app binary: see
 
 | In the window | Command | |
 |---|---|---|
-| Folder list with note counts | `icloud-notes folders` | added |
+| Folder list with recursive note counts | `icloud-notes folders` | added |
 | Note list: title, preview, date, badges (new, conflict, read-only, ...) | `icloud-notes list [--folder F] [--flag FLAG]` | added |
 | Search box | `icloud-notes search QUERY` | added |
 | Open a note: text, attachments, read-only reason | `icloud-notes read NOTE [--raw]` | added |
@@ -222,8 +222,8 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | Command | stdout JSON |
 |---|---|
 | `status` | `{vault, cloned, title_mode, sync_tool, sign_in_known, signed_in, apple_id, sign_in_days_left, lock:{held_by, app_open}, notes, folders, flagged:{FLAG:[path]}}` |
-| `folders` | `[{folder, name, notes, default}]` (`folder` `""` is the vault root, All Notes) |
-| `list` | `[{path, folder, file, title, snippet, modified, modified_ms, id, flags}]` |
+| `folders` | `[{folder, name, notes, default}]` (`folder` `""` is the vault root, All Notes; counts include descendants) |
+| `list` | `[{path, folder, file, title, snippet, modified, modified_ms, id, flags}]` (`--folder` includes descendants, matching the window and folder counts) |
 | `read` | `{path, folder, file, title, id, modified, modified_ms, flags, read_only, body, text?, attachments:[{name, path, image}], conflicts:[{local:[line], remote:[line], before:[line], after:[line]}], conflicts_unreadable, has_synced_copy}` |
 | `search` | `[{path, folder, file, title, snippet}]` |
 | `new` | `{action:"new", path, folder, file, title, sync?}` |

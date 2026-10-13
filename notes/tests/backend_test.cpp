@@ -178,6 +178,26 @@ int main(int argc, char *argv[])
     QFile::remove(QDir(NotesBackend::rootPath()).filePath(QStringLiteral("Sub/A.md")));
     b.setCurrentFolder(QString());
     b.refresh();
+    writeFile(QStringLiteral("Sub/Deep/Child.md"), QStringLiteral("# Child\ndeep-note-marker\n"));
+    writeFile(QStringLiteral("Sub/attachments/Document.md"), QStringLiteral("# attachment-marker\n"));
+    writeFile(QStringLiteral("Sub/.hidden/Secret.md"), QStringLiteral("# hidden-marker\n"));
+    b.refresh();
+    b.setCurrentFolder(QStringLiteral("Sub"));
+    check(b.notes().size() == 2 && b.folderNoteCounts().value(QStringLiteral("Sub")).toInt() == 2
+              && b.notes().contains(QStringLiteral("Deep/Child.md")),
+          "backend parent folder list agrees with its recursive count");
+    check(b.searchVault(QStringLiteral("attachment-marker")).isEmpty()
+              && b.searchVault(QStringLiteral("hidden-marker")).isEmpty(),
+          "backend search excludes Markdown attachments and hidden files");
+    b.openNote(QStringLiteral("Deep/Child.md"));
+    check(b.currentFolder() == QStringLiteral("Sub/Deep")
+              && b.noteBody().contains(QStringLiteral("deep-note-marker")),
+          "backend parent folder opens the correct descendant");
+    QDir(testVault() + QStringLiteral("/Sub/Deep")).removeRecursively();
+    QDir(testVault() + QStringLiteral("/Sub/attachments")).removeRecursively();
+    QDir(testVault() + QStringLiteral("/Sub/.hidden")).removeRecursively();
+    b.setCurrentFolder(QString());
+    b.refresh();
     check(!b.noteStates().contains(QStringLiteral("A.md")), "backend clean note unflagged");
     check(hasFlag(b, QStringLiteral("B.md"), "conflict"), "backend conflict flagged");
     check(hasFlag(b, QStringLiteral("C.md"), "new"), "backend new flagged");
@@ -487,6 +507,10 @@ int main(int argc, char *argv[])
         check(nested.size() == 1
                   && nested.at(0).toMap().value(QStringLiteral("folder")).toString() == QStringLiteral("Sub"),
               "backend search reports folder");
+        const QVariantList byTitle = b.searchVault(QStringLiteral("second"));
+        check(byTitle.size() == 1
+                  && byTitle.at(0).toMap().value(QStringLiteral("file")).toString() == QStringLiteral("Second.md"),
+              "backend search matches filename-mode titles absent from the body");
         check(b.searchVault(QStringLiteral("zzz-no-match")).isEmpty(), "backend search empty");
         check(b.searchVault(QStringLiteral("x")).isEmpty(), "backend search needs 2 chars");
     }

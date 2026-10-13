@@ -333,6 +333,12 @@ int main()
     check(SyncModel::stripMarkdownLead(QStringLiteral("## Title *here*")) == QStringLiteral("Title here"),
           "strip heading and emphasis");
 
+    check(SyncModel::toggleCheckbox(QStringLiteral("- [ ]"), 0) == QStringLiteral("- [x]"),
+          "checkbox checks an empty task without planting another box");
+    check(SyncModel::toggleCheckbox(QStringLiteral("- [X]\n"), 0) == QStringLiteral("- [ ]\n"),
+          "checkbox unchecks an empty task and preserves its newline");
+    check(SyncModel::toggleCheckbox(QStringLiteral("- [ ]\tmilk"), 0) == QStringLiteral("- [x]\tmilk"),
+          "checkbox preserves whitespace after the marker");
     // toggleCheckbox
     check(SyncModel::toggleCheckbox(QStringLiteral("a\n- [ ] milk\nb"), 1) == QStringLiteral("a\n- [x] milk\nb"),
           "checkbox check");

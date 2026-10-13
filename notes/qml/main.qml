@@ -1425,6 +1425,14 @@ ApplicationWindow {
         function onEditsKeptAsNote(message) {
             root.keptNotice = message;
         }
+        function onNotesChanged() {
+            if (root.searching)
+                root.searchResults = backend.searchVault(searchField.text);
+        }
+        function onFoldersChanged() {
+            if (root.searching)
+                root.searchResults = backend.searchVault(searchField.text);
+        }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
         // Not on syncRunningChanged: that turns false between runSync's
         // push and its pull, which would unlock the editor too early.
