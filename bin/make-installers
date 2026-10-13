@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Write the per-app installers into a directory: install-notes.sh,
-# install-photos.sh, install-findmy.sh, install-reminders.sh and install-contacts.sh. Each is
+# install-photos.sh and install-findmy.sh. Each is
 # install.sh with its
 # DEFAULT_PACKAGES line set to that one app, so a bare
 # `curl .../install-photos.sh | sudo bash` installs only Photos; install.sh
