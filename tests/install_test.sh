@@ -110,11 +110,25 @@ check "re-running keeps one Include line" [ "$(count_include icloud-for-omarchy)
 check "on Omarchy it installs with omarchy-pkg-add" grep -q '^omarchy-pkg-add icloud-notes' "$PACMAN_LOG"
 check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" not grep -q '^pacman -Syu' "$PACMAN_LOG"
 
+# ARM's update helper removes the old [omarchy] block before appending
+# a restricted replacement. A trailing Include must survive that rewrite.
+setup
+printf '\n[omarchy]\nServer = old\nInclude = /etc/pacman.d/icloud-for-omarchy.conf\n' >> /etc/pacman.conf
+bash install.sh icloud-notes >/dev/null 2>&1
+awk '/^[[:space:]]*\[/ { omit = ($0 ~ /^[[:space:]]*\[omarchy\][[:space:]]*(#.*)?$/) } !omit { print }' /etc/pacman.conf > "$work/arm.conf"
+check "repository Include survives ARM source replacement" grep -qxF 'Include = /etc/pacman.d/icloud-for-omarchy.conf' "$work/arm.conf"
+check "moving an existing Include keeps one copy" [ "$(count_include icloud-for-omarchy)" = 1 ]
+# The installed hook must restore the same placement after a config reset.
+printf '[options]\n[omarchy]\nServer = old\n' > /etc/pacman.conf
+bash "$hooks/icloud-for-omarchy"
+awk '/^[[:space:]]*\[/ { omit = ($0 ~ /^[[:space:]]*\[omarchy\][[:space:]]*(#.*)?$/) } !omit { print }' /etc/pacman.conf > "$work/arm.conf"
+check "refresh hook Include survives ARM source replacement" grep -qxF 'Include = /etc/pacman.d/icloud-for-omarchy.conf' "$work/arm.conf"
+
 # Plain Arch: no Omarchy commands anywhere on PATH, so one pacman -Syu transaction.
 setup
 mkdir -p "$work/plain"
 cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/bin/uname" "$work/plain/"
-for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail; do
+for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail awk cmp; do
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true

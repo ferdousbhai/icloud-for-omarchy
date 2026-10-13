@@ -58,16 +58,39 @@ add_signed_repo() {
   $sudo pacman-key --lsign-key "$fingerprint"
   rm -f "$key"
   printf '[%s]\nSigLevel = Required DatabaseRequired\nServer = %s\n' "$name" "$release" | $sudo tee "$conf" >/dev/null
-  grep -qxF "$include" /etc/pacman.conf || printf '\n%s\n' "$include" | $sudo tee -a /etc/pacman.conf >/dev/null
+  # ARM updates replace [omarchy] and everything below its header up to
+  # the next section. Keep our Include before repository sections so it
+  # cannot be mistaken for part of [omarchy], even on an existing install.
+  restore_repo_include() {
+    local include=$1 temporary sudo=''
+    (( EUID == 0 )) || sudo=sudo
+    temporary=$(mktemp)
+    awk -v repo_include="$include" '
+      $0 == repo_include { next }
+      !added && /^[[:space:]]*\[/ && !/^[[:space:]]*\[options\]/ {
+        print repo_include
+        added = 1
+      }
+      { print }
+      END { if (!added) print repo_include }
+    ' /etc/pacman.conf > "$temporary"
+    if ! cmp -s "$temporary" /etc/pacman.conf; then
+      $sudo tee /etc/pacman.conf < "$temporary" >/dev/null
+    fi
+    rm -f "$temporary"
+  }
+  restore_repo_include "$include"
   user="${SUDO_USER:-${USER:-$(id -un)}}"
   home="$(getent passwd "$user" | cut -d: -f6)"
   if [[ -n $home && -d $home/.config/omarchy ]]; then
     hook_dir="$home/.config/omarchy/hooks/pre-refresh-pacman.d"
     install -d -o "$user" -g "$(id -gn "$user")" "$hook_dir"
-    printf '%s\n' '#!/bin/bash' \
-      "# Restore the [$name] repository after Omarchy rewrote /etc/pacman.conf." \
-      "grep -qxF '$include' /etc/pacman.conf || printf '\\n%s\\n' '$include' | sudo tee -a /etc/pacman.conf >/dev/null" \
-      > "$hook_dir/$name"
+    {
+      printf '%s\n' '#!/bin/bash' 'set -euo pipefail' \
+        "# Restore the [$name] repository before Omarchy's ARM source rewrite."
+      declare -f restore_repo_include
+      printf 'restore_repo_include %q\n' "$include"
+    } > "$hook_dir/$name"
     chown "$user" "$hook_dir/$name"
     chmod 755 "$hook_dir/$name"
   fi
