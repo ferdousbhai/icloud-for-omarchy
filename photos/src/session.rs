@@ -17,6 +17,12 @@ impl From<icloud_session::Error> for Error {
             icloud_session::Error::SignInRequired => Error::SignInRequired,
             icloud_session::Error::Http { status, body } => Error::Http { status, body },
             icloud_session::Error::Io(e) => Error::Io(e),
+            icloud_session::Error::Offline(m) => Error::Offline(m),
+            icloud_session::Error::Network(m) => Error::Network(m),
+            icloud_session::Error::BadResponse(m) => Error::BadResponse(m),
+            icloud_session::Error::Service(m) => Error::Service(m),
+            icloud_session::Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m),
+            // Find My's password, which Photos never asks for.
             other => Error::Other(other.to_string()),
         }
     }
@@ -59,7 +65,7 @@ impl Transport for SessionTransport {
         let ws = self.session.webservices()?;
         ws.url(key)
             .map(str::to_owned)
-            .ok_or_else(|| Error::Other(format!("iCloud did not offer the {key} service for this account")))
+            .ok_or_else(|| Error::NotOffered(key.to_owned()))
     }
 
     fn post_json(&self, url: &str, body: &Value) -> Result<Value> {

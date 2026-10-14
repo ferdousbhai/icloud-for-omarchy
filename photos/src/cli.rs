@@ -4,8 +4,10 @@
 //! `upload::upload_batch`, `CloudKit::delete_assets`, `thumbs::prune_cache`.
 //!
 //! Output is plain text, or JSON on stdout with `--json`. Exit codes, as in
-//! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 usage, 3 sign-in
-//! required, 4 not found. With `--json` an error is one JSON line on stderr:
+//! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 usage, 3 not signed in
+//! (or iCloud Photos not enabled for the account), 4 not found, 5 a service
+//! unavailable (offline, network, icloud-sessiond, keyring, Apple 5xx). With
+//! `--json` an error is one JSON line on stderr:
 //! `{"ok":false,"error":{"code","message","hint"?}}`.
 
 use std::cell::RefCell;
@@ -25,13 +27,14 @@ use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
 
 const TOOL: &str = "icloud-photos";
 
-const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in), 4 not found.\n\
+const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in (icloud-session sign-in) or iCloud Photos \
+not enabled, 4 not found, 5 service unavailable (offline, network, icloud-sessiond, keyring).\n\
 With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
 {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}.\n\
 ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple.";
@@ -210,21 +213,66 @@ pub fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => ExitCode::from(code),
         Err(fail) => {
-            let (code, kind, msg) = match fail {
-                Fail::Usage(m) => (EXIT_USAGE, "usage", m),
-                Fail::NotFound(m) => (EXIT_NOT_FOUND, "not_found", m),
-                Fail::Cancelled(m) => (EXIT_ERROR, "cancelled", m),
-                Fail::Err(e) if e.is_sign_in() => (
+            let (code, kind, msg, hint) = classify(fail);
+            ExitCode::from(cli::report(TOOL, json, kind, code, &msg, hint))
+        }
+    }
+}
+
+/// A failure's exit code, JSON `code`, message and remediation hint, per
+/// the shared mapping (docs/CLI.md).
+fn classify(fail: Fail) -> (u8, &'static str, String, Option<&'static str>) {
+    match fail {
+        Fail::Usage(m) => (EXIT_USAGE, "usage", m, None),
+        Fail::NotFound(m) => (EXIT_NOT_FOUND, "not_found", m, None),
+        Fail::Cancelled(m) => (EXIT_ERROR, "cancelled", m, None),
+        Fail::Err(e) => {
+            let msg = e.to_string();
+            match e {
+                Error::SignInRequired => (
                     EXIT_SIGN_IN,
                     "sign_in_required",
-                    format!(
-                        "{}; run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)",
-                        icloud_session::sign_in_required_message()
-                    ),
+                    icloud_session::sign_in_required_message(),
+                    Some("run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)"),
                 ),
-                Fail::Err(e) => (EXIT_ERROR, "error", e.to_string()),
-            };
-            ExitCode::from(cli::report(TOOL, json, kind, code, &msg, None))
+                Error::NotOffered(_) => (
+                    EXIT_SIGN_IN,
+                    "service_not_offered",
+                    msg,
+                    Some("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
+                ),
+                Error::Offline(_) => (
+                    EXIT_UNAVAILABLE,
+                    "offline",
+                    msg,
+                    Some("check the network connection, then try again"),
+                ),
+                Error::Network(_) => (EXIT_UNAVAILABLE, "network", msg, None),
+                Error::BadResponse(_) => (EXIT_UNAVAILABLE, "bad_response", msg, None),
+                Error::Service(_) => (
+                    EXIT_UNAVAILABLE,
+                    "session_service",
+                    msg,
+                    Some("check `icloud-session status`; icloud-sessiond must be installed and reachable on D-Bus"),
+                ),
+                Error::KeyringUnavailable(_) => (
+                    EXIT_UNAVAILABLE,
+                    "keyring_unavailable",
+                    msg,
+                    Some("unlock the keyring (GNOME Keyring), then try again"),
+                ),
+                Error::Http { status: 500..=599, .. } => (EXIT_UNAVAILABLE, "http", msg, None),
+                // Apple keeps refusing the session although the daemon says
+                // it is signed in.
+                Error::Http { status: 401 | 421, .. } => (
+                    EXIT_SIGN_IN,
+                    "http",
+                    msg,
+                    Some("run `icloud-session sign-in` to sign in again"),
+                ),
+                Error::Http { .. } => (EXIT_ERROR, "http", msg, None),
+                _ => (EXIT_ERROR, "error", msg, None),
+            }
         }
     }
 }
@@ -1114,5 +1162,41 @@ mod tests {
     fn the_cli_definition_is_consistent() {
         use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::*;
+
+    fn exit_and_code(e: Error) -> (u8, &'static str, bool) {
+        let (exit, code, _, hint) = classify(Fail::Err(e));
+        (exit, code, hint.is_some())
+    }
+
+    #[test]
+    fn failures_follow_the_shared_exit_mapping() {
+        let s = || "x".to_owned();
+        let http = |status| Error::Http { status, body: s() };
+        assert_eq!(exit_and_code(Error::Offline(s())), (5, "offline", true));
+        assert_eq!(exit_and_code(Error::Network(s())), (5, "network", false));
+        assert_eq!(exit_and_code(Error::BadResponse(s())), (5, "bad_response", false));
+        assert_eq!(exit_and_code(Error::Service(s())), (5, "session_service", true));
+        assert_eq!(
+            exit_and_code(Error::KeyringUnavailable(s())),
+            (5, "keyring_unavailable", true)
+        );
+        assert_eq!(exit_and_code(http(503)), (5, "http", false));
+        assert_eq!(exit_and_code(http(421)), (3, "http", true));
+        assert_eq!(exit_and_code(http(401)), (3, "http", true));
+        assert_eq!(exit_and_code(http(404)), (1, "http", false));
+        assert_eq!(
+            exit_and_code(Error::NotOffered("ckdatabasews".into())),
+            (3, "service_not_offered", true)
+        );
+        assert_eq!(exit_and_code(Error::Other(s())), (1, "error", false));
+        assert_eq!(classify(Fail::NotFound(s())).0, 4);
+        assert_eq!(classify(Fail::Usage(s())).0, 2);
+        assert_eq!(classify(Fail::Cancelled(s())).0, 1);
     }
 }

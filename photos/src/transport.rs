@@ -23,6 +23,28 @@ pub enum Error {
     /// `serverErrorCode`).
     #[error("CloudKit {code}: {reason}")]
     CloudKit { code: String, reason: String },
+    /// No network: a host name did not resolve or nothing answered the
+    /// connect. Every other request would fail the same way.
+    #[error("offline: {0}")]
+    Offline(String),
+    /// Any other transport failure talking to Apple.
+    #[error("network: {0}")]
+    Network(String),
+    /// Apple answered with a body this version cannot read (an HTML
+    /// maintenance page instead of JSON, say).
+    #[error("unexpected response: {0}")]
+    BadResponse(String),
+    /// `icloud-sessiond` could not be reached or failed.
+    #[error("icloud-sessiond: {0}")]
+    Service(String),
+    /// The keyring holding the session's cookies would not give them
+    /// (locked, no Secret Service, prompt dismissed). Not a sign-in.
+    #[error("the keyring holding the iCloud session cannot be read: {0}")]
+    KeyringUnavailable(String),
+    /// The account's `webservices` has no entry for this service (iCloud
+    /// Photos is not enabled for the Apple ID); holds the service key.
+    #[error("iCloud did not offer the {0} service for this account")]
+    NotOffered(String),
     #[error("{0}")]
     Other(String),
     #[error(transparent)]
@@ -57,6 +79,12 @@ impl Error {
                 code: code.clone(),
                 reason: reason.clone(),
             },
+            Error::Offline(m) => Error::Offline(m.clone()),
+            Error::Network(m) => Error::Network(m.clone()),
+            Error::BadResponse(m) => Error::BadResponse(m.clone()),
+            Error::Service(m) => Error::Service(m.clone()),
+            Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m.clone()),
+            Error::NotOffered(m) => Error::NotOffered(m.clone()),
             Error::Other(m) => Error::Other(m.clone()),
             Error::Io(e) => Error::Io(std::io::Error::new(e.kind(), e.to_string())),
             Error::Db(e) => Error::Other(e.to_string()),

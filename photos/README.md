@@ -96,12 +96,22 @@ window, when given no arguments; the desktop entry starts
 | `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
 
 - `--json` prints JSON on stdout, and an error as one JSON line on stderr,
-  `{"error":{"code":"not_found","message":…,"exit_code":1}}` (codes:
-  `usage`, `sign_in_required`, `not_found`, `cancelled`, `error`); otherwise
-  output is plain text, tab-separated for lists. Every command has `--help`.
-- Exit codes: 0 ok, 1 error, 2 sign-in required (`status` also exits 2
-  when signed out), 64 usage, as in every iCloud tool
-  ([docs/CLI.md](../docs/CLI.md)).
+  `{"ok":false,"error":{"code":"not_found","message":…,"hint":…}}` (`hint`,
+  a remediation such as "run `icloud-session sign-in`", only when there is
+  one). Codes: `usage`, `not_found`, `cancelled`, `sign_in_required`,
+  `service_not_offered` (iCloud Photos not enabled for the Apple ID),
+  `offline`, `network`, `session_service` (icloud-sessiond unreachable),
+  `keyring_unavailable`, `bad_response`, `http`, `error`. Otherwise output is
+  plain text, tab-separated for lists, and an error is `icloud-photos:
+  message` with the hint on the next line. Every command has `--help`.
+- Exit codes, as in every iCloud tool ([docs/CLI.md](../docs/CLI.md)):
+  0 ok; 1 error (also `cancelled`, an HTTP 4xx, or some items of a
+  `download`/`upload`/`delete` failed); 2 usage, or `delete` without `--yes`
+  off a terminal; 3 not signed in (`status` also exits 3 when signed out),
+  iCloud Photos not offered for the account, or Apple refusing the session
+  (HTTP 401/421) while the daemon says signed in; 4 not found; 5 a service
+  unavailable: offline, network, icloud-sessiond, keyring, bad response or
+  an Apple 5xx.
 - `--data-dir DIR` keeps the catalog, cache, preferences and library all
   under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`), so a
   test run never touches your own.
