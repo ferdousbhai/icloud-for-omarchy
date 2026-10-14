@@ -154,6 +154,12 @@ PATH (a development build).
 
 ## Conventions every tool follows
 
+- **Output modes** (the shared product contract): human-readable text on a
+  terminal, the JSON envelope `{"ok":true,"data","summary","meta"?}` when
+  piped. `--json` forces the envelope, `--styled` text, `--quiet` only the
+  `data`, `--ids-only` one id per line, `--count` their number. Progress and
+  warnings go to stderr. (Rolling out tool by tool: `icloud-findmy` follows it;
+  the others still print the bare result on stdout and take `--json` only.)
 - **`--json`** on every command: the result as JSON on stdout (stdout
   carries nothing else), progress and warnings on stderr. `icloud-session`
   prints JSON anyway; `--json` there makes its errors JSON too.

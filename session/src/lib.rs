@@ -30,6 +30,7 @@
 //!   path and query; [`sign_in`] posts to the fake's `/mock/reauthenticate`.
 
 pub mod cli;
+pub mod output;
 pub mod time;
 
 use std::collections::HashMap;

@@ -15,14 +15,13 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::output::{self, CliError, OutputFlags, Response};
 use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
 
 use crate::findme::{self, FindMe, SessionTransport, Transport};
 use crate::history::{self, History, Point};
 use crate::models::{self, Device, Fix};
-
-const TOOL: &str = "icloud-findmy";
 
 /// How long `locate` waits for a fresh fix unless `--wait` says otherwise.
 const DEFAULT_WAIT_SECS: u64 = 30;
@@ -33,10 +32,12 @@ const AFTER_HELP: &str = "\
 NAME|ID matches a device name case-insensitively (a unique part of it is
 enough); an ambiguous NAME lists the matches, use the ID then.
 
-With --json, stdout is only the JSON result and an error is one JSON line on
-stderr: {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}; codes: usage,
+Output: human-readable text on a terminal, a JSON envelope
+{\"ok\":true,\"data\",\"summary\",\"meta\"?} when piped (--json forces it, --styled
+text, --quiet only the data, --ids-only the device ids, --count their number).
+A failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} (codes: usage,
 sign_in_required, find_my_auth_required, not_found, ambiguous, cancelled,
-unsupported, no_fix, error.
+unsupported, no_fix, error) on stdout, or error:/hint: on stderr in text mode.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in)
 or Find My needs the Apple password (icloud-session authorize-find-my),
@@ -50,9 +51,8 @@ or Find My needs the Apple password (icloud-session authorize-find-my),
     after_help = AFTER_HELP
 )]
 struct Args {
-    /// Machine-readable output on stdout (errors as JSON on stderr).
-    #[arg(long, global = true)]
-    json: bool,
+    #[command(flatten)]
+    out: OutputFlags,
     /// Keep history.db in DIR (default ~/.local/share/icloud-findmy).
     #[arg(long, global = true, value_name = "DIR")]
     data_dir: Option<PathBuf>,
@@ -210,7 +210,7 @@ impl Failure {
     }
 }
 
-type Outcome = Result<(), Failure>;
+type Outcome = Result<Response, Failure>;
 
 fn usage(msg: impl Into<String>) -> Failure {
     Failure::Usage(msg.into())
@@ -245,13 +245,12 @@ fn parse_duration(s: &str) -> Result<i64, String> {
 
 /// Runs the command line on the process arguments and returns the exit code.
 pub fn run() -> u8 {
-    let args = match cli::parse::<Args>(TOOL) {
+    let args = match output::parse::<Args>() {
         Ok(args) => args,
         Err(code) => return code,
     };
-    let json = args.json;
+    let mode = args.out.mode();
     let mut cli = Cli {
-        json,
         data_dir: args.data_dir,
         fm: FindMe::new(SessionTransport::default()),
         history: None,
@@ -270,13 +269,15 @@ pub fn run() -> u8 {
         Command::PruneHistory => cli.prune_history(),
     };
     match result {
-        Ok(()) => EXIT_OK,
-        Err(f) => cli::report(TOOL, json, f.kind(), f.code(), &f.message(), None),
+        Ok(resp) => {
+            resp.print(mode);
+            EXIT_OK
+        }
+        Err(f) => CliError::new(f.kind(), f.code(), f.message()).report(mode),
     }
 }
 
 struct Cli<T: Transport> {
-    json: bool,
     data_dir: Option<PathBuf>,
     fm: FindMe<T>,
     history: Option<History>,
@@ -322,20 +323,22 @@ impl<T: Transport> Cli<T> {
     fn devices(&mut self, locate: bool, coords: bool) -> Outcome {
         let devices = self.fetch(locate)?;
         let now = icloud_session::time::now_ms();
-        if self.json {
-            let list: Vec<Value> = devices.iter().map(|d| device_json(d, coords, now)).collect();
-            println!("{}", pretty(&json!(list)));
-        } else if devices.is_empty() {
-            println!("No devices.");
+        let data: Vec<Value> = devices.iter().map(|d| device_json(d, coords, now)).collect();
+        let ids: Vec<String> = devices.iter().map(|d| d.id.clone()).collect();
+        let human = if devices.is_empty() {
+            "No devices.".to_string()
         } else {
-            for (i, d) in devices.iter().enumerate() {
-                if i > 0 {
-                    println!();
-                }
-                print!("{}", device_text(d, coords, now));
-            }
-        }
-        Ok(())
+            devices
+                .iter()
+                .map(|d| device_text(d, coords, now).trim_end().to_string())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+        let summary = match devices.len() {
+            1 => "1 device".to_string(),
+            n => format!("{n} devices"),
+        };
+        Ok(Response::new(data, summary).human(human).ids(ids))
     }
 
     fn locate(&mut self, query: &str, wait: Duration) -> Outcome {
@@ -351,7 +354,7 @@ impl<T: Transport> Cli<T> {
             };
             // Newer than before, and not one Apple itself marks as old.
             if let Some(fix) = now.location.filter(|f| f.ts_ms > before && !f.is_old) {
-                return self.print_fix(now, &fix);
+                return Ok(self.fix_response(now, &fix));
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -373,21 +376,20 @@ impl<T: Transport> Cli<T> {
         }
     }
 
-    fn print_fix(&self, d: &Device, fix: &Fix) -> Outcome {
+    fn fix_response(&self, d: &Device, fix: &Fix) -> Response {
         let now = icloud_session::time::now_ms();
-        if self.json {
-            println!("{}", pretty(&device_json(d, true, now)));
-        } else {
-            println!("{}", d.name);
-            println!(
-                "  fix:      {} ({}), ±{:.0} m",
-                rfc3339(fix.ts_ms / 1000),
-                models::last_seen(now, fix.ts_ms),
-                fix.accuracy
-            );
-            println!("  coords:   {:.6}, {:.6}", fix.lat, fix.lon);
-        }
-        Ok(())
+        let human = format!(
+            "{}\n  fix:      {} ({}), ±{:.0} m\n  coords:   {:.6}, {:.6}",
+            d.name,
+            rfc3339(fix.ts_ms / 1000),
+            models::last_seen(now, fix.ts_ms),
+            fix.accuracy,
+            fix.lat,
+            fix.lon
+        );
+        Response::new(device_json(d, true, now), format!("Located {}", d.name))
+            .human(human)
+            .ids(vec![d.id.clone()])
     }
 
     fn play_sound(&mut self, query: &str, yes: bool) -> Outcome {
@@ -428,15 +430,8 @@ impl<T: Transport> Cli<T> {
     }
 
     fn done(&self, action: &str, d: &Device, text: &str) -> Outcome {
-        if self.json {
-            println!(
-                "{}",
-                pretty(&json!({"ok": true, "action": action, "device": {"id": d.id, "name": d.name}}))
-            );
-        } else {
-            println!("{text}");
-        }
-        Ok(())
+        let data = json!({"ok": true, "action": action, "device": {"id": d.id, "name": d.name}});
+        Ok(Response::new(data, text.to_string()).human(text.to_string()))
     }
 
     fn history(&mut self, query: &str, since_secs: i64) -> Outcome {
@@ -452,35 +447,30 @@ impl<T: Transport> Cli<T> {
             (d.id.clone(), Some(d.name.clone()))
         };
         let points = self.open_history()?.trail(&id, since).map_err(db)?;
-        if self.json {
-            let rows: Vec<Value> = points.iter().map(point_json).collect();
-            println!(
-                "{}",
-                pretty(&json!({
-                    "device": {"id": id, "name": name},
-                    "since": rfc3339(since),
-                    "points": rows,
-                }))
-            );
-            return Ok(());
-        }
+        let rows: Vec<Value> = points.iter().map(point_json).collect();
+        let data = json!({
+            "device": {"id": id, "name": name},
+            "since": rfc3339(since),
+            "points": rows,
+        });
         let who = name.as_deref().unwrap_or(&id);
-        if points.is_empty() {
-            println!("No positions for {who} since {}.", rfc3339(since));
-            return Ok(());
-        }
-        println!("{who}: {} positions since {}", points.len(), rfc3339(since));
-        for p in &points {
-            let battery = p.battery.map(|b| format!("  {:.0}%", b * 100.0)).unwrap_or_default();
-            println!(
-                "{}  {:.6}, {:.6}  ±{:.0} m{battery}",
-                rfc3339(p.ts),
-                p.lat,
-                p.lon,
-                p.accuracy
-            );
-        }
-        Ok(())
+        let human = if points.is_empty() {
+            format!("No positions for {who} since {}.", rfc3339(since))
+        } else {
+            let mut lines = vec![format!("{who}: {} positions since {}", points.len(), rfc3339(since))];
+            for p in &points {
+                let battery = p.battery.map(|b| format!("  {:.0}%", b * 100.0)).unwrap_or_default();
+                lines.push(format!(
+                    "{}  {:.6}, {:.6}  ±{:.0} m{battery}",
+                    rfc3339(p.ts),
+                    p.lat,
+                    p.lon,
+                    p.accuracy
+                ));
+            }
+            lines.join("\n")
+        };
+        Ok(Response::new(data, format!("{} positions", points.len())).human(human))
     }
 
     fn prune_history(&mut self) -> Outcome {
@@ -489,20 +479,14 @@ impl<T: Transport> Cli<T> {
         let deleted = h.pruned_on_open() + h.prune(icloud_session::time::now_ms() / 1000).map_err(db)?;
         let remaining = h.count().map_err(db)?;
         let days = history::RETENTION_SECS / 86_400;
-        if self.json {
-            println!(
-                "{}",
-                pretty(&json!({"deleted": deleted, "remaining": remaining, "retention_days": days}))
-            );
-        } else {
-            println!("Deleted {deleted} positions older than {days} days; {remaining} remain.");
-        }
-        Ok(())
+        let data = json!({"deleted": deleted, "remaining": remaining, "retention_days": days});
+        let human = format!("Deleted {deleted} positions older than {days} days; {remaining} remain.");
+        Ok(Response::new(data, format!("Deleted {deleted} positions")).human(human))
     }
 }
 
 /// Asks on a terminal unless `yes`; refuses without a terminal.
-fn confirm(cmd: &str, yes: bool, question: &str) -> Outcome {
+fn confirm(cmd: &str, yes: bool, question: &str) -> Result<(), Failure> {
     if yes {
         return Ok(());
     }
@@ -520,10 +504,6 @@ fn confirm(cmd: &str, yes: bool, question: &str) -> Outcome {
 
 fn db(e: rusqlite::Error) -> Failure {
     Failure::Other(format!("history: {e}"))
-}
-
-fn pretty(v: &Value) -> String {
-    serde_json::to_string_pretty(v).expect("JSON values serialize")
 }
 
 /// Lowercase, with typographic apostrophes as plain ones ("Dous’s" = "dous's").

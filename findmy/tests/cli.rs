@@ -46,10 +46,18 @@ impl Env {
         run_at(&self.base, self.dir.path(), args)
     }
 
+    /// The `data` of the JSON envelope on stdout (every caller passes `--json`).
     fn json(&self, args: &[&str]) -> Value {
         let out = self.run(args);
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
-        serde_json::from_slice(&out.stdout).unwrap()
+        envelope(&out.stdout)["data"].clone()
+    }
+
+    /// A human-readable run: `--styled` forces text even when piped.
+    fn styled(&self, args: &[&str]) -> Output {
+        let mut a = args.to_vec();
+        a.push("--styled");
+        self.run(&a)
     }
 
     fn actions(&self) -> Vec<Value> {
@@ -77,6 +85,18 @@ fn code(out: &Output) -> i32 {
     out.status.code().unwrap()
 }
 
+/// Parses a JSON envelope (`{ok,data,summary}` or `{ok:false,error}`) from stdout.
+fn envelope(stdout: &[u8]) -> Value {
+    serde_json::from_slice(stdout).unwrap()
+}
+
+/// `--styled` forces human text even when piped (tests run with no terminal).
+fn styled_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
+    let mut a = args.to_vec();
+    a.push("--styled");
+    run_at(base, tmp, &a)
+}
+
 fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
@@ -88,7 +108,7 @@ fn stderr(out: &Output) -> String {
 #[test]
 fn devices_lists_every_field_and_coords_only_when_asked() {
     let env = start();
-    let out = env.run(&["devices"]);
+    let out = env.styled(&["devices"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let text = stdout(&out);
     for want in [
@@ -106,7 +126,7 @@ fn devices_lists_every_field_and_coords_only_when_asked() {
     }
     assert!(!text.contains("coords:"), "{text}");
     assert!(
-        env.run(&["devices", "--coords"])
+        env.styled(&["devices", "--coords"])
             .stdout
             .windows(7)
             .any(|w| w == b"coords:")
@@ -150,7 +170,7 @@ fn locate_prints_a_fresh_fix_with_coordinates() {
     assert!(fix["last_fix"]["lat"].is_f64() && fix["last_fix"]["lon"].is_f64());
     assert!(fix["last_fix"]["age_secs"].as_i64().unwrap() < 60);
 
-    let out = env.run(&["locate", IPHONE]);
+    let out = env.styled(&["locate", IPHONE]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("coords:"), "{}", stdout(&out));
 }
@@ -158,7 +178,7 @@ fn locate_prints_a_fresh_fix_with_coordinates() {
 #[test]
 fn locate_gives_up_on_a_device_with_only_an_old_fix() {
     let env = start();
-    let out = env.run(&["locate", "watch", "--wait", "1"]);
+    let out = env.styled(&["locate", "watch", "--wait", "1"]);
     assert_eq!(code(&out), 1);
     assert!(stderr(&out).contains("no fresh fix within 1 s"), "{}", stderr(&out));
 }
@@ -166,12 +186,12 @@ fn locate_gives_up_on_a_device_with_only_an_old_fix() {
 #[test]
 fn play_sound_needs_yes_without_a_terminal() {
     let env = start();
-    let out = env.run(&["play-sound", "Test's iPhone"]);
+    let out = env.styled(&["play-sound", "Test's iPhone"]);
     assert_eq!(code(&out), 2);
     assert!(stderr(&out).contains("--yes"), "{}", stderr(&out));
     assert!(env.actions().is_empty());
 
-    let out = env.run(&["play-sound", "TEST'S IPHONE", "--yes"]);
+    let out = env.styled(&["play-sound", "TEST'S IPHONE", "--yes"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "Playing a sound on Test's iPhone");
     let actions = env.actions();
@@ -188,18 +208,19 @@ fn play_sound_needs_yes_without_a_terminal() {
 #[test]
 fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
     let env = start();
-    let out = env.run(&["play-sound", "test's", "--yes"]);
+    let out = env.styled(&["play-sound", "test's", "--yes"]);
     assert_eq!(code(&out), 1);
     let err = stderr(&out);
     assert!(err.contains("matches 4 devices") && err.contains(IPHONE), "{err}");
 
-    let out = env.run(&["play-sound", "nokia", "--yes"]);
+    let out = env.styled(&["play-sound", "nokia", "--yes"]);
     assert_eq!(code(&out), 4);
     assert!(stderr(&out).contains("no device matches"), "{}", stderr(&out));
-    // The same as machine-readable codes (not found exits 4, ambiguous 1).
+    // The same as machine-readable codes (not found exits 4, ambiguous 1);
+    // the failure envelope is on stdout in a machine mode.
     for (name, want, exit) in [("nokia", "not_found", 4), ("test's", "ambiguous", 1)] {
         let out = env.run(&["play-sound", name, "--yes", "--json"]);
-        let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+        let err = envelope(&out.stdout);
         assert_eq!(
             (code(&out), err["error"]["code"].as_str()),
             (exit, Some(want)),
@@ -208,7 +229,7 @@ fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
     }
 
     // The AirPods cannot do Lost Mode in the fixture.
-    let out = env.run(&["lost-mode", "airpods", "--phone", "1", "--message", "m", "--yes"]);
+    let out = env.styled(&["lost-mode", "airpods", "--phone", "1", "--message", "m", "--yes"]);
     assert_eq!(code(&out), 1);
     assert!(stderr(&out).contains("does not support Lost Mode"), "{}", stderr(&out));
     assert!(env.actions().is_empty());
@@ -258,7 +279,7 @@ fn history_shows_the_trail_by_name_or_offline_by_id() {
 
     // A known ID needs no server at all.
     let dead = "http://127.0.0.1:9";
-    let out = run_at(dead, env.dir.path(), &["history", IPHONE, "--since", "1h"]);
+    let out = styled_at(dead, env.dir.path(), &["history", IPHONE, "--since", "1h"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("positions since"), "{}", stdout(&out));
 
@@ -286,7 +307,7 @@ fn prune_history_deletes_rows_past_retention() {
     assert_eq!(out["deleted"], 1);
     assert_eq!(out["remaining"], 1);
     assert_eq!(out["retention_days"], 30);
-    let out = env.run(&["prune-history"]);
+    let out = env.styled(&["prune-history"]);
     assert_eq!(stdout(&out).trim(), "Deleted 0 positions older than 30 days; 1 remain.");
 }
 
@@ -342,10 +363,10 @@ fn usage_errors_exit_2() {
     // before the command.
     let out = env.run(&["--json", "locate"]);
     assert_eq!(code(&out), 2);
-    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
-    assert_eq!(err["ok"], false);
-    assert_eq!(err["error"]["code"], "usage");
-    let listed: Value = serde_json::from_slice(&env.run(&["--json", "devices"]).stdout).unwrap();
+    let env_err = envelope(&out.stdout);
+    assert_eq!(env_err["ok"], false);
+    assert_eq!(env_err["error"]["code"], "usage");
+    let listed = env.json(&["--json", "devices"]);
     assert!(listed.as_array().is_some_and(|a| !a.is_empty()));
 }
 
@@ -365,12 +386,12 @@ fn answering(status: u16) -> String {
 #[test]
 fn find_my_password_needed_exits_3() {
     let tmp = tempfile::tempdir().unwrap();
-    let out = run_at(&answering(450), tmp.path(), &["devices"]);
+    let out = styled_at(&answering(450), tmp.path(), &["devices"]);
     assert_eq!(code(&out), 3, "{}", stderr(&out));
     assert!(stderr(&out).contains("authorize-find-my"), "{}", stderr(&out));
 
     let out = run_at(&answering(450), tmp.path(), &["devices", "--json"]);
-    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    let err = envelope(&out.stdout);
     assert_eq!(err["ok"], false);
     assert_eq!(err["error"]["code"], "find_my_auth_required");
 }
@@ -386,7 +407,7 @@ fn other_http_errors_exit_1() {
 fn signed_out_exits_3() {
     // Mock mode has no daemon to confirm a 421 with: it means signed out.
     let tmp = tempfile::tempdir().unwrap();
-    let out = run_at(&answering(421), tmp.path(), &["devices"]);
+    let out = styled_at(&answering(421), tmp.path(), &["devices"]);
     assert_eq!(code(&out), 3, "{}", stderr(&out));
     assert!(stderr(&out).contains("icloud-session sign-in"), "{}", stderr(&out));
 }
