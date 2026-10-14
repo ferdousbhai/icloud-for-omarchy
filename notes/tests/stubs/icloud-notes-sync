@@ -120,11 +120,23 @@ elif [ "$1" = "sync" ]; then
   # pull/push below, plus ICLOUD_NOTES_SYNC_STUB_OFFLINE=1 (the push finds
   # no network) and ICLOUD_NOTES_SYNC_STUB_PULL_ADDS=FILE (the pull writes
   # that note and reports it, as a pull from iCloud would).
+  # ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL / ICLOUD_NOTES_SYNC_STUB_PULL_FAIL=CODE:EXIT
+  # (sync only, before the other switches): that half fails with that code
+  # and exit; the run exits by the engine's worse-half rule (3 if either
+  # half exited 3, else the higher), and a push failing sign_in_required,
+  # session_rejected, offline or network leaves the pull out.
   [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "sync" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
   stub_fail
   code=0
   half() { # half VERB: prints that half's JSON
+    local forced
+    [ "$1" = push ] && forced="${ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL:-}" || forced="${ICLOUD_NOTES_SYNC_STUB_PULL_FAIL:-}"
+    if [ -n "$forced" ]; then
+      printf '{"ok":false,"exit_code":%s,"error":{"code":"%s","message":"stub %s failed with %s"}}' \
+        "${forced#*:}" "${forced%%:*}" "$1" "${forced%%:*}"
+      return
+    fi
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
       printf '{"ok":false,"exit_code":5,"error":{"code":"offline","message":"offline: dns error: no network"}}'
       return
@@ -152,15 +164,16 @@ elif [ "$1" = "sync" ]; then
   push_json=$(half push)
   pull_json=null
   case "$push_json" in
-    *'"code":"offline"'*) code=5 ;;
-    *'"code":"sign_in_required"'* | *'"code":"session_rejected"'*) code=3 ;;
-    *'"ok":false'*) code=1; pull_json=$(half pull) ;;
+    *'"code":"offline"'* | *'"code":"network"'* | *'"code":"sign_in_required"'* | *'"code":"session_rejected"'*) ;;
     *) pull_json=$(half pull) ;;
   esac
-  case "$pull_json" in
-    *'"code":"sign_in_required"'* | *'"code":"session_rejected"'*) code=3 ;;
-    *'"ok":false'*) [ "$code" -lt 1 ] && code=1 ;;
-  esac
+  # half_exit JSON: a half's exit_code (0 for none).
+  half_exit() { local e; e=$(printf '%s' "$1" | sed -n 's/^{"ok":[a-z]*,"exit_code":\([0-9]*\).*/\1/p'); echo "${e:-0}"; }
+  push_exit=$(half_exit "$push_json") pull_exit=$(half_exit "$pull_json")
+  if [ "$push_exit" = 3 ] || [ "$pull_exit" = 3 ]; then code=3
+  elif [ "$push_exit" -gt "$pull_exit" ]; then code=$push_exit
+  else code=$pull_exit
+  fi
   info=$("$ICLOUD_NOTES_SYNC_REAL" --quiet vault-info . 2>/dev/null) || info=null
   result "{\"push\":$push_json,\"pull\":$pull_json,\"vault_info\":${info:-null}}"
   exit "$code"

@@ -137,7 +137,7 @@ Work/Plan.md
 | `resolve NOTE --all local\|remote\|both` / `--choices C1,C2,...` | settle conflict blocks (`local` = this computer, `remote` = iCloud) |
 | `recover NOTE --strip \| --synced` | unreadable conflict markers (`conflicts_unreadable`): keep every line, or the last synced text; backs up first |
 | `new-folder NAME [--in F]`, `rename-folder F NAME`, `delete-folder F --yes` | folders |
-| `sync`, `pull`, `push [--dry-run]`, `clone` | talk to iCloud (exit 3: sign in, or `not_cloned`) |
+| `sync`, `pull`, `push [--dry-run]`, `clone` | talk to iCloud (exit 3: sign in (`sign_in_required`, `session_rejected`), or `not_cloned`; an engine error such as `account_mismatch` or `bad_response` keeps its own code and exit) |
 | `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`, `export-pdf NOTE` | versions, discard local edits, PDF next to the note |
 
 `write` refuses (`guardrail`) text that adds conflict markers or another

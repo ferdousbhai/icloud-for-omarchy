@@ -446,6 +446,12 @@ private:
     bool m_authExpired = false;
     // A sign-in came back while a sync ran: sync once it finishes.
     bool m_syncWhenIdle = false;
+    // Sign-ins seen (applySignIn's signedInAnew), and their count when the
+    // running engine run started: a refusal from a run older than the
+    // latest sign-in was for the session before it, so it retries instead
+    // of pausing.
+    quint64 m_signIns = 0;
+    quint64 m_runSignIns = 0;
     // icloud-session's properties, as last read or announced.
     int m_signInReads = 0;
     bool m_signInKnown = false;

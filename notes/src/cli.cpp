@@ -860,11 +860,26 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
     b.clearLog();
     QJsonArray runs;
     QHash<QString, bool> last;
-    QJsonObject networkError;
-    // The first failed run's engine error {code, message, hint?} and exit.
+    // The failure that decided the outcome: of the latest engine run (a
+    // ReportSignInRequired answer may retry, and the retry's failure is the
+    // one that counts), its worse half by the engine's own rule (exit 3
+    // beats everything, then the higher code), so the exit matches the
+    // engine's; on a tie the later half. {code, message, hint?} and exit.
     QJsonObject engineError;
     int engineExit = kExitError;
+    // The last run refused for the sign-in: sign_in_required or
+    // session_rejected, as the engine said it.
+    QJsonObject signInError;
     bool cloneDone = false;
+    const auto worse = [](int a, int b) { // whether exit a beats exit b
+        if (b == kExitSignIn)
+            return a == kExitSignIn;
+        return a == kExitSignIn || a >= b;
+    };
+    const QMetaObject::Connection started = QObject::connect(&b, &NotesBackend::syncRunningChanged, &b, [&] {
+        if (b.syncRunning()) // a new engine run: an earlier one's failure no longer decides
+            engineError = QJsonObject();
+    });
     const QMetaObject::Connection finished =
         QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
             const QString command = label.toLower();
@@ -874,16 +889,16 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
                                      { QStringLiteral("exit_code"), b.lastExitCode() },
                                      { QStringLiteral("result"), doc.isObject() ? QJsonValue(doc.object()) : QJsonValue() } });
             last.insert(command, ok);
-            // iCloud out of reach: the engine's offline or network error (from
-            // the half's result, or a pull/push's error object), for a run
-            // that is retried later rather than looked into.
             const QJsonObject error = b.lastError();
             const QString code = error.value(QStringLiteral("code")).toString();
-            if (!ok && networkError.isEmpty() && (code == u"offline" || code == u"network"))
-                networkError = error;
-            if (!ok && engineError.isEmpty() && !code.isEmpty()) {
+            if (ok || code.isEmpty())
+                return;
+            if (code == u"sign_in_required" || code == u"session_rejected")
+                signInError = error;
+            const int exit = b.lastExitCode() > 0 ? b.lastExitCode() : kExitError;
+            if (engineError.isEmpty() || worse(exit, engineExit)) {
                 engineError = error;
-                engineExit = b.lastExitCode();
+                engineExit = exit;
             }
         });
     const QMetaObject::Connection cloned =
@@ -897,6 +912,7 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
     else
         b.runClone();
     waitFor([&] { return b.idle() && (what != u"clone" || cloneDone); });
+    QObject::disconnect(started);
     QObject::disconnect(finished);
     QObject::disconnect(cloned);
 
@@ -907,25 +923,30 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
     result.json = QJsonObject{ { QStringLiteral("ok"), ok }, { QStringLiteral("runs"), runs },
                                { QStringLiteral("log"), b.syncLog() } };
     result.text = b.syncLog();
-    // Which failure the run reports: a refused sign-in (the backend paused
-    // on it) and iCloud out of reach in this tool's words; any other engine
-    // error as the engine said it, code, message, hint and exit
-    // (session_rejected, account_mismatch, not_cloned_directory,
-    // cloudkit_request_failed, ...); sync_failed only for a run that failed
-    // without saying why (a crash, no engine output).
+    // Which failure the run reports: a refused sign-in the backend paused on
+    // as the engine said it when it said session_rejected (icloud-session
+    // was told by the session library), else in this tool's words
+    // (sign_in_required: the backend told icloud-session); iCloud out of
+    // reach in this tool's words; any other engine error as the engine said
+    // it, code, message, hint and exit (account_mismatch,
+    // not_cloned_directory, cloudkit_request_failed, ...); sync_failed only
+    // for a run that failed without saying why (a crash, no engine output).
     const QString engineCode = engineError.value(QStringLiteral("code")).toString();
-    if (b.authExpired() && engineCode != u"session_rejected")
+    if (b.authExpired() && signInError.value(QStringLiteral("code")).toString() == u"session_rejected")
+        result.failure = Failure{ QStringLiteral("session_rejected"),
+                                  signInError.value(QStringLiteral("message")).toString(), kExitSignIn,
+                                  signInError.value(QStringLiteral("hint")).toString() };
+    else if (b.authExpired())
         result.failure = Failure{ QStringLiteral("sign_in_required"),
                                   signInMessage(QStringLiteral("iCloud refused the sign-in; icloud-session was told")),
                                   kExitSignIn, QLatin1StringView(kSignInHint) };
-    else if (!ok && !networkError.isEmpty())
-        result.failure = Failure{ networkError.value(QStringLiteral("code")).toString(),
+    else if (!ok && (engineCode == u"offline" || engineCode == u"network"))
+        result.failure = Failure{ engineCode,
                                   QStringLiteral("iCloud could not be reached (%1)")
-                                      .arg(networkError.value(QStringLiteral("message")).toString()),
+                                      .arg(engineError.value(QStringLiteral("message")).toString()),
                                   kExitUnavailable, QLatin1StringView(kNetworkHint) };
     else if (!ok && !engineError.isEmpty())
-        result.failure = Failure{ engineCode, engineError.value(QStringLiteral("message")).toString(),
-                                  engineExit > 0 ? engineExit : kExitError,
+        result.failure = Failure{ engineCode, engineError.value(QStringLiteral("message")).toString(), engineExit,
                                   engineError.value(QStringLiteral("hint")).toString() };
     else if (!ok)
         result.failure = Failure{ QStringLiteral("sync_failed"), QStringLiteral("%1 failed; see the log").arg(what),

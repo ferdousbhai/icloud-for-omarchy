@@ -95,7 +95,7 @@ Run cli(const QStringList &args, const QHash<QString, QString> &env = {})
         e.insert(it.key(), it.value());
     p.setProcessEnvironment(e);
     p.setProgram(QCoreApplication::applicationFilePath());
-    p.setArguments(QStringList{ QStringLiteral("--as-cli") } + args);
+    p.setArguments(args.value(0) == u"--as-sync" ? args : QStringList{ QStringLiteral("--as-cli") } + args);
     p.setStandardInputFile(QProcess::nullDevice());
     QElapsedTimer timer;
     timer.start();
@@ -173,6 +173,14 @@ int main(int argc, char *argv[])
 {
     if (argc > 1 && qstrcmp(argv[1], "--as-cli") == 0)
         return cliMain(argc - 1, argv + 1);
+    // `icloud-notes --sync`, as main() runs it for the timer.
+    if (argc > 1 && qstrcmp(argv[1], "--as-sync") == 0) {
+        QCoreApplication app(argc, argv);
+        app.setOrganizationName(QStringLiteral("icloud-notes"));
+        app.setApplicationName(QStringLiteral("icloud-notes"));
+        QTextStream out(stdout);
+        return runBackgroundSync(out);
+    }
 
     QCoreApplication app(argc, argv);
     if (qEnvironmentVariable("ICLOUD_NOTES_PRIVATE_BUS") != QStringLiteral("1")) {
@@ -682,6 +690,42 @@ int main(int argc, char *argv[])
                              == QStringLiteral("run `icloud-session sign-in` (a person signs in in the window)")
                       && fake.reportCalls == 0,
                   "cli pull refused with session_rejected: that code, exit 3, no report");
+            // The push failed first (a CloudKit 4xx), then the pull's
+            // session_rejected paused: that is the failure, as the engine
+            // said it, never "icloud-session was told" (it was not).
+            const QHash<QString, QString> pushThenRejected{
+                { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL"), QStringLiteral("cloudkit_request_failed:1") },
+                { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PULL_FAIL"), QStringLiteral("session_rejected:3") }
+            };
+            const Run both = cliJson({ QStringLiteral("sync") }, pushThenRejected);
+            check(both.code == 3 && both.errorCode() == QStringLiteral("session_rejected")
+                      && both.error().value(QStringLiteral("message")).toString() == QStringLiteral("stub pull failed with session_rejected")
+                      && !both.out.contains("icloud-session was told") && fake.reportCalls == 0,
+                  "cli sync push 4xx then pull session_rejected: session_rejected, exit 3, nobody told");
+            const Run bg = cli({ QStringLiteral("--as-sync") }, pushThenRejected);
+            check(bg.code == 1 && bg.out.contains("Apple refused the iCloud session icloud-session holds")
+                      && !bg.out.contains("icloud-session was told"),
+                  "background sync push 4xx then pull session_rejected: logs the rejection, not a report");
+            // The worse half decides, as the engine's exit: push 4xx exit 1,
+            // pull bad_response exit 5 -> bad_response, exit 5.
+            const Run worse = cliJson({ QStringLiteral("sync") },
+                                      { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL"), QStringLiteral("cloudkit_request_failed:1") },
+                                        { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PULL_FAIL"), QStringLiteral("bad_response:5") } });
+            check(worse.code == 5 && worse.errorCode() == QStringLiteral("bad_response"),
+                  "cli sync push exit 1, pull bad_response exit 5: bad_response, exit 5 (the engine's exit)");
+            // A refused pull that icloud-session vouches for retries (a full
+            // sync); the retry's own failure is reported, not the stale
+            // sign_in_required that started it.
+            fake.reportCalls = 0;
+            fake.stillSignedIn = true;
+            const Run retried = cliJson({ QStringLiteral("pull") },
+                                        { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXPIRED"), QStringLiteral("pull") },
+                                          { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PULL_FAIL"), QStringLiteral("cloudkit_transient:5") } });
+            fake.stillSignedIn = false;
+            check(retried.code == 5 && retried.errorCode() == QStringLiteral("cloudkit_transient") && fake.reportCalls == 1
+                      && retried.json().toObject().value(QStringLiteral("runs")).toArray().size() == 3,
+                  "cli pull refused, retried after icloud-session vouched: the retry's failure, exit 5");
+            fake.reportCalls = 0;
         }
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
         check(cli({ QStringLiteral("push") }).code == 0 && stubLog() == QStringList{ QStringLiteral("push") }, "cli push");
