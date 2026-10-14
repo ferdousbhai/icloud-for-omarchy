@@ -61,6 +61,20 @@ struct Failure {
 // Every usage error points at the help.
 const char *const kUsageHint = "run `icloud-notes --help`";
 
+// The wording every iCloud tool shares, copied from icloud_session::output
+// (session/src/output.rs); keep them in step.
+const char *const kSignInHint = "run `icloud-session sign-in` (a person signs in in the window)"; // SIGN_IN_HINT
+const char *const kNetworkHint = "check the network connection and try again"; // NETWORK_HINT
+const char *const kSessionServiceHint = // SESSION_SERVICE_HINT
+    "check that icloud-sessiond is installed and the D-Bus session bus is running (`icloud-session status` tells)";
+
+// sign_in_message: "sign in to iCloud required", then ": reason" when known.
+QString signInMessage(const QString &reason = {})
+{
+    const QString required = QStringLiteral("sign in to iCloud required");
+    return reason.trimmed().isEmpty() ? required : required + QStringLiteral(": ") + reason.trimmed();
+}
+
 Failure usageError(const QString &message)
 {
     return { QStringLiteral("usage"), message, kExitUsage, QLatin1StringView(kUsageHint) };
@@ -173,11 +187,14 @@ const char *const kFooter =
     "Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to\n"
     "wait for the vault's lock; 30 when a background sync holds it, none while the Notes window\n"
     "holds it). Nothing asks without a terminal: delete, delete-folder and restore need --yes.\n"
-    "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (icloud-session sign-in)\n"
-    "or not cloned, 4 not found, 5 unavailable (offline, icloud-session or the sync engine missing).\n"
-    "push --dry-run and diff report their changes in the result and exit 0. A failed sync, pull,\n"
-    "push or clone (or the sync of a change's --push) still prints its result, with the failure\n"
-    "in it as error: {code, message, hint?}, and exits with the failure's code.";
+    "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,\n"
+    "session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),\n"
+    "4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,\n"
+    "sync_tool_missing, iCloud trouble). push --dry-run and diff report their changes in the result\n"
+    "and exit 0. A failed sync, pull, push or clone (or the sync of a change's --push) still prints\n"
+    "its result, with the failure in it as error: {code, message, hint?} (the sync engine's own\n"
+    "error and exit when it gave one; sync_failed, exit 1, when it did not), and exits with the\n"
+    "failure's code. --version prints `icloud-notes VERSION` in every mode.";
 
 // NOTE is a note's vault-relative path ("Notes/Groceries.md", .md optional),
 // its apple-note-id, or its title (ignoring case) when exactly one note has it.
@@ -791,13 +808,11 @@ std::optional<Failure> needSignIn(NotesBackend &b)
     b.refreshSignIn();
     waitFor([&] { return !b.signInPending(); }, 20000);
     if (!b.signInKnown())
-        return Failure{ QStringLiteral("session_unavailable"),
-                        QStringLiteral("icloud-session is not available, so the sign-in is unknown."), kExitUnavailable,
-                        QStringLiteral("Install icloud-session (sudo pacman -S icloud-session); `icloud-session status` "
-                                       "shows what it says.") };
+        return Failure{ QStringLiteral("session_service"),
+                        QStringLiteral("icloud-session is not available, so the sign-in is unknown"), kExitUnavailable,
+                        QLatin1StringView(kSessionServiceHint) };
     if (!b.signedIn() || b.authExpired())
-        return Failure{ QStringLiteral("sign_in_required"), QStringLiteral("Not signed in to iCloud."), kExitSignIn,
-                        QStringLiteral("Run `icloud-session sign-in`: a person signs in in the window that opens.") };
+        return Failure{ QStringLiteral("sign_in_required"), signInMessage(), kExitSignIn, QLatin1StringView(kSignInHint) };
     return std::nullopt;
 }
 
@@ -810,6 +825,9 @@ std::optional<Failure> needSyncTool(NotesBackend &b)
                     QStringLiteral("Reinstall icloud-notes: sudo pacman -S icloud-notes") };
 }
 
+// `not_cloned` is this tool's own code (exit 3) for a vault with nothing
+// cloned into it, found before the engine runs; the engine's
+// `not_cloned_directory` says the same about the directory it was given.
 std::optional<Failure> needCloned()
 {
     if (NotesBackend::vaultCloned())
@@ -843,6 +861,9 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
     QJsonArray runs;
     QHash<QString, bool> last;
     QJsonObject networkError;
+    // The first failed run's engine error {code, message, hint?} and exit.
+    QJsonObject engineError;
+    int engineExit = kExitError;
     bool cloneDone = false;
     const QMetaObject::Connection finished =
         QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
@@ -860,6 +881,10 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
             const QString code = error.value(QStringLiteral("code")).toString();
             if (!ok && networkError.isEmpty() && (code == u"offline" || code == u"network"))
                 networkError = error;
+            if (!ok && engineError.isEmpty() && !code.isEmpty()) {
+                engineError = error;
+                engineExit = b.lastExitCode();
+            }
         });
     const QMetaObject::Connection cloned =
         QObject::connect(&b, &NotesBackend::cloneFinished, &b, [&] { cloneDone = true; });
@@ -882,17 +907,28 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
     result.json = QJsonObject{ { QStringLiteral("ok"), ok }, { QStringLiteral("runs"), runs },
                                { QStringLiteral("log"), b.syncLog() } };
     result.text = b.syncLog();
-    if (b.authExpired())
+    // Which failure the run reports: a refused sign-in (the backend paused
+    // on it) and iCloud out of reach in this tool's words; any other engine
+    // error as the engine said it, code, message, hint and exit
+    // (session_rejected, account_mismatch, not_cloned_directory,
+    // cloudkit_request_failed, ...); sync_failed only for a run that failed
+    // without saying why (a crash, no engine output).
+    const QString engineCode = engineError.value(QStringLiteral("code")).toString();
+    if (b.authExpired() && engineCode != u"session_rejected")
         result.failure = Failure{ QStringLiteral("sign_in_required"),
-                                  QStringLiteral("iCloud refused the sign-in; icloud-session was told."), kExitSignIn,
-                                  QStringLiteral("Run `icloud-session sign-in`: a person signs in in the window that opens.") };
+                                  signInMessage(QStringLiteral("iCloud refused the sign-in; icloud-session was told")),
+                                  kExitSignIn, QLatin1StringView(kSignInHint) };
     else if (!ok && !networkError.isEmpty())
         result.failure = Failure{ networkError.value(QStringLiteral("code")).toString(),
-                                  QStringLiteral("iCloud could not be reached (%1).")
+                                  QStringLiteral("iCloud could not be reached (%1)")
                                       .arg(networkError.value(QStringLiteral("message")).toString()),
-                                  kExitUnavailable, QStringLiteral("Check the network connection, then retry.") };
+                                  kExitUnavailable, QLatin1StringView(kNetworkHint) };
+    else if (!ok && !engineError.isEmpty())
+        result.failure = Failure{ engineCode, engineError.value(QStringLiteral("message")).toString(),
+                                  engineExit > 0 ? engineExit : kExitError,
+                                  engineError.value(QStringLiteral("hint")).toString() };
     else if (!ok)
-        result.failure = Failure{ QStringLiteral("sync_failed"), QStringLiteral("%1 failed; see the log.").arg(what),
+        result.failure = Failure{ QStringLiteral("sync_failed"), QStringLiteral("%1 failed; see the log").arg(what),
                                   kExitError, {} };
     return result;
 }
@@ -1685,12 +1721,8 @@ int cliMain(int argc, char *argv[])
         return kExitOk;
     }
     if (a.command.isEmpty() && a.has("--version")) {
-        const QString version = QStringLiteral(ICLOUD_NOTES_VERSION);
-        // As it always was: {"version"} with --json, else one line of text.
-        if (a.flags.json)
-            out() << QJsonDocument(QJsonObject{ { QStringLiteral("version"), version } }).toJson(QJsonDocument::Indented);
-        else
-            out() << "icloud-notes " << version << '\n';
+        // Plain `icloud-notes VERSION` in every mode, as every iCloud tool's.
+        out() << "icloud-notes " << ICLOUD_NOTES_VERSION << '\n';
         return kExitOk;
     }
     if (a.command.isEmpty())
@@ -1731,18 +1763,22 @@ int runBackgroundSync(QTextStream &log)
     // tries again), a missing engine an error.
     if (sync.failure && sync.json.isEmpty()) {
         const Failure &f = *sync.failure;
-        const bool skip = f.code == u"sign_in_required" || f.code == u"session_unavailable";
-        log << f.message << (skip ? QStringLiteral(" Skipped.") : u' ' + f.hint) << '\n';
+        const bool skip = f.code == u"sign_in_required" || f.code == u"session_service";
+        log << f.message << (skip ? QStringLiteral("; skipped.") : QStringLiteral(" (%1)").arg(f.hint)) << '\n';
         return skip ? kExitOk : kExitError;
     }
     // No network: one line, and a skip like signed out (the timer tries again).
     if (sync.failure && (sync.failure->code == u"offline" || sync.failure->code == u"network")) {
-        log << sync.failure->message << " Skipped; the next sync tries again.\n";
+        log << sync.failure->message << "; skipped, the next sync tries again.\n";
         return kExitOk;
     }
     log << sync.text << '\n';
     if (sync.failure && sync.failure->code == u"sign_in_required") {
         log << "iCloud refused the sign-in; icloud-session was told. Sync paused until you sign in.\n";
+        return kExitError;
+    }
+    if (sync.failure && sync.failure->code == u"session_rejected") {
+        log << "Apple refused the iCloud session icloud-session holds; sign in again (" << sync.failure->hint << ").\n";
         return kExitError;
     }
     log << (sync.failure ? "Sync failed for " : "Synced ") << vault << ".\n";

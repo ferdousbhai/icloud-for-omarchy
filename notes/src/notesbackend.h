@@ -47,8 +47,9 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString syncLog READ syncLog NOTIFY syncLogChanged)
     Q_PROPERTY(bool syncRunning READ syncRunning NOTIFY syncRunningChanged)
     // The iCloud sign-in is gone (icloud-session says signed out, or
-    // icloud-notes-sync was refused); syncing pauses until icloud-session reports
-    // a sign-in again.
+    // icloud-notes-sync was refused: sign_in_required, or session_rejected when
+    // Apple refuses a session icloud-session still holds); syncing pauses until
+    // icloud-session reports a sign-in again.
     Q_PROPERTY(bool authExpired READ authExpired NOTIFY authExpiredChanged)
     // The account as icloud-session (the D-Bus daemon that owns the Apple
     // sign-in for every iCloud app) reports it. signInPending while a read
@@ -265,8 +266,7 @@ public:
     // The last icloud-notes-sync run's exit code and JSON result (the
     // envelope's data), as they were when syncFinished was emitted for it:
     // for a half of runSync, that half's exit code and result; for a failed
-    // run (or half) that
-    // said why, {"error": {code, message, hint?}}.
+    // run (or half) that said why, {"error": {code, message, hint?}}.
     int lastExitCode() const { return m_lastExit; }
     QByteArray lastOutput() const { return m_captured; }
     // The engine's error {code, message, hint?} for that run when it failed:
@@ -340,6 +340,10 @@ private:
     // An engine progress line (icloud-notes:progress:..., or an older
     // engine's icloud-md:progress:...), which the log leaves out.
     static bool isProgressLine(const QByteArray &line);
+    // A line of the engine's stderr the log shows: not empty, not progress,
+    // and not an older engine's one-line error document (which the error
+    // logged after the run repeats).
+    static bool isLoggedStderrLine(const QByteArray &line);
     void startEngine();
     void rebuildFolders();
     void rebuildNotes();
@@ -438,7 +442,7 @@ private:
     // directories changed during it (re-read once, after it).
     QString m_stateStampBefore;
     bool m_vaultTouched = false;
-    QByteArray m_errLine; // runSync's stderr up to the next newline
+    QByteArray m_errLine; // the run's stderr up to the next newline
     bool m_authExpired = false;
     // A sign-in came back while a sync ran: sync once it finishes.
     bool m_syncWhenIdle = false;

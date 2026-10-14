@@ -243,8 +243,17 @@ int main(int argc, char *argv[])
         check(cli({ QStringLiteral("list"), QStringLiteral("extra") }).code == 2, "cli extra argument is usage");
         check(cli({ QStringLiteral("read"), QStringLiteral("Alpha"), QStringLiteral("--yes") }).code == 2,
               "cli an option the command does not take is usage");
-        check(cliJson({ QStringLiteral("--version") }).json().toObject().contains(QStringLiteral("version")), "cli --version");
-        check(cli({ QStringLiteral("--version") }).out.startsWith("icloud-notes "), "cli --version piped is text, as before");
+        // --version is plain `icloud-notes VERSION` in every mode, as every iCloud tool's.
+        bool plain = true;
+        for (const QStringList &args :
+             { QStringList{ QStringLiteral("--version") }, QStringList{ QStringLiteral("--json"), QStringLiteral("--version") },
+               QStringList{ QStringLiteral("--quiet"), QStringLiteral("--version") },
+               QStringList{ QStringLiteral("--styled"), QStringLiteral("-V") } }) {
+            const Run v = cli(args);
+            plain = plain && v.code == 0 && v.out.startsWith("icloud-notes ") && v.out.endsWith("\n")
+                && v.out.count('\n') == 1 && !v.out.contains('{') && v.err.isEmpty();
+        }
+        check(plain, "cli --version is plain text in every mode");
     }
 
     // ---- the output contract ---------------------------------------------------
@@ -615,7 +624,8 @@ int main(int argc, char *argv[])
         const Run offlineText =
             cliText({ QStringLiteral("sync") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
         check(offlineText.code == 5 && offlineText.out.contains("$ icloud-notes-sync --quiet sync")
-                  && offlineText.err.startsWith("error: iCloud could not be reached"),
+                  && offlineText.err.startsWith("error: iCloud could not be reached")
+                  && offlineText.err.contains("\nhint: check the network connection and try again"),
               "cli sync offline in text: the log on stdout, error: on stderr");
         // A standalone pull says so only on the engine's stderr error line.
         const Run offlinePull =
@@ -623,7 +633,56 @@ int main(int argc, char *argv[])
         check(offlinePull.code == 5 && offlinePull.errorCode() == QStringLiteral("offline"),
               "cli pull offline: error offline, exit 5");
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
-        check(cli({ QStringLiteral("pull") }).code == 0 && stubLog() == QStringList{ QStringLiteral("pull") }, "cli pull");
+        const Run pull = cli({ QStringLiteral("pull") });
+        check(pull.code == 0 && stubLog() == QStringList{ QStringLiteral("pull") }, "cli pull");
+        // The engine's progress lines (one per page and note) stay out of
+        // the log, in data.log and on a person's terminal alike.
+        const QString pullLog = pull.json().toObject().value(QStringLiteral("log")).toString();
+        const Run pullText = cliText({ QStringLiteral("pull") });
+        check(pullLog.contains(QStringLiteral("stub pull ok")) && !pullLog.contains(QStringLiteral(":progress:"))
+                  && pullText.code == 0 && pullText.out.contains("stub pull ok") && !pullText.out.contains(":progress:")
+                  && !pullText.err.contains(":progress:"),
+              "cli pull: no progress lines in data.log or the text");
+        // A run that failed with the engine's error reports that error: its
+        // code, message, hint and exit (not sync_failed/1).
+        {
+            const QHash<QString, QString> mismatch{ { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXIT"), QStringLiteral("3") },
+                                                    { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ERROR"), QStringLiteral("account_mismatch") },
+                                                    { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_MESSAGE"), QStringLiteral("another account's vault") },
+                                                    { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_HINT"), QStringLiteral("use its own vault") } };
+            const Run p = cliJson({ QStringLiteral("pull") }, mismatch);
+            const QJsonObject e = p.error();
+            check(p.code == 3 && p.errorCode() == QStringLiteral("account_mismatch")
+                      && e.value(QStringLiteral("message")).toString() == QStringLiteral("another account's vault")
+                      && e.value(QStringLiteral("hint")).toString() == QStringLiteral("use its own vault")
+                      && !p.json().toObject().value(QStringLiteral("ok")).toBool(true) && p.err.isEmpty(),
+                  "cli pull failing with account_mismatch: that code, message, hint and exit 3");
+            const Run st = cliJson({ QStringLiteral("sync") }, mismatch);
+            check(st.code == 3 && st.errorCode() == QStringLiteral("account_mismatch"), "cli sync failing with account_mismatch: exit 3");
+            const Run text = cliText({ QStringLiteral("push") }, mismatch);
+            check(text.code == 3 && text.err.startsWith("error: another account's vault\nhint: use its own vault"),
+                  "cli push failing with account_mismatch in text: error: and hint: on stderr");
+            const Run unavailable = cliJson({ QStringLiteral("pull") },
+                                            { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXIT"), QStringLiteral("5") },
+                                              { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ERROR"), QStringLiteral("cloudkit_request_failed") } });
+            check(unavailable.code == 5 && unavailable.errorCode() == QStringLiteral("cloudkit_request_failed"),
+                  "cli pull failing with cloudkit_request_failed: exit 5");
+            // Only a failure that says nothing (text only, exit 1) is sync_failed.
+            const Run silent = cliJson({ QStringLiteral("pull") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXPIRED"), QStringLiteral("1") },
+                                                                     { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_SIGNIN"), QStringLiteral("marker") } });
+            check(silent.code == 1 && silent.errorCode() == QStringLiteral("sync_failed"),
+                  "cli pull failing without an error object: sync_failed, exit 1");
+            // Apple refused the session icloud-session holds: session_rejected,
+            // exit 3, and icloud-session is not told again.
+            fake.reportCalls = 0;
+            const Run rejected = cliJson({ QStringLiteral("pull") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXPIRED"), QStringLiteral("1") },
+                                                                       { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_SIGNIN"), QStringLiteral("rejected") } });
+            check(rejected.code == 3 && rejected.errorCode() == QStringLiteral("session_rejected")
+                      && rejected.error().value(QStringLiteral("hint")).toString()
+                             == QStringLiteral("run `icloud-session sign-in` (a person signs in in the window)")
+                      && fake.reportCalls == 0,
+                  "cli pull refused with session_rejected: that code, exit 3, no report");
+        }
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
         check(cli({ QStringLiteral("push") }).code == 0 && stubLog() == QStringList{ QStringLiteral("push") }, "cli push");
 
@@ -691,8 +750,17 @@ int main(int argc, char *argv[])
         fake.set({ { QStringLiteral("SignedIn"), false } });
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
         const Run out = cliJson({ QStringLiteral("sync") });
-        check(out.code == 3 && out.errorCode() == QStringLiteral("sign_in_required") && stubLog().isEmpty(),
-              "cli sync signed out: exit 3, icloud-notes-sync never runs");
+        check(out.code == 3 && out.isMachineError(QStringLiteral("sign_in_required")) && stubLog().isEmpty()
+                  && out.error().value(QStringLiteral("message")).toString() == QStringLiteral("sign in to iCloud required")
+                  && out.error().value(QStringLiteral("hint")).toString()
+                         == QStringLiteral("run `icloud-session sign-in` (a person signs in in the window)"),
+              "cli sync signed out: exit 3, the shared wording, icloud-notes-sync never runs");
+        // icloud-session unreachable (no session bus): session_service, exit 5.
+        const Run noBus = cliJson({ QStringLiteral("sync") },
+                                  { { QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), QStringLiteral("unix:path=/nonexistent/bus") } });
+        check(noBus.code == 5 && noBus.isMachineError(QStringLiteral("session_service")) && stubLog().isEmpty()
+                  && noBus.error().value(QStringLiteral("hint")).toString().startsWith(QStringLiteral("check that icloud-sessiond is installed")),
+              "cli without icloud-session: session_service, exit 5");
         const Run st = cliJson({ QStringLiteral("status") });
         check(st.code == 3 && !st.json().toObject().value(QStringLiteral("signed_in")).toBool(), "cli status signed out exits 3");
         const Run local = cliJson({ QStringLiteral("write"), QStringLiteral("pushed"), QStringLiteral("--body"),

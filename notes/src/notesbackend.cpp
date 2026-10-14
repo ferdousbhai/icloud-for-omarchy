@@ -230,6 +230,20 @@ bool isSignInRequired(const QString &code, int exitCode)
     return code.isEmpty() ? exitCode == 3 : code == u"sign_in_required";
 }
 
+// Apple refused the session icloud-session still holds (a 401/421 that
+// persisted after icloud-session revalidated it): only a sign-in fixes it
+// too, but icloud-session was told already, by the session library.
+bool isSessionRejected(const QString &code)
+{
+    return code == u"session_rejected";
+}
+
+// Either: the engine's sync skips its pull after it, and the app pauses.
+bool needsSignIn(const QString &code, int exitCode)
+{
+    return isSignInRequired(code, exitCode) || isSessionRejected(code);
+}
+
 // iCloud out of reach: the engine's network errors (icloud-session's
 // `offline` comes at once when there is no network at all).
 bool isNetworkError(const QString &code)
@@ -298,24 +312,22 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     // progress and warnings go to stderr (logged). The run's text report is
     // logged once it is done: pull, push and clone's meta.lines, diff's
     // meta.text (finishRun), each half's lines of runSync
-    // (finishSyncHalves), or the error's message and hint. runSync leaves
-    // out the progress lines (and an older engine's stderr error line,
-    // which its result repeats).
+    // (finishSyncHalves), or the error's message and hint. Stderr is read a
+    // line at a time in every mode, leaving out the progress lines (one per
+    // fetched page and processed note in a machine mode: thousands in a
+    // clone), empty lines, and an older engine's stderr error line (which
+    // the error logged after the run repeats).
     connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this,
             [this] { m_captured += m_syncProcess.readAllStandardOutput(); });
     connect(&m_syncProcess, &QProcess::readyReadStandardError, this, [this] {
         const QByteArray err = m_syncProcess.readAllStandardError();
         m_capturedErr += err;
-        if (m_mode != Mode::Sync) {
-            appendLog(QString::fromUtf8(err));
-            return;
-        }
         m_errLine += err;
         QStringList lines;
         for (qsizetype nl; (nl = m_errLine.indexOf('\n')) >= 0;) {
             const QByteArray line = m_errLine.left(nl);
             m_errLine.remove(0, nl + 1);
-            if (!isProgressLine(line) && contractError(line).isEmpty())
+            if (isLoggedStderrLine(line))
                 lines << QString::fromUtf8(line);
         }
         if (!lines.isEmpty())
@@ -640,6 +652,11 @@ bool NotesBackend::isProgressLine(const QByteArray &line)
 {
     // icloud-notes:progress:..., or an older engine's icloud-md:progress:...
     return line.startsWith("icloud-notes:progress:") || line.startsWith("icloud-md:progress:");
+}
+
+bool NotesBackend::isLoggedStderrLine(const QByteArray &line)
+{
+    return !line.trimmed().isEmpty() && !isProgressLine(line) && contractError(line).isEmpty();
 }
 
 QString NotesBackend::vaultInfoKey(const QString &stateFile) const
@@ -1611,8 +1628,7 @@ void NotesBackend::finishSync(int exitCode)
 {
     m_syncRunning = false;
     emit syncRunningChanged();
-    if (m_mode == Mode::Sync && !m_errLine.isEmpty() && !isProgressLine(m_errLine)
-        && contractError(m_errLine).isEmpty())
+    if (isLoggedStderrLine(m_errLine))
         appendLog(QString::fromUtf8(m_errLine));
     m_errLine.clear();
     appendLog(QStringLiteral("(exit %1)").arg(exitCode));
@@ -1670,24 +1686,27 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
         parsed = SyncModel::parseStatusJson(m_captured);
     else if (ok && m_mode == Mode::History)
         parsed = SyncModel::parseHistoryJson(m_captured);
-    const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
-                             : QStringLiteral("%1 failed (exit %2). See log.").arg(label).arg(exitCode);
     // iCloud out of reach is not worth a failure: the next sync tries again.
     m_lastError = ok ? QJsonObject() : engineError(output, m_capturedErr);
     // A failure's output is its error, as a failed half's is: {"error":{...}}.
     if (!m_lastError.isEmpty())
         m_captured = QJsonDocument(QJsonObject{ { QStringLiteral("error"), m_lastError } }).toJson(QJsonDocument::Compact);
     const QString code = m_lastError.value(QStringLiteral("code")).toString();
+    const QString message = m_lastError.value(QStringLiteral("message")).toString();
     const bool offline = !ok && isNetworkError(code);
-    // A --json run's error is only on stdout: log it as a sync half's is.
-    if (enveloped && !m_lastError.isEmpty()) {
-        const QString message = m_lastError.value(QStringLiteral("message")).toString();
+    // A run's error is only on stdout (every run is in a machine mode): log
+    // it as a sync half's is (finishSyncHalves logs the halves'), and say it
+    // in the preview's or history's error rather than "see log".
+    if (m_mode != Mode::Sync && !m_lastError.isEmpty()) {
         const QString hint = m_lastError.value(QStringLiteral("hint")).toString();
         if (offline)
             appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(label.toLower(), message));
         else
             appendLog(label.toLower() + QStringLiteral(" failed: ") + message + (hint.isEmpty() ? QString() : u'\n' + hint));
     }
+    const QString error = ok                    ? parsed.value(QStringLiteral("error")).toString()
+                          : !message.isEmpty() ? QStringLiteral("%1 failed: %2").arg(label, message)
+                                               : QStringLiteral("%1 failed (exit %2). See log.").arg(label).arg(exitCode);
 
     // A failure that only a sign-in fixes says `sign_in_required` (exit 3,
     // which it shares with "not cloned", "another account's vault" and the
@@ -1695,8 +1714,11 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // signs in by itself: icloud-session owns the sign-in, so it is told (it
     // confirms with Apple before signing everyone out) and syncing pauses
     // until it reports a sign-in, since every further sync would fail the
-    // same way.
+    // same way. `session_rejected` (Apple refused a session icloud-session
+    // still holds) pauses the same way, but is not reported: the session
+    // library reported it already when it got the refusal.
     const bool sessionExpired = !ok && isSignInRequired(code, exitCode);
+    const bool sessionRejected = !ok && isSessionRejected(code);
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the
@@ -1706,7 +1728,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     const bool sessionWorks = ok && (label == u"Pull" || label == u"Clone");
     if (sessionWorks)
         m_retriedAfterReport = false;
-    setAuthExpired(sessionExpired || (m_authExpired && !sessionWorks));
+    setAuthExpired(sessionExpired || sessionRejected || (m_authExpired && !sessionWorks));
     emit syncFinished(label, ok);
 
     switch (m_mode) {
@@ -1737,14 +1759,16 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
         break;
     }
     // The sign-in banner already says what went wrong and how to fix it.
-    setSyncMessage(sessionExpired ? kPausedMessage
-                   : offline      ? kOfflineMessage
-                                  : label + (error.isEmpty() ? QStringLiteral(" done.") : QStringLiteral(" failed. See log.")));
+    setSyncMessage(sessionExpired || sessionRejected ? kPausedMessage
+                   : offline                         ? kOfflineMessage
+                                                     : label + (error.isEmpty() ? QStringLiteral(" done.")
+                                                                                : QStringLiteral(" failed. See log.")));
 }
 
 // `icloud-notes-sync --quiet sync` answers {push, pull, vault_info}, each half
 // {ok, exit_code, result, lines} or {ok, exit_code, error}, pull null when it
-// did not run (the push found the sign-in gone, or iCloud out of reach).
+// did not run (the push found the sign-in gone or the session rejected, or
+// iCloud out of reach).
 // Each half is logged and finished as a run of its own was, so syncFinished
 // says "Push", then "Pull"; then the vault is re-read, once, and only when
 // the run may have changed it.
@@ -1780,7 +1804,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
                 appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(name, message));
             } else {
                 appendLog(name + QStringLiteral(" failed: ") + message + (hint.isEmpty() ? QString() : u'\n' + hint));
-                quiet = quiet && code == u"sign_in_required";
+                quiet = quiet && (code == u"sign_in_required" || isSessionRejected(code));
             }
         }
         const int code = half.value(QStringLiteral("exit_code")).toInt(ok ? 0 : 1);
@@ -1803,7 +1827,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
             output = QJsonDocument(QJsonObject{ { QStringLiteral("error"), error } }).toJson(QJsonDocument::Compact);
         }
         halves << Half{ QStringLiteral("Push"), code, output };
-        if (!isSignInRequired(error.value(QStringLiteral("code")).toString(), code))
+        if (!needsSignIn(error.value(QStringLiteral("code")).toString(), code))
             halves << Half{ QStringLiteral("Pull"), code, output };
         quiet = false;
     } else {
@@ -1814,8 +1838,10 @@ void NotesBackend::finishSyncHalves(int exitCode)
                 pulledChanges = pulledChanges || pulled.value(QLatin1StringView(count)).toInt() > 0;
             pulledChanges = pulledChanges || !pulled.value(QStringLiteral("changes")).toArray().isEmpty()
                 || !pulled.value(QStringLiteral("conflicts")).toArray().isEmpty();
-        } else if (!isSignInRequired(engineErrorCode(halves.first().output, m_capturedErr), halves.first().exitCode)) {
-            // Not run: the push found iCloud out of reach. It failed as the push did.
+        } else if (!needsSignIn(engineErrorCode(halves.first().output, m_capturedErr), halves.first().exitCode)) {
+            // Not run, and not for a sign-in (sign_in_required or
+            // session_rejected, which pause instead): the push found iCloud
+            // out of reach. It failed as the push did.
             halves << Half{ QStringLiteral("Pull"), halves.first().exitCode, halves.first().output };
         }
     }
