@@ -32,13 +32,13 @@ installed `/usr/lib/icloud-notes/icloud-notes-sync <command>`):
 ```console
 $ icloud-notes-sync clone --account <dsid> ~/Notes
 $ icloud-notes-sync pull
-$ icloud-notes-sync --json status
+$ icloud-notes-sync --quiet status
 $ icloud-notes-sync push
 $ icloud-notes-sync sync
 $ icloud-notes-sync history <file>
 $ icloud-notes-sync diff <file> <id>|<from>..<to>
 $ icloud-notes-sync restore <file>
-$ icloud-notes-sync --json vault-info
+$ icloud-notes-sync --quiet vault-info
 ```
 
 Exit codes, the table the other iCloud tools share
@@ -54,19 +54,30 @@ exit apart:
 | 4 | not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a `ZONE_NOT_FOUND` zone |
 | 5 | a service unavailable | `offline`, `network`, `session_service` (icloud-sessiond unreachable), `keyring_unavailable`, `cloudkit_request_failed`, `cloudkit_zone_fetch_failed` |
 
-With `--json`, stdout carries only the JSON result, and an error is one line
-on stderr: `{"ok":false,"error":{"code":"sign_in_required","message":…,"hint":…}}`
-(`code` is the error's class in snake case; `hint`, when present, says how
-to fix it).
+Output follows the contract every iCloud tool shares
+([icloud_session::output](../session/src/output.rs)): text on a terminal;
+when piped, or with `--json`, the envelope `{"ok":true,"data":…,"summary":"…"}`;
+`--quiet` prints only `data` (the command's result: what the Notes app
+reads); `--styled` forces text; `--count` prints how many entries
+(`status`, `push`, `pull` changes, `history`, `vault-info` notes) and
+`--ids-only` their files (`status`, `push`, `restore`) or snapshot ids
+(`history`). The flags combine: ids-only > count > quiet > json > styled. In
+those machine modes stdout is exactly one JSON document, and status lines
+and progress go to stderr. A failure is
+`{"ok":false,"error":{"code":"sign_in_required","message":…,"hint":…}}`
+on stdout in a machine mode, pretty-printed (`code` is the error's class in
+snake case; `hint`, when present, says how to fix it), and `error: …` /
+`hint: …` on stderr in text mode.
 
 `sync` is for the Notes app: push, then pull, in one run
 over one connection (one icloud-sessiond `Session()` call, one TLS
 connection, one lock). Each half is exactly `push` and `pull`; the pull runs
-unless the push found the sign-in gone or iCloud out of reach. With
-`--json` stdout is `{"push": HALF, "pull": HALF|null, "vault_info": …}`
-even when a half failed, HALF being `{ok, exit_code, result, lines}` (the
-command's own JSON and its human report) or `{ok, exit_code, error}`; it
-exits 3 if either half exited 3, else with the higher of the two halves'
+unless the push found the sign-in gone or iCloud out of reach. Its data
+is `{"push": HALF, "pull": HALF|null, "vault_info": …}` even when a half
+failed, HALF being `{ok, exit_code, result, lines}` (the command's own data
+and its human report) or `{ok, exit_code, error}` (`{code, message,
+hint?}`); a failed half is reported only there, with no separate error
+object. It exits 3 if either half exited 3, else with the higher of the two halves'
 codes. No network is the error `offline` (nothing reachable at all:
 icloud-session says so at once) or `network`, exit 5.
 
@@ -110,8 +121,9 @@ left off, so a pull walks only the shared zones that changed (and lists them
 all from scratch at least daily, or when the key is missing). A pull or
 clone looks up the attachments of all its notes in one `records/lookup`
 walk per zone and record type, and downloads up to four attachment files at
-once. Both are in docs/DESIGN.md §1. With `--json`, progress goes to stderr
-as `icloud-notes:progress:...` lines.
+once. Both are in docs/DESIGN.md §1. In a machine mode (`--json`,
+`--quiet`, piped, ...), progress goes to stderr as
+`icloud-notes:progress:...` lines.
 
 ## Development
 

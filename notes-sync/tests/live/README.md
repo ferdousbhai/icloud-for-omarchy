@@ -22,7 +22,7 @@ The binary signs in through icloud-session. A run takes a few minutes.
   engine's own folder-create path on the first run. The run refuses to start if
   that folder holds a note without an `itest-` prefix.
 - Every note it creates is titled `itest-<runId> ...`.
-- Before every real push, `status --json` and `push --dry-run --json` are
+- Before every real push, `status --quiet` and `push --dry-run --quiet` (the bare JSON data) are
   logged and `guard.py plan` refuses the push unless the two plans agree,
   every entry is `ready` (the one exception: the dry-run that checks a file
   with conflict markers is refused, where `conflict` is required), every file (and `previousFile` / `pendingRename`)

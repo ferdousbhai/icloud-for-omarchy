@@ -2,56 +2,109 @@
 # Test double for the icloud-notes-sync CLI: canned answers, no Apple
 # account, no network. The tests name it with ICLOUD_NOTES_SYNC_BIN,
 # as the app finds the engine. Used by backend_test to exercise the exact
-# argv/stdout/stderr/exit-code path the app uses in production. Like the
-# real tool, --json results go to stdout alone and everything else
-# (progress, notices) to stderr; status, push --dry-run and diff report their
-# changes in the result and exit 0, a sign-in required exits 3, a usage error
-# 2, offline 5 (the codes every iCloud tool shares). A --json failure ends
-# stderr with the contract error line {"ok":false,"error":{code,message}},
-# in either key order (key order is not part of the contract). vault-info is
-# the real engine's ($ICLOUD_NOTES_SYNC_REAL, which bin/test builds): it
-# reads the test's vault as the app would.
+# argv/stdout/stderr/exit-code path the app uses in production.
+#
+# Output modes, as the real tool's (icloud_session::output): --quiet prints
+# only the result's data on stdout; --json (or no flag: the stub's stdout
+# is never a terminal) the envelope {"ok":true,"data","summary"}; --styled
+# text. In --quiet/--json a failure is the contract error object
+# {"ok":false,"error":{code,message,hint?}} on stdout, pretty-printed over
+# several lines (here sometimes with its keys sorted: key order and layout
+# are not part of the contract), and stderr carries no JSON; in --styled it
+# is "error: ..." / "hint: ..." on stderr. Progress and notices go to
+# stderr. status, push --dry-run and diff report their changes in the
+# result and exit 0, a sign-in required exits 3, a usage error 2, offline 5
+# (the codes every iCloud tool shares). vault-info is the real engine's
+# ($ICLOUD_NOTES_SYNC_REAL, which bin/test builds): it reads the test's
+# vault as the app would.
 #
 # ICLOUD_NOTES_SYNC_STUB_EXIT=N (with ICLOUD_NOTES_SYNC_STUB_ERROR=CODE,
 # default "internal"): sync, pull, push and diff fail at once with exit N and
 # that error code, giving no answer, as the engine does for a vault it cannot
 # use (not_cloned_directory, account_mismatch, ...).
+# ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR=1: such a failure also ends stderr with
+# an older engine's one-line error (sorted keys), which the app must keep
+# out of its log.
+orig=("$@")
+quiet="" json="" styled=""
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quiet) quiet=1 ;;
+    --json) json=1 ;;
+    --styled) styled=1 ;;
+    --wait) shift ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+set -- "${args[@]}"
+# Precedence quiet > json > styled > (not a terminal: the envelope).
+if [ -n "$quiet" ]; then mode=quiet
+elif [ -n "$json" ] || [ -z "$styled" ]; then mode=json
+else mode=text
+fi
+
+# result JSON [TEXT]: the result in the run's mode.
+result() {
+  case "$mode" in
+    quiet) printf '%s\n' "$1" ;;
+    json) printf '{"ok":true,"data":%s,"summary":"stub"}\n' "$1" ;;
+    text) printf '%s\n' "${2:-stub}" ;;
+  esac
+}
+# fail CODE MESSAGE HINT EXIT [sorted]: the failure in the run's mode, then exit.
+fail() {
+  if [ "$mode" = text ]; then
+    echo "error: $2" >&2
+    [ -n "$3" ] && echo "hint: $3" >&2
+  elif [ -n "${5:-}" ]; then
+    printf '{\n  "error": {\n    "code": "%s",\n' "$1"
+    [ -n "$3" ] && printf '    "hint": "%s",\n' "$3"
+    printf '    "message": "%s"\n  },\n  "ok": false\n}\n' "$2"
+  else
+    printf '{\n  "ok": false,\n  "error": {\n    "code": "%s",\n    "message": "%s"' "$1" "$2"
+    [ -n "$3" ] && printf ',\n    "hint": "%s"' "$3"
+    printf '\n  }\n}\n'
+  fi
+  exit "$4"
+}
 stub_fail() {
   [ -n "${ICLOUD_NOTES_SYNC_STUB_EXIT:-}" ] || return 0
-  echo "stub: failing with ${ICLOUD_NOTES_SYNC_STUB_ERROR:-internal}" >&2
-  printf ' {"error":{"code":"%s","message":"stub failure"},"ok":false}\n' "${ICLOUD_NOTES_SYNC_STUB_ERROR:-internal}" >&2
-  exit "$ICLOUD_NOTES_SYNC_STUB_EXIT"
+  local code="${ICLOUD_NOTES_SYNC_STUB_ERROR:-internal}"
+  echo "stub: failing with $code" >&2
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR:-}" ] \
+    && printf ' {"error":{"code":"%s","message":"stub failure"},"ok":false}\n' "$code" >&2
+  fail "$code" "stub failure" "" "$ICLOUD_NOTES_SYNC_STUB_EXIT" sorted
 }
-if [ "$1" = "--json" ] && [ "$2" = "vault-info" ]; then
+sign_in_hint='Run `icloud-session sign-in` to sign in to iCloud again, then retry.'
+
+if [ "$1" = "vault-info" ]; then
   # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG: a file each vault-info appends a line to.
   [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG:-}" ] && echo "vault-info" >> "$ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG"
-  exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "$@"
-elif [ "$1" = "--json" ] && [ "$2" = "sync" ]; then
+  exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "${orig[@]}"
+elif [ "$1" = "sync" ]; then
   # Push, then pull, in one run: {push, pull, vault_info}, each half
-  # {ok, exit_code, result, lines} or {ok, exit_code, error}. The pull is
-  # left out (null) after a refused sign-in or an offline push, as the real
-  # tool does. The same switches as pull/push below, plus
-  # ICLOUD_NOTES_SYNC_STUB_OFFLINE=1 (the push finds no network) and
-  # ICLOUD_NOTES_SYNC_STUB_PULL_ADDS=FILE (the pull writes that note and
-  # reports it, as a pull from iCloud would).
+  # {ok, exit_code, result, lines} or {ok, exit_code, error}; a failed half
+  # is reported there only. The pull is left out (null) after a refused
+  # sign-in or an offline push, as the real tool does. The same switches as
+  # pull/push below, plus ICLOUD_NOTES_SYNC_STUB_OFFLINE=1 (the push finds
+  # no network) and ICLOUD_NOTES_SYNC_STUB_PULL_ADDS=FILE (the pull writes
+  # that note and reports it, as a pull from iCloud would).
   [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "sync" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
   stub_fail
   code=0
   half() { # half VERB: prints that half's JSON
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
-      # Sorted keys, as a serializer without insertion order writes them.
-      echo '{"error":{"code":"offline","message":"offline: dns error: no network"},"ok":false}' >&2
       printf '{"ok":false,"exit_code":5,"error":{"code":"offline","message":"offline: dns error: no network"}}'
       return
     fi
     if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
       if [ "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" = marker ]; then
-        echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
         printf '{"ok":false,"exit_code":1,"error":{"code":"internal","message":"Run \\"icloud-md reauthenticate\\" to sign in interactively."}}'
       else
-        echo '{"ok":false,"error":{"code":"sign_in_required","message":"Not signed in to iCloud."}}' >&2
-        printf '{"ok":false,"exit_code":3,"error":{"code":"sign_in_required","message":"Not signed in to iCloud."}}'
+        printf '{"ok":false,"exit_code":3,"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","hint":"%s"}}' "$sign_in_hint"
       fi
       return
     fi
@@ -77,84 +130,74 @@ elif [ "$1" = "--json" ] && [ "$2" = "sync" ]; then
     *'"code":"sign_in_required"'*) code=3 ;;
     *'"ok":false'*) [ "$code" -lt 1 ] && code=1 ;;
   esac
-  info=$("$ICLOUD_NOTES_SYNC_REAL" --json vault-info . 2>/dev/null) || info=null
-  printf '{"push":%s,"pull":%s,"vault_info":%s}\n' "$push_json" "$pull_json" "${info:-null}"
+  info=$("$ICLOUD_NOTES_SYNC_REAL" --quiet vault-info . 2>/dev/null) || info=null
+  result "{\"push\":$push_json,\"pull\":$pull_json,\"vault_info\":${info:-null}}"
   exit "$code"
-elif [ "$1" = "--json" ] && [ "$2" = "status" ]; then
+elif [ "$1" = "status" ]; then
   echo "Fetching changes from iCloud..." >&2
   echo "icloud-notes:progress:fetch:12" >&2
-  cat <<'JSON'
-{"entries":[{"kind":"update","file":"A.md","resolution":"ready"},{"kind":"update","file":"B.md","resolution":"refused","reason":"B.md: has attachments"},{"kind":"createFolder","file":"New","resolution":"ready","folderTitle":"New"}],"unchanged":2,"notices":[{"level":"warn","message":"careful"}]}
-JSON
+  result '{"entries":[{"kind":"update","file":"A.md","resolution":"ready"},{"kind":"update","file":"B.md","resolution":"refused","reason":"B.md: has attachments"},{"kind":"createFolder","file":"New","resolution":"ready","folderTitle":"New"}],"unchanged":2,"notices":[{"level":"warn","message":"careful"}]}' \
+    "Would update A.md"
   echo "Checked 5 notes." >&2
   exit 0
-elif [ "$1" = "--json" ] && [ "$2" = "history" ]; then
-  echo "Reading history..." >&2
-  cat <<'JSON'
-{"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}
-JSON
-elif { [ "$1" = "--json" ] && [ "$2" = "push" ] && [ "$3" = "--dry-run" ]; } || { [ "$1" = "push" ] && [ "$2" = "--dry-run" ]; }; then
+elif [ "$1" = "push" ] && [ "$2" = "--dry-run" ]; then
   # What icloud-notes push --dry-run passes through.
-  if [ "$1" = "--json" ]; then
-    echo '{"entries":[{"kind":"update","file":"Notes/Alpha.md","resolution":"ready"}],"unchanged":1,"notices":[],"dryRun":true}'
-  else
-    echo "Would update Notes/Alpha.md"
-  fi
+  result '{"entries":[{"kind":"update","file":"Notes/Alpha.md","resolution":"ready"}],"unchanged":1,"notices":[],"dryRun":true}' \
+    "Would update Notes/Alpha.md"
   exit 0
-elif [ "$1" = "history" ] && [ "$3" = "--records" ]; then
-  echo "r1  2026-09-01T00:00:00Z  $2"
 elif [ "$1" = "history" ]; then
-  echo "e9  2026-09-01T00:00:00Z  changed: $2"
-elif [ "$1" = "restore" ] || { [ "$1" = "--json" ] && [ "$2" = "restore" ]; }; then
-  [ "$1" = "--json" ] && shift
+  [ "$mode" != text ] && echo "Reading history..." >&2
+  if [ "$3" = "--records" ]; then
+    result '{"mode":"records","records":[{"id":"r1","timestamp":"2026-09-01T00:00:00Z","label":"note","recordChangeTag":"t"}]}' \
+      "r1  2026-09-01T00:00:00Z  $2"
+  else
+    result '{"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}' \
+      "e9  2026-09-01T00:00:00Z  changed: $2"
+  fi
+elif [ "$1" = "restore" ]; then
   # Stands for "back to the last synced copy": the file gets a marker line.
   printf 'restored\n' >> "$2"
-  echo "{\"file\":\"$2\"}"
+  result "{\"file\":\"$2\"}" "Restored $2 to match the last synced copy."
 elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
   # A clone into the last argument: the state file and one note.
   dir="${@: -1}"
   mkdir -p "$dir/.icloud-notes" "$dir/Notes"
   echo '{"layoutVersion":4,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-notes/state.json"
   printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
-  echo "Cloned 1 notes"
-elif [ "$1" = "diff" ] || { [ "$1" = "--json" ] && [ "$2" = "diff" ]; }; then
+  result '{"written":1}' "Cloned 1 notes"
+elif [ "$1" = "diff" ]; then
   stub_fail
   echo "Fetching the current remote copy..." >&2
-  printf -- '--- remote\n+++ local\n- old\n+ new\n'
+  text=$'--- remote\n+++ local\n- old\n+ new'
+  result '{"kind":"snapshot","from":"e9","to":"remote","hasDifferences":true,"text":"--- remote\n+++ local\n- old\n+ new"}' "$text"
   exit 0
-elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2" = "pull" ] || [ "$2" = "push" ]; }; }; then
-  json=""
-  if [ "$1" = "--json" ]; then json=1; shift; fi
+elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   # ICLOUD_NOTES_SYNC_STUB_LOG: a file each pull/push appends its verb to.
   [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "$1" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   # ICLOUD_NOTES_SYNC_STUB_SLEEP: seconds a run takes.
   # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
   # only that one (a push with nothing to send never asks iCloud).
   # ICLOUD_NOTES_SYNC_STUB_SIGNIN: how a refusal is reported: "code" exit 3
-  # without icloud-md's text marker; "marker" exit 1 with only the marker,
-  # which the app no longer takes for a sign-in; unset, exit 3 and the
-  # marker, as the real tool does.
+  # with plain text and no error object, whatever the mode (so no code);
+  # "marker" exit 1 with only icloud-md's text marker, which the app no
+  # longer takes for a sign-in; unset, exit 3 and the code
+  # sign_in_required, as the real tool does.
   # ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK: the real engine takes the vault's lock
   # here (restore of a note that isn't there, so nothing changes): through
   # the descriptor the app handed down it must get it, without it it must
-  # find the vault busy.
+  # find the vault busy (its error object is on stdout).
   if [ -n "${ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK:-}" ]; then
-    with=$("$ICLOUD_NOTES_SYNC_REAL" --json --wait 0 restore no-such-note.md . 2>&1 >/dev/null)
-    without=$(env -u ICLOUD_NOTES_LOCK_FD "$ICLOUD_NOTES_SYNC_REAL" --json --wait 0 restore no-such-note.md . 2>&1 >/dev/null)
+    with=$("$ICLOUD_NOTES_SYNC_REAL" --quiet --wait 0 restore no-such-note.md . 2>/dev/null)
+    without=$(env -u ICLOUD_NOTES_LOCK_FD "$ICLOUD_NOTES_SYNC_REAL" --quiet --wait 0 restore no-such-note.md . 2>/dev/null)
     case "$with" in *vault_busy*) echo "stub: the engine found the vault busy despite the lock handed down" >&2; exit 1 ;; esac
     case "$without" in *vault_busy*) ;; *) echo "stub: the engine got the vault without the lock: $without" >&2; exit 1 ;; esac
   fi
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
   stub_fail
-  # ICLOUD_NOTES_SYNC_STUB_OFFLINE: iCloud out of reach, exit 5; with --json
-  # the error line (sorted keys) is the only place the code is.
+  # ICLOUD_NOTES_SYNC_STUB_OFFLINE: iCloud out of reach, exit 5; the error
+  # object (sorted keys) is the only place the code is.
   if [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
-    if [ -n "$json" ]; then
-      echo '{"error":{"code":"offline","hint":"Check the network connection.","message":"offline: dns error: no network"},"ok":false}' >&2
-    else
-      echo "error: offline: dns error: no network" >&2
-    fi
-    exit 5
+    fail offline "offline: dns error: no network" "Check the network connection." 5 sorted
   fi
   if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
     case "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" in
@@ -165,17 +208,11 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ] || { [ "$1" = "--json" ] && { [ "$2"
         echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
         exit 1 ;;
       *)
-        if [ -n "$json" ]; then
-          echo '{"ok":false,"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","hint":"Sign in to iCloud again with icloud-session, then retry."}}' >&2
-        else
-          echo "Not signed in to iCloud." >&2
-          echo 'Sign in to iCloud again with icloud-session, then retry.' >&2
-        fi
-        exit 3 ;;
+        fail sign_in_required "Not signed in to iCloud." "$sign_in_hint" 3 ;;
     esac
   fi
-  if [ -n "$json" ]; then echo "{\"stub\":\"$1\",\"ok\":true}"; else echo "stub $1 ok"; fi
+  result "{\"stub\":\"$1\",\"ok\":true}" "stub $1 ok"
 else
-  echo "stub: unknown args: $*" >&2
+  echo "stub: unknown args: ${orig[*]}" >&2
   exit 2
 fi

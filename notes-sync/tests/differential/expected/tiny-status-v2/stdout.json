@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "vault_needs_update",
+    "message": "@OUT@/vault uses an older vault layout (2) that has to be updated first.",
+    "hint": "Run \"icloud-notes-sync pull\" once to update it, then try again. (This command made no changes.)"
+  }
+}

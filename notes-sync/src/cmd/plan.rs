@@ -1,9 +1,9 @@
-//! The push plan: entries, their `--json` projection, and every refusal and
+//! The push plan: entries, their JSON projection, and every refusal and
 //! conflict push can plan, enumerated. Originally derived from icloud-md.
 //!
 //! Every way push can refuse or conflict is one [`Refusal`] variant; reason
 //! interpolations become fields. [`Refusal::reason`] is what lands in
-//! `PlanEntry.reason` (and so in `status --json`).
+//! `PlanEntry.reason` (and so in `status`'s JSON data).
 //!
 //! Some reasons are reported as `"<file>: <message>"` in the push summary
 //! and without the prefix in the plan entry; those messages are [`PrepareRefusal`] / [`TextUpdateRefusal`], whose
@@ -41,7 +41,7 @@ pub enum PlanResolution {
     Noop,
 }
 
-/// `SerializedPlanEntry`: the `--json` shape of `status` / `push --dry-run`
+/// `SerializedPlanEntry`: the JSON shape of `status` / `push --dry-run`
 /// entries, keys in `serializePlanEntry`'s order: kind, file, resolution,
 /// reason, previousFile, pendingRename, folderTitle, remark.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

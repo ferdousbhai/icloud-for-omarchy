@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "vault_from_newer_tool",
+    "message": "@OUT@/vault was written by a newer version of icloud-notes (vault layout 5; this build understands 4).",
+    "hint": "Upgrade icloud-notes-sync to the latest release. (This tool made no changes.)"
+  }
+}

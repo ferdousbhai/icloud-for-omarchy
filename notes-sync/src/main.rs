@@ -6,47 +6,62 @@
 //! (`cmd::lock`); status, history, diff, push --dry-run and vault-info only
 //! read, and don't.
 //!
-//! Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required, 5 a service
-//! unavailable (the table every iCloud tool shares; docs/CLI.md). `status`,
-//! `push --dry-run` and `diff` report their changes in the result and exit 0;
-//! `sync` exits with its worse half, a sign-in above all. `--json` is global
-//! (before or after the verb): stdout carries only the JSON result,
-//! everything else goes to stderr, an error as one JSON line last.
+//! Output follows the product contract every iCloud tool shares
+//! ([`icloud_session::output`]): text on a terminal, the JSON envelope
+//! `{"ok":true,"data","summary"}` when piped (or with `--json`), only `data`
+//! with `--quiet` (what the Notes app reads), `--styled` forces text,
+//! `--ids-only` / `--count` where a command lists something. A failure is
+//! the contract error object `{"ok":false,"error":{"code","message","hint"?}}`
+//! on stdout in a machine mode, `error:` / `hint:` on stderr in text mode.
+//! Status lines and machine progress (`icloud-notes:progress:...`) go to
+//! stderr in a machine mode.
+//!
+//! Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in / not set up, 4 not
+//! found, 5 a service unavailable (the table every iCloud tool shares;
+//! `cmd::errors`). `status`, `push --dry-run` and `diff` report their
+//! changes in the result and exit 0; `sync` reports both halves in its data
+//! and exits with its worse half, a sign-in above all.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use icloud_notes_sync::cmd::errors::EXIT_OK;
 use icloud_notes_sync::cmd::lock::lock_vault;
-use icloud_notes_sync::cmd::output::{OutputContext, TOOL};
+use icloud_notes_sync::cmd::output::{error_json, usage_error};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
     self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
     vault_info,
 };
 use icloud_notes_sync::vault::local::{display_path, find_vault_root};
+use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 
 #[derive(Parser)]
 #[command(
     name = "icloud-notes-sync",
     about = "Sync iCloud Notes with a folder of Markdown files",
-    after_help = "Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory), \
+    after_help = "Output: text on a terminal; when piped (or with --json) the JSON envelope \
+                  {\"ok\":true,\"data\",\"summary\"}; --quiet prints only data (the command's result); \
+                  --styled forces text; --count prints how many entries (status, push, pull changes, history, \
+                  vault-info notes) and --ids-only their files (status, push, restore) or snapshot ids \
+                  (history). The flags combine: ids-only > count > quiet > json > styled. In those machine \
+                  modes stdout is one JSON document; status lines and progress (icloud-notes:progress:...) \
+                  go to stderr, and a failure is \
+                  {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout (text mode: error: and \
+                  hint: lines on stderr).\n\
+                  Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory), \
                   3 not signed in or not set up (sign_in_required: icloud-session sign-in; not_cloned_directory, \
-                  account_mismatch, ...: the JSON code tells them apart), 4 not found (untracked_file, \
+                  account_mismatch, ...: the error code tells them apart), 4 not found (untracked_file, \
                   unknown_version_snapshot), 5 a service unavailable (offline, network, session_service, \
                   keyring_unavailable, iCloud failing a request). status, push --dry-run and diff \
                   report their changes in the result and exit 0.\n\
-                  With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
-                  {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}.\n\
                   clone, pull, push, sync and restore take the vault's lock, shared with the Notes app (icloud-notes); \
                   a busy lock is the error vault_busy (exit 1).",
     disable_version_flag = true
 )]
 struct Cli {
-    /// Emit machine-readable JSON on stdout instead of human-readable text
-    #[arg(long, global = true)]
-    json: bool,
+    #[command(flatten)]
+    out: OutputFlags,
 
     /// Print the version
     #[arg(short = 'V', long)]
@@ -92,10 +107,11 @@ enum Command {
     },
     /// Push, then pull, in one run over one connection (what the Notes app does)
     #[command(
-        after_help = "With --json, stdout is {\"push\": HALF, \"pull\": HALF or null, \"vault_info\": vault-info's \
+        after_help = "data is {\"push\": HALF, \"pull\": HALF or null, \"vault_info\": vault-info's \
                       answer or null}, even when a half failed; HALF is {\"ok\", \"exit_code\", \"result\" (push's or \
-                      pull's own JSON), \"lines\" (its human report)} or {\"ok\", \"exit_code\", \"error\" (as on \
-                      stderr)}. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
+                      pull's own data), \"lines\" (its human report)} or {\"ok\", \"exit_code\", \"error\" \
+                      ({\"code\",\"message\",\"hint\"?})}. A failed half is reported only there: no separate error \
+                      object. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
                       then). Exit code: 3 if either half exited 3 (sign-in required, or the vault not set up for this \
                       account), else the higher of the two halves' codes (5 unavailable, 4 not found, 2 usage, 1 error)."
     )]
@@ -112,7 +128,7 @@ enum Command {
         #[arg(long)]
         records: bool,
     },
-    /// What the Notes app reads from the vault's state: title mode, default folder, tracked notes (JSON only)
+    /// What the Notes app reads from the vault's state: title mode, default folder, tracked notes (JSON, also in text mode)
     VaultInfo { directory: Option<PathBuf> },
     /// Diff two snapshots, or one snapshot against the current remote copy
     #[command(
@@ -127,8 +143,8 @@ enum Command {
     },
 }
 
-/// `--json` progress: one `icloud-notes:progress:...` line per event on stderr
-/// (the prefix is what wrapping processes match).
+/// Machine-mode progress: one `icloud-notes:progress:...` line per event on
+/// stderr (the prefix is what wrapping processes match).
 struct MachineProgress {
     processed: usize,
     total: usize,
@@ -152,35 +168,29 @@ impl SyncProgress for MachineProgress {
 }
 
 fn main() -> ExitCode {
-    let cli = match icloud_session::cli::parse::<Cli>(TOOL) {
+    let cli = match output::parse::<Cli>() {
         Ok(cli) => cli,
         Err(code) => return ExitCode::from(code),
     };
-    let ctx = OutputContext { json: cli.json };
+    let mode = cli.out.mode();
 
     if cli.version {
         let version = env!("CARGO_PKG_VERSION");
-        if ctx.json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({ "version": version })).unwrap()
-            );
-        } else {
-            println!("{version}");
-        }
-        return ExitCode::from(EXIT_OK);
+        return ExitCode::from(Response::new(serde_json::json!({ "version": version }), version).print(mode));
     }
     let Some(command) = cli.command else {
-        use clap::CommandFactory;
-        eprintln!("{}", Cli::command().render_help());
-        return ExitCode::from(ctx.emit_usage_error("no command given"));
+        if !mode.is_machine() {
+            use clap::CommandFactory;
+            eprintln!("{}", Cli::command().render_help());
+        }
+        return ExitCode::from(usage_error("no command given").report(mode));
     };
 
     let wait = cli.wait.map(std::time::Duration::from_secs);
-    match run(command, ctx, wait) {
-        Ok(code) => ExitCode::from(code),
-        Err(error) => ExitCode::from(ctx.emit_error(&error)),
-    }
+    ExitCode::from(match run(command, mode, wait) {
+        Ok(response) => response.print(mode),
+        Err(error) => error.report(mode),
+    })
 }
 
 /// An explicit directory wins; otherwise walk up from the cwd to the vault,
@@ -195,14 +205,19 @@ fn resolve_target_dir(directory: Option<PathBuf>) -> Result<PathBuf, cmd::Error>
 /// One line of a human report, and whether it is a warning (stderr).
 type Line = (bool, String);
 
-fn print_lines(lines: Vec<Line>) {
+/// The text-mode report: warnings go to stderr now (text mode only; in a
+/// machine mode they are in the data's `notices`), the rest is returned for
+/// stdout.
+fn human(mode: Mode, lines: Vec<Line>) -> String {
+    let mut out = Vec::new();
     for (warn, line) in lines {
-        if warn {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
+        if !warn {
+            out.push(line);
+        } else if mode == Mode::Human {
+            eprintln!("{}", output::terminal_safe(&line));
         }
     }
+    out.join("\n")
 }
 
 fn notice_lines(notices: &[SyncNotice]) -> Vec<Line> {
@@ -212,8 +227,40 @@ fn notice_lines(notices: &[SyncNotice]) -> Vec<Line> {
         .collect()
 }
 
-fn print_notices(notices: &[SyncNotice]) {
-    print_lines(notice_lines(notices));
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// `clone`'s human report.
+fn clone_lines(s: &clone::CloneSummary, directory: &Path) -> Vec<Line> {
+    let mut lines = vec![(
+        false,
+        format!(
+            "Cloned {} notes (plus {} shared with you) into {}, {} attachment(s) downloaded",
+            s.written,
+            s.written_shared,
+            directory.display(),
+            s.attachments_downloaded
+        ),
+    )];
+    if s.written_unpublishable > 0 {
+        lines.push((
+            false,
+            format!(
+                "{} note(s) written with content this tool couldn't fully parse - read-only",
+                s.written_unpublishable
+            ),
+        ));
+    }
+    lines.push((
+        false,
+        format!(
+            "Skipped: {} deleted, {} undecodable",
+            s.skipped_deleted, s.skipped_undecodable
+        ),
+    ));
+    lines.extend(notice_lines(&s.notices));
+    lines
 }
 
 /// `pull`'s human report.
@@ -242,6 +289,21 @@ fn pull_lines(s: &pull::PullSummary, target: &Path) -> Vec<Line> {
     }
     lines.extend(notice_lines(&s.notices));
     lines
+}
+
+fn pull_summary(s: &pull::PullSummary) -> String {
+    if s.changes.is_empty() {
+        "Already up to date.".into()
+    } else {
+        format!(
+            "Pulled {}: {} added, {} updated, {} merged, {} removed",
+            plural(s.changes.len(), "change", "changes"),
+            s.added,
+            s.updated,
+            s.merged,
+            s.removed
+        )
+    }
 }
 
 /// `push`'s (and `push --dry-run`'s) human report.
@@ -290,7 +352,22 @@ fn push_lines(r: &push::PushResult, target: &Path) -> Vec<Line> {
     lines
 }
 
-/// One half of `sync --json`: `{ok, exit_code, result, lines}`, or `{ok,
+fn push_summary(r: &push::PushResult, target: &Path) -> String {
+    match r.pushed {
+        Some(pushed) => format!(
+            "Pushed {} from {}",
+            plural(pushed, "change", "changes"),
+            target.display()
+        ),
+        None => format!(
+            "{} to push, {} unchanged",
+            plural(r.entries.len(), "change", "changes"),
+            r.unchanged
+        ),
+    }
+}
+
+/// One half of `sync`'s data: `{ok, exit_code, result, lines}`, or `{ok,
 /// exit_code, error}` when it failed.
 fn sync_half_json<T: serde::Serialize>(
     half: &Result<T, cmd::Error>,
@@ -299,25 +376,33 @@ fn sync_half_json<T: serde::Serialize>(
     match half {
         Ok(result) => serde_json::json!({
             "ok": true,
-            "exit_code": EXIT_OK,
+            "exit_code": cmd::errors::EXIT_OK,
             "result": result,
             "lines": lines(result).into_iter().map(|(_, line)| line).collect::<Vec<_>>(),
         }),
         Err(error) => serde_json::json!({
             "ok": false,
             "exit_code": error.exit_code(),
-            "error": error.to_json(),
+            "error": error_json(&CliError::from(error)),
         }),
     }
 }
 
-fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) -> Result<u8, cmd::Error> {
-    let mut on_status = |message: &str| ctx.status(message);
+fn half_summary<T>(name: &str, half: Option<&Result<T, cmd::Error>>) -> String {
+    match half {
+        Some(Ok(_)) => format!("{name} ok"),
+        Some(Err(error)) => format!("{name} failed ({})", error.code()),
+        None => format!("{name} not run"),
+    }
+}
+
+fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Result<Response, CliError> {
+    let mut on_status = |message: &str| cmd::output::status(mode, message);
     let mut machine = MachineProgress { processed: 0, total: 0 };
     let mut quiet = NoProgress;
-    let progress: &mut dyn SyncProgress = if ctx.json { &mut machine } else { &mut quiet };
+    let progress: &mut dyn SyncProgress = if mode.is_machine() { &mut machine } else { &mut quiet };
 
-    match command {
+    Ok(match command {
         Command::Clone {
             directory,
             filename_as_title,
@@ -330,28 +415,15 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
                 non_interactive,
             };
             let _lock = lock_vault(&directory, wait)?;
-            let summary = clone::run_clone(&directory, progress, &mut on_status, &options)?;
-            ctx.emit_result(&summary, |s| {
-                println!(
-                    "Cloned {} notes (plus {} shared with you) into {}, {} attachment(s) downloaded",
-                    s.written,
-                    s.written_shared,
-                    directory.display(),
-                    s.attachments_downloaded
-                );
-                if s.written_unpublishable > 0 {
-                    println!(
-                        "{} note(s) written with content this tool couldn't fully parse - read-only",
-                        s.written_unpublishable
-                    );
-                }
-                println!(
-                    "Skipped: {} deleted, {} undecodable",
-                    s.skipped_deleted, s.skipped_undecodable
-                );
-                print_notices(&s.notices);
-            });
-            Ok(EXIT_OK)
+            let s = clone::run_clone(&directory, progress, &mut on_status, &options)?;
+            let summary = format!(
+                "Cloned {} (plus {} shared with you) into {}",
+                plural(s.written, "note", "notes"),
+                s.written_shared,
+                directory.display()
+            );
+            let text = human(mode, clone_lines(&s, &directory));
+            Response::new(&s, summary).human(text)
         }
         Command::Pull {
             directory,
@@ -359,9 +431,9 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
         } => {
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
-            let summary = pull::run_pull(&target, progress, &mut on_status, &pull::PullOptions { defer_renames })?;
-            ctx.emit_result(&summary, |s| print_lines(pull_lines(s, &target)));
-            Ok(EXIT_OK)
+            let s = pull::run_pull(&target, progress, &mut on_status, &pull::PullOptions { defer_renames })?;
+            let text = human(mode, pull_lines(&s, &target));
+            Response::new(&s, pull_summary(&s)).human(text).count(s.changes.len())
         }
         Command::Push { directory, dry_run } => {
             let target = resolve_target_dir(directory)?;
@@ -370,73 +442,93 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
             } else {
                 Some(lock_vault(&target, wait)?)
             };
-            let result = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
-            ctx.emit_result(&result, |r| print_lines(push_lines(r, &target)));
-            Ok(EXIT_OK)
+            let r = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
+            let text = human(mode, push_lines(&r, &target));
+            Response::new(&r, push_summary(&r, &target))
+                .human(text)
+                .count(r.entries.len())
+                .ids(r.entries.iter().map(|e| e.entry.file.clone()).collect())
         }
         Command::Sync { directory } => {
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
             let outcome = sync::run_sync(&target, progress, &mut on_status);
-            if ctx.json {
-                // A failed half is reported on stderr too, as push or pull alone would.
-                let pull_error = outcome.pull.as_ref().and_then(|p| p.as_ref().err());
-                for error in [outcome.push.as_ref().err(), pull_error].into_iter().flatten() {
-                    ctx.emit_error(error);
-                }
-                let result = serde_json::json!({
-                    "push": sync_half_json(&outcome.push, |r| push_lines(r, &target)),
-                    "pull": outcome.pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
-                    "vault_info": vault_info::run_vault_info(&target).ok(),
-                });
-                ctx.emit_result(&result, |_| {});
-            } else {
+            let data = serde_json::json!({
+                "push": sync_half_json(&outcome.push, |r| push_lines(r, &target)),
+                "pull": outcome.pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
+                "vault_info": vault_info::run_vault_info(&target).ok(),
+            });
+            let summary = format!(
+                "{}, {}",
+                half_summary("push", Some(&outcome.push)),
+                half_summary("pull", outcome.pull.as_ref())
+            );
+            // Text mode: each half's report, or its error on stderr, as push
+            // and pull alone would print them. A machine mode has it all in
+            // the data (no separate error object).
+            let mut lines = Vec::new();
+            if mode == Mode::Human {
                 match &outcome.push {
-                    Ok(r) => print_lines(push_lines(r, &target)),
+                    Ok(r) => lines.extend(push_lines(r, &target)),
                     Err(error) => {
-                        ctx.emit_error(error);
+                        CliError::from(error).report(mode);
                     }
                 }
                 match &outcome.pull {
-                    Some(Ok(s)) => print_lines(pull_lines(s, &target)),
+                    Some(Ok(s)) => lines.extend(pull_lines(s, &target)),
                     Some(Err(error)) => {
-                        ctx.emit_error(error);
+                        CliError::from(error).report(mode);
                     }
                     // The push's error says why (no sign-in, or no network).
                     None => eprintln!("Not pulled."),
                 }
             }
-            Ok(outcome.exit_code())
+            let text = human(mode, lines);
+            Response::new(data, summary).human(text).exit(outcome.exit_code())
         }
         Command::Status { directory } => {
             let target = resolve_target_dir(directory)?;
-            let result = status::run_status(&target, &mut on_status)?;
-            ctx.emit_result(&result, |r| {
-                print_notices(&r.notices);
-                let options = RenderPlanOptions {
-                    preview: true,
-                    unchanged: Some(r.unchanged),
-                };
-                for line in render_plan(&r.entries, &|file| display_path(&target, file), options) {
-                    println!("{line}");
-                }
-            });
-            Ok(EXIT_OK)
+            let r = status::run_status(&target, &mut on_status)?;
+            let mut lines = notice_lines(&r.notices);
+            let options = RenderPlanOptions {
+                preview: true,
+                unchanged: Some(r.unchanged),
+            };
+            lines.extend(
+                render_plan(&r.entries, &|file| display_path(&target, file), options)
+                    .into_iter()
+                    .map(|line| (false, line)),
+            );
+            let summary = format!(
+                "{} to push, {} unchanged",
+                plural(r.entries.len(), "change", "changes"),
+                r.unchanged
+            );
+            let text = human(mode, lines);
+            Response::new(&r, summary)
+                .human(text)
+                .count(r.entries.len())
+                .ids(r.entries.iter().map(|e| e.file.clone()).collect())
         }
         Command::Restore { file, directory } => {
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
-            let result = restore::run_restore(&target, &file)?;
-            ctx.emit_result(&result, |r| {
-                println!("Restored {} to match the last synced copy.", r.file)
-            });
-            Ok(EXIT_OK)
+            let r = restore::run_restore(&target, &file)?;
+            let summary = format!("Restored {} to match the last synced copy.", r.file);
+            let ids = vec![r.file.clone()];
+            Response::new(&r, summary).ids(ids)
         }
         Command::VaultInfo { directory } => {
             let target = resolve_target_dir(directory)?;
             let info = vault_info::run_vault_info(&target)?;
-            ctx.emit_result(&info, |i| println!("{}", serde_json::to_string_pretty(i).unwrap()));
-            Ok(EXIT_OK)
+            let text = output::pretty(&info);
+            let summary = format!(
+                "{} ({}), {} tracked",
+                info.vault,
+                if info.cloned { "cloned" } else { "not cloned" },
+                plural(info.notes.len(), "note", "notes")
+            );
+            Response::new(&info, summary).human(text).count(info.notes.len())
         }
         Command::History {
             file,
@@ -444,9 +536,18 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
             records,
         } => {
             let target = resolve_target_dir(directory)?;
-            let result = history::run_history(&target, &file, &history::HistoryOptions { records })?;
-            ctx.emit_result(&result, print_history);
-            Ok(EXIT_OK)
+            let r = history::run_history(&target, &file, &history::HistoryOptions { records })?;
+            let (ids, summary): (Vec<String>, String) = match &r {
+                history::HistoryResult::Records { records } => (
+                    records.iter().map(|row| row.id.clone()).collect(),
+                    plural(records.len(), "snapshot", "snapshots"),
+                ),
+                history::HistoryResult::Epochs { epochs } => (
+                    epochs.iter().map(|e| e.id.clone()).collect(),
+                    plural(epochs.len(), "epoch", "epochs"),
+                ),
+            };
+            Response::new(&r, summary).human(history_text(&r)).ids(ids)
         }
         Command::Diff {
             file,
@@ -458,34 +559,41 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
                 [from] if !from.is_empty() => (*from, None),
                 [from, to] if !from.is_empty() && !to.is_empty() => (*from, Some(*to)),
                 _ => {
-                    let message = format!("Invalid ref \"{reference}\" - expected a snapshot id or <from>..<to>.");
-                    return Ok(ctx.emit_usage_error(&message));
+                    return Err(usage_error(format!(
+                        "Invalid ref \"{reference}\" - expected a snapshot id or <from>..<to>."
+                    )));
                 }
             };
             let target = resolve_target_dir(directory)?;
-            let result = diff::run_diff(&target, &file, from, to, &mut on_status)?;
-            ctx.emit_result(&result, |r| println!("{}", diff::render_diff_result(r)));
-            Ok(EXIT_OK)
+            let r = diff::run_diff(&target, &file, from, to, &mut on_status)?;
+            let summary = if r.has_differences() {
+                "Differences found"
+            } else {
+                "No differences"
+            };
+            Response::new(&r, summary).human(diff::render_diff_result(&r))
         }
-    }
+    })
 }
 
-fn print_history(result: &history::HistoryResult) {
+/// `history`'s human report.
+fn history_text(result: &history::HistoryResult) -> String {
+    let mut lines = Vec::new();
     match result {
         history::HistoryResult::Records { records } => {
             if records.is_empty() {
-                println!("No version history recorded yet.");
+                lines.push("No version history recorded yet.".to_owned());
             }
             for row in records {
-                println!(
+                lines.push(format!(
                     "{}  {}  {}  (changeTag {})",
                     row.id, row.timestamp, row.label, row.record_change_tag
-                );
+                ));
             }
         }
         history::HistoryResult::Epochs { epochs } => {
             if epochs.is_empty() {
-                println!("No version history recorded yet.");
+                lines.push("No version history recorded yet.".to_owned());
             }
             for epoch in epochs {
                 let mut line = format!(
@@ -497,8 +605,9 @@ fn print_history(result: &history::HistoryResult) {
                 if !epoch.carried_over.is_empty() {
                     line.push_str(&format!("  (carried over: {})", epoch.carried_over.join(", ")));
                 }
-                println!("{line}");
+                lines.push(line);
             }
         }
     }
+    lines.join("\n")
 }

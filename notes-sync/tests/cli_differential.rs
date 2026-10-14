@@ -3,8 +3,8 @@
 //! binary on its cassette (ReplayTransport via `ICLOUD_NOTES_SYNC_CASSETTE`,
 //! clock and randomness pinned via `ICLOUD_NOTES_SYNC_NOW` /
 //! `ICLOUD_NOTES_SYNC_DETERMINISTIC`) and compared with what an earlier run
-//! recorded in tests/differential/expected/<scenario>/: exit code, `--json`
-//! stdout, request log, the vault tree (state.json's `generator` normalized)
+//! recorded in tests/differential/expected/<scenario>/: exit code, `--quiet`
+//! stdout (the bare result, or the contract error object), request log, the vault tree (state.json's `generator` normalized)
 //! and the deterministic file mtimes.
 //!
 //! Regenerate expected/ after an intended behaviour change, then review the
@@ -192,7 +192,8 @@ struct Run {
     /// Holds `vault/`, `requests.json` and `stdout.json`; removed on drop.
     tmp: tempfile::TempDir,
     exit: i32,
-    /// `--json` stdout, the run's temp dir replaced by `@OUT@`.
+    /// stdout (`--quiet`: the result's data or the error object), the run's
+    /// temp dir replaced by `@OUT@`.
     stdout: String,
     stderr: String,
     started_ms: i64,
@@ -907,6 +908,10 @@ fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
 
     assert!(!expected("tiny-status-v2/vault").join(STATE_DIR).exists());
     assert_eq!(std::fs::read_to_string(expected("tiny-status-v2/exit")).unwrap(), "1\n");
+    assert_eq!(
+        read_json(&expected("tiny-status-v2/stdout.json"))["error"]["code"],
+        "vault_needs_update"
+    );
 
     assert_eq!(state_of("tiny-migrate-v2")["layoutVersion"], 4);
     assert_eq!(state_of("tiny-migrate-v2")["titleMode"], "in-body");
@@ -915,4 +920,26 @@ fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
             .unwrap()
             .starts_with("---\napple-note-id: 03667d1d-eee8-4e98-82fb-8c5cd02fd9d1\n---\n")
     );
+}
+
+/// A failing scenario's `--quiet` stdout is the contract error object (and
+/// nothing else): `{"ok":false,"error":{"code","message","hint"?}}`, with
+/// the code its exit code belongs to.
+#[test]
+fn failing_scenarios_record_the_error_object() {
+    for (name, code, exit) in [
+        ("asset-clone-download-failed", "cloudkit_request_failed", "5"),
+        ("tiny-clone-wrong-account", "requested_account_mismatch", "3"),
+        ("tiny-newer-layout", "vault_from_newer_tool", "1"),
+        ("tiny-status-v2", "vault_needs_update", "1"),
+    ] {
+        let stdout = read_json(&expected(name).join("stdout.json"));
+        assert_eq!(stdout["ok"], false, "{name}");
+        assert_eq!(stdout["error"]["code"], code, "{name}");
+        assert_eq!(
+            std::fs::read_to_string(expected(name).join("exit")).unwrap().trim(),
+            exit,
+            "{name}"
+        );
+    }
 }

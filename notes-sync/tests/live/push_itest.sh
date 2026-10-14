@@ -50,10 +50,10 @@ guard() { "${GUARD[@]}" "$@" | tee -a "$SUMMARY"; return "${PIPESTATUS[0]}"; }
 clone_with() {
   local label=$1 dir=$2
   shift 2
-  run "$label" "$WORK" "$@" --json clone --account "$ACCOUNT" --non-interactive "$dir"
+  run "$label" "$WORK" "$@" --quiet clone --account "$ACCOUNT" --non-interactive "$dir"
   if [[ $RC == 5 ]]; then
     mv "$WORK/$dir" "$WORK/$dir.failed-$n" 2>/dev/null
-    run "$label-retry" "$WORK" "$@" --json clone --account "$ACCOUNT" --non-interactive "$dir"
+    run "$label-retry" "$WORK" "$@" --quiet clone --account "$ACCOUNT" --non-interactive "$dir"
   fi
   want_rc 0
 }
@@ -62,23 +62,23 @@ port_clone() { clone_with "clone-$1" "$1" "$BIN"; guard dedupe "$WORK/$1"; }
 # plan_check <vault> <expected kinds|-> [allow-refused]: status + dry-run, both logged, then the guard.
 plan_check() {
   local v=$1 expect=$2 allow=${3:-}
-  run status "$v" "$BIN" --json status; want_rc 0
+  run status "$v" "$BIN" --quiet status; want_rc 0
   local s=$OUT
-  run push-dry-run "$v" "$BIN" --json push --dry-run; want_rc 0
+  run push-dry-run "$v" "$BIN" --quiet push --dry-run; want_rc 0
   guard plan "$v" "$FOLDER" "$PREFIX" "$IDS" "$s" "$OUT" "$expect" $allow || die "containment guard refused the plan"
 }
 
 # guarded_push <vault> <expected kinds|->
 guarded_push() {
   plan_check "$1" "$2"
-  run push "$1" "$BIN" --json push; want_rc 0
+  run push "$1" "$BIN" --quiet push; want_rc 0
   "${GUARD[@]}" ids "$1" "$FOLDER" "$PREFIX" >>"$IDS"
   sort -u -o "$IDS" "$IDS"
 }
 
-expect_clean() { run status-clean "$1" "$BIN" --json status; want_rc 0; }
+expect_clean() { run status-clean "$1" "$BIN" --quiet status; want_rc 0; }
 
-pull() { run pull "$1" "$BIN" --json pull; want_rc 0; guard pull "$OUT" "$2" || die "pull conflict expectation"; }
+pull() { run pull "$1" "$BIN" --quiet pull; want_rc 0; guard pull "$OUT" "$2" || die "pull conflict expectation"; }
 
 # verify <label> <vault>: a fresh clone (a separate vault, so nothing the
 # pushing vault remembers) must hold the vault's notes byte for byte.

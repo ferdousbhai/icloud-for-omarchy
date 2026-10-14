@@ -20,7 +20,7 @@ fn engine(runtime: &Path) -> Command {
 
 fn lock_path(runtime: &Path, vault: &Path) -> String {
     let o = engine(runtime)
-        .args(["--json", "vault-info"])
+        .args(["--quiet", "vault-info"])
         .arg(vault)
         .output()
         .unwrap();
@@ -45,13 +45,17 @@ fn hold(path: &str, owner: &str) -> File {
     file
 }
 
+/// The contract error object a machine-mode failure prints: the whole of
+/// stdout (stderr carries no JSON).
 fn json_error(o: &Output) -> Value {
-    let line = String::from_utf8_lossy(&o.stderr)
-        .lines()
-        .last()
-        .unwrap_or_default()
-        .to_owned();
-    serde_json::from_str::<Value>(&line).unwrap_or(Value::Null)["error"].clone()
+    assert!(
+        !String::from_utf8_lossy(&o.stderr).contains("\"ok\""),
+        "an error object on stderr: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let doc = serde_json::from_slice::<Value>(&o.stdout).unwrap_or(Value::Null);
+    assert_eq!(doc["ok"], false, "{doc}");
+    doc["error"].clone()
 }
 
 /// `restore` on a vault that was never cloned: past the lock it fails with
@@ -71,7 +75,7 @@ fn the_lock_path_is_the_apps() {
     // The same vector notes/tests/backend_test.cpp checks NotesBackend::lockPath() against.
     let o = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
         .env("XDG_RUNTIME_DIR", "/run/user/test")
-        .args(["--json", "vault-info", "/nonexistent/icloud-notes-vault"])
+        .args(["--quiet", "vault-info", "/nonexistent/icloud-notes-vault"])
         .output()
         .unwrap();
     let info: Value = serde_json::from_slice(&o.stdout).unwrap();
@@ -81,7 +85,7 @@ fn the_lock_path_is_the_apps() {
     // Without a runtime directory, beside the vault.
     let o = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
         .env_remove("XDG_RUNTIME_DIR")
-        .args(["--json", "vault-info", "/nonexistent/icloud-notes-vault"])
+        .args(["--quiet", "vault-info", "/nonexistent/icloud-notes-vault"])
         .output()
         .unwrap();
     let info: Value = serde_json::from_slice(&o.stdout).unwrap();
@@ -223,7 +227,7 @@ fn vault_info_reports_what_the_app_reads() {
     std::fs::write(vault.join(".icloud-md/base/id-a.md"), "body\n").unwrap();
 
     let o = engine(tmp.path())
-        .args(["--json", "vault-info"])
+        .args(["--quiet", "vault-info"])
         .arg(&vault)
         .output()
         .unwrap();
@@ -244,7 +248,7 @@ fn vault_info_reports_what_the_app_reads() {
 
     // From inside the vault, without naming it.
     let o = engine(tmp.path())
-        .args(["--json", "vault-info"])
+        .args(["--quiet", "vault-info"])
         .current_dir(vault.join(".icloud-md"))
         .output()
         .unwrap();
