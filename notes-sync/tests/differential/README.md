@@ -3,9 +3,10 @@
 End-to-end regression tests for the `icloud-notes-sync` binary. Each
 scenario runs the binary against recorded CloudKit answers (a *cassette*),
 with the clock and randomness pinned, and compares what it did with what an
-earlier run recorded in `expected/<scenario>/`: the exit code, the `--json`
-output, every request sent to CloudKit, the vault on disk and the file
-mtimes that don't depend on when the test ran.
+earlier run recorded in `expected/<scenario>/`: the exit code, the `--quiet`
+output (the bare data, or the contract error object of a failure), every
+request sent to CloudKit, the vault on disk and the file mtimes that don't
+depend on when the test ran.
 
 The expectations are recorded from this crate, so a deliberate behaviour
 change is re-recorded and reviewed like any other code change; no Node or
@@ -51,7 +52,8 @@ cargo test -p icloud-notes-sync --test cli_differential
 one) and rewrites `expected/<name>/` from the run:
 
 - `exit`: the exit code
-- `stdout.json`: the `--json` output, with the run's temp dir replaced by
+- `stdout.json`: the `--quiet` output (the result's data, or the error
+  object `{"ok":false,"error":{…}}` of a failing scenario), with the run's temp dir replaced by
   `@OUT@`
 - `requests.json`: the request log (`{"requests": []}` when nothing was
   sent)

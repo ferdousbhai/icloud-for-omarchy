@@ -1,64 +1,50 @@
-//! `--json` vs human output and error reporting. Originally derived from
-//! icloud-md.
+//! How the CLI reports: the shared product contract of
+//! [`icloud_session::output`] (human text on a terminal, a JSON envelope
+//! when piped, `--quiet` for the bare result, errors as the contract error
+//! object on stdout in machine modes and `error:`/`hint:` on stderr for a
+//! person). This module holds what is notes-sync's own: turning an
+//! [`Error`] into a [`CliError`], usage errors, and where status lines go.
 //!
 //! Every emitter has a `*_to` form writing to explicit streams (tests) and a
 //! plain form writing to stdout/stderr.
 
 use std::io::Write;
 
-use serde::Serialize;
+use icloud_session::output::{CliError, Mode, usage_hint};
+use serde_json::Value;
 
 use super::errors::{EXIT_USAGE, Error};
 
 /// The name errors are reported under.
 pub const TOOL: &str = "icloud-notes-sync";
 
-/// `OutputContext`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct OutputContext {
-    pub json: bool,
+/// A status line ("Fetching changes from iCloud..."): on stdout ahead of the
+/// report for a person, on stderr in a machine mode, so stdout stays one
+/// JSON document.
+pub fn status(mode: Mode, message: &str) {
+    status_to(mode, message, &mut std::io::stdout(), &mut std::io::stderr());
 }
 
-/// `JSON.stringify(value, null, 2)`.
-fn to_json_pretty<T: Serialize>(value: &T) -> String {
-    serde_json::to_string_pretty(value).expect("result serializes")
+pub fn status_to(mode: Mode, message: &str, stdout: &mut dyn Write, stderr: &mut dyn Write) {
+    let _ = if mode.is_machine() {
+        writeln!(stderr, "{message}")
+    } else {
+        writeln!(stdout, "{message}")
+    };
 }
 
-impl OutputContext {
-    /// `emitResult`: JSON on stdout in `--json` mode, else the human
-    /// renderer.
-    pub fn emit_result<T: Serialize>(&self, result: &T, render_human: impl FnOnce(&T)) {
-        self.emit_result_to(result, render_human, &mut std::io::stdout());
-    }
+/// A usage error found after parsing (clap's own are reported by
+/// `icloud_session::output::parse`): code `usage`, exit 2, with the
+/// ``run `icloud-notes-sync --help` `` hint.
+pub fn usage_error(message: impl Into<String>) -> CliError {
+    CliError::new("usage", EXIT_USAGE, message).hint(usage_hint(TOOL))
+}
 
-    pub fn emit_result_to<T: Serialize>(&self, result: &T, render_human: impl FnOnce(&T), stdout: &mut dyn Write) {
-        if self.json {
-            let _ = writeln!(stdout, "{}", to_json_pretty(result));
-        } else {
-            render_human(result);
-        }
-    }
-
-    /// `makeStatusSink`: status lines to stdout for a human, stderr in
-    /// `--json` mode.
-    pub fn status(&self, message: &str) {
-        self.status_to(message, &mut std::io::stdout(), &mut std::io::stderr());
-    }
-
-    pub fn status_to(&self, message: &str, stdout: &mut dyn Write, stderr: &mut dyn Write) {
-        let _ = if self.json {
-            writeln!(stderr, "{message}")
-        } else {
-            writeln!(stdout, "{message}")
-        };
-    }
-
-    /// `emitError`: report on stderr (icloud-session's shared form: with
-    /// `--json` one line, `{"ok":false,"error":{"code","message","hint"?}}`),
-    /// return the exit code.
-    /// A sign-in error says why the account was signed out, when the
-    /// daemon knows.
-    pub fn emit_error(&self, error: &Error) -> u8 {
+/// The error's code, message, hint and exit code. A sign-in error says why
+/// the account was signed out, when icloud-sessiond knows (one D-Bus round
+/// trip).
+impl From<&Error> for CliError {
+    fn from(error: &Error) -> CliError {
         let message = match error {
             Error::SignInRequired => match icloud_session::status().ok().filter(|s| !s.signed_in) {
                 Some(status) => status.sign_in_prompt(&error.to_string()),
@@ -66,19 +52,29 @@ impl OutputContext {
             },
             _ => error.to_string(),
         };
-        icloud_session::cli::report(
-            TOOL,
-            self.json,
-            &error.code(),
-            error.exit_code(),
-            &message,
-            error.hint().as_deref(),
-        )
+        let cli = CliError::new(&error.code(), error.exit_code(), message);
+        match error.hint() {
+            Some(hint) => cli.hint(hint),
+            None => cli,
+        }
     }
+}
 
-    /// A usage error found after parsing (clap's own go through
-    /// `icloud_session::cli::parse`). Always exit 2.
-    pub fn emit_usage_error(&self, message: &str) -> u8 {
-        icloud_session::cli::report(TOOL, self.json, "usage", EXIT_USAGE, message, None)
+impl From<Error> for CliError {
+    fn from(error: Error) -> CliError {
+        CliError::from(&error)
     }
+}
+
+/// The contract error object's inner part, `{"code","message","hint"?}`, as
+/// a value inside a result (each failed `sync` half carries one).
+pub fn error_json(error: &CliError) -> Value {
+    let mut object = serde_json::json!({
+        "code": error.code,
+        "message": error.message,
+    });
+    if let Some(hint) = &error.hint {
+        object["hint"] = hint.as_str().into();
+    }
+    object
 }

@@ -23,7 +23,8 @@
 //!
 //! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
 //! `name()` is the error's class name; `code()` is the
-//! machine-readable `error.code` of the `--json` error object.
+//! machine-readable `error.code` of the contract error object
+//! (`cmd::output` turns an `Error` into icloud-session's `CliError`).
 
 use crate::cloudkit::CkError;
 use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
@@ -143,7 +144,7 @@ impl Error {
         }
     }
 
-    /// The `--json` `error` field.
+    /// The error's class name (icloud-md's), from which [`Error::code`] is made.
     pub fn name(&self) -> &'static str {
         match self {
             Error::UntrackedFile { .. } => "UntrackedFileError",
@@ -180,21 +181,7 @@ impl Error {
         matches!(self, Error::CloudKit(CkError::Network(_) | CkError::Offline(_)))
     }
 
-    /// The shared product error object (inside each `sync` half):
-    /// `{"code","message","hint"?}`. The exit code rides the process, and
-    /// inside `sync` the half's own `exit_code` field.
-    pub fn to_json(&self) -> serde_json::Value {
-        let mut error = serde_json::json!({
-            "code": self.code(),
-            "message": self.to_string(),
-        });
-        if let Some(hint) = self.hint() {
-            error["hint"] = hint.into();
-        }
-        error
-    }
-
-    /// The `--json` error object's `code`: the class name in snake case
+    /// The contract error object's `code`: the class name in snake case
     /// without its `Error` suffix (`UntrackedFileError` → `untracked_file`),
     /// so `sign_in_required`, `usage` and `internal` read as in the other
     /// iCloud tools.
@@ -246,10 +233,7 @@ impl Error {
             Error::VersionContentUnavailable(_) => {
                 Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
             }
-            Error::SignInRequired => Some(
-                "Sign in to iCloud again with icloud-session, then retry."
-                    .into(),
-            ),
+            Error::SignInRequired => Some("Run `icloud-session sign-in` to sign in to iCloud again, then retry.".into()),
             Error::VaultBusy { app: true, .. } => Some(
                 "Notes syncs this vault itself while it is open. Quit it and retry, or pass --wait SECS to wait for it to close."
                     .into(),

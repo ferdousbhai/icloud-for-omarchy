@@ -1,6 +1,6 @@
 //! Every refused/conflict plan entry the engine's push can produce, with the
-//! exact `reason` string each one puts in `status --json` / `push --dry-run
-//! --json`, and the folder refusals behind moves and creates. Every such
+//! exact `reason` string each one puts in `status` / `push --dry-run`
+//! JSON data, and the folder refusals behind moves and creates. Every such
 //! entry is built from `cmd::plan::Refusal`, so this table is the checklist
 //! of them all: `every_refusal_variant_is_listed` fails to compile when a
 //! variant is added without a row here.

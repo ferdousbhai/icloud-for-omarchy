@@ -39,7 +39,7 @@ pub enum NoticeLevel {
     Warn,
 }
 
-/// `SyncProgress`: progress callbacks for clone/pull (`--json` renders them
+/// `SyncProgress`: progress callbacks for clone/pull (a machine mode renders them
 /// as `icloud-notes:progress:...` lines on stderr).
 pub trait SyncProgress {
     fn on_fetch_start(&mut self) {}

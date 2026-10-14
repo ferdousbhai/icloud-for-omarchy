@@ -258,17 +258,21 @@ public:
     // arrive on their own); keeps the day count current in an app left open.
     Q_INVOKABLE void refreshSignIn();
 
-    // Runs of pull and push pass --json to icloud-notes-sync, so its result
-    // is in lastOutput() (the command line's --json). runSync always does.
+    // Runs of pull and push pass --quiet to icloud-notes-sync, so its result
+    // (the bare JSON data) is in lastOutput() (the command line's --json);
+    // without it they pass --styled, for its text report. runSync, the push
+    // preview and history always pass --quiet.
     void setToolJson(bool json) { m_toolJson = json; }
     // The last icloud-notes-sync run's exit code and stdout, as they were
     // when syncFinished was emitted for it: for a half of runSync, that
-    // half's exit code and JSON result, or {"error": {code, message, ...}}.
+    // half's exit code and JSON result; for a failed run (or half) that
+    // said why, {"error": {code, message, hint?}}.
     int lastExitCode() const { return m_lastExit; }
     QByteArray lastOutput() const { return m_captured; }
     // The engine's error {code, message, hint?} for that run when it failed:
-    // from its result, else its stderr's contract error line. Empty when it
-    // worked or said nothing.
+    // the error object on its stdout (or in its half), else a contract error
+    // line on its stderr. Empty when it worked or said nothing (a --styled
+    // run's error is text).
     QJsonObject lastError() const { return m_lastError; }
 
 signals:
@@ -307,9 +311,10 @@ signals:
 
 private:
     static inline QString s_vaultNotice;
-    // Sync: runSync's `--json sync`, whose stdout holds both halves.
+    // Sync: runSync's `--quiet sync`, whose stdout holds both halves.
     enum class Mode { Plain, Preview, History, Diff, Sync };
 
+    QString toolOutputFlag() const;
     QString folderAbsolutePath(const QString &folder) const;
     QString noteAbsolutePath() const;
     QString vaultRelative(const QString &name) const;
@@ -462,7 +467,7 @@ private:
     // Runs while someone else holds the lock: a sync asked for meanwhile
     // starts once it is free, never before.
     QTimer m_lockRetry;
-    QByteArray m_captured; // the run's stdout: its --json result, or diff text
+    QByteArray m_captured; // the run's stdout: its --quiet result or error object, or text
     QByteArray m_capturedErr; // its stderr: progress, warnings, errors
     const double m_uiScale;
     QVariantMap m_theme;

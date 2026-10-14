@@ -98,13 +98,16 @@ keeps its conflict backups in `stateDir`.
 `sync` (`src/cmd/sync.rs`) is push then pull in one run, over one connection
 (`remote::SharedConnector`), under one lock: what the app runs on every tick.
 The pull runs whatever the push did, except after a sign-in required or a
-network error. Its `--json` holds both results plus vault-info's answer.
+network error. Its data holds both results plus vault-info's answer, a
+failed half's error included (no separate error object); the process exits
+with the worse half (`Response::exit`).
 icloud-session's `Offline` and `Network` errors are the errors `offline` and
 `network`, its `Service` and `KeyringUnavailable` the errors `session_service`
 and `keyring_unavailable` (all exit 5, with a hint) rather than `internal`
 (exit 1). The run exits 3 if either half did, else the higher half's code.
 
-With `--json`, progress goes to stderr as `icloud-notes:progress:...` lines
+In a machine mode (`--json`, `--quiet`, piped), progress goes to stderr as
+`icloud-notes:progress:...` lines
 (`fetch:N`, `process-start:N`, `process:I/N`, `process-done`). Engines
 before layout 4 said `icloud-md:progress:...`; the app accepts both.
 

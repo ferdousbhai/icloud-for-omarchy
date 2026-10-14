@@ -95,7 +95,7 @@ fn push_trashes_a_deleted_note_that_changed_remotely() {
     let vault = vault_with_note_deleted(&out);
     let cassette = push_delete_cassette(&out, "26a");
 
-    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(&out, &cassette, &["--quiet", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     let entries = stdout["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{stdout}");
@@ -119,7 +119,7 @@ fn pull_leaves_a_deleted_note_deleted_and_the_next_push_trashes_it() {
     let (code, stdout, stderr) = run(
         &out,
         &differential().join("cassettes/tiny-pull-update.json"),
-        &["--json", "pull", vault.to_str().unwrap()],
+        &["--quiet", "pull", vault.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert!(!vault.join(FILE).exists(), "the file stays deleted");
@@ -138,7 +138,7 @@ fn pull_leaves_a_deleted_note_deleted_and_the_next_push_trashes_it() {
 
     // The deletion is still pending, and goes up on the next push.
     let cassette = push_delete_cassette(&out, "26a");
-    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(&out, &cassette, &["--quiet", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["kind"], "delete", "{stdout}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
@@ -160,7 +160,7 @@ fn pull_merges_a_remote_edit_into_a_renamed_file_and_the_move_still_pairs() {
     let (code, stdout, stderr) = run(
         &out,
         &differential().join("cassettes/tiny-pull-update.json"),
-        &["--json", "pull", vault.to_str().unwrap()],
+        &["--quiet", "pull", vault.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert!(!vault.join(FILE).exists(), "the old name isn't written back");
@@ -182,7 +182,7 @@ fn pull_merges_a_remote_edit_into_a_renamed_file_and_the_move_still_pairs() {
     let (code, stdout, stderr) = run(
         &out,
         &cassette,
-        &["--json", "push", "--dry-run", vault.to_str().unwrap()],
+        &["--quiet", "push", "--dry-run", vault.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     let entries = stdout["entries"].as_array().unwrap();
@@ -208,7 +208,7 @@ fn pull_never_overwrites_an_untracked_file_with_the_same_name() {
     let (code, stdout, stderr) = run(
         &out,
         &differential().join("cassettes/bodyless-pull.json"),
-        &["--json", "pull", vault.to_str().unwrap()],
+        &["--quiet", "pull", vault.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["added"], 1, "{stdout}");
@@ -232,7 +232,7 @@ fn a_note_at_the_top_level_is_created_in_the_default_folder() {
     let (code, stdout, stderr) = run(
         &out,
         &differential().join("cassettes/tiny-push-create.json"),
-        &["--json", "push", vault.to_str().unwrap()],
+        &["--quiet", "push", vault.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["kind"], "create", "{stdout}");
@@ -268,7 +268,7 @@ fn emptying_a_note_moves_it_to_recently_deleted() {
     std::fs::write(vault.join(FILE), format!("---\napple-note-id: {RECORD}\n---\n")).unwrap();
 
     let cassette = push_delete_cassette(&out, "25q");
-    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(&out, &cassette, &["--quiet", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["kind"], "delete", "{stdout}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
@@ -307,7 +307,7 @@ fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
     let (code, stdout, stderr) = run(
         &out,
         &cassette,
-        &["--json", "push", "--dry-run", vault.to_str().unwrap()],
+        &["--quiet", "push", "--dry-run", vault.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
@@ -317,7 +317,7 @@ fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
         "a preview writes nothing"
     );
 
-    let (code, stdout, stderr) = run(&out, &cassette, &["--json", "push", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(&out, &cassette, &["--quiet", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["kind"], "update", "{stdout}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
@@ -355,7 +355,7 @@ fn a_rename_with_an_edit_goes_up_in_one_push() {
     // A rename within its folder changes nothing in iCloud: the one write is
     // the edit (tiny-push's answers, tag 26b).
     let path = differential().join("cassettes/tiny-push.json");
-    let (code, stdout, stderr) = run(&out, &path, &["--json", "push", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(&out, &path, &["--quiet", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"].as_array().unwrap().len(), 1, "{stdout}");
     assert_eq!(stdout["entries"][0]["kind"], "move", "{stdout}");
@@ -414,7 +414,7 @@ fn several_deletes_go_up_in_one_request() {
     let path = out.join("cassette.json");
     std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
 
-    let (code, stdout, stderr) = run(&out, &path, &["--json", "push", vault.to_str().unwrap()]);
+    let (code, stdout, stderr) = run(&out, &path, &["--quiet", "push", vault.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     let entries = stdout["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2, "{stdout}");
@@ -438,7 +438,7 @@ fn several_deletes_go_up_in_one_request() {
     assert!(after["notes"].get(RECORD).is_none() && after["notes"].get(other).is_none());
 }
 
-/// The push summary names folder changes apart from notes.
+/// The push report (text mode) names folder changes apart from notes.
 #[test]
 fn the_push_summary_counts_folder_changes_apart_from_notes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -448,7 +448,7 @@ fn the_push_summary_counts_folder_changes_apart_from_notes() {
     std::fs::create_dir(vault.join("Ideas")).unwrap();
     std::fs::create_dir_all(out.join("home")).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
-        .args(["push", vault.to_str().unwrap()])
+        .args(["--styled", "push", vault.to_str().unwrap()])
         .env("HOME", out.join("home"))
         .env("XDG_RUNTIME_DIR", out.join("home"))
         .env(
