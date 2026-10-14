@@ -1,1 +1,2 @@
+# Shared by every product repository: one style, so code moves between them unchanged.
 max_width = 120
