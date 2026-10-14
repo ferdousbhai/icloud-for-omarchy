@@ -31,7 +31,7 @@ prepare() {
 }
 
 _cargo_env() {
-  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}"  # absolute: notes/bin/test runs from tests/
   export RUSTFLAGS="$_rustflags --remap-path-prefix=$_root=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
 }
 
@@ -53,7 +53,7 @@ _package_gtk_app() {
   local app=${pkgname#icloud-} desktop=com.ferdousbhai.$1 binary
   cd "$srcdir/icloud-for-omarchy"
   for binary in "$pkgname" "$pkgname-app"; do
-    install -Dm755 "${CARGO_TARGET_DIR:-target}/release/$binary" "$pkgdir/usr/bin/$binary"
+    install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/$binary" "$pkgdir/usr/bin/$binary"
   done
   install -Dm644 "$app/data/$desktop.desktop" "$pkgdir/usr/share/applications/$desktop.desktop"
   install -Dm644 "$app/data/$desktop.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$desktop.svg"
@@ -68,7 +68,7 @@ package_icloud-session() {
   cd "$srcdir/icloud-for-omarchy"
   local bin
   for bin in icloud-sessiond icloud-session-signin; do
-    install -Dm755 "${CARGO_TARGET_DIR:-target}/release/$bin" "$pkgdir/usr/bin/$bin"
+    install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/$bin" "$pkgdir/usr/bin/$bin"
   done
   # One executable: run as icloud-session it is the CLI.
   ln -s icloud-sessiond "$pkgdir/usr/bin/icloud-session"
@@ -103,7 +103,7 @@ package_icloud-notes() {
   conflicts=('icloud-notes-sync')
   cd "$srcdir/icloud-for-omarchy"
   # The engine, run by the app and by `icloud-notes`; not a command of its own.
-  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/icloud-notes-sync" "$pkgdir/usr/lib/icloud-notes/icloud-notes-sync"
+  install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/icloud-notes-sync" "$pkgdir/usr/lib/icloud-notes/icloud-notes-sync"
   install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
   cd notes
   install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
