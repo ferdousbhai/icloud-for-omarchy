@@ -242,11 +242,25 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
 ```
 
 - Every command takes `--json`: the result as JSON on stdout, an error as
-  one JSON line on stderr, `{"error":{"code","message","exit_code","hint"}}`.
-- Exit codes: 0 ok, 1 error, 2 sign-in required (`icloud-session
-  sign-in`), 3 `push --dry-run` has changes or `diff` found differences,
-  64 usage: the table every iCloud tool shares
-  ([docs/CLI.md](../docs/CLI.md)).
+  one JSON line on stderr, `{"ok":false,"error":{"code","message","hint"?}}`
+  (`hint`, when present, is the command that fixes it). Parse it as JSON:
+  key order is not part of the contract (icloud-notes prints `ok` last).
+- Exit codes, the table every iCloud tool shares
+  ([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells cases apart:
+  - 0 ok. `status`, `push --dry-run` and `diff` report their changes in
+    the result and exit 0.
+  - 1 any other failure (`guardrail`, `read_only`, `vault_busy`,
+    `cancelled`, `sync_failed`, ...).
+  - 2 invalid usage or request: `usage`, `ambiguous`, `exists`,
+    `already_cloned`, `choices_mismatch`, a destructive command without
+    `--yes`.
+  - 3 not signed in (`sign_in_required`: `icloud-session sign-in`) or
+    nothing cloned (`not_cloned`).
+  - 4 not found (`not_found`).
+  - 5 unavailable: `offline`/`network`, `session_unavailable`
+    (icloud-session unreachable), `sync_tool_missing`.
+  - `push --dry-run`, `history`, `diff` and `restore` are the engine
+    itself, so its exit codes and error codes come through unchanged.
 - Commands that change the vault or sync take the vault's lock first, as
   the window and the background sync do. While the window is open it holds
   that lock, so they are refused at once (`vault_busy`): make the change in

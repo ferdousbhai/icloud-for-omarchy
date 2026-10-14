@@ -710,9 +710,63 @@ int main(int argc, char *argv[])
         check(log.count(QStringLiteral("could not be reached")) == 1 && !log.contains(QStringLiteral("failed"))
                   && !log.contains(QStringLiteral("stub pull ok")),
               "seam offline logs one line and pulls nothing");
+        // The engine's error line (here with its keys sorted, `ok` last) is
+        // parsed, never matched by prefix: it stays out of the log.
+        check(!log.contains(QStringLiteral("\"ok\":false")) && !log.contains(QStringLiteral("{\"error\"")),
+              "seam offline keeps the engine's JSON error line out of the log");
         b.runSync();
         waitForIdle(b);
         check(b.syncMessage() == QStringLiteral("Pull done."), "seam the next sync after offline goes through");
+    }
+    {
+        // A standalone --json pull finds no network: its code is only on the
+        // stderr error line (sorted keys), and it is still a quiet skip.
+        b.setToolJson(true);
+        qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
+        b.runPull();
+        waitForSync(b);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
+        b.setToolJson(false);
+        check(b.syncMessage() == QStringLiteral("Offline. Notes syncs again once iCloud can be reached.") && !b.authExpired()
+                  && b.lastExitCode() == 5 && b.lastError().value(QStringLiteral("code")).toString() == QStringLiteral("offline"),
+              "seam --json pull offline: the code from the stderr error line, a quiet skip");
+    }
+    {
+        // Exit 3 is not only a sign-in: a vault the engine cannot use (not
+        // cloned here, another account's) exits 3 too. Only the code
+        // `sign_in_required` pauses and reports; anything else is a failure,
+        // both halves of it.
+        fake.reportCalls = 0;
+        b.clearLog();
+        QStringList runs;
+        const auto c = QObject::connect(&b, &NotesBackend::syncFinished, &b,
+                                        [&](const QString &label, bool ok) { runs << label + (ok ? u'+' : u'-'); });
+        qputenv("ICLOUD_NOTES_SYNC_STUB_EXIT", "3");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "not_cloned_directory");
+        b.runSync();
+        waitForIdle(b);
+        QObject::disconnect(c);
+        waitUntil([] { return false; }, 300); // a report would have gone out by now
+        const QString log = b.syncLog();
+        check(!b.authExpired() && fake.reportCalls == 0 && b.syncMessage() == QStringLiteral("Pull failed. See log.")
+                  && runs == QStringList{ QStringLiteral("Push-"), QStringLiteral("Pull-") },
+              "seam exit 3 with not_cloned_directory is a failure, not a sign-in");
+        check(log.contains(QStringLiteral("stub: failing with not_cloned_directory")) && log.contains(QStringLiteral("(exit 3)"))
+                  && !log.contains(QStringLiteral("\"ok\":false")) && !log.contains(QStringLiteral("{\"error\"")),
+              "seam the engine's JSON error line never leaks into the sync log");
+        // Exit 2 (a usage error) is no sign-in either.
+        qputenv("ICLOUD_NOTES_SYNC_STUB_EXIT", "2");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "usage");
+        b.runSync();
+        waitForIdle(b);
+        waitUntil([] { return false; }, 300);
+        check(!b.authExpired() && fake.reportCalls == 0 && b.syncMessage() == QStringLiteral("Pull failed. See log."),
+              "seam exit 2 is not a sign-in");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXIT");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_ERROR");
+        b.runSync();
+        waitForIdle(b);
+        check(b.syncMessage() == QStringLiteral("Pull done."), "seam the next sync after a failure goes through");
     }
 
     // A save (Ctrl+S, leaving the note) while a pull runs writes nothing
@@ -829,9 +883,10 @@ int main(int argc, char *argv[])
     fake.stillSignedIn = false;
     fake.reportCalls = 0;
 
-    // A sign-in required is exit 3, whatever the text says: exit 3 alone
-    // pauses syncing and reports it. Any other failure, even one naming
-    // icloud-md's `reauthenticate` (with exit 1), is only a failure.
+    // A sign-in required is the code `sign_in_required`, whatever the text
+    // says; exit 3 counts only when no code came through at all (a run
+    // without --json). Any other failure, even one naming icloud-md's
+    // `reauthenticate` (with exit 1), is only a failure.
     {
         fake.reportCalls = 0;
         qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", "code");
@@ -842,7 +897,7 @@ int main(int argc, char *argv[])
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
         check(b.authExpired() && waitUntil([&] { return fake.reportCalls == 1; })
                   && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
-              "seam exit 3 alone pauses and reports");
+              "seam exit 3 with no error code pauses and reports");
         fake.set({ { QStringLiteral("SigningIn"), true } });
         waitUntil([&] { return b.signingIn(); });
         fake.set({ { QStringLiteral("SigningIn"), false } });
@@ -881,6 +936,23 @@ int main(int argc, char *argv[])
     check(!b.syncRunning() && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
           "seam expired push does not report a failure or pull");
     check(!b.syncLog().contains(QStringLiteral("reauthenticate\n")), "seam never runs a reauthenticate of its own");
+    {
+        // A sync that gave no answer, only the stderr error line: its code
+        // `sign_in_required` skips the pull as a refused push half does.
+        QStringList runs;
+        const auto c = QObject::connect(&b, &NotesBackend::syncFinished, &b,
+                                        [&](const QString &label, bool ok) { runs << label + (ok ? u'+' : u'-'); });
+        qputenv("ICLOUD_NOTES_SYNC_STUB_EXIT", "3");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "sign_in_required");
+        b.runSync();
+        waitForSync(b);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXIT");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_ERROR");
+        QObject::disconnect(c);
+        check(runs == QStringList{ QStringLiteral("Push-") } && b.authExpired()
+                  && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
+              "seam sign_in_required on stderr alone skips the pull and pauses");
+    }
     // The daemon confirms with Apple and signs out.
     fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("AppleId"), QString() },
                { QStringLiteral("Dsid"), QString() }, { QStringLiteral("ExpiresAt"), QVariant::fromValue<qulonglong>(0) } });

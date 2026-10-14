@@ -279,10 +279,10 @@ int main(int argc, char *argv[])
                          == g_vault + QStringLiteral("/Work/attachments/pic.png"),
               "cli read lists attachments with their paths");
         const Run missing = cliJson({ QStringLiteral("read"), QStringLiteral("nothing like it") });
-        check(missing.code == 1 && missing.errorCode() == QStringLiteral("not_found") && missing.out.isEmpty(),
-              "cli read unknown note: not_found");
+        check(missing.code == 4 && missing.errorCode() == QStringLiteral("not_found") && missing.out.isEmpty(),
+              "cli read unknown note: not_found, exit 4");
         const Run twin = cliJson({ QStringLiteral("read"), QStringLiteral("same title") });
-        check(twin.code == 1 && twin.errorCode() == QStringLiteral("ambiguous")
+        check(twin.code == 2 && twin.errorCode() == QStringLiteral("ambiguous")
                   && twin.error().value(QStringLiteral("message")).toString().contains(QStringLiteral("Notes/Twin.md")),
               "cli read ambiguous title lists the paths");
         check(cli({ QStringLiteral("read"), QStringLiteral("Notes/Twin.md") }).code == 0, "cli a path settles it");
@@ -304,13 +304,12 @@ int main(int argc, char *argv[])
                   && readFile(QStringLiteral("Notes/Groceries.md")) == QStringLiteral("# Groceries\nbread\ncheese\n"),
               "cli new goes to the default folder, title first, then the body");
         const Run again = cliJson({ QStringLiteral("new"), QStringLiteral("Groceries") });
-        check(again.code == 1 && again.errorCode() == QStringLiteral("exists"), "cli new refuses an existing note");
+        check(again.code == 2 && again.errorCode() == QStringLiteral("exists"), "cli new refuses an existing note, exit 2");
         check(cli({ QStringLiteral("new"), QStringLiteral("Root note"), QStringLiteral("--folder"), QString() }).code == 0
                   && readFile(QStringLiteral("Root note.md")) == QStringLiteral("# Root note\n"),
               "cli new --folder \"\" is the vault root");
-        check(cliJson({ QStringLiteral("new"), QStringLiteral("X"), QStringLiteral("--folder"), QStringLiteral("Nope") }).errorCode()
-                  == QStringLiteral("not_found"),
-              "cli new into a missing folder: not_found");
+        const Run noFolder = cliJson({ QStringLiteral("new"), QStringLiteral("X"), QStringLiteral("--folder"), QStringLiteral("Nope") });
+        check(noFolder.code == 4 && noFolder.errorCode() == QStringLiteral("not_found"), "cli new into a missing folder: not_found, exit 4");
         {
             QProcess p;
             p.setProgram(QCoreApplication::applicationFilePath());
@@ -440,8 +439,8 @@ int main(int argc, char *argv[])
                       == QStringLiteral("Work/Archive")
                   && QDir(g_vault + QStringLiteral("/Work/Archive")).exists(),
               "cli new-folder --in");
-        check(cliJson({ QStringLiteral("new-folder"), QStringLiteral("Work") }).errorCode() == QStringLiteral("exists"),
-              "cli new-folder refuses an existing one");
+        const Run twinFolder = cliJson({ QStringLiteral("new-folder"), QStringLiteral("Work") });
+        check(twinFolder.code == 2 && twinFolder.errorCode() == QStringLiteral("exists"), "cli new-folder refuses an existing one, exit 2");
         const Run rf = cliJson({ QStringLiteral("rename-folder"), QStringLiteral("Work/Archive"), QStringLiteral("Old") });
         check(rf.code == 0 && QDir(g_vault + QStringLiteral("/Work/Old")).exists()
                   && rf.json().toObject().value(QStringLiteral("folder")).toString() == QStringLiteral("Work/Old"),
@@ -500,9 +499,14 @@ int main(int argc, char *argv[])
                   && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --json sync"))
                   && stubLog() == QStringList{ QStringLiteral("sync") },
               "cli sync: push, then pull, in one engine run, each half with icloud-notes-sync's JSON");
-        // No network: the engine's offline error, exit 1.
+        // No network: the engine's offline error, exit 5.
         const Run offline = cliJson({ QStringLiteral("sync") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
-        check(offline.code == 1 && offline.errorCode() == QStringLiteral("offline"), "cli sync offline: error offline, exit 1");
+        check(offline.code == 5 && offline.errorCode() == QStringLiteral("offline"), "cli sync offline: error offline, exit 5");
+        // A standalone pull says so only on the engine's stderr error line.
+        const Run offlinePull =
+            cliJson({ QStringLiteral("pull") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
+        check(offlinePull.code == 5 && offlinePull.errorCode() == QStringLiteral("offline"),
+              "cli pull offline: error offline, exit 5");
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
         check(cli({ QStringLiteral("pull") }).code == 0 && stubLog() == QStringList{ QStringLiteral("pull") }, "cli pull");
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
@@ -517,6 +521,18 @@ int main(int argc, char *argv[])
                   .out.contains("r1  2026-09-01T00:00:00Z  Notes/Alpha.md"),
               "cli history --records passes --records through");
         check(cli({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") }).code == 0, "cli diff exit 0");
+        // diff is the engine itself (exec): its exit code is this tool's.
+        for (const int code : { 3, 4, 5 }) {
+            const Run d = cliJson({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") },
+                                  { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXIT"), QString::number(code) },
+                                    { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ERROR"), QStringLiteral("some_code") } });
+            check(d.code == code && d.errorCode() == QStringLiteral("some_code"),
+                  qPrintable(QStringLiteral("cli diff passes the engine's exit %1 through").arg(code)));
+        }
+        const Run noEngine = cliJson({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") },
+                                     { { QStringLiteral("ICLOUD_NOTES_SYNC_BIN"), g_scratch + QStringLiteral("/no-engine") } });
+        check(noEngine.code == 5 && noEngine.errorCode() == QStringLiteral("sync_tool_missing"),
+              "cli without the engine: sync_tool_missing, exit 5");
         check(cli({ QStringLiteral("restore"), QStringLiteral("alpha") }).code == 2
                   && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("restored")),
               "cli restore asks for --yes");
@@ -564,10 +580,10 @@ int main(int argc, char *argv[])
         check(cloned.code == 0 && QFile::exists(fresh + QStringLiteral("/Notes/Cloned.md"))
                   && cloned.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral("clone --account 1006081438")),
               "cli clone the signed-in account by dsid");
-        check(cliJson({ QStringLiteral("--vault"), fresh, QStringLiteral("clone") }).errorCode() == QStringLiteral("already_cloned"),
-              "cli clone refuses a cloned vault");
+        const Run twice = cliJson({ QStringLiteral("--vault"), fresh, QStringLiteral("clone") });
+        check(twice.code == 2 && twice.errorCode() == QStringLiteral("already_cloned"), "cli clone refuses a cloned vault, exit 2");
         const Run nothing = cliJson({ QStringLiteral("--vault"), g_scratch + QStringLiteral("/none"), QStringLiteral("list") });
-        check(nothing.code == 1 && nothing.errorCode() == QStringLiteral("not_cloned"), "cli list without a vault: not_cloned");
+        check(nothing.code == 3 && nothing.errorCode() == QStringLiteral("not_cloned"), "cli list without a vault: not_cloned, exit 3");
     }
 
     // ---- export-pdf (a GUI application, offscreen) -----------------------------
