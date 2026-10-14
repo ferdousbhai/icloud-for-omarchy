@@ -516,11 +516,13 @@ mod tests {
 
     #[test]
     fn envelope_is_ok_data_summary_meta_in_order() {
-        let r = Response::new(json!({ "z": 1, "a": 2 }), "2 things").meta("locate", true);
+        // One key in `data`: the order inside it follows serde_json's map
+        // (preserve_order is feature-unified); the envelope's own order is fixed.
+        let r = Response::new(json!({ "z": 1 }), "2 things").meta("locate", true);
         let s = compact(&r.envelope());
         assert_eq!(
             s,
-            r#"{"ok":true,"data":{"a":2,"z":1},"summary":"2 things","meta":{"locate":true}}"#
+            r#"{"ok":true,"data":{"z":1},"summary":"2 things","meta":{"locate":true}}"#
         );
         let s = compact(&Response::new(json!([]), "x").envelope());
         assert_eq!(s, r#"{"ok":true,"data":[],"summary":"x"}"#);

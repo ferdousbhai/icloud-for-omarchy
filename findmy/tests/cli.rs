@@ -598,7 +598,10 @@ fn errors_go_where_the_mode_says() {
         assert_eq!(code(&out), 4, "{args:?}");
         assert!(out.stderr.is_empty(), "{args:?}: {}", stderr(&out));
         let err = envelope(&out.stdout);
-        let keys: Vec<&String> = err.as_object().unwrap().keys().collect();
+        // Parsed map order depends on serde_json's preserve_order (feature
+        // unification); the byte check below pins `ok` first.
+        let mut keys: Vec<&String> = err.as_object().unwrap().keys().collect();
+        keys.sort();
         assert_eq!(keys, ["error", "ok"]);
         let mut fields: Vec<&String> = err["error"].as_object().unwrap().keys().collect();
         fields.sort();
