@@ -90,28 +90,44 @@ window, when given no arguments; the desktop entry starts
 | `download ID... \| --all [--medium] [--out DIR]` | originals (plus a Live Photo's video) into the library folder, or under `DIR`; `--medium` fetches the viewer's preview instead; prints the saved paths |
 | `open ID [--medium]` | the viewer's Open: downloads the original if needed (or fetches the preview) and opens it in the default app (`xdg-open`) |
 | `upload FILE... [--album ID] [--no-sync]` | uploads, progress on stderr, prints the new ids, then syncs until they are in the catalog |
-| `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal, refuses without `--yes` otherwise |
+| `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal (text mode), refuses without `--yes` otherwise |
 | `prune-cache` | drops cached previews of deleted items, trims the preview cache |
 | `sign-in` | opens the iCloud sign-in window |
 | `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
 
-- `--json` prints JSON on stdout, and an error as one JSON line on stderr,
-  `{"ok":false,"error":{"code":"not_found","message":…,"hint":…}}` (`hint`,
-  a remediation such as "run `icloud-session sign-in`", only when there is
-  one). Codes: `usage`, `not_found`, `cancelled`, `sign_in_required`,
-  `service_not_offered` (iCloud Photos not enabled for the Apple ID),
-  `offline`, `network`, `session_service` (icloud-sessiond unreachable),
-  `keyring_unavailable`, `bad_response`, `http`, `error`. Otherwise output is
-  plain text, tab-separated for lists, and an error is `icloud-photos:
-  message` with the hint on the next line. Every command has `--help`.
+- Output follows the shared contract of every iCloud tool: human-readable
+  text on a terminal (tab-separated for lists), and a JSON envelope when
+  stdout is piped, `{"ok":true,"data":…,"summary":"…"}`. `--json` forces the
+  envelope, `--styled` text, `--quiet` prints only `data`, `--ids-only` one id
+  per line (album ids for `albums`; item ids for `list`, `info`, `thumb`,
+  `open`; the items that succeeded for `download` and `delete`; the new asset
+  ids for `upload`), `--count` the number of results (`list`, `albums`, the
+  ids above, files removed for `prune-cache`). The flags may be combined;
+  the strongest wins: ids-only > count > quiet > json > styled. Every command
+  has `--help`.
+- Errors: in a machine mode (piped, `--json`, `--quiet`, `--ids-only`,
+  `--count`) one JSON document on **stdout**,
+  `{"ok":false,"error":{"code":"not_found","message":…,"hint":…}}`, and
+  nothing on stderr; in text mode `error: …` and `hint: …` lines on stderr.
+  `hint`, a remediation such as "run `icloud-session sign-in`", is there
+  only when there is one. Codes: `usage`, `not_found`, `cancelled`,
+  `sign_in_required`, `service_not_offered` (iCloud Photos not enabled for
+  the Apple ID), `offline`, `network`, `session_service` (icloud-sessiond
+  unreachable), `keyring_unavailable`, `bad_response`, `http`, `error`.
+- Progress (a sync on a terminal in text mode, upload steps) goes to
+  stderr. `download`, `delete` and `upload` report every item: in text mode
+  each saved path or deleted id is printed as it finishes and failures go to
+  stderr; in a machine mode the data lists each item, a failed one with its
+  `error`, and the command exits 1 if any failed.
 - Exit codes, as in every iCloud tool ([docs/CLI.md](../docs/CLI.md)):
   0 ok; 1 error (also `cancelled`, an HTTP 4xx, or some items of a
   `download`/`upload`/`delete` failed); 2 usage, or `delete` without `--yes`
-  off a terminal; 3 not signed in (`status` also exits 3 when signed out),
-  iCloud Photos not offered for the account, or Apple refusing the session
-  (HTTP 401/421) while the daemon says signed in; 4 not found; 5 a service
-  unavailable: offline, network, icloud-sessiond, keyring, bad response or
-  an Apple 5xx.
+  when nobody can be asked (it asks only in text mode with stdin and stdout
+  a terminal); 3 not signed in (`status` also exits 3 when signed out, with
+  its data), iCloud Photos not offered for the account, or Apple refusing
+  the session (HTTP 401/421) while the daemon says signed in; 4 not found;
+  5 a service unavailable: offline, network, icloud-sessiond, keyring, bad
+  response or an Apple 5xx.
 - `--data-dir DIR` keeps the catalog, cache, preferences and library all
   under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`), so a
   test run never touches your own.
@@ -203,7 +219,7 @@ your own files:
 ```bash
 export ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=http://127.0.0.1:8765
 cargo run -- --data-dir /tmp/photos-dev sync
-cargo run -- --data-dir /tmp/photos-dev --json list --limit 3
+cargo run -- --data-dir /tmp/photos-dev list --limit 3 --quiet
 ```
 
 `ICLOUD_SESSION_MOCK=1` is icloud-session's mock mode: no D-Bus, and every

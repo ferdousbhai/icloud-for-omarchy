@@ -25,9 +25,20 @@ struct Run {
 }
 
 impl Run {
-    fn json(&self) -> Value {
+    /// stdout as one JSON document (an envelope, an error object, or the
+    /// bare data with `--quiet`).
+    fn doc(&self) -> Value {
         serde_json::from_str(&self.stdout)
             .unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{}\nstderr:\n{}", self.stdout, self.stderr))
+    }
+
+    /// The `data` of the `{"ok":true,"data","summary"}` envelope on stdout
+    /// (whatever the exit code: a batch reports its items and exits 1).
+    fn json(&self) -> Value {
+        let v = self.doc();
+        assert_eq!(v["ok"], true, "not a success envelope: {v}\nstderr:\n{}", self.stderr);
+        assert!(v["summary"].is_string(), "{v}");
+        v["data"].clone()
     }
 }
 
@@ -86,7 +97,14 @@ impl Env {
         self.bare(&all)
     }
 
-    /// Run with --json, expect exit 0, parse stdout.
+    /// `run` in text mode: `--styled` forces it even though stdout is a pipe.
+    fn styled(&self, args: &[&str]) -> Run {
+        let mut all = vec!["--styled"];
+        all.extend_from_slice(args);
+        self.run(&all)
+    }
+
+    /// Run with --json, expect exit 0, and give the envelope's `data`.
     fn json(&self, args: &[&str]) -> Value {
         let mut all = vec!["--json"];
         all.extend_from_slice(args);
@@ -150,20 +168,23 @@ fn usage_help_and_exit_codes() {
     assert_eq!(env.run(&["download"]).code, 2, "an id or --all is required");
     assert_eq!(env.run(&["upload"]).code, 2);
 
-    // Not found: exit 4, and with --json a JSON object on stderr.
+    // Not found: exit 4, and with --json the error object on stdout.
     let r = env.run(&["--json", "info", "NO-SUCH-ID"]);
     assert_eq!(r.code, 4);
-    assert!(r.stdout.is_empty());
-    let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
-    assert_eq!(err["ok"], false);
+    let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "not_found");
     assert!(err["error"]["message"].as_str().unwrap().contains("NO-SUCH-ID"));
-    // A usage error with --json is JSON too.
+    assert!(err["error"]["hint"].as_str().unwrap().contains("icloud-photos sync"));
+    // A usage error with --json is JSON too, with a --help hint.
     let r = env.run(&["--json", "list", "--kind", "painting"]);
     assert_eq!(r.code, 2);
-    let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
-    assert_eq!(err["ok"], false);
+    let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "usage");
+    assert_eq!(err["error"]["hint"], "run `icloud-photos --help`");
+    // In text mode clap's own message, on stderr.
+    let r = env.styled(&["list", "--kind", "painting"]);
+    assert_eq!(r.code, 2);
+    assert!(r.stdout.is_empty() && r.stderr.starts_with("error:"), "{}", r.stderr);
     // Delete never asks without a terminal: --yes or a usage error.
     let r = env.run(&["--json", "delete", "NO-SUCH-ID"]);
     assert_eq!(r.code, 4, "the id is checked first: {}", r.stderr);
@@ -224,7 +245,7 @@ fn status_and_sync() {
         "status does not create the catalog"
     );
 
-    let r = env.run(&["sync"]);
+    let r = env.styled(&["sync"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(
         r.stdout.starts_with("Full sync: 12 updated, 0 removed, 3 albums"),
@@ -249,7 +270,7 @@ fn status_and_sync() {
     );
     assert_eq!(s["incremental_sync_ready"], true);
     assert!(s["last_sync"].as_str().is_some_and(|t| t.ends_with('Z')));
-    let human = env.run(&["status"]);
+    let human = env.styled(&["status"]);
     assert!(
         human.stdout.contains("Signed in:     yes [mock]") && human.stdout.contains("Items:         12"),
         "{}",
@@ -268,7 +289,7 @@ fn albums_list_and_info() {
         .map(|a| (a["name"].as_str().unwrap(), a["count"].as_i64().unwrap()))
         .collect();
     assert_eq!(names, vec![("Trips", 10), ("Family", 6), ("Empty album", 0)]);
-    let human = env.run(&["albums"]);
+    let human = env.styled(&["albums"]);
     assert_eq!(human.stdout.lines().next(), Some("ALBUM-TRIPS\t10\tTrips"));
 
     let all = env.json(&["list"]);
@@ -292,7 +313,7 @@ fn albums_list_and_info() {
     assert!(env.ids(&["--since", day]).len() >= 10);
     assert_eq!(env.run(&["list", "--album", "NOPE"]).code, 4);
 
-    let human = env.run(&["list", "--limit", "1"]);
+    let human = env.styled(&["list", "--limit", "1"]);
     let cols: Vec<&str> = human.stdout.trim_end().split('\t').collect();
     assert_eq!(cols.len(), 6, "{}", human.stdout);
     assert_eq!(cols[0], all[0]["id"]);
@@ -309,7 +330,7 @@ fn albums_list_and_info() {
         .map(|a| a["name"].as_str().unwrap())
         .collect();
     assert_eq!(in_albums, vec!["Trips", "Family"], "item #0 is in both albums");
-    assert!(env.run(&["info", id]).stdout.contains("Albums:    Trips, Family"));
+    assert!(env.styled(&["info", id]).stdout.contains("Albums:    Trips, Family"));
 }
 
 #[test]
@@ -322,12 +343,12 @@ fn thumb_and_download() {
     let cached = PathBuf::from(t["path"].as_str().unwrap());
     assert!(cached.starts_with(env.data().join("cache/thumbs")) && is_jpeg(&cached));
     let out = env.root.join("exports/t.jpg");
-    let r = env.run(&["thumb", &live, "--out", out.to_str().unwrap()]);
+    let r = env.styled(&["thumb", &live, "--out", out.to_str().unwrap()]);
     assert_eq!((r.code, r.stdout.trim()), (0, out.to_str().unwrap()));
     assert!(is_jpeg(&out));
 
     // A Live Photo brings its video; both land in the library folder.
-    let r = env.run(&["download", &live]);
+    let r = env.styled(&["download", &live]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let paths: Vec<PathBuf> = r.stdout.lines().map(PathBuf::from).collect();
     assert_eq!(paths.len(), 2, "{}", r.stdout);
@@ -425,7 +446,7 @@ fn open_downloads_then_hands_the_file_to_the_default_app() {
     );
     assert_eq!(r.code, 1);
     let r = run(&["open", "NO-SUCH-ID"]);
-    let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
+    let err = error_doc(&r);
     assert_eq!((r.code, err["error"]["code"].as_str()), (4, Some("not_found")));
 }
 
@@ -439,7 +460,7 @@ fn upload_then_sync_into_the_catalog() {
     let txt = env.root.join("notes.txt");
     std::fs::write(&txt, b"not a photo").unwrap();
 
-    let r = env.run(&[
+    let r = env.styled(&[
         "upload",
         a.to_str().unwrap(),
         b.to_str().unwrap(),
@@ -500,13 +521,23 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     let ids = env.ids(&[]);
     let (one, two, three) = (&ids[0], &ids[1], &ids[2]);
 
-    // stdin is not a terminal here: without --yes, nothing happens.
+    // Nobody can be asked here (not a terminal, or a machine mode): without
+    // --yes, nothing happens.
     let r = env.run(&["delete", one]);
     assert_eq!(r.code, 2);
-    assert!(r.stderr.contains("--yes"));
+    let err = error_doc(&r);
+    assert_eq!(err["error"]["code"], "usage");
+    assert!(err["error"]["hint"].as_str().unwrap().contains("--yes"), "{err}");
+    let r = env.styled(&["delete", one]);
+    assert_eq!(r.code, 2);
+    assert!(
+        r.stderr.starts_with("error:") && r.stderr.contains("--yes"),
+        "{}",
+        r.stderr
+    );
     assert!(env.server.asset_ids().contains(one));
 
-    let r = env.run(&["delete", one, two, "--yes"]);
+    let r = env.styled(&["delete", one, two, "--yes"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout.lines().count(), 2);
     assert!(!env.server.asset_ids().contains(one) && !env.server.asset_ids().contains(two));
@@ -582,7 +613,7 @@ fn prune_cache_drops_renditions_of_deleted_items() {
     env.json(&["delete", &ids[0], "--yes"]);
     assert_eq!(env.json(&["prune-cache"])["removed"], 2);
     assert!(!thumb.exists() && !medium.exists());
-    assert_eq!(env.run(&["prune-cache"]).stdout.trim(), "Removed 0 cached file(s)");
+    assert_eq!(env.styled(&["prune-cache"]).stdout.trim(), "Removed 0 cached file(s)");
 }
 
 #[test]
@@ -599,13 +630,18 @@ fn signed_out_exits_3_until_sign_in() {
         vec!["sync", "--full"],
         vec!["delete", id.as_str(), "--yes"],
     ] {
-        let r = env.run(&args);
+        let r = env.styled(&args);
         assert_eq!(r.code, 3, "{args:?}: {}", r.stderr);
-        assert!(r.stderr.contains("sign in"), "{}", r.stderr);
+        assert!(r.stdout.is_empty(), "{args:?}: {}", r.stdout);
+        assert!(
+            r.stderr.starts_with("error:") && r.stderr.contains("\nhint: run `icloud-session sign-in`"),
+            "{}",
+            r.stderr
+        );
     }
     let r = env.run(&["--json", "sync"]);
     assert_eq!(r.code, 3, "{}", r.stderr);
-    let err = error_line(&r);
+    let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "sign_in_required");
     assert!(
         err["error"]["hint"]
@@ -632,13 +668,21 @@ fn signed_out_exits_3_until_sign_in() {
     assert_eq!(env.run(&["sync"]).code, 0);
 }
 
-/// The last stderr line, checked to be exactly the contract's error
-/// object: `{"ok":false,"error":{"code","message","hint"?}}`.
-fn error_line(r: &Run) -> Value {
-    let line = r.stderr.trim().lines().last().unwrap_or_default();
-    let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("stderr is not JSON ({e}):\n{}", r.stderr));
-    let top: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
-    assert!(top.len() == 2 && top.contains(&"ok") && top.contains(&"error"), "{v}");
+/// A machine-mode failure: stdout is exactly one JSON document, the
+/// contract's error object `{"ok":false,"error":{"code","message","hint"?}}`
+/// with `ok` first, and stderr is empty.
+fn error_doc(r: &Run) -> Value {
+    assert!(r.stderr.is_empty(), "stderr: {}", r.stderr);
+    assert!(
+        r.stdout.trim_start().starts_with("{\n  \"ok\": false,"),
+        "ok first: {}",
+        r.stdout
+    );
+    let v = r.doc();
+    // Map order depends on serde_json's preserve_order (feature unification).
+    let mut top: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    top.sort();
+    assert_eq!(top, ["error", "ok"], "{v}");
     assert_eq!(v["ok"], false);
     let error = v["error"].as_object().unwrap();
     assert!(error["code"].is_string() && error["message"].is_string(), "{v}");
@@ -660,15 +704,27 @@ fn no_network_exits_5_offline() {
         all.extend_from_slice(&args);
         let r = env.bare_at(dead, &all, &[]);
         assert_eq!(r.code, 5, "{args:?}: {}", r.stderr);
-        assert!(r.stdout.is_empty(), "{}", r.stdout);
-        let err = error_line(&r);
+        let err = error_doc(&r);
         assert_eq!(err["error"]["code"], "offline", "{err}");
         assert!(err["error"]["hint"].is_string(), "{err}");
     }
-    // Text mode: the same exit code, `tool: message` and the hint on stderr.
-    let r = env.bare_at(dead, &["--data-dir", data.to_str().unwrap(), "sync"], &[]);
+    // Piped with no flag, and --quiet: the same error object.
+    for flag in [None, Some("--quiet"), Some("--count")] {
+        let mut all = vec!["--data-dir", data.to_str().unwrap(), "sync"];
+        all.extend(flag);
+        let r = env.bare_at(dead, &all, &[]);
+        assert_eq!(r.code, 5, "{flag:?}");
+        assert_eq!(error_doc(&r)["error"]["code"], "offline", "{flag:?}");
+    }
+    // Text mode: the same exit code, `error:` and `hint:` on stderr.
+    let r = env.bare_at(dead, &["--styled", "--data-dir", data.to_str().unwrap(), "sync"], &[]);
     assert_eq!(r.code, 5, "{}", r.stderr);
-    assert!(r.stderr.contains("offline"), "{}", r.stderr);
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    assert!(
+        r.stderr.starts_with("error:") && r.stderr.contains("offline") && r.stderr.contains("\nhint: "),
+        "{}",
+        r.stderr
+    );
     // Local commands need no network.
     assert_eq!(
         env.bare_at(dead, &["--data-dir", data.to_str().unwrap(), "list"], &[])
@@ -706,7 +762,7 @@ fn without_data_dir_it_uses_the_xdg_directories() {
     let r = env.bare(&["--json", "sync"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(home.join("xdg-data/icloud-photos/catalog.db").exists());
-    let s: Value = serde_json::from_str(&env.bare(&["--json", "status"]).stdout).unwrap();
+    let s = env.bare(&["--json", "status"]).json();
     assert_eq!(s["assets"], 3);
     assert_eq!(
         s["library_dir"].as_str().map(PathBuf::from),
@@ -716,11 +772,11 @@ fn without_data_dir_it_uses_the_xdg_directories() {
         s["cache_dir"].as_str().map(PathBuf::from),
         Some(home.join("xdg-cache/icloud-photos"))
     );
-    let id = serde_json::from_str::<Value>(&env.bare(&["--json", "list", "--limit", "1"]).stdout).unwrap()[0]["id"]
+    let id = env.bare(&["--json", "list", "--limit", "1"]).json()[0]["id"]
         .as_str()
         .unwrap()
         .to_owned();
-    let t: Value = serde_json::from_str(&env.bare(&["--json", "thumb", &id]).stdout).unwrap();
+    let t = env.bare(&["--json", "thumb", &id]).json();
     assert!(
         t["path"]
             .as_str()
@@ -739,7 +795,7 @@ fn the_library_sits_in_the_xdg_pictures_directory() {
         "XDG_PICTURES_DIR=\"$HOME/Photos\"\n",
     )
     .unwrap();
-    let s: Value = serde_json::from_str(&env.bare(&["--json", "status"]).stdout).unwrap();
+    let s = env.bare(&["--json", "status"]).json();
     assert_eq!(s["library_dir"].as_str().map(PathBuf::from), Some(home.join("Photos")));
 }
 
@@ -761,4 +817,120 @@ fn a_library_in_the_old_default_folder_moves_into_pictures() {
     assert!(!home.join("Pictures/icloud-photos").exists());
     // Once only.
     assert!(!env.bare(&["status"]).stderr.contains("moved"));
+}
+
+/// The output modes: the envelope when piped (no flag), `--quiet` the data,
+/// `--ids-only` the ids, `--count` the number; flags combine by precedence.
+#[test]
+fn output_modes() {
+    let env = Env::synced("modes", 6);
+    let r = env.run(&["list"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stderr.is_empty(), "{}", r.stderr);
+    assert!(
+        r.stdout.trim_start().starts_with("{\n  \"ok\": true,"),
+        "ok first: {}",
+        r.stdout
+    );
+    let whole = r.doc();
+    assert_eq!(whole["ok"], true);
+    assert_eq!(whole["summary"], "6 items");
+    let data = whole["data"].clone();
+    assert_eq!(data.as_array().unwrap().len(), 6);
+    let ids: Vec<String> = data
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_owned())
+        .collect();
+
+    assert_eq!(env.run(&["list", "--quiet"]).doc(), data);
+    assert_eq!(env.run(&["list", "--ids-only"]).stdout.lines().collect::<Vec<_>>(), ids);
+    assert_eq!(env.run(&["list", "--count"]).stdout.trim(), "6");
+    assert_eq!(env.run(&["list", "--kind", "video", "--count"]).stdout.trim(), "0");
+    let albums = env.run(&["albums", "--ids-only"]);
+    assert_eq!(
+        albums.stdout.lines().collect::<Vec<_>>(),
+        ["ALBUM-TRIPS", "ALBUM-FAMILY", "ALBUM-EMPTY"]
+    );
+    assert_eq!(env.run(&["--count", "albums"]).stdout.trim(), "3");
+    assert_eq!(env.run(&["info", &ids[0], "--ids-only"]).stdout.trim(), ids[0]);
+
+    // Combinations are not usage errors: ids-only > count > quiet > json > styled.
+    for (args, want) in [
+        (&["--json", "list", "--quiet"][..], "quiet"),
+        (&["list", "--ids-only", "--count"], "ids"),
+        (&["--styled", "--json", "list"], "json"),
+        (&["list", "--quiet", "--quiet"], "quiet"),
+        (&["--count", "list", "--json", "--styled"], "count"),
+    ] {
+        let r = env.run(args);
+        assert_eq!(r.code, 0, "{args:?}: {}", r.stdout);
+        match want {
+            "quiet" => assert_eq!(r.doc(), data, "{args:?}"),
+            "json" => assert_eq!(r.doc()["ok"], true, "{args:?}"),
+            "ids" => assert_eq!(r.stdout.lines().count(), 6, "{args:?}"),
+            _ => assert_eq!(r.stdout.trim(), "6", "{args:?}"),
+        }
+    }
+
+    // Batch commands: --ids-only lists the items that succeeded, and a
+    // partial failure still prints the data, exiting 1.
+    let r = env.run(&["download", &ids[0], &ids[1], "--ids-only"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout.lines().collect::<Vec<_>>(), [&ids[0], &ids[1]]);
+    assert!(r.stderr.is_empty(), "no per-item lines in machine modes: {}", r.stderr);
+    let r = env.run(&["download", &ids[2], "--count"]);
+    assert_eq!(r.stdout.trim(), "1");
+    let r = env.run(&["download", &ids[2]]);
+    assert_eq!(r.doc()["summary"], "Downloaded 1 item");
+
+    env.server.delete_elsewhere(&ids[4]);
+    let r = env.run(&["delete", &ids[3], &ids[4], "--yes"]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.is_empty(), "{}", r.stderr);
+    let v = r.doc();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["summary"], "Moved 1 item to Recently Deleted; 1 failed");
+    assert_eq!(v["data"][1]["deleted"], false);
+    assert!(v["data"][1]["error"].is_string());
+    let r = env.run(&["delete", &ids[5], "--yes", "--ids-only"]);
+    assert_eq!((r.code, r.stdout.trim()), (0, ids[5].as_str()));
+
+    // prune-cache counts the files removed.
+    assert_eq!(env.run(&["prune-cache", "--count"]).stdout.trim(), "0");
+    // Without ids, --ids-only falls back to the data with a note.
+    let r = env.run(&["status", "--ids-only"]);
+    assert_eq!(r.doc()["assets"], 3);
+    assert!(r.stderr.starts_with("note: "), "{}", r.stderr);
+}
+
+/// A machine-mode failure is one JSON document on stdout and nothing on
+/// stderr; a text-mode one is `error:` (and `hint:`) on stderr only.
+#[test]
+fn errors_go_where_the_mode_says() {
+    let env = Env::synced("errors", 2);
+    for args in [
+        &["info", "NOPE"][..],
+        &["info", "NOPE", "--json"],
+        &["info", "NOPE", "--quiet"],
+        &["info", "NOPE", "--ids-only"],
+        &["info", "NOPE", "--count"],
+        &["list", "--album", "NOPE"],
+    ] {
+        let r = env.run(args);
+        assert_eq!(r.code, 4, "{args:?}");
+        let err = error_doc(&r);
+        assert_eq!(err["error"]["code"], "not_found", "{args:?}");
+        assert!(err["error"]["hint"].is_string(), "{args:?}");
+    }
+    let r = env.styled(&["info", "NOPE"]);
+    assert_eq!(r.code, 4);
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    assert!(
+        r.stderr
+            .starts_with("error: no item NOPE in the catalog\nhint: run `icloud-photos sync`"),
+        "{}",
+        r.stderr
+    );
 }
