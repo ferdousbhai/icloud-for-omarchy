@@ -20,7 +20,11 @@
 // cloned, 4 not found, 5 offline or a service (icloud-session, the engine)
 // unavailable. `push --dry-run` and `diff` report their changes and exit 0;
 // a sync, pull, push or clone that ran but failed prints its result (with
-// `error` in it) and exits with the failure's code.
+// `error` in it: the engine's own code, message, hint and exit when it gave
+// one, sync_failed/1 only when it did not) and exits with the failure's
+// code. icloud-session unreachable is `session_service` (exit 5), and the
+// sign-in, network and session-service hints are icloud_session::output's
+// shared wording. `--version` is plain `icloud-notes VERSION` in every mode.
 
 // argv[1] starts a command (or global options, help, the version) rather
 // than the window. `--sync`, the background sync, is not one.

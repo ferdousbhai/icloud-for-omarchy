@@ -181,10 +181,11 @@ Sync is automatic, like Notes:
 - Apple ends a web session now and then. Syncing then pauses and a
   banner offers **Sign in**: icloud-session opens Apple's window, which
   skips 2FA for a browser you trusted; syncing resumes on its own once
-  you are signed in. The same banner appears a few days before a sign-in
-  lapses, and after a sign-in too short to last. A sign-in or sign-out
-  in another iCloud app (or with `icloud-session sign-in` in a terminal)
-  shows up here at once.
+  you are signed in. Apple refusing a session icloud-session still holds
+  (`session_rejected`) pauses syncing the same way. The same banner
+  appears a few days before a sign-in lapses, and after a sign-in too
+  short to last. A sign-in or sign-out in another iCloud app (or with
+  `icloud-session sign-in` in a terminal) shows up here at once.
 - New folders upload as real Notes folders.
 
 ## Background sync
@@ -257,7 +258,14 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
   part of the contract.
 - `sync`, `pull`, `push` and `clone` print their result `{ok, runs, log}`
   even when they fail, with the failure in it as `error`, and exit with its
-  code; so does a change's `--push` (in `data.sync`).
+  code; so does a change's `--push` (in `data.sync`). That failure is the
+  sync engine's own error (code, message, hint and exit, e.g.
+  `account_mismatch` exit 3, `cloudkit_request_failed` exit 5), except a
+  refused sign-in (`sign_in_required`, exit 3) and iCloud out of reach
+  (`offline`/`network`, exit 5), worded by this tool; `sync_failed` (exit
+  1) only when the engine failed without saying why. `log` holds the
+  engine's report and warnings, never its progress lines.
+- `--version` prints `icloud-notes VERSION`, in every mode.
 - Exit codes, the table every iCloud tool shares
   ([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells cases apart:
   - 0 ok. `status`, `push --dry-run` and `diff` report their changes in
@@ -267,11 +275,18 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
   - 2 invalid usage or request: `usage`, `ambiguous`, `exists`,
     `already_cloned`, `choices_mismatch`, a destructive command without
     `--yes`.
-  - 3 not signed in (`sign_in_required`: `icloud-session sign-in`) or
-    nothing cloned (`not_cloned`).
+  - 3 not signed in (`sign_in_required`, or `session_rejected` when Apple
+    refuses a session icloud-session still holds: `icloud-session
+    sign-in`) or not set up: nothing cloned (`not_cloned`, this tool's own
+    check before the engine runs; the engine says `not_cloned_directory`),
+    `account_mismatch`, ...
   - 4 not found (`not_found`).
-  - 5 unavailable: `offline`/`network`, `session_unavailable`
-    (icloud-session unreachable), `sync_tool_missing`.
+  - 5 unavailable: `offline`/`network`, `session_service`
+    (icloud-sessiond unreachable), `sync_tool_missing`, iCloud trouble
+    from the engine (`bad_response`, `cloudkit_request_failed`, ...).
+  - Hints use the wording every iCloud tool shares (from
+    `icloud_session::output`), e.g. ``run `icloud-session sign-in` (a
+    person signs in in the window)``.
   - `push --dry-run`, `history`, `diff` and `restore` are the engine
     itself, so its exit codes and error codes come through unchanged; it
     gets the output flags as given (with none, `--styled` on a terminal and
