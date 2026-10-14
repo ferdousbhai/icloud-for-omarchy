@@ -1,8 +1,6 @@
 name: Native packages
+# Started by bin/release on the release tag; changes are checked locally by bin/check.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read

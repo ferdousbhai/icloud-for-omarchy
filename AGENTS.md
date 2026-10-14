@@ -30,7 +30,7 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
 - `packaging/PKGBUILD` — one split recipe for all four packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
-- `bin/` — `build`, `test`, `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
+- `bin/` — `build`, `check`, `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
   `make-installers`, `release`, `verify-release`, `dev-install`/`dev-uninstall` (puts a release
   sessiond in `~/.local/bin` with a user D-Bus activation file).
 - `tests/` — installer tests (`install_test.sh`, stubbed pacman in a user namespace),
