@@ -177,7 +177,7 @@ All five tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
   describe `data`. `summary` is one line for people ("6 items", "Created
   Notes/Packing.md"). `meta` is optional extra context (`icloud-notes-sync`:
   `meta.lines`, the text report of clone, pull and push, and `meta.text`,
-  diff's text).
+  diff's whole text, present for either kind of diff).
 - In a machine mode (everything but text) stdout is exactly one JSON
   document (or the id lines, or the number), pretty-printed over several
   lines: parse the whole of stdout, not a line. Progress (`[1/2] sending …`,
@@ -295,9 +295,9 @@ Every code each tool can emit, by exit.
 |---|---|
 | 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `cancelled`, `error` |
 | 2 | `usage`, `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
-| 3 | `sign_in_required`, `not_cloned` (run `icloud-notes clone`); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
+| 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder) |
-| 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing) |
+| 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
 
 `push --dry-run`, `history`, `diff` and `restore` are the engine itself, so
 they exit with the engine's codes, below.
@@ -397,7 +397,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `pull` | `{added, updated, merged, removed, changes:[{kind, file}], conflicts, notices, ...}` |
 | `clone` | `{written, writtenShared, attachmentsDownloaded, notices, ...}` |
 | `history` | `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`; with `--records`, `{mode:"records", records:[...]}` |
-| `diff` | `{kind, from, to, hasDifferences, text}` (`text` also in `meta.text`) |
+| `diff` | a snapshot ref: `{kind:"snapshot", from, to, hasDifferences, text}`; an epoch ref: `{kind:"epoch", epochId, hasDifferences, sections:[{label, skipped, hasDifferences?, text}]}` (no top-level `text`). The whole diff's text is always in `meta.text` |
 | `restore` | `{file}` |
 | `sync` | `{push, pull, vault_info}` (below) |
 | `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}` |
