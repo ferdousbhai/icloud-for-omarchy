@@ -22,8 +22,9 @@ impl From<icloud_session::Error> for Error {
             icloud_session::Error::BadResponse(m) => Error::BadResponse(m),
             icloud_session::Error::Service(m) => Error::Service(m),
             icloud_session::Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m),
-            // Find My's password, which Photos never asks for.
-            other => Error::Other(other.to_string()),
+            // The daemon's own failures, Find My's password (which Photos
+            // never asks for): reported as every iCloud tool reports them.
+            other => Error::Session(other),
         }
     }
 }
