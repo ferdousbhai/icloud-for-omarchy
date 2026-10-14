@@ -3,12 +3,19 @@
 //! as the window: `sync::run`, `thumbs::fetch_detailed` and the download pool,
 //! `upload::upload_batch`, `CloudKit::delete_assets`, `thumbs::prune_cache`.
 //!
-//! Output is plain text, or JSON on stdout with `--json`. Exit codes, as in
-//! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 usage, 3 not signed in
-//! (or iCloud Photos not enabled for the account), 4 not found, 5 a service
-//! unavailable (offline, network, icloud-sessiond, keyring, Apple 5xx). With
-//! `--json` an error is one JSON line on stderr:
-//! `{"ok":false,"error":{"code","message","hint"?}}`.
+//! Output follows the shared product contract ([`icloud_session::output`]):
+//! text on a terminal, the JSON envelope `{"ok":true,"data","summary"}` when
+//! piped, and `--json`/`--styled`/`--quiet`/`--ids-only`/`--count` to choose.
+//! A failure in a machine mode is `{"ok":false,"error":{"code","message","hint"?}}`
+//! on stdout; in text mode `error:`/`hint:` lines on stderr. Progress (sync
+//! on a terminal, upload steps) goes to stderr.
+//!
+//! Exit codes, as in every iCloud tool (docs/CLI.md): 0 ok, 1 error (also
+//! some items of a `download`/`upload`/`delete` failed: the data still lists
+//! every item, each failed one with its `error`), 2 usage (or `delete`
+//! without `--yes` when nobody can be asked), 3 not signed in (or iCloud
+//! Photos not enabled for the account), 4 not found, 5 a service unavailable
+//! (offline, network, icloud-sessiond, keyring, Apple 5xx).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -28,15 +35,33 @@ use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+use icloud_session::output::{self, CliError, Mode as OutMode, OutputFlags, Response};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
 
-const TOOL: &str = "icloud-photos";
+const AFTER_HELP: &str = "\
+Output: human-readable text on a terminal, a JSON envelope
+{\"ok\":true,\"data\",\"summary\"} when piped. --json forces the envelope,
+--styled text, --quiet prints only the data, --ids-only one id per line
+(albums: album ids; list, info, thumb, open: item ids; download, delete: the
+items that succeeded; upload: the new asset ids), --count the number of
+results (list, albums; the ids above; prune-cache: files removed). Flags
+combine: ids-only > count > quiet > json > styled. A failure is
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
+error:/hint: lines on stderr in text mode. Progress goes to stderr.
 
-const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in (icloud-session sign-in) or iCloud Photos \
-not enabled, 4 not found, 5 service unavailable (offline, network, icloud-sessiond, keyring).\n\
-With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
-{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}.\n\
+Exit codes:
+  0 ok
+  1 error (cancelled, error, http 4xx), or some items of download, upload or
+    delete failed (the data lists each item with its error)
+  2 usage, or delete without --yes when nobody can be asked
+  3 sign_in_required (icloud-session sign-in; status also exits 3 when
+    signed out), service_not_offered (iCloud Photos is not on for this
+    Apple ID), http 401/421 (iCloud refuses the session)
+  4 not_found
+  5 offline, network, session_service (icloud-sessiond unreachable),
+    keyring_unavailable, bad_response, http 5xx
+
 ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple.";
 
 #[derive(Parser)]
@@ -47,9 +72,8 @@ ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit se
     after_help = AFTER_HELP
 )]
 struct Cli {
-    /// Machine-readable JSON on stdout (errors as JSON on stderr).
-    #[arg(long, global = true)]
-    json: bool,
+    #[command(flatten)]
+    out: OutputFlags,
     /// Keep the catalog, cache, settings and library all under DIR instead
     /// of the XDG directories and ~/Pictures.
     #[arg(long, global = true, value_name = "DIR")]
@@ -101,6 +125,11 @@ enum Command {
         out: Option<PathBuf>,
     },
     /// Download originals (and a Live Photo's video) into the library folder.
+    ///
+    /// In text mode prints each saved path as it finishes (failures on
+    /// stderr). The data is one entry per id asked for, in that order:
+    /// {id, path, live_path, live_error} or {id, error}. Exits 1 if any
+    /// item failed.
     #[command(after_help = AFTER_HELP)]
     Download {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
@@ -125,6 +154,11 @@ enum Command {
         medium: bool,
     },
     /// Upload photos and videos, then sync so they appear in the catalog.
+    ///
+    /// Progress on stderr. The data is {files: [{file, asset_id,
+    /// master_id, duplicate} | {file, error}], uploaded, duplicates,
+    /// failed, album, album_error, sync, not_in_catalog}. Exits 1 if any
+    /// file failed.
     #[command(after_help = AFTER_HELP)]
     Upload {
         #[arg(required = true)]
@@ -137,11 +171,15 @@ enum Command {
         no_sync: bool,
     },
     /// Move items to Recently Deleted in iCloud (on every device).
+    ///
+    /// Asks in text mode on a terminal (stdin and stdout); anywhere else
+    /// --yes is required (a usage error, exit 2, otherwise). The data is
+    /// [{id, deleted, error?}]. Exits 1 if any item failed.
     #[command(after_help = AFTER_HELP)]
     Delete {
         #[arg(required = true)]
         ids: Vec<String>,
-        /// Do not ask; required when stdin is not a terminal.
+        /// Do not ask; required when nobody can be asked (not a terminal, or a machine output mode).
         #[arg(long, short)]
         yes: bool,
     },
@@ -176,12 +214,10 @@ enum DownloadArg {
     All,
 }
 
+/// A failure: either already the contract's error object (usage, not
+/// found, cancelled), or a library error that [`classify`] maps.
 enum Fail {
-    Usage(String),
-    /// No such item or album in the catalog.
-    NotFound(String),
-    /// The person answered no.
-    Cancelled(String),
+    Cli(CliError),
     Err(Error),
 }
 
@@ -197,88 +233,83 @@ impl From<std::io::Error> for Fail {
     }
 }
 
+impl From<CliError> for Fail {
+    fn from(e: CliError) -> Self {
+        Fail::Cli(e)
+    }
+}
+
 type Res<T> = std::result::Result<T, Fail>;
 
 fn other(msg: impl Into<String>) -> Fail {
     Fail::Err(Error::Other(msg.into()))
 }
 
+fn usage(msg: impl Into<String>) -> CliError {
+    CliError::new("usage", EXIT_USAGE, msg)
+}
+
+fn not_found(msg: impl Into<String>) -> CliError {
+    CliError::new("not_found", EXIT_NOT_FOUND, msg)
+}
+
+fn cancelled(msg: impl Into<String>) -> CliError {
+    CliError::new("cancelled", EXIT_ERROR, msg)
+}
+
 /// Run the CLI on the process arguments.
 pub fn main() -> ExitCode {
-    let cli = match cli::parse::<Cli>(TOOL) {
+    let cli = match output::parse::<Cli>() {
         Ok(c) => c,
         Err(code) => return ExitCode::from(code),
     };
-    let json = cli.json;
-    match run(cli) {
-        Ok(code) => ExitCode::from(code),
-        Err(fail) => {
-            let (code, kind, msg, hint) = classify(fail);
-            ExitCode::from(cli::report(TOOL, json, kind, code, &msg, hint))
-        }
-    }
+    let mode = cli.out.mode();
+    let code = match run(cli, mode) {
+        Ok(resp) => resp.print(mode),
+        Err(fail) => classify(fail).report(mode),
+    };
+    ExitCode::from(code)
 }
 
-/// A failure's exit code, JSON `code`, message and remediation hint, per
-/// the shared mapping (docs/CLI.md).
-fn classify(fail: Fail) -> (u8, &'static str, String, Option<&'static str>) {
-    match fail {
-        Fail::Usage(m) => (EXIT_USAGE, "usage", m, None),
-        Fail::NotFound(m) => (EXIT_NOT_FOUND, "not_found", m, None),
-        Fail::Cancelled(m) => (EXIT_ERROR, "cancelled", m, None),
-        Fail::Err(e) => {
-            let msg = e.to_string();
-            match e {
-                Error::SignInRequired => (
-                    EXIT_SIGN_IN,
-                    "sign_in_required",
-                    icloud_session::sign_in_required_message(),
-                    Some("run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)"),
-                ),
-                Error::NotOffered(_) => (
-                    EXIT_SIGN_IN,
-                    "service_not_offered",
-                    msg,
-                    Some("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
-                ),
-                Error::Offline(_) => (
-                    EXIT_UNAVAILABLE,
-                    "offline",
-                    msg,
-                    Some("check the network connection, then try again"),
-                ),
-                Error::Network(_) => (EXIT_UNAVAILABLE, "network", msg, None),
-                Error::BadResponse(_) => (EXIT_UNAVAILABLE, "bad_response", msg, None),
-                Error::Service(_) => (
-                    EXIT_UNAVAILABLE,
-                    "session_service",
-                    msg,
-                    Some("check `icloud-session status`; icloud-sessiond must be installed and reachable on D-Bus"),
-                ),
-                Error::KeyringUnavailable(_) => (
-                    EXIT_UNAVAILABLE,
-                    "keyring_unavailable",
-                    msg,
-                    Some("unlock the keyring (GNOME Keyring), then try again"),
-                ),
-                Error::Http { status: 500..=599, .. } => (EXIT_UNAVAILABLE, "http", msg, None),
-                // Apple keeps refusing the session although the daemon says
-                // it is signed in.
-                Error::Http { status: 401 | 421, .. } => (
-                    EXIT_SIGN_IN,
-                    "http",
-                    msg,
-                    Some("run `icloud-session sign-in` to sign in again"),
-                ),
-                Error::Http { .. } => (EXIT_ERROR, "http", msg, None),
-                _ => (EXIT_ERROR, "error", msg, None),
-            }
+/// A failure as the contract's error: exit code, JSON `code`, message and
+/// remediation hint, per the shared mapping (docs/CLI.md).
+fn classify(fail: Fail) -> CliError {
+    let e = match fail {
+        Fail::Cli(e) => return e,
+        Fail::Err(e) => e,
+    };
+    let msg = e.to_string();
+    match e {
+        Error::SignInRequired => CliError::new(
+            "sign_in_required",
+            EXIT_SIGN_IN,
+            icloud_session::sign_in_required_message(),
+        )
+        .hint("run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)"),
+        Error::NotOffered(_) => CliError::new("service_not_offered", EXIT_SIGN_IN, msg)
+            .hint("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
+        Error::Offline(_) => {
+            CliError::new("offline", EXIT_UNAVAILABLE, msg).hint("check the network connection, then try again")
         }
+        Error::Network(_) => CliError::new("network", EXIT_UNAVAILABLE, msg),
+        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg),
+        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, msg)
+            .hint("check `icloud-session status`; icloud-sessiond must be installed and reachable on D-Bus"),
+        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg)
+            .hint("unlock the keyring (GNOME Keyring), then try again"),
+        Error::Http { status: 500..=599, .. } => CliError::new("http", EXIT_UNAVAILABLE, msg),
+        // Apple keeps refusing the session although the daemon says it is
+        // signed in.
+        Error::Http { status: 401 | 421, .. } => {
+            CliError::new("http", EXIT_SIGN_IN, msg).hint("run `icloud-session sign-in` to sign in again")
+        }
+        Error::Http { .. } => CliError::new("http", EXIT_ERROR, msg),
+        _ => CliError::new("error", EXIT_ERROR, msg),
     }
 }
 
 struct Ctx {
-    json: bool,
+    mode: OutMode,
     dirs: Dirs,
     settings: Settings,
 }
@@ -299,20 +330,31 @@ impl Ctx {
         }
     }
 
-    /// Print `human` or, with --json, `value`.
-    fn out(&self, value: &Value, human: impl FnOnce() -> String) {
-        if self.json {
-            println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
-        } else {
-            let text = human();
-            if !text.is_empty() {
-                println!("{text}");
-            }
-        }
+    /// Text mode: per-item lines are streamed as they happen.
+    fn text(&self) -> bool {
+        self.mode == OutMode::Human
     }
 }
 
-fn run(cli: Cli) -> Res<u8> {
+/// A line on stdout, safe for a terminal (file names come from iCloud).
+fn say(line: &str) {
+    println!("{}", output::terminal_safe(line));
+}
+
+/// A line on stderr, safe for a terminal.
+fn warn(line: &str) {
+    eprintln!("{}", output::terminal_safe(line));
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{n} {many}")
+    }
+}
+
+fn run(cli: Cli, mode: OutMode) -> Res<Response> {
     let (dirs, settings) = match &cli.data_dir {
         Some(dir) => {
             let root = std::path::absolute(dir)?;
@@ -330,11 +372,7 @@ fn run(cli: Cli) -> Res<u8> {
             (dirs, settings)
         }
     };
-    let ctx = Ctx {
-        json: cli.json,
-        dirs,
-        settings,
-    };
+    let ctx = Ctx { mode, dirs, settings };
     match cli.command {
         Command::Status => status(&ctx),
         Command::Sync { full } => sync_cmd(&ctx, full),
@@ -352,14 +390,14 @@ fn run(cli: Cli) -> Res<u8> {
         Command::Upload { files, album, no_sync } => upload_cmd(&ctx, &files, album.as_deref(), no_sync),
         Command::Delete { ids, yes } => delete(&ctx, &ids, yes),
         Command::PruneCache => prune(&ctx),
-        Command::SignIn => sign_in(&ctx),
+        Command::SignIn => sign_in(),
         Command::Config { library_dir, download } => config(ctx, library_dir, download),
     }
 }
 
 // ---- status, sync, sign-in, config --------------------------------------
 
-fn status(ctx: &Ctx) -> Res<u8> {
+fn status(ctx: &Ctx) -> Res<Response> {
     let (signed_in, sign_in_error) = match session::sign_in_state() {
         Ok(s) => (Some(s.signed_in), None),
         Err(e) => (None, Some(e.to_string())),
@@ -405,35 +443,48 @@ fn status(ctx: &Ctx) -> Res<u8> {
         "settings": ctx.dirs.settings(),
         "download_mode": mode,
     });
-    ctx.out(&v, || {
-        let signed = match (signed_in, &sign_in_error) {
-            (Some(true), _) => "yes".to_owned(),
-            (Some(false), _) => "no (run `icloud-photos sign-in`)".to_owned(),
-            (None, e) => format!("unknown ({})", e.as_deref().unwrap_or("")),
-        };
-        [
-            format!(
-                "Signed in:     {signed}{}",
-                if session::is_mock() { " [mock]" } else { "" }
-            ),
-            format!(
-                "Catalog:       {}{}",
-                catalog.display(),
-                if catalog.exists() { "" } else { " (not created yet)" }
-            ),
-            format!("Items:         {assets} ({downloaded} downloaded)"),
-            format!("Albums:        {albums}"),
-            format!(
-                "Last sync:     {}",
-                last_sync.map_or_else(|| "never".to_owned(), rfc3339)
-            ),
-            format!("Library:       {}", ctx.settings.library_dir.display()),
-            format!("Cache:         {}", ctx.dirs.cache.display()),
-            format!("Download mode: {mode}"),
-        ]
-        .join("\n")
-    });
-    Ok(if signed_in == Some(false) { EXIT_SIGN_IN } else { 0 })
+    let signed = match (signed_in, &sign_in_error) {
+        (Some(true), _) => "yes".to_owned(),
+        (Some(false), _) => "no (run `icloud-photos sign-in`)".to_owned(),
+        (None, e) => format!("unknown ({})", e.as_deref().unwrap_or("")),
+    };
+    let human = [
+        format!(
+            "Signed in:     {signed}{}",
+            if session::is_mock() { " [mock]" } else { "" }
+        ),
+        format!(
+            "Catalog:       {}{}",
+            catalog.display(),
+            if catalog.exists() { "" } else { " (not created yet)" }
+        ),
+        format!("Items:         {assets} ({downloaded} downloaded)"),
+        format!("Albums:        {albums}"),
+        format!(
+            "Last sync:     {}",
+            last_sync.map_or_else(|| "never".to_owned(), rfc3339)
+        ),
+        format!("Library:       {}", ctx.settings.library_dir.display()),
+        format!("Cache:         {}", ctx.dirs.cache.display()),
+        format!("Download mode: {mode}"),
+    ]
+    .join("\n");
+    let state = match signed_in {
+        Some(true) => "Signed in",
+        Some(false) => "Not signed in",
+        None => "Sign-in state unknown",
+    };
+    let summary = format!(
+        "{state}; {}, {}",
+        plural(assets, "item", "items"),
+        plural(albums, "album", "albums")
+    );
+    let resp = Response::new(v, summary).human(human);
+    Ok(if signed_in == Some(false) {
+        resp.exit(EXIT_SIGN_IN)
+    } else {
+        resp
+    })
 }
 
 fn report_json(r: &Report) -> Value {
@@ -446,24 +497,29 @@ fn report_json(r: &Report) -> Value {
     })
 }
 
-fn report_text(r: &Report) -> String {
+fn report_summary(r: &Report) -> String {
     let mode = match r.mode {
         Mode::Full => "Full",
         Mode::Incremental => "Incremental",
     };
-    let mut s = format!(
+    format!(
         "{mode} sync: {} updated, {} removed, {} albums",
         r.assets, r.removed, r.albums
-    );
+    )
+}
+
+fn report_text(r: &Report) -> String {
+    let mut s = report_summary(r);
     if let Some(why) = &r.fell_back {
         s.push_str(&format!("\n(incremental sync failed: {why}; did a full listing)"));
     }
     s
 }
 
-/// Run the app's sync, with progress on stderr when it is a terminal.
+/// Run the app's sync, with progress on stderr in text mode when stderr is a
+/// terminal.
 fn run_sync(ctx: &Ctx, t: &dyn Transport, full: bool) -> Res<Report> {
-    let tty = std::io::stderr().is_terminal() && !ctx.json;
+    let tty = ctx.text() && std::io::stderr().is_terminal();
     let progress = move |p: Progress| {
         if !tty {
             return;
@@ -483,27 +539,24 @@ fn run_sync(ctx: &Ctx, t: &dyn Transport, full: bool) -> Res<Report> {
     Ok(result?)
 }
 
-fn sync_cmd(ctx: &Ctx, full: bool) -> Res<u8> {
+fn sync_cmd(ctx: &Ctx, full: bool) -> Res<Response> {
     let t = ctx.transport()?;
     let report = run_sync(ctx, &*t, full)?;
-    ctx.out(&report_json(&report), || report_text(&report));
-    Ok(0)
+    Ok(Response::new(report_json(&report), report_summary(&report)).human(report_text(&report)))
 }
 
-fn sign_in(ctx: &Ctx) -> Res<u8> {
+fn sign_in() -> Res<Response> {
     session::start_sign_in(&|_| {})?;
     let mock = session::is_mock();
-    ctx.out(&json!({ "started": true, "mock": mock }), || {
-        if mock {
-            "Signed the fake server back in.".to_owned()
-        } else {
-            "Opened the iCloud sign-in window; `icloud-photos status` shows when it is done.".to_owned()
-        }
-    });
-    Ok(0)
+    let summary = if mock {
+        "Signed the fake server back in."
+    } else {
+        "Opened the iCloud sign-in window; `icloud-photos status` shows when it is done."
+    };
+    Ok(Response::new(json!({ "started": true, "mock": mock }), summary))
 }
 
-fn config(mut ctx: Ctx, library_dir: Option<PathBuf>, download: Option<DownloadArg>) -> Res<u8> {
+fn config(mut ctx: Ctx, library_dir: Option<PathBuf>, download: Option<DownloadArg>) -> Res<Response> {
     let changed = library_dir.is_some() || download.is_some();
     if let Some(dir) = library_dir {
         ctx.settings.library_dir = std::path::absolute(dir)?;
@@ -522,13 +575,16 @@ fn config(mut ctx: Ctx, library_dir: Option<PathBuf>, download: Option<DownloadA
         DownloadMode::All => "all",
     };
     let v = json!({ "library_dir": ctx.settings.library_dir, "download": mode, "file": ctx.dirs.settings(), "saved": changed });
-    ctx.out(&v, || {
-        format!(
-            "library_dir = {}\ndownload    = {mode}",
-            ctx.settings.library_dir.display()
-        )
-    });
-    Ok(0)
+    let summary = if changed {
+        "Saved the preferences"
+    } else {
+        "The preferences"
+    };
+    let human = format!(
+        "library_dir = {}\ndownload    = {mode}",
+        ctx.settings.library_dir.display()
+    );
+    Ok(Response::new(v, summary).human(human))
 }
 
 // ---- reading the catalog ------------------------------------------------
@@ -560,29 +616,42 @@ fn row_json(r: &Row) -> Value {
     })
 }
 
-fn albums(ctx: &Ctx) -> Res<u8> {
+fn albums(ctx: &Ctx) -> Res<Response> {
     let rows = ctx.catalog()?.albums()?;
     let v: Vec<Value> = rows
         .iter()
         .map(|a| json!({ "id": a.id, "name": a.name, "count": a.count }))
         .collect();
-    ctx.out(&Value::Array(v), || {
-        rows.iter()
-            .map(|a| format!("{}\t{}\t{}", a.id, a.count, a.name))
-            .collect::<Vec<_>>()
-            .join("\n")
-    });
-    Ok(0)
+    let human = rows
+        .iter()
+        .map(|a| format!("{}\t{}\t{}", a.id, a.count, a.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(Response::new(v, plural(rows.len(), "album", "albums"))
+        .human(human)
+        .ids(rows.iter().map(|a| a.id.clone()).collect()))
 }
 
-fn list(ctx: &Ctx, album: Option<&str>, since: Option<i64>, limit: Option<usize>, kind: Option<KindFilter>) -> Res<u8> {
+fn check_album(cat: &Catalog, album: &str) -> Res<()> {
+    if cat.albums()?.iter().any(|x| x.id == album) {
+        Ok(())
+    } else {
+        Err(not_found(format!("no album {album} in the catalog"))
+            .hint("see `icloud-photos albums` (or run `icloud-photos sync` first)")
+            .into())
+    }
+}
+
+fn list(
+    ctx: &Ctx,
+    album: Option<&str>,
+    since: Option<i64>,
+    limit: Option<usize>,
+    kind: Option<KindFilter>,
+) -> Res<Response> {
     let cat = ctx.catalog()?;
-    if let Some(a) = album
-        && !cat.albums()?.iter().any(|x| x.id == a)
-    {
-        return Err(Fail::NotFound(format!(
-            "no album {a} in the catalog (see `icloud-photos albums`)"
-        )));
+    if let Some(a) = album {
+        check_album(&cat, a)?;
     }
     let want = kind.map(|k| match k {
         KindFilter::Photo => "photo",
@@ -596,37 +665,39 @@ fn list(ctx: &Ctx, album: Option<&str>, since: Option<i64>, limit: Option<usize>
         .filter(|r| want.is_none_or(|k| kind_of(r) == k))
         .take(limit.unwrap_or(usize::MAX))
         .collect();
-    ctx.out(&Value::Array(rows.iter().map(row_json).collect()), || {
-        rows.iter()
-            .map(|r| {
-                let local = existing(&r.local_path)
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "-".into());
-                format!(
-                    "{}\t{}\t{}\t{}\t{}\t{}",
-                    r.id,
-                    rfc3339(r.created),
-                    kind_of(r),
-                    r.size,
-                    r.filename,
-                    local
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    });
-    Ok(0)
+    let human = rows
+        .iter()
+        .map(|r| {
+            let local = existing(&r.local_path)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "-".into());
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                r.id,
+                rfc3339(r.created),
+                kind_of(r),
+                r.size,
+                r.filename,
+                local
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let data: Vec<Value> = rows.iter().map(row_json).collect();
+    Ok(Response::new(data, plural(rows.len(), "item", "items"))
+        .human(human)
+        .ids(rows.iter().map(|r| r.id.clone()).collect()))
 }
 
 fn row_or_fail(cat: &Catalog, id: &str) -> Res<Row> {
     cat.asset(id)?.ok_or_else(|| {
-        Fail::NotFound(format!(
-            "no item {id} in the catalog (run `icloud-photos sync`, then `list`)"
-        ))
+        not_found(format!("no item {id} in the catalog"))
+            .hint("run `icloud-photos sync`, then `icloud-photos list`")
+            .into()
     })
 }
 
-fn info(ctx: &Ctx, id: &str) -> Res<u8> {
+fn info(ctx: &Ctx, id: &str) -> Res<Response> {
     let cat = ctx.catalog()?;
     let r = row_or_fail(&cat, id)?;
     let albums = cat.albums_of(id)?;
@@ -642,38 +713,40 @@ fn info(ctx: &Ctx, id: &str) -> Res<u8> {
         .iter()
         .map(|(id, name)| json!({ "id": id, "name": name }))
         .collect();
-    ctx.out(&v, || {
-        let path = |p: &Option<PathBuf>| existing(p).map_or_else(|| "-".to_owned(), |p| p.display().to_string());
-        [
-            format!("ID:        {}", r.id),
-            format!("File:      {}", r.filename),
-            format!("Taken:     {}", rfc3339(r.created)),
-            format!("Kind:      {}", kind_of(&r)),
-            format!("Size:      {} bytes, {}x{}", r.size, r.w, r.h),
-            format!(
-                "Albums:    {}",
-                if albums.is_empty() {
-                    "-".into()
-                } else {
-                    albums.iter().map(|a| a.1.as_str()).collect::<Vec<_>>().join(", ")
-                }
-            ),
-            format!("Original:  {}", path(&r.local_path)),
-            format!("Live:      {}", path(&r.live_path)),
-            format!("Thumbnail: {}", path(&r.thumb_path)),
-            format!("Preview:   {}", path(&r.medium_path)),
-            format!(
-                "Deleted:   {}",
-                if r.deleted {
-                    "yes (in Recently Deleted or gone)"
-                } else {
-                    "no"
-                }
-            ),
-        ]
-        .join("\n")
-    });
-    Ok(0)
+    let path = |p: &Option<PathBuf>| existing(p).map_or_else(|| "-".to_owned(), |p| p.display().to_string());
+    let human = [
+        format!("ID:        {}", r.id),
+        format!("File:      {}", r.filename),
+        format!("Taken:     {}", rfc3339(r.created)),
+        format!("Kind:      {}", kind_of(&r)),
+        format!("Size:      {} bytes, {}x{}", r.size, r.w, r.h),
+        format!(
+            "Albums:    {}",
+            if albums.is_empty() {
+                "-".into()
+            } else {
+                albums.iter().map(|a| a.1.as_str()).collect::<Vec<_>>().join(", ")
+            }
+        ),
+        format!("Original:  {}", path(&r.local_path)),
+        format!("Live:      {}", path(&r.live_path)),
+        format!("Thumbnail: {}", path(&r.thumb_path)),
+        format!("Preview:   {}", path(&r.medium_path)),
+        format!(
+            "Deleted:   {}",
+            if r.deleted {
+                "yes (in Recently Deleted or gone)"
+            } else {
+                "no"
+            }
+        ),
+    ]
+    .join("\n");
+    Ok(
+        Response::new(v, format!("{} ({}, {})", r.filename, kind_of(&r), rfc3339(r.created)))
+            .human(human)
+            .ids(vec![r.id.clone()]),
+    )
 }
 
 // ---- downloads ----------------------------------------------------------
@@ -686,7 +759,7 @@ fn copy_to(src: &Path, dest: &Path) -> Res<PathBuf> {
     Ok(dest.to_path_buf())
 }
 
-fn thumb(ctx: &Ctx, id: &str, out: Option<&Path>) -> Res<u8> {
+fn thumb(ctx: &Ctx, id: &str, out: Option<&Path>) -> Res<Response> {
     let cat = ctx.catalog()?;
     row_or_fail(&cat, id)?;
     let t = ctx.transport()?;
@@ -695,16 +768,14 @@ fn thumb(ctx: &Ctx, id: &str, out: Option<&Path>) -> Res<u8> {
         Some(p) => copy_to(&cached, p)?,
         None => cached.clone(),
     };
-    ctx.out(&json!({ "id": id, "path": path, "cache_path": cached }), || {
-        path.display().to_string()
-    });
-    Ok(0)
+    let text = path.display().to_string();
+    Ok(Response::new(json!({ "id": id, "path": path, "cache_path": cached }), text).ids(vec![id.to_owned()]))
 }
 
 /// The viewer's Open: the original (downloaded first when it is not yet),
 /// or with `medium` iCloud's preview, handed to the desktop's default app
 /// (`xdg-open`, or `$ICLOUD_PHOTOS_OPENER`).
-fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<u8> {
+fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<Response> {
     let cat = ctx.catalog()?;
     let row = row_or_fail(&cat, id)?;
     let path = match existing(&row.local_path) {
@@ -724,16 +795,14 @@ fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<u8> {
     if !status.success() {
         return Err(other(format!("{opener} {} failed ({status})", path.display())));
     }
-    ctx.out(&json!({ "id": id, "path": path, "opened": true }), || {
-        path.display().to_string()
-    });
-    Ok(0)
+    let text = path.display().to_string();
+    Ok(Response::new(json!({ "id": id, "path": path, "opened": true }), text).ids(vec![id.to_owned()]))
 }
 
 /// Parallel downloads, as in the app.
 const DOWNLOAD_WORKERS: usize = 4;
 
-fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&Path>) -> Res<u8> {
+fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&Path>) -> Res<Response> {
     let cat = ctx.catalog()?;
     let ids = if all { cat.missing_originals()? } else { ids };
     for id in &ids {
@@ -801,56 +870,71 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
             }),
         };
         let result = match result {
-            Err(f @ (Fail::Usage(_) | Fail::NotFound(_) | Fail::Cancelled(_))) => return Err(f),
+            Err(f @ Fail::Cli(_)) => return Err(f),
             r => r,
         };
-        // Lines as each finishes; the JSON array keeps the order asked for.
+        // Text mode: lines as each finishes; the data keeps the order asked for.
         match &result {
             Ok(v) => {
                 if !v["live_error"].is_null() {
                     failed += 1;
                 }
-                if !ctx.json {
-                    println!("{}", v["path"].as_str().unwrap_or_default());
+                if ctx.text() {
+                    say(v["path"].as_str().unwrap_or_default());
                     if let Some(p) = v["live_path"].as_str() {
-                        println!("{p}");
+                        say(p);
                     }
                     if let Some(err) = v["live_error"].as_str() {
-                        eprintln!("icloud-photos: {id}: Live Photo video: {err}");
+                        warn(&format!("error: {id}: Live Photo video: {err}"));
                     }
                 }
             }
             Err(Fail::Err(err)) => {
                 failed += 1;
-                if !ctx.json {
-                    eprintln!("icloud-photos: {id}: {err}");
+                if ctx.text() {
+                    warn(&format!("error: {id}: {err}"));
                 }
             }
-            Err(_) => {}
+            Err(Fail::Cli(_)) => {}
         }
         done.insert(id, result);
     }
-    if ctx.json {
-        let results: Vec<Value> = ids
-            .iter()
-            .map(|id| match done.get(id) {
-                Some(Ok(v)) => v.clone(),
-                Some(Err(Fail::Err(e))) => json!({ "id": id, "error": e.to_string() }),
-                _ => json!({ "id": id, "error": "not downloaded" }),
-            })
-            .collect();
-        ctx.out(&Value::Array(results), String::new);
+    let code = if failed > 0 { EXIT_ERROR } else { 0 };
+    if ctx.text() && !unique.is_empty() {
+        // Every line is already out.
+        return Ok(Response::silent().exit(code));
     }
-    Ok(if failed > 0 { EXIT_ERROR } else { 0 })
+    let results: Vec<Value> = ids
+        .iter()
+        .map(|id| match done.get(id) {
+            Some(Ok(v)) => v.clone(),
+            Some(Err(Fail::Err(e))) => json!({ "id": id, "error": e.to_string() }),
+            _ => json!({ "id": id, "error": "not downloaded" }),
+        })
+        .collect();
+    let ok: Vec<String> = unique
+        .iter()
+        .filter(|id| matches!(done.get(**id), Some(Ok(v)) if v["live_error"].is_null()))
+        .map(|id| id.to_string())
+        .collect();
+    let summary = match (unique.len(), failed) {
+        (0, _) => "Nothing to download".to_owned(),
+        (n, 0) => format!("Downloaded {}", plural(n, "item", "items")),
+        (n, f) => format!("Downloaded {} of {}; {f} failed", n - f, plural(n, "item", "items")),
+    };
+    Ok(Response::new(results, summary).ids(ok).exit(code))
 }
 
 // ---- upload -------------------------------------------------------------
 
-fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) -> Res<u8> {
+fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) -> Res<Response> {
     let (paths, skipped): (Vec<PathBuf>, Vec<PathBuf>) = files
         .iter()
         .cloned()
         .partition(|p| p.is_file() && upload::is_supported(p));
+    if let Some(a) = album {
+        check_album(&ctx.catalog()?, a)?;
+    }
     let mut results: Vec<Value> = skipped
         .iter()
         .map(|p| {
@@ -859,150 +943,158 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
             } else {
                 "no such file"
             };
-            eprintln!("icloud-photos: skipping {}: {why}", p.display());
+            if ctx.text() {
+                warn(&format!("error: skipping {}: {why}", p.display()));
+            }
             json!({ "file": p, "error": why })
         })
         .collect();
-    if let Some(a) = album
-        && !ctx.catalog()?.albums()?.iter().any(|x| x.id == a)
-    {
-        return Err(Fail::NotFound(format!(
-            "no album {a} in the catalog (see `icloud-photos albums`)"
-        )));
-    }
     let mut failed = skipped.len();
-    if paths.is_empty() {
-        ctx.out(&json!({ "files": results }), String::new);
-        return Ok(EXIT_ERROR);
-    }
-    let t = ctx.transport()?;
-
-    let done: RefCell<Vec<(usize, String, icloud_photos::transport::Result<upload::Uploaded>)>> =
-        RefCell::new(Vec::new());
-    let summary = upload::upload_batch(&*t, &paths, Duration::from_secs(60), &|| false, &|event| match event {
-        BatchEvent::Step {
-            index,
-            total,
-            name,
-            step,
-        } => {
-            let text = match step {
-                Step::Reserving => format!("preparing {name}"),
-                Step::Sending { bytes } => format!("sending {name} ({bytes} bytes)"),
-                Step::Registering => format!("adding {name} to the library"),
-                Step::Ingesting { progress } => format!("iCloud is processing the upload ({progress}%)"),
-            };
-            eprintln!("[{}/{total}] {text}", (index + 1).min(total));
-        }
-        BatchEvent::FileDone { index, name, result } => done.borrow_mut().push((index, name, result)),
-    });
-    failed += summary.failed;
-
+    let mut uploaded = 0;
+    let mut duplicates = 0;
     let mut sign_in_lapsed = false;
     let mut new_ids: Vec<String> = Vec::new();
-    for (index, name, result) in done.into_inner() {
-        match result {
-            Ok(u) => {
-                new_ids.push(u.asset_id.clone());
-                results.push(json!({ "file": paths[index], "asset_id": u.asset_id, "master_id": u.master_id, "duplicate": u.duplicate }));
+    let mut album_error = None;
+    let mut sync_report = None;
+    let mut missing: Vec<String> = Vec::new();
+
+    if !paths.is_empty() {
+        let t = ctx.transport()?;
+        let done: RefCell<Vec<(usize, String, icloud_photos::transport::Result<upload::Uploaded>)>> =
+            RefCell::new(Vec::new());
+        // Progress goes to stderr in every mode: it is not the result.
+        let summary = upload::upload_batch(&*t, &paths, Duration::from_secs(60), &|| false, &|event| match event {
+            BatchEvent::Step {
+                index,
+                total,
+                name,
+                step,
+            } => {
+                let text = match step {
+                    Step::Reserving => format!("preparing {name}"),
+                    Step::Sending { bytes } => format!("sending {name} ({bytes} bytes)"),
+                    Step::Registering => format!("adding {name} to the library"),
+                    Step::Ingesting { progress } => format!("iCloud is processing the upload ({progress}%)"),
+                };
+                warn(&format!("[{}/{total}] {text}", (index + 1).min(total)));
             }
-            Err(e) => {
-                sign_in_lapsed |= e.is_sign_in();
-                // An error before any file (the service unreachable) has no name.
-                let file = paths.get(index).filter(|_| !name.is_empty());
-                eprintln!(
-                    "icloud-photos: {}: {e}",
-                    file.map_or_else(|| "upload".into(), |p| p.display().to_string())
-                );
-                results.push(json!({ "file": file, "error": e.to_string() }));
+            BatchEvent::FileDone { index, name, result } => done.borrow_mut().push((index, name, result)),
+        });
+        failed += summary.failed;
+        uploaded = summary.uploaded;
+        duplicates = summary.duplicates;
+
+        for (index, name, result) in done.into_inner() {
+            match result {
+                Ok(u) => {
+                    new_ids.push(u.asset_id.clone());
+                    results.push(json!({ "file": paths[index], "asset_id": u.asset_id, "master_id": u.master_id, "duplicate": u.duplicate }));
+                }
+                Err(e) => {
+                    sign_in_lapsed |= e.is_sign_in();
+                    // An error before any file (the service unreachable) has no name.
+                    let file = paths.get(index).filter(|_| !name.is_empty());
+                    if ctx.text() {
+                        warn(&format!(
+                            "error: {}: {e}",
+                            file.map_or_else(|| "upload".into(), |p| p.display().to_string())
+                        ));
+                    }
+                    results.push(json!({ "file": file, "error": e.to_string() }));
+                }
             }
         }
-    }
-    if sign_in_lapsed && new_ids.is_empty() {
-        return Err(Fail::Err(Error::SignInRequired));
-    }
+        if sign_in_lapsed && new_ids.is_empty() {
+            return Err(Fail::Err(Error::SignInRequired));
+        }
 
-    let mut album_error = None;
-    if let (Some(album), false) = (album, new_ids.is_empty()) {
-        let ids: Vec<&str> = new_ids.iter().map(String::as_str).collect();
-        match CloudKit::connect(&*t).and_then(|ck| ck.add_to_album(album, &ids)) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("icloud-photos: adding to album {album}: {e}");
+        if let (Some(album), false) = (album, new_ids.is_empty()) {
+            let ids: Vec<&str> = new_ids.iter().map(String::as_str).collect();
+            if let Err(e) = CloudKit::connect(&*t).and_then(|ck| ck.add_to_album(album, &ids)) {
+                if ctx.text() {
+                    warn(&format!("error: adding to album {album}: {e}"));
+                }
                 album_error = Some(e.to_string());
                 failed += 1;
             }
         }
-    }
 
-    // CloudKit can take ~15-20 s to make new assets queryable: sync until
-    // they are in the catalog, for up to a minute.
-    let mut sync_report = None;
-    let mut missing: Vec<String> = Vec::new();
-    if !no_sync && !new_ids.is_empty() && !sign_in_lapsed {
-        for attempt in 0..4 {
-            if attempt > 0 {
-                eprintln!("waiting for iCloud to index {} new item(s)…", missing.len());
-                std::thread::sleep(Duration::from_secs(15));
+        // CloudKit can take ~15-20 s to make new assets queryable: sync until
+        // they are in the catalog, for up to a minute.
+        if !no_sync && !new_ids.is_empty() && !sign_in_lapsed {
+            for attempt in 0..4 {
+                if attempt > 0 {
+                    eprintln!("waiting for iCloud to index {} new item(s)…", missing.len());
+                    std::thread::sleep(Duration::from_secs(15));
+                }
+                sync_report = Some(run_sync(ctx, &*t, false)?);
+                let cat = ctx.catalog()?;
+                missing = new_ids
+                    .iter()
+                    .filter(|id| !cat.asset(id).ok().flatten().is_some_and(|r| !r.deleted))
+                    .cloned()
+                    .collect();
+                if missing.is_empty() {
+                    break;
+                }
             }
-            sync_report = Some(run_sync(ctx, &*t, false)?);
-            let cat = ctx.catalog()?;
-            missing = new_ids
-                .iter()
-                .filter(|id| !cat.asset(id).ok().flatten().is_some_and(|r| !r.deleted))
-                .cloned()
-                .collect();
-            if missing.is_empty() {
-                break;
+            if !missing.is_empty() && ctx.text() {
+                warn(&format!(
+                    "warning: not in the catalog yet (a later sync will bring them): {}",
+                    missing.join(", ")
+                ));
             }
-        }
-        if !missing.is_empty() {
-            eprintln!(
-                "icloud-photos: not in the catalog yet (a later sync will bring them): {}",
-                missing.join(", ")
-            );
         }
     }
 
     let v = json!({
         "files": results,
-        "uploaded": summary.uploaded,
-        "duplicates": summary.duplicates,
+        "uploaded": uploaded,
+        "duplicates": duplicates,
         "failed": failed,
         "album": album,
         "album_error": album_error,
         "sync": sync_report.as_ref().map(report_json),
         "not_in_catalog": missing,
     });
-    ctx.out(&v, || {
-        let mut lines: Vec<String> = results
-            .iter()
-            .filter_map(|r| {
-                let id = r["asset_id"].as_str()?;
-                Some(if r["duplicate"] == true {
-                    format!("{id}\t(already in iCloud)")
-                } else {
-                    id.to_owned()
-                })
+    let mut lines: Vec<String> = results
+        .iter()
+        .filter_map(|r| {
+            let id = r["asset_id"].as_str()?;
+            Some(if r["duplicate"] == true {
+                format!("{id}\t(already in iCloud)")
+            } else {
+                id.to_owned()
             })
-            .collect();
-        if let Some(r) = &sync_report {
-            lines.push(report_text(r));
-        }
-        lines.join("\n")
-    });
-    Ok(if sign_in_lapsed {
+        })
+        .collect();
+    if let Some(r) = &sync_report {
+        lines.push(report_text(r));
+    }
+    let mut summary = format!("Uploaded {}", plural(uploaded, "file", "files"));
+    if duplicates > 0 {
+        summary.push_str(&format!(", {duplicates} already in iCloud"));
+    }
+    if failed > 0 {
+        summary.push_str(&format!(", {failed} failed"));
+    }
+    let code = if sign_in_lapsed {
         EXIT_SIGN_IN
     } else if failed > 0 {
         EXIT_ERROR
     } else {
         0
-    })
+    };
+    // With nothing uploaded the text is the summary (the failures are on stderr).
+    Ok(Response::new(v, summary)
+        .human(lines.join("\n"))
+        .ids(new_ids)
+        .exit(code))
 }
 
 // ---- delete, prune ------------------------------------------------------
 
-fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
+fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     let mut cat = ctx.catalog()?;
     let mut rows = Vec::new();
     for id in ids {
@@ -1013,22 +1105,21 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
         rows.push(r);
     }
     if !yes {
-        if !std::io::stdin().is_terminal() {
-            return Err(Fail::Usage(
-                "refusing to delete without --yes when stdin is not a terminal".into(),
-            ));
+        // Ask only when someone can answer: text mode, stdin and stdout a terminal.
+        if !output::interactive(ctx.mode) {
+            return Err(usage("delete asks before it acts, and nobody can be asked here")
+                .hint("pass --yes to delete without asking")
+                .into());
         }
-        if !ctx.json {
-            for r in &rows {
-                eprintln!("  {}\t{}", r.id, r.filename);
-            }
+        for r in &rows {
+            warn(&format!("  {}\t{}", r.id, r.filename));
         }
         if !cli::confirm(&format!(
             "Move {} item(s) to Recently Deleted in iCloud, on all your devices? \
              They can be recovered there for about 30 days.",
             rows.len()
         )) {
-            return Err(Fail::Cancelled("nothing deleted".into()));
+            return Err(cancelled("nothing deleted").into());
         }
     }
     let t = ctx.transport()?;
@@ -1077,38 +1168,47 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<u8> {
         Ok(())
     })?;
     let mut results = Vec::new();
+    let mut deleted = Vec::new();
     let mut failed = 0;
     for (row, result) in rows.iter().zip(outcome) {
         match result {
             Ok(_) => {
-                if !ctx.json {
-                    println!("{}\tmoved to Recently Deleted", row.id);
+                if ctx.text() {
+                    say(&format!("{}\tmoved to Recently Deleted", row.id));
                 }
+                deleted.push(row.id.clone());
                 results.push(json!({ "id": row.id, "deleted": true }));
             }
             Err(e) if e.is_sign_in() => return Err(e.into()),
             Err(e) => {
                 failed += 1;
-                if !ctx.json {
-                    eprintln!("icloud-photos: {}: {e}", row.id);
+                if ctx.text() {
+                    warn(&format!("error: {}: {e}", row.id));
                 }
                 results.push(json!({ "id": row.id, "deleted": false, "error": e.to_string() }));
             }
         }
     }
-    if ctx.json {
-        ctx.out(&Value::Array(results), String::new);
+    let code = if failed > 0 { EXIT_ERROR } else { 0 };
+    if ctx.text() {
+        // Every line is already out.
+        return Ok(Response::silent().exit(code));
     }
-    Ok(if failed > 0 { EXIT_ERROR } else { 0 })
+    let mut summary = format!("Moved {} to Recently Deleted", plural(deleted.len(), "item", "items"));
+    if failed > 0 {
+        summary.push_str(&format!("; {failed} failed"));
+    }
+    Ok(Response::new(results, summary).ids(deleted).exit(code))
 }
 
-fn prune(ctx: &Ctx) -> Res<u8> {
+fn prune(ctx: &Ctx) -> Res<Response> {
     let cat = ctx.catalog()?;
     let removed = thumbs::prune_cache(&cat, &ctx.dirs, thumbs::MEDIUM_CACHE_CAP)?;
-    ctx.out(&json!({ "removed": removed }), || {
-        format!("Removed {removed} cached file(s)")
-    });
-    Ok(0)
+    Ok(Response::new(
+        json!({ "removed": removed }),
+        format!("Removed {removed} cached file(s)"),
+    )
+    .count(removed))
 }
 
 // ---- dates --------------------------------------------------------------
@@ -1169,34 +1269,36 @@ mod tests {
 mod exit_tests {
     use super::*;
 
-    fn exit_and_code(e: Error) -> (u8, &'static str, bool) {
-        let (exit, code, _, hint) = classify(Fail::Err(e));
-        (exit, code, hint.is_some())
+    fn exit_and_code(e: Error) -> (u8, String, bool) {
+        let e = classify(Fail::Err(e));
+        (e.exit, e.code, e.hint.is_some())
     }
 
     #[test]
     fn failures_follow_the_shared_exit_mapping() {
         let s = || "x".to_owned();
         let http = |status| Error::Http { status, body: s() };
-        assert_eq!(exit_and_code(Error::Offline(s())), (5, "offline", true));
-        assert_eq!(exit_and_code(Error::Network(s())), (5, "network", false));
-        assert_eq!(exit_and_code(Error::BadResponse(s())), (5, "bad_response", false));
-        assert_eq!(exit_and_code(Error::Service(s())), (5, "session_service", true));
+        let t = |exit, code: &str, hint| (exit, code.to_owned(), hint);
+        assert_eq!(exit_and_code(Error::Offline(s())), t(5, "offline", true));
+        assert_eq!(exit_and_code(Error::Network(s())), t(5, "network", false));
+        assert_eq!(exit_and_code(Error::BadResponse(s())), t(5, "bad_response", false));
+        assert_eq!(exit_and_code(Error::Service(s())), t(5, "session_service", true));
         assert_eq!(
             exit_and_code(Error::KeyringUnavailable(s())),
-            (5, "keyring_unavailable", true)
+            t(5, "keyring_unavailable", true)
         );
-        assert_eq!(exit_and_code(http(503)), (5, "http", false));
-        assert_eq!(exit_and_code(http(421)), (3, "http", true));
-        assert_eq!(exit_and_code(http(401)), (3, "http", true));
-        assert_eq!(exit_and_code(http(404)), (1, "http", false));
+        assert_eq!(exit_and_code(http(503)), t(5, "http", false));
+        assert_eq!(exit_and_code(http(421)), t(3, "http", true));
+        assert_eq!(exit_and_code(http(401)), t(3, "http", true));
+        assert_eq!(exit_and_code(http(404)), t(1, "http", false));
         assert_eq!(
             exit_and_code(Error::NotOffered("ckdatabasews".into())),
-            (3, "service_not_offered", true)
+            t(3, "service_not_offered", true)
         );
-        assert_eq!(exit_and_code(Error::Other(s())), (1, "error", false));
-        assert_eq!(classify(Fail::NotFound(s())).0, 4);
-        assert_eq!(classify(Fail::Usage(s())).0, 2);
-        assert_eq!(classify(Fail::Cancelled(s())).0, 1);
+        assert_eq!(exit_and_code(Error::SignInRequired), t(3, "sign_in_required", true));
+        assert_eq!(exit_and_code(Error::Other(s())), t(1, "error", false));
+        assert_eq!(classify(not_found(s()).into()).exit, 4);
+        assert_eq!(classify(usage(s()).into()).exit, 2);
+        assert_eq!(classify(cancelled(s()).into()).exit, 1);
     }
 }
