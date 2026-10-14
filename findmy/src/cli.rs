@@ -3,17 +3,18 @@
 //! uses. Human-readable output by default, `--json` for machines.
 //!
 //! Exit codes are the table every iCloud tool shares (docs/CLI.md,
-//! `icloud_session::cli`): 0 ok, 1 error, 2 sign-in required, 4 Find My
-//! needs the Apple password (after `icloud-session`'s own re-authorization
-//! with a stored password failed), 64 usage. With `--json` an error is one
-//! JSON line on stderr, `{"error":{"code","message","exit_code"}}`.
+//! `icloud_session::cli`): 0 ok, 1 error, 2 usage, 3 sign-in required or Find
+//! My needs the Apple password (after `icloud-session`'s own re-authorization
+//! with a stored password failed; the JSON `code` tells them apart),
+//! 4 not found. With `--json` an error is one JSON line on stderr,
+//! `{"error":{"code","message","exit_code"}}`.
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
 use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
 
@@ -37,9 +38,9 @@ stderr: {\"error\":{\"code\",\"message\",\"exit_code\"}}; codes: usage,
 sign_in_required, find_my_auth_required, not_found, ambiguous, cancelled,
 unsupported, no_fix, error.
 
-Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in),
-4 Find My needs the Apple password (icloud-session authorize-find-my),
-64 usage.";
+Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in)
+or Find My needs the Apple password (icloud-session authorize-find-my),
+4 not found.";
 
 #[derive(Parser)]
 #[command(
@@ -176,6 +177,7 @@ impl Failure {
             Failure::Usage(_) => EXIT_USAGE,
             Failure::Find(findme::Error::SignInRequired) => EXIT_SIGN_IN,
             Failure::Find(findme::Error::FindMyAuthRequired) => EXIT_FIND_MY_AUTH,
+            Failure::Coded("not_found", _) => EXIT_NOT_FOUND,
             _ => EXIT_ERROR,
         }
     }

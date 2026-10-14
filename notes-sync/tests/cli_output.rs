@@ -77,15 +77,15 @@ fn an_error_without_a_hint_has_none() {
 }
 
 #[test]
-fn internal_error_is_code_internal_exit_70() {
+fn internal_error_is_code_internal_exit_1() {
     let error = Error::Internal("a genuine bug".into());
-    assert_eq!((error.code().as_str(), error.exit_code()), ("internal", 70));
+    assert_eq!((error.code().as_str(), error.exit_code()), ("internal", 1));
     assert_eq!(error.to_string(), "a genuine bug");
 }
 
 #[test]
-fn sign_in_required_exits_2_and_keeps_the_sign_in_marker() {
-    assert_eq!(Error::SignInRequired.exit_code(), 2);
+fn sign_in_required_exits_3_and_keeps_the_sign_in_marker() {
+    assert_eq!(Error::SignInRequired.exit_code(), 3);
     assert!(
         Error::SignInRequired
             .hint()

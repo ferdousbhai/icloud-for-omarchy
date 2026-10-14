@@ -139,31 +139,31 @@ fn usage_help_and_exit_codes() {
         assert!(own.stdout.contains("Exit codes"), "{cmd} --help names the exit codes");
     }
     assert_eq!(env.bare(&["--version"]).code, 0);
-    assert_eq!(env.bare(&["frobnicate"]).code, 64);
-    assert_eq!(env.run(&["list", "--kind", "painting"]).code, 64);
-    assert_eq!(env.run(&["list", "--since", "last tuesday"]).code, 64);
-    assert_eq!(env.run(&["download"]).code, 64, "an id or --all is required");
-    assert_eq!(env.run(&["upload"]).code, 64);
+    assert_eq!(env.bare(&["frobnicate"]).code, 2);
+    assert_eq!(env.run(&["list", "--kind", "painting"]).code, 2);
+    assert_eq!(env.run(&["list", "--since", "last tuesday"]).code, 2);
+    assert_eq!(env.run(&["download"]).code, 2, "an id or --all is required");
+    assert_eq!(env.run(&["upload"]).code, 2);
 
-    // Errors: exit 1, and with --json a JSON object on stderr.
+    // Not found: exit 4, and with --json a JSON object on stderr.
     let r = env.run(&["--json", "info", "NO-SUCH-ID"]);
-    assert_eq!(r.code, 1);
+    assert_eq!(r.code, 4);
     assert!(r.stdout.is_empty());
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
     assert_eq!(
         (err["error"]["code"].as_str(), err["error"]["exit_code"].as_i64()),
-        (Some("not_found"), Some(1))
+        (Some("not_found"), Some(4))
     );
     assert!(err["error"]["message"].as_str().unwrap().contains("NO-SUCH-ID"));
     // A usage error with --json is JSON too.
     let r = env.run(&["--json", "list", "--kind", "painting"]);
-    assert_eq!(r.code, 64);
+    assert_eq!(r.code, 2);
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
     assert_eq!(err["error"]["code"], "usage");
-    assert_eq!(err["error"]["exit_code"], 64);
+    assert_eq!(err["error"]["exit_code"], 2);
     // Delete never asks without a terminal: --yes or a usage error.
     let r = env.run(&["--json", "delete", "NO-SUCH-ID"]);
-    assert_eq!(r.code, 1, "the id is checked first: {}", r.stderr);
+    assert_eq!(r.code, 4, "the id is checked first: {}", r.stderr);
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn albums_list_and_info() {
     assert_eq!(env.ids(&["--since", cutoff]).len(), 10);
     let day = &cutoff[..10];
     assert!(env.ids(&["--since", day]).len() >= 10);
-    assert_eq!(env.run(&["list", "--album", "NOPE"]).code, 1);
+    assert_eq!(env.run(&["list", "--album", "NOPE"]).code, 4);
 
     let human = env.run(&["list", "--limit", "1"]);
     let cols: Vec<&str> = human.stdout.trim_end().split('\t').collect();
@@ -375,8 +375,8 @@ fn thumb_and_download() {
     assert_eq!(got, vec![ids[3].as_str(), ids[0].as_str(), ids[3].as_str()]);
     assert_eq!(many[0]["path"], many[2]["path"]);
 
-    assert_eq!(env.run(&["download", "NO-SUCH-ID"]).code, 1);
-    assert_eq!(env.run(&["thumb", "NO-SUCH-ID"]).code, 1);
+    assert_eq!(env.run(&["download", "NO-SUCH-ID"]).code, 4);
+    assert_eq!(env.run(&["thumb", "NO-SUCH-ID"]).code, 4);
     // Nothing escaped the sandbox.
     assert!(!env.root.join("home/Pictures").exists());
 }
@@ -423,7 +423,7 @@ fn open_downloads_then_hands_the_file_to_the_default_app() {
     assert_eq!(r.code, 1);
     let r = run(&["open", "NO-SUCH-ID"]);
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
-    assert_eq!((r.code, err["error"]["code"].as_str()), (1, Some("not_found")));
+    assert_eq!((r.code, err["error"]["code"].as_str()), (4, Some("not_found")));
 }
 
 #[test]
@@ -488,7 +488,7 @@ fn upload_then_sync_into_the_catalog() {
     assert_eq!(env.ids(&[]).len(), 12);
     assert_eq!(env.json(&["sync"])["assets"], 1);
 
-    assert_eq!(env.run(&["upload", a.to_str().unwrap(), "--album", "NOPE"]).code, 1);
+    assert_eq!(env.run(&["upload", a.to_str().unwrap(), "--album", "NOPE"]).code, 4);
 }
 
 #[test]
@@ -499,7 +499,7 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
 
     // stdin is not a terminal here: without --yes, nothing happens.
     let r = env.run(&["delete", one]);
-    assert_eq!(r.code, 64);
+    assert_eq!(r.code, 2);
     assert!(r.stderr.contains("--yes"));
     assert!(env.server.asset_ids().contains(one));
 
@@ -525,7 +525,7 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     assert_eq!(r.code, 1);
     assert_eq!(r.json()[0]["deleted"], false);
 
-    assert_eq!(env.run(&["delete", "NO-SUCH-ID", "--yes"]).code, 1);
+    assert_eq!(env.run(&["delete", "NO-SUCH-ID", "--yes"]).code, 4);
     assert_eq!(env.json(&["sync"])["mode"], "incremental");
     assert_eq!(env.ids(&[]).len(), 6);
 }
@@ -583,13 +583,13 @@ fn prune_cache_drops_renditions_of_deleted_items() {
 }
 
 #[test]
-fn signed_out_exits_2_until_sign_in() {
+fn signed_out_exits_3_until_sign_in() {
     let env = Env::synced("signin", 4);
     let id = env.ids(&[]).remove(0);
     env.server.sign_out();
 
     let s = env.run(&["--json", "status"]);
-    assert_eq!(s.code, 2);
+    assert_eq!(s.code, 3);
     assert_eq!(s.json()["signed_in"], false);
     for args in [
         vec!["sync"],
@@ -597,16 +597,16 @@ fn signed_out_exits_2_until_sign_in() {
         vec!["delete", id.as_str(), "--yes"],
     ] {
         let r = env.run(&args);
-        assert_eq!(r.code, 2, "{args:?}: {}", r.stderr);
+        assert_eq!(r.code, 3, "{args:?}: {}", r.stderr);
         assert!(r.stderr.contains("sign in"), "{}", r.stderr);
     }
     let r = env.run(&["--json", "sync"]);
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
     assert_eq!(err["error"]["code"], "sign_in_required");
-    assert_eq!(err["error"]["exit_code"], 2);
+    assert_eq!(err["error"]["exit_code"], 3);
     let f = env.root.join("X.JPG");
     std::fs::write(&f, b"\xFF\xD8 x").unwrap();
-    assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 2);
+    assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 3);
     // Local-only commands still work, and so do content downloads (signed
     // URLs on Apple's content hosts carry no session).
     assert_eq!(env.run(&["list"]).code, 0);

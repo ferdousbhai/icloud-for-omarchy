@@ -62,8 +62,8 @@ fn every_known_error_has_its_class_name_a_hint_and_exit_1() {
 }
 
 #[test]
-fn sign_in_required_exits_2_with_the_reauthenticate_marker() {
-    assert_eq!(Error::SignInRequired.exit_code(), 2);
+fn sign_in_required_exits_3_with_the_reauthenticate_marker() {
+    assert_eq!(Error::SignInRequired.exit_code(), 3);
     assert_eq!(Error::SignInRequired.code(), "sign_in_required");
     assert!(
         Error::SignInRequired

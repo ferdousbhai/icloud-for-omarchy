@@ -6,10 +6,10 @@
 //! (`cmd::lock`); status, history, diff, push --dry-run and vault-info only
 //! read, and don't.
 //!
-//! Exit codes: 0 ok, 1 known error, 2 sign-in required, 3 `status`/`push
-//! --dry-run` has entries or `diff` found differences, 64 usage, 70 internal
-//! (the table every iCloud tool shares; docs/CLI.md); `sync` exits with its
-//! worse half, 2 above all. `--json` is global
+//! Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required, 5 a service
+//! unavailable (the table every iCloud tool shares; docs/CLI.md). `status`,
+//! `push --dry-run` and `diff` report their changes in the result and exit 0;
+//! `sync` exits with its worse half, a sign-in above all. `--json` is global
 //! (before or after the verb): stdout carries only the JSON result,
 //! everything else goes to stderr, an error as one JSON line last.
 
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use icloud_notes_sync::cmd::errors::{EXIT_HAS_ENTRIES, EXIT_OK};
+use icloud_notes_sync::cmd::errors::EXIT_OK;
 use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{OutputContext, TOOL};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
@@ -31,8 +31,9 @@ use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 #[command(
     name = "icloud-notes-sync",
     about = "Sync iCloud Notes with a folder of Markdown files",
-    after_help = "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 3 status/push --dry-run \
-                  has entries or diff found differences, 64 usage, 70 internal error.\n\
+    after_help = "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in), \
+                  5 a service unavailable (no network / offline). status, push --dry-run and diff \
+                  report their changes in the result and exit 0.\n\
                   With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
                   {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}.\n\
                   clone, pull, push, sync and restore take the vault's lock, shared with the Notes app (icloud-notes); \
@@ -367,11 +368,7 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
             };
             let result = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
             ctx.emit_result(&result, |r| print_lines(push_lines(r, &target)));
-            Ok(if result.dry_run && !result.entries.is_empty() {
-                EXIT_HAS_ENTRIES
-            } else {
-                EXIT_OK
-            })
+            Ok(EXIT_OK)
         }
         Command::Sync { directory } => {
             let target = resolve_target_dir(directory)?;
@@ -420,11 +417,7 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
                     println!("{line}");
                 }
             });
-            Ok(if result.entries.is_empty() {
-                EXIT_OK
-            } else {
-                EXIT_HAS_ENTRIES
-            })
+            Ok(EXIT_OK)
         }
         Command::Restore { file, directory } => {
             let target = resolve_target_dir(directory)?;
@@ -468,11 +461,7 @@ fn run(command: Command, ctx: OutputContext, wait: Option<std::time::Duration>) 
             let target = resolve_target_dir(directory)?;
             let result = diff::run_diff(&target, &file, from, to, &mut on_status)?;
             ctx.emit_result(&result, |r| println!("{}", diff::render_diff_result(r)));
-            Ok(if result.has_differences() {
-                EXIT_HAS_ENTRIES
-            } else {
-                EXIT_OK
-            })
+            Ok(EXIT_OK)
         }
     }
 }

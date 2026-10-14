@@ -6,15 +6,22 @@ use std::io::{BufRead, IsTerminal, Write};
 
 pub const EXIT_OK: u8 = 0;
 pub const EXIT_ERROR: u8 = 1;
-/// iCloud sign-in required: `icloud-session sign-in`.
-pub const EXIT_SIGN_IN: u8 = 2;
-/// Has changes or differences; not an error.
-pub const EXIT_CHANGES: u8 = 3;
+/// Invalid usage or request; a destructive command without `--yes`.
+pub const EXIT_USAGE: u8 = 2;
+/// Not signed in: `icloud-session sign-in`.
+pub const EXIT_SIGN_IN: u8 = 3;
 /// Find My needs the Apple password: `icloud-session authorize-find-my`.
-pub const EXIT_FIND_MY_AUTH: u8 = 4;
-pub const EXIT_USAGE: u8 = 64;
-/// An internal error, a bug.
-pub const EXIT_INTERNAL: u8 = 70;
+/// The same exit code as a sign-in (not configured / not signed in); the
+/// JSON `code` (`find_my_auth_required`) still tells the two apart.
+pub const EXIT_FIND_MY_AUTH: u8 = 3;
+/// The thing asked for does not exist.
+pub const EXIT_NOT_FOUND: u8 = 4;
+/// A service or a required tool is unavailable: no network, offline, the
+/// daemon unreachable (`network`, `offline`, `session_service`, `http`).
+pub const EXIT_UNAVAILABLE: u8 = 5;
+/// An internal error, a bug. The same exit code as [`EXIT_ERROR`]; kept so
+/// call sites can say which they mean.
+pub const EXIT_INTERNAL: u8 = 1;
 
 /// Reports an error on stderr and returns `exit_code`. With `json`, one line
 /// `{"error":{"code","message","exit_code","hint"?}}`; else `tool: message`,

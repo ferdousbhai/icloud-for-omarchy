@@ -39,8 +39,8 @@ namespace {
 
 constexpr int kExitOk = 0;
 constexpr int kExitError = 1;
-constexpr int kExitSignIn = 2;
-constexpr int kExitUsage = 64;
+constexpr int kExitUsage = 2;
+constexpr int kExitSignIn = 3;
 
 // How long a command waits for the vault's lock when a background sync or
 // another command holds it (the window holds it while open: no waiting
@@ -75,8 +75,8 @@ const char *const kFooter =
     "{\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}), --vault DIR (a vault other than\n"
     "~/Documents/Notes), --wait SECS (how long to wait for the vault's lock; 30 when\n"
     "a background sync holds it, none while the Notes window holds it).\n"
-    "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 3 push --dry-run\n"
-    "has changes or diff found differences, 64 usage.";
+    "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in). push --dry-run\n"
+    "and diff report their changes in the result and exit 0.";
 
 // NOTE is a note's vault-relative path ("Notes/Groceries.md", .md optional),
 // its apple-note-id, or its title (ignoring case) when exactly one note has it.

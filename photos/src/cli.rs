@@ -4,8 +4,8 @@
 //! `upload::upload_batch`, `CloudKit::delete_assets`, `thumbs::prune_cache`.
 //!
 //! Output is plain text, or JSON on stdout with `--json`. Exit codes, as in
-//! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 sign-in required,
-//! 64 usage. With `--json` an error is one JSON line on stderr:
+//! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 usage, 3 sign-in
+//! required, 4 not found. With `--json` an error is one JSON line on stderr:
 //! `{"error":{"code","message","exit_code"}}`.
 
 use std::cell::RefCell;
@@ -25,13 +25,13 @@ use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_USAGE};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
 
 const TOOL: &str = "icloud-photos";
 
-const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 sign-in required (icloud-session sign-in), 64 usage.\n\
+const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in), 4 not found.\n\
 With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
 {\"error\":{\"code\",\"message\",\"exit_code\"}}.\n\
 ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple.";
@@ -212,7 +212,7 @@ pub fn main() -> ExitCode {
         Err(fail) => {
             let (code, kind, msg) = match fail {
                 Fail::Usage(m) => (EXIT_USAGE, "usage", m),
-                Fail::NotFound(m) => (EXIT_ERROR, "not_found", m),
+                Fail::NotFound(m) => (EXIT_NOT_FOUND, "not_found", m),
                 Fail::Cancelled(m) => (EXIT_ERROR, "cancelled", m),
                 Fail::Err(e) if e.is_sign_in() => (
                     EXIT_SIGN_IN,

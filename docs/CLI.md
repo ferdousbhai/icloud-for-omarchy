@@ -78,7 +78,7 @@ timer's sync). All of it is new, in the app binary: see
 | Sync Now (Ctrl+R) | `icloud-photos sync [--full]` | existed |
 | Upload… (Ctrl+U), Stop After This File | `icloud-photos upload FILE... [--album ID] [--no-sync]` (album, no-sync: command line only) | existed |
 | Preferences: library folder, download originals on demand / all | `icloud-photos config [--library-dir DIR] [--download on-demand\|all]`; `download --all` | existed |
-| Sign-in banner | `icloud-photos status` (exits 2 signed out), `icloud-photos sign-in` | existed |
+| Sign-in banner | `icloud-photos status` (exits 3 signed out), `icloud-photos sign-in` | existed |
 | About | `icloud-photos --version` | existed |
 | Cache trimming (automatic) | `icloud-photos prune-cache` | existed |
 | Favourites, editing, album management | not in the app either | n/a |
@@ -94,8 +94,8 @@ timer's sync). All of it is new, in the app binary: see
 | History trail on the map | `icloud-findmy history NAME\|ID [--since 24h]` | existed |
 | Play Sound | `icloud-findmy play-sound NAME\|ID --yes` | existed |
 | Lost Mode… (phone, message) | `icloud-findmy lost-mode NAME\|ID --phone P --message M --yes` | existed |
-| Sign-in banner | exit 2, then `icloud-session sign-in` | existed |
-| Find My password banner (Enter Password) | exit 4, then `icloud-session authorize-find-my` (or `set-password` once) | existed |
+| Sign-in banner | exit 3, then `icloud-session sign-in` | existed |
+| Find My password banner (Enter Password) | exit 3 (code `find_my_auth_required`), then `icloud-session authorize-find-my` (or `set-password` once) | existed |
 | Old positions dropped after 30 days | `icloud-findmy prune-history` | existed |
 
 ### Sign-in (`sessiond`)
@@ -171,7 +171,7 @@ PATH (a development build).
 - **Nothing asks unless stdin is a terminal.** Destructive commands
   (`icloud-notes delete`, `delete-folder`, `restore`; `icloud-photos
   delete`; `icloud-findmy play-sound`, `lost-mode`) ask on a terminal and, without one, refuse with a usage error
-  (64) unless `--yes` is given.
+  (2) unless `--yes` is given.
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
   `ICLOUD_SESSION_MOCK_URL` (photos and findmy: a fake
   Apple server), `icloud-photos --data-dir DIR`, `icloud-findmy --data-dir
@@ -180,26 +180,29 @@ PATH (a development build).
 
 ### Exit codes
 
+The codes are the shared product contract (0 ok, 1 other failure, 2 usage,
+3 not signed in, 4 not found, 5 a service unavailable). `status`, `push
+--dry-run` and `diff` report their changes in the result and exit 0.
+
 | Code | Meaning | session | notes | notes-sync (engine) | photos | findmy |
 |---|---|---|---|---|---|---|
 | 0 | ok | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 1 | error (the JSON `code` says which) | ✓ | ✓ | ✓ | ✓ (also: some items of a batch failed) | ✓ |
-| 2 | iCloud sign-in required: `icloud-session sign-in` | ✓ (also: the window closed without a sign-in) | ✓ (`status` too, when signed out) | ✓ | ✓ (`status` too, when signed out) | ✓ |
-| 3 | has changes / differences (not an error) | | `push --dry-run`, `diff` | `status`, `push --dry-run`, `diff` | | |
-| 4 | Find My needs the Apple password: `icloud-session authorize-find-my` | ✓ (also: authorization not completed) | | | | ✓ |
-| 64 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 70 | internal error, a bug | | (passed through from the engine) | ✓ | | |
+| 2 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 3 | not signed in: `icloud-session sign-in`; or Find My needs the Apple password: `icloud-session authorize-find-my` (the JSON `code` tells them apart) | ✓ (also: the window closed without a sign-in or authorization) | ✓ (`status` too, when signed out) | ✓ | ✓ (`status` too, when signed out) | ✓ |
+| 4 | not found | | | | ✓ | ✓ |
+| 5 | a service or a required tool is unavailable (no network, offline, the daemon unreachable) | ✓ | | ✓ | | |
 
 ### Error codes
 
 | Tool | `error.code` values |
 |---|---|
 | all | `usage`, `sign_in_required` |
-| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed`, `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `session_service` (daemon unreachable), `network`, `bad_response` (Apple answered with something unreadable), `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http`, `io`, `error` |
-| icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 64), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` |
-| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed), `internal`, ... |
-| icloud-photos | `not_found`, `cancelled`, `error` |
-| icloud-findmy | `find_my_auth_required`, `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
+| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed` (these three exit 3), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `session_service` (daemon unreachable), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http` (these four exit 5), `bad_response` (Apple answered with something unreadable), `io`, `error` |
+| icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 2), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` (all exit 1 but `choices_mismatch`) |
+| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed; `offline` and `network` exit 5), `internal`, ... |
+| icloud-photos | `not_found` (exit 4), `cancelled`, `error` |
+| icloud-findmy | `find_my_auth_required` (exit 3), `not_found` (exit 4), `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
 
 ## JSON shapes
 
@@ -255,7 +258,7 @@ exit_code, result, lines}` (`result` the command's own JSON, `lines` its
 human report) or `{ok, exit_code, error}`, `pull` is null when it did not
 run (the push found the sign-in gone, or iCloud out of reach), and
 `vault_info` is what `vault-info` would print after it. It exits with the
-worse half's code, 2 above all. `vault-info` prints `{vault, cloned,
+worse half's code, a sign-in required (3) above all. `vault-info` prints `{vault, cloned,
 stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}`;
 `stateDir` is the engine's state directory, `.icloud-notes` (or a layout 3
 vault's `.icloud-md`, until a command that takes the lock moves it; see

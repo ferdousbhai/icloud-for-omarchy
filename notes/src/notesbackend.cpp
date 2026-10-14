@@ -1594,9 +1594,9 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     m_syncLabel = label;
     m_lastExit = exitCode;
     m_captured = output;
-    // Exit 3 is an answer, not a failure: status has entries to push, or
-    // diff found differences.
-    const bool ok = exitCode == 0 || (exitCode == 3 && (m_mode == Mode::Preview || m_mode == Mode::Diff));
+    // status, push --dry-run and diff report their changes in the result and
+    // exit 0; only a non-zero exit is a failure.
+    const bool ok = exitCode == 0;
 
     QVariantMap parsed;
     if (ok && m_mode == Mode::Preview)
@@ -1614,7 +1614,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // told (it confirms with Apple before signing everyone out) and syncing
     // pauses until it reports a sign-in, since every further sync would
     // fail the same way.
-    const bool sessionExpired = !ok && exitCode == 2;
+    const bool sessionExpired = !ok && exitCode == 3;
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the
@@ -1712,7 +1712,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
         // failed as the run did, as two runs would have; a sign-in skips the pull.
         const int code = exitCode == 0 ? -1 : exitCode;
         halves << Half{ QStringLiteral("Push"), code, {} };
-        if (code != 2)
+        if (code != 3)
             halves << Half{ QStringLiteral("Pull"), code, {} };
         quiet = false;
     } else {
@@ -1723,7 +1723,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
                 pulledChanges = pulledChanges || pulled.value(QLatin1StringView(count)).toInt() > 0;
             pulledChanges = pulledChanges || !pulled.value(QStringLiteral("changes")).toArray().isEmpty()
                 || !pulled.value(QStringLiteral("conflicts")).toArray().isEmpty();
-        } else if (halves.first().exitCode != 2) {
+        } else if (halves.first().exitCode != 3) {
             // Not run: the push found iCloud out of reach. It failed as the push did.
             halves << Half{ QStringLiteral("Pull"), halves.first().exitCode, halves.first().output };
         }

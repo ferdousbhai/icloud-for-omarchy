@@ -167,7 +167,7 @@ fn locate_gives_up_on_a_device_with_only_an_old_fix() {
 fn play_sound_needs_yes_without_a_terminal() {
     let env = start();
     let out = env.run(&["play-sound", "Test's iPhone"]);
-    assert_eq!(code(&out), 64);
+    assert_eq!(code(&out), 2);
     assert!(stderr(&out).contains("--yes"), "{}", stderr(&out));
     assert!(env.actions().is_empty());
 
@@ -194,13 +194,17 @@ fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
     assert!(err.contains("matches 4 devices") && err.contains(IPHONE), "{err}");
 
     let out = env.run(&["play-sound", "nokia", "--yes"]);
-    assert_eq!(code(&out), 1);
+    assert_eq!(code(&out), 4);
     assert!(stderr(&out).contains("no device matches"), "{}", stderr(&out));
-    // The same as machine-readable codes.
-    for (name, want) in [("nokia", "not_found"), ("test's", "ambiguous")] {
+    // The same as machine-readable codes (not found exits 4, ambiguous 1).
+    for (name, want, exit) in [("nokia", "not_found", 4), ("test's", "ambiguous", 1)] {
         let out = env.run(&["play-sound", name, "--yes", "--json"]);
         let err: Value = serde_json::from_slice(&out.stderr).unwrap();
-        assert_eq!((code(&out), err["error"]["code"].as_str()), (1, Some(want)), "{name}");
+        assert_eq!(
+            (code(&out), err["error"]["code"].as_str()),
+            (exit, Some(want)),
+            "{name}"
+        );
     }
 
     // The AirPods cannot do Lost Mode in the fixture.
@@ -214,9 +218,9 @@ fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
 fn lost_mode_sends_phone_and_message() {
     let env = start();
     let out = env.run(&["lost-mode", "macbook", "--phone", "+1555", "--message", "Lost"]);
-    assert_eq!(code(&out), 64, "refused without --yes on a non-terminal");
+    assert_eq!(code(&out), 2, "refused without --yes on a non-terminal");
     let out = env.run(&["lost-mode", "macbook", "--phone", "+1555", "--yes"]);
-    assert_eq!(code(&out), 64, "--message is required");
+    assert_eq!(code(&out), 2, "--message is required");
     assert!(env.actions().is_empty());
 
     let done = env.json(&[
@@ -259,7 +263,7 @@ fn history_shows_the_trail_by_name_or_offline_by_id() {
     assert!(stdout(&out).contains("positions since"), "{}", stdout(&out));
 
     let out = env.run(&["history", "iphone", "--since", "soon"]);
-    assert_eq!(code(&out), 64);
+    assert_eq!(code(&out), 2);
 }
 
 #[test]
@@ -287,7 +291,7 @@ fn prune_history_deletes_rows_past_retention() {
 }
 
 #[test]
-fn usage_errors_exit_64() {
+fn usage_errors_exit_2() {
     let env = start();
     for args in [
         &["frobnicate"][..],
@@ -297,7 +301,7 @@ fn usage_errors_exit_64() {
         &["devices", "--bogus"],
     ] {
         let out = env.run(args);
-        assert_eq!(code(&out), 64, "{args:?}: {}", stderr(&out));
+        assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
     }
     // Help never touches the network or the history.
     let help = |args: &[&str]| {
@@ -337,10 +341,10 @@ fn usage_errors_exit_64() {
     // A usage error with --json is the JSON error object; --json may come
     // before the command.
     let out = env.run(&["--json", "locate"]);
-    assert_eq!(code(&out), 64);
+    assert_eq!(code(&out), 2);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(err["error"]["code"], "usage");
-    assert_eq!(err["error"]["exit_code"], 64);
+    assert_eq!(err["error"]["exit_code"], 2);
     let listed: Value = serde_json::from_slice(&env.run(&["--json", "devices"]).stdout).unwrap();
     assert!(listed.as_array().is_some_and(|a| !a.is_empty()));
 }
@@ -359,16 +363,16 @@ fn answering(status: u16) -> String {
 }
 
 #[test]
-fn find_my_password_needed_exits_4() {
+fn find_my_password_needed_exits_3() {
     let tmp = tempfile::tempdir().unwrap();
     let out = run_at(&answering(450), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 4, "{}", stderr(&out));
+    assert_eq!(code(&out), 3, "{}", stderr(&out));
     assert!(stderr(&out).contains("authorize-find-my"), "{}", stderr(&out));
 
     let out = run_at(&answering(450), tmp.path(), &["devices", "--json"]);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(err["error"]["code"], "find_my_auth_required");
-    assert_eq!(err["error"]["exit_code"], 4);
+    assert_eq!(err["error"]["exit_code"], 3);
 }
 
 #[test]
@@ -379,11 +383,11 @@ fn other_http_errors_exit_1() {
 }
 
 #[test]
-fn signed_out_exits_2() {
+fn signed_out_exits_3() {
     // Mock mode has no daemon to confirm a 421 with: it means signed out.
     let tmp = tempfile::tempdir().unwrap();
     let out = run_at(&answering(421), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(code(&out), 3, "{}", stderr(&out));
     assert!(stderr(&out).contains("icloud-session sign-in"), "{}", stderr(&out));
 }
 

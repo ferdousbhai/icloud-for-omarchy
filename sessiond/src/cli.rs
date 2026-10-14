@@ -3,7 +3,8 @@
 //!
 //! Talks to icloud-sessiond over D-Bus. JSON on stdout; errors on stderr
 //! with a non-zero exit, in the table every iCloud tool shares: 1 error,
-//! 2 sign-in required, 4 Find My not authorized, 64 usage
+//! 2 usage, 3 sign-in required or Find My not authorized, 5 a service
+//! unavailable (the daemon unreachable, no network, offline)
 //! (`icloud_session::cli`). With `--json` an error is one JSON line on stderr:
 //! `{"error":{"code","message","exit_code","hint"?}}`.
 
@@ -12,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
 use icloud_session::{BUS_NAME, Error, INTERFACE, OBJECT_PATH, Session, Status};
 use serde_json::json;
 use zeroize::Zeroizing;
@@ -25,8 +26,8 @@ static JSON: AtomicBool = AtomicBool::new(false);
 const AFTER_HELP: &str = "\
 --json: errors as one JSON line on stderr, {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"?}}
 (output is JSON anyway).
-Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed), 4 Find My not authorized
-(or its authorization not completed), 64 usage.";
+Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (or sign-in not completed) or Find My not
+authorized (or its authorization not completed), 5 a service unavailable (daemon unreachable, offline).";
 
 #[derive(Parser)]
 #[command(
@@ -298,11 +299,11 @@ fn fail(e: Error) -> ExitCode {
             &message,
             Some("unlock the keyring (GNOME Keyring), then try again"),
         ),
-        Error::Service(_) => fail_with("session_service", EXIT_ERROR, &message, None),
-        Error::Network(_) => fail_with("network", EXIT_ERROR, &message, None),
+        Error::Service(_) => fail_with("session_service", EXIT_UNAVAILABLE, &message, None),
+        Error::Network(_) => fail_with("network", EXIT_UNAVAILABLE, &message, None),
         Error::BadResponse(_) => fail_with("bad_response", EXIT_ERROR, &message, None),
-        Error::Offline(_) => fail_with("offline", EXIT_ERROR, &message, None),
-        Error::Http { .. } => fail_with("http", EXIT_ERROR, &message, None),
+        Error::Offline(_) => fail_with("offline", EXIT_UNAVAILABLE, &message, None),
+        Error::Http { .. } => fail_with("http", EXIT_UNAVAILABLE, &message, None),
         Error::Io(_) => fail_with("io", EXIT_ERROR, &message, None),
     }
 }

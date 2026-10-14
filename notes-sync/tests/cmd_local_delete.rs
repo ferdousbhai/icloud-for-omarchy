@@ -184,7 +184,7 @@ fn pull_merges_a_remote_edit_into_a_renamed_file_and_the_move_still_pairs() {
         &cassette,
         &["--json", "push", "--dry-run", vault.to_str().unwrap()],
     );
-    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
     let entries = stdout["entries"].as_array().unwrap();
     assert!(
         entries
@@ -309,7 +309,7 @@ fn a_local_edit_over_a_remote_edit_goes_up_merged_in_one_push() {
         &cassette,
         &["--json", "push", "--dry-run", vault.to_str().unwrap()],
     );
-    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
     assert_eq!(
         std::fs::read_to_string(vault.join(FILE)).unwrap(),

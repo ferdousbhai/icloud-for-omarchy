@@ -25,7 +25,7 @@ pub struct SyncOutcome {
 
 impl SyncOutcome {
     /// The run's exit code: the worse of the two halves, a sign-in required
-    /// (2) above anything else.
+    /// (3) above anything else.
     pub fn exit_code(&self) -> u8 {
         let push = half_exit_code(&self.push);
         let pull = self.pull.as_ref().map_or(EXIT_OK, half_exit_code);

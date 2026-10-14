@@ -186,11 +186,11 @@ int main(int argc, char *argv[])
         }
         check(all, "cli every command has --help, and help lists it");
         const Run bogus = cliJson({ QStringLiteral("bogus") });
-        check(bogus.code == 64 && bogus.out.isEmpty() && bogus.errorCode() == QStringLiteral("usage")
-                  && bogus.error().value(QStringLiteral("exit_code")).toInt() == 64,
-              "cli unknown command: exit 64, JSON usage error");
-        check(cli({ QStringLiteral("list"), QStringLiteral("extra") }).code == 64, "cli extra argument is usage");
-        check(cli({ QStringLiteral("read"), QStringLiteral("Alpha"), QStringLiteral("--yes") }).code == 64,
+        check(bogus.code == 2 && bogus.out.isEmpty() && bogus.errorCode() == QStringLiteral("usage")
+                  && bogus.error().value(QStringLiteral("exit_code")).toInt() == 2,
+              "cli unknown command: exit 2, JSON usage error");
+        check(cli({ QStringLiteral("list"), QStringLiteral("extra") }).code == 2, "cli extra argument is usage");
+        check(cli({ QStringLiteral("read"), QStringLiteral("Alpha"), QStringLiteral("--yes") }).code == 2,
               "cli an option the command does not take is usage");
         check(cliJson({ QStringLiteral("--version") }).json().toObject().contains(QStringLiteral("version")), "cli --version");
     }
@@ -289,7 +289,7 @@ int main(int argc, char *argv[])
         check(found.size() == 1 && found.at(0).toObject().value(QStringLiteral("path")).toString() == QStringLiteral("Notes/Alpha.md")
                   && found.at(0).toObject().value(QStringLiteral("snippet")).toString() == QStringLiteral("eggs"),
               "cli search JSON");
-        check(cli({ QStringLiteral("search"), QStringLiteral("e") }).code == 64, "cli search wants 2 characters");
+        check(cli({ QStringLiteral("search"), QStringLiteral("e") }).code == 2, "cli search wants 2 characters");
     }
 
     // ---- changing notes ----------------------------------------------------
@@ -350,7 +350,7 @@ int main(int argc, char *argv[])
         check(ro.code == 1 && ro.errorCode() == QStringLiteral("read_only")
                   && readFile(QStringLiteral("Work/Grid.md")).contains(QStringLiteral("huge")),
               "cli write refuses a read-only note");
-        check(cli({ QStringLiteral("write"), QStringLiteral("alpha") }).code == 64, "cli write needs the text");
+        check(cli({ QStringLiteral("write"), QStringLiteral("alpha") }).code == 2, "cli write needs the text");
 
         const Run t1 = cliJson({ QStringLiteral("toggle"), QStringLiteral("alpha"), QStringLiteral("2") });
         const Run t2 = cliJson({ QStringLiteral("toggle"), QStringLiteral("alpha"), QStringLiteral("3") });
@@ -382,7 +382,7 @@ int main(int argc, char *argv[])
               "cli move refuses a read-only note");
 
         const Run noYes = cliJson({ QStringLiteral("delete"), QStringLiteral("Work/Groceries.md") });
-        check(noYes.code == 64 && exists(QStringLiteral("Work/Groceries.md")), "cli delete without --yes and no terminal: refused");
+        check(noYes.code == 2 && exists(QStringLiteral("Work/Groceries.md")), "cli delete without --yes and no terminal: refused");
         const Run del = cliJson({ QStringLiteral("delete"), QStringLiteral("Work/Groceries.md"), QStringLiteral("--yes") });
         check(del.code == 0 && !exists(QStringLiteral("Work/Groceries.md"))
                   && QDir(g_scratch + QStringLiteral("/xdg-data/Trash/files")).entryList(QDir::Files).contains(QStringLiteral("Groceries.md")),
@@ -393,8 +393,8 @@ int main(int argc, char *argv[])
     {
         const Run bad = cliJson({ QStringLiteral("resolve"), QStringLiteral("beta"), QStringLiteral("--choices"),
                                   QStringLiteral("local") });
-        check(bad.code == 64 && bad.errorCode() == QStringLiteral("choices_mismatch"), "cli resolve wants one choice per block");
-        check(cli({ QStringLiteral("resolve"), QStringLiteral("beta"), QStringLiteral("--choices"), QStringLiteral("local,mine") }).code == 64,
+        check(bad.code == 2 && bad.errorCode() == QStringLiteral("choices_mismatch"), "cli resolve wants one choice per block");
+        check(cli({ QStringLiteral("resolve"), QStringLiteral("beta"), QStringLiteral("--choices"), QStringLiteral("local,mine") }).code == 2,
               "cli resolve rejects an unknown choice");
         const Run ok = cliJson({ QStringLiteral("resolve"), QStringLiteral("beta"), QStringLiteral("--choices"),
                                  QStringLiteral("local,both") });
@@ -426,7 +426,7 @@ int main(int argc, char *argv[])
         check(cliJson({ QStringLiteral("recover"), QStringLiteral("tangle"), QStringLiteral("--strip") }).errorCode()
                   == QStringLiteral("no_conflicts"),
               "cli recover on a clean note: no_conflicts");
-        check(cli({ QStringLiteral("recover"), QStringLiteral("tangle") }).code == 64, "cli recover needs --strip or --synced");
+        check(cli({ QStringLiteral("recover"), QStringLiteral("tangle") }).code == 2, "cli recover needs --strip or --synced");
     }
 
     // ---- folders -------------------------------------------------------------
@@ -444,7 +444,7 @@ int main(int argc, char *argv[])
         check(rf.code == 0 && QDir(g_vault + QStringLiteral("/Work/Old")).exists()
                   && rf.json().toObject().value(QStringLiteral("folder")).toString() == QStringLiteral("Work/Old"),
               "cli rename-folder");
-        check(cli({ QStringLiteral("delete-folder"), QStringLiteral("Work/Old") }).code == 64, "cli delete-folder asks for --yes");
+        check(cli({ QStringLiteral("delete-folder"), QStringLiteral("Work/Old") }).code == 2, "cli delete-folder asks for --yes");
         check(cli({ QStringLiteral("delete-folder"), QStringLiteral("Work/Old"), QStringLiteral("--yes") }).code == 0
                   && !QDir(g_vault + QStringLiteral("/Work/Old")).exists(),
               "cli delete-folder --yes");
@@ -465,7 +465,7 @@ int main(int argc, char *argv[])
         // history, diff and push --dry-run are the engine's own, and only read:
         // no lock (the engine takes it itself where it writes).
         check(cli({ QStringLiteral("history"), QStringLiteral("alpha") }).code == 0
-                  && cli({ QStringLiteral("push"), QStringLiteral("--dry-run") }).code == 3,
+                  && cli({ QStringLiteral("push"), QStringLiteral("--dry-run") }).code == 0,
               "cli the engine's read-only commands run while the window is open");
         const QJsonObject s = cliJson({ QStringLiteral("status") }).json().toObject().value(QStringLiteral("lock")).toObject();
         check(s.value(QStringLiteral("app_open")).toBool() && s.value(QStringLiteral("held_by")).toString() == QStringLiteral("Notes (pid 4242)"),
@@ -507,15 +507,15 @@ int main(int argc, char *argv[])
         check(cli({ QStringLiteral("push") }).code == 0 && stubLog() == QStringList{ QStringLiteral("push") }, "cli push");
 
         const Run dry = cliJson({ QStringLiteral("push"), QStringLiteral("--dry-run") });
-        check(dry.code == 3 && dry.json().toObject().value(QStringLiteral("entries")).toArray().size() == 1,
-              "cli push --dry-run passes icloud-notes-sync's preview through, exit 3");
+        check(dry.code == 0 && dry.json().toObject().value(QStringLiteral("entries")).toArray().size() == 1,
+              "cli push --dry-run passes icloud-notes-sync's preview through, exit 0");
         check(cli({ QStringLiteral("history"), QStringLiteral("alpha") }).out.contains("changed: Notes/Alpha.md"),
               "cli history names the note by its vault path");
         check(cli({ QStringLiteral("history"), QStringLiteral("alpha"), QStringLiteral("--records") })
                   .out.contains("r1  2026-09-01T00:00:00Z  Notes/Alpha.md"),
               "cli history --records passes --records through");
-        check(cli({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") }).code == 3, "cli diff exit 3");
-        check(cli({ QStringLiteral("restore"), QStringLiteral("alpha") }).code == 64
+        check(cli({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") }).code == 0, "cli diff exit 0");
+        check(cli({ QStringLiteral("restore"), QStringLiteral("alpha") }).code == 2
                   && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("restored")),
               "cli restore asks for --yes");
         check(cli({ QStringLiteral("restore"), QStringLiteral("alpha"), QStringLiteral("--yes") }).code == 0
@@ -530,32 +530,32 @@ int main(int argc, char *argv[])
                   && stubLog() == QStringList{ QStringLiteral("sync") },
               "cli new --push syncs afterwards");
 
-        // A refused session: exit 2, and icloud-session is told.
+        // A refused session: exit 3, and icloud-session is told.
         fake.reportCalls = 0;
         const Run refused = cliJson({ QStringLiteral("pull") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXPIRED"), QStringLiteral("1") } });
-        check(refused.code == 2 && refused.errorCode() == QStringLiteral("sign_in_required") && fake.reportCalls == 1,
-              "cli pull refused by iCloud: exit 2, reported to icloud-session");
+        check(refused.code == 3 && refused.errorCode() == QStringLiteral("sign_in_required") && fake.reportCalls == 1,
+              "cli pull refused by iCloud: exit 3, reported to icloud-session");
 
         // Signed out: nothing runs.
         fake.set({ { QStringLiteral("SignedIn"), false } });
         QFile::remove(g_scratch + QStringLiteral("/stub.log"));
         const Run out = cliJson({ QStringLiteral("sync") });
-        check(out.code == 2 && out.errorCode() == QStringLiteral("sign_in_required") && stubLog().isEmpty(),
-              "cli sync signed out: exit 2, icloud-notes-sync never runs");
+        check(out.code == 3 && out.errorCode() == QStringLiteral("sign_in_required") && stubLog().isEmpty(),
+              "cli sync signed out: exit 3, icloud-notes-sync never runs");
         const Run st = cliJson({ QStringLiteral("status") });
-        check(st.code == 2 && !st.json().toObject().value(QStringLiteral("signed_in")).toBool(), "cli status signed out exits 2");
+        check(st.code == 3 && !st.json().toObject().value(QStringLiteral("signed_in")).toBool(), "cli status signed out exits 3");
         const Run local = cliJson({ QStringLiteral("write"), QStringLiteral("pushed"), QStringLiteral("--body"),
                                     QStringLiteral("# Pushed\nkept\n"), QStringLiteral("--push") });
-        check(local.code == 2 && readFile(QStringLiteral("Notes/Pushed.md")) == QStringLiteral("# Pushed\nkept\n")
+        check(local.code == 3 && readFile(QStringLiteral("Notes/Pushed.md")) == QStringLiteral("# Pushed\nkept\n")
                   && local.json().toObject().value(QStringLiteral("action")).toString() == QStringLiteral("write"),
-              "cli write --push signed out: written here, exit 2 for the push");
+              "cli write --push signed out: written here, exit 3 for the push");
 
         // clone: into an empty vault, as the signed-in account; never a window.
         const QString fresh = g_scratch + QStringLiteral("/fresh");
         const int signIns = fake.signInCalls;
         const Run noClone = cliJson({ QStringLiteral("--vault"), fresh, QStringLiteral("clone") });
-        check(noClone.code == 2 && fake.signInCalls == signIns && !QFile::exists(fresh + QStringLiteral("/.icloud-notes")),
-              "cli clone signed out: exit 2, no sign-in window");
+        check(noClone.code == 3 && fake.signInCalls == signIns && !QFile::exists(fresh + QStringLiteral("/.icloud-notes")),
+              "cli clone signed out: exit 3, no sign-in window");
         fake.set({ { QStringLiteral("SignedIn"), true } });
         const Run cloned = cliJson({ QStringLiteral("--vault"), fresh, QStringLiteral("clone") },
                                    { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_CLONE"), QStringLiteral("1") } });

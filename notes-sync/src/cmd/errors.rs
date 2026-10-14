@@ -2,11 +2,10 @@
 //! error classes.
 //!
 //! Exit codes, shared with the other iCloud tools (icloud-session,
-//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md): 0 ok, 1 known
-//! error (`IcloudNotesSyncError`), 2 sign-in required (icloud-md said
-//! `Run "icloud-md reauthenticate"` with 1), 3 status has entries / diff has
-//! differences (not an error), 64 usage (`EX_USAGE`; icloud-md used 2),
-//! 70 internal (`EX_SOFTWARE`, anything unexpected).
+//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md): 0 ok, 1 error
+//! (`IcloudNotesSyncError`, including anything unexpected), 2 usage, 3 sign-in
+//! required, 5 a service unavailable (no network / offline). `status`, `push
+//! --dry-run` and `diff` report their changes in the result and exit 0.
 //!
 //! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
 //! `name()` is the error's class name; `code()` is the
@@ -15,9 +14,7 @@
 use crate::cloudkit::CkError;
 use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
 
-/// `status`/`push --dry-run` has entries, `diff` found differences.
-pub use icloud_session::cli::EXIT_CHANGES as EXIT_HAS_ENTRIES;
-pub use icloud_session::cli::{EXIT_ERROR, EXIT_INTERNAL, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
+pub use icloud_session::cli::{EXIT_ERROR, EXIT_INTERNAL, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -101,9 +98,8 @@ impl Error {
             Error::SignInRequired => EXIT_SIGN_IN,
             Error::Usage(_) => EXIT_USAGE,
             Error::Internal(_) | Error::Io(_) => EXIT_INTERNAL,
-            Error::CloudKit(
-                CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_) | CkError::Network(_) | CkError::Offline(_),
-            ) => EXIT_ERROR,
+            Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => EXIT_UNAVAILABLE,
+            Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => EXIT_ERROR,
             Error::CloudKit(_) => EXIT_INTERNAL,
             _ => EXIT_ERROR,
         }

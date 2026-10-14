@@ -57,24 +57,24 @@ fn sync_failing_with(error: fn() -> Error) -> (u8, bool, usize) {
 
 #[test]
 fn a_sign_in_required_on_push_skips_the_pull() {
-    assert_eq!(sync_failing_with(|| Error::SignInRequired), (2, false, 1));
+    assert_eq!(sync_failing_with(|| Error::SignInRequired), (3, false, 1));
 }
 
 #[test]
 fn no_network_on_push_skips_the_pull() {
     assert_eq!(
         sync_failing_with(|| Error::CloudKit(CkError::Offline("no route".into()))),
-        (1, false, 1)
+        (5, false, 1)
     );
     assert_eq!(
         sync_failing_with(|| Error::CloudKit(CkError::Network("reset".into()))),
-        (1, false, 1)
+        (5, false, 1)
     );
     let offline = Error::from(CkError::Offline("no route".into()));
-    assert_eq!((offline.code().as_str(), offline.exit_code()), ("offline", 1));
+    assert_eq!((offline.code().as_str(), offline.exit_code()), ("offline", 5));
     assert!(offline.is_network() && offline.hint().is_some());
     let network = Error::from(CkError::Network("reset".into()));
-    assert_eq!((network.code().as_str(), network.exit_code()), ("network", 1));
+    assert_eq!((network.code().as_str(), network.exit_code()), ("network", 5));
 }
 
 /// Any other failure pulls anyway, as two separate runs did; a failed

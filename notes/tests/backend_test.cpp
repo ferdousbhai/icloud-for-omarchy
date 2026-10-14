@@ -583,10 +583,10 @@ int main(int argc, char *argv[])
           "seam preview reason");
     check(b.statusUnchanged() == 2, "seam preview unchanged");
     check(b.statusNotices().size() == 1, "seam preview notices");
-    // Exit 3 (entries to push) is the preview's answer, not a failure, and
-    // the progress on stderr is logged but never parsed as the JSON.
-    check(b.syncLog().contains(QStringLiteral("(exit 3)")) && b.syncMessage() == QStringLiteral("Push preview done."),
-          "seam preview exit 3 is success");
+    // The preview reports its entries in the result and exits 0, and the
+    // progress on stderr is logged but never parsed as the JSON.
+    check(b.syncLog().contains(QStringLiteral("(exit 0)")) && b.syncMessage() == QStringLiteral("Push preview done."),
+          "seam preview exit 0 is success");
     check(b.syncLog().contains(QStringLiteral("icloud-notes:progress:fetch:12")), "seam preview stderr in the log");
 
     b.runHistory();
@@ -599,7 +599,7 @@ int main(int argc, char *argv[])
     b.runDiff(QStringLiteral("e9"));
     waitForSync(b);
     check(b.diffText().contains(QStringLiteral("+ new")), "seam diff text");
-    check(b.historyError().isEmpty() && b.syncMessage() == QStringLiteral("Diff done."), "seam diff exit 3 is success");
+    check(b.historyError().isEmpty() && b.syncMessage() == QStringLiteral("Diff done."), "seam diff exit 0 is success");
     check(!b.diffText().contains(QStringLiteral("Fetching")), "seam diff text is stdout alone");
 
     b.runPull();
@@ -829,7 +829,7 @@ int main(int argc, char *argv[])
     fake.stillSignedIn = false;
     fake.reportCalls = 0;
 
-    // A sign-in required is exit 2, whatever the text says: exit 2 alone
+    // A sign-in required is exit 3, whatever the text says: exit 3 alone
     // pauses syncing and reports it. Any other failure, even one naming
     // icloud-md's `reauthenticate` (with exit 1), is only a failure.
     {
@@ -842,12 +842,12 @@ int main(int argc, char *argv[])
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
         check(b.authExpired() && waitUntil([&] { return fake.reportCalls == 1; })
                   && b.syncMessage() == QStringLiteral("Sync paused. Sign in to iCloud to resume."),
-              "seam exit 2 alone pauses and reports");
+              "seam exit 3 alone pauses and reports");
         fake.set({ { QStringLiteral("SigningIn"), true } });
         waitUntil([&] { return b.signingIn(); });
         fake.set({ { QStringLiteral("SigningIn"), false } });
         check(waitUntil([&] { return !b.authExpired() && b.idle() && b.syncMessage() == QStringLiteral("Pull done."); }, 15000),
-              "seam exit 2: a new sign-in resumes");
+              "seam exit 3: a new sign-in resumes");
     }
     {
         fake.reportCalls = 0;

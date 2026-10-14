@@ -932,7 +932,7 @@ fn apple_ending_the_session_says_why_until_a_sign_in_even_across_a_restart() {
     assert_eq!(prop::<String>(&conn, "SignOutReason"), SESSION_ENDED);
     assert_eq!(sign_in_required_message(&conn), SESSION_ENDED);
     let out = env.cli(&["validate", "--json"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(
         err["error"]["message"],
@@ -1355,6 +1355,8 @@ fn one_executable_answers_to_both_names() {
     assert_eq!(version(Path::new(DAEMON)), format!("icloud-sessiond {v}\n"));
     assert_eq!(version(cli_bin()), format!("icloud-session {v}\n"));
     // Run as the daemon it takes no commands; as the CLI it does.
+    // The daemon (not the CLI) rejects stray args with its own usage exit 64,
+    // which is internal to D-Bus activation and not the shared CLI contract.
     let out = Command::new(DAEMON).arg("status").env_clear().output().unwrap();
     assert_eq!(out.status.code(), Some(64), "{out:?}");
 }
@@ -1385,13 +1387,13 @@ fn cli_status_validate_sign_in_and_sign_out() {
     );
 
     let out = env.cli(&["validate"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
     // --json: the error is one JSON line on stderr, as in every iCloud tool.
     let out = env.cli(&["validate", "--json"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(err["error"]["code"], "sign_in_required");
-    assert_eq!(err["error"]["exit_code"], 2);
+    assert_eq!(err["error"]["exit_code"], 3);
     assert!(
         err["error"]["hint"]
             .as_str()
@@ -1411,10 +1413,11 @@ fn cli_status_validate_sign_in_and_sign_out() {
     assert_eq!(v["dsid"], DSID);
     assert_eq!(v["webservices"]["findme"], findme_url(&server.url));
 
-    // A window that closes without Find My's session: exit 4, the Find My
-    // code every iCloud tool uses, with the status still printed.
+    // A window that closes without Find My's session: exit 3, the not-signed-in
+    // code every iCloud tool uses (the JSON code tells it from a sign-in), with
+    // the status still printed.
     let out = env.cli(&["authorize-find-my", "--json"]);
-    assert_eq!(out.status.code(), Some(4), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
     let status: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(status["find_my_authorized"], false);
     let err: Value = serde_json::from_str(String::from_utf8_lossy(&out.stderr).lines().last().unwrap()).unwrap();
@@ -1442,13 +1445,13 @@ fn cli_status_validate_sign_in_and_sign_out() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    assert_eq!(env.cli(&["bogus"]).status.code(), Some(64));
+    assert_eq!(env.cli(&["bogus"]).status.code(), Some(2));
     let out = env.cli(&["--json", "sign-in", "--later"]);
-    assert_eq!(out.status.code(), Some(64));
+    assert_eq!(out.status.code(), Some(2));
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(err["error"]["code"], "usage");
     // The password managers' own CLIs pipe into set-password instead.
-    assert_eq!(env.cli(&["set-password", "--from-bitwarden"]).status.code(), Some(64));
+    assert_eq!(env.cli(&["set-password", "--from-bitwarden"]).status.code(), Some(2));
     // Every command has its own --help.
     for cmd in [
         "status",
@@ -1993,7 +1996,7 @@ fn cli_sign_in_ends_when_the_daemon_dies() {
         thread::sleep(Duration::from_millis(25));
     };
     let out = cli.wait_with_output().unwrap();
-    assert_eq!(status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
     let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(printed["signing_in"], false);
     assert_eq!(printed["signed_in"], false);
@@ -2671,7 +2674,7 @@ fn sign_out_keeps_the_stored_password_and_forget_password_removes_it() {
     assert_eq!(env.secrets()[0]["secret"], PASSWORD, "the user's, kept");
     // Signed out: set-password has no account to check it against.
     let out = env.cli_with(&["set-password"], PASSWORD, &[]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
 
     let out = env.cli(&["forget-password"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
