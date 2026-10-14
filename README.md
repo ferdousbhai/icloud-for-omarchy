@@ -53,6 +53,8 @@ aren't available from iCloud on the web either.
 
 Notes, Photos, Find My, and shared sign-in have scriptable JSON CLIs; see
 [docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
+Install the agent skill ([docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md))
+with `npx skills add ferdousbhai/icloud-for-omarchy -g`.
 
 ## Contacts and tasks moved
 
