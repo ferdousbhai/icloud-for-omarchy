@@ -56,8 +56,7 @@ Notes, Photos, Find My, and shared sign-in have scriptable JSON CLIs; see
 `icloud-session skill install` installs the agent skill
 ([docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md)) to `~/.agents/skills/icloud`, linked
 into `~/.claude/skills` for Claude Code; `icloud-session skill remove` removes it, and a new
-release refreshes it. Before the tools are installed:
-`npx skills add ferdousbhai/icloud-for-omarchy -g`.
+release refreshes it.
 
 ## Contacts and tasks moved
 

@@ -19,6 +19,9 @@ pub struct Skill {
     pub cli: &'static str,
     /// The CLI version, stamped so a new release refreshes the copy.
     pub version: &'static str,
+    /// Adopt an unmarked directory holding only `SKILL.md`: what this CLI's
+    /// releases before the marker wrote. Only cloudmail had such releases.
+    pub adopts_legacy: bool,
 }
 
 #[derive(Debug, Default)]
@@ -49,6 +52,16 @@ impl Skill {
     fn owns(&self, dir: &Path) -> bool {
         let is_dir = fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir());
         is_dir && fs::symlink_metadata(dir.join(self.marker())).is_ok_and(|m| m.is_file())
+    }
+    /// True when `dir` is a pre-marker copy this CLI may adopt: a real
+    /// directory whose only entry is a regular `SKILL.md`.
+    fn legacy(&self, dir: &Path) -> bool {
+        if !self.adopts_legacy || !fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+            return false;
+        }
+        let Ok(entries) = fs::read_dir(dir) else { return false };
+        let names: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
+        names.len() == 1 && names[0] == SKILL_FILE && fs::symlink_metadata(dir.join(SKILL_FILE)).is_ok_and(|m| m.is_file())
     }
 }
 
@@ -82,7 +95,7 @@ pub fn install(home: &Path, skill: &Skill) -> io::Result<Outcome> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => fs::create_dir_all(&dir)?,
         Err(e) => return Err(e),
         Ok(m) if !m.is_dir() => return Err(unmanaged(&dir, skill.cli)),
-        Ok(_) if !skill.owns(&dir) && fs::read_dir(&dir)?.next().is_some() => {
+        Ok(_) if !skill.owns(&dir) && !skill.legacy(&dir) && fs::read_dir(&dir)?.next().is_some() => {
             return Err(unmanaged(&dir, skill.cli));
         }
         Ok(_) => {}
@@ -146,6 +159,9 @@ pub fn remove(home: &Path, skill: &Skill) -> io::Result<Outcome> {
 /// does nothing unless this CLI owns the copy and its stamped version differs.
 pub fn refresh(home: &Path, skill: &Skill) -> bool {
     let dir = skill.dir(home);
+    if skill.legacy(&dir) {
+        return install(home, skill).is_ok();
+    }
     if !skill.owns(&dir) || fs::read_to_string(dir.join(VERSION_FILE)).is_ok_and(|v| v == skill.version) {
         return false;
     }
@@ -166,7 +182,7 @@ fn symlink(_target: &Path, _link: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    const S: Skill = Skill { name: "demo", body: "# demo v2\n", cli: "demo", version: "2" };
+    const S: Skill = Skill { name: "demo", body: "# demo v2\n", cli: "demo", version: "2", adopts_legacy: false };
 
     fn home(tag: &str) -> PathBuf {
         let h = std::env::temp_dir().join(format!("agent-skill-{tag}-{}", std::process::id()));
@@ -223,6 +239,27 @@ mod tests {
         assert_eq!(out.notices.len(), 1);
         remove(&h, &S).unwrap();
         assert!(h.join(".claude/skills/demo").is_dir());
+        fs::remove_dir_all(&h).unwrap();
+    }
+
+    #[test]
+    fn adopts_only_its_own_pre_marker_copy() {
+        let h = home("legacy");
+        let dir = h.join(".agents/skills/demo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "# demo v1\n").unwrap();
+        assert!(install(&h, &S).is_err()); // a CLI without legacy releases refuses
+        let legacy = Skill { adopts_legacy: true, ..S };
+        assert!(refresh(&h, &legacy)); // the upgrade adopts and refreshes it
+        assert_eq!(fs::read_to_string(dir.join("SKILL.md")).unwrap(), S.body);
+        assert!(legacy.owns(&dir));
+        // A directory with anything besides SKILL.md is somebody's own skill.
+        fs::remove_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "mine").unwrap();
+        fs::write(dir.join("notes.md"), "mine").unwrap();
+        assert!(install(&h, &legacy).is_err());
+        assert!(!refresh(&h, &legacy));
         fs::remove_dir_all(&h).unwrap();
     }
 }

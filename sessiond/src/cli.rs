@@ -132,6 +132,7 @@ const SKILL: crate::agent_skill::Skill = crate::agent_skill::Skill {
     body: include_str!("../../docs/skills/icloud/SKILL.md"),
     cli: "icloud-session",
     version: env!("CARGO_PKG_VERSION"),
+    adopts_legacy: false,
 };
 
 fn skill(action: Option<SkillAction>) -> ExitCode {
