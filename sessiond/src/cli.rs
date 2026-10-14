@@ -149,9 +149,12 @@ fn skill(action: Option<SkillAction>) -> ExitCode {
     };
     match result {
         Ok(out) => print(&json!({ "paths": out.paths, "notices": out.notices })),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            fail_with("skill_unmanaged", EXIT_ERROR, &e.to_string(), Some("move that path aside, then run `icloud-session skill install` again"))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => fail_with(
+            "skill_unmanaged",
+            EXIT_ERROR,
+            &e.to_string(),
+            Some("move that path aside, then run `icloud-session skill install` again"),
+        ),
         Err(e) => fail_with("io", EXIT_ERROR, &e.to_string(), None),
     }
 }
