@@ -99,26 +99,45 @@ $ icloud-findmy help
 - `locate` asks one device for a fresh fix and waits (30 s unless
   `--wait SECS`) until one newer than the last arrives, then prints it
   with its coordinates; it fails if none comes.
-- `play-sound` and `lost-mode` ask for confirmation on a terminal, and
-  refuse to act without `--yes` when stdin is not one.
+- `play-sound` and `lost-mode` ask for confirmation in text mode on a
+  terminal, and refuse to act without `--yes` anywhere else (exit 2).
 - A device is named by its ID or its name, ignoring case (a unique part
-  of the name is enough); an ambiguous name lists the matching devices.
+  of the name is enough); an ambiguous name lists the matching devices
+  (in the error's `hint`; exit 2).
 - `history` prints the stored trail (24 h unless `--since`, e.g. `90m`,
   `7d`); a device ID already in the history needs no network.
-- `--json` prints JSON on stdout, and an error as one JSON line on
-  stderr, `{"error":{"code":"not_found","message":…,"exit_code":1}}`
-  (codes: `usage`, `sign_in_required`, `find_my_auth_required`,
-  `not_found`, `ambiguous`, `cancelled`, `unsupported`, `no_fix`,
-  `error`); `--data-dir DIR` keeps `history.db` in `DIR` instead of
-  `~/.local/share/icloud-findmy`. Both may come before the command.
+- `--data-dir DIR` keeps `history.db` in `DIR` instead of
+  `~/.local/share/icloud-findmy`. It and the output flags may come before
+  or after the command.
 - `icloud-findmy COMMAND --help` (or `help COMMAND`) describes one
   command and its JSON.
 
-Exit codes: 0 ok, 1 error, 2 sign-in required (`icloud-session
-sign-in`), 4 Find My needs the Apple password after `icloud-session`
-could not re-authorize with a stored one (`icloud-session
-authorize-find-my`), 64 usage: the table every iCloud tool shares
-([docs/CLI.md](../docs/CLI.md)).
+Output follows the contract every iCloud tool is moving to
+([docs/CLI.md](../docs/CLI.md)): human-readable text on a terminal, and
+when piped a JSON envelope on stdout,
+`{"ok":true,"data":…,"summary":"4 devices"}`; the shapes `--help` lists
+are its `data`. `--json` forces the envelope, `--styled` text, `--quiet`
+prints only `data`, `--ids-only` one device id per line (`devices`,
+`locate`, `play-sound`, `lost-mode`), `--count` the number of results
+(devices; positions for `history`; deleted positions for
+`prune-history`). The flags may be combined; the strongest wins:
+`--ids-only` > `--count` > `--quiet` > `--json` > `--styled`.
+
+A failure in a machine mode is one JSON document on stdout (nothing on
+stderr), `{"ok":false,"error":{"code":"not_found","message":"no device
+matches \"nokia\"","hint":"name one of these devices or use its ID: …"}}`;
+in text mode it is `error: …` and `hint: …` on stderr.
+
+Exit codes, the table every iCloud tool shares:
+
+| exit | codes |
+|---|---|
+| 0 | ok |
+| 1 | `unsupported`, `no_fix`, `cancelled`, `io`, `error`, `http` (4xx) |
+| 2 | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` |
+| 3 | `sign_in_required` (`icloud-session sign-in`), `find_my_auth_required` (Find My needs the Apple password after `icloud-session` could not re-authorize with a stored one: `icloud-session authorize-find-my`), `find_my_unavailable` (Find My is not on for this Apple ID), `http` 401/421 (iCloud keeps refusing the session) |
+| 4 | `not_found` (also a device that left the Apple ID while `locate` waited) |
+| 5 | `offline`, `network`, `session_service` (`icloud-sessiond` unreachable), `keyring_unavailable`, `bad_response`, `http` (5xx) |
 
 ## Building from source
 
