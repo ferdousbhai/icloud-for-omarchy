@@ -24,10 +24,15 @@ pub enum Error {
     FindMyAuthRequired,
     #[error("Find My is not enabled for this Apple ID")]
     NoService,
+    /// Any other non-2xx answer. A 401/421 here persisted although the
+    /// daemon still says signed in.
     #[error("iCloud answered HTTP {0}")]
     Http(u16),
+    /// Any other `icloud-session` failure (offline, network, the daemon
+    /// unreachable, the keyring locked, I/O), kept whole so the command
+    /// line can tell them apart.
     #[error("{0}")]
-    Session(String),
+    Session(#[source] icloud_session::Error),
     #[error("unexpected Find My response: {0}")]
     Parse(String),
     #[error("{0}")]
@@ -42,7 +47,8 @@ impl From<icloud_session::Error> for Error {
             icloud_session::Error::SignInRequired => Error::SignInRequired,
             icloud_session::Error::FindMyAuthRequired => Error::FindMyAuthRequired,
             icloud_session::Error::Http { status, .. } => Error::Http(status),
-            other => Error::Session(other.to_string()),
+            icloud_session::Error::BadResponse(msg) => Error::Parse(msg),
+            other => Error::Session(other),
         }
     }
 }

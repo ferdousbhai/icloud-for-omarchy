@@ -303,6 +303,19 @@ fn session_errors_map_to_find_my_errors() {
         }),
         Error::Http(450)
     ));
+    // The kind survives, so the command line can exit 5 for offline.
+    assert!(matches!(
+        Error::from(icloud_session::Error::Offline("refused".into())),
+        Error::Session(icloud_session::Error::Offline(_))
+    ));
+    assert!(matches!(
+        Error::from(icloud_session::Error::Service("gone".into())),
+        Error::Session(icloud_session::Error::Service(_))
+    ));
+    assert!(matches!(
+        Error::from(icloud_session::Error::BadResponse("html".into())),
+        Error::Parse(_)
+    ));
 }
 
 #[test]

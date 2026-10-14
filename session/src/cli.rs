@@ -1,6 +1,7 @@
 //! What every iCloud command line shares (docs/CLI.md): the exit codes, the
 //! error on stderr, the yes/no prompt, and (the `clap` feature) parsing
-//! that answers a usage error the same way.
+//! that answers a usage error the same way. Tools that adopted the full
+//! output contract use [`crate::output`] for parsing and reporting instead.
 
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -25,22 +26,26 @@ pub const EXIT_INTERNAL: u8 = 1;
 
 /// Reports an error on stderr and returns `exit_code`. With `json`, one line
 /// of the shared product contract, `{"ok":false,"error":{"code","message","hint"?}}`
-/// (the process exit code carries the number); else `tool: message`,
-/// then the hint on a line of its own.
+/// in that key order (the process exit code carries the number); else
+/// `tool: message`, then the hint on a line of its own.
+///
+/// Legacy: for tools not yet on [`crate::output`], whose
+/// [`CliError::report`](crate::output::CliError::report) puts a machine-mode
+/// error on stdout and text-mode `error:`/`hint:` lines on stderr.
 pub fn report(tool: &str, json: bool, code: &str, exit_code: u8, message: &str, hint: Option<&str>) -> u8 {
+    eprintln!("{}", render(tool, json, code, message, hint));
+    exit_code
+}
+
+fn render(tool: &str, json: bool, code: &str, message: &str, hint: Option<&str>) -> String {
     if json {
-        let mut error = serde_json::json!({ "code": code, "message": message });
-        if let Some(hint) = hint {
-            error["hint"] = hint.into();
-        }
-        eprintln!("{}", serde_json::json!({ "ok": false, "error": error }));
+        crate::output::compact(&crate::output::ErrorEnvelope::new(code, message, hint))
     } else {
-        eprintln!("{tool}: {message}");
-        if let Some(hint) = hint {
-            eprintln!("{hint}");
+        match hint {
+            Some(hint) => format!("{tool}: {message}\n{hint}"),
+            None => format!("{tool}: {message}"),
         }
     }
-    exit_code
 }
 
 /// Asks `question [y/N]` on stderr and reads the answer from stdin: true
@@ -63,7 +68,11 @@ fn ask(question: &str, mut input: impl BufRead, mut output: impl Write) -> bool 
 
 /// Parses the process arguments. `--help` and `--version` print and give
 /// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_USAGE)` after clap's
-/// message, or the JSON error when `--json` is among the arguments.
+/// message, or the JSON error (with a ``run `<tool> --help` `` hint) when
+/// `--json` is among the arguments.
+///
+/// Legacy: for tools not yet on [`crate::output`]; those use
+/// [`crate::output::parse`].
 #[cfg(feature = "clap")]
 pub fn parse<P: clap::Parser>(tool: &str) -> Result<P, u8> {
     P::try_parse().map_err(|e| {
@@ -71,22 +80,37 @@ pub fn parse<P: clap::Parser>(tool: &str) -> Result<P, u8> {
             let _ = e.print();
             return EXIT_OK;
         }
-        if !std::env::args_os().skip(1).any(|a| a == "--json") {
+        if !std::env::args_os()
+            .skip(1)
+            .take_while(|a| a != "--")
+            .any(|a| a == "--json")
+        {
             let _ = e.print();
             return EXIT_USAGE;
         }
-        // clap's error without its usage and "try --help" lines, on one line.
-        let rendered = e.render().to_string();
-        let error = rendered.split("\n\n").next().unwrap_or_default();
-        let message = error.strip_prefix("error: ").unwrap_or(error);
-        let message = message.split_whitespace().collect::<Vec<_>>().join(" ");
-        report(tool, true, "usage", EXIT_USAGE, &message, None)
+        let message = crate::output::usage_message(&e);
+        let hint = crate::output::usage_hint(tool);
+        report(tool, true, "usage", EXIT_USAGE, &message, Some(&hint))
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ask;
+    use super::{ask, render};
+
+    #[test]
+    fn the_error_line_has_a_fixed_key_order() {
+        assert_eq!(
+            render("t", true, "not_found", "no \"x\"", Some("run `t list`")),
+            r#"{"ok":false,"error":{"code":"not_found","message":"no \"x\"","hint":"run `t list`"}}"#
+        );
+        assert_eq!(
+            render("t", true, "usage", "bad", None),
+            r#"{"ok":false,"error":{"code":"usage","message":"bad"}}"#
+        );
+        assert_eq!(render("t", false, "usage", "bad", Some("try this")), "t: bad\ntry this");
+        assert_eq!(render("t", false, "usage", "bad", None), "t: bad");
+    }
 
     #[test]
     fn only_y_or_yes_confirms() {

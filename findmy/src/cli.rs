@@ -1,21 +1,28 @@
 //! The command line: `icloud-findmy <command>` runs one Find My action
 //! without GTK, through the same [`FindMe`] client and [`History`] the app
-//! uses. Human-readable output by default, `--json` for machines.
+//! uses. Output follows the shared product contract
+//! ([`icloud_session::output`]): text on a terminal, the JSON envelope when
+//! piped, `--json`/`--styled`/`--quiet`/`--ids-only`/`--count` to choose.
 //!
 //! Exit codes are the table every iCloud tool shares (docs/CLI.md,
-//! `icloud_session::cli`): 0 ok, 1 error, 2 usage, 3 sign-in required or Find
-//! My needs the Apple password (after `icloud-session`'s own re-authorization
-//! with a stored password failed; the JSON `code` tells them apart),
-//! 4 not found. With `--json` an error is one JSON line on stderr,
-//! `{"ok":false,"error":{"code","message","hint"?}}`.
+//! `icloud_session::cli`): 0 ok; 1 error; 2 usage, an ambiguous name, or an
+//! action without `--yes` when nobody can be asked; 3 not signed in, Find My
+//! needs the Apple password (after `icloud-session`'s own re-authorization
+//! with a stored password failed), Find My not enabled, or iCloud still
+//! refusing the session (HTTP 401/421); 4 not found; 5 offline, no network,
+//! `icloud-sessiond` unreachable, the keyring locked, an unreadable answer or
+//! an iCloud server error (HTTP 5xx). The JSON `code` tells them apart. A
+//! failure in a machine mode is `{"ok":false,"error":{"code","message","hint"?}}`
+//! on stdout; in text mode `error:`/`hint:` lines on stderr.
 
-use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_USAGE};
-use icloud_session::output::{self, CliError, OutputFlags, Response};
+use icloud_session::cli::{
+    self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
+};
+use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
 
@@ -33,15 +40,25 @@ NAME|ID matches a device name case-insensitively (a unique part of it is
 enough); an ambiguous NAME lists the matches, use the ID then.
 
 Output: human-readable text on a terminal, a JSON envelope
-{\"ok\":true,\"data\",\"summary\",\"meta\"?} when piped (--json forces it, --styled
-text, --quiet only the data, --ids-only the device ids, --count their number).
-A failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} (codes: usage,
-sign_in_required, find_my_auth_required, not_found, ambiguous, cancelled,
-unsupported, no_fix, error) on stdout, or error:/hint: on stderr in text mode.
+{\"ok\":true,\"data\",\"summary\",\"meta\"?} when piped. --json forces the
+envelope, --styled text, --quiet prints only the data, --ids-only the device
+ids (devices, locate, play-sound, lost-mode), --count the number of results
+(devices; positions for history; deleted for prune-history). Flags combine:
+ids-only > count > quiet > json > styled. A failure is
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
+error:/hint: lines on stderr in text mode.
 
-Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in)
-or Find My needs the Apple password (icloud-session authorize-find-my),
-4 not found.";
+Exit codes:
+  0 ok
+  1 error (unsupported, no_fix, cancelled, io, error, http 4xx)
+  2 usage, ambiguous, or play-sound/lost-mode without --yes when nobody can
+    be asked
+  3 sign_in_required (icloud-session sign-in), find_my_auth_required
+    (icloud-session authorize-find-my), find_my_unavailable (Find My is not
+    on for this Apple ID), http 401/421 (iCloud refuses the session)
+  4 not_found
+  5 offline, network, session_service (icloud-sessiond unreachable),
+    keyring_unavailable, bad_response, http 5xx";
 
 #[derive(Parser)]
 #[command(
@@ -98,25 +115,26 @@ enum Command {
     },
     /// Play a sound on a device.
     ///
-    /// Plays a sound on a device. Asks on a terminal; without one, --yes is
-    /// required (a usage error otherwise).
+    /// Plays a sound on a device. Asks in text mode on a terminal (stdin and
+    /// stdout); anywhere else --yes is required (a usage error, exit 2,
+    /// otherwise).
     ///
-    /// JSON: {ok: true, action: "play_sound", device: {id, name}}
+    /// JSON: {action: "play_sound", device: {id, name}}
     #[command(after_help = AFTER_HELP)]
     PlaySound {
         #[arg(value_name = "NAME|ID")]
         device: String,
-        /// Do not ask; required when stdin is not a terminal.
+        /// Do not ask; required when nobody can be asked (not a terminal, or a machine output mode).
         #[arg(long, short)]
         yes: bool,
     },
     /// Turn on Lost Mode (locks the device).
     ///
     /// Turns on Lost Mode: the device locks and shows the message with a
-    /// button to call the number. Asks on a terminal; without one, --yes is
-    /// required.
+    /// button to call the number. Asks in text mode on a terminal (stdin and
+    /// stdout); anywhere else --yes is required.
     ///
-    /// JSON: {ok: true, action: "lost_mode", device: {id, name}}
+    /// JSON: {action: "lost_mode", device: {id, name}}
     #[command(after_help = AFTER_HELP)]
     LostMode {
         #[arg(value_name = "NAME|ID")]
@@ -127,7 +145,7 @@ enum Command {
         /// The text shown.
         #[arg(long, value_name = "M")]
         message: String,
-        /// Do not ask; required when stdin is not a terminal.
+        /// Do not ask; required when nobody can be asked (not a terminal, or a machine output mode).
         #[arg(long, short)]
         yes: bool,
     },
@@ -156,64 +174,60 @@ enum Command {
     PruneHistory,
 }
 
-enum Failure {
-    Usage(String),
-    Find(findme::Error),
-    /// A machine-readable code (`not_found`, `ambiguous`, `no_fix`,
-    /// `cancelled`, ...) and its message.
-    Coded(&'static str, String),
-    Other(String),
-}
-
-impl From<findme::Error> for Failure {
-    fn from(e: findme::Error) -> Self {
-        Failure::Find(e)
-    }
-}
-
-impl Failure {
-    fn code(&self) -> u8 {
-        match self {
-            Failure::Usage(_) => EXIT_USAGE,
-            Failure::Find(findme::Error::SignInRequired) => EXIT_SIGN_IN,
-            Failure::Find(findme::Error::FindMyAuthRequired) => EXIT_FIND_MY_AUTH,
-            Failure::Coded("not_found", _) => EXIT_NOT_FOUND,
-            _ => EXIT_ERROR,
-        }
-    }
-
-    fn kind(&self) -> &'static str {
-        match self {
-            Failure::Usage(_) => "usage",
-            Failure::Find(findme::Error::SignInRequired) => "sign_in_required",
-            Failure::Find(findme::Error::FindMyAuthRequired) => "find_my_auth_required",
-            Failure::Find(findme::Error::Unsupported(_)) => "unsupported",
-            Failure::Coded(code, _) => code,
-            _ => "error",
-        }
-    }
-
-    fn message(&self) -> String {
-        match self {
-            Failure::Usage(m) | Failure::Other(m) | Failure::Coded(_, m) => m.clone(),
-            Failure::Find(findme::Error::SignInRequired) => format!(
-                "{}; run `icloud-session sign-in` (or Sign In in the app)",
-                icloud_session::sign_in_required_message()
-            ),
-            Failure::Find(findme::Error::FindMyAuthRequired) => {
-                "Find My needs your Apple password: run `icloud-session authorize-find-my` \
-                 (to stop being asked: `icloud-session set-password`)"
-                    .into()
-            }
-            Failure::Find(e) => e.to_string(),
-        }
-    }
-}
+/// A failure: the contract's error object and exit code.
+type Failure = CliError;
 
 type Outcome = Result<Response, Failure>;
 
 fn usage(msg: impl Into<String>) -> Failure {
-    Failure::Usage(msg.into())
+    CliError::new("usage", EXIT_USAGE, msg)
+}
+
+fn other(msg: impl Into<String>) -> Failure {
+    CliError::new("error", EXIT_ERROR, msg)
+}
+
+const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (or Sign In in the app)";
+
+/// A Find My failure as the contract's code, exit code, message and hint.
+fn find_error(e: findme::Error) -> Failure {
+    use findme::Error as F;
+    use icloud_session::Error as S;
+    let msg = e.to_string();
+    match e {
+        F::SignInRequired => CliError::new(
+            "sign_in_required",
+            EXIT_SIGN_IN,
+            icloud_session::sign_in_required_message(),
+        )
+        .hint(SIGN_IN_HINT),
+        F::FindMyAuthRequired => CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, msg)
+            .hint("run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)"),
+        F::NoService => CliError::new("find_my_unavailable", EXIT_SIGN_IN, msg)
+            .hint("turn on Find My on one of this Apple ID's devices, or sign in with another Apple ID"),
+        F::Http(401 | 421) => CliError::new("http", EXIT_SIGN_IN, format!("{msg}: iCloud refuses the session"))
+            .hint(format!("sign in again: {SIGN_IN_HINT}")),
+        F::Http(500..) => {
+            CliError::new("http", EXIT_UNAVAILABLE, msg).hint("iCloud is having trouble; try again later")
+        }
+        F::Http(_) => CliError::new("http", EXIT_ERROR, msg),
+        F::Parse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint("try again later"),
+        F::Unsupported(m) => CliError::new("unsupported", EXIT_ERROR, m),
+        F::Session(S::Offline(_)) => {
+            CliError::new("offline", EXIT_UNAVAILABLE, msg).hint("check the network connection and try again")
+        }
+        F::Session(S::Network(_)) => {
+            CliError::new("network", EXIT_UNAVAILABLE, msg).hint("check the network connection and try again")
+        }
+        F::Session(S::Service(_)) => CliError::new("session_service", EXIT_UNAVAILABLE, msg)
+            .hint("is icloud-session installed? `icloud-session status` tells"),
+        F::Session(S::KeyringUnavailable(_)) => {
+            CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg).hint("unlock the keyring and try again")
+        }
+        F::Session(S::Io(_)) => CliError::new("io", EXIT_ERROR, msg),
+        // The rest are mapped to their own variants by `From`.
+        F::Session(_) => other(msg),
+    }
 }
 
 /// "90m", "24h", "7d", "1w2d", "30s": whole units, summed. Seconds.
@@ -251,6 +265,7 @@ pub fn run() -> u8 {
     };
     let mode = args.out.mode();
     let mut cli = Cli {
+        mode,
         data_dir: args.data_dir,
         fm: FindMe::new(SessionTransport::default()),
         history: None,
@@ -269,15 +284,13 @@ pub fn run() -> u8 {
         Command::PruneHistory => cli.prune_history(),
     };
     match result {
-        Ok(resp) => {
-            resp.print(mode);
-            EXIT_OK
-        }
-        Err(f) => CliError::new(f.kind(), f.code(), f.message()).report(mode),
+        Ok(resp) => resp.print(mode),
+        Err(e) => e.report(mode),
     }
 }
 
 struct Cli<T: Transport> {
+    mode: Mode,
     data_dir: Option<PathBuf>,
     fm: FindMe<T>,
     history: Option<History>,
@@ -287,14 +300,15 @@ impl<T: Transport> Cli<T> {
     fn history_path(&self) -> Result<PathBuf, Failure> {
         match &self.data_dir {
             Some(dir) => Ok(dir.join("history.db")),
-            None => history::default_path().ok_or_else(|| Failure::Other("no data directory: pass --data-dir".into())),
+            None => history::default_path()
+                .ok_or_else(|| other("no data directory (no $XDG_DATA_HOME or $HOME)").hint("pass --data-dir DIR")),
         }
     }
 
     fn open_history(&mut self) -> Result<&History, Failure> {
         if self.history.is_none() {
             let path = self.history_path()?;
-            let h = History::open(&path).map_err(|e| Failure::Other(format!("cannot open {}: {e}", path.display())))?;
+            let h = History::open(&path).map_err(|e| other(format!("cannot open {}: {e}", path.display())))?;
             self.history = Some(h);
         }
         Ok(self.history.as_ref().expect("just opened"))
@@ -305,17 +319,20 @@ impl<T: Transport> Cli<T> {
     fn record(&mut self, devices: &[Device]) {
         let result = self.open_history().and_then(|h| {
             h.record_devices(devices, icloud_session::time::now_ms() / 1000)
-                .map_err(|e| Failure::Other(e.to_string()))
+                .map_err(|e| other(e.to_string()))
         });
         if let Err(e) = result {
-            eprintln!("icloud-findmy: could not save history: {}", e.message());
+            eprintln!(
+                "{}",
+                output::terminal_safe(&format!("warning: could not save history: {}", e.message))
+            );
         }
     }
 
     /// The device list (with `locate`, after asking every device to
     /// report), recorded in the history.
     fn fetch(&mut self, locate: bool) -> Result<Vec<Device>, Failure> {
-        let devices = self.fm.refresh(locate)?;
+        let devices = self.fm.refresh(locate).map_err(find_error)?;
         self.record(&devices);
         Ok(devices)
     }
@@ -346,11 +363,15 @@ impl<T: Transport> Cli<T> {
         let device = resolve(&devices, query)?.clone();
         let before = device.location.map_or(0, |f| f.ts_ms);
         let deadline = Instant::now() + wait;
-        let mut devices = self.fm.refresh(true)?;
+        let mut devices = self.fm.refresh(true).map_err(find_error)?;
         loop {
             self.record(&devices);
             let Some(now) = devices.iter().find(|d| d.id == device.id) else {
-                return Err(Failure::Other(format!("{} is no longer on this Apple ID", device.name)));
+                return Err(CliError::new(
+                    "not_found",
+                    EXIT_NOT_FOUND,
+                    format!("{} is no longer on this Apple ID", device.name),
+                ));
             };
             // Newer than before, and not one Apple itself marks as old.
             if let Some(fix) = now.location.filter(|f| f.ts_ms > before && !f.is_old) {
@@ -366,13 +387,15 @@ impl<T: Transport> Cli<T> {
                     ),
                     _ => "no fix at all".into(),
                 };
-                return Err(Failure::Coded(
+                return Err(CliError::new(
                     "no_fix",
+                    EXIT_ERROR,
                     format!("{} sent no fresh fix within {} s; {last}", now.name, wait.as_secs()),
-                ));
+                )
+                .hint("try a longer --wait; the device may be off or out of reach"));
             }
             std::thread::sleep(POLL.min(left));
-            devices = self.fm.refresh(false)?;
+            devices = self.fm.refresh(false).map_err(find_error)?;
         }
     }
 
@@ -396,10 +419,17 @@ impl<T: Transport> Cli<T> {
         let devices = self.fetch(false)?;
         let device = resolve(&devices, query)?.clone();
         if !device.can_play_sound {
-            return Err(findme::Error::Unsupported("This device cannot play a sound.").into());
+            return Err(find_error(findme::Error::Unsupported(
+                "This device cannot play a sound.",
+            )));
         }
-        confirm("play-sound", yes, &format!("Play a sound on {}?", device.name))?;
-        self.fm.play_sound(&device)?;
+        confirm(
+            self.mode,
+            "play-sound",
+            yes,
+            &format!("Play a sound on {}?", device.name),
+        )?;
+        self.fm.play_sound(&device).map_err(find_error)?;
         self.done("play_sound", &device, &format!("Playing a sound on {}", device.name))
     }
 
@@ -410,12 +440,15 @@ impl<T: Transport> Cli<T> {
         let devices = self.fetch(false)?;
         let device = resolve(&devices, query)?.clone();
         if !device.can_lost_mode {
-            return Err(findme::Error::Unsupported("This device does not support Lost Mode.").into());
+            return Err(find_error(findme::Error::Unsupported(
+                "This device does not support Lost Mode.",
+            )));
         }
         if device.lost_mode_enabled {
-            return Err(Failure::Other(format!("Lost Mode is already on for {}", device.name)));
+            return Err(other(format!("Lost Mode is already on for {}", device.name)));
         }
         confirm(
+            self.mode,
             "lost-mode",
             yes,
             &format!(
@@ -425,13 +458,17 @@ impl<T: Transport> Cli<T> {
                 phone.trim()
             ),
         )?;
-        self.fm.lost_mode(&device, phone.trim(), message.trim())?;
+        self.fm
+            .lost_mode(&device, phone.trim(), message.trim())
+            .map_err(find_error)?;
         self.done("lost_mode", &device, &format!("Lost Mode is on for {}", device.name))
     }
 
     fn done(&self, action: &str, d: &Device, text: &str) -> Outcome {
-        let data = json!({"ok": true, "action": action, "device": {"id": d.id, "name": d.name}});
-        Ok(Response::new(data, text.to_string()).human(text.to_string()))
+        let data = json!({"action": action, "device": {"id": d.id, "name": d.name}});
+        Ok(Response::new(data, text.to_string())
+            .human(text.to_string())
+            .ids(vec![d.id.clone()]))
     }
 
     fn history(&mut self, query: &str, since_secs: i64) -> Outcome {
@@ -457,7 +494,7 @@ impl<T: Transport> Cli<T> {
         let human = if points.is_empty() {
             format!("No positions for {who} since {}.", rfc3339(since))
         } else {
-            let mut lines = vec![format!("{who}: {} positions since {}", points.len(), rfc3339(since))];
+            let mut lines = vec![format!("{who}: {} since {}", positions(points.len()), rfc3339(since))];
             for p in &points {
                 let battery = p.battery.map(|b| format!("  {:.0}%", b * 100.0)).unwrap_or_default();
                 lines.push(format!(
@@ -470,7 +507,9 @@ impl<T: Transport> Cli<T> {
             }
             lines.join("\n")
         };
-        Ok(Response::new(data, format!("{} positions", points.len())).human(human))
+        Ok(Response::new(data, positions(points.len()))
+            .human(human)
+            .count(points.len()))
     }
 
     fn prune_history(&mut self) -> Outcome {
@@ -480,30 +519,46 @@ impl<T: Transport> Cli<T> {
         let remaining = h.count().map_err(db)?;
         let days = history::RETENTION_SECS / 86_400;
         let data = json!({"deleted": deleted, "remaining": remaining, "retention_days": days});
-        let human = format!("Deleted {deleted} positions older than {days} days; {remaining} remain.");
-        Ok(Response::new(data, format!("Deleted {deleted} positions")).human(human))
+        let human = format!(
+            "Deleted {} older than {days} days; {remaining} remain.",
+            positions(deleted as usize)
+        );
+        Ok(Response::new(data, format!("Deleted {}", positions(deleted as usize)))
+            .human(human)
+            .count(deleted as usize))
     }
 }
 
-/// Asks on a terminal unless `yes`; refuses without a terminal.
-fn confirm(cmd: &str, yes: bool, question: &str) -> Result<(), Failure> {
+/// "1 position", "N positions".
+fn positions(n: usize) -> String {
+    match n {
+        1 => "1 position".into(),
+        n => format!("{n} positions"),
+    }
+}
+
+/// Asks unless `yes`, and only when someone can answer
+/// ([`output::interactive`]: text mode, stdin and stdout a terminal);
+/// otherwise refuses (exit 2) without `--yes`.
+fn confirm(mode: Mode, cmd: &str, yes: bool, question: &str) -> Result<(), Failure> {
     if yes {
         return Ok(());
     }
-    if !io::stdin().is_terminal() {
-        return Err(usage(format!(
-            "{cmd} asks before it acts: pass --yes when stdin is not a terminal"
-        )));
+    if !output::interactive(mode) {
+        return Err(
+            usage(format!("{cmd} asks before it acts, and nobody can be asked here"))
+                .hint(format!("pass --yes to {cmd} without asking")),
+        );
     }
     if cli::confirm(question) {
         Ok(())
     } else {
-        Err(Failure::Coded("cancelled", "cancelled".into()))
+        Err(CliError::new("cancelled", EXIT_ERROR, "cancelled"))
     }
 }
 
 fn db(e: rusqlite::Error) -> Failure {
-    Failure::Other(format!("history: {e}"))
+    other(format!("history: {e}"))
 }
 
 /// Lowercase, with typographic apostrophes as plain ones ("Dous’s" = "dous's").
@@ -531,21 +586,18 @@ fn resolve<'a>(devices: &'a [Device], query: &str) -> Result<&'a Device, Failure
     };
     match matches.as_slice() {
         [d] => Ok(d),
-        [] => Err(Failure::Coded(
-            "not_found",
-            format!(
-                "no device matches \"{query}\"; devices:{}",
+        [] => Err(
+            CliError::new("not_found", EXIT_NOT_FOUND, format!("no device matches \"{query}\"")).hint(format!(
+                "name one of these devices or use its ID:{}",
                 list(&devices.iter().collect::<Vec<_>>())
-            ),
-        )),
-        many => Err(Failure::Coded(
+            )),
+        ),
+        many => Err(CliError::new(
             "ambiguous",
-            format!(
-                "\"{query}\" matches {} devices; name one exactly or use its ID:{}",
-                many.len(),
-                list(many)
-            ),
-        )),
+            EXIT_USAGE,
+            format!("\"{query}\" matches {} devices", many.len()),
+        )
+        .hint(format!("name one exactly or use its ID:{}", list(many)))),
     }
 }
 
@@ -675,10 +727,15 @@ mod tests {
         assert_eq!(resolve(&ds, "IPHONE").ok().unwrap().id, "c3");
         assert_eq!(resolve(&ds, "dous's iphone").ok().unwrap().id, "a1");
         assert_eq!(resolve(&ds, "ipad").ok().unwrap().id, "b2");
-        let Err(Failure::Coded("ambiguous", msg)) = resolve(&ds, "dous") else {
+        let Err(e) = resolve(&ds, "dous") else {
             panic!("ambiguous")
         };
-        assert!(msg.contains("a1") && msg.contains("b2"), "{msg}");
-        assert!(resolve(&ds, "watch").is_err());
+        assert_eq!((e.code.as_str(), e.exit), ("ambiguous", 2));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains("a1") && hint.contains("b2"), "{hint}");
+        let Err(e) = resolve(&ds, "watch") else {
+            panic!("not found")
+        };
+        assert_eq!((e.code.as_str(), e.exit), ("not_found", 4));
     }
 }
