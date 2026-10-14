@@ -61,6 +61,9 @@ pub const ERROR_FIND_MY_AUTH_REQUIRED: &str = "io.github.ferdousbhai.ICloudSessi
 /// D-Bus error name the daemon returns from `Session()` when an account is
 /// signed in but the keyring holding its cookies cannot be read.
 pub const ERROR_KEYRING_UNAVAILABLE: &str = "io.github.ferdousbhai.ICloudSession.Error.KeyringUnavailable";
+/// D-Bus error name the daemon returns from `SetPassword()` when Apple
+/// refuses the password (it arrives as [`Error::Daemon`] with this `name`).
+pub const ERROR_PASSWORD_REJECTED: &str = "io.github.ferdousbhai.ICloudSession.Error.PasswordRejected";
 
 /// `Session()`'s reply: cookie header, client params, webservices.
 pub type SessionReply = (String, HashMap<String, String>, HashMap<String, String>);
@@ -103,7 +106,10 @@ pub const SESSION_CACHE_TTL: Duration = Duration::from_secs(300);
 const ORIGIN: &str = "https://www.icloud.com";
 const REFERER: &str = "https://www.icloud.com/";
 
+/// Everything a call can fail with. New variants may be added in a minor
+/// release: match with a wildcard arm.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Signed out, or Apple answered 421/401 and the daemon confirmed it.
     /// Apps show a sign-in banner that calls [`sign_in`]. Also returned by a
@@ -137,9 +143,17 @@ pub enum Error {
     /// dismissed). Not a sign-in: unlock the keyring and try again.
     #[error("the keyring holding the iCloud session cannot be read: {0}")]
     KeyringUnavailable(String),
-    /// `icloud-sessiond` could not be reached or failed.
+    /// `icloud-sessiond` could not be reached: no session bus, nothing owns
+    /// (or can start) its name, no reply, a broken connection. A service
+    /// unavailable; trying again later may work.
     #[error("icloud-sessiond: {0}")]
     Service(String),
+    /// `icloud-sessiond` was reached and answered with a D-Bus error this
+    /// crate has no variant for: a failure on the daemon's side (e.g.
+    /// `…Error.Failed`), or [`ERROR_PASSWORD_REJECTED`]. `name` is the D-Bus
+    /// error name, `message` its text (may be empty).
+    #[error("icloud-sessiond: {}", daemon_detail(.name, .message))]
+    Daemon { name: String, message: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -156,10 +170,51 @@ impl From<zbus::Error> for Error {
             zbus::Error::MethodError(name, msg, _) if name.as_str() == ERROR_KEYRING_UNAVAILABLE => {
                 Error::KeyringUnavailable(msg.clone().unwrap_or_default())
             }
-            zbus::Error::MethodError(name, Some(msg), _) => Error::Service(format!("{}: {msg}", name.as_str())),
+            zbus::Error::MethodError(name, msg, _) if !is_unreachable_error_name(name.as_str()) => Error::Daemon {
+                name: name.to_string(),
+                message: msg.clone().unwrap_or_default(),
+            },
+            zbus::Error::FDO(fdo) if !is_unreachable_error_name(zbus::DBusError::name(&**fdo).as_str()) => {
+                Error::Daemon {
+                    name: zbus::DBusError::name(&**fdo).to_string(),
+                    message: zbus::DBusError::description(&**fdo).unwrap_or_default().to_string(),
+                }
+            }
+            // An unreachable daemon's error names, and every other zbus
+            // error (no bus, I/O, a broken connection, an unreadable reply).
             _ => Error::Service(e.to_string()),
         }
     }
+}
+
+fn daemon_detail<'a>(name: &'a str, message: &'a str) -> &'a str {
+    if message.is_empty() { name } else { message }
+}
+
+/// The bus's own errors for a daemon it cannot reach or start, or a
+/// connection that broke: not anything the daemon said.
+fn is_unreachable_error_name(name: &str) -> bool {
+    let Some(short) = name.strip_prefix("org.freedesktop.DBus.Error.") else {
+        return false;
+    };
+    short.starts_with("Spawn.")
+        || matches!(
+            short,
+            "ServiceUnknown"
+                | "NameHasNoOwner"
+                | "NoReply"
+                | "TimedOut"
+                | "Timeout"
+                | "NoServer"
+                | "NoNetwork"
+                | "Disconnected"
+                | "IOError"
+                | "BadAddress"
+                | "AuthFailed"
+                | "AddressInUse"
+                | "LimitsExceeded"
+                | "NoMemory"
+        )
 }
 
 impl From<zbus::fdo::Error> for Error {
@@ -1166,4 +1221,66 @@ fn read_body_lossy(response: ureq::Response) -> String {
     let mut body = String::new();
     let _ = response.into_reader().take(64 * 1024).read_to_string(&mut body);
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ERROR_PASSWORD_REJECTED, ERROR_SIGN_IN_REQUIRED, Error};
+    use zbus::names::OwnedErrorName;
+
+    fn method_error(name: &str, message: Option<&str>) -> zbus::Error {
+        let msg = zbus::message::Message::method_call("/", "M")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        zbus::Error::MethodError(
+            OwnedErrorName::try_from(name).unwrap(),
+            message.map(str::to_string),
+            msg,
+        )
+    }
+
+    #[test]
+    fn an_unreachable_daemon_is_service_and_its_own_errors_are_daemon() {
+        for name in [
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+            "org.freedesktop.DBus.Error.NoReply",
+            "org.freedesktop.DBus.Error.Spawn.ChildExited",
+        ] {
+            assert!(
+                matches!(Error::from(method_error(name, Some("why"))), Error::Service(_)),
+                "{name}"
+            );
+        }
+        let e = Error::from(method_error(
+            "io.github.ferdousbhai.ICloudSession.Error.Failed",
+            Some("storing failed: x"),
+        ));
+        assert!(
+            matches!(&e, Error::Daemon { name, message }
+                if name == "io.github.ferdousbhai.ICloudSession.Error.Failed" && message == "storing failed: x"),
+            "{e:?}"
+        );
+        assert_eq!(e.to_string(), "icloud-sessiond: storing failed: x");
+        let e = Error::from(method_error(ERROR_PASSWORD_REJECTED, None));
+        assert!(matches!(&e, Error::Daemon { name, message } if name == ERROR_PASSWORD_REJECTED && message.is_empty()));
+        assert_eq!(e.to_string(), format!("icloud-sessiond: {ERROR_PASSWORD_REJECTED}"));
+        assert!(matches!(
+            Error::from(method_error(ERROR_SIGN_IN_REQUIRED, None)),
+            Error::SignInRequired
+        ));
+        // FDO errors, as proxies return them.
+        assert!(matches!(
+            Error::from(zbus::fdo::Error::ServiceUnknown("gone".into())),
+            Error::Service(_)
+        ));
+        assert!(matches!(
+            Error::from(zbus::fdo::Error::UnknownProperty("x".into())),
+            Error::Daemon { name, message }
+                if name == "org.freedesktop.DBus.Error.UnknownProperty" && message == "x"
+        ));
+        // Not a D-Bus error reply at all.
+        assert!(matches!(Error::from(zbus::Error::InvalidReply), Error::Service(_)));
+    }
 }

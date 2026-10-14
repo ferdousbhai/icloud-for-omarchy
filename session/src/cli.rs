@@ -18,7 +18,10 @@ pub const EXIT_FIND_MY_AUTH: u8 = 3;
 /// The thing asked for does not exist.
 pub const EXIT_NOT_FOUND: u8 = 4;
 /// A service or a required tool is unavailable: no network, offline, the
-/// daemon unreachable (`network`, `offline`, `session_service`, `http`).
+/// daemon unreachable, a keyring that cannot be read, an unreadable answer,
+/// an HTTP 5xx (`network`, `offline`, `session_service`,
+/// `keyring_unavailable`, `bad_response`, `http` for a 5xx only: another
+/// non-2xx is [`EXIT_ERROR`], a 401/421 that persists [`EXIT_SIGN_IN`]).
 pub const EXIT_UNAVAILABLE: u8 = 5;
 /// An internal error, a bug. The same exit code as [`EXIT_ERROR`]; kept so
 /// call sites can say which they mean.
