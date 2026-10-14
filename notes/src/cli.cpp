@@ -66,7 +66,7 @@ const char *const kUsageHint = "run `icloud-notes --help`";
 const char *const kSignInHint = "run `icloud-session sign-in` (a person signs in in the window)"; // SIGN_IN_HINT
 const char *const kNetworkHint = "check the network connection and try again"; // NETWORK_HINT
 const char *const kSessionServiceHint = // SESSION_SERVICE_HINT
-    "check that icloud-sessiond is installed and the D-Bus session bus is running (`icloud-session status` tells)";
+    "check that icloud-sessiond is installed and the D-Bus session bus is running";
 
 // sign_in_message: "sign in to iCloud required", then ": reason" when known.
 QString signInMessage(const QString &reason = {})
@@ -218,7 +218,7 @@ const QList<Spec> &specs()
         { "list", "list [--folder F] [--flag FLAG]",
           "Every note, newest first within each folder: path, title, preview, modified time, id and the\n"
           "badges the window shows (conflict, new, read-only, missing-id, foreign-id, tables). --folder\n"
-          "lists one folder only (not its subfolders); --flag only notes with that badge. --ids-only:\n"
+          "lists that folder and its subfolders; --flag only notes with that badge. --ids-only:\n"
           "the paths.\n"
           "JSON: [{path, folder, file, title, snippet, modified, modified_ms, id, flags}]",
           { QStringLiteral("--folder"), QStringLiteral("--flag") }, 0, 0 },

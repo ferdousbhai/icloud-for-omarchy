@@ -293,11 +293,11 @@ Every code each tool can emit, by exit.
 
 | Exit | Codes |
 |---|---|
-| 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed otherwise: see the log), `cancelled`, `error` |
+| 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `cancelled`, `error` |
 | 2 | `usage`, `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
 | 3 | `sign_in_required`, `not_cloned` (run `icloud-notes clone`); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder) |
-| 5 | `offline`, `network` (iCloud out of reach: retry later), `session_unavailable` (icloud-session not available), `sync_tool_missing` (the engine is missing) |
+| 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing) |
 
 `push --dry-run`, `history`, `diff` and `restore` are the engine itself, so
 they exit with the engine's codes, below.
@@ -306,7 +306,7 @@ they exit with the engine's codes, below.
 
 | Exit | Codes |
 |---|---|
-| 1 | `internal`, `vault_busy`, `vault_lock`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
+| 1 | `internal` (a bug or an unexpected answer), `io` (a file or disk failure), `error` (icloud-sessiond answered with a failure), `vault_busy`, `vault_lock`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
 | 2 | `usage`, `ambiguous_tracked_file`, `already_cloned_directory` |
 | 3 | `sign_in_required`, `session_rejected` (both: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` (Notes is not on for this Apple ID) |
 | 4 | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a zone that no longer exists (`ZONE_NOT_FOUND`) |
