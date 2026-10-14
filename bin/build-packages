@@ -22,7 +22,20 @@ trap 'rm -rf "$work"' EXIT
 source_commit=$(git -c safe.directory="$PWD" rev-parse HEAD)
 git -c safe.directory="$PWD/.git" clone --quiet --no-hardlinks "$PWD" "$work/source"
 [[ $(git -C "$work/source" rev-parse HEAD) == "$source_commit" ]]
-export CARGO_TARGET_DIR="$work/target"
+# Downloads stay in CARGO_HOME. Compiler output used to follow the temp clone
+# and was deleted with it, so every package build compiled the crates again.
+# The checkout cache is the usual place. A checkout owned by another user is
+# still readable; keep the cache in the builder's home, or beside the output
+# when that home is not writable either.
+cache=$(realpath -m "${ICLOUD_CARGO_TARGET_DIR:-$PWD/target/package-cache/$architecture}")
+if ! mkdir -p "$cache" 2>/dev/null; then
+  cache=$(realpath -m "${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/icloud-for-omarchy/package-cache/$architecture")
+  if ! mkdir -p "$cache" 2>/dev/null; then
+    cache=$(realpath -m "$output/.compiler-cache")
+    mkdir -p "$cache"
+  fi
+fi
+export CARGO_TARGET_DIR="$cache"
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)}
 (cd "$work/source/packaging" && PKGDEST="$output" PKGEXT=.pkg.tar.zst makepkg --force --nodeps)

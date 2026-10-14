@@ -184,19 +184,20 @@ for arch in ("x86_64", "aarch64"):
         self.stub("makepkg", 'printf "%s %s %s %s %s\\n" "$PWD" "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS" "$CARGO_PROFILE_DEV_DEBUG" "$CARGO_INCREMENTAL" >>"$LOG"')
         self.stub("dbus-run-session", "exit 0")
         output = self.work / "packages"
+        cache = self.work / "compiler-cache"
         result = subprocess.run(
             [str(ROOT / "bin/build-packages"), "x86_64", str(output)],
-            env=dict(self.env, LOG=str(log), CARGO_BUILD_JOBS="3"), capture_output=True,
+            env=dict(self.env, LOG=str(log), CARGO_BUILD_JOBS="3", ICLOUD_CARGO_TARGET_DIR=str(cache)), capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [line.split() for line in log.read_text().splitlines()]
         self.assertEqual(len(calls), 1)
-        self.assertEqual(len({call[1] for call in calls}), 1)
+        self.assertEqual(Path(calls[0][1]), cache)
+        self.assertTrue(cache.is_dir())
         self.assertEqual({call[2] for call in calls}, {"3"})
         self.assertEqual({tuple(call[3:]) for call in calls}, {("0", "0")})
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True)
         self.assertEqual((output / "source-commit.txt").read_text(), commit)
-        self.assertFalse(Path(calls[0][1]).exists())
 
     def test_native_build_rejects_other_architecture(self):
         self.stub("uname", "echo x86_64")
