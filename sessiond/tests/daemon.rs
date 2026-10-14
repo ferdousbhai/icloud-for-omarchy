@@ -274,6 +274,8 @@ struct Opts<'a> {
     /// The daemon's stderr goes to a file, for [`Env::log`], rather than
     /// to the test's.
     log: bool,
+    /// What the bus starts for the daemon's name.
+    exec: &'a str,
 }
 
 impl Default for Opts<'_> {
@@ -287,6 +289,7 @@ impl Default for Opts<'_> {
             retry_secs: 60.0,
             seed: true,
             log: false,
+            exec: DAEMON,
         }
     }
 }
@@ -315,7 +318,7 @@ impl Env {
         }
         fs::write(
             root.join("services/io.github.ferdousbhai.ICloudSession.service"),
-            format!("[D-BUS Service]\nName={BUS_NAME}\nExec={DAEMON}\n"),
+            format!("[D-BUS Service]\nName={BUS_NAME}\nExec={}\n", opts.exec),
         )
         .unwrap();
         fs::write(
@@ -1672,6 +1675,18 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
 
     assert!(!prop::<bool>(&conn, "FindMyPasswordStored"));
 
+    // The CLI: a required service unavailable, exit 5, whether through the
+    // client library (validate) or a direct daemon call (set-password).
+    let out = env.cli(&["validate", "--json"]);
+    assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "keyring_unavailable", "{err}");
+    let out = env.cli_with(&["set-password", "--json"], "pw\n", &[]);
+    assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let err: Value = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], "keyring_unavailable", "{err}");
+
     // The keyring answers again (with a password stored): the next
     // Session() moves the cookies, and finds the password.
     fs::remove_dir(env.secrets_path()).unwrap();
@@ -2589,9 +2604,13 @@ fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
     assert!(prop::<bool>(&conn, "FindMyPasswordStored"));
 
     // set-password with the wrong one: refused, nothing stored.
-    let out = env.cli_with(&["set-password"], "also wrong\n", &[]);
-    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("refused"));
+    // Credentials rejected: exit 3, code password_rejected.
+    let out = env.cli_with(&["set-password", "--json"], "also wrong\n", &[]);
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    let err: Value = serde_json::from_str(String::from_utf8_lossy(&out.stderr).lines().last().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], "password_rejected", "{err}");
+    assert!(err["error"]["message"].as_str().unwrap().contains("refused"), "{err}");
+    assert!(err["error"]["hint"].as_str().unwrap().contains("set-password"), "{err}");
     assert_eq!(env.secrets()[0]["secret"], "wrong");
     assert!(!String::from_utf8_lossy(&out.stderr).contains("also wrong"));
 
@@ -2621,6 +2640,7 @@ fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
     autofill.set_failing(true);
     let out = env.cli_with(&["set-password"], "changed on Apple's side too\n", &[]);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // A failure the daemon reports is exit 1, not an unreachable daemon.
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("stored the password, but the Find My sign-in with it failed"),
@@ -2713,4 +2733,42 @@ fn the_call_that_starts_the_daemon_already_sees_the_stored_password() {
     let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(printed["signed_in"], true, "{printed}");
     assert_eq!(printed["find_my_password_stored"], true, "{printed}");
+}
+
+/// The CLI's last stderr line as JSON, run with `--json` against `address`.
+fn cli_error_at(address: &str, args: &[&str]) -> (Option<i32>, Value) {
+    let out = Command::new(cli_bin())
+        .args(args)
+        .arg("--json")
+        .env_clear()
+        .env("DBUS_SESSION_BUS_ADDRESS", address)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let err =
+        serde_json::from_str(stderr.lines().last().unwrap_or_default()).unwrap_or_else(|e| panic!("{e}: {stderr}"));
+    (out.status.code(), err)
+}
+
+#[test]
+fn an_unreachable_daemon_is_session_service_exit_5() {
+    // No session bus at all.
+    let dir = tempfile::tempdir().unwrap();
+    let nobus = format!("unix:path={}", dir.path().join("no-bus").display());
+    for cmd in ["status", "validate", "forget-password", "sign-out"] {
+        let (code, err) = cli_error_at(&nobus, &[cmd]);
+        assert_eq!(code, Some(5), "{cmd}: {err}");
+        assert_eq!(err["error"]["code"], "session_service", "{cmd}: {err}");
+    }
+    // A bus that cannot start the daemon.
+    let env = Env::start(Opts {
+        exec: "/bin/false",
+        ..Default::default()
+    });
+    for cmd in ["status", "forget-password"] {
+        let (code, err) = cli_error_at(&env.address, &[cmd]);
+        assert_eq!(code, Some(5), "{cmd}: {err}");
+        assert_eq!(err["error"]["code"], "session_service", "{cmd}: {err}");
+    }
 }

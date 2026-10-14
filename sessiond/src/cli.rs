@@ -2,10 +2,21 @@
 //! forget-password | sign-out | validate | skill [install|remove]`
 //!
 //! Talks to icloud-sessiond over D-Bus. JSON on stdout; errors on stderr
-//! with a non-zero exit, in the table every iCloud tool shares: 1 error,
-//! 2 usage, 3 sign-in required or Find My not authorized, 5 a service
-//! unavailable (the daemon unreachable, no network, offline)
-//! (`icloud_session::cli`). With `--json` an error is one JSON line on stderr:
+//! with a non-zero exit, in the table every iCloud tool shares
+//! (`icloud_session::cli`):
+//!
+//! - 1 error: a failure the daemon reported (`error`), `io`, a non-5xx `http`;
+//! - 2 usage;
+//! - 3 not signed in or credentials rejected: `sign_in_required`,
+//!   `sign_in_not_completed`, `find_my_auth_required`,
+//!   `find_my_auth_not_completed`, `password_rejected` (Apple refused the
+//!   password given to `set-password`), `session_rejected` (Apple keeps
+//!   answering 401/421 although the daemon still holds the sign-in);
+//! - 5 a service unavailable: `session_service` (the daemon or the session
+//!   bus unreachable), `keyring_unavailable`, `network`, `offline`,
+//!   `bad_response`, `http` 5xx.
+//!
+//! With `--json` an error is one JSON line on stderr:
 //! `{"ok":false,"error":{"code","message","hint"?}}`.
 
 use std::io::{IsTerminal, Read};
@@ -26,8 +37,10 @@ static JSON: AtomicBool = AtomicBool::new(false);
 const AFTER_HELP: &str = "\
 --json: errors as one JSON line on stderr, {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}
 (output is JSON anyway).
-Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (or sign-in not completed) or Find My not
-authorized (or its authorization not completed), 5 a service unavailable (daemon unreachable, offline).";
+Exit codes: 0 ok; 1 error (a failure icloud-sessiond reported); 2 usage; 3 not signed in or
+credentials rejected (sign_in_required, sign_in_not_completed, find_my_auth_required,
+find_my_auth_not_completed, password_rejected, session_rejected); 5 a service unavailable
+(session_service: daemon unreachable; keyring_unavailable, network, offline, bad_response, HTTP 5xx).";
 
 #[derive(Parser)]
 #[command(
@@ -57,8 +70,8 @@ enum Command {
     /// Open the sign-in window and wait for it, then print status.
     ///
     /// Opens the sign-in window (Apple's page: password and 2FA, typed by a
-    /// person) and waits until it closes, then prints status. Exits 2 when
-    /// the window closed without a sign-in.
+    /// person) and waits until it closes, then prints status. Exits 3
+    /// (sign_in_not_completed) when the window closed without a sign-in.
     #[command(after_help = AFTER_HELP)]
     SignIn {
         /// Print status at once instead; poll `status` until signing_in is false.
@@ -68,8 +81,8 @@ enum Command {
     /// Open the sign-in window on Find My's password page, then print status.
     ///
     /// Opens the sign-in window on Find My, where Apple asks for the password
-    /// again, and waits until it closes, then prints status. Exits 4 when
-    /// Find My is still not authorized.
+    /// again, and waits until it closes, then prints status. Exits 3
+    /// (find_my_auth_not_completed) when Find My is still not authorized.
     #[command(after_help = AFTER_HELP)]
     AuthorizeFindMy {
         /// Print status at once instead; poll `status` until signing_in is false.
@@ -81,7 +94,8 @@ enum Command {
     /// Stores the Apple ID password in the keyring (GNOME Keyring), so the
     /// daemon re-authorizes Find My by itself when it asks for the password
     /// again. The password is checked with a Find My sign-in first and stored
-    /// only if Apple accepts it. It is read from the terminal without echo,
+    /// only if Apple accepts it (exit 3, password_rejected, when Apple
+    /// refuses it). It is read from the terminal without echo,
     /// or from stdin when that is not a terminal, e.g. from a password
     /// manager:
     ///
@@ -103,8 +117,8 @@ enum Command {
     ///
     /// The session's webservices: {dsid, apple_id, webservices} (the daemon
     /// validates first when older than 6 hours, and in the background when
-    /// older than 10 minutes). Exits 2 when Apple no longer accepts the
-    /// sign-in.
+    /// older than 10 minutes). Exits 3 (sign_in_required) when Apple no
+    /// longer accepts the sign-in.
     #[command(after_help = AFTER_HELP)]
     Validate,
     /// Print the agent skill for the iCloud tools, or install it for your coding agents.
@@ -285,7 +299,7 @@ fn fail(e: Error) -> ExitCode {
             "sign_in_required",
             EXIT_SIGN_IN,
             &icloud_session::sign_in_required_message(),
-            Some("run `icloud-session sign-in` (a person signs in in the window)"),
+            Some(SIGN_IN_HINT),
         ),
         Error::FindMyAuthRequired => fail_with(
             "find_my_auth_required",
@@ -295,17 +309,107 @@ fn fail(e: Error) -> ExitCode {
         ),
         Error::KeyringUnavailable(_) => fail_with(
             "keyring_unavailable",
-            EXIT_ERROR,
+            EXIT_UNAVAILABLE,
             &message,
             Some("unlock the keyring (GNOME Keyring), then try again"),
         ),
-        Error::Service(_) => fail_with("session_service", EXIT_UNAVAILABLE, &message, None),
+        Error::Service(detail) => match service_failure(&detail) {
+            ServiceFailure::Unreachable => fail_with(
+                "session_service",
+                EXIT_UNAVAILABLE,
+                &message,
+                Some("check that icloud-sessiond is installed and the D-Bus session bus is running"),
+            ),
+            ServiceFailure::Daemon { name, detail } => daemon_error(name, detail),
+        },
         Error::Network(_) => fail_with("network", EXIT_UNAVAILABLE, &message, None),
-        Error::BadResponse(_) => fail_with("bad_response", EXIT_ERROR, &message, None),
+        Error::BadResponse(_) => fail_with("bad_response", EXIT_UNAVAILABLE, &message, None),
         Error::Offline(_) => fail_with("offline", EXIT_UNAVAILABLE, &message, None),
-        Error::Http { .. } => fail_with("http", EXIT_UNAVAILABLE, &message, None),
+        Error::Http { status: 401 | 421, .. } => fail_with(
+            "session_rejected",
+            EXIT_SIGN_IN,
+            &format!("Apple refused the iCloud session although icloud-sessiond still holds it ({message})"),
+            Some(SIGN_IN_HINT),
+        ),
+        Error::Http { status: 500..=599, .. } => fail_with("http", EXIT_UNAVAILABLE, &message, None),
+        Error::Http { .. } => fail_with("http", EXIT_ERROR, &message, None),
         Error::Io(_) => fail_with("io", EXIT_ERROR, &message, None),
     }
+}
+
+const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (a person signs in in the window)";
+
+/// The error name of `ServiceError::PasswordRejected` (sessiond/src/daemon.rs).
+const ERROR_PASSWORD_REJECTED: &str = "io.github.ferdousbhai.ICloudSession.Error.PasswordRejected";
+
+/// What an [`Error::Service`] was: the daemon (or the bus) could not be
+/// reached, or the daemon answered with an error of its own.
+#[derive(Debug, PartialEq, Eq)]
+enum ServiceFailure<'a> {
+    /// No session bus, nothing owns or can start the name, or no reply.
+    Unreachable,
+    /// A D-Bus error the daemon replied with (`name`, `detail`).
+    Daemon { name: &'a str, detail: &'a str },
+}
+
+/// Classifies the text of an [`Error::Service`]. `icloud_session` turns
+/// every D-Bus method error into `Service("{error name}: {detail}")`, and
+/// any other zbus error (no bus, a broken connection) into its plain
+/// message, so the error name, when there is one, tells a daemon-side
+/// failure from an unreachable daemon.
+fn service_failure(text: &str) -> ServiceFailure<'_> {
+    let Some((name, detail)) = text.split_once(": ") else {
+        return ServiceFailure::Unreachable;
+    };
+    let is_error_name = name.contains('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if !is_error_name || unreachable_error_name(name) {
+        return ServiceFailure::Unreachable;
+    }
+    ServiceFailure::Daemon { name, detail }
+}
+
+/// The bus's own errors for a daemon it cannot reach or start, or a
+/// connection that broke: not anything the daemon said.
+fn unreachable_error_name(name: &str) -> bool {
+    let Some(short) = name.strip_prefix("org.freedesktop.DBus.Error.") else {
+        return false;
+    };
+    short.starts_with("Spawn.")
+        || matches!(
+            short,
+            "ServiceUnknown"
+                | "NameHasNoOwner"
+                | "NoReply"
+                | "TimedOut"
+                | "Timeout"
+                | "NoServer"
+                | "NoNetwork"
+                | "Disconnected"
+                | "IOError"
+                | "BadAddress"
+                | "AuthFailed"
+                | "AddressInUse"
+                | "LimitsExceeded"
+                | "NoMemory"
+        )
+}
+
+/// An error the daemon replied with that `icloud_session` has no variant
+/// for: Apple refusing a password (`password_rejected`, exit 3), else a
+/// daemon-side failure (`error`, exit 1), not an unreachable daemon.
+fn daemon_error(name: &str, detail: &str) -> ExitCode {
+    if name == ERROR_PASSWORD_REJECTED {
+        return fail_with(
+            "password_rejected",
+            EXIT_SIGN_IN,
+            detail,
+            Some("check the Apple ID password, then run `icloud-session set-password` again"),
+        );
+    }
+    fail_with("error", EXIT_ERROR, &format!("icloud-sessiond: {detail}"), None)
 }
 
 fn print(value: &serde_json::Value) -> ExitCode {
@@ -326,8 +430,8 @@ fn set_password() -> ExitCode {
         return fail_with(
             "sign_in_required",
             EXIT_SIGN_IN,
-            "sign in first (icloud-session sign-in)",
-            None,
+            "sign in first: the password is checked against the signed-in Apple ID",
+            Some(SIGN_IN_HINT),
         );
     };
     let password = match read_password(&apple_id) {
@@ -378,29 +482,17 @@ fn strip_newline(mut s: Secret) -> Secret {
     s
 }
 
-/// Calls a daemon method that answers nothing, mapping its errors to a
-/// message and an exit code.
+/// Calls a daemon method that answers nothing, reporting a failure as
+/// [`fail`] does (a D-Bus error name the client library has no variant
+/// for, e.g. `PasswordRejected`, is classified by [`service_failure`]).
 fn call_daemon<B>(method: &str, body: &B) -> Result<(), ExitCode>
 where
     B: serde::Serialize + zbus::zvariant::DynamicType,
 {
     let conn = zbus::blocking::Connection::session().map_err(|e| fail(Error::from(e)))?;
-    match conn.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body) {
-        Ok(_) => Ok(()),
-        Err(zbus::Error::MethodError(name, message, _)) => {
-            let message = message.unwrap_or_else(|| name.to_string());
-            Err(match name.as_str().rsplit('.').next() {
-                Some("SignInRequired") => fail_with(
-                    "sign_in_required",
-                    EXIT_SIGN_IN,
-                    "sign in first (icloud-session sign-in)",
-                    None,
-                ),
-                _ => fail_with("error", EXIT_ERROR, &message, None),
-            })
-        }
-        Err(e) => Err(fail(Error::from(e))),
-    }
+    conn.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body)
+        .map(drop)
+        .map_err(|e| fail(Error::from(e)))
 }
 
 #[cfg(test)]
@@ -409,5 +501,41 @@ mod tests {
     fn the_cli_definition_is_consistent() {
         use clap::CommandFactory;
         super::Args::command().debug_assert();
+    }
+
+    #[test]
+    fn a_service_error_tells_an_unreachable_daemon_from_its_own_failure() {
+        use super::ServiceFailure::{Daemon, Unreachable};
+        use super::service_failure;
+        // No bus, or a broken connection: zbus's own message.
+        assert_eq!(
+            service_failure("I/O error: No such file or directory (os error 2)"),
+            Unreachable
+        );
+        assert_eq!(service_failure("Invalid D-Bus method reply"), Unreachable);
+        // The bus cannot reach or start the daemon.
+        for name in [
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+            "org.freedesktop.DBus.Error.NoReply",
+            "org.freedesktop.DBus.Error.Spawn.ChildExited",
+        ] {
+            assert_eq!(service_failure(&format!("{name}: why")), Unreachable, "{name}");
+        }
+        // The daemon answered with an error.
+        assert_eq!(
+            service_failure("io.github.ferdousbhai.ICloudSession.Error.Failed: storing failed: x"),
+            Daemon {
+                name: "io.github.ferdousbhai.ICloudSession.Error.Failed",
+                detail: "storing failed: x"
+            }
+        );
+        assert_eq!(
+            service_failure("org.freedesktop.DBus.Error.UnknownMethod: no such method"),
+            Daemon {
+                name: "org.freedesktop.DBus.Error.UnknownMethod",
+                detail: "no such method"
+            }
+        );
     }
 }
