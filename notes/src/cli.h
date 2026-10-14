@@ -8,13 +8,19 @@
 // rules, and take the vault's lock (VaultLock) before they change the vault
 // or run icloud-notes-sync, as the window and the background sync do.
 //
-// Output is plain text, or JSON on stdout with --json; an error is then
-// one JSON line on stderr, {"ok":false,"error":{"code","message","hint"?}}.
-// The JSON key order is not part of the contract (QJsonObject prints `ok`
-// last). Exit codes, as in every iCloud tool: 0 ok, 1 error, 2 usage or
-// invalid request, 3 not signed in or not cloned, 4 not found, 5 offline or
-// a service (icloud-session, the engine) unavailable. `push --dry-run` and
-// `diff` report their changes and exit 0.
+// Output follows the contract every iCloud tool shares (icloud_session::
+// output): text on a terminal, the JSON envelope {"ok":true,"data","summary"}
+// when piped or with --json; --quiet (data only), --styled (text),
+// --ids-only, --count, combinable (ids-only > count > quiet > json >
+// styled). A failure is {"ok":false,"error":{"code","message","hint"?}} on
+// stdout in those machine modes, `error:`/`hint:` on stderr in text mode.
+// `ok` prints first; keys inside data and error are sorted (QJsonObject),
+// and key order is not part of the contract. Exit codes, as in every iCloud
+// tool: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in or not
+// cloned, 4 not found, 5 offline or a service (icloud-session, the engine)
+// unavailable. `push --dry-run` and `diff` report their changes and exit 0;
+// a sync, pull, push or clone that ran but failed prints its result (with
+// `error` in it) and exits with the failure's code.
 
 // argv[1] starts a command (or global options, help, the version) rather
 // than the window. `--sync`, the background sync, is not one.

@@ -8,8 +8,10 @@
 //!
 //! Output follows the product contract every iCloud tool shares
 //! ([`icloud_session::output`]): text on a terminal, the JSON envelope
-//! `{"ok":true,"data","summary"}` when piped (or with `--json`), only `data`
-//! with `--quiet` (what the Notes app reads), `--styled` forces text,
+//! `{"ok":true,"data","summary","meta"?}` when piped (or with `--json`; clone,
+//! pull and push put their text report in `meta.lines`, diff its text in
+//! `meta.text`, which is how the Notes app logs them), only `data` with
+//! `--quiet`, `--styled` forces text,
 //! `--ids-only` / `--count` where a command lists something. A failure is
 //! the contract error object `{"ok":false,"error":{"code","message","hint"?}}`
 //! on stdout in a machine mode, `error:` / `hint:` on stderr in text mode.
@@ -41,7 +43,8 @@ use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
     name = "icloud-notes-sync",
     about = "Sync iCloud Notes with a folder of Markdown files",
     after_help = "Output: text on a terminal; when piped (or with --json) the JSON envelope \
-                  {\"ok\":true,\"data\",\"summary\"}; --quiet prints only data (the command's result); \
+                  {\"ok\":true,\"data\",\"summary\",\"meta\"?} (clone, pull and push: their text report in \
+                  meta.lines; diff: meta.text); --quiet prints only data (the command's result); \
                   --styled forces text; --count prints how many entries (status, push, pull changes, history, \
                   vault-info notes) and --ids-only their files (status, push, restore) or snapshot ids \
                   (history). The flags combine: ids-only > count > quiet > json > styled. In those machine \
@@ -218,6 +221,13 @@ fn human(mode: Mode, lines: Vec<Line>) -> String {
         }
     }
     out.join("\n")
+}
+
+/// Every line of a human report, warnings included, for the envelope's
+/// `meta.lines` (clone, pull, push): the Notes app runs them with `--json`, so
+/// it gets the error code of a failure and still logs the text report.
+fn report_lines(lines: &[Line]) -> Vec<String> {
+    lines.iter().map(|(_, line)| line.clone()).collect()
 }
 
 fn notice_lines(notices: &[SyncNotice]) -> Vec<Line> {
@@ -422,8 +432,11 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 s.written_shared,
                 directory.display()
             );
-            let text = human(mode, clone_lines(&s, &directory));
-            Response::new(&s, summary).human(text)
+            let lines = clone_lines(&s, &directory);
+            let report = report_lines(&lines);
+            Response::new(&s, summary)
+                .human(human(mode, lines))
+                .meta("lines", report)
         }
         Command::Pull {
             directory,
@@ -432,8 +445,12 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
             let s = pull::run_pull(&target, progress, &mut on_status, &pull::PullOptions { defer_renames })?;
-            let text = human(mode, pull_lines(&s, &target));
-            Response::new(&s, pull_summary(&s)).human(text).count(s.changes.len())
+            let lines = pull_lines(&s, &target);
+            let report = report_lines(&lines);
+            Response::new(&s, pull_summary(&s))
+                .human(human(mode, lines))
+                .meta("lines", report)
+                .count(s.changes.len())
         }
         Command::Push { directory, dry_run } => {
             let target = resolve_target_dir(directory)?;
@@ -443,9 +460,11 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 Some(lock_vault(&target, wait)?)
             };
             let r = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
-            let text = human(mode, push_lines(&r, &target));
+            let lines = push_lines(&r, &target);
+            let report = report_lines(&lines);
             Response::new(&r, push_summary(&r, &target))
-                .human(text)
+                .human(human(mode, lines))
+                .meta("lines", report)
                 .count(r.entries.len())
                 .ids(r.entries.iter().map(|e| e.entry.file.clone()).collect())
         }
@@ -571,7 +590,8 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             } else {
                 "No differences"
             };
-            Response::new(&r, summary).human(diff::render_diff_result(&r))
+            let text = diff::render_diff_result(&r);
+            Response::new(&r, summary).human(text.clone()).meta("text", text)
         }
     })
 }

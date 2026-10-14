@@ -58,9 +58,97 @@ struct Failure {
     QString hint;
 };
 
+// Every usage error points at the help.
+const char *const kUsageHint = "run `icloud-notes --help`";
+
 Failure usageError(const QString &message)
 {
-    return { QStringLiteral("usage"), message, kExitUsage, {} };
+    return { QStringLiteral("usage"), message, kExitUsage, QLatin1StringView(kUsageHint) };
+}
+
+// ---- output modes -----------------------------------------------------------
+
+// How a result is rendered, as icloud_session::output (every iCloud tool,
+// and cloud-mail) does: human text on a terminal, the JSON envelope when
+// piped; --json forces the envelope, --styled text, --quiet prints only
+// `data`, --ids-only one id per line, --count the number of results.
+enum class Mode { Human, Json, Quiet, Ids, Count };
+
+bool isMachine(Mode mode)
+{
+    return mode != Mode::Human;
+}
+
+// The five global output flags. They combine; the strongest wins: ids-only
+// > count > quiet > json > styled > (stdout a terminal ? text : envelope).
+struct OutputFlags {
+    bool json = false;
+    bool styled = false;
+    bool quiet = false;
+    bool idsOnly = false;
+    bool count = false;
+
+    bool set(const QString &arg)
+    {
+        if (arg == u"--json")
+            json = true;
+        else if (arg == u"--styled")
+            styled = true;
+        else if (arg == u"--quiet")
+            quiet = true;
+        else if (arg == u"--ids-only")
+            idsOnly = true;
+        else if (arg == u"--count")
+            count = true;
+        else
+            return false;
+        return true;
+    }
+
+    // The flags given, as icloud-notes-sync takes them (the same five).
+    QStringList given() const
+    {
+        QStringList out;
+        if (json)
+            out << QStringLiteral("--json");
+        if (styled)
+            out << QStringLiteral("--styled");
+        if (quiet)
+            out << QStringLiteral("--quiet");
+        if (idsOnly)
+            out << QStringLiteral("--ids-only");
+        if (count)
+            out << QStringLiteral("--count");
+        return out;
+    }
+
+    Mode mode() const
+    {
+        if (idsOnly)
+            return Mode::Ids;
+        if (count)
+            return Mode::Count;
+        if (quiet)
+            return Mode::Quiet;
+        if (json)
+            return Mode::Json;
+        if (styled || isatty(STDOUT_FILENO))
+            return Mode::Human;
+        return Mode::Json;
+    }
+};
+
+// The output flags among the arguments (up to `--`), for a usage error
+// found before the arguments are fully parsed.
+OutputFlags scanOutputFlags(const QStringList &argv)
+{
+    OutputFlags flags;
+    for (const QString &arg : argv) {
+        if (arg == u"--")
+            break;
+        flags.set(arg);
+    }
+    return flags;
 }
 
 // ---- commands ------------------------------------------------------------
@@ -75,13 +163,21 @@ struct Spec {
 };
 
 const char *const kFooter =
-    "Global options: --json (JSON on stdout; an error is one JSON line on stderr,\n"
-    "{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}), --vault DIR (a vault other than\n"
-    "~/Documents/Notes), --wait SECS (how long to wait for the vault's lock; 30 when\n"
-    "a background sync holds it, none while the Notes window holds it).\n"
+    "Output: text on a terminal; when piped (or with --json) the JSON envelope\n"
+    "{\"ok\":true,\"data\",\"summary\",\"meta\"?} (\"JSON:\" above describes data); --quiet prints\n"
+    "only data; --styled forces text; --ids-only prints one id per line (the note paths of list,\n"
+    "search and read, the folder paths of folders, the path a change touched); --count the\n"
+    "number of results. They combine: ids-only > count > quiet > json > styled. A failure is\n"
+    "{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout in those machine modes,\n"
+    "`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.\n"
+    "Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to\n"
+    "wait for the vault's lock; 30 when a background sync holds it, none while the Notes window\n"
+    "holds it). Nothing asks without a terminal: delete, delete-folder and restore need --yes.\n"
     "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (icloud-session sign-in)\n"
     "or not cloned, 4 not found, 5 unavailable (offline, icloud-session or the sync engine missing).\n"
-    "push --dry-run and diff report their changes in the result and exit 0.";
+    "push --dry-run and diff report their changes in the result and exit 0. A failed sync, pull,\n"
+    "push or clone (or the sync of a change's --push) still prints its result, with the failure\n"
+    "in it as error: {code, message, hint?}, and exits with the failure's code.";
 
 // NOTE is a note's vault-relative path ("Notes/Groceries.md", .md optional),
 // its apple-note-id, or its title (ignoring case) when exactly one note has it.
@@ -91,19 +187,22 @@ const QList<Spec> &specs()
         { "status", "status",
           "Where the vault is, whether it is cloned, the sign-in (from icloud-session), who holds the\n"
           "vault's lock (the Notes window, a background sync), and the notes the window badges: conflict,\n"
-          "new, read-only, missing-id, foreign-id, tables. Exits 2 when signed out.\n"
+          "new, read-only, missing-id, foreign-id, tables. Signed out, it still prints all that, and\n"
+          "exits 3. --count: the number of notes.\n"
           "JSON: {vault, cloned, title_mode, sync_tool, sign_in_known, signed_in, apple_id,\n"
           "sign_in_days_left, lock: {held_by, app_open}, notes, folders, flagged: {FLAG: [path]}}",
           {}, 0, 0 },
         { "folders", "folders",
           "Every folder, Apple Notes' order (the default folder first), with how many notes it and its\n"
-          "subfolders hold. The vault root is \"\" (All Notes).\n"
+          "subfolders hold. The vault root is \"\" (All Notes). --ids-only lists the folder paths and\n"
+          "--count counts them (not the vault root).\n"
           "JSON: [{folder, name, notes, default}]",
           {}, 0, 0 },
         { "list", "list [--folder F] [--flag FLAG]",
           "Every note, newest first within each folder: path, title, preview, modified time, id and the\n"
           "badges the window shows (conflict, new, read-only, missing-id, foreign-id, tables). --folder\n"
-          "lists one folder only (not its subfolders); --flag only notes with that badge.\n"
+          "lists one folder only (not its subfolders); --flag only notes with that badge. --ids-only:\n"
+          "the paths.\n"
           "JSON: [{path, folder, file, title, snippet, modified, modified_ms, id, flags}]",
           { QStringLiteral("--folder"), QStringLiteral("--flag") }, 0, 0 },
         { "read", "read NOTE [--raw]",
@@ -116,7 +215,7 @@ const QList<Spec> &specs()
           { QStringLiteral("--raw") }, 1, 1 },
         { "search", "search QUERY",
           "Notes whose text contains QUERY (ignoring case, at least 2 characters), up to 100, as the\n"
-          "window's search box finds them.\n"
+          "window's search box finds them. --ids-only: the paths.\n"
           "JSON: [{path, folder, file, title, snippet}]",
           {}, 1, 1 },
         { "new", "new TITLE [--folder F] [--body TEXT | --file PATH | --stdin] [--push]",
@@ -188,15 +287,17 @@ const QList<Spec> &specs()
           "What the window does on its own: push what changed here, then pull what changed in iCloud,\n"
           "in one icloud-notes-sync run with the vault's lock held. A refused sign-in is reported to\n"
           "icloud-session, which checks it with Apple (one retry if it still works). No network is the\n"
-          "error offline (or network), exit 5.\n"
-          "JSON: {ok, runs: [{command, ok, exit_code, result}], log} (result: icloud-notes-sync's JSON for\n"
-          "that half, or {error: {code, message, ...}} when it failed)",
+          "error offline (or network), exit 5. A sync that ran but failed still prints its result, with\n"
+          "error in it, and exits with the failure's code.\n"
+          "JSON: {ok, runs: [{command, ok, exit_code, result}], log, error?} (result: icloud-notes-sync's\n"
+          "data for that half, or {error: {code, message, ...}} when it failed; error: why it failed)",
           {}, 0, 0 },
         { "pull", "pull", "Fetch what changed in iCloud (as sync, pull only).\nJSON: as for sync", {}, 0, 0 },
         { "push", "push [--dry-run]",
           "Send what changed here to iCloud (as sync, push only). --dry-run previews it instead (exit 0,\n"
           "the changes in the result): icloud-notes-sync's own push --dry-run output (it takes no lock,\n"
-          "so it works while the Notes window is open).\n"
+          "so it works while the Notes window is open; the output flags are its own: --ids-only lists\n"
+          "the files, --count counts them).\n"
           "JSON: as for sync; with --dry-run icloud-notes-sync's {entries, unchanged, notices, ...}",
           { QStringLiteral("--dry-run") }, 0, 0 },
         { "clone", "clone",
@@ -208,7 +309,7 @@ const QList<Spec> &specs()
           "The note's past versions, newest first (icloud-notes-sync history; no lock, so it works while\n"
           "the Notes window is open). --records lists every snapshot record instead of the epoch timeline.\n"
           "JSON: icloud-notes-sync's {mode, epochs: [{id, timestamp, changed, carriedOver}]}, or with\n"
-          "--records {mode: \"records\", records: [...]}",
+          "--records {mode: \"records\", records: [...]}. --ids-only: the epoch (or record) ids.",
           { QStringLiteral("--records") }, 1, 1 },
         { "diff", "diff NOTE REF",
           "A past version (an id from history) against iCloud's copy, or FROM..TO; exits 0 whether or\n"
@@ -255,7 +356,10 @@ QString commandHelp(const Spec &s)
 const QSet<QString> kValued{ QStringLiteral("--folder"), QStringLiteral("--flag"),   QStringLiteral("--body"),
                              QStringLiteral("--file"),   QStringLiteral("--in"),     QStringLiteral("--all"),
                              QStringLiteral("--choices"), QStringLiteral("--vault"), QStringLiteral("--wait") };
-const QSet<QString> kSwitches{ QStringLiteral("--json"),    QStringLiteral("--yes"),    QStringLiteral("--push"),
+const QSet<QString> kOutputSwitches{ QStringLiteral("--json"), QStringLiteral("--styled"), QStringLiteral("--quiet"),
+                                     QStringLiteral("--ids-only"), QStringLiteral("--count") };
+const QSet<QString> kSwitches{ QStringLiteral("--styled"),  QStringLiteral("--quiet"),  QStringLiteral("--ids-only"),
+                               QStringLiteral("--count"),   QStringLiteral("--json"),   QStringLiteral("--yes"),    QStringLiteral("--push"),
                                QStringLiteral("--append"),  QStringLiteral("--force"),  QStringLiteral("--stdin"),
                                QStringLiteral("--raw"),     QStringLiteral("--dry-run"), QStringLiteral("--strip"),
                                QStringLiteral("--synced"),  QStringLiteral("--records"), QStringLiteral("--help"),
@@ -266,7 +370,8 @@ struct Args {
     QStringList positional;
     QHash<QString, QString> values;
     QSet<QString> switches;
-    bool json = false;
+    OutputFlags flags;
+    Mode mode = Mode::Json;
 
     bool has(const char *name) const { return switches.contains(QLatin1StringView(name)); }
     std::optional<QString> value(const char *name) const
@@ -319,16 +424,18 @@ std::optional<Failure> parseArgs(const QStringList &argv, Args &a)
             return usageError(QStringLiteral("unknown option %1").arg(name));
         }
     }
-    a.json = a.has("--json");
+    for (const QString &name : kOutputSwitches)
+        if (a.switches.contains(name))
+            a.flags.set(name);
+    a.mode = a.flags.mode();
     return std::nullopt;
 }
 
 std::optional<Failure> checkArgs(const Spec &spec, const Args &a)
 {
-    static const QSet<QString> global{ QStringLiteral("--json"), QStringLiteral("--vault"), QStringLiteral("--wait"),
-                                       QStringLiteral("--help") };
+    static const QSet<QString> global{ QStringLiteral("--vault"), QStringLiteral("--wait"), QStringLiteral("--help") };
     for (const QString &name : a.values.keys() + QStringList(a.switches.values()))
-        if (!global.contains(name) && !spec.options.contains(name))
+        if (!global.contains(name) && !kOutputSwitches.contains(name) && !spec.options.contains(name))
             return usageError(QStringLiteral("%1 does not take %2").arg(QLatin1StringView(spec.name), name));
     const qsizetype n = a.positional.size();
     if (n < spec.minArgs || n > spec.maxArgs)
@@ -344,42 +451,144 @@ QTextStream &out()
     return stream;
 }
 
-void printJson(const QJsonValue &value)
+// Text for a terminal: control characters but newline and tab become `?`.
+QString terminalSafe(QString text)
 {
-    const QJsonDocument doc = value.isArray() ? QJsonDocument(value.toArray()) : QJsonDocument(value.toObject());
-    out() << doc.toJson(QJsonDocument::Indented);
-    out().flush();
+    for (QChar &c : text)
+        if (c.category() == QChar::Other_Control && c != u'\n' && c != u'\t')
+            c = u'?';
+    return text;
 }
 
-// A command's result: `json` under --json, else `text` (if any) on a line of its own.
-void print(bool asJson, const QJsonValue &json, const QString &text)
+// JSON text with U+007F..U+009F escaped, so it is also safe on a terminal.
+QString jsonSafe(QString json)
 {
-    if (asJson)
-        printJson(json);
-    else if (!text.isEmpty())
-        out() << text << (text.endsWith(u'\n') ? "" : "\n");
-    out().flush();
+    QString safe;
+    safe.reserve(json.size());
+    for (const QChar c : json) {
+        if (c.unicode() >= 0x7f && c.unicode() <= 0x9f)
+            safe += QStringLiteral("\\u%1").arg(uint(c.unicode()), 4, 16, QLatin1Char('0'));
+        else
+            safe += c;
+    }
+    return safe;
 }
 
-// The error: `{"ok":false,"error":{"code","message","hint"?}}` with --json,
-// else text. QJsonObject sorts its keys, so `ok` prints after `error`; key
-// order is not part of the contract (consumers parse the JSON).
-int report(const Failure &f, bool json)
+// Any JSON value, pretty-printed (QJsonDocument's layout: 4 spaces, an
+// object's keys sorted), without a trailing newline.
+QString jsonText(const QJsonValue &value)
 {
-    QTextStream err(stderr);
-    if (json) {
-        QJsonObject error{ { QStringLiteral("code"), f.code }, { QStringLiteral("message"), f.message } };
+    // QJsonDocument prints only arrays and objects: print [value] and unwrap it.
+    const QList<QByteArray> lines = QJsonDocument(QJsonArray{ value }).toJson(QJsonDocument::Indented).split('\n');
+    QStringList inner;
+    for (qsizetype i = 1; i + 1 < lines.size() && lines.at(i) != "]"; ++i)
+        inner << QString::fromUtf8(lines.at(i).mid(4));
+    return jsonSafe(inner.join(u'\n'));
+}
+
+// `value` as the value of a key one level into an object.
+QString nested(const QJsonValue &value)
+{
+    return jsonText(value).replace(u'\n', QStringLiteral("\n    "));
+}
+
+// What a command produced: the result (`data`), a one-line summary (the
+// text output when there is no `text`), and for the machine modes its ids
+// and count; `exit` non-zero for a result that still failed (a sync).
+struct Done {
+    QJsonValue json;
+    QString text;
+    QString summary = {};
+    std::optional<QStringList> ids = std::nullopt;
+    std::optional<qsizetype> count = std::nullopt;
+    int exit = kExitOk;
+};
+
+// The result in `mode`; returns its exit code. The envelope is written key
+// by key so `ok` comes first (QJsonObject sorts the keys inside data).
+int printResult(const Done &d, Mode mode)
+{
+    switch (mode) {
+    case Mode::Json:
+        out() << "{\n    \"ok\": true,\n    \"data\": " << nested(d.json) << ",\n    \"summary\": " << jsonText(d.summary)
+              << "\n}\n";
+        break;
+    case Mode::Quiet:
+        out() << jsonText(d.json) << '\n';
+        break;
+    case Mode::Count: {
+        qsizetype n = 1;
+        if (d.count)
+            n = *d.count;
+        else if (d.ids)
+            n = d.ids->size();
+        else if (d.json.isArray())
+            n = d.json.toArray().size();
+        else if (d.json.isNull() || d.json.isUndefined())
+            n = 0;
+        out() << n << '\n';
+        break;
+    }
+    case Mode::Ids:
+        if (d.ids) {
+            for (const QString &id : *d.ids)
+                out() << terminalSafe(id).replace(u'\n', u' ').replace(u'\t', u' ') << '\n';
+        } else {
+            QTextStream(stderr) << "note: this command has no ids to list; printing its result instead\n";
+            out() << jsonText(d.json) << '\n';
+        }
+        break;
+    case Mode::Human: {
+        const QString text = d.text.trimmed().isEmpty() ? d.summary : d.text;
+        if (!text.isEmpty())
+            out() << terminalSafe(text) << (text.endsWith(u'\n') ? "" : "\n");
+        break;
+    }
+    }
+    out().flush();
+    return d.exit;
+}
+
+// {code, message, hint?}: the error object inside the failure document and
+// inside a result that failed (data.error).
+QJsonObject failureJson(const Failure &f)
+{
+    QJsonObject error{ { QStringLiteral("code"), f.code }, { QStringLiteral("message"), f.message } };
+    if (!f.hint.isEmpty())
+        error.insert(QStringLiteral("hint"), f.hint);
+    return error;
+}
+
+// The failure's `error:`/`hint:` lines on stderr (text mode).
+void printErrorText(const Failure &f)
+{
+    QString text = QStringLiteral("error: ") + f.message;
+    if (!f.hint.isEmpty())
+        text += QStringLiteral("\nhint: ") + f.hint;
+    QTextStream(stderr) << terminalSafe(text) << '\n';
+}
+
+// The failure: in a machine mode {"ok":false,"error":{"code","message",
+// "hint"?}} on stdout (`ok` first; nothing on stderr), in text mode
+// `error:`/`hint:` lines on stderr. Returns its exit code.
+int report(const Failure &f, Mode mode)
+{
+    if (isMachine(mode)) {
+        out() << "{\n    \"ok\": false,\n    \"error\": {\n        \"code\": " << jsonText(f.code)
+              << ",\n        \"message\": " << jsonText(f.message);
         if (!f.hint.isEmpty())
-            error.insert(QStringLiteral("hint"), f.hint);
-        err << QJsonDocument(QJsonObject{ { QStringLiteral("ok"), false }, { QStringLiteral("error"), error } })
-                   .toJson(QJsonDocument::Compact)
-            << '\n';
+            out() << ",\n        \"hint\": " << jsonText(f.hint);
+        out() << "\n    }\n}\n";
+        out().flush();
     } else {
-        err << "icloud-notes: " << f.message << '\n';
-        if (!f.hint.isEmpty())
-            err << f.hint << '\n';
+        printErrorText(f);
     }
     return f.exit;
+}
+
+QString plural(qsizetype n, const char *one, const char *many)
+{
+    return QStringLiteral("%1 %2").arg(n).arg(QLatin1StringView(n == 1 ? one : many));
 }
 
 QString iso(qint64 ms)
@@ -619,7 +828,7 @@ struct SyncOutcome {
 // `what`: "sync" (push, then pull, in one engine run), "pull", "push" or
 // "clone", through the backend with its lock held, as the window runs them.
 // A sync still reports two runs, one per half.
-SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
+SyncOutcome runSync(NotesBackend &b, const QString &what)
 {
     SyncOutcome result;
     if (auto f = needSyncTool(b)) {
@@ -630,7 +839,6 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
         result.failure = f;
         return result;
     }
-    b.setToolJson(json);
     b.clearLog();
     QJsonArray runs;
     QHash<QString, bool> last;
@@ -646,7 +854,7 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
                                      { QStringLiteral("result"), doc.isObject() ? QJsonValue(doc.object()) : QJsonValue() } });
             last.insert(command, ok);
             // iCloud out of reach: the engine's offline or network error (from
-            // the half's result, or a --json pull/push's stderr), for a run
+            // the half's result, or a pull/push's error object), for a run
             // that is retried later rather than looked into.
             const QJsonObject error = b.lastError();
             const QString code = error.value(QStringLiteral("code")).toString();
@@ -691,15 +899,19 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
 
 // Becomes icloud-notes-sync itself (exec) for push --dry-run, history,
 // diff and restore, in the vault: its output, errors and exit codes are this
-// tool's. The engine takes the vault's lock where it needs it (restore; the
-// others only read), honouring --wait.
+// tool's. It speaks the same output contract, so the output flags are passed
+// on as given (it resolves them the same way); with none, --styled on a
+// terminal and --json otherwise, which is what this tool would pick. The
+// engine takes the vault's lock where it needs it (restore; the others only
+// read), honouring --wait.
 int execEngine(NotesBackend &b, const Args &a, const QStringList &toolArgs)
 {
     if (auto f = needSyncTool(b))
-        return report(*f, a.json);
-    QStringList args{ NotesBackend::syncToolPath() };
-    if (a.json)
-        args << QStringLiteral("--json");
+        return report(*f, a.mode);
+    QStringList flags = a.flags.given();
+    if (flags.isEmpty())
+        flags << (isatty(STDOUT_FILENO) ? QStringLiteral("--styled") : QStringLiteral("--json"));
+    QStringList args = QStringList{ NotesBackend::syncToolPath() } + flags;
     if (const auto wait = a.value("--wait"))
         args << QStringLiteral("--wait") << *wait;
     args += toolArgs;
@@ -714,12 +926,12 @@ int execEngine(NotesBackend &b, const Args &a, const QStringList &toolArgs)
     if (!QDir::setCurrent(NotesBackend::rootPath()))
         return report(Failure{ QStringLiteral("error"), QStringLiteral("cannot enter %1").arg(NotesBackend::rootPath()),
                                kExitError, {} },
-                      a.json);
+                      a.mode);
     ::execv(argv.front(), argv.data());
     return report(Failure{ QStringLiteral("error"),
                            QStringLiteral("icloud-notes-sync did not run: %1").arg(QString::fromLocal8Bit(strerror(errno))),
                            kExitError, {} },
-                  a.json);
+                  a.mode);
 }
 
 // ---- input ------------------------------------------------------------------
@@ -747,13 +959,17 @@ std::optional<Failure> readBody(const Args &a, QString &body, bool &given)
     return std::nullopt;
 }
 
-// Asks on a terminal unless --yes; refuses without one.
+// Asks unless --yes, only in text mode with stdin and stdout a terminal;
+// anywhere else it refuses (exit 2).
 std::optional<Failure> confirm(const Args &a, const QString &question)
 {
     if (a.has("--yes"))
         return std::nullopt;
-    if (!isatty(STDIN_FILENO))
-        return usageError(QStringLiteral("%1 asks before it acts: pass --yes when stdin is not a terminal").arg(a.command));
+    if (a.mode != Mode::Human || !isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+        return Failure{ QStringLiteral("usage"),
+                        QStringLiteral("%1 asks before it acts, and cannot ask here (no terminal, or a machine output mode)")
+                            .arg(a.command),
+                        kExitUsage, QStringLiteral("Pass --yes to go ahead.") };
     QTextStream err(stderr);
     err << question << " [y/N] ";
     err.flush();
@@ -766,35 +982,59 @@ std::optional<Failure> confirm(const Args &a, const QString &question)
 
 // ---- the commands -----------------------------------------------------------
 
-struct Done {
-    QJsonValue json;
-    QString text;
-};
-
 using Result = std::variant<Done, Failure>;
 
+// A sync (or a pull, push, clone) that ran but failed keeps its result,
+// with the failure in it as `error`; one that never ran is the failure.
+QJsonObject withError(QJsonObject json, const Failure &f)
+{
+    json.insert(QStringLiteral("ok"), false);
+    json.insert(QStringLiteral("error"), failureJson(f));
+    return json;
+}
+
+// A change's result, and with --push the sync after it: in `sync` (with
+// `error` when it failed, the change itself done all the same, and the
+// exit code the sync's).
 int finish(NotesBackend &b, const Args &a, Result result)
 {
     if (std::holds_alternative<Failure>(result))
-        return report(std::get<Failure>(result), a.json);
+        return report(std::get<Failure>(result), a.mode);
     Done done = std::get<Done>(std::move(result));
+    // A change's one line is its summary; its id the file it made (a PDF) or
+    // the note or folder it touched.
+    if (done.summary.isEmpty())
+        done.summary = done.text;
+    if (!done.ids) {
+        const QJsonObject json = done.json.toObject();
+        for (const char *key : { "pdf", "path", "folder" })
+            if (json.contains(QLatin1StringView(key))) {
+                done.ids = QStringList{ json.value(QLatin1StringView(key)).toString() };
+                break;
+            }
+    }
     std::optional<Failure> syncFailure;
     if (a.has("--push")) {
-        SyncOutcome sync = runSync(b, QStringLiteral("sync"), a.json);
-        QJsonObject json = done.json.toObject();
-        json.insert(QStringLiteral("sync"), sync.failure && sync.json.isEmpty() ? QJsonValue() : QJsonValue(sync.json));
-        done.json = json;
-        if (!sync.text.isEmpty())
-            done.text += u'\n' + sync.text;
+        SyncOutcome sync = runSync(b, QStringLiteral("sync"));
         syncFailure = sync.failure;
         if (syncFailure)
             syncFailure->message = QStringLiteral("%1 done here, but not synced: %2").arg(a.command, syncFailure->message);
+        QJsonObject json = done.json.toObject();
+        json.insert(QStringLiteral("sync"), syncFailure ? withError(sync.json, *syncFailure) : sync.json);
+        done.json = json;
+        if (!sync.text.isEmpty())
+            done.text += u'\n' + sync.text;
+        done.summary += syncFailure ? QStringLiteral("; not synced") : QStringLiteral("; synced");
+        if (syncFailure)
+            done.exit = syncFailure->exit;
     }
-    print(a.json, done.json, done.text);
-    return syncFailure ? report(*syncFailure, a.json) : kExitOk;
+    const int code = printResult(done, a.mode);
+    if (syncFailure && !isMachine(a.mode))
+        printErrorText(*syncFailure);
+    return code;
 }
 
-Done status(NotesBackend &b, int &exitCode)
+Done status(NotesBackend &b)
 {
     b.refreshSignIn();
     waitFor([&] { return !b.signInPending(); }, 20000);
@@ -849,16 +1089,27 @@ Done status(NotesBackend &b, int &exitCode)
     lines << QStringLiteral("Notes:       %1 in %2 folders").arg(count).arg(json.value(QStringLiteral("folders")).toInt());
     for (auto it = flagged.constBegin(); it != flagged.constEnd(); ++it)
         lines << QStringLiteral("  %1: %2").arg(it.key(), QString::number(it.value().toArray().size()));
-    exitCode = b.signInKnown() && !b.signedIn() ? kExitSignIn : kExitOk;
-    return { json, lines.join(u'\n') };
+    const QString signIn = !b.signInKnown() ? QStringLiteral("sign-in unknown")
+                           : b.signedIn()   ? QStringLiteral("signed in as %1").arg(b.appleId())
+                                            : QStringLiteral("signed out");
+    Done done{ json, lines.join(u'\n'),
+               cloned ? QStringLiteral("%1, %2").arg(plural(count, "note", "notes"), signIn)
+                      : QStringLiteral("not cloned, %1").arg(signIn) };
+    done.count = count;
+    // Signed out is reported, and exits 3 (the result printed all the same).
+    done.exit = b.signInKnown() && !b.signedIn() ? kExitSignIn : kExitOk;
+    return done;
 }
 
 Result folders(NotesBackend &b)
 {
     QJsonArray list;
     QStringList lines;
+    QStringList ids;
     const QString def = b.defaultFolder();
     for (const QString &f : b.folders()) {
+        if (!f.isEmpty())
+            ids << f;
         const int n = b.folderNoteCounts().value(f).toInt();
         list.append(QJsonObject{ { QStringLiteral("folder"), f },
                                  { QStringLiteral("name"), f.isEmpty() ? QStringLiteral("All Notes") : f.section(u'/', -1) },
@@ -866,7 +1117,10 @@ Result folders(NotesBackend &b)
                                  { QStringLiteral("default"), !f.isEmpty() && f == def } });
         lines << QStringLiteral("%1\t%2").arg(n).arg(f.isEmpty() ? QStringLiteral("(All Notes)") : f);
     }
-    return Done{ list, lines.join(u'\n') };
+    // The ids and the count are the folders, not the vault root (All Notes).
+    Done done{ list, lines.join(u'\n'), plural(ids.size(), "folder", "folders") };
+    done.ids = ids;
+    return done;
 }
 
 Result list(NotesBackend &b, const Args &a)
@@ -881,13 +1135,17 @@ Result list(NotesBackend &b, const Args &a)
     const std::optional<QString> flag = a.value("--flag");
     QJsonArray arr;
     QStringList lines;
+    QStringList ids;
     for (const Note &n : scanNotes(b, only)) {
         if (flag && !n.flags.contains(*flag))
             continue;
         arr.append(noteJson(n));
+        ids << n.path();
         lines << QStringLiteral("%1\t%2\t%3\t%4").arg(n.path(), n.title, iso(n.modifiedMs), n.flags.join(u','));
     }
-    return Done{ arr, lines.join(u'\n') };
+    Done done{ arr, lines.join(u'\n'), plural(ids.size(), "note", "notes") };
+    done.ids = ids;
+    return done;
 }
 
 Result read(NotesBackend &b, const Args &a)
@@ -926,7 +1184,9 @@ Result read(NotesBackend &b, const Args &a)
     json.insert(QStringLiteral("conflicts"), conflicts);
     json.insert(QStringLiteral("conflicts_unreadable"), b.noteConflictsUnreadable());
     json.insert(QStringLiteral("has_synced_copy"), b.noteHasSyncedCopy());
-    return Done{ json, a.has("--raw") ? b.noteContent() : b.noteBody() };
+    Done done{ json, a.has("--raw") ? b.noteContent() : b.noteBody(), QStringLiteral("%1 (%2)").arg(n.title, n.path()) };
+    done.ids = QStringList{ n.path() };
+    return done;
 }
 
 Result search(NotesBackend &b, const Args &a)
@@ -936,6 +1196,7 @@ Result search(NotesBackend &b, const Args &a)
         return usageError(QStringLiteral("search wants at least 2 characters"));
     QJsonArray arr;
     QStringList lines;
+    QStringList ids;
     for (const QVariant &v : b.searchVault(q)) {
         const QVariantMap m = v.toMap();
         const QString folder = m.value(QStringLiteral("folder")).toString();
@@ -948,8 +1209,11 @@ Result search(NotesBackend &b, const Args &a)
                                 { QStringLiteral("snippet"), m.value(QStringLiteral("snippet")).toString() } });
         lines << QStringLiteral("%1\t%2\t%3").arg(path, m.value(QStringLiteral("title")).toString(),
                                                   m.value(QStringLiteral("snippet")).toString());
+        ids << path;
     }
-    return Done{ arr, lines.join(u'\n') };
+    Done done{ arr, lines.join(u'\n'), QStringLiteral("%1 matching \"%2\"").arg(plural(ids.size(), "note", "notes"), q) };
+    done.ids = ids;
+    return done;
 }
 
 QString relPath(NotesBackend &b)
@@ -1118,7 +1382,7 @@ Result toggle(NotesBackend &b, const Args &a)
                               { QStringLiteral("path"), relPath(b) },
                               { QStringLiteral("line"), line },
                               { QStringLiteral("text"), text } },
-                 text };
+                 text, QStringLiteral("Line %1 of %2: %3").arg(line).arg(relPath(b), text) };
 }
 
 Result resolve(NotesBackend &b, const Args &a)
@@ -1264,42 +1528,49 @@ int syncCommand(NotesBackend &b, const Args &a, const QString &what)
             return report(Failure{ QStringLiteral("already_cloned"),
                                    QStringLiteral("%1 is already cloned").arg(NotesBackend::rootPath()), kExitUsage,
                                    QStringLiteral("Run `icloud-notes pull` to fetch what changed.") },
-                          a.json);
+                          a.mode);
         QDir().mkpath(NotesBackend::rootPath());
     } else if (auto f = needCloned()) {
-        return report(*f, a.json);
+        return report(*f, a.mode);
     }
     if (auto f = needSyncTool(b))
-        return report(*f, a.json);
+        return report(*f, a.mode);
     if (auto f = takeLock(b, a))
-        return report(*f, a.json);
-    const SyncOutcome sync = runSync(b, what, a.json);
+        return report(*f, a.mode);
+    const SyncOutcome sync = runSync(b, what);
     if (sync.json.isEmpty() && sync.failure)
-        return report(*sync.failure, a.json);
-    print(a.json, sync.json, sync.text);
-    return sync.failure ? report(*sync.failure, a.json) : kExitOk;
+        return report(*sync.failure, a.mode);
+    // It ran: its result (the runs and the log) whether or not it worked,
+    // with the failure in it and its exit code.
+    Done done{ sync.failure ? withError(sync.json, *sync.failure) : sync.json, sync.text,
+               sync.failure ? QStringLiteral("%1 failed: %2").arg(what, sync.failure->message)
+                            : QStringLiteral("%1 done").arg(what) };
+    done.count = sync.json.value(QStringLiteral("runs")).toArray().size();
+    if (sync.failure)
+        done.exit = sync.failure->exit;
+    const int code = printResult(done, a.mode);
+    if (sync.failure && !isMachine(a.mode))
+        printErrorText(*sync.failure);
+    return code;
 }
 
 int runCommand(const Args &a, const Spec &spec)
 {
     if (const auto vault = a.value("--vault")) {
         if (vault->trimmed().isEmpty())
-            return report(usageError(QStringLiteral("--vault needs a directory")), a.json);
+            return report(usageError(QStringLiteral("--vault needs a directory")), a.mode);
         qputenv("ICLOUD_NOTES_VAULT", QFileInfo(*vault).absoluteFilePath().toUtf8());
     }
     NotesBackend b(nullptr, NotesBackend::Role::Cli);
     const QString cmd = QLatin1StringView(spec.name);
 
     if (cmd == u"status") {
-        int code = kExitOk;
-        const Done d = status(b, code);
-        print(a.json, d.json, d.text);
-        return code;
+        return printResult(status(b), a.mode);
     }
     if (cmd == u"sync" || cmd == u"pull" || cmd == u"clone" || (cmd == u"push" && !a.has("--dry-run")))
         return syncCommand(b, a, cmd);
     if (auto f = needCloned())
-        return report(*f, a.json);
+        return report(*f, a.mode);
 
     // icloud-notes-sync's own commands, on a resolved note.
     if (cmd == u"push")
@@ -1307,10 +1578,10 @@ int runCommand(const Args &a, const Spec &spec)
     if (cmd == u"history" || cmd == u"diff" || cmd == u"restore") {
         Note n;
         if (auto f = resolveNote(b, a.positional.at(0), n))
-            return report(*f, a.json);
+            return report(*f, a.mode);
         if (cmd == u"restore")
             if (auto f = confirm(a, QStringLiteral("Throw away the local edits to \"%1\" and go back to the last synced copy?").arg(n.path())))
-                return report(*f, a.json);
+                return report(*f, a.mode);
         QStringList args{ cmd, n.path() };
         if (cmd == u"diff")
             args << a.positional.at(1);
@@ -1322,10 +1593,8 @@ int runCommand(const Args &a, const Spec &spec)
     // Reading needs no lock.
     auto show = [&](Result r) -> int {
         if (std::holds_alternative<Failure>(r))
-            return report(std::get<Failure>(r), a.json);
-        const Done &d = std::get<Done>(r);
-        print(a.json, d.json, d.text);
-        return kExitOk;
+            return report(std::get<Failure>(r), a.mode);
+        return printResult(std::get<Done>(r), a.mode);
     };
     if (cmd == u"folders")
         return show(folders(b));
@@ -1338,7 +1607,7 @@ int runCommand(const Args &a, const Spec &spec)
 
     // Changing the vault: under its lock, so no sync runs meanwhile.
     if (auto f = takeLock(b, a))
-        return report(*f, a.json);
+        return report(*f, a.mode);
     b.refresh();
     if (cmd == u"new")
         return finish(b, a, newNote(b, a));
@@ -1364,7 +1633,7 @@ int runCommand(const Args &a, const Spec &spec)
         return finish(b, a, renameFolder(b, a));
     if (cmd == u"delete-folder")
         return finish(b, a, deleteFolder(b, a));
-    return report(usageError(QStringLiteral("unknown command \"%1\"").arg(cmd)), a.json);
+    return report(usageError(QStringLiteral("unknown command \"%1\"").arg(cmd)), a.mode);
 }
 
 } // namespace
@@ -1374,9 +1643,10 @@ bool isCliInvocation(const char *arg)
     const QString a = QString::fromLocal8Bit(arg);
     if (a == u"--sync")
         return false;
-    static const QSet<QString> starts{ QStringLiteral("help"),    QStringLiteral("-h"),     QStringLiteral("--help"),
-                                       QStringLiteral("-V"),      QStringLiteral("--version"), QStringLiteral("--json"),
-                                       QStringLiteral("--vault"), QStringLiteral("--wait") };
+    static const QSet<QString> starts{ QStringLiteral("help"),     QStringLiteral("-h"),       QStringLiteral("--help"),
+                                       QStringLiteral("-V"),       QStringLiteral("--version"), QStringLiteral("--json"),
+                                       QStringLiteral("--styled"), QStringLiteral("--quiet"),  QStringLiteral("--ids-only"),
+                                       QStringLiteral("--count"),  QStringLiteral("--vault"),  QStringLiteral("--wait") };
     return starts.contains(a) || a.startsWith(QStringLiteral("--vault=")) || a.startsWith(QStringLiteral("--wait="))
         || findSpec(a) != nullptr;
 }
@@ -1388,7 +1658,9 @@ int cliMain(int argc, char *argv[])
         argvList << QString::fromLocal8Bit(argv[i]);
     Args a;
     const std::optional<Failure> parseFailure = parseArgs(argvList, a);
-    const bool json = argvList.contains(QStringLiteral("--json"));
+    // The output mode, also for a usage error found before parsing ended.
+    if (parseFailure)
+        a.mode = scanOutputFlags(argvList).mode();
 
     // export-pdf lays out text, which needs a GUI application; on the
     // offscreen platform it needs no display.
@@ -1404,33 +1676,34 @@ int cliMain(int argc, char *argv[])
     app->setApplicationName(QStringLiteral("icloud-notes"));
 
     if (parseFailure)
-        return report(*parseFailure, json);
+        return report(*parseFailure, a.mode);
     if (a.command == u"help" || (a.command.isEmpty() && a.has("--help"))) {
         const Spec *spec = a.positional.isEmpty() ? nullptr : findSpec(a.positional.first());
         if (!a.positional.isEmpty() && !spec)
-            return report(usageError(QStringLiteral("unknown command \"%1\"").arg(a.positional.first())), a.json);
+            return report(usageError(QStringLiteral("unknown command \"%1\"").arg(a.positional.first())), a.mode);
         out() << (spec ? commandHelp(*spec) : usageText()) << '\n';
         return kExitOk;
     }
     if (a.command.isEmpty() && a.has("--version")) {
         const QString version = QStringLiteral(ICLOUD_NOTES_VERSION);
-        if (a.json)
-            printJson(QJsonObject{ { QStringLiteral("version"), version } });
+        // As it always was: {"version"} with --json, else one line of text.
+        if (a.flags.json)
+            out() << QJsonDocument(QJsonObject{ { QStringLiteral("version"), version } }).toJson(QJsonDocument::Indented);
         else
             out() << "icloud-notes " << version << '\n';
         return kExitOk;
     }
     if (a.command.isEmpty())
-        return report(usageError(QStringLiteral("no command given (`icloud-notes help` lists them)")), a.json);
+        return report(usageError(QStringLiteral("no command given")), a.mode);
     const Spec *spec = findSpec(a.command);
     if (!spec)
-        return report(usageError(QStringLiteral("unknown command \"%1\" (`icloud-notes help` lists them)").arg(a.command)), a.json);
+        return report(usageError(QStringLiteral("unknown command \"%1\"").arg(a.command)), a.mode);
     if (a.has("--help")) {
         out() << commandHelp(*spec) << '\n';
         return kExitOk;
     }
     if (auto f = checkArgs(*spec, a))
-        return report(*f, a.json);
+        return report(*f, a.mode);
     return runCommand(a, *spec);
 }
 
@@ -1453,7 +1726,7 @@ int runBackgroundSync(QTextStream &log)
         log << "Could not open the sync lock " << NotesBackend::lockPath() << "; not syncing.\n";
         return kExitError;
     }
-    const SyncOutcome sync = runSync(b, QStringLiteral("sync"), false);
+    const SyncOutcome sync = runSync(b, QStringLiteral("sync"));
     // Nothing ran: signed out or the sign-in unknown is a skip (the timer
     // tries again), a missing engine an error.
     if (sync.failure && sync.json.isEmpty()) {

@@ -258,21 +258,21 @@ public:
     // arrive on their own); keeps the day count current in an app left open.
     Q_INVOKABLE void refreshSignIn();
 
-    // Runs of pull and push pass --quiet to icloud-notes-sync, so its result
-    // (the bare JSON data) is in lastOutput() (the command line's --json);
-    // without it they pass --styled, for its text report. runSync, the push
-    // preview and history always pass --quiet.
-    void setToolJson(bool json) { m_toolJson = json; }
-    // The last icloud-notes-sync run's exit code and stdout, as they were
-    // when syncFinished was emitted for it: for a half of runSync, that
-    // half's exit code and JSON result; for a failed run (or half) that
+    // Every icloud-notes-sync run is in a machine mode, so a failure's error
+    // code always comes through: pull, push, clone and diff pass --json (the
+    // envelope's meta carries their text report, which is logged); runSync,
+    // the push preview, history and vault-info pass --quiet.
+    // The last icloud-notes-sync run's exit code and JSON result (the
+    // envelope's data), as they were when syncFinished was emitted for it:
+    // for a half of runSync, that half's exit code and result; for a failed
+    // run (or half) that
     // said why, {"error": {code, message, hint?}}.
     int lastExitCode() const { return m_lastExit; }
     QByteArray lastOutput() const { return m_captured; }
     // The engine's error {code, message, hint?} for that run when it failed:
-    // the error object on its stdout (or in its half), else a contract error
-    // line on its stderr. Empty when it worked or said nothing (a --styled
-    // run's error is text).
+    // the error object on its stdout (or in its half), else an older engine's
+    // contract error line on its stderr. Empty when it worked or said nothing
+    // (a crash, an engine that printed only text).
     QJsonObject lastError() const { return m_lastError; }
 
 signals:
@@ -314,7 +314,6 @@ private:
     // Sync: runSync's `--quiet sync`, whose stdout holds both halves.
     enum class Mode { Plain, Preview, History, Diff, Sync };
 
-    QString toolOutputFlag() const;
     QString folderAbsolutePath(const QString &folder) const;
     QString noteAbsolutePath() const;
     QString vaultRelative(const QString &name) const;
@@ -460,14 +459,13 @@ private:
     QDBusServiceWatcher *m_sessionWatcher = nullptr;
     int m_sessionCalls = 0; // icloud-session method calls awaiting an answer
     const Role m_role;
-    bool m_toolJson = false;
     int m_lastExit = 0;
     QJsonObject m_lastError;
     VaultLock m_lock;
     // Runs while someone else holds the lock: a sync asked for meanwhile
     // starts once it is free, never before.
     QTimer m_lockRetry;
-    QByteArray m_captured; // the run's stdout: its --quiet result or error object, or text
+    QByteArray m_captured; // the run's stdout (its JSON result or error object); its data once finished
     QByteArray m_capturedErr; // its stderr: progress, warnings, errors
     const double m_uiScale;
     QVariantMap m_theme;

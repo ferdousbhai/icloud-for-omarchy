@@ -3,8 +3,9 @@
 // is cliMain, the same entry the app's main() hands commands to. A scratch
 // vault under a temporary directory, the icloud-notes-sync stub as the engine and
 // a fake icloud-session on the private bus bin/test starts: never the real
-// notes, account or daemon. Checks exit codes and the JSON shapes docs/CLI.md
-// documents.
+// notes, account or daemon. Checks exit codes, the output contract (the
+// envelope when piped, --quiet, --ids-only, --count, --styled, the error
+// object on stdout) and the JSON shapes docs/CLI.md documents.
 #include "../src/cli.h"
 #include "../src/notesbackend.h"
 #include "../src/vaultlock.h"
@@ -39,20 +40,49 @@ struct Run {
     QByteArray err;
     qint64 ms = 0;
 
+    // stdout as one JSON document (an object, or an array for --quiet).
+    QJsonValue doc() const
+    {
+        const QJsonDocument d = QJsonDocument::fromJson(out);
+        return d.isArray() ? QJsonValue(d.array()) : d.isObject() ? QJsonValue(d.object()) : QJsonValue();
+    }
+    // The result: the envelope's data ({"ok":true,"data",...}), or the
+    // document itself (--quiet, --version).
     QJsonValue json() const
     {
-        const QJsonDocument doc = QJsonDocument::fromJson(out);
-        return doc.isArray() ? QJsonValue(doc.array()) : QJsonValue(doc.object());
+        const QJsonObject o = doc().toObject();
+        if (o.value(QStringLiteral("ok")) == QJsonValue(true) && o.contains(QStringLiteral("data")))
+            return o.value(QStringLiteral("data"));
+        return doc();
     }
-    // The --json error envelope: the last line of stderr,
-    // {"ok":false,"error":{...}}.
+    // A machine-mode failure on stdout, {"ok":false,"error":{...}}.
     QJsonObject errorEnvelope() const
     {
-        const QList<QByteArray> lines = err.trimmed().split('\n');
-        return QJsonDocument::fromJson(lines.last()).object();
+        const QJsonObject o = doc().toObject();
+        return o.value(QStringLiteral("ok")) == QJsonValue(false) ? o : QJsonObject();
     }
-    QJsonObject error() const { return errorEnvelope().value(QStringLiteral("error")).toObject(); }
+    // The failure: the error document's, else that of a result that ran but
+    // failed (a sync's data.error).
+    QJsonObject error() const
+    {
+        const QJsonObject e = errorEnvelope();
+        return (e.isEmpty() ? json().toObject() : e).value(QStringLiteral("error")).toObject();
+    }
     QString errorCode() const { return error().value(QStringLiteral("code")).toString(); }
+    // The contract's machine error: one document {ok:false, error:{code,
+    // message, hint?}} on stdout, `ok` first, and nothing on stderr.
+    bool isMachineError(const QString &code) const
+    {
+        const QJsonObject e = errorEnvelope();
+        const QStringList keys = e.keys();
+        QStringList errorKeys = error().keys();
+        errorKeys.removeAll(QStringLiteral("hint"));
+        return keys == QStringList{ QStringLiteral("error"), QStringLiteral("ok") }
+            && errorKeys == QStringList{ QStringLiteral("code"), QStringLiteral("message") } && errorCode() == code
+            && out.startsWith("{\n    \"ok\": false,") && err.isEmpty();
+    }
+    // A text-mode failure: `error: ...` (and `hint: ...`) on stderr, stdout empty.
+    bool isTextError() const { return err.startsWith("error: ") && out.isEmpty(); }
 };
 
 // Runs `icloud-notes <args>` with stdin not a terminal, spinning the event
@@ -85,6 +115,13 @@ Run cli(const QStringList &args, const QHash<QString, QString> &env = {})
 Run cliJson(QStringList args, const QHash<QString, QString> &env = {})
 {
     args.prepend(QStringLiteral("--json"));
+    return cli(args, env);
+}
+
+// Text mode (stdout is a pipe here, which would get the envelope).
+Run cliText(QStringList args, const QHash<QString, QString> &env = {})
+{
+    args.prepend(QStringLiteral("--styled"));
     return cli(args, env);
 }
 
@@ -174,6 +211,7 @@ int main(int argc, char *argv[])
     // ---- help, usage, exit codes -------------------------------------------
     {
         const Run help = cli({ QStringLiteral("help") });
+        // help and --help print text, piped or not.
         check(help.code == 0 && help.out.contains("Exit codes"), "cli help");
         const QStringList commands{ "status", "folders", "list", "read", "search", "new", "write", "rename", "move",
                                     "delete", "toggle", "resolve", "recover", "export-pdf", "new-folder",
@@ -188,13 +226,71 @@ int main(int argc, char *argv[])
         }
         check(all, "cli every command has --help, and help lists it");
         const Run bogus = cliJson({ QStringLiteral("bogus") });
-        check(bogus.code == 2 && bogus.out.isEmpty() && bogus.errorCode() == QStringLiteral("usage")
-                  && bogus.errorEnvelope().value(QStringLiteral("ok")).toBool(true) == false,
-              "cli unknown command: exit 2, JSON usage error");
+        check(bogus.code == 2 && bogus.isMachineError(QStringLiteral("usage"))
+                  && bogus.error().value(QStringLiteral("hint")).toString() == QStringLiteral("run `icloud-notes --help`"),
+              "cli unknown command: exit 2, the usage error object on stdout, hinting at --help");
+        // Piped, with no flag: the same error object.
+        const Run bogusPiped = cli({ QStringLiteral("bogus") });
+        check(bogusPiped.code == 2 && bogusPiped.isMachineError(QStringLiteral("usage")), "cli piped usage error: the error object");
+        const Run badOption = cli({ QStringLiteral("list"), QStringLiteral("--nope"), QStringLiteral("--quiet") });
+        check(badOption.code == 2 && badOption.isMachineError(QStringLiteral("usage")),
+              "cli an unknown option is a usage error object too");
+        const Run bogusText = cliText({ QStringLiteral("bogus") });
+        check(bogusText.code == 2 && bogusText.isTextError() && bogusText.err.contains("\nhint: run `icloud-notes --help`"),
+              "cli text usage error: error: and hint: on stderr");
+        const Run none = cli({});
+        check(none.code == 2 && none.isMachineError(QStringLiteral("usage")), "cli no command: usage error");
         check(cli({ QStringLiteral("list"), QStringLiteral("extra") }).code == 2, "cli extra argument is usage");
         check(cli({ QStringLiteral("read"), QStringLiteral("Alpha"), QStringLiteral("--yes") }).code == 2,
               "cli an option the command does not take is usage");
         check(cliJson({ QStringLiteral("--version") }).json().toObject().contains(QStringLiteral("version")), "cli --version");
+        check(cli({ QStringLiteral("--version") }).out.startsWith("icloud-notes "), "cli --version piped is text, as before");
+    }
+
+    // ---- the output contract ---------------------------------------------------
+    {
+        // Piped with no flag: the envelope {"ok":true,"data","summary"}, `ok` first.
+        const Run piped = cli({ QStringLiteral("list") });
+        const QJsonObject env = piped.doc().toObject();
+        QStringList keys = env.keys();
+        check(piped.code == 0 && piped.err.isEmpty() && piped.out.startsWith("{\n    \"ok\": true,")
+                  && keys == QStringList{ QStringLiteral("data"), QStringLiteral("ok"), QStringLiteral("summary") }
+                  && env.value(QStringLiteral("data")).toArray().size() == 7
+                  && env.value(QStringLiteral("summary")).toString() == QStringLiteral("7 notes"),
+              "cli piped default is the envelope, ok first");
+        check(cliJson({ QStringLiteral("list") }).doc() == piped.doc(), "cli --json is the same envelope");
+        const Run quiet = cli({ QStringLiteral("--quiet"), QStringLiteral("list") });
+        check(quiet.code == 0 && quiet.doc() == env.value(QStringLiteral("data")), "cli --quiet prints only data");
+        QStringList listed;
+        for (const QJsonValue &v : env.value(QStringLiteral("data")).toArray())
+            listed << v.toObject().value(QStringLiteral("path")).toString();
+        const Run ids = cli({ QStringLiteral("list"), QStringLiteral("--ids-only") });
+        check(ids.code == 0 && QString::fromUtf8(ids.out) == listed.join(u'\n') + u'\n', "cli list --ids-only: the paths");
+        check(cli({ QStringLiteral("list"), QStringLiteral("--count") }).out == "7\n", "cli list --count");
+        check(cli({ QStringLiteral("search"), QStringLiteral("eggs"), QStringLiteral("--ids-only") }).out == "Notes/Alpha.md\n"
+                  && cli({ QStringLiteral("search"), QStringLiteral("eggs"), QStringLiteral("--count") }).out == "1\n",
+              "cli search --ids-only / --count");
+        check(cli({ QStringLiteral("folders"), QStringLiteral("--ids-only") }).out == "Notes\nWork\n"
+                  && cli({ QStringLiteral("folders"), QStringLiteral("--count") }).out == "2\n",
+              "cli folders --ids-only / --count: the folders, not the vault root");
+        check(cli({ QStringLiteral("status"), QStringLiteral("--count") }).out == "7\n", "cli status --count: the notes");
+        const Run statusIds = cli({ QStringLiteral("status"), QStringLiteral("--ids-only") });
+        check(statusIds.code == 0 && statusIds.json().toObject().value(QStringLiteral("cloned")).toBool()
+                  && statusIds.err.startsWith("note: "),
+              "cli status --ids-only: no ids, the data with a note on stderr");
+        // Flags combine, the strongest winning: ids-only > count > quiet > json > styled.
+        check(cli({ QStringLiteral("--json"), QStringLiteral("--count"), QStringLiteral("--ids-only"), QStringLiteral("list") }).out
+                  == ids.out,
+              "cli --ids-only beats --count and --json");
+        check(cli({ QStringLiteral("--quiet"), QStringLiteral("--count"), QStringLiteral("list") }).out == "7\n",
+              "cli --count beats --quiet");
+        check(cli({ QStringLiteral("--json"), QStringLiteral("--quiet"), QStringLiteral("list") }).doc() == quiet.doc(),
+              "cli --quiet beats --json");
+        check(cli({ QStringLiteral("--styled"), QStringLiteral("--json"), QStringLiteral("list") }).doc() == piped.doc(),
+              "cli --json beats --styled");
+        const Run text = cliText({ QStringLiteral("list") });
+        check(text.code == 0 && text.out.startsWith(listed.first().toUtf8() + '\t') && text.doc().isNull(),
+              "cli --styled prints text");
     }
 
     // ---- reading ---------------------------------------------------------------
@@ -265,11 +361,13 @@ int main(int argc, char *argv[])
                   && !beta.value(QStringLiteral("conflicts_unreadable")).toBool()
                   && beta.value(QStringLiteral("read_only")).isNull(),
               "cli read JSON by title, with its conflict blocks");
-        check(cli({ QStringLiteral("read"), QStringLiteral("Notes/Alpha") }).out
+        check(cliText({ QStringLiteral("read"), QStringLiteral("Notes/Alpha") }).out
                   == "# Alpha\n- [ ] milk\n- eggs\nplain line\n",
               "cli read by path without .md prints the body");
-        check(cli({ QStringLiteral("read"), QStringLiteral("id-a"), QStringLiteral("--raw") }).out.startsWith("---\napple-note-id: id-a\n"),
+        check(cliText({ QStringLiteral("read"), QStringLiteral("id-a"), QStringLiteral("--raw") }).out.startsWith("---\napple-note-id: id-a\n"),
               "cli read --raw by id prints the whole file");
+        check(cli({ QStringLiteral("read"), QStringLiteral("alpha"), QStringLiteral("--ids-only") }).out == "Notes/Alpha.md\n",
+              "cli read --ids-only: the note's path");
         check(cli({ QStringLiteral("read"), g_vault + QStringLiteral("/Work/Grid.md") }).code == 0, "cli read by absolute path");
         const QJsonObject grid = cliJson({ QStringLiteral("read"), QStringLiteral("grid") }).json().toObject();
         check(grid.value(QStringLiteral("read_only")).toString() == QStringLiteral("is too large"), "cli read says read-only");
@@ -279,8 +377,16 @@ int main(int argc, char *argv[])
                          == g_vault + QStringLiteral("/Work/attachments/pic.png"),
               "cli read lists attachments with their paths");
         const Run missing = cliJson({ QStringLiteral("read"), QStringLiteral("nothing like it") });
-        check(missing.code == 4 && missing.errorCode() == QStringLiteral("not_found") && missing.out.isEmpty(),
-              "cli read unknown note: not_found, exit 4");
+        check(missing.code == 4 && missing.isMachineError(QStringLiteral("not_found")),
+              "cli read unknown note: not_found, exit 4, the error object on stdout and nothing on stderr");
+        const Run missingText = cliText({ QStringLiteral("read"), QStringLiteral("nothing like it") });
+        check(missingText.code == 4 && missingText.isTextError() && missingText.err.contains("\nhint: "),
+              "cli text error: error: and hint: on stderr, nothing on stdout");
+        for (const char *flag : { "--quiet", "--ids-only", "--count" }) {
+            const Run e = cli({ QString::fromLatin1(flag), QStringLiteral("read"), QStringLiteral("nothing like it") });
+            check(e.code == 4 && e.isMachineError(QStringLiteral("not_found")),
+                  qPrintable(QStringLiteral("cli %1 error: the error object on stdout").arg(QLatin1StringView(flag))));
+        }
         const Run twin = cliJson({ QStringLiteral("read"), QStringLiteral("same title") });
         check(twin.code == 2 && twin.errorCode() == QStringLiteral("ambiguous")
                   && twin.error().value(QStringLiteral("message")).toString().contains(QStringLiteral("Notes/Twin.md")),
@@ -496,12 +602,21 @@ int main(int argc, char *argv[])
                          == QStringLiteral("pull")
                   && runs.at(0).toObject().value(QStringLiteral("result")).toObject().value(QStringLiteral("stub")).toString()
                          == QStringLiteral("push")
-                  && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --json sync"))
+                  && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --quiet sync"))
                   && stubLog() == QStringList{ QStringLiteral("sync") },
               "cli sync: push, then pull, in one engine run, each half with icloud-notes-sync's JSON");
         // No network: the engine's offline error, exit 5.
         const Run offline = cliJson({ QStringLiteral("sync") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
-        check(offline.code == 5 && offline.errorCode() == QStringLiteral("offline"), "cli sync offline: error offline, exit 5");
+        check(offline.code == 5 && offline.errorCode() == QStringLiteral("offline")
+                  && offline.doc().toObject().value(QStringLiteral("ok")).toBool()
+                  && !offline.json().toObject().value(QStringLiteral("ok")).toBool(true)
+                  && offline.json().toObject().value(QStringLiteral("runs")).toArray().size() == 2 && offline.err.isEmpty(),
+              "cli sync offline: its result, with error offline in it, and exit 5");
+        const Run offlineText =
+            cliText({ QStringLiteral("sync") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
+        check(offlineText.code == 5 && offlineText.out.contains("$ icloud-notes-sync --quiet sync")
+                  && offlineText.err.startsWith("error: iCloud could not be reached"),
+              "cli sync offline in text: the log on stdout, error: on stderr");
         // A standalone pull says so only on the engine's stderr error line.
         const Run offlinePull =
             cliJson({ QStringLiteral("pull") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_OFFLINE"), QStringLiteral("1") } });
@@ -515,23 +630,41 @@ int main(int argc, char *argv[])
         const Run dry = cliJson({ QStringLiteral("push"), QStringLiteral("--dry-run") });
         check(dry.code == 0 && dry.json().toObject().value(QStringLiteral("entries")).toArray().size() == 1,
               "cli push --dry-run passes icloud-notes-sync's preview through, exit 0");
-        check(cli({ QStringLiteral("history"), QStringLiteral("alpha") }).out.contains("changed: Notes/Alpha.md"),
+        check(cliText({ QStringLiteral("history"), QStringLiteral("alpha") }).out.contains("changed: Notes/Alpha.md"),
               "cli history names the note by its vault path");
-        check(cli({ QStringLiteral("history"), QStringLiteral("alpha"), QStringLiteral("--records") })
+        check(cliText({ QStringLiteral("history"), QStringLiteral("alpha"), QStringLiteral("--records") })
                   .out.contains("r1  2026-09-01T00:00:00Z  Notes/Alpha.md"),
               "cli history --records passes --records through");
+        // The engine's commands get this tool's output mode: the flags as
+        // given, else the envelope when piped.
+        const Run histPiped = cli({ QStringLiteral("history"), QStringLiteral("alpha") });
+        check(histPiped.code == 0 && histPiped.doc().toObject().value(QStringLiteral("ok")).toBool()
+                  && histPiped.json().toObject().value(QStringLiteral("mode")).toString() == QStringLiteral("epochs"),
+              "cli history piped: the engine's envelope");
+        check(cli({ QStringLiteral("history"), QStringLiteral("alpha"), QStringLiteral("--quiet") })
+                      .doc()
+                      .toObject()
+                      .value(QStringLiteral("mode"))
+                  == QStringLiteral("epochs"),
+              "cli history --quiet: the engine's data");
+        check(cli({ QStringLiteral("history"), QStringLiteral("alpha"), QStringLiteral("--count") }).out == "1\n"
+                  && cli({ QStringLiteral("--ids-only"), QStringLiteral("history"), QStringLiteral("alpha") }).out == "stub-id\n"
+                  && cli({ QStringLiteral("--count"), QStringLiteral("--ids-only"), QStringLiteral("push"), QStringLiteral("--dry-run") }).out
+                         == "stub-id\n",
+              "cli --count and --ids-only pass through to the engine");
         check(cli({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") }).code == 0, "cli diff exit 0");
         // diff is the engine itself (exec): its exit code is this tool's.
         for (const int code : { 3, 4, 5 }) {
             const Run d = cliJson({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") },
                                   { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXIT"), QString::number(code) },
                                     { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ERROR"), QStringLiteral("some_code") } });
-            check(d.code == code && d.errorCode() == QStringLiteral("some_code"),
+            // The exec'd engine's error object is on stdout.
+            check(d.code == code && d.errorCode() == QStringLiteral("some_code") && d.err.indexOf("\"ok\"") < 0,
                   qPrintable(QStringLiteral("cli diff passes the engine's exit %1 through").arg(code)));
         }
         const Run noEngine = cliJson({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") },
                                      { { QStringLiteral("ICLOUD_NOTES_SYNC_BIN"), g_scratch + QStringLiteral("/no-engine") } });
-        check(noEngine.code == 5 && noEngine.errorCode() == QStringLiteral("sync_tool_missing"),
+        check(noEngine.code == 5 && noEngine.isMachineError(QStringLiteral("sync_tool_missing")),
               "cli without the engine: sync_tool_missing, exit 5");
         check(cli({ QStringLiteral("restore"), QStringLiteral("alpha") }).code == 2
                   && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("restored")),
