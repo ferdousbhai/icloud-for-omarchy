@@ -73,7 +73,7 @@ pub enum CkError {
     Offline(String),
     /// icloud-sessiond could not be reached (no session bus, the daemon not
     /// installed): icloud-session's `Service`. A failure the daemon itself
-    /// reported (icloud-session's `Daemon`) is `Other`.
+    /// reported (icloud-session's `Daemon`) is `Session`.
     #[error("icloud-sessiond: {0}")]
     SessionService(String),
     /// The keyring holding the session's cookies would not give them
@@ -82,6 +82,12 @@ pub enum CkError {
     KeyringUnavailable(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// Any other icloud-session failure (`Daemon`, say), kept as it is so
+    /// the command line reports it exactly as every iCloud tool does
+    /// (`icloud_session::output::session_failure`: `Daemon` is code
+    /// `error`, exit 1).
+    #[error(transparent)]
+    Session(icloud_session::Error),
     #[error("{0}")]
     Other(String),
 }
@@ -107,7 +113,7 @@ impl From<icloud_session::Error> for CkError {
             icloud_session::Error::Io(e) => CkError::Io(e),
             icloud_session::Error::Service(m) => CkError::SessionService(m),
             icloud_session::Error::KeyringUnavailable(m) => CkError::KeyringUnavailable(m),
-            other => CkError::Other(other.to_string()),
+            other => CkError::Session(other),
         }
     }
 }

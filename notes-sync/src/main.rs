@@ -372,8 +372,10 @@ fn push_summary(r: &push::PushResult, target: &Path) -> String {
 
 /// One half of `sync`'s data: `{ok, exit_code, result, lines}`, or `{ok,
 /// exit_code, error}` when it failed.
+/// A failed half's error is converted to its `CliError` once by the caller
+/// (a sign-in error asks icloud-sessiond why, a D-Bus round trip).
 fn sync_half_json<T: serde::Serialize>(
-    half: &Result<T, cmd::Error>,
+    half: &Result<&T, CliError>,
     lines: impl FnOnce(&T) -> Vec<Line>,
 ) -> serde_json::Value {
     match half {
@@ -385,16 +387,16 @@ fn sync_half_json<T: serde::Serialize>(
         }),
         Err(error) => serde_json::json!({
             "ok": false,
-            "exit_code": error.exit_code(),
-            "error": error_json(&CliError::from(error)),
+            "exit_code": error.exit,
+            "error": error_json(error),
         }),
     }
 }
 
-fn half_summary<T>(name: &str, half: Option<&Result<T, cmd::Error>>) -> String {
+fn half_summary<T>(name: &str, half: Option<&Result<T, CliError>>) -> String {
     match half {
         Some(Ok(_)) => format!("{name} ok"),
-        Some(Err(error)) => format!("{name} failed ({})", error.code()),
+        Some(Err(error)) => format!("{name} failed ({})", error.code),
         None => format!("{name} not run"),
     }
 }
@@ -465,31 +467,35 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
             let outcome = sync::run_sync(&target, progress, &mut on_status);
+            // Each failed half's error, converted once for the data and the
+            // text report alike.
+            let push = outcome.push.as_ref().map_err(CliError::from);
+            let pull = outcome.pull.as_ref().map(|p| p.as_ref().map_err(CliError::from));
             let data = serde_json::json!({
-                "push": sync_half_json(&outcome.push, |r| push_lines(r, &target)),
-                "pull": outcome.pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
+                "push": sync_half_json(&push, |r| push_lines(r, &target)),
+                "pull": pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
                 "vault_info": vault_info::run_vault_info(&target).ok(),
             });
             let summary = format!(
                 "{}, {}",
-                half_summary("push", Some(&outcome.push)),
-                half_summary("pull", outcome.pull.as_ref())
+                half_summary("push", Some(&push)),
+                half_summary("pull", pull.as_ref())
             );
             // Text mode: each half's report, or its error on stderr, as push
             // and pull alone would print them. A machine mode has it all in
             // the data (no separate error object).
             let mut lines = Vec::new();
             if mode == Mode::Human {
-                match &outcome.push {
+                match &push {
                     Ok(r) => lines.extend(push_lines(r, &target)),
                     Err(error) => {
-                        CliError::from(error).report(mode);
+                        error.report(mode);
                     }
                 }
-                match &outcome.pull {
+                match &pull {
                     Some(Ok(s)) => lines.extend(pull_lines(s, &target)),
                     Some(Err(error)) => {
-                        CliError::from(error).report(mode);
+                        error.report(mode);
                     }
                     // The push's error says why (no sign-in, or no network).
                     None => eprintln!("Not pulled."),

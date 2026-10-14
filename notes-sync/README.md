@@ -48,7 +48,7 @@ exit apart:
 | exit | meaning | codes |
 |---|---|---|
 | 0 | ok (`status`, `push --dry-run` and `diff` report their changes in the result) | |
-| 1 | error | `internal`, `io`, `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
+| 1 | error | `internal`, `io` (a file or disk failure), `error` (a failure icloud-sessiond itself reported; icloud-session's errors read as in every iCloud tool), `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
 | 2 | usage | `usage`, `ambiguous_tracked_file`, `already_cloned_directory` |
 | 3 | not signed in, or the vault isn't set up for this account | `sign_in_required` (sign in with icloud-session), `session_rejected` (iCloud keeps answering 401/421 although icloud-sessiond still holds the sign-in: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` |
 | 4 | not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a `ZONE_NOT_FOUND` zone |

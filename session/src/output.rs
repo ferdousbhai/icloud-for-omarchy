@@ -446,8 +446,7 @@ pub const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (a person signs in 
 pub const FIND_MY_AUTH_HINT: &str =
     "run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)";
 /// The hint for `session_service` (icloud-sessiond unreachable).
-pub const SESSION_SERVICE_HINT: &str =
-    "check that icloud-sessiond is installed and the D-Bus session bus is running (`icloud-session status` tells)";
+pub const SESSION_SERVICE_HINT: &str = "check that icloud-sessiond is installed and the D-Bus session bus is running";
 /// The hint for `offline` and `network`.
 pub const NETWORK_HINT: &str = "check the network connection and try again";
 /// The hint for `keyring_unavailable`.

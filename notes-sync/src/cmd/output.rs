@@ -3,10 +3,8 @@
 //! when piped, `--quiet` for the bare result, errors as the contract error
 //! object on stdout in machine modes and `error:`/`hint:` on stderr for a
 //! person). This module holds what is notes-sync's own: turning an
-//! [`Error`] into a [`CliError`], usage errors, and where status lines go.
-//!
-//! Every emitter has a `*_to` form writing to explicit streams (tests) and a
-//! plain form writing to stdout/stderr.
+//! [`Error`] into a [`CliError`], usage errors, and where status lines go
+//! ([`status`], with [`status_to`] writing to explicit streams for tests).
 
 use std::io::Write;
 
@@ -43,8 +41,14 @@ pub fn usage_error(message: impl Into<String>) -> CliError {
 /// The error's code, message, hint and exit code. A sign-in error says why
 /// the account was signed out, when icloud-sessiond knows (one D-Bus round
 /// trip): "sign in to iCloud required: {reason}", as in every iCloud tool.
+/// Convert once per error, and reuse the result. An icloud-session failure
+/// carried as it is reads exactly as `icloud_session::output::session_failure`
+/// makes it.
 impl From<&Error> for CliError {
     fn from(error: &Error) -> CliError {
+        if let Some(failure) = error.session_failure() {
+            return failure;
+        }
         let message = match error {
             Error::SignInRequired => icloud_session::sign_in_required_message(),
             _ => error.to_string(),
