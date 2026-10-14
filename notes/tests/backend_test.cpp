@@ -913,6 +913,33 @@ int main(int argc, char *argv[])
                   && fake.reportCalls == 0,
               "seam after session_rejected a new sign-in resumes");
     }
+    {
+        // A sign-in that arrives while a run is going (signed out, then in
+        // as someone new) supersedes that run's session_rejected: no pause,
+        // and the sync runs again with the new sign-in.
+        waitForIdle(b);
+        fake.reportCalls = 0;
+        const QString dsid = fake.dsid;
+        qputenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN", "rejected");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED", "1");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_SLEEP", "1");
+        b.clearLog();
+        b.runSync();
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED"); // the retry's engine works
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_SIGNIN");
+        fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("Dsid"), QString() } });
+        const bool pausedMid = waitUntil([&] { return b.authExpired(); });
+        fake.set({ { QStringLiteral("SignedIn"), true }, { QStringLiteral("Dsid"), QStringLiteral("2000000001") } });
+        const bool resumedMid = waitUntil([&] { return !b.authExpired(); }) && b.syncRunning();
+        check(pausedMid && resumedMid
+                  && waitUntil([&] { return b.idle() && b.syncLog().count(QStringLiteral("$ icloud-notes-sync --quiet sync")) == 2
+                                            && b.syncMessage() == QStringLiteral("Pull done."); }, 15000)
+                  && !b.authExpired() && fake.reportCalls == 0,
+              "seam a sign-in during a run that ends session_rejected is not lost: no pause, the sync runs again");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
+        fake.set({ { QStringLiteral("Dsid"), dsid } });
+        waitForIdle(b);
+    }
 
     // A save (Ctrl+S, leaving the note) while a pull runs writes nothing
     // under it; the edits land once it is done, merged with its changes.

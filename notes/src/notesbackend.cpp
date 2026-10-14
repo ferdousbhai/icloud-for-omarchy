@@ -1604,6 +1604,7 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     m_captured.clear();
     m_capturedErr.clear();
     m_errLine.clear();
+    m_runSignIns = m_signIns;
     if (mode == Mode::Sync) {
         m_stateStampBefore = stateFileStamp();
         m_vaultTouched = false;
@@ -1717,8 +1718,13 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // same way. `session_rejected` (Apple refused a session icloud-session
     // still holds) pauses the same way, but is not reported: the session
     // library reported it already when it got the refusal.
-    const bool sessionExpired = !ok && isSignInRequired(code, exitCode);
-    const bool sessionRejected = !ok && isSessionRejected(code);
+    // A sign-in that arrived while this ran supersedes the session it was
+    // refused: no report and no pause, but one more sync with the new one.
+    const bool staleRefusal = !ok && needsSignIn(code, exitCode) && m_runSignIns != m_signIns;
+    const bool sessionExpired = !ok && !staleRefusal && isSignInRequired(code, exitCode);
+    const bool sessionRejected = !ok && !staleRefusal && isSessionRejected(code);
+    if (staleRefusal && cloned())
+        m_syncWhenIdle = true;
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the
@@ -2037,8 +2043,10 @@ void NotesBackend::applySignIn(const QVariantMap &properties)
         // A sign-in, not a validate: ExpiresAt moves with every token
         // rotation, so it says nothing about whether anyone signed in.
         const bool signedInAnew = !wasSignedIn || m_dsid != dsidBefore || (wasSigningIn && !m_signingIn);
-        if (signedInAnew)
+        if (signedInAnew) {
             m_retriedAfterReport = false;
+            ++m_signIns;
+        }
         if (m_authExpired && signedInAnew) {
             setAuthExpired(false);
             setSyncMessage(QStringLiteral("Signed in."));
