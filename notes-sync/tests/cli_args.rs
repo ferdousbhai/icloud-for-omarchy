@@ -74,11 +74,51 @@ fn usage_error_exits_2_with_a_json_payload() {
 fn status_outside_a_vault_is_a_known_error() {
     let tmp = tempfile::tempdir().unwrap();
     let o = run(&["--json", "status"], tmp.path());
-    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(o.status.code(), Some(3));
     assert!(stdout(&o).is_empty());
     let payload: Value = serde_json::from_str(&stderr(&o)).unwrap();
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "not_cloned_directory");
+}
+
+/// icloud-sessiond out of reach is `session_service`, exit 5 (a service
+/// unavailable), not an internal error.
+#[test]
+fn an_unreachable_session_daemon_is_session_service_exit_5() {
+    let vault = tempfile::tempdir().unwrap();
+    copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/differential/expected/tiny-clone/vault"),
+        vault.path(),
+    );
+    let runtime = tempfile::tempdir().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
+        .args(["--json", "pull"])
+        .arg(vault.path())
+        .env_remove("ICLOUD_NOTES_SYNC_CASSETTE")
+        .env_remove("ICLOUD_SESSION_MOCK")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent/icloud-notes-sync-test-bus",
+        )
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .output()
+        .expect("binary runs");
+    assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+    let payload: Value = serde_json::from_str(stderr(&o).lines().last().unwrap()).unwrap();
+    assert_eq!(payload["error"]["code"], "session_service");
+    assert!(payload["error"]["hint"].is_string());
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
 }
 
 #[test]

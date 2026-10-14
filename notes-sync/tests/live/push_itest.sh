@@ -46,12 +46,12 @@ run() {
 want_rc() { for c in "$@"; do [[ $RC == "$c" ]] && return 0; done; die "exit $RC, expected $* (see $OUT)"; }
 guard() { "${GUARD[@]}" "$@" | tee -a "$SUMMARY"; return "${PIPESTATUS[0]}"; }
 
-# Clones are read-only, so a transient CloudKit failure (HTTP 5xx, exit 1) is retried once.
+# Clones are read-only, so a transient CloudKit failure (HTTP 5xx or no network, exit 5) is retried once.
 clone_with() {
   local label=$1 dir=$2
   shift 2
   run "$label" "$WORK" "$@" --json clone --account "$ACCOUNT" --non-interactive "$dir"
-  if [[ $RC == 1 ]]; then
+  if [[ $RC == 5 ]]; then
     mv "$WORK/$dir" "$WORK/$dir.failed-$n" 2>/dev/null
     run "$label-retry" "$WORK" "$@" --json clone --account "$ACCOUNT" --non-interactive "$dir"
   fi
@@ -62,9 +62,9 @@ port_clone() { clone_with "clone-$1" "$1" "$BIN"; guard dedupe "$WORK/$1"; }
 # plan_check <vault> <expected kinds|-> [allow-refused]: status + dry-run, both logged, then the guard.
 plan_check() {
   local v=$1 expect=$2 allow=${3:-}
-  run status "$v" "$BIN" --json status; want_rc 0 3
+  run status "$v" "$BIN" --json status; want_rc 0
   local s=$OUT
-  run push-dry-run "$v" "$BIN" --json push --dry-run; want_rc 0 3
+  run push-dry-run "$v" "$BIN" --json push --dry-run; want_rc 0
   guard plan "$v" "$FOLDER" "$PREFIX" "$IDS" "$s" "$OUT" "$expect" $allow || die "containment guard refused the plan"
 }
 

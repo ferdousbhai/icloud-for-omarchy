@@ -77,7 +77,7 @@ impl OutputContext {
     }
 
     /// A usage error found after parsing (clap's own go through
-    /// `icloud_session::cli::parse`). Always 64.
+    /// `icloud_session::cli::parse`). Always exit 2.
     pub fn emit_usage_error(&self, message: &str) -> u8 {
         icloud_session::cli::report(TOOL, self.json, "usage", EXIT_USAGE, message, None)
     }
