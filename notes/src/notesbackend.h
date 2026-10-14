@@ -3,6 +3,7 @@
 
 #include <QFileSystemWatcher>
 #include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QProcess>
 #include <QQuickTextDocument>
@@ -265,6 +266,10 @@ public:
     // half's exit code and JSON result, or {"error": {code, message, ...}}.
     int lastExitCode() const { return m_lastExit; }
     QByteArray lastOutput() const { return m_captured; }
+    // The engine's error {code, message, hint?} for that run when it failed:
+    // from its result, else its stderr's contract error line. Empty when it
+    // worked or said nothing.
+    QJsonObject lastError() const { return m_lastError; }
 
 signals:
     void foldersChanged();
@@ -452,6 +457,7 @@ private:
     const Role m_role;
     bool m_toolJson = false;
     int m_lastExit = 0;
+    QJsonObject m_lastError;
     VaultLock m_lock;
     // Runs while someone else holds the lock: a sync asked for meanwhile
     // starts once it is free, never before.

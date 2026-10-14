@@ -172,21 +172,48 @@ QString findIconFont()
     return {};
 }
 
-// The engine's error code for a failed run: its --json result's
-// {"error":{"code"}} (a half of runSync), else the last JSON error line on
-// its stderr (a --json pull or push: {"ok":false,"error":{"code"}}). Empty
-// when neither says.
-QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
+// The contract error object `{"code","message","hint"?}` when a line is the
+// engine's error line `{"ok":false,"error":{...}}`, else empty. Parsed as
+// JSON: key order and surrounding whitespace are not part of the contract.
+// The `{` check keeps the per-line cost negligible for plain log lines.
+QJsonObject contractError(QByteArrayView line)
+{
+    const QByteArray trimmed = line.toByteArray().trimmed();
+    if (!trimmed.startsWith('{'))
+        return {};
+    const QJsonObject object = QJsonDocument::fromJson(trimmed).object();
+    const QJsonValue ok = object.value(QStringLiteral("ok"));
+    if (!ok.isBool() || ok.toBool())
+        return {};
+    return object.value(QStringLiteral("error")).toObject();
+}
+
+// The engine's error for a failed run: its --json result's {"error":{...}}
+// (a half of runSync), else the last contract error line on its stderr (a
+// --json pull or push, or a sync that gave no answer). Empty when neither
+// says.
+QJsonObject engineError(const QByteArray &output, const QByteArray &stderrText)
 {
     QJsonObject error = QJsonDocument::fromJson(output).object().value(QStringLiteral("error")).toObject();
     if (error.isEmpty()) {
         const QList<QByteArray> lines = stderrText.split('\n');
-        for (auto it = lines.crbegin(); it != lines.crend() && error.isEmpty(); ++it) {
-            if (it->startsWith("{\"ok\":false"))
-                error = QJsonDocument::fromJson(*it).object().value(QStringLiteral("error")).toObject();
-        }
+        for (auto it = lines.crbegin(); it != lines.crend() && error.isEmpty(); ++it)
+            error = contractError(*it);
     }
-    return error.value(QStringLiteral("code")).toString();
+    return error;
+}
+
+QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
+{
+    return engineError(output, stderrText).value(QStringLiteral("code")).toString();
+}
+
+// Only a sign-in fixes it: the engine's error code says so. Exit 3 also
+// means "not cloned", "another account's vault" and the like, so the exit
+// code counts only when no error code came through at all.
+bool isSignInRequired(const QString &code, int exitCode)
+{
+    return code.isEmpty() ? exitCode == 3 : code == u"sign_in_required";
 }
 
 // iCloud out of reach: the engine's network errors (icloud-session's
@@ -274,7 +301,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         for (qsizetype nl; (nl = m_errLine.indexOf('\n')) >= 0;) {
             const QByteArray line = m_errLine.left(nl);
             m_errLine.remove(0, nl + 1);
-            if (!isProgressLine(line) && !line.startsWith("{\"ok\":false"))
+            if (!isProgressLine(line) && contractError(line).isEmpty())
                 lines << QString::fromUtf8(line);
         }
         if (!lines.isEmpty())
@@ -1570,7 +1597,7 @@ void NotesBackend::finishSync(int exitCode)
     m_syncRunning = false;
     emit syncRunningChanged();
     if (m_mode == Mode::Sync && !m_errLine.isEmpty() && !isProgressLine(m_errLine)
-        && !m_errLine.startsWith("{\"ok\":false"))
+        && contractError(m_errLine).isEmpty())
         appendLog(QString::fromUtf8(m_errLine));
     m_errLine.clear();
     appendLog(QStringLiteral("(exit %1)").arg(exitCode));
@@ -1607,15 +1634,18 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     const QString error = ok ? parsed.value(QStringLiteral("error")).toString()
                              : QStringLiteral("%1 failed (exit %2). See log.").arg(label).arg(exitCode);
     // iCloud out of reach is not worth a failure: the next sync tries again.
-    const bool offline = !ok && isNetworkError(engineErrorCode(output, m_capturedErr));
+    m_lastError = ok ? QJsonObject() : engineError(output, m_capturedErr);
+    const QString code = m_lastError.value(QStringLiteral("code")).toString();
+    const bool offline = !ok && isNetworkError(code);
 
-    // Every failure that only a sign-in fixes exits 2, the code every iCloud
-    // tool uses (the app's own arguments never make a usage error). Notes
-    // never signs in by itself: icloud-session owns the sign-in, so it is
-    // told (it confirms with Apple before signing everyone out) and syncing
-    // pauses until it reports a sign-in, since every further sync would
-    // fail the same way.
-    const bool sessionExpired = !ok && exitCode == 3;
+    // A failure that only a sign-in fixes says `sign_in_required` (exit 3,
+    // which it shares with "not cloned", "another account's vault" and the
+    // like; the app's own arguments never make a usage error). Notes never
+    // signs in by itself: icloud-session owns the sign-in, so it is told (it
+    // confirms with Apple before signing everyone out) and syncing pauses
+    // until it reports a sign-in, since every further sync would fail the
+    // same way.
+    const bool sessionExpired = !ok && isSignInRequired(code, exitCode);
     if (sessionExpired)
         callSession(QStringLiteral("ReportSignInRequired"));
     // A pull or clone always talks to iCloud, so one that worked proves the
@@ -1713,7 +1743,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
         // failed as the run did, as two runs would have; a sign-in skips the pull.
         const int code = exitCode == 0 ? -1 : exitCode;
         halves << Half{ QStringLiteral("Push"), code, {} };
-        if (code != 3)
+        if (!isSignInRequired(engineErrorCode({}, m_capturedErr), code))
             halves << Half{ QStringLiteral("Pull"), code, {} };
         quiet = false;
     } else {
@@ -1724,7 +1754,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
                 pulledChanges = pulledChanges || pulled.value(QLatin1StringView(count)).toInt() > 0;
             pulledChanges = pulledChanges || !pulled.value(QStringLiteral("changes")).toArray().isEmpty()
                 || !pulled.value(QStringLiteral("conflicts")).toArray().isEmpty();
-        } else if (halves.first().exitCode != 3) {
+        } else if (!isSignInRequired(engineErrorCode(halves.first().output, m_capturedErr), halves.first().exitCode)) {
             // Not run: the push found iCloud out of reach. It failed as the push did.
             halves << Half{ QStringLiteral("Pull"), halves.first().exitCode, halves.first().output };
         }

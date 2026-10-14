@@ -37,10 +37,14 @@
 
 namespace {
 
+// The exit codes every iCloud tool shares; the JSON error `code` tells the
+// cases within one apart.
 constexpr int kExitOk = 0;
-constexpr int kExitError = 1;
-constexpr int kExitUsage = 2;
-constexpr int kExitSignIn = 3;
+constexpr int kExitError = 1; // any other failure
+constexpr int kExitUsage = 2; // invalid usage or request (ambiguous, exists, ...)
+constexpr int kExitSignIn = 3; // not signed in, or nothing cloned yet
+constexpr int kExitNotFound = 4; // no such note or folder
+constexpr int kExitUnavailable = 5; // iCloud, icloud-session or the sync engine out of reach
 
 // How long a command waits for the vault's lock when a background sync or
 // another command holds it (the window holds it while open: no waiting
@@ -75,8 +79,9 @@ const char *const kFooter =
     "{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}), --vault DIR (a vault other than\n"
     "~/Documents/Notes), --wait SECS (how long to wait for the vault's lock; 30 when\n"
     "a background sync holds it, none while the Notes window holds it).\n"
-    "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in). push --dry-run\n"
-    "and diff report their changes in the result and exit 0.";
+    "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (icloud-session sign-in)\n"
+    "or not cloned, 4 not found, 5 unavailable (offline, icloud-session or the sync engine missing).\n"
+    "push --dry-run and diff report their changes in the result and exit 0.";
 
 // NOTE is a note's vault-relative path ("Notes/Groceries.md", .md optional),
 // its apple-note-id, or its title (ignoring case) when exactly one note has it.
@@ -183,20 +188,20 @@ const QList<Spec> &specs()
           "What the window does on its own: push what changed here, then pull what changed in iCloud,\n"
           "in one icloud-notes-sync run with the vault's lock held. A refused sign-in is reported to\n"
           "icloud-session, which checks it with Apple (one retry if it still works). No network is the\n"
-          "error offline (or network), exit 1.\n"
+          "error offline (or network), exit 5.\n"
           "JSON: {ok, runs: [{command, ok, exit_code, result}], log} (result: icloud-notes-sync's JSON for\n"
           "that half, or {error: {code, message, ...}} when it failed)",
           {}, 0, 0 },
         { "pull", "pull", "Fetch what changed in iCloud (as sync, pull only).\nJSON: as for sync", {}, 0, 0 },
         { "push", "push [--dry-run]",
-          "Send what changed here to iCloud (as sync, push only). --dry-run previews it instead and exits 3\n"
-          "when there is something to push: icloud-notes-sync's own push --dry-run output (it takes no\n"
-          "lock, so it works while the Notes window is open).\n"
+          "Send what changed here to iCloud (as sync, push only). --dry-run previews it instead (exit 0,\n"
+          "the changes in the result): icloud-notes-sync's own push --dry-run output (it takes no lock,\n"
+          "so it works while the Notes window is open).\n"
           "JSON: as for sync; with --dry-run icloud-notes-sync's {entries, unchanged, notices, ...}",
           { QStringLiteral("--dry-run") }, 0, 0 },
         { "clone", "clone",
           "Download every note into the (empty) vault, as the window's Clone my notes, for the account\n"
-          "icloud-session is signed in to. Never opens a sign-in window: signed out exits 2.\n"
+          "icloud-session is signed in to. Never opens a sign-in window: signed out exits 3.\n"
           "JSON: as for sync",
           {}, 0, 0 },
         { "history", "history NOTE [--records]",
@@ -206,8 +211,8 @@ const QList<Spec> &specs()
           "--records {mode: \"records\", records: [...]}",
           { QStringLiteral("--records") }, 1, 1 },
         { "diff", "diff NOTE REF",
-          "A past version (an id from history) against iCloud's copy, or FROM..TO; exits 3 when they\n"
-          "differ (icloud-notes-sync diff; no lock).",
+          "A past version (an id from history) against iCloud's copy, or FROM..TO; exits 0 whether or\n"
+          "not they differ (icloud-notes-sync diff; no lock).",
           {}, 2, 2 },
         { "restore", "restore NOTE [--yes]",
           "Throw away the note's local edits and go back to the last synced copy (icloud-notes-sync\n"
@@ -356,6 +361,9 @@ void print(bool asJson, const QJsonValue &json, const QString &text)
     out().flush();
 }
 
+// The error: `{"ok":false,"error":{"code","message","hint"?}}` with --json,
+// else text. QJsonObject sorts its keys, so `ok` prints after `error`; key
+// order is not part of the contract (consumers parse the JSON).
 int report(const Failure &f, bool json)
 {
     QTextStream err(stderr);
@@ -479,14 +487,14 @@ std::optional<Failure> resolveNote(NotesBackend &b, const QString &arg, Note &fo
         return std::nullopt;
     }
     if (matches.isEmpty())
-        return Failure{ QStringLiteral("not_found"), QStringLiteral("no note \"%1\"").arg(arg), kExitError,
+        return Failure{ QStringLiteral("not_found"), QStringLiteral("no note \"%1\"").arg(arg), kExitNotFound,
                         QStringLiteral("`icloud-notes list` shows every note's path; a title must match exactly.") };
     QStringList paths;
     for (const Note &n : matches)
         paths << n.path();
     return Failure{ QStringLiteral("ambiguous"),
                     QStringLiteral("\"%1\" names %2 notes: %3").arg(arg).arg(matches.size()).arg(paths.join(QStringLiteral(", "))),
-                    kExitError, QStringLiteral("Name the note by its path.") };
+                    kExitUsage, QStringLiteral("Name the note by its path.") };
 }
 
 // Makes the note the backend's open one, as a click in the list does.
@@ -496,7 +504,7 @@ std::optional<Failure> openNote(NotesBackend &b, const Note &n)
     b.refresh();
     b.openNote(n.file);
     if (b.currentNote() != n.file)
-        return Failure{ QStringLiteral("not_found"), QStringLiteral("could not open %1").arg(n.path()), kExitError, {} };
+        return Failure{ QStringLiteral("not_found"), QStringLiteral("could not open %1").arg(n.path()), kExitNotFound, {} };
     return std::nullopt;
 }
 
@@ -523,7 +531,7 @@ std::optional<Failure> resolveFolder(NotesBackend &b, const QString &arg, QStrin
             folder = f;
             return std::nullopt;
         }
-    return Failure{ QStringLiteral("not_found"), QStringLiteral("no folder \"%1\"").arg(arg), kExitError,
+    return Failure{ QStringLiteral("not_found"), QStringLiteral("no folder \"%1\"").arg(arg), kExitNotFound,
                     QStringLiteral("`icloud-notes folders` lists them; `icloud-notes new-folder` makes one.") };
 }
 
@@ -575,7 +583,7 @@ std::optional<Failure> needSignIn(NotesBackend &b)
     waitFor([&] { return !b.signInPending(); }, 20000);
     if (!b.signInKnown())
         return Failure{ QStringLiteral("session_unavailable"),
-                        QStringLiteral("icloud-session is not available, so the sign-in is unknown."), kExitError,
+                        QStringLiteral("icloud-session is not available, so the sign-in is unknown."), kExitUnavailable,
                         QStringLiteral("Install icloud-session (sudo pacman -S icloud-session); `icloud-session status` "
                                        "shows what it says.") };
     if (!b.signedIn() || b.authExpired())
@@ -589,7 +597,7 @@ std::optional<Failure> needSyncTool(NotesBackend &b)
     if (b.syncToolAvailable())
         return std::nullopt;
     return Failure{ QStringLiteral("sync_tool_missing"),
-                    QStringLiteral("the sync engine (icloud-notes-sync) is missing."), kExitError,
+                    QStringLiteral("the sync engine (icloud-notes-sync) is missing."), kExitUnavailable,
                     QStringLiteral("Reinstall icloud-notes: sudo pacman -S icloud-notes") };
 }
 
@@ -598,7 +606,7 @@ std::optional<Failure> needCloned()
     if (NotesBackend::vaultCloned())
         return std::nullopt;
     return Failure{ QStringLiteral("not_cloned"),
-                    QStringLiteral("no notes cloned at %1").arg(NotesBackend::rootPath()), kExitError,
+                    QStringLiteral("no notes cloned at %1").arg(NotesBackend::rootPath()), kExitSignIn,
                     QStringLiteral("Run `icloud-notes clone` (signed in to icloud-session) first.") };
 }
 
@@ -626,6 +634,7 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
     b.clearLog();
     QJsonArray runs;
     QHash<QString, bool> last;
+    QJsonObject networkError;
     bool cloneDone = false;
     const QMetaObject::Connection finished =
         QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
@@ -636,6 +645,13 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
                                      { QStringLiteral("exit_code"), b.lastExitCode() },
                                      { QStringLiteral("result"), doc.isObject() ? QJsonValue(doc.object()) : QJsonValue() } });
             last.insert(command, ok);
+            // iCloud out of reach: the engine's offline or network error (from
+            // the half's result, or a --json pull/push's stderr), for a run
+            // that is retried later rather than looked into.
+            const QJsonObject error = b.lastError();
+            const QString code = error.value(QStringLiteral("code")).toString();
+            if (!ok && networkError.isEmpty() && (code == u"offline" || code == u"network"))
+                networkError = error;
         });
     const QMetaObject::Connection cloned =
         QObject::connect(&b, &NotesBackend::cloneFinished, &b, [&] { cloneDone = true; });
@@ -655,16 +671,6 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
     for (const QString &half : what == u"sync" ? QStringList{ QStringLiteral("push"), QStringLiteral("pull") }
                                                : QStringList{ what })
         ok = ok && last.value(half);
-    // iCloud out of reach: the engine's offline or network error, for a run
-    // that is retried later rather than looked into.
-    QJsonObject networkError;
-    for (const QJsonValue &run : std::as_const(runs)) {
-        const QJsonObject error =
-            run.toObject().value(QStringLiteral("result")).toObject().value(QStringLiteral("error")).toObject();
-        const QString code = error.value(QStringLiteral("code")).toString();
-        if (networkError.isEmpty() && (code == u"offline" || code == u"network"))
-            networkError = error;
-    }
     result.json = QJsonObject{ { QStringLiteral("ok"), ok }, { QStringLiteral("runs"), runs },
                                { QStringLiteral("log"), b.syncLog() } };
     result.text = b.syncLog();
@@ -676,7 +682,7 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
         result.failure = Failure{ networkError.value(QStringLiteral("code")).toString(),
                                   QStringLiteral("iCloud could not be reached (%1).")
                                       .arg(networkError.value(QStringLiteral("message")).toString()),
-                                  kExitError, QStringLiteral("Check the network connection, then retry.") };
+                                  kExitUnavailable, QStringLiteral("Check the network connection, then retry.") };
     else if (!ok)
         result.failure = Failure{ QStringLiteral("sync_failed"), QStringLiteral("%1 failed; see the log.").arg(what),
                                   kExitError, {} };
@@ -974,7 +980,7 @@ Result newNote(NotesBackend &b, const Args &a)
     if (b.notes().contains(file) || QFile::exists(QDir(QDir(NotesBackend::rootPath()).filePath(folder)).filePath(file)))
         return Failure{ QStringLiteral("exists"),
                         QStringLiteral("a note named \"%1\" is already in %2").arg(file, folder.isEmpty() ? QStringLiteral("the vault root") : folder),
-                        kExitError, QStringLiteral("Edit it with `icloud-notes write`, or pick another title.") };
+                        kExitUsage, QStringLiteral("Edit it with `icloud-notes write`, or pick another title.") };
     b.newNote(title);
     if (b.currentNote() != file)
         return Failure{ QStringLiteral("error"), QStringLiteral("could not create %1").arg(file), kExitError, {} };
@@ -1038,7 +1044,7 @@ Failure backendFailure(const QString &message)
         code = QStringLiteral("exists");
     else if (message.contains(QStringLiteral("attachments")))
         code = QStringLiteral("has_attachments");
-    return { code, message, kExitError, {} };
+    return { code, message, code == u"exists" ? kExitUsage : kExitError, {} };
 }
 
 Result rename(NotesBackend &b, const Args &a)
@@ -1182,9 +1188,11 @@ Result exportPdf(NotesBackend &b, const Args &a)
     if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     const QString err = b.exportPdf();
-    if (!err.isEmpty())
-        return Failure{ err.startsWith(QStringLiteral("Already exists")) ? QStringLiteral("exists") : QStringLiteral("error"), err,
-                        kExitError, {} };
+    if (!err.isEmpty()) {
+        const bool exists = err.startsWith(QStringLiteral("Already exists"));
+        return Failure{ exists ? QStringLiteral("exists") : QStringLiteral("error"), err, exists ? kExitUsage : kExitError,
+                        {} };
+    }
     const QString pdf = QDir(QDir(NotesBackend::rootPath()).filePath(n.folder)).filePath(n.file.chopped(3) + QStringLiteral(".pdf"));
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("export-pdf") },
                               { QStringLiteral("path"), n.path() },
@@ -1204,7 +1212,7 @@ Result newFolder(NotesBackend &b, const Args &a)
         return usageError(QStringLiteral("the folder name is empty"));
     const QString folder = parent.isEmpty() ? name : parent + u'/' + name;
     if (b.folders().contains(folder))
-        return Failure{ QStringLiteral("exists"), QStringLiteral("folder \"%1\" already exists").arg(folder), kExitError, {} };
+        return Failure{ QStringLiteral("exists"), QStringLiteral("folder \"%1\" already exists").arg(folder), kExitUsage, {} };
     b.setCurrentFolder(parent);
     b.newFolder(name);
     if (!b.folders().contains(folder))
@@ -1254,7 +1262,7 @@ int syncCommand(NotesBackend &b, const Args &a, const QString &what)
     if (what == u"clone") {
         if (NotesBackend::vaultCloned())
             return report(Failure{ QStringLiteral("already_cloned"),
-                                   QStringLiteral("%1 is already cloned").arg(NotesBackend::rootPath()), kExitError,
+                                   QStringLiteral("%1 is already cloned").arg(NotesBackend::rootPath()), kExitUsage,
                                    QStringLiteral("Run `icloud-notes pull` to fetch what changed.") },
                           a.json);
         QDir().mkpath(NotesBackend::rootPath());

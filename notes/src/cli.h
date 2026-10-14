@@ -10,8 +10,11 @@
 //
 // Output is plain text, or JSON on stdout with --json; an error is then
 // one JSON line on stderr, {"ok":false,"error":{"code","message","hint"?}}.
-// Exit codes, as in every iCloud tool: 0 ok, 1 error, 2 usage, 3 sign-in
-// required. `push --dry-run` and `diff` report their changes and exit 0.
+// The JSON key order is not part of the contract (QJsonObject prints `ok`
+// last). Exit codes, as in every iCloud tool: 0 ok, 1 error, 2 usage or
+// invalid request, 3 not signed in or not cloned, 4 not found, 5 offline or
+// a service (icloud-session, the engine) unavailable. `push --dry-run` and
+// `diff` report their changes and exit 0.
 
 // argv[1] starts a command (or global options, help, the version) rather
 // than the window. `--sync`, the background sync, is not one.
