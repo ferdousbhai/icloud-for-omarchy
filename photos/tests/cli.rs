@@ -52,12 +52,17 @@ impl Env {
 
     /// `bare` with extra environment variables.
     fn bare_with(&self, args: &[&str], vars: &[(&str, &Path)]) -> Run {
+        self.bare_at(&self.server.url, args, vars)
+    }
+
+    /// `bare_with`, but mock mode sends every request to `url`.
+    fn bare_at(&self, url: &str, args: &[&str], vars: &[(&str, &Path)]) -> Run {
         let home = self.root.join("home");
         let out: Output = Command::new(env!("CARGO_BIN_EXE_icloud-photos"))
             .args(args)
             .envs(vars.iter().map(|(k, v)| (*k, *v)))
             .env("ICLOUD_SESSION_MOCK", "1")
-            .env("ICLOUD_SESSION_MOCK_URL", &self.server.url)
+            .env("ICLOUD_SESSION_MOCK_URL", url)
             .env("HOME", &home)
             .env("XDG_DATA_HOME", home.join("xdg-data"))
             .env("XDG_CACHE_HOME", home.join("xdg-cache"))
@@ -599,8 +604,20 @@ fn signed_out_exits_3_until_sign_in() {
         assert!(r.stderr.contains("sign in"), "{}", r.stderr);
     }
     let r = env.run(&["--json", "sync"]);
-    let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    let err = error_line(&r);
     assert_eq!(err["error"]["code"], "sign_in_required");
+    assert!(
+        err["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("icloud-session sign-in"),
+        "{err}"
+    );
+    assert!(
+        !err["error"]["message"].as_str().unwrap().contains("icloud-session"),
+        "{err}"
+    );
     let f = env.root.join("X.JPG");
     std::fs::write(&f, b"\xFF\xD8 x").unwrap();
     assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 3);
@@ -613,6 +630,51 @@ fn signed_out_exits_3_until_sign_in() {
     assert_eq!(env.run(&["sign-in"]).code, 0);
     assert_eq!(env.json(&["status"])["signed_in"], true);
     assert_eq!(env.run(&["sync"]).code, 0);
+}
+
+/// The last stderr line, checked to be exactly the contract's error
+/// object: `{"ok":false,"error":{"code","message","hint"?}}`.
+fn error_line(r: &Run) -> Value {
+    let line = r.stderr.trim().lines().last().unwrap_or_default();
+    let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("stderr is not JSON ({e}):\n{}", r.stderr));
+    let top: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    assert!(top.len() == 2 && top.contains(&"ok") && top.contains(&"error"), "{v}");
+    assert_eq!(v["ok"], false);
+    let error = v["error"].as_object().unwrap();
+    assert!(error["code"].is_string() && error["message"].is_string(), "{v}");
+    assert!(
+        error.keys().all(|k| ["code", "message", "hint"].contains(&k.as_str())),
+        "{v}"
+    );
+    v
+}
+
+#[test]
+fn no_network_exits_5_offline() {
+    let env = Env::new("offline", 1);
+    let data = env.data();
+    // Nothing listens on port 1: the connect is refused, which is offline.
+    let dead = "http://127.0.0.1:1";
+    for args in [vec!["sync"], vec!["sync", "--full"]] {
+        let mut all = vec!["--json", "--data-dir", data.to_str().unwrap()];
+        all.extend_from_slice(&args);
+        let r = env.bare_at(dead, &all, &[]);
+        assert_eq!(r.code, 5, "{args:?}: {}", r.stderr);
+        assert!(r.stdout.is_empty(), "{}", r.stdout);
+        let err = error_line(&r);
+        assert_eq!(err["error"]["code"], "offline", "{err}");
+        assert!(err["error"]["hint"].is_string(), "{err}");
+    }
+    // Text mode: the same exit code, `tool: message` and the hint on stderr.
+    let r = env.bare_at(dead, &["--data-dir", data.to_str().unwrap(), "sync"], &[]);
+    assert_eq!(r.code, 5, "{}", r.stderr);
+    assert!(r.stderr.contains("offline"), "{}", r.stderr);
+    // Local commands need no network.
+    assert_eq!(
+        env.bare_at(dead, &["--data-dir", data.to_str().unwrap(), "list"], &[])
+            .code,
+        0
+    );
 }
 
 #[test]
