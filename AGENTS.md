@@ -56,13 +56,18 @@ packaging tests, then native x86_64/aarch64 package builds.
 
 ## Conventions and gotchas
 
-- CLI contract, shared by every tool: `--json` puts only the result on stdout; failures end
-  stderr with `{"ok":false,"error":{"code","message","hint"?}}`; exit codes 0 ok / 1 error /
-  2 (usage or destructive command without `--yes`) / 3 (not signed in, or Find My password; the
-  JSON `code` tells them apart) / 4 (not found) / 5 (a service unavailable: no network, offline,
-  daemon unreachable). `status`, `push --dry-run` and `diff` report their changes and exit 0.
-  Nothing prompts without a TTY. New commands must follow this and be added to docs/CLI.md,
-  docs/AGENTS.md and the skill.
+- CLI contract, shared by every tool (Rust: `session/src/output.rs` — `OutputFlags`, `Response`,
+  `CliError`, the shared hints and `session_failure`/`http_failure`; Notes mirrors it in
+  `notes/src/cli.cpp`): text on a terminal, the envelope `{"ok":true,"data","summary","meta"?}`
+  when piped or with `--json`; `--styled`, `--quiet` (data only), `--ids-only`, `--count`, combinable
+  (ids-only > count > quiet > json > styled). Failures are `{"ok":false,"error":{"code","message",
+  "hint"?}}` on stdout in machine modes, `error:`/`hint:` on stderr in text mode; remediation goes in
+  `hint`. Data plus a non-zero exit (`Response::exit`) for partial failures and signed-out
+  `status`. Exit codes 0 ok / 1 other failure / 2 usage, ambiguous, exists, or a destructive
+  command without `--yes` / 3 not signed in, credentials rejected, or not set up (the JSON `code`
+  tells them apart) / 4 not found / 5 a service unavailable (network, daemon, keyring, iCloud 5xx).
+  `push --dry-run` and `diff` report their changes and exit 0. Nothing prompts outside text mode on
+  a TTY. New commands must follow this and be added to docs/CLI.md, docs/AGENTS.md and the skill.
 - No app signs in by itself: everything goes through icloud-sessiond. Tests never touch the real
   account; use the fakes.
 - One suite version in `[workspace.package]` of `Cargo.toml` is inherited by every Rust crate

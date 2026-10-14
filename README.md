@@ -9,7 +9,7 @@ one Apple sign-in, published as one signed pacman repository.
 - **Photos**: browse, download, upload and delete your iCloud Photos.
 - **Find My**: your devices on a map, with play sound, Lost Mode and a
   location trail.
-- Every window action also works from the terminal, with `--json` output
+- Every window action also works from the terminal, with JSON output
   for scripts and AI agents.
 
 ```bash
@@ -51,8 +51,10 @@ aren't available from iCloud on the web either.
 
 ## Command line and agents
 
-Notes, Photos, Find My, and shared sign-in have scriptable JSON CLIs; see
-[docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
+Notes, Photos, Find My, and shared sign-in have scriptable CLIs with one
+output contract: text on a terminal, a JSON envelope when piped (`--quiet`
+for the bare result), JSON errors with stable codes, and shared exit codes;
+see [docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
 `icloud-session skill install` installs the agent skill
 ([docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md)) to `~/.agents/skills/icloud`, linked
 into `~/.claude/skills` for Claude Code; `icloud-session skill remove` removes it, and a new
@@ -82,7 +84,7 @@ shared dependency. The old apps and per-app installers are no longer built here.
   `icloud-session forget-password` removes it.
 - **The apps talk only to Apple**, plus OpenStreetMap for Find My's map
   tiles.
-- **Notes and Reminders deletes are recoverable**: a note or reminder you
+- **Notes and Photos deletes are recoverable**: a note or photo you
   delete goes to Recently Deleted in iCloud (about 30 days).
 - **Contacts deletes are not**: iCloud has no Recently Deleted for
   contacts; Cloud Contacts requires an explicit source deletion. Only
