@@ -928,7 +928,8 @@ fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
 #[test]
 fn failing_scenarios_record_the_error_object() {
     for (name, code, exit) in [
-        ("asset-clone-download-failed", "cloudkit_request_failed", "5"),
+        // An HTTP 410 for an attachment: iCloud refused it, exit 1 (a 5xx is 5).
+        ("asset-clone-download-failed", "cloudkit_request_failed", "1"),
         ("tiny-clone-wrong-account", "requested_account_mismatch", "3"),
         ("tiny-newer-layout", "vault_from_newer_tool", "1"),
         ("tiny-status-v2", "vault_needs_update", "1"),

@@ -19,7 +19,8 @@
 //!   `sign_in_not_completed`, `find_my_auth_required`,
 //!   `find_my_auth_not_completed`, `password_rejected` (Apple refused the
 //!   password given to `set-password`), `session_rejected` (Apple keeps
-//!   answering 401/421 although the daemon still holds the sign-in);
+//!   answering 401/421 although the daemon still holds the sign-in); and
+//!   `status` while signed out (its result is still printed);
 //! - 5 a service unavailable: `session_service` (the daemon or the session
 //!   bus unreachable), `keyring_unavailable`, `network`, `offline`,
 //!   `bad_response`, `http` 5xx.
@@ -30,8 +31,8 @@ use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
-use icloud_session::output::{self, CliError, OutputFlags, Response};
+use icloud_session::cli::{EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN};
+use icloud_session::output::{self, CliError, FIND_MY_AUTH_HINT, OutputFlags, Response, SIGN_IN_HINT};
 use icloud_session::{BUS_NAME, ERROR_PASSWORD_REJECTED, Error, INTERFACE, OBJECT_PATH, Session, Status};
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -50,7 +51,8 @@ Exit codes:
   1 error (a failure icloud-sessiond reported), io, http 4xx, skill_unmanaged
   2 usage
   3 not signed in or credentials rejected: sign_in_required, sign_in_not_completed,
-    find_my_auth_required, find_my_auth_not_completed, password_rejected, session_rejected
+    find_my_auth_required, find_my_auth_not_completed, password_rejected, session_rejected;
+    also `status` while signed out (the status is still printed)
   5 a service unavailable: session_service (icloud-sessiond unreachable),
     keyring_unavailable, network, offline, bad_response, http 5xx";
 
@@ -76,6 +78,7 @@ enum Command {
     /// seconds; null for a sign-in without "Keep me signed in"), signing_in,
     /// find_my_authorized, find_my_password_stored, sign_out_reason (why the
     /// account was last signed out; null while signed in or never signed in).
+    /// Signed out, the status is still printed and the exit code is 3.
     #[command(after_help = AFTER_HELP)]
     Status,
     /// Open the sign-in window and wait for it, then print status.
@@ -181,8 +184,13 @@ pub fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Command::Skill { action: Some(action) } => skill(action),
+        // Signed out: the status is still the result, with exit 3 (as
+        // `icloud-photos status` and `icloud-notes status`).
         Command::Status => icloud_session::status()
-            .map(|s| status_response(&s, None))
+            .map(|s| {
+                let exit = if s.signed_in { 0 } else { EXIT_SIGN_IN };
+                status_response(&s, None).exit(exit)
+            })
             .map_err(failure),
         Command::SignIn { no_wait: true } => open_now(icloud_session::sign_in),
         Command::SignIn { no_wait: false } => sign_in(),
@@ -299,7 +307,7 @@ fn authorize_find_my() -> Outcome {
             EXIT_FIND_MY_AUTH,
             format!("Find My authorization did not complete: still not authorized for {who}"),
         )
-        .hint("run `icloud-session authorize-find-my` again (to stop being asked: `icloud-session set-password`)"),
+        .hint(FIND_MY_AUTH_HINT),
         _ => CliError::new(
             "find_my_auth_not_completed",
             EXIT_FIND_MY_AUTH,
@@ -339,14 +347,15 @@ fn open_window(open: fn() -> Result<(), Error>) -> Result<Status, Error> {
 struct Validated {
     dsid: String,
     apple_id: String,
-    webservices: std::collections::HashMap<String, String>,
+    /// Sorted by key, so the output is the same from run to run.
+    webservices: std::collections::BTreeMap<String, String>,
 }
 
 fn validate() -> Result<Response, Error> {
     let session = Session::connect()?;
     let webservices = session.webservices()?;
-    let mut keys: Vec<String> = webservices.urls.keys().cloned().collect();
-    keys.sort();
+    let webservices: std::collections::BTreeMap<String, String> = webservices.urls.into_iter().collect();
+    let keys: Vec<String> = webservices.keys().cloned().collect();
     let summary = format!(
         "Apple accepts the sign-in of {}: {} services",
         session.apple_id(),
@@ -361,7 +370,7 @@ fn validate() -> Result<Response, Error> {
     let data = Validated {
         dsid: session.dsid().to_string(),
         apple_id: session.apple_id().to_string(),
-        webservices: webservices.urls,
+        webservices,
     };
     Ok(Response::new(data, summary).human(human).ids(keys))
 }
@@ -402,51 +411,16 @@ fn skill(action: SkillAction) -> Outcome {
 
 // ------------------------------------------------------------ errors
 
-const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (a person signs in in the window)";
-
-/// A client-library error as the contract's code, exit code, message and hint.
+/// A client-library error as the contract's code, exit code, message and
+/// hint: the shared mapping ([`output::session_failure`]), plus
+/// `password_rejected` for Apple refusing the password given to set-password.
 fn failure(e: Error) -> CliError {
-    let message = e.to_string();
     match e {
-        Error::SignInRequired => CliError::new(
-            "sign_in_required",
-            EXIT_SIGN_IN,
-            icloud_session::sign_in_required_message(),
-        )
-        .hint(SIGN_IN_HINT),
-        Error::FindMyAuthRequired => CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, message)
-            .hint("run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)"),
-        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, message)
-            .hint("unlock the keyring (GNOME Keyring), then try again"),
-        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, message)
-            .hint("check that icloud-sessiond is installed and the D-Bus session bus is running"),
-        // Apple refused the password given to set-password.
         Error::Daemon { name, message } if name == ERROR_PASSWORD_REJECTED => {
             CliError::new("password_rejected", EXIT_SIGN_IN, message)
                 .hint("check the Apple ID password, then run `icloud-session set-password` again")
         }
-        // The daemon was reached and failed: not an unreachable daemon.
-        Error::Daemon { .. } => CliError::new("error", EXIT_ERROR, message),
-        Error::Network(_) => {
-            CliError::new("network", EXIT_UNAVAILABLE, message).hint("check the network connection and try again")
-        }
-        Error::Offline(_) => {
-            CliError::new("offline", EXIT_UNAVAILABLE, message).hint("check the network connection and try again")
-        }
-        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, message).hint("try again later"),
-        Error::Http { status: 401 | 421, .. } => CliError::new(
-            "session_rejected",
-            EXIT_SIGN_IN,
-            format!("Apple refused the iCloud session although icloud-sessiond still holds it ({message})"),
-        )
-        .hint(SIGN_IN_HINT),
-        Error::Http { status: 500..=599, .. } => {
-            CliError::new("http", EXIT_UNAVAILABLE, message).hint("iCloud is having trouble; try again later")
-        }
-        Error::Http { .. } => CliError::new("http", EXIT_ERROR, message),
-        Error::Io(_) => CliError::new("io", EXIT_ERROR, message),
-        // `icloud_session::Error` is non-exhaustive: a variant added later.
-        _ => CliError::new("error", EXIT_ERROR, message),
+        e => output::session_failure(&e),
     }
 }
 

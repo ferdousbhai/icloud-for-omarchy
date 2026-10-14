@@ -124,7 +124,12 @@ fn a_destination_already_queued_is_fetched_once() {
 
 fn assert_attachment_download_failed(e: CkError) {
     match e {
-        CkError::RequestFailed(m) => assert_eq!(m, "Attachment download failed: HTTP 403"),
+        CkError::RequestFailed { message, status } => {
+            assert_eq!(
+                (message.as_str(), status),
+                ("Attachment download failed: HTTP 403", Some(403))
+            )
+        }
         other => panic!("{other:?}"),
     }
 }

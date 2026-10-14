@@ -110,10 +110,10 @@ impl<T: Transport> Database<T> {
     /// failed ({database} db): HTTP {status}")`.
     fn post_database(&self, database: DatabaseScope, operation: &str, body: &Value) -> Result<Value, CkError> {
         match self.transport.post_json(&database_path(database, operation), body) {
-            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed(format!(
-                "{operation} request failed ({} db): HTTP {status}",
-                database.as_str()
-            ))),
+            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed {
+                message: format!("{operation} request failed ({} db): HTTP {status}", database.as_str()),
+                status: Some(status),
+            }),
             other => other,
         }
     }
@@ -147,9 +147,8 @@ impl<T: Transport> Database<T> {
             let count = page.len();
             records.extend(page);
             if zone.more_coming == Some(true) && (zone.sync_token.is_none() || zone.sync_token == sync_token) {
-                return Err(CkError::RequestFailed(
-                    "changes/zone reported moreComing without a new syncToken; refusing to re-request the same page"
-                        .into(),
+                return Err(CkError::request_failed(
+                    "changes/zone reported moreComing without a new syncToken; refusing to re-request the same page",
                 ));
             }
             if zone.sync_token.is_some() {
@@ -227,9 +226,8 @@ impl<T: Transport> Database<T> {
             zone_ids.extend(page.zone_ids);
             deleted_zone_ids.extend(page.deleted_zone_ids);
             if page.more_coming && (page.sync_token.is_none() || page.sync_token == sync_token) {
-                return Err(CkError::RequestFailed(
-                    "shared changes/database reported moreComing without a new syncToken; refusing to re-request the same page"
-                        .into(),
+                return Err(CkError::request_failed(
+                    "shared changes/database reported moreComing without a new syncToken; refusing to re-request the same page",
                 ));
             }
             if page.sync_token.is_some() {
@@ -294,7 +292,7 @@ impl<T: Transport> Database<T> {
                     });
                 }
                 // An expired or unknown token: list from scratch.
-                Err(CkError::RequestFailed(_) | CkError::UnexpectedResponse(_)) => {}
+                Err(CkError::RequestFailed { .. } | CkError::UnexpectedResponse(_)) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -624,7 +622,10 @@ fn stored_zone_token<'a>(since_sync_tokens: &'a IndexMap<String, String>, zone_i
 /// failed: HTTP {status}")`.
 fn asset_error(e: CkError) -> CkError {
     match e {
-        CkError::Http { status, .. } => CkError::RequestFailed(format!("Attachment download failed: HTTP {status}")),
+        CkError::Http { status, .. } => CkError::RequestFailed {
+            message: format!("Attachment download failed: HTTP {status}"),
+            status: Some(status),
+        },
         other => other,
     }
 }

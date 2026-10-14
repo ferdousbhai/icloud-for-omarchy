@@ -35,6 +35,7 @@ pub const EXIT_INTERNAL: u8 = 1;
 /// Legacy: for tools not yet on [`crate::output`], whose
 /// [`CliError::report`](crate::output::CliError::report) puts a machine-mode
 /// error on stdout and text-mode `error:`/`hint:` lines on stderr.
+#[deprecated(note = "use icloud_session::output")]
 pub fn report(tool: &str, json: bool, code: &str, exit_code: u8, message: &str, hint: Option<&str>) -> u8 {
     eprintln!("{}", render(tool, json, code, message, hint));
     exit_code
@@ -77,6 +78,8 @@ fn ask(question: &str, mut input: impl BufRead, mut output: impl Write) -> bool 
 /// Legacy: for tools not yet on [`crate::output`]; those use
 /// [`crate::output::parse`].
 #[cfg(feature = "clap")]
+#[deprecated(note = "use icloud_session::output")]
+#[allow(deprecated)]
 pub fn parse<P: clap::Parser>(tool: &str) -> Result<P, u8> {
     P::try_parse().map_err(|e| {
         if !e.use_stderr() {

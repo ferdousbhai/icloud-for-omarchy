@@ -42,14 +42,11 @@ pub fn usage_error(message: impl Into<String>) -> CliError {
 
 /// The error's code, message, hint and exit code. A sign-in error says why
 /// the account was signed out, when icloud-sessiond knows (one D-Bus round
-/// trip).
+/// trip): "sign in to iCloud required: {reason}", as in every iCloud tool.
 impl From<&Error> for CliError {
     fn from(error: &Error) -> CliError {
         let message = match error {
-            Error::SignInRequired => match icloud_session::status().ok().filter(|s| !s.signed_in) {
-                Some(status) => status.sign_in_prompt(&error.to_string()),
-                None => error.to_string(),
-            },
+            Error::SignInRequired => icloud_session::sign_in_required_message(),
             _ => error.to_string(),
         };
         let cli = CliError::new(&error.code(), error.exit_code(), message);

@@ -111,9 +111,11 @@ window, when given no arguments; the desktop entry starts
   nothing on stderr; in text mode `error: …` and `hint: …` lines on stderr.
   `hint`, a remediation such as "run `icloud-session sign-in`", is there
   only when there is one. Codes: `usage`, `not_found`, `cancelled`,
-  `sign_in_required`, `service_not_offered` (iCloud Photos not enabled for
-  the Apple ID), `offline`, `network`, `session_service` (icloud-sessiond
-  unreachable), `keyring_unavailable`, `bad_response`, `http`, `error`.
+  `sign_in_required`, `photos_unavailable` (iCloud Photos not enabled for
+  the Apple ID), `session_rejected` (Apple keeps answering 401/421 although
+  icloud-sessiond still holds the sign-in), `offline`, `network`,
+  `session_service` (icloud-sessiond unreachable), `keyring_unavailable`,
+  `bad_response`, `http`, `io`, `error`. Every exit-5 error has a hint.
 - Progress (a sync on a terminal in text mode, upload steps) goes to
   stderr. `download`, `delete` and `upload` report every item: in text mode
   each saved path or deleted id is printed as it finishes and failures go to
@@ -125,7 +127,7 @@ window, when given no arguments; the desktop entry starts
   when nobody can be asked (it asks only in text mode with stdin and stdout
   a terminal); 3 not signed in (`status` also exits 3 when signed out, with
   its data), iCloud Photos not offered for the account, or Apple refusing
-  the session (HTTP 401/421) while the daemon says signed in; 4 not found;
+  the session (`session_rejected`) while the daemon says signed in; 4 not found;
   5 a service unavailable: offline, network, icloud-sessiond, keyring, bad
   response or an Apple 5xx.
 - `--data-dir DIR` keeps the catalog, cache, preferences and library all

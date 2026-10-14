@@ -35,7 +35,10 @@ use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
-use icloud_session::output::{self, CliError, Mode as OutMode, OutputFlags, Response};
+use icloud_session::output::{
+    self, CliError, KEYRING_HINT, Mode as OutMode, NETWORK_HINT, OutputFlags, Response, SERVICE_TROUBLE_HINT,
+    SESSION_SERVICE_HINT, SIGN_IN_HINT,
+};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
 
@@ -52,12 +55,13 @@ error:/hint: lines on stderr in text mode. Progress goes to stderr.
 
 Exit codes:
   0 ok
-  1 error (cancelled, error, http 4xx), or some items of download, upload or
+  1 error (cancelled, error, io, http 4xx), or some items of download, upload or
     delete failed (the data lists each item with its error)
   2 usage, or delete without --yes when nobody can be asked
   3 sign_in_required (icloud-session sign-in; status also exits 3 when
-    signed out), service_not_offered (iCloud Photos is not on for this
-    Apple ID), http 401/421 (iCloud refuses the session)
+    signed out), photos_unavailable (iCloud Photos is not on for this
+    Apple ID), session_rejected (iCloud keeps refusing the session although
+    icloud-sessiond still holds it: sign in again)
   4 not_found
   5 offline, network, session_service (icloud-sessiond unreachable),
     keyring_unavailable, bad_response, http 5xx
@@ -279,33 +283,33 @@ fn classify(fail: Fail) -> CliError {
         Fail::Err(e) => e,
     };
     let msg = e.to_string();
+    let with_photos_hint = |e: CliError| {
+        if e.hint.as_deref() == Some(SIGN_IN_HINT) {
+            e.hint(sign_in_hint())
+        } else {
+            e
+        }
+    };
     match e {
-        Error::SignInRequired => CliError::new(
-            "sign_in_required",
-            EXIT_SIGN_IN,
-            icloud_session::sign_in_required_message(),
-        )
-        .hint("run `icloud-session sign-in` (or `icloud-photos sign-in`, or sign in from any iCloud app)"),
-        Error::NotOffered(_) => CliError::new("service_not_offered", EXIT_SIGN_IN, msg)
+        Error::SignInRequired => output::sign_in_required().hint(sign_in_hint()),
+        Error::NotOffered(_) => CliError::new("photos_unavailable", EXIT_SIGN_IN, msg)
             .hint("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
-        Error::Offline(_) => {
-            CliError::new("offline", EXIT_UNAVAILABLE, msg).hint("check the network connection, then try again")
-        }
-        Error::Network(_) => CliError::new("network", EXIT_UNAVAILABLE, msg),
-        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg),
-        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, msg)
-            .hint("check `icloud-session status`; icloud-sessiond must be installed and reachable on D-Bus"),
-        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg)
-            .hint("unlock the keyring (GNOME Keyring), then try again"),
-        Error::Http { status: 500..=599, .. } => CliError::new("http", EXIT_UNAVAILABLE, msg),
-        // Apple keeps refusing the session although the daemon says it is
-        // signed in.
-        Error::Http { status: 401 | 421, .. } => {
-            CliError::new("http", EXIT_SIGN_IN, msg).hint("run `icloud-session sign-in` to sign in again")
-        }
-        Error::Http { .. } => CliError::new("http", EXIT_ERROR, msg),
+        Error::Offline(_) => CliError::new("offline", EXIT_UNAVAILABLE, msg).hint(NETWORK_HINT),
+        Error::Network(_) => CliError::new("network", EXIT_UNAVAILABLE, msg).hint(NETWORK_HINT),
+        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint(SERVICE_TROUBLE_HINT),
+        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, msg).hint(SESSION_SERVICE_HINT),
+        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg).hint(KEYRING_HINT),
+        // 401/421 here persisted although the daemon says signed in:
+        // `session_rejected`; 5xx exit 5; other 4xx exit 1.
+        Error::Http { status, .. } => with_photos_hint(output::http_failure(status, msg)),
+        Error::Io(_) => CliError::new("io", EXIT_ERROR, msg),
         _ => CliError::new("error", EXIT_ERROR, msg),
     }
+}
+
+/// The shared sign-in hint, plus Photos' own ways to sign in.
+fn sign_in_hint() -> String {
+    format!("{SIGN_IN_HINT}, or `icloud-photos sign-in`, or sign in from any iCloud app")
 }
 
 struct Ctx {
@@ -1280,23 +1284,27 @@ mod exit_tests {
         let http = |status| Error::Http { status, body: s() };
         let t = |exit, code: &str, hint| (exit, code.to_owned(), hint);
         assert_eq!(exit_and_code(Error::Offline(s())), t(5, "offline", true));
-        assert_eq!(exit_and_code(Error::Network(s())), t(5, "network", false));
-        assert_eq!(exit_and_code(Error::BadResponse(s())), t(5, "bad_response", false));
+        assert_eq!(exit_and_code(Error::Network(s())), t(5, "network", true));
+        assert_eq!(exit_and_code(Error::BadResponse(s())), t(5, "bad_response", true));
         assert_eq!(exit_and_code(Error::Service(s())), t(5, "session_service", true));
         assert_eq!(
             exit_and_code(Error::KeyringUnavailable(s())),
             t(5, "keyring_unavailable", true)
         );
-        assert_eq!(exit_and_code(http(503)), t(5, "http", false));
-        assert_eq!(exit_and_code(http(421)), t(3, "http", true));
-        assert_eq!(exit_and_code(http(401)), t(3, "http", true));
+        assert_eq!(exit_and_code(http(503)), t(5, "http", true));
+        assert_eq!(exit_and_code(http(421)), t(3, "session_rejected", true));
+        assert_eq!(exit_and_code(http(401)), t(3, "session_rejected", true));
         assert_eq!(exit_and_code(http(404)), t(1, "http", false));
         assert_eq!(
             exit_and_code(Error::NotOffered("ckdatabasews".into())),
-            t(3, "service_not_offered", true)
+            t(3, "photos_unavailable", true)
         );
+        let rejected = classify(Fail::Err(http(421)));
+        assert_eq!(rejected.hint.as_deref(), Some(sign_in_hint().as_str()));
+        assert!(rejected.message.contains("HTTP 421"), "{}", rejected.message);
         assert_eq!(exit_and_code(Error::SignInRequired), t(3, "sign_in_required", true));
         assert_eq!(exit_and_code(Error::Other(s())), t(1, "error", false));
+        assert_eq!(exit_and_code(Error::Io(std::io::Error::other("x"))), t(1, "io", false));
         assert_eq!(classify(not_found(s()).into()).exit, 4);
         assert_eq!(classify(usage(s()).into()).exit, 2);
         assert_eq!(classify(cancelled(s()).into()).exit, 1);

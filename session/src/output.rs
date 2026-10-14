@@ -29,8 +29,10 @@ use std::io::{IsTerminal, Write};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// How a result is rendered.
+/// How a result is rendered. New modes may be added: match with a wildcard
+/// arm (or use [`Mode::is_machine`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Mode {
     /// Human-readable text (default on a terminal).
     Human,
@@ -432,6 +434,109 @@ impl CliError {
     }
 }
 
+// ------------------------------------------------------------ shared wording
+//
+// The same situation reads the same in every iCloud tool. A tool may append
+// its own extra to a hint (`format!("{SIGN_IN_HINT}, or …")`), but starts
+// from these.
+
+/// The hint for `sign_in_required` and `session_rejected`.
+pub const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (a person signs in in the window)";
+/// The hint for `find_my_auth_required`.
+pub const FIND_MY_AUTH_HINT: &str =
+    "run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)";
+/// The hint for `session_service` (icloud-sessiond unreachable).
+pub const SESSION_SERVICE_HINT: &str =
+    "check that icloud-sessiond is installed and the D-Bus session bus is running (`icloud-session status` tells)";
+/// The hint for `offline` and `network`.
+pub const NETWORK_HINT: &str = "check the network connection and try again";
+/// The hint for `keyring_unavailable`.
+pub const KEYRING_HINT: &str = "unlock the keyring (Secret Service, e.g. GNOME Keyring) and try again";
+/// The hint for an HTTP 5xx, an unreadable answer (`bad_response`) and other
+/// transient iCloud failures.
+pub const SERVICE_TROUBLE_HINT: &str = "iCloud is having trouble; try again later";
+
+/// "sign in to iCloud required", then `: {reason}` when the reason the
+/// account was signed out is known. [`crate::sign_in_required_message`]
+/// asks the daemon for the reason.
+pub fn sign_in_message(reason: Option<&str>) -> String {
+    let required = crate::Error::SignInRequired.to_string();
+    match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(reason) => format!("{required}: {reason}"),
+        None => required,
+    }
+}
+
+/// `sign_in_required`, exit 3, with why when the daemon says (one D-Bus
+/// round trip) and [`SIGN_IN_HINT`].
+pub fn sign_in_required() -> CliError {
+    CliError::new(
+        "sign_in_required",
+        crate::cli::EXIT_SIGN_IN,
+        crate::sign_in_required_message(),
+    )
+    .hint(SIGN_IN_HINT)
+}
+
+/// An HTTP failure with `status`, the shared way: a 401/421 (which the
+/// session library only returns when it persists although icloud-sessiond
+/// still holds the session) is `session_rejected`, exit 3, with
+/// [`SIGN_IN_HINT`]; a 5xx is `http`, exit 5, with [`SERVICE_TROUBLE_HINT`];
+/// any other status `http`, exit 1. `message` describes the failure.
+pub fn http_failure(status: u16, message: impl Into<String>) -> CliError {
+    use crate::cli::{EXIT_ERROR, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
+    let message = message.into();
+    match status {
+        401 | 421 => CliError::new(
+            "session_rejected",
+            EXIT_SIGN_IN,
+            format!("Apple refused the iCloud session although icloud-sessiond still holds it ({message})"),
+        )
+        .hint(SIGN_IN_HINT),
+        500..=599 => CliError::new("http", EXIT_UNAVAILABLE, message).hint(SERVICE_TROUBLE_HINT),
+        _ => CliError::new("http", EXIT_ERROR, message),
+    }
+}
+
+/// An [`icloud_session::Error`](crate::Error) as the contract's error, the
+/// same in every tool:
+///
+/// | variant | code | exit |
+/// |---|---|---|
+/// | `SignInRequired` | `sign_in_required` (message with the reason, see [`sign_in_required`]) | 3 |
+/// | `FindMyAuthRequired` | `find_my_auth_required` | 3 |
+/// | `Http` | see [`http_failure`] | 3 / 5 / 1 |
+/// | `Offline`, `Network` | `offline`, `network` | 5 |
+/// | `Service` | `session_service` | 5 |
+/// | `KeyringUnavailable` | `keyring_unavailable` | 5 |
+/// | `BadResponse` | `bad_response` | 5 |
+/// | `Io` | `io` | 1 |
+/// | `Daemon` and anything else | `error` | 1 |
+///
+/// Every exit-5 error carries a hint. A tool overrides what it knows better
+/// (icloud-session's `password_rejected`, say) before calling this.
+pub fn session_failure(e: &crate::Error) -> CliError {
+    use crate::Error;
+    use crate::cli::{EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_UNAVAILABLE};
+    let message = e.to_string();
+    match e {
+        Error::SignInRequired => sign_in_required(),
+        Error::FindMyAuthRequired => {
+            CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, message).hint(FIND_MY_AUTH_HINT)
+        }
+        Error::Http { status, .. } => http_failure(*status, message),
+        Error::Offline(_) => CliError::new("offline", EXIT_UNAVAILABLE, message).hint(NETWORK_HINT),
+        Error::Network(_) => CliError::new("network", EXIT_UNAVAILABLE, message).hint(NETWORK_HINT),
+        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, message).hint(SESSION_SERVICE_HINT),
+        Error::KeyringUnavailable(_) => {
+            CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, message).hint(KEYRING_HINT)
+        }
+        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, message).hint(SERVICE_TROUBLE_HINT),
+        Error::Io(_) => CliError::new("io", EXIT_ERROR, message),
+        _ => CliError::new("error", EXIT_ERROR, message),
+    }
+}
+
 /// JSON, pretty-printed, with the DEL and C1 controls escaped (terminals act
 /// on C1 codes, and strings can carry device names a sender chose).
 pub fn pretty<T: Serialize + ?Sized>(v: &T) -> String {
@@ -625,6 +730,73 @@ mod tests {
         // Output flags combine and repeat without a usage error.
         let t = T::try_parse_from(["t", "--json", "x", "--quiet", "--quiet", "--styled", "--count"]).unwrap();
         assert_eq!(Flags::from(t.out).resolve(false), Mode::Count);
+    }
+
+    #[test]
+    fn session_errors_map_the_same_in_every_tool() {
+        use crate::Error;
+        let http = |status| Error::Http {
+            status,
+            body: String::new(),
+        };
+        let cases = [
+            (http(401), "session_rejected", 3, Some(SIGN_IN_HINT)),
+            (http(421), "session_rejected", 3, Some(SIGN_IN_HINT)),
+            (http(503), "http", 5, Some(SERVICE_TROUBLE_HINT)),
+            (http(404), "http", 1, None),
+            (
+                Error::FindMyAuthRequired,
+                "find_my_auth_required",
+                3,
+                Some(FIND_MY_AUTH_HINT),
+            ),
+            (Error::Offline("x".into()), "offline", 5, Some(NETWORK_HINT)),
+            (Error::Network("x".into()), "network", 5, Some(NETWORK_HINT)),
+            (
+                Error::Service("x".into()),
+                "session_service",
+                5,
+                Some(SESSION_SERVICE_HINT),
+            ),
+            (
+                Error::KeyringUnavailable("x".into()),
+                "keyring_unavailable",
+                5,
+                Some(KEYRING_HINT),
+            ),
+            (
+                Error::BadResponse("x".into()),
+                "bad_response",
+                5,
+                Some(SERVICE_TROUBLE_HINT),
+            ),
+            (
+                Error::Daemon {
+                    name: "x".into(),
+                    message: "y".into(),
+                },
+                "error",
+                1,
+                None,
+            ),
+        ];
+        for (e, code, exit, hint) in cases {
+            let f = session_failure(&e);
+            assert_eq!(
+                (f.code.as_str(), f.exit, f.hint.as_deref()),
+                (code, exit, hint),
+                "{e:?}"
+            );
+            // Every exit-5 error tells what to do.
+            assert!(f.exit != 5 || f.hint.is_some(), "{e:?}");
+        }
+        assert!(http_failure(421, "HTTP 421").message.contains("HTTP 421"));
+        assert_eq!(sign_in_message(None), "sign in to iCloud required");
+        assert_eq!(sign_in_message(Some(" ")), "sign in to iCloud required");
+        assert_eq!(
+            sign_in_message(Some("session ended")),
+            "sign in to iCloud required: session ended"
+        );
     }
 
     #[test]

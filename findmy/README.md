@@ -135,7 +135,7 @@ Exit codes, the table every iCloud tool shares:
 | 0 | ok |
 | 1 | `unsupported`, `no_fix`, `cancelled`, `io`, `error`, `http` (4xx) |
 | 2 | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` |
-| 3 | `sign_in_required` (`icloud-session sign-in`), `find_my_auth_required` (Find My needs the Apple password after `icloud-session` could not re-authorize with a stored one: `icloud-session authorize-find-my`), `find_my_unavailable` (Find My is not on for this Apple ID), `http` 401/421 (iCloud keeps refusing the session) |
+| 3 | `sign_in_required` (`icloud-session sign-in`), `find_my_auth_required` (Find My needs the Apple password after `icloud-session` could not re-authorize with a stored one: `icloud-session authorize-find-my`), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` (iCloud keeps answering 401/421 although `icloud-sessiond` still holds the sign-in: sign in again) |
 | 4 | `not_found` (also a device that left the Apple ID while `locate` waited) |
 | 5 | `offline`, `network`, `session_service` (`icloud-sessiond` unreachable), `keyring_unavailable`, `bad_response`, `http` (5xx) |
 

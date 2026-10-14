@@ -450,6 +450,7 @@ fn server_errors_exit_5_and_other_http_errors_1() {
     let out = run_at(&answering(503), tmp.path(), &["devices"]);
     assert_eq!(code(&out), 5, "{}", stderr(&out));
     assert_eq!(envelope(&out.stdout)["error"]["code"], "http");
+    assert!(envelope(&out.stdout)["error"]["hint"].is_string());
     let out = run_at(&answering(404), tmp.path(), &["devices"]);
     assert_eq!(code(&out), 1, "{}", stderr(&out));
     assert_eq!(envelope(&out.stdout)["error"]["code"], "http");
@@ -486,6 +487,7 @@ fn a_bad_answer_exits_5() {
     let out = run_at(&base, tmp.path(), &["devices"]);
     assert_eq!(code(&out), 5, "{}", stdout(&out));
     assert_eq!(envelope(&out.stdout)["error"]["code"], "bad_response");
+    assert!(envelope(&out.stdout)["error"]["hint"].is_string());
 }
 
 #[test]
