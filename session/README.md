@@ -145,8 +145,12 @@ returns `FindMyAuthRequired`. One retry at most, so a 450 never loops.
 Errors: `SignInRequired`, `FindMyAuthRequired`, `Http { status, body }` (any other non-2xx),
 `Network`, `Offline` (the host's name did not resolve or nothing answered
 the connect within 10 s: no network, so a background sync can skip its
-run instead of trying every request), `Service` (the daemon could not be
-reached or failed), `Io`.
+run instead of trying every request), `BadResponse`, `KeyringUnavailable`,
+`Service` (the daemon could not be reached: no bus, nothing owns or can
+start its name, no reply), `Daemon { name, message }` (the daemon answered
+with a D-Bus error of its own, e.g. `ERROR_PASSWORD_REJECTED` from
+`SetPassword`, or a failure on its side), `Io`. The enum is
+`#[non_exhaustive]`: match it with a wildcard arm.
 
 Every call is blocking: ureq for HTTP, zbus's blocking API with its own
 small executor thread for D-Bus, no tokio. GTK apps run calls on
@@ -215,27 +219,51 @@ $ gdbus call --session -d io.github.ferdousbhai.ICloudSession -o /io/github/ferd
 
 ## Command line
 
-JSON on stdout, errors on stderr.
+Text on a terminal, the shared JSON envelope `{"ok":true,"data","summary"}`
+when piped (`--json`/`--styled`/`--quiet`/`--ids-only`/`--count` choose;
+`--quiet` prints only `data`, e.g. the bare status object).
 
 ```console
 $ icloud-session status
-{"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":false,"find_my_password_stored":false}
+Signed in as you@example.com (Your Name)
+Session expires 2026-10-26T07:33:20Z
+Find My: not authorized (icloud-session authorize-find-my)
+Password: not stored
+$ icloud-session status --quiet
+{
+  "signed_in": true,
+  "apple_id": "you@example.com",
+  "full_name": "Your Name",
+  "dsid": "1234567890",
+  "expires_at": 1793000000,
+  "signing_in": false,
+  "find_my_authorized": false,
+  "find_my_password_stored": false,
+  "sign_out_reason": null
+}
 $ icloud-session sign-in     # opens the window, waits for it to close, prints status
 $ icloud-session sign-in --no-wait   # opens it and prints status at once
 $ icloud-session authorize-find-my   # the same on Find My's password page (also --no-wait)
 $ icloud-session set-password        # store the Apple ID password (see below)
 $ icloud-session forget-password
-$ icloud-session validate    # {"dsid":…,"apple_id":…,"webservices":{…}}
+$ icloud-session validate --json     # {"ok":true,"data":{"dsid","apple_id","webservices":{…}},"summary":…}
+$ icloud-session validate --ids-only # the webservice keys, one per line
 $ icloud-session sign-out
+$ icloud-session skill [install|remove]  # the agent skill (alone: its Markdown)
 $ icloud-session <command> --help
 ```
 
-Exit codes: 0 ok, 1 error, 2 sign-in required (or sign-in not completed),
-4 Find My not authorized (or its authorization not completed; 3 in
-0.2.1 and older), 64 usage: the table every iCloud tool shares
-([docs/CLI.md](../docs/CLI.md)). With `--json` (accepted anywhere; the
-output is JSON anyway) an error is one line on stderr,
-`{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hint":…}}`.
+A failure is `{"ok":false,"error":{"code","message","hint"?}}` on stdout in
+a machine mode, `error: …` / `hint: …` on stderr in text mode. A sign-in or
+Find My authorization whose window closes without completing prints only
+that error (`sign_in_not_completed` / `find_my_auth_not_completed`).
+Exit codes, the table every iCloud tool shares ([docs/CLI.md](../docs/CLI.md)):
+0 ok; 1 error (a failure the daemon reported, `io`, HTTP 4xx); 2 usage;
+3 not signed in or credentials rejected (`sign_in_required`,
+`sign_in_not_completed`, `find_my_auth_required`,
+`find_my_auth_not_completed`, `password_rejected`, `session_rejected`);
+5 a service unavailable (`session_service`: the daemon unreachable;
+`keyring_unavailable`, `network`, `offline`, `bad_response`, HTTP 5xx).
 
 ## Files
 
