@@ -17,9 +17,11 @@ pub use transport::{LiveTransport, ReplayTransport, Transport};
 pub use types::*;
 
 /// Errors from the CloudKit layer. Exit-code mapping lives in
-/// `cmd::errors`: `SignInRequired` is exit 2; `ZoneFetchFailed` and
-/// `RequestFailed` are icloud-md's known `CloudKit*Error`s (exit 1);
-/// `UnexpectedResponse` is a plain `Error` in icloud-md (exit 70).
+/// `cmd::errors`: `SignInRequired` is exit 3; `ZoneFetchFailed` and
+/// `RequestFailed` are icloud-md's known `CloudKit*Error`s, exit 5 (iCloud
+/// failed the request; a `ZONE_NOT_FOUND` zone is exit 4); `Network`,
+/// `Offline`, `SessionService` and `KeyringUnavailable` exit 5;
+/// `UnexpectedResponse` is a plain `Error` in icloud-md (exit 1, `internal`).
 ///
 /// Not in the plan's sketch: `Conflict`. A changeTag conflict is not an error
 /// in icloud-md - it arrives per record inside an HTTP 200 and is returned as
@@ -50,7 +52,7 @@ pub enum CkError {
     UnexpectedResponse(String),
     /// `NotesUnavailableError`: the session's webservices have no
     /// `ckdatabasews`. `cmd::errors` should map it to its own
-    /// `Error::NotesUnavailable` (exit 1, with the hint).
+    /// `Error::NotesUnavailable` (exit 3, with the hint).
     #[error("Authenticated, but the account reported no ckdatabasews host - can't reach Notes.")]
     NotesUnavailable,
     #[error("network: {0}")]
@@ -60,6 +62,14 @@ pub enum CkError {
     /// at once rather than after a long timeout.
     #[error("offline: {0}")]
     Offline(String),
+    /// icloud-sessiond could not be reached (no session bus, the daemon not
+    /// installed) or failed: icloud-session's `Service`.
+    #[error("icloud-sessiond: {0}")]
+    SessionService(String),
+    /// The keyring holding the session's cookies would not give them
+    /// (no Secret Service, locked, prompt dismissed): not a sign-in.
+    #[error("the keyring holding the iCloud session cannot be read: {0}")]
+    KeyringUnavailable(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -75,6 +85,8 @@ impl From<icloud_session::Error> for CkError {
             icloud_session::Error::BadResponse(m) => CkError::UnexpectedResponse(m),
             icloud_session::Error::Offline(m) => CkError::Offline(m),
             icloud_session::Error::Io(e) => CkError::Io(e),
+            icloud_session::Error::Service(m) => CkError::SessionService(m),
+            icloud_session::Error::KeyringUnavailable(m) => CkError::KeyringUnavailable(m),
             other => CkError::Other(other.to_string()),
         }
     }

@@ -2,10 +2,24 @@
 //! error classes.
 //!
 //! Exit codes, shared with the other iCloud tools (icloud-session,
-//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md): 0 ok, 1 error
-//! (`IcloudNotesSyncError`, including anything unexpected), 2 usage, 3 sign-in
-//! required, 5 a service unavailable (no network / offline). `status`, `push
-//! --dry-run` and `diff` report their changes in the result and exit 0.
+//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md):
+//!
+//! - 0 ok. `status`, `push --dry-run` and `diff` report their changes in the
+//!   result and exit 0.
+//! - 1 error: anything not below (`internal`, `io`, `vault_busy`,
+//!   `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`,
+//!   `unsupported_vault_layout`, `corrupt_state_file`, …).
+//! - 2 usage: `usage`, `ambiguous_tracked_file`, `already_cloned_directory`.
+//! - 3 not signed in / not set up for this account: `sign_in_required`,
+//!   `not_cloned_directory`, `unbound_account`, `account_mismatch`,
+//!   `requested_account_mismatch`, `notes_unavailable`. The JSON `code`
+//!   tells them apart; only `sign_in_required` is fixed by signing in.
+//! - 4 not found: `untracked_file`, `unknown_version_snapshot`, a
+//!   `cloudkit_zone_fetch_failed` whose zone is `ZONE_NOT_FOUND`.
+//! - 5 a service unavailable: `network`, `offline`, `session_service`
+//!   (icloud-sessiond unreachable), `keyring_unavailable`, and iCloud
+//!   failing a request (`cloudkit_request_failed`,
+//!   `cloudkit_zone_fetch_failed`).
 //!
 //! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
 //! `name()` is the error's class name; `code()` is the
@@ -14,7 +28,9 @@
 use crate::cloudkit::CkError;
 use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
 
-pub use icloud_session::cli::{EXIT_ERROR, EXIT_INTERNAL, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+pub use icloud_session::cli::{
+    EXIT_ERROR, EXIT_INTERNAL, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -62,7 +78,7 @@ pub enum Error {
     UnknownVersionSnapshot { id: String, file: String },
     #[error("Can't complete this operation: {0}.")]
     VersionContentUnavailable(String),
-    /// Sign-in required: exit 2.
+    /// Sign-in required: exit 3.
     #[error("Not signed in to iCloud.")]
     SignInRequired,
     /// The vault's lock is held (by the Notes window when `app`).
@@ -75,7 +91,7 @@ pub enum Error {
     CloudKit(CkError),
     #[error("{0}")]
     Usage(String),
-    /// Anything else (a plain `Error` in icloud-md): exit 70.
+    /// Anything else (a plain `Error` in icloud-md): exit 1.
     #[error("{0}")]
     Internal(String),
     #[error(transparent)]
@@ -95,13 +111,35 @@ impl From<CkError> for Error {
 impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
-            Error::SignInRequired => EXIT_SIGN_IN,
-            Error::Usage(_) => EXIT_USAGE,
-            Error::Internal(_) | Error::Io(_) => EXIT_INTERNAL,
-            Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => EXIT_UNAVAILABLE,
-            Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => EXIT_ERROR,
-            Error::CloudKit(_) => EXIT_INTERNAL,
-            _ => EXIT_ERROR,
+            Error::SignInRequired
+            | Error::NotClonedDirectory { .. }
+            | Error::UnboundAccount { .. }
+            | Error::AccountMismatch { .. }
+            | Error::RequestedAccountMismatch { .. }
+            | Error::NotesUnavailable => EXIT_SIGN_IN,
+            Error::Usage(_) | Error::AmbiguousTrackedFile { .. } | Error::AlreadyClonedDirectory { .. } => EXIT_USAGE,
+            Error::UntrackedFile { .. } | Error::UnknownVersionSnapshot { .. } => EXIT_NOT_FOUND,
+            Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. })
+                if server_error_code == "ZONE_NOT_FOUND" =>
+            {
+                EXIT_NOT_FOUND
+            }
+            Error::CloudKit(
+                CkError::Network(_)
+                | CkError::Offline(_)
+                | CkError::SessionService(_)
+                | CkError::KeyringUnavailable(_)
+                | CkError::ZoneFetchFailed { .. }
+                | CkError::RequestFailed(_),
+            ) => EXIT_UNAVAILABLE,
+            Error::Internal(_) | Error::Io(_) | Error::CloudKit(_) => EXIT_INTERNAL,
+            Error::UnsupportedVaultLayout { .. }
+            | Error::VaultFromNewerTool { .. }
+            | Error::VaultNeedsUpdate { .. }
+            | Error::CorruptStateFile(_)
+            | Error::VersionContentUnavailable(_)
+            | Error::VaultBusy { .. }
+            | Error::VaultLock { .. } => EXIT_ERROR,
         }
     }
 
@@ -129,6 +167,8 @@ impl Error {
             Error::CloudKit(CkError::RequestFailed(_)) => "CloudKitRequestFailedError",
             Error::CloudKit(CkError::Network(_)) => "NetworkError",
             Error::CloudKit(CkError::Offline(_)) => "OfflineError",
+            Error::CloudKit(CkError::SessionService(_)) => "SessionServiceError",
+            Error::CloudKit(CkError::KeyringUnavailable(_)) => "KeyringUnavailableError",
             Error::CloudKit(_) | Error::Internal(_) | Error::Io(_) => "InternalError",
             Error::Usage(_) => "UsageError",
         }
@@ -228,6 +268,12 @@ impl Error {
             ),
             Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => {
                 Some("Couldn't reach iCloud - check the network connection, then try again.".into())
+            }
+            Error::CloudKit(CkError::SessionService(_)) => Some(
+                "Check that icloud-sessiond is installed and the D-Bus session bus is running, then try again.".into(),
+            ),
+            Error::CloudKit(CkError::KeyringUnavailable(_)) => {
+                Some("Unlock the keyring (Secret Service) that holds the iCloud session, then try again.".into())
             }
             Error::CloudKit(_) | Error::Usage(_) | Error::Internal(_) | Error::Io(_) => None,
         }

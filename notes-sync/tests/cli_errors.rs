@@ -11,53 +11,229 @@ fn not_cloned() -> Error {
     }
 }
 
+/// Every known error: its class name, code, whether it has a hint, and its
+/// exit code (the shared table: 1 error, 2 usage, 3 not signed in / not set
+/// up, 4 not found, 5 a service unavailable).
 #[test]
-fn every_known_error_has_its_class_name_a_hint_and_exit_1() {
-    let errors = vec![
-        (not_cloned(), "NotClonedDirectoryError"),
-        (Error::NotesUnavailable, "NotesUnavailableError"),
+fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
+    let dir = || "/some/dir".to_string();
+    let zone_failed = |code: &str| {
+        Error::CloudKit(CkError::ZoneFetchFailed {
+            server_error_code: code.into(),
+            reason: "r".into(),
+        })
+    };
+    let errors: Vec<(Error, &str, &str, bool, u8)> = vec![
+        (not_cloned(), "NotClonedDirectoryError", "not_cloned_directory", true, 3),
         (
-            Error::CorruptStateFile("state.json has a malformed replicaId".into()),
-            "CorruptStateFileError",
+            Error::NotesUnavailable,
+            "NotesUnavailableError",
+            "notes_unavailable",
+            true,
+            3,
         ),
+        (
+            Error::SignInRequired,
+            "SignInRequiredError",
+            "sign_in_required",
+            true,
+            3,
+        ),
+        (
+            Error::UnboundAccount { target_dir: dir() },
+            "UnboundAccountError",
+            "unbound_account",
+            true,
+            3,
+        ),
+        (
+            Error::AccountMismatch {
+                target_dir: dir(),
+                expected: "me@example.com".into(),
+                actual: "someone-else@example.com".into(),
+            },
+            "AccountMismatchError",
+            "account_mismatch",
+            true,
+            3,
+        ),
+        (
+            Error::RequestedAccountMismatch {
+                requested: "me@example.com".into(),
+                actual: "someone-else@example.com".into(),
+            },
+            "RequestedAccountMismatchError",
+            "requested_account_mismatch",
+            false,
+            3,
+        ),
+        (
+            Error::UntrackedFile {
+                file: "missing-note.md".into(),
+                target_dir: dir(),
+            },
+            "UntrackedFileError",
+            "untracked_file",
+            true,
+            4,
+        ),
+        (
+            Error::UnknownVersionSnapshot {
+                id: "abc".into(),
+                file: "a.md".into(),
+            },
+            "UnknownVersionSnapshotError",
+            "unknown_version_snapshot",
+            true,
+            4,
+        ),
+        (
+            zone_failed("ZONE_NOT_FOUND"),
+            "CloudKitZoneFetchFailedError",
+            "cloudkit_zone_fetch_failed",
+            true,
+            4,
+        ),
+        (
+            zone_failed("INTERNAL_ERROR"),
+            "CloudKitZoneFetchFailedError",
+            "cloudkit_zone_fetch_failed",
+            true,
+            5,
+        ),
+        (
+            Error::AmbiguousTrackedFile {
+                base_name: "a.md".into(),
+                candidates: vec!["x/a.md".into(), "y/a.md".into()],
+            },
+            "AmbiguousTrackedFileError",
+            "ambiguous_tracked_file",
+            true,
+            2,
+        ),
+        (
+            Error::AlreadyClonedDirectory { target_dir: dir() },
+            "AlreadyClonedDirectoryError",
+            "already_cloned_directory",
+            true,
+            2,
+        ),
+        (Error::Usage("bad".into()), "UsageError", "usage", false, 2),
         (
             Error::CloudKit(CkError::RequestFailed(
                 "records/lookup request failed (private db): HTTP 500".into(),
             )),
             "CloudKitRequestFailedError",
+            "cloudkit_request_failed",
+            true,
+            5,
         ),
         (
-            Error::UntrackedFile {
-                file: "missing-note.md".into(),
-                target_dir: "/some/dir".into(),
-            },
-            "UntrackedFileError",
+            Error::CloudKit(CkError::Offline("no route".into())),
+            "OfflineError",
+            "offline",
+            true,
+            5,
         ),
         (
-            Error::AlreadyClonedDirectory {
-                target_dir: "/some/dir".into(),
-            },
-            "AlreadyClonedDirectoryError",
+            Error::CloudKit(CkError::Network("reset".into())),
+            "NetworkError",
+            "network",
+            true,
+            5,
         ),
         (
-            Error::UnboundAccount {
-                target_dir: "/some/dir".into(),
-            },
-            "UnboundAccountError",
+            Error::from(CkError::from(icloud_session::Error::Service("no bus".into()))),
+            "SessionServiceError",
+            "session_service",
+            true,
+            5,
         ),
         (
-            Error::AccountMismatch {
-                target_dir: "/some/dir".into(),
-                expected: "me@example.com".into(),
-                actual: "someone-else@example.com".into(),
-            },
-            "AccountMismatchError",
+            Error::from(CkError::from(icloud_session::Error::KeyringUnavailable(
+                "locked".into(),
+            ))),
+            "KeyringUnavailableError",
+            "keyring_unavailable",
+            true,
+            5,
         ),
+        (
+            Error::CorruptStateFile("state.json has a malformed replicaId".into()),
+            "CorruptStateFileError",
+            "corrupt_state_file",
+            true,
+            1,
+        ),
+        (
+            Error::UnsupportedVaultLayout { target_dir: dir() },
+            "UnsupportedVaultLayoutError",
+            "unsupported_vault_layout",
+            true,
+            1,
+        ),
+        (
+            Error::VaultFromNewerTool {
+                target_dir: dir(),
+                vault_version: 9,
+                supported_version: 4,
+            },
+            "VaultFromNewerToolError",
+            "vault_from_newer_tool",
+            true,
+            1,
+        ),
+        (
+            Error::VaultNeedsUpdate {
+                target_dir: dir(),
+                vault_version: 2,
+            },
+            "VaultNeedsUpdateError",
+            "vault_needs_update",
+            true,
+            1,
+        ),
+        (
+            Error::VersionContentUnavailable("x".into()),
+            "VersionContentUnavailableError",
+            "version_content_unavailable",
+            true,
+            1,
+        ),
+        (
+            Error::VaultBusy {
+                holder: "Notes".into(),
+                app: true,
+            },
+            "VaultBusyError",
+            "vault_busy",
+            true,
+            1,
+        ),
+        (
+            Error::VaultLock {
+                path: "/l".into(),
+                reason: "r".into(),
+            },
+            "VaultLockError",
+            "vault_lock",
+            false,
+            1,
+        ),
+        (
+            Error::CloudKit(CkError::UnexpectedResponse("odd".into())),
+            "InternalError",
+            "internal",
+            false,
+            1,
+        ),
+        (Error::Internal("bug".into()), "InternalError", "internal", false, 1),
     ];
-    for (error, name) in errors {
+    for (error, name, code, has_hint, exit) in errors {
         assert_eq!(error.name(), name);
-        assert!(error.hint().is_some(), "{name} should have a hint");
-        assert_eq!(error.exit_code(), 1, "{name}");
+        assert_eq!(error.code(), code, "{name}");
+        assert_eq!(error.hint().is_some(), has_hint, "{name} hint");
+        assert_eq!(error.exit_code(), exit, "{name} ({code})");
     }
 }
 

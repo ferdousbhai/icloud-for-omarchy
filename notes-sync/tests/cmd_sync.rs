@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use icloud_notes_sync::cloudkit::transport::ReplayTransport;
 use icloud_notes_sync::cloudkit::{CkError, Database};
 use icloud_notes_sync::cmd::remote::{FnConnector, Remote};
-use icloud_notes_sync::cmd::sync::run_sync_with;
+use icloud_notes_sync::cmd::sync::{SyncOutcome, run_sync_with};
 use icloud_notes_sync::cmd::{Error, NoProgress};
 use icloud_notes_sync::vault::state::Account;
 
@@ -81,7 +81,40 @@ fn no_network_on_push_skips_the_pull() {
 /// connect is tried again rather than remembered.
 #[test]
 fn another_push_failure_still_pulls() {
-    assert_eq!(sync_failing_with(|| Error::NotesUnavailable), (1, true, 2));
+    assert_eq!(sync_failing_with(|| Error::Internal("boom".into())), (1, true, 2));
+    assert_eq!(sync_failing_with(|| Error::NotesUnavailable), (3, true, 2));
+    assert_eq!(
+        sync_failing_with(|| Error::CloudKit(CkError::SessionService("no bus".into()))),
+        (5, true, 2)
+    );
+}
+
+/// The run's exit code: 3 if either half exited 3, else the higher half's.
+#[test]
+fn the_exit_code_is_3_above_all_then_the_higher_half() {
+    let outcome = |push: Error, pull: Option<Error>| {
+        SyncOutcome {
+            push: Err(push),
+            pull: pull.map(Err),
+        }
+        .exit_code()
+    };
+    let offline = || Error::CloudKit(CkError::Offline("no route".into()));
+    let untracked = || Error::UntrackedFile {
+        file: "a.md".into(),
+        target_dir: "/v".into(),
+    };
+    let mismatch = || Error::AccountMismatch {
+        target_dir: "/v".into(),
+        expected: "a@example.com".into(),
+        actual: "b@example.com".into(),
+    };
+    assert_eq!(outcome(offline(), Some(mismatch())), 3);
+    assert_eq!(outcome(mismatch(), Some(offline())), 3);
+    assert_eq!(outcome(Error::Internal("x".into()), Some(untracked())), 4);
+    assert_eq!(outcome(untracked(), Some(offline())), 5);
+    assert_eq!(outcome(Error::Usage("x".into()), Some(Error::Internal("x".into()))), 2);
+    assert_eq!(outcome(offline(), None), 5);
 }
 
 #[test]

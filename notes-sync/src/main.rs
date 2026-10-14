@@ -31,8 +31,11 @@ use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 #[command(
     name = "icloud-notes-sync",
     about = "Sync iCloud Notes with a folder of Markdown files",
-    after_help = "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in), \
-                  5 a service unavailable (no network / offline). status, push --dry-run and diff \
+    after_help = "Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory), \
+                  3 not signed in or not set up (sign_in_required: icloud-session sign-in; not_cloned_directory, \
+                  account_mismatch, ...: the JSON code tells them apart), 4 not found (untracked_file, \
+                  unknown_version_snapshot), 5 a service unavailable (offline, network, session_service, \
+                  keyring_unavailable, iCloud failing a request). status, push --dry-run and diff \
                   report their changes in the result and exit 0.\n\
                   With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
                   {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}.\n\
@@ -93,7 +96,8 @@ enum Command {
                       answer or null}, even when a half failed; HALF is {\"ok\", \"exit_code\", \"result\" (push's or \
                       pull's own JSON), \"lines\" (its human report)} or {\"ok\", \"exit_code\", \"error\" (as on \
                       stderr)}. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
-                      then). Exit code: the worse half's, 2 (sign-in required) above all."
+                      then). Exit code: 3 if either half exited 3 (sign-in required, or the vault not set up for this \
+                      account), else the higher of the two halves' codes (5 unavailable, 4 not found, 2 usage, 1 error)."
     )]
     Sync { directory: Option<PathBuf> },
     /// Preview exactly what the next push will do (requires signing in)

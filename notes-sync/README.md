@@ -41,13 +41,23 @@ $ icloud-notes-sync restore <file>
 $ icloud-notes-sync --json vault-info
 ```
 
-Exit codes: 0 ok, 1 error, 2 iCloud sign-in required, 3 `status`/`push
---dry-run` has entries or `diff` found differences, 64 usage, 70 internal
-error, the table the other iCloud tools share ([docs/CLI.md](../docs/CLI.md)).
+Exit codes, the table the other iCloud tools share
+([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells errors with the same
+exit apart:
+
+| exit | meaning | codes |
+|---|---|---|
+| 0 | ok (`status`, `push --dry-run` and `diff` report their changes in the result) | |
+| 1 | error | `internal`, `io`, `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable` |
+| 2 | usage | `usage`, `ambiguous_tracked_file`, `already_cloned_directory` |
+| 3 | not signed in, or the vault isn't set up for this account | `sign_in_required` (sign in with icloud-session), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` |
+| 4 | not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a `ZONE_NOT_FOUND` zone |
+| 5 | a service unavailable | `offline`, `network`, `session_service` (icloud-sessiond unreachable), `keyring_unavailable`, `cloudkit_request_failed`, `cloudkit_zone_fetch_failed` |
+
 With `--json`, stdout carries only the JSON result, and an error is one line
-on stderr: `{"error":{"code":"sign_in_required","message":…,"exit_code":2,"hint":…}}`
-(`code` is the error's class in snake case: `untracked_file`,
-`not_cloned_directory`, `vault_needs_update`, `usage`, `internal`, …).
+on stderr: `{"ok":false,"error":{"code":"sign_in_required","message":…,"hint":…}}`
+(`code` is the error's class in snake case; `hint`, when present, says how
+to fix it).
 
 `sync` is for the Notes app: push, then pull, in one run
 over one connection (one icloud-sessiond `Session()` call, one TLS
@@ -56,9 +66,9 @@ unless the push found the sign-in gone or iCloud out of reach. With
 `--json` stdout is `{"push": HALF, "pull": HALF|null, "vault_info": …}`
 even when a half failed, HALF being `{ok, exit_code, result, lines}` (the
 command's own JSON and its human report) or `{ok, exit_code, error}`; it
-exits with the worse half's code, 2 (sign-in) above all. No network is the
-error `offline` (nothing reachable at all: icloud-session says so at once)
-or `network`, exit 1.
+exits 3 if either half exited 3, else with the higher of the two halves'
+codes. No network is the error `offline` (nothing reachable at all:
+icloud-session says so at once) or `network`, exit 5.
 
 clone, pull, push, sync and restore take the vault's lock, the one the Notes app
 holds while it is open (`--wait SECS` to wait for it; busy is the error

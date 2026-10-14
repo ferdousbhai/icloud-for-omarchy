@@ -53,9 +53,9 @@ fn status_goes_to_stdout_for_humans_and_stderr_in_json_mode() {
 // cover the line itself); here, what notes-sync hands it.
 
 #[test]
-fn known_error_has_its_message_hint_code_and_exit_1() {
+fn known_error_has_its_message_hint_code_and_exit_4() {
     let error = known_error();
-    assert_eq!(error.exit_code(), 1);
+    assert_eq!(error.exit_code(), 4);
     assert_eq!(error.code(), "untracked_file");
     assert_eq!(
         error.to_string(),
@@ -104,7 +104,7 @@ fn the_json_error_line_is_the_shared_one() {
         .env("XDG_RUNTIME_DIR", tmp.path())
         .output()
         .unwrap();
-    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(o.status.code(), Some(3));
     let dir = tmp.path().display();
     assert_eq!(
         String::from_utf8_lossy(&o.stderr),

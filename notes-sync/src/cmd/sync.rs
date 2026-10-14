@@ -24,8 +24,11 @@ pub struct SyncOutcome {
 }
 
 impl SyncOutcome {
-    /// The run's exit code: the worse of the two halves, a sign-in required
-    /// (3) above anything else.
+    /// The run's exit code: 3 (sign-in required, or the vault not set up
+    /// for this account) if either half exited 3, since nothing else can
+    /// work until that is fixed; otherwise the higher of the two halves'
+    /// codes, so 5 (unavailable) > 4 (not found) > 2 (usage) > 1 (error) >
+    /// 0: a specific reason beats the generic error.
     pub fn exit_code(&self) -> u8 {
         let push = half_exit_code(&self.push);
         let pull = self.pull.as_ref().map_or(EXIT_OK, half_exit_code);

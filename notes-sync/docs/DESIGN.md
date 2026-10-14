@@ -100,7 +100,9 @@ keeps its conflict backups in `stateDir`.
 The pull runs whatever the push did, except after a sign-in required or a
 network error. Its `--json` holds both results plus vault-info's answer.
 icloud-session's `Offline` and `Network` errors are the errors `offline` and
-`network` (exit 1, with a retry hint) rather than `internal` (70).
+`network`, its `Service` and `KeyringUnavailable` the errors `session_service`
+and `keyring_unavailable` (all exit 5, with a hint) rather than `internal`
+(exit 1). The run exits 3 if either half did, else the higher half's code.
 
 With `--json`, progress goes to stderr as `icloud-notes:progress:...` lines
 (`fetch:N`, `process-start:N`, `process:I/N`, `process-done`). Engines
