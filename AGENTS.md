@@ -39,7 +39,7 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
 ## Commands
 
 ```sh
-bin/test                      # rustfmt check, clippy -D warnings, all Rust tests, notes/bin/test, installer + packaging tests
+bin/check                      # rustfmt check, clippy -D warnings, all Rust tests, notes/bin/test, installer + packaging tests
 bin/build [icloud-photos ...] # release binaries into target/release/, Notes into notes/build/
 cargo test -p icloud-findmy   # one crate
 cargo fmt --all               # max_width = 120 (rustfmt.toml)
@@ -47,7 +47,7 @@ bin/build-packages "$(uname -m)" # native Arch packages; no Docker
 ```
 
 Build deps: rust, sqlite, gtk4, libadwaita, libshumate (findmy), webkitgtk-6.0 (sign-in window;
-without it `bin/test` tests sessiond with `--no-default-features`), qt6-base, qt6-declarative,
+without it `bin/check` tests sessiond with `--no-default-features`), qt6-base, qt6-declarative,
 make. GitHub's Ubuntu runners use `bin/arch-run` with `arch-install-scripts` to build
 in a disposable native Arch chroot; local package builds run directly as a regular
 Arch user. Release installer checks also use fresh chroots, never the host.

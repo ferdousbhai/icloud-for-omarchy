@@ -162,7 +162,7 @@ curl -s http://127.0.0.1:8765/fake/actions
 cargo test -p icloud-findmy
 ```
 
-runs the full Rust test suite (the root `bin/test` runs every crate's). The core
+runs the full Rust test suite (the root `bin/check` runs every crate's). The core
 (`findme.rs`, `history.rs`, `models.rs`) and the command line (`cli.rs`)
 have no GTK dependency, so `cargo test --no-default-features` tests them
 on a machine without the GTK stack (only `icloud-findmy`, the command

@@ -207,7 +207,7 @@ file (`bin/dev-uninstall` undoes it).
 
 ```bash
 bin/build                       # every package; or name some: bin/build icloud-photos
-bin/test                        # rustfmt, clippy, all Rust tests, notes/bin/test, the installer checks
+bin/check                        # rustfmt, clippy, all Rust tests, notes/bin/test, the installer checks
 tests/install_test.sh           # the installers alone: stubbed pacman, scratch /etc in a user namespace
 cargo test -p icloud-findmy     # one crate
 notes/bin/test                  # the Qt app's tests alone (they run on a private D-Bus)
@@ -235,7 +235,7 @@ older per-app tags remain historical. Development packages add
 `.r<count>.<commit>` to the suite version. The first suite release must be
 newer than the current 0.8.0 baseline so existing installations upgrade.
 
-`bin/release` updates that one version and the lockfile, runs `bin/test`,
+`bin/release` updates that one version and the lockfile, runs `bin/check`,
 commits and tags, then dispatches native x86_64 and ARM CI at that commit.
 One split `packaging/PKGBUILD` builds and tests the workspace once and emits
 all six independently installable packages. Before signing,

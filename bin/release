@@ -16,7 +16,7 @@ export GPGKEY=$fingerprint
 
 sed -i "s/^version = .*/version = \"$version\"/" Cargo.toml
 cargo update --workspace --offline
-bin/test
+bin/check
 git commit -q -a -m "Release $tag"
 git tag -a "$tag" -m "iCloud suite $version"
 source_commit=$(git rev-parse HEAD)

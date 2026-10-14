@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Run the maintained tests: rustfmt, clippy and the Rust workspace suite, the Qt
+# Every check a change must pass, run on this machine. .githooks/pre-push runs it before a push
+# (NO_CHECK=1 skips it); enable the hook once per clone with `git config core.hooksPath .githooks`.
+# Runs rustfmt, clippy and the Rust workspace suite, the Qt
 # app's tests (notes/bin/test), then install.sh's shared add_signed_repo
 # hash and install.sh and the per-app installers against stubbed pacman
 # (tests/install_test.sh). The notes-sync recorded scenarios and golden corpora
 # run with the rest (see notes-sync/tests/differential/README.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export PATH="$HOME/.cargo/bin:$PATH"
 
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -25,3 +28,6 @@ bash -n install.sh
 tests/install_test.sh
 
 python3 tests/packaging_test.py
+bash -n .githooks/pre-push
+
+printf '\nAll checks passed.\n'

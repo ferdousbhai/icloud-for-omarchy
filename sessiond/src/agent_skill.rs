@@ -4,8 +4,7 @@
 //! gets a `~/.claude/skills/<name>` link to it. Only directories this CLI
 //! created (marked by `.managed-by-<cli>`) are ever written, refreshed or
 //! removed; a symlink or a hand-authored skill at that path is left alone.
-//! The same module is copied into each of our products' CLIs; keep the code in sync (each
-//! repository's rustfmt formats its own copy).
+//! The same file is copied into each of our products' CLIs; keep the copies identical.
 
 use std::fs;
 use std::io;

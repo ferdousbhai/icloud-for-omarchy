@@ -1,0 +1,24 @@
+#!/bin/bash
+# Enable once per clone with
+#   git config core.hooksPath .githooks
+#
+# Pushing a branch runs bin/check first and stops the push if it fails; set NO_CHECK=1 to push
+# without it. Every product repository uses this same hook.
+top="$(git rev-parse --show-toplevel)"
+branches=0
+while read -r _ local_sha remote_ref _; do
+  [[ $local_sha =~ ^0+$ ]] && continue # a deleted ref
+  [[ $remote_ref == refs/heads/* ]] && branches=1
+done
+
+if ((branches)) && [[ ${NO_CHECK:-} != 1 ]]; then
+  # The checks run on the working tree, which is what's being pushed unless it has changes.
+  [[ -z $(git -C "$top" status --porcelain --untracked-files=no) ]] \
+    || echo "note: the working tree has uncommitted changes; bin/check sees them, the push doesn't" >&2
+  # From a linked worktree git hands hooks GIT_DIR (and friends); the checks' own fixture
+  # repositories must not inherit them, or their commits land in this one.
+  # shellcheck disable=SC2046
+  (unset $(git rev-parse --local-env-vars); "$top/bin/check" >&2) \
+    || { echo "bin/check failed; not pushing (NO_CHECK=1 skips it)" >&2; exit 1; }
+fi
+exit 0

@@ -99,8 +99,8 @@ class Packaging(unittest.TestCase):
         (root / "bin").mkdir()
         for name in ("release", "collect-packages", "make-installers"):
             shutil.copy2(ROOT / "bin" / name, root / "bin" / name)
-        (root / "bin/test").write_text("#!/bin/bash\nexit 0\n")
-        (root / "bin/test").chmod(0o755)
+        (root / "bin/check").write_text("#!/bin/bash\nexit 0\n")
+        (root / "bin/check").chmod(0o755)
         (root / "install.sh").write_text("#!/bin/bash\nSIGNING_KEY_FINGERPRINT=test-key\nDEFAULT_PACKAGES=(icloud-notes)\n")
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "Release scripts"], cwd=root, check=True)

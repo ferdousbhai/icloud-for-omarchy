@@ -217,7 +217,7 @@ Layout:
 
 `cargo test -p icloud-photos` runs the test suite (fixtures in `tests/fixtures/`, plus
 an end-to-end run against the fake server, and `tests/cli.rs`, which runs
-the built binary against it for every command); the root `bin/test` runs
+the built binary against it for every command); the root `bin/check` runs
 it with clippy and every other crate's tests.
 In debug builds, `ICLOUD_PHOTOS_SCREENSHOT=out.png` (optionally with
 `ICLOUD_PHOTOS_SCREENSHOT_VIEW=viewer` or `prefs`) renders the window to a
