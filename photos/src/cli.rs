@@ -6,7 +6,7 @@
 //! Output is plain text, or JSON on stdout with `--json`. Exit codes, as in
 //! every iCloud tool (docs/CLI.md): 0 ok, 1 error, 2 usage, 3 sign-in
 //! required, 4 not found. With `--json` an error is one JSON line on stderr:
-//! `{"error":{"code","message","exit_code"}}`.
+//! `{"ok":false,"error":{"code","message","hint"?}}`.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -33,7 +33,7 @@ const TOOL: &str = "icloud-photos";
 
 const AFTER_HELP: &str = "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in), 4 not found.\n\
 With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
-{\"error\":{\"code\",\"message\",\"exit_code\"}}.\n\
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}.\n\
 ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple.";
 
 #[derive(Parser)]

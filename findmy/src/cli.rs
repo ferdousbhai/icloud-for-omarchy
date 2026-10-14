@@ -7,7 +7,7 @@
 //! My needs the Apple password (after `icloud-session`'s own re-authorization
 //! with a stored password failed; the JSON `code` tells them apart),
 //! 4 not found. With `--json` an error is one JSON line on stderr,
-//! `{"error":{"code","message","exit_code"}}`.
+//! `{"ok":false,"error":{"code","message","hint"?}}`.
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -34,7 +34,7 @@ NAME|ID matches a device name case-insensitively (a unique part of it is
 enough); an ambiguous NAME lists the matches, use the ID then.
 
 With --json, stdout is only the JSON result and an error is one JSON line on
-stderr: {\"error\":{\"code\",\"message\",\"exit_code\"}}; codes: usage,
+stderr: {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}; codes: usage,
 sign_in_required, find_my_auth_required, not_found, ambiguous, cancelled,
 unsupported, no_fix, error.
 

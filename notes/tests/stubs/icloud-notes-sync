@@ -26,17 +26,17 @@ elif [ "$1" = "--json" ] && [ "$2" = "sync" ]; then
   code=0
   half() { # half VERB: prints that half's JSON
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
-      echo '{"error":{"code":"offline","message":"offline: dns error: no network","exit_code":5}}' >&2
-      printf '{"ok":false,"exit_code":5,"error":{"code":"offline","message":"offline: dns error: no network","exit_code":5}}'
+      echo '{"ok":false,"error":{"code":"offline","message":"offline: dns error: no network"}}' >&2
+      printf '{"ok":false,"exit_code":5,"error":{"code":"offline","message":"offline: dns error: no network"}}'
       return
     fi
     if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
       if [ "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" = marker ]; then
         echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
-        printf '{"ok":false,"exit_code":1,"error":{"code":"internal","message":"Run \\"icloud-md reauthenticate\\" to sign in interactively.","exit_code":1}}'
+        printf '{"ok":false,"exit_code":1,"error":{"code":"internal","message":"Run \\"icloud-md reauthenticate\\" to sign in interactively."}}'
       else
-        echo '{"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","exit_code":3}}' >&2
-        printf '{"ok":false,"exit_code":3,"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","exit_code":3}}'
+        echo '{"ok":false,"error":{"code":"sign_in_required","message":"Not signed in to iCloud."}}' >&2
+        printf '{"ok":false,"exit_code":3,"error":{"code":"sign_in_required","message":"Not signed in to iCloud."}}'
       fi
       return
     fi

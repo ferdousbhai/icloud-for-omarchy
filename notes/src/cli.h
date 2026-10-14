@@ -9,7 +9,7 @@
 // or run icloud-notes-sync, as the window and the background sync do.
 //
 // Output is plain text, or JSON on stdout with --json; an error is then
-// one JSON line on stderr, {"error":{"code","message","exit_code","hint"}}.
+// one JSON line on stderr, {"ok":false,"error":{"code","message","hint"?}}.
 // Exit codes, as in every iCloud tool: 0 ok, 1 error, 2 usage, 3 sign-in
 // required. `push --dry-run` and `diff` report their changes and exit 0.
 

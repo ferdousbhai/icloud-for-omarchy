@@ -72,7 +72,7 @@ struct Spec {
 
 const char *const kFooter =
     "Global options: --json (JSON on stdout; an error is one JSON line on stderr,\n"
-    "{\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}), --vault DIR (a vault other than\n"
+    "{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}), --vault DIR (a vault other than\n"
     "~/Documents/Notes), --wait SECS (how long to wait for the vault's lock; 30 when\n"
     "a background sync holds it, none while the Notes window holds it).\n"
     "Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (icloud-session sign-in). push --dry-run\n"
@@ -360,12 +360,12 @@ int report(const Failure &f, bool json)
 {
     QTextStream err(stderr);
     if (json) {
-        QJsonObject error{ { QStringLiteral("code"), f.code },
-                           { QStringLiteral("message"), f.message },
-                           { QStringLiteral("exit_code"), f.exit } };
+        QJsonObject error{ { QStringLiteral("code"), f.code }, { QStringLiteral("message"), f.message } };
         if (!f.hint.isEmpty())
             error.insert(QStringLiteral("hint"), f.hint);
-        err << QJsonDocument(QJsonObject{ { QStringLiteral("error"), error } }).toJson(QJsonDocument::Compact) << '\n';
+        err << QJsonDocument(QJsonObject{ { QStringLiteral("ok"), false }, { QStringLiteral("error"), error } })
+                   .toJson(QJsonDocument::Compact)
+            << '\n';
     } else {
         err << "icloud-notes: " << f.message << '\n';
         if (!f.hint.isEmpty())

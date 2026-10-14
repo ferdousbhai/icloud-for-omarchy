@@ -343,8 +343,8 @@ fn usage_errors_exit_2() {
     let out = env.run(&["--json", "locate"]);
     assert_eq!(code(&out), 2);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["ok"], false);
     assert_eq!(err["error"]["code"], "usage");
-    assert_eq!(err["error"]["exit_code"], 2);
     let listed: Value = serde_json::from_slice(&env.run(&["--json", "devices"]).stdout).unwrap();
     assert!(listed.as_array().is_some_and(|a| !a.is_empty()));
 }
@@ -371,8 +371,8 @@ fn find_my_password_needed_exits_3() {
 
     let out = run_at(&answering(450), tmp.path(), &["devices", "--json"]);
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["ok"], false);
     assert_eq!(err["error"]["code"], "find_my_auth_required");
-    assert_eq!(err["error"]["exit_code"], 3);
 }
 
 #[test]

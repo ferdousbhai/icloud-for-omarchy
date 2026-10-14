@@ -24,15 +24,16 @@ pub const EXIT_UNAVAILABLE: u8 = 5;
 pub const EXIT_INTERNAL: u8 = 1;
 
 /// Reports an error on stderr and returns `exit_code`. With `json`, one line
-/// `{"error":{"code","message","exit_code","hint"?}}`; else `tool: message`,
+/// of the shared product contract, `{"ok":false,"error":{"code","message","hint"?}}`
+/// (the process exit code carries the number); else `tool: message`,
 /// then the hint on a line of its own.
 pub fn report(tool: &str, json: bool, code: &str, exit_code: u8, message: &str, hint: Option<&str>) -> u8 {
     if json {
-        let mut error = serde_json::json!({ "code": code, "message": message, "exit_code": exit_code });
+        let mut error = serde_json::json!({ "code": code, "message": message });
         if let Some(hint) = hint {
             error["hint"] = hint.into();
         }
-        eprintln!("{}", serde_json::json!({ "error": error }));
+        eprintln!("{}", serde_json::json!({ "ok": false, "error": error }));
     } else {
         eprintln!("{tool}: {message}");
         if let Some(hint) = hint {

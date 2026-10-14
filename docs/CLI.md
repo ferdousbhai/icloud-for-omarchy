@@ -158,14 +158,17 @@ PATH (a development build).
   carries nothing else), progress and warnings on stderr. `icloud-session`
   prints JSON anyway; `--json` there makes its errors JSON too.
 - **Errors** go to stderr. With `--json` the last line of stderr is one
-  JSON object:
+  JSON object, the shared product contract (the process exit code carries the
+  number):
 
   ```json
-  {"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","exit_code":2,"hint":"Run `icloud-session sign-in` ..."}}
+  {"ok":false,"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","hint":"Run `icloud-session sign-in` ..."}}
   ```
 
   `code` is stable and machine-readable; `hint` is optional; `message` and
-  `hint` are for people.
+  `hint` are for people. (The success envelope `{"ok":true,"data","summary",
+  "meta"}` when piped is still being rolled out; today a success is the bare
+  result on stdout.)
 - **`--help`** on every command (`TOOL COMMAND --help`), with the command's
   JSON shape where it has one; `TOOL help` or `TOOL --help` lists them all.
 - **Nothing asks unless stdin is a terminal.** Destructive commands

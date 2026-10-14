@@ -1392,8 +1392,8 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let out = env.cli(&["validate", "--json"]);
     assert_eq!(out.status.code(), Some(3));
     let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["ok"], false);
     assert_eq!(err["error"]["code"], "sign_in_required");
-    assert_eq!(err["error"]["exit_code"], 3);
     assert!(
         err["error"]["hint"]
             .as_str()

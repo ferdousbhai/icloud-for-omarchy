@@ -57,7 +57,7 @@ packaging tests, then native x86_64/aarch64 package builds.
 ## Conventions and gotchas
 
 - CLI contract, shared by every tool: `--json` puts only the result on stdout; failures end
-  stderr with `{"error":{"code","message","exit_code","hint"}}`; exit codes 0 ok / 1 error /
+  stderr with `{"ok":false,"error":{"code","message","hint"?}}`; exit codes 0 ok / 1 error /
   2 (usage or destructive command without `--yes`) / 3 (not signed in, or Find My password; the
   JSON `code` tells them apart) / 4 (not found) / 5 (a service unavailable: no network, offline,
   daemon unreachable). `status`, `push --dry-run` and `diff` report their changes and exit 0.

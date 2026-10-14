@@ -140,13 +140,13 @@ impl Error {
         matches!(self, Error::CloudKit(CkError::Network(_) | CkError::Offline(_)))
     }
 
-    /// The `--json` error object, as `emit_error` reports it:
-    /// `{"code","message","exit_code","hint"?}`.
+    /// The shared product error object (inside each `sync` half):
+    /// `{"code","message","hint"?}`. The exit code rides the process, and
+    /// inside `sync` the half's own `exit_code` field.
     pub fn to_json(&self) -> serde_json::Value {
         let mut error = serde_json::json!({
             "code": self.code(),
             "message": self.to_string(),
-            "exit_code": self.exit_code(),
         });
         if let Some(hint) = self.hint() {
             error["hint"] = hint.into();

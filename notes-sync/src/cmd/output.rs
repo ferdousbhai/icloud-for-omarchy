@@ -54,7 +54,7 @@ impl OutputContext {
     }
 
     /// `emitError`: report on stderr (icloud-session's shared form: with
-    /// `--json` one line, `{"error":{"code","message","exit_code","hint"?}}`),
+    /// `--json` one line, `{"ok":false,"error":{"code","message","hint"?}}`),
     /// return the exit code.
     /// A sign-in error says why the account was signed out, when the
     /// daemon knows.

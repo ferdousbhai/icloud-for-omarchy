@@ -63,8 +63,8 @@ fn usage_error_exits_2_with_a_json_payload() {
     assert_eq!(o.status.code(), Some(2));
     assert!(stdout(&o).is_empty());
     let payload: Value = serde_json::from_str(&stderr(&o)).unwrap();
+    assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "usage");
-    assert_eq!(payload["error"]["exit_code"], 2);
 
     let human = run_here(&["pull", "--nope"]);
     assert_eq!(human.status.code(), Some(2));
@@ -77,8 +77,8 @@ fn status_outside_a_vault_is_a_known_error() {
     assert_eq!(o.status.code(), Some(1));
     assert!(stdout(&o).is_empty());
     let payload: Value = serde_json::from_str(&stderr(&o)).unwrap();
+    assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "not_cloned_directory");
-    assert_eq!(payload["error"]["exit_code"], 1);
 }
 
 #[test]

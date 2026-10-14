@@ -44,12 +44,14 @@ struct Run {
         const QJsonDocument doc = QJsonDocument::fromJson(out);
         return doc.isArray() ? QJsonValue(doc.array()) : QJsonValue(doc.object());
     }
-    // The --json error object: the last line of stderr.
-    QJsonObject error() const
+    // The --json error envelope: the last line of stderr,
+    // {"ok":false,"error":{...}}.
+    QJsonObject errorEnvelope() const
     {
         const QList<QByteArray> lines = err.trimmed().split('\n');
-        return QJsonDocument::fromJson(lines.last()).object().value(QStringLiteral("error")).toObject();
+        return QJsonDocument::fromJson(lines.last()).object();
     }
+    QJsonObject error() const { return errorEnvelope().value(QStringLiteral("error")).toObject(); }
     QString errorCode() const { return error().value(QStringLiteral("code")).toString(); }
 };
 
@@ -187,7 +189,7 @@ int main(int argc, char *argv[])
         check(all, "cli every command has --help, and help lists it");
         const Run bogus = cliJson({ QStringLiteral("bogus") });
         check(bogus.code == 2 && bogus.out.isEmpty() && bogus.errorCode() == QStringLiteral("usage")
-                  && bogus.error().value(QStringLiteral("exit_code")).toInt() == 2,
+                  && bogus.errorEnvelope().value(QStringLiteral("ok")).toBool(true) == false,
               "cli unknown command: exit 2, JSON usage error");
         check(cli({ QStringLiteral("list"), QStringLiteral("extra") }).code == 2, "cli extra argument is usage");
         check(cli({ QStringLiteral("read"), QStringLiteral("Alpha"), QStringLiteral("--yes") }).code == 2,

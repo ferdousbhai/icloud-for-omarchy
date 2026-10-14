@@ -6,7 +6,7 @@
 //! 2 usage, 3 sign-in required or Find My not authorized, 5 a service
 //! unavailable (the daemon unreachable, no network, offline)
 //! (`icloud_session::cli`). With `--json` an error is one JSON line on stderr:
-//! `{"error":{"code","message","exit_code","hint"?}}`.
+//! `{"ok":false,"error":{"code","message","hint"?}}`.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
@@ -24,7 +24,7 @@ const TOOL: &str = "icloud-session";
 static JSON: AtomicBool = AtomicBool::new(false);
 
 const AFTER_HELP: &str = "\
---json: errors as one JSON line on stderr, {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"?}}
+--json: errors as one JSON line on stderr, {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}
 (output is JSON anyway).
 Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in required (or sign-in not completed) or Find My not
 authorized (or its authorization not completed), 5 a service unavailable (daemon unreachable, offline).";

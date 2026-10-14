@@ -35,7 +35,7 @@ use icloud_notes_sync::vault::local::{display_path, find_vault_root};
                   5 a service unavailable (no network / offline). status, push --dry-run and diff \
                   report their changes in the result and exit 0.\n\
                   With --json, stdout is only the JSON result and an error is one JSON line on stderr: \
-                  {\"error\":{\"code\",\"message\",\"exit_code\",\"hint\"}}.\n\
+                  {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}.\n\
                   clone, pull, push, sync and restore take the vault's lock, shared with the Notes app (icloud-notes); \
                   a busy lock is the error vault_busy (exit 1).",
     disable_version_flag = true

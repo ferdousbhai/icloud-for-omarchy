@@ -150,17 +150,15 @@ fn usage_help_and_exit_codes() {
     assert_eq!(r.code, 4);
     assert!(r.stdout.is_empty());
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
-    assert_eq!(
-        (err["error"]["code"].as_str(), err["error"]["exit_code"].as_i64()),
-        (Some("not_found"), Some(4))
-    );
+    assert_eq!(err["ok"], false);
+    assert_eq!(err["error"]["code"], "not_found");
     assert!(err["error"]["message"].as_str().unwrap().contains("NO-SUCH-ID"));
     // A usage error with --json is JSON too.
     let r = env.run(&["--json", "list", "--kind", "painting"]);
     assert_eq!(r.code, 2);
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
+    assert_eq!(err["ok"], false);
     assert_eq!(err["error"]["code"], "usage");
-    assert_eq!(err["error"]["exit_code"], 2);
     // Delete never asks without a terminal: --yes or a usage error.
     let r = env.run(&["--json", "delete", "NO-SUCH-ID"]);
     assert_eq!(r.code, 4, "the id is checked first: {}", r.stderr);
@@ -603,7 +601,6 @@ fn signed_out_exits_3_until_sign_in() {
     let r = env.run(&["--json", "sync"]);
     let err: Value = serde_json::from_str(r.stderr.trim()).unwrap();
     assert_eq!(err["error"]["code"], "sign_in_required");
-    assert_eq!(err["error"]["exit_code"], 3);
     let f = env.root.join("X.JPG");
     std::fs::write(&f, b"\xFF\xD8 x").unwrap();
     assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 3);

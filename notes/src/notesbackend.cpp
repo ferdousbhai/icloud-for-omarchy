@@ -174,14 +174,15 @@ QString findIconFont()
 
 // The engine's error code for a failed run: its --json result's
 // {"error":{"code"}} (a half of runSync), else the last JSON error line on
-// its stderr (a --json pull or push). Empty when neither says.
+// its stderr (a --json pull or push: {"ok":false,"error":{"code"}}). Empty
+// when neither says.
 QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
 {
     QJsonObject error = QJsonDocument::fromJson(output).object().value(QStringLiteral("error")).toObject();
     if (error.isEmpty()) {
         const QList<QByteArray> lines = stderrText.split('\n');
         for (auto it = lines.crbegin(); it != lines.crend() && error.isEmpty(); ++it) {
-            if (it->startsWith("{\"error\":"))
+            if (it->startsWith("{\"ok\":false"))
                 error = QJsonDocument::fromJson(*it).object().value(QStringLiteral("error")).toObject();
         }
     }
@@ -273,7 +274,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         for (qsizetype nl; (nl = m_errLine.indexOf('\n')) >= 0;) {
             const QByteArray line = m_errLine.left(nl);
             m_errLine.remove(0, nl + 1);
-            if (!isProgressLine(line) && !line.startsWith("{\"error\":"))
+            if (!isProgressLine(line) && !line.startsWith("{\"ok\":false"))
                 lines << QString::fromUtf8(line);
         }
         if (!lines.isEmpty())
@@ -1569,7 +1570,7 @@ void NotesBackend::finishSync(int exitCode)
     m_syncRunning = false;
     emit syncRunningChanged();
     if (m_mode == Mode::Sync && !m_errLine.isEmpty() && !isProgressLine(m_errLine)
-        && !m_errLine.startsWith("{\"error\":"))
+        && !m_errLine.startsWith("{\"ok\":false"))
         appendLog(QString::fromUtf8(m_errLine));
     m_errLine.clear();
     appendLog(QStringLiteral("(exit %1)").arg(exitCode));
