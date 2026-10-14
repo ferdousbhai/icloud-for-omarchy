@@ -109,6 +109,7 @@ timer's sync). All of it is new, in the app binary: see
 | Forget it | `icloud-session forget-password` | existed |
 | Sign out | `icloud-session sign-out` | existed |
 | Check the session with Apple | `icloud-session validate` | existed |
+| Agent skill for these tools | `icloud-session skill` (print), `skill install`, `skill remove` | added |
 
 ### What cannot be a command
 

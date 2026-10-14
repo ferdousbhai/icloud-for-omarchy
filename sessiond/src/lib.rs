@@ -2,6 +2,7 @@
 //! (src/main.rs, which is also the `icloud-session` CLI) and the sign-in
 //! window.
 
+mod agent_skill;
 pub mod apple;
 pub mod cli;
 pub mod cookies;

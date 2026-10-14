@@ -6,7 +6,7 @@ scriptable `--json` CLI.
 
 This file is for working on the code. For *using* the CLIs as an agent, read
 [docs/AGENTS.md](docs/AGENTS.md) (short) and [docs/CLI.md](docs/CLI.md) (every command, JSON shape
-and error code); `docs/skills/icloud/SKILL.md` is the installable skill.
+and error code); `docs/skills/icloud/SKILL.md` is the installable skill, embedded in `icloud-session skill` (`sessiond/src/agent_skill.rs`, shared verbatim with our other product CLIs).
 
 ## Code index
 

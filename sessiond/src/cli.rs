@@ -1,5 +1,5 @@
 //! `icloud-session status | sign-in | authorize-find-my | set-password |
-//! forget-password | sign-out | validate`
+//! forget-password | sign-out | validate | skill [install|remove]`
 //!
 //! Talks to icloud-sessiond over D-Bus. JSON on stdout; errors on stderr
 //! with a non-zero exit, in the table every iCloud tool shares: 1 error,
@@ -106,6 +106,53 @@ enum Command {
     /// sign-in.
     #[command(after_help = AFTER_HELP)]
     Validate,
+    /// Print the agent skill for the iCloud tools, or install it for your coding agents.
+    ///
+    /// Prints the skill (SKILL.md, Markdown) built into icloud-session. `install` copies it to
+    /// ~/.agents/skills/icloud/ (Codex, Pi and others) and links it into ~/.claude/skills/ when
+    /// Claude Code is installed; `remove` removes what install created. Only a copy icloud-session
+    /// wrote (marked .managed-by-icloud-session) is ever changed; a new release refreshes it.
+    #[command(after_help = AFTER_HELP)]
+    Skill {
+        #[command(subcommand)]
+        action: Option<SkillAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillAction {
+    /// Install the skill, then print {paths, notices}.
+    Install,
+    /// Remove the installed skill and link, then print {paths, notices}.
+    Remove,
+}
+
+const SKILL: crate::agent_skill::Skill = crate::agent_skill::Skill {
+    name: "icloud",
+    body: include_str!("../../docs/skills/icloud/SKILL.md"),
+    cli: "icloud-session",
+    version: env!("CARGO_PKG_VERSION"),
+};
+
+fn skill(action: Option<SkillAction>) -> ExitCode {
+    let Some(action) = action else {
+        print!("{}", SKILL.body);
+        return ExitCode::SUCCESS;
+    };
+    let Some(home) = crate::agent_skill::home() else {
+        return fail_with("error", EXIT_ERROR, "no home directory to install the skill into", None);
+    };
+    let result = match action {
+        SkillAction::Install => crate::agent_skill::install(&home, &SKILL),
+        SkillAction::Remove => crate::agent_skill::remove(&home, &SKILL),
+    };
+    match result {
+        Ok(out) => print(&json!({ "paths": out.paths, "notices": out.notices })),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            fail_with("skill_unmanaged", EXIT_ERROR, &e.to_string(), Some("move that path aside, then run `icloud-session skill install` again"))
+        }
+        Err(e) => fail_with("io", EXIT_ERROR, &e.to_string(), None),
+    }
 }
 
 pub fn main() -> ExitCode {
@@ -114,6 +161,9 @@ pub fn main() -> ExitCode {
         Err(code) => return ExitCode::from(code),
     };
     JSON.store(args.json, Ordering::Relaxed);
+    if let Some(home) = crate::agent_skill::home() {
+        crate::agent_skill::refresh(&home, &SKILL);
+    }
     match args.command {
         Command::Status => run(icloud_session::status().map(|s| status_json(&s))),
         Command::SignIn { no_wait: true } => run(open_now(icloud_session::sign_in)),
@@ -151,6 +201,7 @@ pub fn main() -> ExitCode {
             .and_then(|()| icloud_session::status())
             .map(|s| status_json(&s))),
         Command::Validate => run(validate()),
+        Command::Skill { action } => skill(action),
     }
 }
 
