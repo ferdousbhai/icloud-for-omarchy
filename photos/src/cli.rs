@@ -34,11 +34,8 @@ use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
-use icloud_session::output::{
-    self, CliError, KEYRING_HINT, Mode as OutMode, NETWORK_HINT, OutputFlags, Response, SERVICE_TROUBLE_HINT,
-    SESSION_SERVICE_HINT, SIGN_IN_HINT,
-};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::output::{self, CliError, Mode as OutMode, OutputFlags, Response, SIGN_IN_HINT};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
 
@@ -276,34 +273,29 @@ pub fn main() -> ExitCode {
 }
 
 /// A failure as the contract's error: exit code, JSON `code`, message and
-/// remediation hint, per the shared mapping (docs/CLI.md).
+/// remediation hint, per the shared mapping (docs/CLI.md). Everything shaped
+/// like an icloud-session failure (sign-in, HTTP, network, icloud-sessiond,
+/// keyring, I/O, ...) goes through `output::session_failure`, so it reads
+/// exactly as in every iCloud tool; a 401/421 there persisted although the
+/// daemon says signed in (`session_rejected`). The sign-in hint gains
+/// Photos' own ways to sign in.
 fn classify(fail: Fail) -> CliError {
     let e = match fail {
         Fail::Cli(e) => return e,
         Fail::Err(e) => e,
     };
-    let msg = e.to_string();
-    let with_photos_hint = |e: CliError| {
-        if e.hint.as_deref() == Some(SIGN_IN_HINT) {
-            e.hint(sign_in_hint())
-        } else {
-            e
+    match e.into_session() {
+        Ok(session) => {
+            let e = output::session_failure(&session);
+            if e.hint.as_deref() == Some(SIGN_IN_HINT) {
+                e.hint(sign_in_hint())
+            } else {
+                e
+            }
         }
-    };
-    match e {
-        Error::SignInRequired => output::sign_in_required().hint(sign_in_hint()),
-        Error::NotOffered(_) => CliError::new("photos_unavailable", EXIT_SIGN_IN, msg)
+        Err(e @ Error::NotOffered(_)) => CliError::new("photos_unavailable", EXIT_SIGN_IN, e.to_string())
             .hint("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
-        Error::Offline(_) => CliError::new("offline", EXIT_UNAVAILABLE, msg).hint(NETWORK_HINT),
-        Error::Network(_) => CliError::new("network", EXIT_UNAVAILABLE, msg).hint(NETWORK_HINT),
-        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint(SERVICE_TROUBLE_HINT),
-        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, msg).hint(SESSION_SERVICE_HINT),
-        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg).hint(KEYRING_HINT),
-        // 401/421 here persisted although the daemon says signed in:
-        // `session_rejected`; 5xx exit 5; other 4xx exit 1.
-        Error::Http { status, .. } => with_photos_hint(output::http_failure(status, msg)),
-        Error::Io(_) => CliError::new("io", EXIT_ERROR, msg),
-        _ => CliError::new("error", EXIT_ERROR, msg),
+        Err(e) => CliError::new("error", EXIT_ERROR, e.to_string()),
     }
 }
 
@@ -1305,8 +1297,80 @@ mod exit_tests {
         assert_eq!(exit_and_code(Error::SignInRequired), t(3, "sign_in_required", true));
         assert_eq!(exit_and_code(Error::Other(s())), t(1, "error", false));
         assert_eq!(exit_and_code(Error::Io(std::io::Error::other("x"))), t(1, "io", false));
+        let daemon = icloud_session::Error::Daemon {
+            name: "org.freedesktop.DBus.Error.Failed".into(),
+            message: "x".into(),
+        };
+        assert_eq!(exit_and_code(daemon.into()), t(1, "error", false));
+        assert_eq!(
+            exit_and_code(Error::CloudKit {
+                code: "CONFLICT".into(),
+                reason: s()
+            }),
+            t(1, "error", false)
+        );
         assert_eq!(classify(not_found(s()).into()).exit, 4);
         assert_eq!(classify(usage(s()).into()).exit, 2);
         assert_eq!(classify(cancelled(s()).into()).exit, 1);
+    }
+}
+
+#[cfg(test)]
+mod session_parity_tests {
+    use super::*;
+
+    /// Every icloud-session failure, through Photos' error and back, reads
+    /// as `output::session_failure` makes it in every iCloud tool: the same
+    /// code, exit, message and hint (the sign-in hint with Photos' extra).
+    /// `SignInRequired` is checked apart: its message asks the daemon why.
+    #[test]
+    fn icloud_session_errors_read_as_in_every_tool() {
+        let variants = || {
+            let http = |status| icloud_session::Error::Http {
+                status,
+                body: "x".into(),
+            };
+            vec![
+                icloud_session::Error::FindMyAuthRequired,
+                http(401),
+                http(421),
+                http(404),
+                http(503),
+                icloud_session::Error::Offline("x".into()),
+                icloud_session::Error::Network("x".into()),
+                icloud_session::Error::BadResponse("x".into()),
+                icloud_session::Error::Service("x".into()),
+                icloud_session::Error::KeyringUnavailable("x".into()),
+                icloud_session::Error::Daemon {
+                    name: "org.freedesktop.DBus.Error.Failed".into(),
+                    message: "x".into(),
+                },
+                icloud_session::Error::Io(std::io::Error::other("x")),
+            ]
+        };
+        for (session, expected) in variants()
+            .into_iter()
+            .zip(variants().iter().map(output::session_failure))
+        {
+            let label = format!("{session:?}");
+            let ours = classify(Fail::Err(Error::from(session)));
+            let expected_hint = match expected.hint.as_deref() {
+                Some(SIGN_IN_HINT) => Some(sign_in_hint()),
+                other => other.map(str::to_owned),
+            };
+            assert_eq!(
+                (ours.code.as_str(), ours.exit, ours.message.as_str(), ours.hint),
+                (
+                    expected.code.as_str(),
+                    expected.exit,
+                    expected.message.as_str(),
+                    expected_hint
+                ),
+                "{label}"
+            );
+        }
+        let sign_in = classify(Fail::Err(Error::from(icloud_session::Error::SignInRequired)));
+        assert_eq!((sign_in.code.as_str(), sign_in.exit), ("sign_in_required", 3));
+        assert_eq!(sign_in.hint, Some(sign_in_hint()));
     }
 }

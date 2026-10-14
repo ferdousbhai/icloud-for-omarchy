@@ -34,7 +34,7 @@ pub enum Error {
     /// maintenance page instead of JSON, say).
     #[error("unexpected response: {0}")]
     BadResponse(String),
-    /// `icloud-sessiond` could not be reached or failed.
+    /// `icloud-sessiond` could not be reached.
     #[error("icloud-sessiond: {0}")]
     Service(String),
     /// The keyring holding the session's cookies would not give them
@@ -45,6 +45,11 @@ pub enum Error {
     /// Photos is not enabled for the Apple ID); holds the service key.
     #[error("iCloud did not offer the {0} service for this account")]
     NotOffered(String),
+    /// Any other icloud-session failure (the daemon's own `Daemon` error,
+    /// say), kept as it is so the command line reports it exactly as every
+    /// iCloud tool does.
+    #[error(transparent)]
+    Session(icloud_session::Error),
     #[error("{0}")]
     Other(String),
     #[error(transparent)]
@@ -56,6 +61,29 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
+    /// The error as the icloud-session failure it stands for, when it has
+    /// that shape (the inverse of `From<icloud_session::Error>`), so the
+    /// command line reports it with `icloud_session::output::session_failure`
+    /// like every iCloud tool. An I/O error, local or not, reads the same
+    /// (`io`, exit 1). Photos' own failures come back unchanged.
+    pub fn into_session(self) -> std::result::Result<icloud_session::Error, Error> {
+        use icloud_session::Error as S;
+        Ok(match self {
+            Error::SignInRequired => S::SignInRequired,
+            Error::Http { status, body } => S::Http { status, body },
+            Error::Offline(m) => S::Offline(m),
+            Error::Network(m) => S::Network(m),
+            Error::BadResponse(m) => S::BadResponse(m),
+            Error::Service(m) => S::Service(m),
+            Error::KeyringUnavailable(m) => S::KeyringUnavailable(m),
+            Error::Io(e) => S::Io(e),
+            Error::Session(e) => e,
+            other @ (Error::CloudKit { .. } | Error::NotOffered(_) | Error::Other(_) | Error::Db(_)) => {
+                return Err(other);
+            }
+        })
+    }
+
     pub fn is_sign_in(&self) -> bool {
         matches!(self, Error::SignInRequired)
     }
@@ -85,6 +113,14 @@ impl Error {
             Error::Service(m) => Error::Service(m.clone()),
             Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m.clone()),
             Error::NotOffered(m) => Error::NotOffered(m.clone()),
+            Error::Session(e) => match e {
+                icloud_session::Error::Daemon { name, message } => Error::Session(icloud_session::Error::Daemon {
+                    name: name.clone(),
+                    message: message.clone(),
+                }),
+                icloud_session::Error::FindMyAuthRequired => Error::Session(icloud_session::Error::FindMyAuthRequired),
+                other => Error::Other(other.to_string()),
+            },
             Error::Other(m) => Error::Other(m.clone()),
             Error::Io(e) => Error::Io(std::io::Error::new(e.kind(), e.to_string())),
             Error::Db(e) => Error::Other(e.to_string()),

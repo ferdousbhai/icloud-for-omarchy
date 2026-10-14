@@ -6,7 +6,8 @@
 //!
 //! - 0 ok. `status`, `push --dry-run` and `diff` report their changes in the
 //!   result and exit 0.
-//! - 1 error: anything not below (`internal`, `io`, `vault_busy`,
+//! - 1 error: anything not below (`internal`, `io`, `error` (a failure
+//!   icloud-sessiond reported), `vault_busy`,
 //!   `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`,
 //!   `unsupported_vault_layout`, `corrupt_state_file`, a
 //!   `cloudkit_request_failed` that is an HTTP 4xx, …).
@@ -27,7 +28,10 @@
 //!
 //! Hints for situations every iCloud tool shares (sign-in, network,
 //! icloud-sessiond, keyring, iCloud trouble) are icloud-session's
-//! (`icloud_session::output::*_HINT`).
+//! (`icloud_session::output::*_HINT`). An icloud-session failure with no
+//! notes-sync meaning of its own (`CkError::Session`, e.g. the daemon's
+//! `Daemon`) is reported through `icloud_session::output::session_failure`,
+//! exactly as the other tools report it.
 //!
 //! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
 //! `name()` is the error's class name; `code()` is the
@@ -36,7 +40,9 @@
 
 use crate::cloudkit::CkError;
 use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
-use icloud_session::output::{KEYRING_HINT, NETWORK_HINT, SERVICE_TROUBLE_HINT, SESSION_SERVICE_HINT, SIGN_IN_HINT};
+use icloud_session::output::{
+    CliError, KEYRING_HINT, NETWORK_HINT, SERVICE_TROUBLE_HINT, SESSION_SERVICE_HINT, SIGN_IN_HINT, session_failure,
+};
 
 pub use icloud_session::cli::{
     EXIT_ERROR, EXIT_INTERNAL, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
@@ -112,7 +118,7 @@ pub enum Error {
 impl From<CkError> for Error {
     fn from(e: CkError) -> Error {
         match e {
-            CkError::SignInRequired => Error::SignInRequired,
+            CkError::SignInRequired | CkError::Session(icloud_session::Error::SignInRequired) => Error::SignInRequired,
             CkError::NotesUnavailable => Error::NotesUnavailable,
             other => Error::CloudKit(other),
         }
@@ -120,7 +126,20 @@ impl From<CkError> for Error {
 }
 
 impl Error {
+    /// The shared contract error of an icloud-session failure carried as
+    /// it is (`CkError::Session`). Never a sign-in (that is
+    /// [`Error::SignInRequired`]), so no D-Bus round trip.
+    pub fn session_failure(&self) -> Option<CliError> {
+        match self {
+            Error::CloudKit(CkError::Session(e)) => Some(session_failure(e)),
+            _ => None,
+        }
+    }
+
     pub fn exit_code(&self) -> u8 {
+        if let Some(failure) = self.session_failure() {
+            return failure.exit;
+        }
         match self {
             Error::SignInRequired
             | Error::NotClonedDirectory { .. }
@@ -151,7 +170,8 @@ impl Error {
                 | CkError::ZoneFetchFailed { .. }
                 | CkError::RequestFailed { .. },
             ) => EXIT_UNAVAILABLE,
-            Error::Internal(_) | Error::Io(_) | Error::CloudKit(_) => EXIT_INTERNAL,
+            Error::Io(_) | Error::CloudKit(CkError::Io(_)) => EXIT_ERROR,
+            Error::Internal(_) | Error::CloudKit(_) => EXIT_INTERNAL,
             Error::UnsupportedVaultLayout { .. }
             | Error::VaultFromNewerTool { .. }
             | Error::VaultNeedsUpdate { .. }
@@ -190,7 +210,10 @@ impl Error {
             Error::CloudKit(CkError::Offline(_)) => "OfflineError",
             Error::CloudKit(CkError::SessionService(_)) => "SessionServiceError",
             Error::CloudKit(CkError::KeyringUnavailable(_)) => "KeyringUnavailableError",
-            Error::CloudKit(_) | Error::Internal(_) | Error::Io(_) => "InternalError",
+            Error::Io(_) | Error::CloudKit(CkError::Io(_)) => "IoError",
+            // Its code comes from icloud-session (`Error::code`).
+            Error::CloudKit(CkError::Session(_)) => "SessionError",
+            Error::CloudKit(_) | Error::Internal(_) => "InternalError",
             Error::Usage(_) => "UsageError",
         }
     }
@@ -205,12 +228,20 @@ impl Error {
     /// without its `Error` suffix (`UntrackedFileError` → `untracked_file`),
     /// so `sign_in_required`, `usage` and `internal` read as in the other
     /// iCloud tools.
+    /// An icloud-session failure carried as it is takes icloud-session's
+    /// code (`Daemon` → `error`).
     pub fn code(&self) -> String {
-        snake_code(self.name())
+        match self.session_failure() {
+            Some(failure) => failure.code,
+            None => snake_code(self.name()),
+        }
     }
 
     /// The hint line icloud-md prints under the message, if any.
     pub fn hint(&self) -> Option<String> {
+        if let Some(failure) = self.session_failure() {
+            return failure.hint;
+        }
         match self {
             Error::UntrackedFile { .. } => Some("Check the file name (it's case-sensitive) and try again.".into()),
             Error::NotClonedDirectory { .. } => Some("Run \"icloud-notes-sync clone <directory>\" first.".into()),

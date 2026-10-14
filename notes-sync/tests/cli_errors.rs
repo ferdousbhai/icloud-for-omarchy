@@ -262,6 +262,24 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
             5,
         ),
         (Error::Internal("bug".into()), "InternalError", "internal", false, 1),
+        (Error::Io(std::io::Error::other("disk")), "IoError", "io", false, 1),
+        (
+            Error::from(CkError::from(icloud_session::Error::Io(std::io::Error::other("disk")))),
+            "IoError",
+            "io",
+            false,
+            1,
+        ),
+        (
+            Error::from(CkError::from(icloud_session::Error::Daemon {
+                name: "org.freedesktop.DBus.Error.Failed".into(),
+                message: "boom".into(),
+            })),
+            "SessionError",
+            "error",
+            false,
+            1,
+        ),
     ];
     for (error, name, code, has_hint, exit) in errors {
         assert_eq!(error.name(), name);
@@ -374,4 +392,42 @@ fn account_mismatch_names_directory_and_both_accounts() {
     assert!(message.contains("me@example.com"));
     assert!(message.contains("someone-else@example.com"));
     assert!(error.hint().unwrap().contains("me@example.com"));
+}
+
+/// Every icloud-session failure reads as `icloud_session::output::session_failure`
+/// makes it, as in the other iCloud tools: the same code, exit and hint
+/// (and the same message, except where notes-sync names the failure in its
+/// own words). `SignInRequired` is left out (its message asks the daemon
+/// why), and so is `Http`: the client wraps it with the operation name
+/// (`cloudkit_request_failed`, or `session_rejected` for a 401/421).
+#[test]
+fn icloud_session_errors_read_as_in_every_tool() {
+    use icloud_session::output::{CliError, session_failure};
+    let variants = || {
+        vec![
+            icloud_session::Error::FindMyAuthRequired,
+            icloud_session::Error::Offline("x".into()),
+            icloud_session::Error::Network("x".into()),
+            icloud_session::Error::Service("x".into()),
+            icloud_session::Error::KeyringUnavailable("x".into()),
+            icloud_session::Error::BadResponse("x".into()),
+            icloud_session::Error::Io(std::io::Error::other("x")),
+            icloud_session::Error::Daemon {
+                name: "org.freedesktop.DBus.Error.Failed".into(),
+                message: "x".into(),
+            },
+        ]
+    };
+    for (session, expected) in variants().into_iter().zip(variants().iter().map(session_failure)) {
+        let label = format!("{session:?}");
+        let error = Error::from(CkError::from(session));
+        let ours = CliError::from(&error);
+        assert_eq!(ours.code, expected.code, "{label}");
+        assert_eq!(ours.exit, expected.exit, "{label}");
+        assert_eq!(ours.hint, expected.hint, "{label}");
+        assert_eq!(
+            (error.code(), error.exit_code(), error.hint()),
+            (ours.code, ours.exit, ours.hint)
+        );
+    }
 }
