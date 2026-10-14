@@ -1,11 +1,19 @@
 //! `icloud-session status | sign-in | authorize-find-my | set-password |
 //! forget-password | sign-out | validate | skill [install|remove]`
 //!
-//! Talks to icloud-sessiond over D-Bus. JSON on stdout; errors on stderr
-//! with a non-zero exit, in the table every iCloud tool shares
-//! (`icloud_session::cli`):
+//! Talks to icloud-sessiond over D-Bus. Output follows the shared product
+//! contract ([`icloud_session::output`]): a short text rendering on a
+//! terminal, the JSON envelope `{"ok":true,"data","summary"}` when piped;
+//! `--json`/`--styled`/`--quiet` (only `data`, the bare status or
+//! webservices object)/`--ids-only`/`--count` choose. `skill` with no action
+//! prints the skill's Markdown as it is, in every mode.
 //!
-//! - 1 error: a failure the daemon reported (`error`), `io`, a non-5xx `http`;
+//! A failure is `{"ok":false,"error":{"code","message","hint"?}}` on stdout in
+//! a machine mode, `error:`/`hint:` lines on stderr in text mode, with a
+//! non-zero exit in the table every iCloud tool shares (`icloud_session::cli`):
+//!
+//! - 1 error: a failure the daemon reported (`error`), `io`, a non-5xx
+//!   `http`, `skill_unmanaged`;
 //! - 2 usage;
 //! - 3 not signed in or credentials rejected: `sign_in_required`,
 //!   `sign_in_not_completed`, `find_my_auth_required`,
@@ -16,43 +24,46 @@
 //!   bus unreachable), `keyring_unavailable`, `network`, `offline`,
 //!   `bad_response`, `http` 5xx.
 //!
-//! With `--json` an error is one JSON line on stderr:
-//! `{"ok":false,"error":{"code","message","hint"?}}`.
+//! Progress ("finish in the window", "checking the password") goes to stderr.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
-use icloud_session::{BUS_NAME, Error, INTERFACE, OBJECT_PATH, Session, Status};
-use serde_json::json;
+use icloud_session::cli::{EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
+use icloud_session::output::{self, CliError, OutputFlags, Response};
+use icloud_session::{BUS_NAME, ERROR_PASSWORD_REJECTED, Error, INTERFACE, OBJECT_PATH, Session, Status};
+use serde::Serialize;
 use zeroize::Zeroizing;
 
-const TOOL: &str = "icloud-session";
-
-/// `--json`: errors as JSON (the output already is).
-static JSON: AtomicBool = AtomicBool::new(false);
-
 const AFTER_HELP: &str = "\
---json: errors as one JSON line on stderr, {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}}
-(output is JSON anyway).
-Exit codes: 0 ok; 1 error (a failure icloud-sessiond reported); 2 usage; 3 not signed in or
-credentials rejected (sign_in_required, sign_in_not_completed, find_my_auth_required,
-find_my_auth_not_completed, password_rejected, session_rejected); 5 a service unavailable
-(session_service: daemon unreachable; keyring_unavailable, network, offline, bad_response, HTTP 5xx).";
+Output: short text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"} when piped.
+--json forces the envelope, --styled text, --quiet prints only the data (the status object, or
+validate's {dsid, apple_id, webservices}), --ids-only the webservice keys (validate) or the
+paths (skill install/remove), --count their number. Flags combine: ids-only > count > quiet >
+json > styled. `skill` alone prints the skill's Markdown in every mode. A failure is
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or error:/hint: lines on stderr
+in text mode.
+
+Exit codes:
+  0 ok
+  1 error (a failure icloud-sessiond reported), io, http 4xx, skill_unmanaged
+  2 usage
+  3 not signed in or credentials rejected: sign_in_required, sign_in_not_completed,
+    find_my_auth_required, find_my_auth_not_completed, password_rejected, session_rejected
+  5 a service unavailable: session_service (icloud-sessiond unreachable),
+    keyring_unavailable, network, offline, bad_response, http 5xx";
 
 #[derive(Parser)]
 #[command(
     name = "icloud-session",
     version,
-    about = "The one iCloud sign-in every app uses, through icloud-sessiond. JSON on stdout.",
+    about = "The one iCloud sign-in every app uses, through icloud-sessiond.",
     after_help = AFTER_HELP
 )]
 struct Args {
-    /// Errors as one JSON line on stderr (the output is JSON anyway).
-    #[arg(long, global = true)]
-    json: bool,
+    #[command(flatten)]
+    out: OutputFlags,
     #[command(subcommand)]
     command: Command,
 }
@@ -71,7 +82,8 @@ enum Command {
     ///
     /// Opens the sign-in window (Apple's page: password and 2FA, typed by a
     /// person) and waits until it closes, then prints status. Exits 3
-    /// (sign_in_not_completed) when the window closed without a sign-in.
+    /// (sign_in_not_completed, no status printed) when the window closed
+    /// without a sign-in.
     #[command(after_help = AFTER_HELP)]
     SignIn {
         /// Print status at once instead; poll `status` until signing_in is false.
@@ -82,7 +94,8 @@ enum Command {
     ///
     /// Opens the sign-in window on Find My, where Apple asks for the password
     /// again, and waits until it closes, then prints status. Exits 3
-    /// (find_my_auth_not_completed) when Find My is still not authorized.
+    /// (find_my_auth_not_completed, no status printed) when Find My is still
+    /// not authorized.
     #[command(after_help = AFTER_HELP)]
     AuthorizeFindMy {
         /// Print status at once instead; poll `status` until signing_in is false.
@@ -93,11 +106,11 @@ enum Command {
     ///
     /// Stores the Apple ID password in the keyring (GNOME Keyring), so the
     /// daemon re-authorizes Find My by itself when it asks for the password
-    /// again. The password is checked with a Find My sign-in first and stored
-    /// only if Apple accepts it (exit 3, password_rejected, when Apple
-    /// refuses it). It is read from the terminal without echo,
-    /// or from stdin when that is not a terminal, e.g. from a password
-    /// manager:
+    /// again, then prints status. The password is checked with a Find My
+    /// sign-in first and stored only if Apple accepts it (exit 3,
+    /// password_rejected, when Apple refuses it). It is read from the
+    /// terminal without echo, or from stdin when that is not a terminal,
+    /// e.g. from a password manager:
     ///
     ///     bw get password "Apple ID" | icloud-session set-password
     ///     op read "op://Private/Apple ID/password" | icloud-session set-password
@@ -123,10 +136,11 @@ enum Command {
     Validate,
     /// Print the agent skill for the iCloud tools, or install it for your coding agents.
     ///
-    /// Prints the skill (SKILL.md, Markdown) built into icloud-session. `install` copies it to
-    /// ~/.agents/skills/icloud/ (Codex, Pi and others) and links it into ~/.claude/skills/ when
-    /// Claude Code is installed; `remove` removes what install created. Only a copy icloud-session
-    /// wrote (marked .managed-by-icloud-session) is ever changed; a new release refreshes it.
+    /// Prints the skill (SKILL.md, Markdown) built into icloud-session, as it is (in every
+    /// output mode). `install` copies it to ~/.agents/skills/icloud/ (Codex, Pi and others) and
+    /// links it into ~/.claude/skills/ when Claude Code is installed; `remove` removes what
+    /// install created. Only a copy icloud-session wrote (marked .managed-by-icloud-session) is
+    /// ever changed; a new release refreshes it.
     #[command(after_help = AFTER_HELP)]
     Skill {
         #[command(subcommand)]
@@ -150,104 +164,150 @@ const SKILL: crate::agent_skill::Skill = crate::agent_skill::Skill {
     adopts_legacy: false,
 };
 
-fn skill(action: Option<SkillAction>) -> ExitCode {
-    let Some(action) = action else {
-        print!("{}", SKILL.body);
-        return ExitCode::SUCCESS;
-    };
-    let Some(home) = crate::agent_skill::home() else {
-        return fail_with("error", EXIT_ERROR, "no home directory to install the skill into", None);
-    };
-    let result = match action {
-        SkillAction::Install => crate::agent_skill::install(&home, &SKILL),
-        SkillAction::Remove => crate::agent_skill::remove(&home, &SKILL),
-    };
-    match result {
-        Ok(out) => print(&json!({ "paths": out.paths, "notices": out.notices })),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => fail_with(
-            "skill_unmanaged",
-            EXIT_ERROR,
-            &e.to_string(),
-            Some("move that path aside, then run `icloud-session skill install` again"),
-        ),
-        Err(e) => fail_with("io", EXIT_ERROR, &e.to_string(), None),
-    }
-}
+type Outcome = Result<Response, CliError>;
 
 pub fn main() -> ExitCode {
-    let args = match cli::parse::<Args>(TOOL) {
+    let args = match output::parse::<Args>() {
         Ok(args) => args,
         Err(code) => return ExitCode::from(code),
     };
-    JSON.store(args.json, Ordering::Relaxed);
+    let mode = args.out.mode();
     if let Some(home) = crate::agent_skill::home() {
         crate::agent_skill::refresh(&home, &SKILL);
     }
-    match args.command {
-        Command::Status => run(icloud_session::status().map(|s| status_json(&s))),
-        Command::SignIn { no_wait: true } => run(open_now(icloud_session::sign_in)),
-        Command::SignIn { no_wait: false } => match open_window(icloud_session::sign_in) {
-            Ok(s) if s.signed_in => print(&status_json(&s)),
-            Ok(s) => {
-                println!("{}", status_json(&s));
-                fail_with("sign_in_not_completed", EXIT_SIGN_IN, "sign-in did not complete", None)
-            }
-            Err(e) => fail(e),
-        },
-        Command::AuthorizeFindMy { no_wait: true } => run(open_now(icloud_session::authorize_find_my)),
-        Command::AuthorizeFindMy { no_wait: false } => match open_window(icloud_session::authorize_find_my) {
-            Ok(s) if s.find_my_authorized => print(&status_json(&s)),
-            Ok(s) => {
-                println!("{}", status_json(&s));
-                fail_with(
-                    "find_my_auth_not_completed",
-                    EXIT_FIND_MY_AUTH,
-                    "Find My authorization did not complete",
-                    None,
-                )
-            }
-            Err(e) => fail(e),
-        },
+    let outcome = match args.command {
+        Command::Skill { action: None } => {
+            print!("{}", SKILL.body);
+            return ExitCode::SUCCESS;
+        }
+        Command::Skill { action: Some(action) } => skill(action),
+        Command::Status => icloud_session::status()
+            .map(|s| status_response(&s, None))
+            .map_err(failure),
+        Command::SignIn { no_wait: true } => open_now(icloud_session::sign_in),
+        Command::SignIn { no_wait: false } => sign_in(),
+        Command::AuthorizeFindMy { no_wait: true } => open_now(icloud_session::authorize_find_my),
+        Command::AuthorizeFindMy { no_wait: false } => authorize_find_my(),
         Command::SetPassword => set_password(),
-        Command::ForgetPassword => match call_daemon("ForgetPassword", &()) {
-            Ok(()) => {
-                eprintln!("icloud-session: removed the stored password from the keyring");
-                run(icloud_session::status().map(|s| status_json(&s)))
-            }
-            Err(code) => code,
-        },
-        Command::SignOut => run(icloud_session::sign_out()
+        Command::ForgetPassword => call_daemon("ForgetPassword", &())
             .and_then(|()| icloud_session::status())
-            .map(|s| status_json(&s))),
-        Command::Validate => run(validate()),
-        Command::Skill { action } => skill(action),
-    }
+            .map(|s| status_response(&s, Some("Removed the stored password from the keyring.")))
+            .map_err(failure),
+        Command::SignOut => icloud_session::sign_out()
+            .and_then(|()| icloud_session::status())
+            .map(|s| status_response(&s, Some("Signed out.")))
+            .map_err(failure),
+        Command::Validate => validate().map_err(failure),
+    };
+    ExitCode::from(match outcome {
+        Ok(response) => response.print(mode),
+        Err(e) => e.report(mode),
+    })
 }
+
+// ------------------------------------------------------------ rendering
+
+/// The status as the result: `data` is the bare status object; the summary
+/// its first line (or `headline`, what the command did), the text all of it.
+fn status_response(s: &Status, headline: Option<&str>) -> Response {
+    let lines = status_lines(s);
+    let summary = headline.map_or_else(|| lines[0].clone(), str::to_string);
+    let mut text = Vec::new();
+    if let Some(h) = headline {
+        text.push(h.to_string());
+    }
+    text.extend(lines);
+    Response::new(s, summary).human(text.join("\n"))
+}
+
+/// "Signed in as …", expiry, Find My, the password; or "Not signed in" and why.
+fn status_lines(s: &Status) -> Vec<String> {
+    let mut lines = Vec::new();
+    if s.signed_in {
+        let who = s.apple_id.as_deref().unwrap_or("an unknown Apple ID");
+        lines.push(match &s.full_name {
+            Some(name) => format!("Signed in as {who} ({name})"),
+            None => format!("Signed in as {who}"),
+        });
+        lines.push(match s.expires_at {
+            Some(t) => format!("Session expires {}", icloud_session::time::rfc3339(t as i64)),
+            None => "Session has no expiry date (signed in without \"Keep me signed in\")".into(),
+        });
+        lines.push(if s.find_my_authorized {
+            "Find My: authorized".into()
+        } else {
+            "Find My: not authorized (icloud-session authorize-find-my)".into()
+        });
+        lines.push(if s.find_my_password_stored {
+            "Password: stored in the keyring (Find My re-authorizes itself)".into()
+        } else {
+            "Password: not stored".into()
+        });
+    } else {
+        lines.push(match &s.sign_out_reason {
+            Some(reason) => format!("Not signed in: {reason}"),
+            None => "Not signed in".into(),
+        });
+    }
+    if s.signing_in {
+        lines.push("The sign-in window is open.".into());
+    }
+    lines
+}
+
+// ------------------------------------------------------------ commands
+
+const WINDOW_NOTE: &str = "icloud-session: finish in the \"Sign in to iCloud\" window (it may be on another workspace)";
 
 /// Opens the window (unless one is open) and returns the status at once.
-fn open_now(open: fn() -> Result<(), Error>) -> Result<serde_json::Value, Error> {
-    if !icloud_session::status()?.signing_in {
-        open()?;
-    }
-    eprintln!("icloud-session: finish in the \"Sign in to iCloud\" window (it may be on another workspace)");
-    icloud_session::status().map(|s| status_json(&s))
-}
-
-/// Reports an error on stderr (one JSON line with `--json`) and returns its
-/// exit code.
-fn fail_with(code: &str, exit: u8, message: &str, hint: Option<&str>) -> ExitCode {
-    ExitCode::from(cli::report(
-        TOOL,
-        JSON.load(Ordering::Relaxed),
-        code,
-        exit,
-        message,
-        hint,
+fn open_now(open: fn() -> Result<(), Error>) -> Outcome {
+    let run = || -> Result<Status, Error> {
+        if !icloud_session::status()?.signing_in {
+            open()?;
+        }
+        eprintln!("{WINDOW_NOTE}");
+        icloud_session::status()
+    };
+    let s = run().map_err(failure)?;
+    Ok(status_response(
+        &s,
+        Some("Sign-in window opened; poll `icloud-session status` until signing_in is false."),
     ))
 }
 
-fn status_json(s: &Status) -> serde_json::Value {
-    serde_json::to_value(s).expect("status serializes")
+fn sign_in() -> Outcome {
+    let s = open_window(icloud_session::sign_in).map_err(failure)?;
+    if s.signed_in {
+        return Ok(status_response(&s, None));
+    }
+    let message = match &s.sign_out_reason {
+        Some(reason) => format!("sign-in did not complete: the window closed and you are still signed out ({reason})"),
+        None => "sign-in did not complete: the window closed and you are still signed out".into(),
+    };
+    Err(CliError::new("sign_in_not_completed", EXIT_SIGN_IN, message)
+        .hint("run `icloud-session sign-in` again and finish in the window"))
+}
+
+fn authorize_find_my() -> Outcome {
+    let s = open_window(icloud_session::authorize_find_my).map_err(failure)?;
+    if s.find_my_authorized {
+        return Ok(status_response(&s, Some("Find My is authorized.")));
+    }
+    let e = match (&s.apple_id, s.signed_in) {
+        (Some(who), true) => CliError::new(
+            "find_my_auth_not_completed",
+            EXIT_FIND_MY_AUTH,
+            format!("Find My authorization did not complete: still not authorized for {who}"),
+        )
+        .hint("run `icloud-session authorize-find-my` again (to stop being asked: `icloud-session set-password`)"),
+        _ => CliError::new(
+            "find_my_auth_not_completed",
+            EXIT_FIND_MY_AUTH,
+            "Find My authorization did not complete: not signed in",
+        )
+        .hint(SIGN_IN_HINT),
+    };
+    Err(e)
 }
 
 /// `SignIn()` or `AuthorizeFindMy()`, then waits for the window to close
@@ -258,7 +318,7 @@ fn open_window(open: fn() -> Result<(), Error>) -> Result<Status, Error> {
     if !before.signing_in {
         open()?;
     }
-    eprintln!("icloud-session: finish in the \"Sign in to iCloud\" window (it may be on another workspace)");
+    eprintln!("{WINDOW_NOTE}");
     let mut opened = before.signing_in;
     if let Some(current) = watch.current()
         && current.signing_in
@@ -275,190 +335,161 @@ fn open_window(open: fn() -> Result<(), Error>) -> Result<Status, Error> {
     icloud_session::status()
 }
 
-fn validate() -> Result<serde_json::Value, Error> {
+#[derive(Serialize)]
+struct Validated {
+    dsid: String,
+    apple_id: String,
+    webservices: std::collections::HashMap<String, String>,
+}
+
+fn validate() -> Result<Response, Error> {
     let session = Session::connect()?;
     let webservices = session.webservices()?;
-    Ok(json!({
-        "dsid": session.dsid(),
-        "apple_id": session.apple_id(),
-        "webservices": webservices.urls,
-    }))
+    let mut keys: Vec<String> = webservices.urls.keys().cloned().collect();
+    keys.sort();
+    let summary = format!(
+        "Apple accepts the sign-in of {}: {} services",
+        session.apple_id(),
+        keys.len()
+    );
+    let human = format!(
+        "Apple ID: {} (dsid {})\nServices: {}",
+        session.apple_id(),
+        session.dsid(),
+        keys.join(", ")
+    );
+    let data = Validated {
+        dsid: session.dsid().to_string(),
+        apple_id: session.apple_id().to_string(),
+        webservices: webservices.urls,
+    };
+    Ok(Response::new(data, summary).human(human).ids(keys))
 }
 
-fn run(result: Result<serde_json::Value, Error>) -> ExitCode {
-    match result {
-        Ok(value) => print(&value),
-        Err(e) => fail(e),
-    }
+#[derive(Serialize)]
+struct SkillOutcome {
+    paths: Vec<std::path::PathBuf>,
+    notices: Vec<String>,
 }
 
-fn fail(e: Error) -> ExitCode {
-    let message = e.to_string();
-    match e {
-        Error::SignInRequired => fail_with(
-            "sign_in_required",
-            EXIT_SIGN_IN,
-            &icloud_session::sign_in_required_message(),
-            Some(SIGN_IN_HINT),
-        ),
-        Error::FindMyAuthRequired => fail_with(
-            "find_my_auth_required",
-            EXIT_FIND_MY_AUTH,
-            &message,
-            Some("run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)"),
-        ),
-        Error::KeyringUnavailable(_) => fail_with(
-            "keyring_unavailable",
-            EXIT_UNAVAILABLE,
-            &message,
-            Some("unlock the keyring (GNOME Keyring), then try again"),
-        ),
-        Error::Service(detail) => match service_failure(&detail) {
-            ServiceFailure::Unreachable => fail_with(
-                "session_service",
-                EXIT_UNAVAILABLE,
-                &message,
-                Some("check that icloud-sessiond is installed and the D-Bus session bus is running"),
-            ),
-            ServiceFailure::Daemon { name, detail } => daemon_error(name, detail),
-        },
-        Error::Network(_) => fail_with("network", EXIT_UNAVAILABLE, &message, None),
-        Error::BadResponse(_) => fail_with("bad_response", EXIT_UNAVAILABLE, &message, None),
-        Error::Offline(_) => fail_with("offline", EXIT_UNAVAILABLE, &message, None),
-        Error::Http { status: 401 | 421, .. } => fail_with(
-            "session_rejected",
-            EXIT_SIGN_IN,
-            &format!("Apple refused the iCloud session although icloud-sessiond still holds it ({message})"),
-            Some(SIGN_IN_HINT),
-        ),
-        Error::Http { status: 500..=599, .. } => fail_with("http", EXIT_UNAVAILABLE, &message, None),
-        Error::Http { .. } => fail_with("http", EXIT_ERROR, &message, None),
-        Error::Io(_) => fail_with("io", EXIT_ERROR, &message, None),
-    }
+fn skill(action: SkillAction) -> Outcome {
+    let home = crate::agent_skill::home()
+        .ok_or_else(|| CliError::new("error", EXIT_ERROR, "no home directory to install the skill into"))?;
+    let (result, done) = match action {
+        SkillAction::Install => (crate::agent_skill::install(&home, &SKILL), "Installed"),
+        SkillAction::Remove => (crate::agent_skill::remove(&home, &SKILL), "Removed"),
+    };
+    let out = result.map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => CliError::new("skill_unmanaged", EXIT_ERROR, e.to_string())
+            .hint("move that path aside, then run `icloud-session skill install` again"),
+        _ => CliError::new("io", EXIT_ERROR, e.to_string()),
+    })?;
+    let ids: Vec<String> = out.paths.iter().map(|p| p.display().to_string()).collect();
+    let summary = match ids.len() {
+        0 => format!("{done} nothing: the icloud skill was already in that state"),
+        1 => format!("{done} the icloud skill: 1 path"),
+        n => format!("{done} the icloud skill: {n} paths"),
+    };
+    let mut human = vec![summary.clone()];
+    human.extend(ids.iter().map(|p| format!("  {p}")));
+    human.extend(out.notices.iter().map(|n| format!("note: {n}")));
+    let data = SkillOutcome {
+        paths: out.paths,
+        notices: out.notices,
+    };
+    Ok(Response::new(data, summary).human(human.join("\n")).ids(ids))
 }
+
+// ------------------------------------------------------------ errors
 
 const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (a person signs in in the window)";
 
-/// The error name of `ServiceError::PasswordRejected` (sessiond/src/daemon.rs).
-const ERROR_PASSWORD_REJECTED: &str = "io.github.ferdousbhai.ICloudSession.Error.PasswordRejected";
-
-/// What an [`Error::Service`] was: the daemon (or the bus) could not be
-/// reached, or the daemon answered with an error of its own.
-#[derive(Debug, PartialEq, Eq)]
-enum ServiceFailure<'a> {
-    /// No session bus, nothing owns or can start the name, or no reply.
-    Unreachable,
-    /// A D-Bus error the daemon replied with (`name`, `detail`).
-    Daemon { name: &'a str, detail: &'a str },
-}
-
-/// Classifies the text of an [`Error::Service`]. `icloud_session` turns
-/// every D-Bus method error into `Service("{error name}: {detail}")`, and
-/// any other zbus error (no bus, a broken connection) into its plain
-/// message, so the error name, when there is one, tells a daemon-side
-/// failure from an unreachable daemon.
-fn service_failure(text: &str) -> ServiceFailure<'_> {
-    let Some((name, detail)) = text.split_once(": ") else {
-        return ServiceFailure::Unreachable;
-    };
-    let is_error_name = name.contains('.')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
-    if !is_error_name || unreachable_error_name(name) {
-        return ServiceFailure::Unreachable;
-    }
-    ServiceFailure::Daemon { name, detail }
-}
-
-/// The bus's own errors for a daemon it cannot reach or start, or a
-/// connection that broke: not anything the daemon said.
-fn unreachable_error_name(name: &str) -> bool {
-    let Some(short) = name.strip_prefix("org.freedesktop.DBus.Error.") else {
-        return false;
-    };
-    short.starts_with("Spawn.")
-        || matches!(
-            short,
-            "ServiceUnknown"
-                | "NameHasNoOwner"
-                | "NoReply"
-                | "TimedOut"
-                | "Timeout"
-                | "NoServer"
-                | "NoNetwork"
-                | "Disconnected"
-                | "IOError"
-                | "BadAddress"
-                | "AuthFailed"
-                | "AddressInUse"
-                | "LimitsExceeded"
-                | "NoMemory"
-        )
-}
-
-/// An error the daemon replied with that `icloud_session` has no variant
-/// for: Apple refusing a password (`password_rejected`, exit 3), else a
-/// daemon-side failure (`error`, exit 1), not an unreachable daemon.
-fn daemon_error(name: &str, detail: &str) -> ExitCode {
-    if name == ERROR_PASSWORD_REJECTED {
-        return fail_with(
-            "password_rejected",
+/// A client-library error as the contract's code, exit code, message and hint.
+fn failure(e: Error) -> CliError {
+    let message = e.to_string();
+    match e {
+        Error::SignInRequired => CliError::new(
+            "sign_in_required",
             EXIT_SIGN_IN,
-            detail,
-            Some("check the Apple ID password, then run `icloud-session set-password` again"),
-        );
+            icloud_session::sign_in_required_message(),
+        )
+        .hint(SIGN_IN_HINT),
+        Error::FindMyAuthRequired => CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, message)
+            .hint("run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)"),
+        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, message)
+            .hint("unlock the keyring (GNOME Keyring), then try again"),
+        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, message)
+            .hint("check that icloud-sessiond is installed and the D-Bus session bus is running"),
+        // Apple refused the password given to set-password.
+        Error::Daemon { name, message } if name == ERROR_PASSWORD_REJECTED => {
+            CliError::new("password_rejected", EXIT_SIGN_IN, message)
+                .hint("check the Apple ID password, then run `icloud-session set-password` again")
+        }
+        // The daemon was reached and failed: not an unreachable daemon.
+        Error::Daemon { .. } => CliError::new("error", EXIT_ERROR, message),
+        Error::Network(_) => {
+            CliError::new("network", EXIT_UNAVAILABLE, message).hint("check the network connection and try again")
+        }
+        Error::Offline(_) => {
+            CliError::new("offline", EXIT_UNAVAILABLE, message).hint("check the network connection and try again")
+        }
+        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, message).hint("try again later"),
+        Error::Http { status: 401 | 421, .. } => CliError::new(
+            "session_rejected",
+            EXIT_SIGN_IN,
+            format!("Apple refused the iCloud session although icloud-sessiond still holds it ({message})"),
+        )
+        .hint(SIGN_IN_HINT),
+        Error::Http { status: 500..=599, .. } => {
+            CliError::new("http", EXIT_UNAVAILABLE, message).hint("iCloud is having trouble; try again later")
+        }
+        Error::Http { .. } => CliError::new("http", EXIT_ERROR, message),
+        Error::Io(_) => CliError::new("io", EXIT_ERROR, message),
+        // `icloud_session::Error` is non-exhaustive: a variant added later.
+        _ => CliError::new("error", EXIT_ERROR, message),
     }
-    fail_with("error", EXIT_ERROR, &format!("icloud-sessiond: {detail}"), None)
-}
-
-fn print(value: &serde_json::Value) -> ExitCode {
-    println!("{value}");
-    ExitCode::SUCCESS
 }
 
 // ------------------------------------------------------------ set-password
 
 type Secret = Zeroizing<String>;
 
-fn set_password() -> ExitCode {
-    let status = match icloud_session::status() {
-        Ok(s) => s,
-        Err(e) => return fail(e),
-    };
+fn set_password() -> Outcome {
+    let status = icloud_session::status().map_err(failure)?;
     let Some(apple_id) = status.apple_id.filter(|_| status.signed_in) else {
-        return fail_with(
+        return Err(CliError::new(
             "sign_in_required",
             EXIT_SIGN_IN,
-            "sign in first: the password is checked against the signed-in Apple ID",
-            Some(SIGN_IN_HINT),
-        );
+            "not signed in: the password is checked against the signed-in Apple ID",
+        )
+        .hint(SIGN_IN_HINT));
     };
-    let password = match read_password(&apple_id) {
-        Ok(p) if p.is_empty() => {
-            return fail_with("error", EXIT_ERROR, "the password is empty; nothing stored", None);
-        }
-        Ok(p) => p,
-        Err(message) => return fail_with("error", EXIT_ERROR, &message, None),
-    };
+    let password = read_password(&apple_id).map_err(|m| CliError::new("error", EXIT_ERROR, m))?;
+    if password.is_empty() {
+        return Err(CliError::new(
+            "error",
+            EXIT_ERROR,
+            "the password is empty; nothing stored",
+        ));
+    }
     eprintln!("icloud-session: checking the password with a Find My sign-in…");
     // The password travels to the daemon in the D-Bus message only.
     let result = call_daemon("SetPassword", &(password.as_str(),));
     drop(password);
-    match result {
-        Ok(()) => {
-            eprintln!(
-                "icloud-session: Apple accepted the password; stored in the keyring for {apple_id}. \
-                 Find My now re-authorizes itself (icloud-session forget-password to undo)"
-            );
-            run(icloud_session::status().map(|s| status_json(&s)))
-        }
-        Err(code) => code,
-    }
+    result.map_err(failure)?;
+    let s = icloud_session::status().map_err(failure)?;
+    Ok(status_response(
+        &s,
+        Some(&format!(
+            "Apple accepted the password; stored in the keyring for {apple_id}. Find My now \
+             re-authorizes itself (`icloud-session forget-password` to undo)."
+        )),
+    ))
 }
 
 /// From the terminal without echo, else all of stdin (one trailing newline
-/// dropped).
+/// dropped). The terminal prompt is the password's source, not a question:
+/// it is asked whenever stdin is a terminal, in every output mode.
 fn read_password(apple_id: &str) -> Result<Secret, String> {
     if std::io::stdin().is_terminal() {
         let p = rpassword::prompt_password(format!("Apple ID password for {apple_id}: "))
@@ -482,21 +513,22 @@ fn strip_newline(mut s: Secret) -> Secret {
     s
 }
 
-/// Calls a daemon method that answers nothing, reporting a failure as
-/// [`fail`] does (a D-Bus error name the client library has no variant
-/// for, e.g. `PasswordRejected`, is classified by [`service_failure`]).
-fn call_daemon<B>(method: &str, body: &B) -> Result<(), ExitCode>
+/// Calls a daemon method that answers nothing. A D-Bus error the client
+/// library has no variant for (e.g. `PasswordRejected`) arrives as
+/// [`Error::Daemon`].
+fn call_daemon<B>(method: &str, body: &B) -> Result<(), Error>
 where
     B: serde::Serialize + zbus::zvariant::DynamicType,
 {
-    let conn = zbus::blocking::Connection::session().map_err(|e| fail(Error::from(e)))?;
-    conn.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body)
-        .map(drop)
-        .map_err(|e| fail(Error::from(e)))
+    let conn = zbus::blocking::Connection::session()?;
+    conn.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use icloud_session::{ERROR_PASSWORD_REJECTED, Error};
+
     #[test]
     fn the_cli_definition_is_consistent() {
         use clap::CommandFactory;
@@ -504,38 +536,37 @@ mod tests {
     }
 
     #[test]
-    fn a_service_error_tells_an_unreachable_daemon_from_its_own_failure() {
-        use super::ServiceFailure::{Daemon, Unreachable};
-        use super::service_failure;
-        // No bus, or a broken connection: zbus's own message.
-        assert_eq!(
-            service_failure("I/O error: No such file or directory (os error 2)"),
-            Unreachable
-        );
-        assert_eq!(service_failure("Invalid D-Bus method reply"), Unreachable);
-        // The bus cannot reach or start the daemon.
-        for name in [
-            "org.freedesktop.DBus.Error.ServiceUnknown",
-            "org.freedesktop.DBus.Error.NameHasNoOwner",
-            "org.freedesktop.DBus.Error.NoReply",
-            "org.freedesktop.DBus.Error.Spawn.ChildExited",
-        ] {
-            assert_eq!(service_failure(&format!("{name}: why")), Unreachable, "{name}");
+    fn errors_map_to_the_shared_codes_and_exits() {
+        let daemon = |name: &str| Error::Daemon {
+            name: name.into(),
+            message: "why".into(),
+        };
+        let cases = [
+            (Error::Service("gone".into()), "session_service", 5),
+            (daemon("io.github.ferdousbhai.ICloudSession.Error.Failed"), "error", 1),
+            (daemon(ERROR_PASSWORD_REJECTED), "password_rejected", 3),
+            (Error::KeyringUnavailable("locked".into()), "keyring_unavailable", 5),
+            (Error::FindMyAuthRequired, "find_my_auth_required", 3),
+            (Error::BadResponse("html".into()), "bad_response", 5),
+            (Error::Offline("x".into()), "offline", 5),
+            (Error::Network("x".into()), "network", 5),
+            (http(401), "session_rejected", 3),
+            (http(503), "http", 5),
+            (http(404), "http", 1),
+        ];
+        for (e, code, exit) in cases {
+            let what = format!("{e:?}");
+            let f = super::failure(e);
+            assert_eq!((f.code.as_str(), f.exit), (code, exit), "{what}");
         }
-        // The daemon answered with an error.
-        assert_eq!(
-            service_failure("io.github.ferdousbhai.ICloudSession.Error.Failed: storing failed: x"),
-            Daemon {
-                name: "io.github.ferdousbhai.ICloudSession.Error.Failed",
-                detail: "storing failed: x"
-            }
-        );
-        assert_eq!(
-            service_failure("org.freedesktop.DBus.Error.UnknownMethod: no such method"),
-            Daemon {
-                name: "org.freedesktop.DBus.Error.UnknownMethod",
-                detail: "no such method"
-            }
-        );
+        let f = super::failure(daemon(ERROR_PASSWORD_REJECTED));
+        assert_eq!(f.message, "why");
+    }
+
+    fn http(status: u16) -> Error {
+        Error::Http {
+            status,
+            body: String::new(),
+        }
     }
 }

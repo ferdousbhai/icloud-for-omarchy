@@ -464,6 +464,18 @@ impl Env {
         child.wait_with_output().unwrap()
     }
 
+    /// The CLI run piped (the default machine mode): its stdout must be the
+    /// success envelope; returns `data`.
+    fn cli_data(&self, args: &[&str]) -> Value {
+        let out = self.cli(args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        envelope_data(&out.stdout)
+    }
+
     /// What the daemon wrote to stderr (with `Opts::log`).
     fn log(&self) -> String {
         fs::read_to_string(self.root().join("daemon.log")).unwrap_or_default()
@@ -579,6 +591,27 @@ impl Drop for Env {
         let _ = self.bus.kill();
         let _ = self.bus.wait();
     }
+}
+
+/// `{"ok":true,"data","summary"}` from stdout: returns `data`.
+fn envelope_data(stdout: &[u8]) -> Value {
+    let v: Value =
+        serde_json::from_slice(stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(stdout)));
+    assert_eq!(v["ok"], true, "{v}");
+    assert!(v["summary"].is_string(), "{v}");
+    v["data"].clone()
+}
+
+/// A machine-mode failure: one error document on stdout, nothing on stderr
+/// but progress lines. Returns it.
+fn machine_error(out: &std::process::Output) -> Value {
+    let err: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(err["ok"], false, "{err}");
+    let mut keys: Vec<_> = err.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["error", "ok"], "{err}");
+    err
 }
 
 fn call<R: serde::de::DeserializeOwned + zbus::zvariant::Type>(conn: &Connection, method: &str) -> zbus::Result<R> {
@@ -936,7 +969,7 @@ fn apple_ending_the_session_says_why_until_a_sign_in_even_across_a_restart() {
     assert_eq!(sign_in_required_message(&conn), SESSION_ENDED);
     let out = env.cli(&["validate", "--json"]);
     assert_eq!(out.status.code(), Some(3));
-    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    let err = machine_error(&out);
     assert_eq!(
         err["error"]["message"],
         format!("sign in to iCloud required: {SESSION_ENDED}")
@@ -1381,63 +1414,111 @@ fn cli_status_validate_sign_in_and_sign_out() {
         ..Default::default()
     });
 
-    let out = env.cli(&["status"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let status = env.cli_data(&["status"]);
     assert_eq!(
         status,
         json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false, "sign_out_reason": null})
     );
 
-    let out = env.cli(&["validate"]);
+    // A machine-mode error is one JSON document on stdout, nothing on
+    // stderr, in every machine mode (piped is one).
+    for mode in [&[][..], &["--json"], &["--quiet"], &["--count"], &["--ids-only"]] {
+        let out = env.cli(&[&["validate"], mode].concat());
+        assert_eq!(out.status.code(), Some(3), "{mode:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), "", "{mode:?}");
+        let err = machine_error(&out);
+        assert_eq!(err["error"]["code"], "sign_in_required");
+        let mut keys: Vec<_> = err["error"].as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["code", "hint", "message"], "{err}");
+        assert!(
+            err["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("icloud-session sign-in")
+        );
+    }
+    // Text mode: error:/hint: lines on stderr, nothing on stdout.
+    let out = env.cli(&["validate", "--styled"]);
     assert_eq!(out.status.code(), Some(3));
-    // --json: the error is one JSON line on stderr, as in every iCloud tool.
-    let out = env.cli(&["validate", "--json"]);
-    assert_eq!(out.status.code(), Some(3));
-    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
-    assert_eq!(err["ok"], false);
-    assert_eq!(err["error"]["code"], "sign_in_required");
-    assert!(
-        err["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("icloud-session sign-in")
-    );
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.starts_with("error: sign in to iCloud required"), "{stderr}");
+    assert!(stderr.contains("\nhint: run `icloud-session sign-in`"), "{stderr}");
+    let out = env.cli(&["status", "--styled"]);
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "Not signed in\n");
 
-    let out = env.cli(&["sign-in"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let status = env.cli_data(&["sign-in"]);
     assert_eq!(status["signed_in"], true);
     assert_eq!(status["dsid"], DSID);
 
+    // Piped: the envelope; --quiet: only its data, the bare object.
     let out = env.cli(&["validate"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        envelope["summary"].as_str().unwrap().contains("someone@example.com"),
+        "{envelope}"
+    );
+    let v = envelope_data(&out.stdout);
     assert_eq!(v["dsid"], DSID);
     assert_eq!(v["webservices"]["findme"], findme_url(&server.url));
+    let quiet: Value = serde_json::from_slice(&env.cli(&["validate", "--quiet"]).stdout).unwrap();
+    assert_eq!(quiet, v);
+    let quiet: Value = serde_json::from_slice(&env.cli(&["--quiet", "status"]).stdout).unwrap();
+    assert_eq!(quiet, env.cli_data(&["status"]));
+    assert_eq!(quiet["signed_in"], true);
+    // --ids-only: the webservice keys, sorted; --count: how many.
+    let mut keys: Vec<String> = v["webservices"].as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    let ids = String::from_utf8(env.cli(&["validate", "--ids-only"]).stdout).unwrap();
+    assert_eq!(ids.lines().collect::<Vec<_>>(), keys);
+    let count = String::from_utf8(env.cli(&["validate", "--count"]).stdout).unwrap();
+    assert_eq!(count.trim(), keys.len().to_string());
+    // Text: who, and the services.
+    let text = String::from_utf8(env.cli(&["validate", "--styled"]).stdout).unwrap();
+    assert!(
+        text.starts_with(&format!("Apple ID: someone@example.com (dsid {DSID})\nServices: ")),
+        "{text}"
+    );
+    let text = String::from_utf8(env.cli(&["status", "--styled"]).stdout).unwrap();
+    assert!(text.starts_with("Signed in as someone@example.com"), "{text}");
+    assert!(text.contains("Find My: not authorized"), "{text}");
+    assert!(text.contains("Password: not stored"), "{text}");
 
     // A window that closes without Find My's session: exit 3, the not-signed-in
-    // code every iCloud tool uses (the JSON code tells it from a sign-in), with
-    // the status still printed.
+    // code every iCloud tool uses (the JSON code tells it from a sign-in), and
+    // only the error on stdout.
     let out = env.cli(&["authorize-find-my", "--json"]);
     assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
-    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(status["find_my_authorized"], false);
-    let err: Value = serde_json::from_str(String::from_utf8_lossy(&out.stderr).lines().last().unwrap()).unwrap();
+    let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "find_my_auth_not_completed");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("still not authorized"),
+        "{err}"
+    );
+    assert!(
+        err["error"]["hint"].as_str().unwrap().contains("authorize-find-my"),
+        "{err}"
+    );
 
     let out = env.cli(&["sign-out"]);
     assert!(out.status.success());
-    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(status["signed_in"], false);
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(envelope["summary"], "Signed out.");
+    assert_eq!(envelope["data"]["signed_in"], false);
+    let out = env.cli(&["sign-out", "--styled"]);
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("Signed out.\nNot signed in"));
 
     // --no-wait opens the window and answers at once; status shows the rest.
-    let out = env.cli(&["sign-in", "--no-wait"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let _: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let _ = env.cli_data(&["sign-in", "--no-wait"]);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        let status: Value = serde_json::from_slice(&env.cli(&["status"]).stdout).unwrap();
+        let status = env.cli_data(&["status"]);
         if status["signed_in"] == true && status["signing_in"] == false {
             break;
         }
@@ -1451,8 +1532,9 @@ fn cli_status_validate_sign_in_and_sign_out() {
     assert_eq!(env.cli(&["bogus"]).status.code(), Some(2));
     let out = env.cli(&["--json", "sign-in", "--later"]);
     assert_eq!(out.status.code(), Some(2));
-    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "usage");
+    assert!(out.stderr.is_empty());
     // The password managers' own CLIs pipe into set-password instead.
     assert_eq!(env.cli(&["set-password", "--from-bitwarden"]).status.code(), Some(2));
     // Every command has its own --help.
@@ -1679,12 +1761,11 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
     // client library (validate) or a direct daemon call (set-password).
     let out = env.cli(&["validate", "--json"]);
     assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
-    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "keyring_unavailable", "{err}");
     let out = env.cli_with(&["set-password", "--json"], "pw\n", &[]);
     assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let err: Value = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+    let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "keyring_unavailable", "{err}");
 
     // The keyring answers again (with a password stored): the next
@@ -2012,9 +2093,13 @@ fn cli_sign_in_ends_when_the_daemon_dies() {
     };
     let out = cli.wait_with_output().unwrap();
     assert_eq!(status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
-    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(printed["signing_in"], false);
-    assert_eq!(printed["signed_in"], false);
+    // Only the error on stdout (piped: a machine mode); it says still signed out.
+    let err = machine_error(&out);
+    assert_eq!(err["error"]["code"], "sign_in_not_completed", "{err}");
+    assert!(
+        err["error"]["message"].as_str().unwrap().contains("signed out"),
+        "{err}"
+    );
     if let Ok(pid) = fs::read_to_string(&pid_file) {
         let _ = Command::new("kill").arg(pid.trim()).status();
     }
@@ -2242,9 +2327,7 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
 
     // The CLI authorizes again; signing out forgets it.
     *accepted.lock().unwrap() = "fmip2".into();
-    let out = env.cli(&["authorize-find-my"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let printed = env.cli_data(&["authorize-find-my"]);
     assert_eq!(printed["find_my_authorized"], true);
     assert_eq!(printed["signing_in"], false);
     s.post_json(&init, &json!({})).unwrap();
@@ -2607,18 +2690,19 @@ fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
     // Credentials rejected: exit 3, code password_rejected.
     let out = env.cli_with(&["set-password", "--json"], "also wrong\n", &[]);
     assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
-    let err: Value = serde_json::from_str(String::from_utf8_lossy(&out.stderr).lines().last().unwrap()).unwrap();
+    let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "password_rejected", "{err}");
     assert!(err["error"]["message"].as_str().unwrap().contains("refused"), "{err}");
     assert!(err["error"]["hint"].as_str().unwrap().contains("set-password"), "{err}");
     assert_eq!(env.secrets()[0]["secret"], "wrong");
     assert!(!String::from_utf8_lossy(&out.stderr).contains("also wrong"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("also wrong"));
 
     // set-password with the right one (stdin, not a terminal): verified
     // with a sign-in, stored, and Find My authorized by it.
     let out = env.cli_with(&["set-password"], &format!("{PASSWORD}\n"), &[]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let printed = envelope_data(&out.stdout);
     assert_eq!(printed["find_my_password_stored"], true);
     assert_eq!(printed["find_my_authorized"], true);
     let secrets = env.secrets();
@@ -2639,12 +2723,14 @@ fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
     autofill.set_good("changed on Apple's side too");
     autofill.set_failing(true);
     let out = env.cli_with(&["set-password"], "changed on Apple's side too\n", &[]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
     // A failure the daemon reports is exit 1, not an unreachable daemon.
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = machine_error(&out);
+    assert_eq!(err["error"]["code"], "error", "{err}");
+    let message = err["error"]["message"].as_str().unwrap();
     assert!(
-        stderr.contains("stored the password, but the Find My sign-in with it failed"),
-        "{stderr}"
+        message.contains("stored the password, but the Find My sign-in with it failed"),
+        "{message}"
     );
     assert_eq!(env.secrets()[0]["secret"], "changed on Apple's side too");
     assert!(prop::<bool>(&conn, "FindMyPasswordStored"));
@@ -2696,10 +2782,8 @@ fn sign_out_keeps_the_stored_password_and_forget_password_removes_it() {
     let out = env.cli_with(&["set-password"], PASSWORD, &[]);
     assert_eq!(out.status.code(), Some(3));
 
-    let out = env.cli(&["forget-password"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let printed = env.cli_data(&["forget-password"]);
     assert_eq!(env.secrets(), json!([]));
-    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(printed["find_my_password_stored"], false);
     assert_eq!(autofill.runs(), 0);
 }
@@ -2728,14 +2812,12 @@ fn the_call_that_starts_the_daemon_already_sees_the_stored_password() {
         ..Default::default()
     });
     env.store_password(PASSWORD);
-    let out = env.cli(&["status"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let printed = env.cli_data(&["status"]);
     assert_eq!(printed["signed_in"], true, "{printed}");
     assert_eq!(printed["find_my_password_stored"], true, "{printed}");
 }
 
-/// The CLI's last stderr line as JSON, run with `--json` against `address`.
+/// The CLI's error document (stdout, stderr empty), run with `--json` against `address`.
 fn cli_error_at(address: &str, args: &[&str]) -> (Option<i32>, Value) {
     let out = Command::new(cli_bin())
         .args(args)
@@ -2745,10 +2827,8 @@ fn cli_error_at(address: &str, args: &[&str]) -> (Option<i32>, Value) {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let err =
-        serde_json::from_str(stderr.lines().last().unwrap_or_default()).unwrap_or_else(|e| panic!("{e}: {stderr}"));
-    (out.status.code(), err)
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "", "{args:?}");
+    (out.status.code(), machine_error(&out))
 }
 
 #[test]
@@ -2771,4 +2851,49 @@ fn an_unreachable_daemon_is_session_service_exit_5() {
         assert_eq!(code, Some(5), "{cmd}: {err}");
         assert_eq!(err["error"]["code"], "session_service", "{cmd}: {err}");
     }
+}
+
+#[test]
+fn skill_prints_the_markdown_and_install_remove_report_paths() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(cli_bin())
+            .args(args)
+            .env_clear()
+            .env("HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    // `skill` alone: the Markdown as it is, even piped.
+    let out = run(&["skill"]);
+    assert!(out.status.success());
+    let body = String::from_utf8(out.stdout).unwrap();
+    assert!(body.starts_with("---\n"), "{body}");
+    assert_eq!(String::from_utf8(run(&["skill", "--json"]).stdout).unwrap(), body);
+
+    let out = run(&["skill", "install"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let data = envelope_data(&out.stdout);
+    let skill_md = home.path().join(".agents/skills/icloud/SKILL.md");
+    assert_eq!(fs::read_to_string(&skill_md).unwrap(), body);
+    let paths: Vec<&str> = data["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&skill_md.to_str().unwrap()), "{data}");
+    assert!(data["notices"].is_array(), "{data}");
+
+    let out = run(&["skill", "remove", "--ids-only"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let ids = String::from_utf8(out.stdout).unwrap();
+    assert!(!ids.trim().is_empty() && !ids.contains('{'), "{ids}");
+    assert!(!skill_md.exists());
+    let out = run(&["skill", "remove", "--styled"]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with("Removed nothing"),
+        "{out:?}"
+    );
 }
