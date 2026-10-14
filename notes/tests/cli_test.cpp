@@ -496,7 +496,7 @@ int main(int argc, char *argv[])
                          == QStringLiteral("pull")
                   && runs.at(0).toObject().value(QStringLiteral("result")).toObject().value(QStringLiteral("stub")).toString()
                          == QStringLiteral("push")
-                  && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --json sync"))
+                  && s.value(QStringLiteral("log")).toString().contains(QStringLiteral("$ icloud-notes-sync --quiet sync"))
                   && stubLog() == QStringList{ QStringLiteral("sync") },
               "cli sync: push, then pull, in one engine run, each half with icloud-notes-sync's JSON");
         // No network: the engine's offline error, exit 5.
@@ -526,7 +526,9 @@ int main(int argc, char *argv[])
             const Run d = cliJson({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") },
                                   { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_EXIT"), QString::number(code) },
                                     { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ERROR"), QStringLiteral("some_code") } });
-            check(d.code == code && d.errorCode() == QStringLiteral("some_code"),
+            // The exec'd engine's error object is on stdout.
+            const QString engineCode = QJsonDocument::fromJson(d.out).object().value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
+            check(d.code == code && engineCode == QStringLiteral("some_code") && d.err.indexOf("\"ok\"") < 0,
                   qPrintable(QStringLiteral("cli diff passes the engine's exit %1 through").arg(code)));
         }
         const Run noEngine = cliJson({ QStringLiteral("diff"), QStringLiteral("alpha"), QStringLiteral("e9") },

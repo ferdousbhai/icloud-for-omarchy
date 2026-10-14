@@ -691,15 +691,18 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, bool json)
 
 // Becomes icloud-notes-sync itself (exec) for push --dry-run, history,
 // diff and restore, in the vault: its output, errors and exit codes are this
-// tool's. The engine takes the vault's lock where it needs it (restore; the
+// tool's (with --json its error object is on stdout, pretty-printed, until
+// this tool's own errors move there too). The engine takes the vault's lock where it needs it (restore; the
 // others only read), honouring --wait.
 int execEngine(NotesBackend &b, const Args &a, const QStringList &toolArgs)
 {
     if (auto f = needSyncTool(b))
         return report(*f, a.json);
-    QStringList args{ NotesBackend::syncToolPath() };
-    if (a.json)
-        args << QStringLiteral("--json");
+    // --quiet: the engine's bare result on stdout (as this tool's --json
+    // prints results), or its error object, pretty-printed, on stdout; a
+    // pipe would otherwise get the engine's JSON envelope, so text needs
+    // --styled.
+    QStringList args{ NotesBackend::syncToolPath(), a.json ? QStringLiteral("--quiet") : QStringLiteral("--styled") };
     if (const auto wait = a.value("--wait"))
         args << QStringLiteral("--wait") << *wait;
     args += toolArgs;
