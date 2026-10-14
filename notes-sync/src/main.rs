@@ -53,22 +53,19 @@ use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
                   {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout (text mode: error: and \
                   hint: lines on stderr).\n\
                   Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory), \
-                  3 not signed in or not set up (sign_in_required: icloud-session sign-in; not_cloned_directory, \
-                  account_mismatch, ...: the error code tells them apart), 4 not found (untracked_file, \
-                  unknown_version_snapshot), 5 a service unavailable (offline, network, session_service, \
-                  keyring_unavailable, iCloud failing a request). status, push --dry-run and diff \
+                  3 not signed in or not set up (sign_in_required, session_rejected: icloud-session sign-in; \
+                  not_cloned_directory, account_mismatch, notes_unavailable, ...: the error code tells them apart), \
+                  4 not found (untracked_file, unknown_version_snapshot), 5 a service unavailable (offline, network, \
+                  session_service, keyring_unavailable, bad_response, iCloud failing a request; an HTTP 4xx \
+                  cloudkit_request_failed is 1). status, push --dry-run and diff \
                   report their changes in the result and exit 0.\n\
                   clone, pull, push, sync and restore take the vault's lock, shared with the Notes app (icloud-notes); \
                   a busy lock is the error vault_busy (exit 1).",
-    disable_version_flag = true
+    version
 )]
 struct Cli {
     #[command(flatten)]
     out: OutputFlags,
-
-    /// Print the version
-    #[arg(short = 'V', long)]
-    version: bool,
 
     /// How long clone/pull/push/sync/restore wait for the vault's lock: default 30 when another run or a
     /// background sync holds it, none while the Notes window does
@@ -177,10 +174,6 @@ fn main() -> ExitCode {
     };
     let mode = cli.out.mode();
 
-    if cli.version {
-        let version = env!("CARGO_PKG_VERSION");
-        return ExitCode::from(Response::new(serde_json::json!({ "version": version }), version).print(mode));
-    }
     let Some(command) = cli.command else {
         if !mode.is_machine() {
             use clap::CommandFactory;

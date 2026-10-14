@@ -46,19 +46,20 @@ fn machine_error(o: &Output) -> Value {
     error
 }
 
+/// clap's plain `<bin> <version>` in every mode, as in every iCloud tool.
 #[test]
-fn version_prints_the_package_version() {
-    let o = run_here(&["--styled", "--version"]);
-    assert_eq!(o.status.code(), Some(0));
-    assert_eq!(stdout(&o).trim(), env!("CARGO_PKG_VERSION"));
-}
-
-#[test]
-fn quiet_version_prints_an_object_in_either_flag_order() {
-    for args in [["--quiet", "--version"], ["--version", "--quiet"]] {
-        let o = run_here(&args);
-        let parsed: Value = serde_json::from_str(&stdout(&o)).unwrap();
-        assert_eq!(parsed, serde_json::json!({"version": env!("CARGO_PKG_VERSION")}));
+fn version_is_plain_text_in_every_mode() {
+    let want = format!("icloud-notes-sync {}", env!("CARGO_PKG_VERSION"));
+    for args in [
+        &["--version"][..],
+        &["-V"],
+        &["--styled", "--version"],
+        &["--quiet", "--version"],
+        &["--version", "--json"],
+    ] {
+        let o = run_here(args);
+        assert_eq!(o.status.code(), Some(0), "{args:?}");
+        assert_eq!(stdout(&o).trim(), want, "{args:?}");
     }
 }
 
