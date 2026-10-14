@@ -164,8 +164,8 @@ parsing):
 
 - `cli`: the exit codes (`EXIT_OK` 0, `EXIT_ERROR` 1, `EXIT_USAGE` 2,
   `EXIT_SIGN_IN` 3, `EXIT_NOT_FOUND` 4, `EXIT_UNAVAILABLE` 5), `confirm`
-  (a `[y/N]` question), and the legacy `report`/`parse` for tools not yet
-  on `output` (one-line JSON error on stderr with `--json`).
+  (a `[y/N]` question), and the deprecated `report`/`parse` for tools not
+  yet on `output` (one-line JSON error on stderr with `--json`).
 - `output`: the product output contract. `OutputFlags` (`--json`,
   `--styled`, `--quiet`, `--ids-only`, `--count`; combinable, resolved
   ids-only > count > quiet > json > styled > terminal ? text : JSON),
@@ -175,7 +175,16 @@ parsing):
   returns the exit code), `CliError` (code, message, hint, exit; machine
   modes print it on stdout, text mode as `error:`/`hint:` on stderr), and
   `interactive(mode)` (prompt only in text mode with stdin and stdout a
-  terminal). JSON objects it writes always start with `ok`.
+  terminal). The envelope and the error object always start with `ok`
+  (`--quiet` prints the bare `data`). `Mode` is `#[non_exhaustive]`.
+  The shared wording, so one situation reads the same in every tool:
+  `SIGN_IN_HINT`, `FIND_MY_AUTH_HINT`, `SESSION_SERVICE_HINT`,
+  `NETWORK_HINT`, `KEYRING_HINT`, `SERVICE_TROUBLE_HINT`,
+  `sign_in_message(reason)`, `sign_in_required()`; and the shared mapping
+  of this crate's `Error` (`session_failure(&e)`) and of an HTTP status
+  (`http_failure(status, message)`: 401/421 that persists →
+  `session_rejected` exit 3, 5xx → `http` exit 5, other → `http` exit 1).
+  Every exit-5 error carries a hint.
 
 ## D-Bus interface
 

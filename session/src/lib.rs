@@ -290,11 +290,8 @@ impl Status {
 /// command line reporting [`Error::SignInRequired`], which carries no
 /// reason. Never a reason in mock mode.
 pub fn sign_in_required_message() -> String {
-    let required = Error::SignInRequired.to_string();
-    match status().ok().filter(|s| !s.signed_in).and_then(|s| s.sign_out_reason) {
-        Some(reason) => format!("{required}: {reason}"),
-        None => required,
-    }
+    let reason = status().ok().filter(|s| !s.signed_in).and_then(|s| s.sign_out_reason);
+    output::sign_in_message(reason.as_deref())
 }
 
 /// The mock base URL when mock mode is on (`ICLOUD_SESSION_MOCK` set to

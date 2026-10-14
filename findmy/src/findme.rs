@@ -90,6 +90,7 @@ impl SessionTransport {
             icloud_session::Error::SignInRequired
                 | icloud_session::Error::KeyringUnavailable(_)
                 | icloud_session::Error::Service(_)
+                | icloud_session::Error::Daemon { .. }
         ) {
             self.session = None;
         }

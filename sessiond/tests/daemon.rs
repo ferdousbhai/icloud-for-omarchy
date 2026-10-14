@@ -466,6 +466,16 @@ impl Env {
 
     /// The CLI run piped (the default machine mode): its stdout must be the
     /// success envelope; returns `data`.
+    /// `status`'s data: its envelope is printed whether signed in (exit 0)
+    /// or not (exit 3).
+    fn cli_status(&self) -> Value {
+        let out = self.cli(&["status"]);
+        let data = envelope_data(&out.stdout);
+        let want = if data["signed_in"] == true { 0 } else { 3 };
+        assert_eq!(out.status.code(), Some(want), "{data}");
+        data
+    }
+
     fn cli_data(&self, args: &[&str]) -> Value {
         let out = self.cli(args);
         assert!(
@@ -1414,7 +1424,13 @@ fn cli_status_validate_sign_in_and_sign_out() {
         ..Default::default()
     });
 
-    let status = env.cli_data(&["status"]);
+    // Signed out: the status is still printed, with exit 3.
+    let out = env.cli(&["status"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(out.stderr.is_empty());
+    let status = envelope_data(&out.stdout);
+    let quiet: Value = serde_json::from_slice(&env.cli(&["status", "--quiet"]).stdout).unwrap();
+    assert_eq!(quiet, status);
     assert_eq!(
         status,
         json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false, "sign_out_reason": null})
@@ -1446,7 +1462,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     assert!(stderr.starts_with("error: sign in to iCloud required"), "{stderr}");
     assert!(stderr.contains("\nhint: run `icloud-session sign-in`"), "{stderr}");
     let out = env.cli(&["status", "--styled"]);
-    assert!(out.status.success());
+    assert_eq!(out.status.code(), Some(3));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "Not signed in\n");
 
     let status = env.cli_data(&["sign-in"]);
@@ -1518,7 +1534,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
     let _ = env.cli_data(&["sign-in", "--no-wait"]);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        let status = env.cli_data(&["status"]);
+        let status = env.cli_status();
         if status["signed_in"] == true && status["signing_in"] == false {
             break;
         }

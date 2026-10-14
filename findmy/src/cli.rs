@@ -9,7 +9,7 @@
 //! action without `--yes` when nobody can be asked; 3 not signed in, Find My
 //! needs the Apple password (after `icloud-session`'s own re-authorization
 //! with a stored password failed), Find My not enabled, or iCloud still
-//! refusing the session (HTTP 401/421); 4 not found; 5 offline, no network,
+//! refusing the session (`session_rejected`, HTTP 401/421); 4 not found; 5 offline, no network,
 //! `icloud-sessiond` unreachable, the keyring locked, an unreadable answer or
 //! an iCloud server error (HTTP 5xx). The JSON `code` tells them apart. A
 //! failure in a machine mode is `{"ok":false,"error":{"code","message","hint"?}}`
@@ -22,7 +22,9 @@ use clap::{Parser, Subcommand};
 use icloud_session::cli::{
     self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
 };
-use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
+use icloud_session::output::{
+    self, CliError, FIND_MY_AUTH_HINT, Mode, OutputFlags, Response, SERVICE_TROUBLE_HINT, SIGN_IN_HINT,
+};
 use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
 
@@ -55,7 +57,8 @@ Exit codes:
     be asked
   3 sign_in_required (icloud-session sign-in), find_my_auth_required
     (icloud-session authorize-find-my), find_my_unavailable (Find My is not
-    on for this Apple ID), http 401/421 (iCloud refuses the session)
+    on for this Apple ID), session_rejected (iCloud keeps refusing the
+    session although icloud-sessiond still holds it: sign in again)
   4 not_found
   5 offline, network, session_service (icloud-sessiond unreachable),
     keyring_unavailable, bad_response, http 5xx";
@@ -187,46 +190,34 @@ fn other(msg: impl Into<String>) -> Failure {
     CliError::new("error", EXIT_ERROR, msg)
 }
 
-const SIGN_IN_HINT: &str = "run `icloud-session sign-in` (or Sign In in the app)";
+/// The shared sign-in hint, plus the app's own button.
+fn sign_in_hint() -> String {
+    format!("{SIGN_IN_HINT}, or Sign In in the app")
+}
 
-/// A Find My failure as the contract's code, exit code, message and hint.
+/// A Find My failure as the contract's code, exit code, message and hint:
+/// the shared mapping of `icloud_session::output` (`session_failure`,
+/// `http_failure`), plus Find My's own `find_my_unavailable`, `bad_response`
+/// for an answer it cannot read, and `unsupported`.
 fn find_error(e: findme::Error) -> Failure {
     use findme::Error as F;
-    use icloud_session::Error as S;
     let msg = e.to_string();
+    let with_app_hint = |e: CliError| {
+        if e.hint.as_deref() == Some(SIGN_IN_HINT) {
+            e.hint(sign_in_hint())
+        } else {
+            e
+        }
+    };
     match e {
-        F::SignInRequired => CliError::new(
-            "sign_in_required",
-            EXIT_SIGN_IN,
-            icloud_session::sign_in_required_message(),
-        )
-        .hint(SIGN_IN_HINT),
-        F::FindMyAuthRequired => CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, msg)
-            .hint("run `icloud-session authorize-find-my` (to stop being asked: `icloud-session set-password`)"),
+        F::SignInRequired => output::sign_in_required().hint(sign_in_hint()),
+        F::FindMyAuthRequired => CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, msg).hint(FIND_MY_AUTH_HINT),
         F::NoService => CliError::new("find_my_unavailable", EXIT_SIGN_IN, msg)
             .hint("turn on Find My on one of this Apple ID's devices, or sign in with another Apple ID"),
-        F::Http(401 | 421) => CliError::new("http", EXIT_SIGN_IN, format!("{msg}: iCloud refuses the session"))
-            .hint(format!("sign in again: {SIGN_IN_HINT}")),
-        F::Http(500..) => {
-            CliError::new("http", EXIT_UNAVAILABLE, msg).hint("iCloud is having trouble; try again later")
-        }
-        F::Http(_) => CliError::new("http", EXIT_ERROR, msg),
-        F::Parse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint("try again later"),
+        F::Http(status) => with_app_hint(output::http_failure(status, msg)),
+        F::Parse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint(SERVICE_TROUBLE_HINT),
         F::Unsupported(m) => CliError::new("unsupported", EXIT_ERROR, m),
-        F::Session(S::Offline(_)) => {
-            CliError::new("offline", EXIT_UNAVAILABLE, msg).hint("check the network connection and try again")
-        }
-        F::Session(S::Network(_)) => {
-            CliError::new("network", EXIT_UNAVAILABLE, msg).hint("check the network connection and try again")
-        }
-        F::Session(S::Service(_)) => CliError::new("session_service", EXIT_UNAVAILABLE, msg)
-            .hint("is icloud-session installed? `icloud-session status` tells"),
-        F::Session(S::KeyringUnavailable(_)) => {
-            CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg).hint("unlock the keyring and try again")
-        }
-        F::Session(S::Io(_)) => CliError::new("io", EXIT_ERROR, msg),
-        // The rest are mapped to their own variants by `From`.
-        F::Session(_) => other(msg),
+        F::Session(s) => with_app_hint(output::session_failure(&s)),
     }
 }
 
@@ -688,6 +679,35 @@ mod tests {
     fn the_cli_definition_is_consistent() {
         use clap::CommandFactory;
         Args::command().debug_assert();
+    }
+
+    #[test]
+    fn failures_use_the_shared_codes_exits_and_hints() {
+        use findme::Error as F;
+        use icloud_session::Error as S;
+        let cases = [
+            (F::Http(421), "session_rejected", 3),
+            (F::Http(401), "session_rejected", 3),
+            (F::Http(503), "http", 5),
+            (F::Http(404), "http", 1),
+            (F::NoService, "find_my_unavailable", 3),
+            (F::Parse("x".into()), "bad_response", 5),
+            (F::Session(S::Offline("x".into())), "offline", 5),
+            (F::Session(S::Service("x".into())), "session_service", 5),
+            (F::Session(S::KeyringUnavailable("x".into())), "keyring_unavailable", 5),
+            (F::Session(S::Io(std::io::Error::other("x"))), "io", 1),
+        ];
+        for (e, code, exit) in cases {
+            let what = format!("{e:?}");
+            let f = find_error(e);
+            assert_eq!((f.code.as_str(), f.exit), (code, exit), "{what}");
+            assert!(exit != 5 || f.hint.is_some(), "{what}");
+        }
+        let f = find_error(F::Http(421));
+        assert_eq!(f.hint.as_deref(), Some(sign_in_hint().as_str()));
+        assert!(f.hint.unwrap().starts_with(SIGN_IN_HINT));
+        let f = find_error(F::Session(S::Offline("x".into())));
+        assert_eq!(f.hint.as_deref(), Some(output::NETWORK_HINT));
     }
 
     #[test]
