@@ -19,37 +19,50 @@
 # vault as the app would.
 #
 # ICLOUD_NOTES_SYNC_STUB_EXIT=N (with ICLOUD_NOTES_SYNC_STUB_ERROR=CODE,
-# default "internal"): sync, pull, push and diff fail at once with exit N and
+# default "internal"): sync, pull, push, clone and diff fail at once with exit N and
 # that error code, giving no answer, as the engine does for a vault it cannot
 # use (not_cloned_directory, account_mismatch, ...).
 # ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR=1: such a failure also ends stderr with
 # an older engine's one-line error (sorted keys), which the app must keep
 # out of its log.
 orig=("$@")
-quiet="" json="" styled=""
+quiet="" json="" styled="" ids="" count=""
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --quiet) quiet=1 ;;
     --json) json=1 ;;
     --styled) styled=1 ;;
+    --ids-only) ids=1 ;;
+    --count) count=1 ;;
     --wait) shift ;;
     *) args+=("$1") ;;
   esac
   shift
 done
 set -- "${args[@]}"
-# Precedence quiet > json > styled > (not a terminal: the envelope).
-if [ -n "$quiet" ]; then mode=quiet
+# Precedence ids-only > count > quiet > json > styled > (not a terminal:
+# the envelope). --ids-only prints "stub-id", --count "1", whatever the
+# command (the tests only check they are passed through).
+if [ -n "$ids" ]; then mode=ids
+elif [ -n "$count" ]; then mode=count
+elif [ -n "$quiet" ]; then mode=quiet
 elif [ -n "$json" ] || [ -z "$styled" ]; then mode=json
 else mode=text
 fi
 
-# result JSON [TEXT]: the result in the run's mode.
+# result JSON [TEXT] [META]: the result in the run's mode; META (a JSON
+# object) is the envelope's meta, as the real tool's clone/pull/push
+# ({"lines":[...]}) and diff ({"text":...}) carry their text report.
 result() {
   case "$mode" in
+    ids) echo stub-id ;;
+    count) echo 1 ;;
     quiet) printf '%s\n' "$1" ;;
-    json) printf '{"ok":true,"data":%s,"summary":"stub"}\n' "$1" ;;
+    json)
+      if [ -n "${3:-}" ]; then printf '{"ok":true,"data":%s,"summary":"stub","meta":%s}\n' "$1" "$3"
+      else printf '{"ok":true,"data":%s,"summary":"stub"}\n' "$1"
+      fi ;;
     text) printf '%s\n' "${2:-stub}" ;;
   esac
 }
@@ -158,18 +171,21 @@ elif [ "$1" = "restore" ]; then
   # Stands for "back to the last synced copy": the file gets a marker line.
   printf 'restored\n' >> "$2"
   result "{\"file\":\"$2\"}" "Restored $2 to match the last synced copy."
+elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_EXIT:-}" ]; then
+  stub_fail
 elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
   # A clone into the last argument: the state file and one note.
   dir="${@: -1}"
   mkdir -p "$dir/.icloud-notes" "$dir/Notes"
   echo '{"layoutVersion":4,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-notes/state.json"
   printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
-  result '{"written":1}' "Cloned 1 notes"
+  result '{"written":1}' "Cloned 1 notes" '{"lines":["Cloned 1 notes"]}'
 elif [ "$1" = "diff" ]; then
   stub_fail
   echo "Fetching the current remote copy..." >&2
   text=$'--- remote\n+++ local\n- old\n+ new'
-  result '{"kind":"snapshot","from":"e9","to":"remote","hasDifferences":true,"text":"--- remote\n+++ local\n- old\n+ new"}' "$text"
+  result '{"kind":"snapshot","from":"e9","to":"remote","hasDifferences":true,"text":"--- remote\n+++ local\n- old\n+ new"}' "$text" \
+    '{"text":"--- remote\n+++ local\n- old\n+ new"}'
   exit 0
 elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   # ICLOUD_NOTES_SYNC_STUB_LOG: a file each pull/push appends its verb to.
@@ -211,7 +227,7 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
         fail sign_in_required "Not signed in to iCloud." "$sign_in_hint" 3 ;;
     esac
   fi
-  result "{\"stub\":\"$1\",\"ok\":true}" "stub $1 ok"
+  result "{\"stub\":\"$1\",\"ok\":true}" "stub $1 ok" "{\"lines\":[\"stub $1 ok\"]}"
 else
   echo "stub: unknown args: ${orig[*]}" >&2
   exit 2

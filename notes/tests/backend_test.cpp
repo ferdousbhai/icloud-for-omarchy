@@ -602,9 +602,16 @@ int main(int argc, char *argv[])
     check(b.historyError().isEmpty() && b.syncMessage() == QStringLiteral("Diff done."), "seam diff exit 0 is success");
     check(!b.diffText().contains(QStringLiteral("Fetching")), "seam diff text is stdout alone");
 
+    b.clearLog();
     b.runPull();
     waitForSync(b);
     check(b.syncMessage() == QStringLiteral("Pull done."), "seam pull done");
+    // A pull runs with --json: the envelope's data is the result, and its
+    // meta.lines (the text report) is what reaches the log, not the JSON.
+    check(b.syncLog().contains(QStringLiteral("$ icloud-notes-sync --json pull\n"))
+              && b.syncLog().contains(QStringLiteral("\nstub pull ok")) && !b.syncLog().contains(QStringLiteral("\"ok\""))
+              && QJsonDocument::fromJson(b.lastOutput()).object().value(QStringLiteral("stub")).toString() == QStringLiteral("pull"),
+          "seam pull logs the envelope's meta.lines; its data is the result");
     // The engine takes the vault's lock itself: the app, holding it, hands
     // its descriptor down, so the engine neither waits on the app nor runs
     // beside it without the lock.
@@ -718,18 +725,19 @@ int main(int argc, char *argv[])
         check(b.syncMessage() == QStringLiteral("Pull done."), "seam the next sync after offline goes through");
     }
     {
-        // A standalone --quiet pull (the command line's --json) finds no
-        // network: its code is only in the error object on stdout (pretty,
-        // keys sorted), and it is still a quiet skip.
-        b.setToolJson(true);
+        // A standalone pull (--json) finds no network: its code is only in
+        // the error object on stdout (pretty, keys sorted), and it is still a
+        // quiet skip.
+        b.clearLog();
         qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
         b.runPull();
         waitForSync(b);
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
-        b.setToolJson(false);
+        check(b.syncLog().count(QStringLiteral("could not be reached")) == 1 && !b.syncLog().contains(QStringLiteral("\"ok\"")),
+              "seam pull offline logs one line, no JSON");
         check(b.syncMessage() == QStringLiteral("Offline. Notes syncs again once iCloud can be reached.") && !b.authExpired()
                   && b.lastExitCode() == 5 && b.lastError().value(QStringLiteral("code")).toString() == QStringLiteral("offline"),
-              "seam --quiet pull offline: the code from the stdout error object, a quiet skip");
+              "seam pull offline: the code from the stdout error object, a quiet skip");
         check(b.lastOutput() == QByteArray(R"({"error":{"code":"offline","hint":"Check the network connection.","message":"offline: dns error: no network"}})"),
               "seam a failed run's output is its error, as a failed half's");
     }
@@ -759,17 +767,35 @@ int main(int argc, char *argv[])
                   && !log.contains(QStringLiteral("\"ok\":false")) && !log.contains(QStringLiteral("{\"error\"")),
               "seam the engine's error is logged by its message; no JSON leaks into the sync log");
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR");
-        // The same from a standalone --quiet pull: the code comes from the
-        // error object on stdout, so exit 3 is still no sign-in.
-        b.setToolJson(true);
+        // The same from the window's own pull, push and clone (--json): the
+        // code comes from the error object on stdout, so exit 3 with
+        // not_cloned_directory or account_mismatch is still no sign-in, and
+        // the log gets the error's message, not its JSON.
+        b.clearLog();
         b.runPull();
         waitForSync(b);
-        b.setToolJson(false);
         waitUntil([] { return false; }, 300);
         check(!b.authExpired() && fake.reportCalls == 0 && b.lastExitCode() == 3
                   && b.lastError().value(QStringLiteral("code")).toString() == QStringLiteral("not_cloned_directory")
-                  && b.syncMessage() == QStringLiteral("Pull failed. See log."),
-              "seam --quiet pull exit 3 with not_cloned_directory is a failure, not a sign-in");
+                  && b.syncMessage() == QStringLiteral("Pull failed. See log.")
+                  && b.syncLog().contains(QStringLiteral("pull failed: stub failure"))
+                  && !b.syncLog().contains(QStringLiteral("\"ok\"")),
+              "seam pull exit 3 with not_cloned_directory is a failure, not a sign-in");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "account_mismatch");
+        for (const QString &verb : { QStringLiteral("Pull"), QStringLiteral("Push") }) {
+            if (verb == u"Pull")
+                b.runPull();
+            else
+                b.runPush();
+            waitForSync(b);
+            waitUntil([] { return false; }, 300);
+            check(!b.authExpired() && fake.reportCalls == 0 && b.lastExitCode() == 3
+                      && b.lastError().value(QStringLiteral("code")).toString() == QStringLiteral("account_mismatch")
+                      && b.syncMessage() == verb + QStringLiteral(" failed. See log."),
+                  qPrintable(QStringLiteral("seam the window's %1 exiting 3 with account_mismatch neither pauses nor reports")
+                                 .arg(verb.toLower())));
+        }
+        qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "not_cloned_directory");
         // Exit 2 (a usage error) is no sign-in either.
         qputenv("ICLOUD_NOTES_SYNC_STUB_EXIT", "2");
         qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "usage");
@@ -892,7 +918,7 @@ int main(int argc, char *argv[])
     b.runPull();
     waitForSync(b);
     check(waitUntil([&] { return fake.reportCalls == 1 && b.idle(); }) && !b.authExpired()
-              && b.syncLog().count(QStringLiteral("$ icloud-notes-sync --styled pull\n")) == 1,
+              && b.syncLog().count(QStringLiteral("$ icloud-notes-sync --json pull\n")) == 1,
           "seam failed report is unknown, not paused, and not retried");
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
     fake.reportFails = false;
@@ -900,8 +926,8 @@ int main(int argc, char *argv[])
     fake.reportCalls = 0;
 
     // A sign-in required is the code `sign_in_required`, whatever the text
-    // says; exit 3 counts only when no code came through at all (a run with
-    // --styled, whose error is text). Any other failure, even one naming
+    // says; exit 3 counts only when no code came through at all (an engine
+    // that printed only text). Any other failure, even one naming
     // icloud-md's `reauthenticate` (with exit 1), is only a failure.
     {
         fake.reportCalls = 0;
@@ -1157,7 +1183,7 @@ int main(int argc, char *argv[])
     const QString fresh = scratch.path() + QStringLiteral("/fresh");
     QDir().mkpath(fresh);
     qputenv("ICLOUD_NOTES_VAULT", fresh.toUtf8());
-    const QString cloneArgs = QStringLiteral("$ icloud-notes-sync --styled clone --account 1006081438 --non-interactive ") + fresh;
+    const QString cloneArgs = QStringLiteral("$ icloud-notes-sync --json clone --account 1006081438 --non-interactive ") + fresh;
     {
         NotesBackend first;
         waitForSignIn(first);
@@ -1167,6 +1193,26 @@ int main(int argc, char *argv[])
         waitForIdle(first); // the stub rejects clone
         check(first.syncLog().contains(cloneArgs), "clone uses --account <dsid>");
         check(fake.signInCalls == signIns, "clone signed in opens no sign-in");
+        // Another account's vault: exit 3, but account_mismatch is no sign-in.
+        fake.reportCalls = 0;
+        bool cloneOk = true, cloneDone = false;
+        const auto c = QObject::connect(&first, &NotesBackend::cloneFinished, &first, [&](bool ok) {
+            cloneOk = ok;
+            cloneDone = true;
+        });
+        qputenv("ICLOUD_NOTES_SYNC_STUB_EXIT", "3");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "account_mismatch");
+        first.runClone();
+        waitUntil([&] { return cloneDone; });
+        waitForIdle(first);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXIT");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_ERROR");
+        QObject::disconnect(c);
+        waitUntil([] { return false; }, 300);
+        check(cloneDone && !cloneOk && !first.authExpired() && fake.reportCalls == 0
+                  && first.lastError().value(QStringLiteral("code")).toString() == QStringLiteral("account_mismatch")
+                  && first.syncLog().contains(QStringLiteral("clone failed: stub failure")),
+              "clone exiting 3 with account_mismatch is a failure, not a sign-in");
     }
     // Signed out: sign in through icloud-session first, then clone.
     fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("Dsid"), QString() } });

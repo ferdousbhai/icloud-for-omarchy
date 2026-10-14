@@ -189,11 +189,12 @@ QJsonObject contractError(QByteArrayView text)
     return object.value(QStringLiteral("error")).toObject();
 }
 
-// The engine's error for a failed run. With --quiet the engine prints it on
-// stdout as the contract error document (a pull, push, status or history,
-// or a sync that gave no answer); a half of runSync carries it as
-// {"error":{...}}. An older engine's last contract error line on stderr is
-// the fallback. Empty when none says (a --styled run's error is text).
+// The engine's error for a failed run. In its machine modes (--json,
+// --quiet) the engine prints it on stdout as the contract error document (a
+// pull, push, clone, diff, status or history, or a sync that gave no
+// answer); a half of runSync carries it as {"error":{...}}. An older
+// engine's last contract error line on stderr is the fallback. Empty when
+// none says (a crash, plain text).
 QJsonObject engineError(const QByteArray &output, const QByteArray &stderrText)
 {
     QJsonObject error = contractError(output);
@@ -205,6 +206,15 @@ QJsonObject engineError(const QByteArray &output, const QByteArray &stderrText)
             error = contractError(*it);
     }
     return error;
+}
+
+// The JSON envelope {"ok":true,"data","summary","meta"?} a `--json` run
+// prints on success, else empty.
+QJsonObject successEnvelope(const QByteArray &output)
+{
+    const QJsonObject object = QJsonDocument::fromJson(output.trimmed()).object();
+    const QJsonValue ok = object.value(QStringLiteral("ok"));
+    return ok.isBool() && ok.toBool() ? object : QJsonObject();
 }
 
 QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
@@ -283,17 +293,16 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
             emit vaultChanged();
     });
 
-    // Separate channels: with --quiet, stdout carries only the JSON result or
-    // the error object (parsed), and progress and warnings go to stderr
-    // (logged). runSync logs its result's report once it is done
-    // (finishSyncHalves), and leaves out the progress lines (and an older
-    // engine's stderr error line, which its result repeats).
-    connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this, [this] {
-        const QByteArray out = m_syncProcess.readAllStandardOutput();
-        m_captured += out;
-        if (m_mode != Mode::Sync)
-            appendLog(QString::fromUtf8(out));
-    });
+    // Separate channels: every run is in a machine mode (--json or --quiet),
+    // so stdout carries only JSON (parsed, never logged as it is), and
+    // progress and warnings go to stderr (logged). The run's text report is
+    // logged once it is done: pull, push and clone's meta.lines, diff's
+    // meta.text (finishRun), each half's lines of runSync
+    // (finishSyncHalves), or the error's message and hint. runSync leaves
+    // out the progress lines (and an older engine's stderr error line,
+    // which its result repeats).
+    connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this,
+            [this] { m_captured += m_syncProcess.readAllStandardOutput(); });
     connect(&m_syncProcess, &QProcess::readyReadStandardError, this, [this] {
         const QByteArray err = m_syncProcess.readAllStandardError();
         m_capturedErr += err;
@@ -1517,7 +1526,7 @@ void NotesBackend::continueClone()
         // icloud-notes-sync defaults to; a vault cloned with --filename-as-title from
         // the CLI is still read correctly (see vaultTitleMode).
         startSync(Mode::Plain,
-                  { QStringLiteral("--styled"), QStringLiteral("clone"), QStringLiteral("--account"), m_dsid,
+                  { QStringLiteral("--json"), QStringLiteral("clone"), QStringLiteral("--account"), m_dsid,
                     QStringLiteral("--non-interactive"), rootPath() },
                   QStringLiteral("Clone"));
         return;
@@ -1528,23 +1537,17 @@ void NotesBackend::continueClone()
     }
 }
 
-// The engine's output mode for a pull or push: --quiet (the bare JSON data,
-// or the error object, on stdout) for the command line's --json, else
-// --styled (its text report, for the log; stdout is a pipe, so without it
-// the engine would print the JSON envelope).
-QString NotesBackend::toolOutputFlag() const
-{
-    return m_toolJson ? QStringLiteral("--quiet") : QStringLiteral("--styled");
-}
-
+// Pull, push, clone and diff run with --json: the envelope carries the
+// result and the text report for the log (meta), and a failure is the error
+// object, so its code always comes through (exit 3 is not only a sign-in).
 void NotesBackend::runPull()
 {
-    startSync(Mode::Plain, { toolOutputFlag(), QStringLiteral("pull") }, QStringLiteral("Pull"));
+    startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("pull") }, QStringLiteral("Pull"));
 }
 
 void NotesBackend::runPush()
 {
-    startSync(Mode::Plain, { toolOutputFlag(), QStringLiteral("push") }, QStringLiteral("Push"));
+    startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("push") }, QStringLiteral("Push"));
 }
 
 void NotesBackend::runSync()
@@ -1571,7 +1574,7 @@ void NotesBackend::runDiff(const QString &ref)
 {
     if (m_currentNote.isEmpty() || ref.trimmed().isEmpty())
         return;
-    startSync(Mode::Diff, { QStringLiteral("--styled"), QStringLiteral("diff"), vaultRelative(m_currentNote), ref.trimmed() },
+    startSync(Mode::Diff, { QStringLiteral("--json"), QStringLiteral("diff"), vaultRelative(m_currentNote), ref.trimmed() },
               QStringLiteral("Diff"));
 }
 
@@ -1638,6 +1641,30 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // exit 0; only a non-zero exit is a failure.
     const bool ok = exitCode == 0;
 
+    // A --json run (pull, push, clone, diff): the envelope's data is the
+    // result, its meta the text report, logged here.
+    const bool enveloped = m_mode == Mode::Plain || m_mode == Mode::Diff;
+    QString diffText;
+    if (ok && enveloped) {
+        const QJsonObject envelope = successEnvelope(output);
+        const QJsonValue data = envelope.value(QStringLiteral("data"));
+        const QJsonObject meta = envelope.value(QStringLiteral("meta")).toObject();
+        m_captured = data.isObject()  ? QJsonDocument(data.toObject()).toJson(QJsonDocument::Compact)
+                     : data.isArray() ? QJsonDocument(data.toArray()).toJson(QJsonDocument::Compact)
+                                      : QByteArray();
+        if (m_mode == Mode::Diff) {
+            diffText = meta.contains(QStringLiteral("text")) ? meta.value(QStringLiteral("text")).toString()
+                                                             : data.toObject().value(QStringLiteral("text")).toString();
+        } else {
+            QStringList lines;
+            for (const QJsonValue &line : meta.value(QStringLiteral("lines")).toArray())
+                lines << line.toString();
+            const QString report = lines.isEmpty() ? envelope.value(QStringLiteral("summary")).toString() : lines.join(u'\n');
+            if (!report.isEmpty())
+                appendLog(report);
+        }
+    }
+
     QVariantMap parsed;
     if (ok && m_mode == Mode::Preview)
         parsed = SyncModel::parseStatusJson(m_captured);
@@ -1652,6 +1679,15 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
         m_captured = QJsonDocument(QJsonObject{ { QStringLiteral("error"), m_lastError } }).toJson(QJsonDocument::Compact);
     const QString code = m_lastError.value(QStringLiteral("code")).toString();
     const bool offline = !ok && isNetworkError(code);
+    // A --json run's error is only on stdout: log it as a sync half's is.
+    if (enveloped && !m_lastError.isEmpty()) {
+        const QString message = m_lastError.value(QStringLiteral("message")).toString();
+        const QString hint = m_lastError.value(QStringLiteral("hint")).toString();
+        if (offline)
+            appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(label.toLower(), message));
+        else
+            appendLog(label.toLower() + QStringLiteral(" failed: ") + message + (hint.isEmpty() ? QString() : u'\n' + hint));
+    }
 
     // A failure that only a sign-in fixes says `sign_in_required` (exit 3,
     // which it shares with "not cloned", "another account's vault" and the
@@ -1694,7 +1730,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
         emit historyReady(error.isEmpty());
         break;
     case Mode::Diff:
-        m_diffText = ok ? QString::fromUtf8(m_captured) : QString();
+        m_diffText = diffText;
         m_historyError = error;
         emit historyChanged();
         emit historyReady(error.isEmpty());

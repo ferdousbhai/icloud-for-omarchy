@@ -241,10 +241,23 @@ icloud-notes sync | pull | push [--dry-run] | clone
 icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
 ```
 
-- Every command takes `--json`: the result as JSON on stdout, an error as
-  one JSON line on stderr, `{"ok":false,"error":{"code","message","hint"?}}`
-  (`hint`, when present, is the command that fixes it). Parse it as JSON:
-  key order is not part of the contract (icloud-notes prints `ok` last).
+- Output, the contract every iCloud tool shares: text on a terminal, and
+  when piped (or with `--json`) the JSON envelope
+  `{"ok":true,"data":…,"summary":"…"}`, where `data` is the result each
+  command's `--help` describes. `--quiet` prints only `data`, `--styled`
+  forces text, `--ids-only` one id per line (the note paths of `list`,
+  `search` and `read`, the folder paths of `folders`, the path a change
+  touched) and `--count` the number of results. The flags combine:
+  ids-only > count > quiet > json > styled.
+- A failure in those machine modes is one document on stdout,
+  `{"ok":false,"error":{"code","message","hint"?}}` (`hint`, when present,
+  is how to fix it), with nothing on stderr; in text mode it is `error: …`
+  and `hint: …` on stderr. Parse it as JSON: `ok` comes first, but the keys
+  inside `data` and `error` are sorted (QJsonObject), and key order is not
+  part of the contract.
+- `sync`, `pull`, `push` and `clone` print their result `{ok, runs, log}`
+  even when they fail, with the failure in it as `error`, and exit with its
+  code; so does a change's `--push` (in `data.sync`).
 - Exit codes, the table every iCloud tool shares
   ([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells cases apart:
   - 0 ok. `status`, `push --dry-run` and `diff` report their changes in
@@ -260,7 +273,9 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
   - 5 unavailable: `offline`/`network`, `session_unavailable`
     (icloud-session unreachable), `sync_tool_missing`.
   - `push --dry-run`, `history`, `diff` and `restore` are the engine
-    itself, so its exit codes and error codes come through unchanged.
+    itself, so its exit codes and error codes come through unchanged; it
+    gets the output flags as given (with none, `--styled` on a terminal and
+    `--json` when piped), so its output follows the same contract.
 - Commands that change the vault or sync take the vault's lock first, as
   the window and the background sync do. While the window is open it holds
   that lock, so they are refused at once (`vault_busy`): make the change in
@@ -271,8 +286,9 @@ icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
 - A change stays on this computer until the next sync (the window's, the
   background timer's, or `icloud-notes sync`); `--push` on any change runs
   one right after it.
-- `delete`, `delete-folder` and `restore` ask on a terminal and need
-  `--yes` otherwise. Nothing else ever asks.
+- `delete`, `delete-folder` and `restore` ask only in text mode with
+  stdin and stdout a terminal, and need `--yes` otherwise (exit 2). Nothing
+  else ever asks.
 - `--vault DIR` works on another vault (tests use a scratch one).
 
 ## Your files
