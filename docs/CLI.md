@@ -57,7 +57,7 @@ timer's sync). All of it is new, in the app binary: see
 | Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (the engine's `restore` existed) |
 | Link your Apple Notes: Clone my notes | `icloud-notes clone` | added |
 | Sign-in banner, days left, Sign in | `icloud-notes status` (`signed_in`, `sign_in_days_left`), then `icloud-session sign-in` | added |
-| Sync log | each command's output; `sync --json` carries `log` | added |
+| Sync log | each command's output; `sync`'s data carries `log` | added |
 | Background sync while closed | `icloud-notes --sync` (the systemd timer) | existed |
 | Refresh | nothing: every command reads the disk afresh | n/a |
 | Merging unsaved editor text with a change on disk | nothing: a command writes whole under the lock, with no editor buffer | n/a |
@@ -102,7 +102,7 @@ timer's sync). All of it is new, in the app binary: see
 
 | In the window / daemon | Command | |
 |---|---|---|
-| State, expiry | `icloud-session status` | existed |
+| State, expiry | `icloud-session status` (exits 3 signed out) | existed |
 | Sign in (Apple's page) | `icloud-session sign-in [--no-wait]` | `--no-wait` added |
 | Find My's password page | `icloud-session authorize-find-my [--no-wait]` | `--no-wait` added |
 | Remember the password for Find My | `icloud-session set-password` (a no-echo prompt, or stdin: `bw get password "Apple ID" \| icloud-session set-password`, `op read "op://…/password" \| icloud-session set-password`) | existed |
@@ -142,7 +142,7 @@ icloud-notes package and off PATH, and `icloud-notes` is the one command
 for notes: it runs the engine for `sync`, `pull`, `push` and `clone` the
 way the window does (a refused sign-in is reported to icloud-session), and
 for `push --dry-run`, `history [--records]`, `diff` and `restore` becomes
-the engine (exec), with `--json` and `--wait` passed on: the first three
+the engine (exec), with the output flags and `--wait` passed on: the first three
 only read and take no lock, so they work while the window is open. The engine's other flags are the app's to choose: `clone
 --filename-as-title` (the app clones with titles in the first line) and
 `pull --defer-renames` are not exposed.
@@ -154,85 +154,218 @@ PATH (a development build).
 
 ## Conventions every tool follows
 
-- **Output modes** (the shared product contract): human-readable text on a
-  terminal, the JSON envelope `{"ok":true,"data","summary","meta"?}` when
-  piped. `--json` forces the envelope, `--styled` text, `--quiet` only the
-  `data`, `--ids-only` one id per line, `--count` their number. Progress and
-  warnings go to stderr. (Rolling out tool by tool: `icloud-findmy` follows it;
-  the others still print the bare result on stdout and take `--json` only.)
-- **`--json`** on every command: the result as JSON on stdout (stdout
-  carries nothing else), progress and warnings on stderr. `icloud-session`
-  prints JSON anyway; `--json` there makes its errors JSON too.
-- **Errors** go to stderr. With `--json` the last line of stderr is one
-  JSON object, the shared product contract (the process exit code carries the
-  number):
+All five tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
+`icloud-photos`, `icloud-findmy`) follow the same output contract
+(`session/src/output.rs` for the Rust tools; `notes/src/cli.cpp` mirrors it).
+
+### Output modes
+
+| Flag | stdout |
+|---|---|
+| (none, on a terminal) | human-readable text |
+| (none, piped) | the JSON envelope, as `--json` |
+| `--json` | the envelope `{"ok":true,"data":…,"summary":"…","meta":{…}?}` |
+| `--styled` | human-readable text, even when piped |
+| `--quiet` | only `data`, as JSON: the bare result. Use this when you want the result and nothing else |
+| `--ids-only` | one id per line (what an id is depends on the command, see below) |
+| `--count` | one number: how many results |
+
+- The flags are global (before or after the command) and may be combined;
+  the strongest wins: `--ids-only` > `--count` > `--quiet` > `--json` >
+  `--styled`.
+- `data` is the command's result; the [JSON shapes](#json-shapes) below
+  describe `data`. `summary` is one line for people ("6 items", "Created
+  Notes/Packing.md"). `meta` is optional extra context (`icloud-notes-sync`:
+  `meta.lines`, the text report of clone, pull and push, and `meta.text`,
+  diff's text).
+- In a machine mode (everything but text) stdout is exactly one JSON
+  document (or the id lines, or the number), pretty-printed over several
+  lines: parse the whole of stdout, not a line. Progress (`[1/2] sending …`,
+  `icloud-notes:progress:…`), status lines and warnings go to stderr.
+- `ok` comes first; any other key order is not part of the contract
+  (`icloud-notes` sorts the keys inside `data`).
+- `--ids-only` on a command without ids prints the result as `--quiet`
+  would, plus `note: this command has no ids to list; printing its result
+  instead` on stderr. `--count` on a command without a list counts 1 for an
+  object (an array: its length).
+- `--version` prints `TOOL VERSION` as plain text in every mode;
+  `icloud-session skill` (no action) prints the skill's Markdown as it is in
+  every mode.
+
+**`ok:true` with a non-zero exit.** The envelope's `ok` says the command
+produced its result; the exit code says whether everything succeeded. A
+batch that partly failed, or a sync that ran but failed, prints its data
+and exits non-zero:
+
+- `icloud-photos download`/`delete`/`upload`: exit 1 (or 3 if the sign-in
+  lapsed mid-upload) when some items failed; each failed item carries its
+  own `error`.
+- `icloud-notes sync`/`pull`/`push`/`clone`: their data gains `ok:false`
+  and `error:{code, message, hint?}` and the process exits with that
+  failure's code (offline: 5). A change's `--push` puts the sync's result,
+  with its `error`, in `data.sync`, and exits with the sync's code.
+- `icloud-notes-sync sync`: a failed half is `{ok:false, exit_code, error}`
+  inside `data`; the exit is the worse half's.
+- `status` in `icloud-session`, `icloud-photos` and `icloud-notes` prints
+  the status and exits 3 when signed out.
+
+### Errors
+
+A command that could not produce its result prints only an error:
+
+- machine modes (`--json`, piped, `--quiet`, `--ids-only`, `--count`): one
+  JSON document on **stdout**, stderr empty:
 
   ```json
-  {"ok":false,"error":{"code":"sign_in_required","message":"Not signed in to iCloud.","hint":"Run `icloud-session sign-in` ..."}}
+  {
+    "ok": false,
+    "error": {
+      "code": "sign_in_required",
+      "message": "sign in to iCloud required",
+      "hint": "run `icloud-session sign-in` (a person signs in in the window)"
+    }
+  }
   ```
 
-  `code` is stable and machine-readable; `hint` is optional; `message` and
-  `hint` are for people. (The success envelope `{"ok":true,"data","summary",
-  "meta"}` when piped is still being rolled out; today a success is the bare
-  result on stdout.)
+- text mode: `error: <message>` and `hint: <hint>` on **stderr**, stdout
+  empty.
+
+`code` is stable and machine-readable: branch on it together with the exit
+code. `message` says what happened and `hint` (optional) how to fix it; both
+are for people. Remediation commands (`run icloud-session sign-in`) are in
+`hint`, never in `message`. A usage error carries the hint ``run `TOOL
+--help` ``.
+
+### Other conventions
+
 - **`--help`** on every command (`TOOL COMMAND --help`), with the command's
-  JSON shape where it has one; `TOOL help` or `TOOL --help` lists them all.
-- **Nothing asks unless stdin is a terminal.** Destructive commands
-  (`icloud-notes delete`, `delete-folder`, `restore`; `icloud-photos
-  delete`; `icloud-findmy play-sound`, `lost-mode`) ask on a terminal and, without one, refuse with a usage error
-  (2) unless `--yes` is given.
+  JSON shape (of `data`) where it has one; `TOOL help` or `TOOL --help`
+  lists them all, with the output modes and the exit codes.
+- **Nothing asks unless it is in text mode with stdin and stdout on a
+  terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
+  `restore`; `icloud-photos delete`; `icloud-findmy play-sound`,
+  `lost-mode`) ask there; anywhere else they refuse with `usage` (exit 2)
+  unless `--yes` is given. (`icloud-session set-password` reads the password
+  from a terminal without echo, or from stdin.)
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
-  `ICLOUD_SESSION_MOCK_URL` (photos and findmy: a fake
-  Apple server), `icloud-photos --data-dir DIR`, `icloud-findmy --data-dir
-  DIR`,
-  `icloud-notes --vault DIR` (or `ICLOUD_NOTES_VAULT`).
+  `ICLOUD_SESSION_MOCK_URL` (no D-Bus; photos and findmy talk to a fake
+  Apple server, `examples/` in each crate), `icloud-photos --data-dir DIR`,
+  `icloud-findmy --data-dir DIR`, `icloud-notes --vault DIR` (or
+  `ICLOUD_NOTES_VAULT`).
+
+### `--ids-only` and `--count` per command
+
+| Tool | `--ids-only` | `--count` |
+|---|---|---|
+| icloud-session | `validate`: the webservice keys, sorted; `skill install`/`remove`: the paths | the same, counted |
+| icloud-notes | `list`, `search`: note paths; `read`: its path; `folders`: folder paths (not the vault root `""`); a change: the path it touched (`export-pdf`: the PDF); `history`, `push --dry-run`, `diff`, `restore`: the engine's | `list`, `search`: notes; `folders`: folders (not the root); `status`: notes; engine commands: the engine's |
+| icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
+| icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`: item ids; `download`, `delete`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
+| icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
 
 ### Exit codes
 
-The codes are the shared product contract (0 ok, 1 other failure, 2 usage,
-3 not signed in, 4 not found, 5 a service unavailable). `status`, `push
---dry-run` and `diff` report their changes in the result and exit 0.
+The shared table. The JSON `code` tells failures with the same exit apart.
 
-| Code | Meaning | session | notes | notes-sync (engine) | photos | findmy |
-|---|---|---|---|---|---|---|
-| 0 | ok | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 1 | error (the JSON `code` says which) | ✓ | ✓ | ✓ | ✓ (also: some items of a batch failed) | ✓ |
-| 2 | usage (bad arguments; a destructive command without `--yes` and no terminal) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 3 | not signed in: `icloud-session sign-in`; or Find My needs the Apple password: `icloud-session authorize-find-my` (the JSON `code` tells them apart) | ✓ (also: the window closed without a sign-in or authorization) | ✓ (`status` too, when signed out) | ✓ | ✓ (`status` too, when signed out) | ✓ |
-| 4 | not found | | | | ✓ | ✓ |
-| 5 | a service or a required tool is unavailable (no network, offline, the daemon unreachable) | ✓ | | ✓ | | |
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | ok. `push --dry-run`, `diff` and the engine's `status` report their changes in the result and exit 0 | |
+| 1 | other failure (a partly failed batch, a refused edit, a busy vault, an HTTP 4xx, …) | read `error.code` (or the items' `error`) |
+| 2 | invalid usage or request: bad arguments, an ambiguous name, something that already exists, a destructive command without `--yes` and nobody to ask | fix the call |
+| 3 | not signed in, credentials rejected, or not set up: `sign_in_required`, `session_rejected` → `icloud-session sign-in`; `find_my_auth_required` → `icloud-session authorize-find-my`; `password_rejected`; `*_unavailable` (the service is off for this Apple ID); `not_cloned` | a person acts; see `error.code` and `hint` |
+| 4 | not found | check the name or id |
+| 5 | a service or a required tool unavailable: no network (`offline`, `network`), icloud-sessiond unreachable (`session_service`), a locked keyring, iCloud failing (HTTP 5xx, `bad_response`), the sync engine or icloud-session missing | retry later, or fix what `hint` names |
 
 ### Error codes
 
-| Tool | `error.code` values |
+Every code each tool can emit, by exit.
+
+**icloud-session**
+
+| Exit | Codes |
 |---|---|
-| all | `usage`, `sign_in_required` |
-| icloud-session | `sign_in_not_completed`, `find_my_auth_required`, `find_my_auth_not_completed` (these three exit 3), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `session_service` (daemon unreachable), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `http` (these four exit 5), `bad_response` (Apple answered with something unreadable), `io`, `error` |
-| icloud-notes | `not_found`, `ambiguous`, `not_cloned`, `already_cloned`, `exists`, `read_only`, `has_attachments`, `guardrail`, `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `choices_mismatch` (exit 2), `no_synced_copy`, `vault_busy`, `vault_lock`, `session_unavailable`, `sync_tool_missing`, `offline`, `network` (iCloud out of reach: retry later), `sync_failed`, `cancelled`, `error` (all exit 1 but `choices_mismatch`) |
-| icloud-notes-sync | the error's class in snake case: `untracked_file`, `not_cloned_directory`, `ambiguous_tracked_file`, `already_cloned_directory`, `account_mismatch`, `unknown_version_snapshot`, `vault_from_newer_tool`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `cloudkit_request_failed`, `offline` (no network at all), `network` (a connection that failed; `offline` and `network` exit 5), `internal`, ... |
-| icloud-photos | `not_found` (exit 4), `cancelled`, `error` |
-| icloud-findmy | `find_my_auth_required` (exit 3), `not_found` (exit 4), `ambiguous`, `cancelled`, `unsupported`, `no_fix`, `error` |
+| 1 | `error` (icloud-sessiond answered with a failure), `io`, `http` (a 4xx), `skill_unmanaged` (a path `skill install` did not write is in the way) |
+| 2 | `usage` |
+| 3 | `sign_in_required`, `sign_in_not_completed` (the window closed and you are still signed out), `find_my_auth_required`, `find_my_auth_not_completed`, `password_rejected` (Apple refused the password given to `set-password`), `session_rejected` (Apple keeps answering 401/421 although icloud-sessiond still holds the session: sign in again); also `status` while signed out (the status is printed) |
+| 5 | `session_service` (icloud-sessiond unreachable), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `bad_response` (Apple answered with something unreadable), `http` (a 5xx) |
+
+**icloud-notes**
+
+| Exit | Codes |
+|---|---|
+| 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed otherwise: see the log), `cancelled`, `error` |
+| 2 | `usage`, `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
+| 3 | `sign_in_required`, `not_cloned` (run `icloud-notes clone`); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
+| 4 | `not_found` (no such note or folder) |
+| 5 | `offline`, `network` (iCloud out of reach: retry later), `session_unavailable` (icloud-session not available), `sync_tool_missing` (the engine is missing) |
+
+`push --dry-run`, `history`, `diff` and `restore` are the engine itself, so
+they exit with the engine's codes, below.
+
+**icloud-notes-sync** (`code` is the error's class in snake case)
+
+| Exit | Codes |
+|---|---|
+| 1 | `internal`, `vault_busy`, `vault_lock`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
+| 2 | `usage`, `ambiguous_tracked_file`, `already_cloned_directory` |
+| 3 | `sign_in_required`, `session_rejected` (both: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` (Notes is not on for this Apple ID) |
+| 4 | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a zone that no longer exists (`ZONE_NOT_FOUND`) |
+| 5 | `offline` (no network at all), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
+
+**icloud-photos**
+
+| Exit | Codes |
+|---|---|
+| 1 | `cancelled`, `io`, `error`, `http` (a 4xx); a batch with failed items (the data lists them) |
+| 2 | `usage` (also `delete` without `--yes` when nobody can be asked) |
+| 3 | `sign_in_required`, `photos_unavailable` (iCloud Photos is not on for this Apple ID), `session_rejected`; also `status` while signed out (the status is printed) |
+| 4 | `not_found` (no such item or album in the catalog: `sync` first) |
+| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+
+**icloud-findmy**
+
+| Exit | Codes |
+|---|---|
+| 1 | `unsupported`, `no_fix` (no fresh fix in time), `cancelled`, `io`, `error`, `http` (a 4xx) |
+| 2 | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
+| 3 | `sign_in_required`, `find_my_auth_required` (`icloud-session authorize-find-my`, or `set-password` once), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` |
+| 4 | `not_found` (no device matches; the hint lists them) |
+| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+
+In mock mode (`ICLOUD_SESSION_MOCK=1`) there is no daemon to confirm a
+session, so a 401/421 is `sign_in_required`, not `session_rejected`.
 
 ## JSON shapes
 
-Stable: fields are added, never renamed or removed without a note here.
+These are the `data` of the envelope (what `--quiet` prints). Stable:
+fields are added, never renamed or removed without a note here.
 
 ### icloud-session
 
-`status`, `sign-in`, `authorize-find-my`, `forget-password`, `sign-out`:
+`status`, `sign-in`, `authorize-find-my`, `forget-password`,
+`set-password`, `sign-out` (`sign-in`/`authorize-find-my` print it once the
+window closes, or at once with `--no-wait`; when the window closes without
+success they print only the error):
 
 ```json
 {"signed_in":true,"apple_id":"you@example.com","full_name":"Your Name","dsid":"1234567890","expires_at":1793000000,"signing_in":false,"find_my_authorized":true,"find_my_password_stored":false,"sign_out_reason":null}
 ```
 
-`validate`: `{"dsid","apple_id","webservices":{"findme":"https://...",...}}`.
+`expires_at` is Unix seconds (null for a sign-in without "Keep me signed
+in"); `sign_out_reason` says why the account was last signed out.
+
+| Command | `data` |
+|---|---|
+| `validate` | `{dsid, apple_id, webservices:{"findme":"https://...",...}}` (keys sorted) |
+| `skill install`, `skill remove` | `{paths:[path], notices:[text]}` |
+| `skill` | not JSON: the Markdown |
 
 ### icloud-notes
 
 NOTE is a vault path (`Notes/Groceries.md`, `.md` optional), an
 apple-note-id, or a title exactly one note has (ignoring case).
 
-| Command | stdout JSON |
+| Command | `data` |
 |---|---|
 | `status` | `{vault, cloned, title_mode, sync_tool, sign_in_known, signed_in, apple_id, sign_in_days_left, lock:{held_by, app_open}, notes, folders, flagged:{FLAG:[path]}}` |
 | `folders` | `[{folder, name, notes, default}]` (`folder` `""` is the vault root, All Notes; counts include descendants) |
@@ -248,35 +381,43 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |
 | `new-folder`, `rename-folder`, `delete-folder` | `{action, folder, from?, sync?}` |
-| `sync`, `pull`, `push`, `clone` (and `sync` under `--push`) | `{ok, runs:[{command, ok, exit_code, result}], log}`; `result` is icloud-notes-sync's own JSON for that run, or `{error:{code, message, ...}}` for a half of `sync` that failed. `sync` is one engine run (`icloud-notes-sync sync`) reported as two runs, `push` then `pull` (no `pull` after a refused sign-in) |
-| `push --dry-run`, `history [--records]`, `diff`, `restore` | icloud-notes-sync's own output |
+| `sync`, `pull`, `push`, `clone` | `{ok, runs:[{command, ok, exit_code, result}], log, error?}`; `result` is icloud-notes-sync's data for that run, or `{error:{code, message, hint?}}` when it failed; `error` (with `ok:false`) says why the whole command failed, and the exit code is that failure's. `sync` is one engine run (`icloud-notes-sync sync`) reported as two runs, `push` then `pull` (no `pull` after a refused sign-in) |
+| `sync` under a change's `--push` | the same object as `sync?`, or `{ok:false, error}` when the sync could not start (signed out, icloud-session missing, …) |
+| `push --dry-run`, `history [--records]`, `diff`, `restore` | icloud-notes-sync's own output (below) |
 
 `flags`: `new` (not synced yet), `conflict`, `read-only`, `missing-id`,
 `foreign-id`, `tables`. `modified` is UTC ISO 8601.
 
 ### icloud-notes-sync (the engine, inside icloud-notes)
 
-`--json` results (shapes first taken from icloud-md): `status`/`push --dry-run`
-`{entries:[{kind, file, resolution, reason?, ...}], unchanged, notices}`,
-`history` `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`
-(with `--records`, `{mode:"records", records:[...]}`), `pull`/`clone`
-summaries; see `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`.
-`sync` (push, then pull, in one run: what the app runs) prints
-`{push, pull, vault_info}` even when a half failed: each half is `{ok,
-exit_code, result, lines}` (`result` the command's own JSON, `lines` its
-human report) or `{ok, exit_code, error}`, `pull` is null when it did not
-run (the push found the sign-in gone, or iCloud out of reach), and
-`vault_info` is what `vault-info` would print after it. It exits with the
-worse half's code, a sign-in required (3) above all. `vault-info` prints `{vault, cloned,
-stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}`;
-`stateDir` is the engine's state directory, `.icloud-notes` (or a layout 3
-vault's `.icloud-md`, until a command that takes the lock moves it; see
-notes-sync/docs/DESIGN.md §1). With `--json`, progress goes to stderr as
-`icloud-notes:progress:...` lines (older engines: `icloud-md:progress:...`).
+| Command | `data` |
+|---|---|
+| `status` | `{entries:[{kind, file, resolution, reason?, ...}], unchanged, notices}` |
+| `push` (and `--dry-run`) | `{dryRun, pushed?, entries:[{kind, file, resolution, outcome?, ...}], unchanged, notices}` |
+| `pull` | `{added, updated, merged, removed, changes:[{kind, file}], conflicts, notices, ...}` |
+| `clone` | `{written, writtenShared, attachmentsDownloaded, notices, ...}` |
+| `history` | `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`; with `--records`, `{mode:"records", records:[...]}` |
+| `diff` | `{kind, from, to, hasDifferences, text}` (`text` also in `meta.text`) |
+| `restore` | `{file}` |
+| `sync` | `{push, pull, vault_info}` (below) |
+| `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}` |
+
+See `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`. `sync` (push,
+then pull, in one run: what the app runs) prints `{push, pull, vault_info}`
+even when a half failed: each half is `{ok, exit_code, result, lines}`
+(`result` the command's own data, `lines` its human report) or `{ok,
+exit_code, error}`; `pull` is null when it did not run (the push found the
+sign-in gone or refused, or iCloud out of reach), and `vault_info` is what
+`vault-info` would print after it. It exits 3 if either half exited 3, else
+with the worse half's code. `stateDir` is the engine's state directory,
+`.icloud-notes` (or a layout 3 vault's `.icloud-md`, until a command that
+takes the lock moves it; see notes-sync/docs/DESIGN.md §1). In a machine
+mode progress goes to stderr as `icloud-notes:progress:...` lines (older
+engines: `icloud-md:progress:...`).
 
 ### icloud-photos
 
-| Command | stdout JSON |
+| Command | `data` |
 |---|---|
 | `status` | `{signed_in, sign_in_error, mock, catalog, catalog_exists, assets, albums, downloaded, last_sync, last_sync_unix, incremental_sync_ready, library_dir, cache_dir, settings, download_mode}` |
 | `sync` | `{mode:"full"\|"incremental", assets, removed, albums, fell_back}` |
@@ -284,9 +425,9 @@ notes-sync/docs/DESIGN.md §1). With `--json`, progress goes to stderr as
 | `list` | `[{id, filename, created, created_unix, kind:"photo"\|"video"\|"live", size, width, height, local_path, live_path}]` |
 | `info` | a `list` row plus `{master_id, deleted, change_tag, original_type, live_type, thumb_path, medium_path, albums:[{id, name}]}` |
 | `thumb` | `{id, path, cache_path}` |
-| `download` | `[{id, path, live_path?, live_error?} \| {id, error}]` |
+| `download` | `[{id, path, live_path, live_error} \| {id, error}]`, one per id asked for, in order |
 | `open` | `{id, path, opened}` |
-| `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, not_in_catalog}`; only `{files}` (exit 1) when every file was skipped |
+| `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, not_in_catalog}` |
 | `delete` | `[{id, deleted, error?}]` |
 | `prune-cache` | `{removed}` |
 | `sign-in` | `{started, mock}` |
@@ -294,10 +435,10 @@ notes-sync/docs/DESIGN.md §1). With `--json`, progress goes to stderr as
 
 ### icloud-findmy
 
-| Command | stdout JSON |
+| Command | `data` |
 |---|---|
 | `devices`, `locate` | `[{id, name, model, class, battery_percent, charging, online, lost_mode, can_play_sound, can_lost_mode, last_fix:{time, timestamp_ms, age_secs, accuracy_m, is_old, lat?, lon?} \| null}]` (`last_fix` is `null` for a device with no fix; `locate`: one object, with coordinates) |
-| `play-sound`, `lost-mode` | `{ok:true, action:"play_sound"\|"lost_mode", device:{id, name}}` |
+| `play-sound`, `lost-mode` | `{action:"play_sound"\|"lost_mode", device:{id, name}}` |
 | `history` | `{device:{id, name}, since, points:[{time, timestamp, lat, lon, accuracy_m, battery_percent}]}` |
 | `prune-history` | `{deleted, remaining, retention_days}` |
 
