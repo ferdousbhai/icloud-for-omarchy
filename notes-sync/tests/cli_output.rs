@@ -102,7 +102,7 @@ fn sign_in_required_exits_3_and_its_hint_names_the_command() {
         Error::SignInRequired
             .hint()
             .unwrap()
-            .contains("Run `icloud-session sign-in`")
+            .contains("run `icloud-session sign-in`")
     );
 }
 

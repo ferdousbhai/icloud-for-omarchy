@@ -269,7 +269,7 @@ fn non_2xx_answers_become_request_failed_with_icloud_md_wording() {
     .unwrap();
     let database = Database::new(transport);
     let err = database.fetch_all_note_records(None, &mut |_| {}).unwrap_err();
-    assert!(matches!(&err, CkError::RequestFailed(_)));
+    assert!(matches!(&err, CkError::RequestFailed { .. }));
     assert_eq!(err.to_string(), "changes/zone request failed (private db): HTTP 500");
     let err = database.fetch_shared_zone_ids().unwrap_err();
     assert_eq!(err.to_string(), "changes/database request failed (shared db): HTTP 503");

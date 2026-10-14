@@ -58,6 +58,11 @@ fn sync_failing_with(error: fn() -> Error) -> (u8, bool, usize) {
 #[test]
 fn a_sign_in_required_on_push_skips_the_pull() {
     assert_eq!(sync_failing_with(|| Error::SignInRequired), (3, false, 1));
+    // iCloud refusing the session the daemon still holds: the pull would too.
+    assert_eq!(
+        sync_failing_with(|| Error::CloudKit(CkError::SessionRejected { status: 421 })),
+        (3, false, 1)
+    );
 }
 
 #[test]

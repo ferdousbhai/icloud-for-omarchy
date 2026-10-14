@@ -43,7 +43,7 @@ fn fetch_shared_zone_ids_fails_when_more_coming_has_no_sync_token() {
         json!({ "moreComing": true, "zones": [zone_entry("_ownerA")] }),
     ]));
     match database.fetch_shared_zone_ids().unwrap_err() {
-        CkError::RequestFailed(m) => assert!(m.contains("moreComing"), "{m}"),
+        CkError::RequestFailed { message: m, .. } => assert!(m.contains("moreComing"), "{m}"),
         other => panic!("{other:?}"),
     }
 }
@@ -55,7 +55,7 @@ fn fetch_shared_zone_ids_fails_when_the_server_repeats_the_sync_token() {
         json!({ "moreComing": true, "syncToken": "page-1", "zones": [zone_entry("_ownerA")] }),
     ]));
     match database.fetch_shared_zone_ids().unwrap_err() {
-        CkError::RequestFailed(m) => assert!(m.contains("same page"), "{m}"),
+        CkError::RequestFailed { message: m, .. } => assert!(m.contains("same page"), "{m}"),
         other => panic!("{other:?}"),
     }
 }

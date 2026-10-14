@@ -45,9 +45,13 @@ pub fn half_exit_code<T>(half: &Result<T, Error>) -> u8 {
     half.as_ref().err().map_or(EXIT_OK, Error::exit_code)
 }
 
-/// Whether a failed push leaves the pull out.
+/// Whether a failed push leaves the pull out: the pull would fail the same
+/// way (the sign-in gone or refused, iCloud out of reach).
 pub fn push_error_skips_pull(error: &Error) -> bool {
-    matches!(error, Error::SignInRequired) || error.is_network()
+    matches!(
+        error,
+        Error::SignInRequired | Error::CloudKit(crate::cloudkit::CkError::SessionRejected { .. })
+    ) || error.is_network()
 }
 
 /// `sync`.

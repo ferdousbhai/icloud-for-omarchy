@@ -120,13 +120,40 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
         ),
         (Error::Usage("bad".into()), "UsageError", "usage", false, 2),
         (
-            Error::CloudKit(CkError::RequestFailed(
-                "records/lookup request failed (private db): HTTP 500".into(),
-            )),
+            Error::CloudKit(CkError::RequestFailed {
+                message: "records/lookup request failed (private db): HTTP 500".into(),
+                status: Some(500),
+            }),
             "CloudKitRequestFailedError",
             "cloudkit_request_failed",
             true,
             5,
+        ),
+        (
+            Error::CloudKit(CkError::request_failed("changes/zone reported moreComing")),
+            "CloudKitRequestFailedError",
+            "cloudkit_request_failed",
+            true,
+            5,
+        ),
+        // iCloud refused the request: not a service outage.
+        (
+            Error::CloudKit(CkError::RequestFailed {
+                message: "Attachment download failed: HTTP 410".into(),
+                status: Some(410),
+            }),
+            "CloudKitRequestFailedError",
+            "cloudkit_request_failed",
+            true,
+            1,
+        ),
+        // Persisting 401/421 while icloud-sessiond holds the sign-in.
+        (
+            Error::CloudKit(CkError::SessionRejected { status: 421 }),
+            "SessionRejectedError",
+            "session_rejected",
+            true,
+            3,
         ),
         (
             Error::CloudKit(CkError::Offline("no route".into())),
@@ -222,10 +249,17 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
         ),
         (
             Error::CloudKit(CkError::UnexpectedResponse("odd".into())),
-            "InternalError",
-            "internal",
-            false,
-            1,
+            "BadResponseError",
+            "bad_response",
+            true,
+            5,
+        ),
+        (
+            Error::from(CkError::from(icloud_session::Error::BadResponse("html".into()))),
+            "BadResponseError",
+            "bad_response",
+            true,
+            5,
         ),
         (Error::Internal("bug".into()), "InternalError", "internal", false, 1),
     ];
@@ -234,6 +268,8 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
         assert_eq!(error.code(), code, "{name}");
         assert_eq!(error.hint().is_some(), has_hint, "{name} hint");
         assert_eq!(error.exit_code(), exit, "{name} ({code})");
+        // Every exit-5 error tells what to do.
+        assert!(exit != 5 || error.hint().is_some(), "{name}");
     }
 }
 
@@ -241,11 +277,10 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
 fn sign_in_required_exits_3_with_the_reauthenticate_marker() {
     assert_eq!(Error::SignInRequired.exit_code(), 3);
     assert_eq!(Error::SignInRequired.code(), "sign_in_required");
-    assert!(
-        Error::SignInRequired
-            .hint()
-            .unwrap()
-            .contains("Run `icloud-session sign-in`")
+    // The hint every iCloud tool gives.
+    assert_eq!(
+        Error::SignInRequired.hint().as_deref(),
+        Some(icloud_session::output::SIGN_IN_HINT)
     );
     assert!(matches!(Error::from(CkError::SignInRequired), Error::SignInRequired));
 }
@@ -271,14 +306,27 @@ fn corrupt_state_file_points_at_recloning() {
 
 #[test]
 fn cloudkit_request_failed_keeps_detail_and_gives_retry_hint() {
-    let error = Error::CloudKit(CkError::RequestFailed(
-        "records/lookup request failed (private db): HTTP 500".into(),
-    ));
+    let error = Error::CloudKit(CkError::RequestFailed {
+        message: "records/lookup request failed (private db): HTTP 500".into(),
+        status: Some(500),
+    });
     assert_eq!(
         error.to_string(),
         "records/lookup request failed (private db): HTTP 500"
     );
-    assert!(error.hint().unwrap().contains("try again"));
+    assert_eq!(
+        error.hint().as_deref(),
+        Some(icloud_session::output::SERVICE_TROUBLE_HINT)
+    );
+}
+
+#[test]
+fn session_rejected_says_so_and_points_at_sign_in() {
+    let error = Error::from(CkError::SessionRejected { status: 401 });
+    assert!(error.to_string().contains("HTTP 401"), "{error}");
+    assert_eq!(error.hint().as_deref(), Some(icloud_session::output::SIGN_IN_HINT));
+    // Not a plain sign-in: the Notes app keeps `sign_in_required` for that.
+    assert!(!matches!(error, Error::SignInRequired));
 }
 
 #[test]

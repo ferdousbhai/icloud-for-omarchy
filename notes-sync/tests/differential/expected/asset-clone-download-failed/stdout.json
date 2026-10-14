@@ -3,6 +3,6 @@
   "error": {
     "code": "cloudkit_request_failed",
     "message": "Attachment download failed: HTTP 410",
-    "hint": "This may be a transient network or iCloud-service issue - wait a moment and try again."
+    "hint": "iCloud refused the request; try again, and report it if it keeps failing."
   }
 }

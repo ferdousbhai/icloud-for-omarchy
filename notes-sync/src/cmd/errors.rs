@@ -8,18 +8,26 @@
 //!   result and exit 0.
 //! - 1 error: anything not below (`internal`, `io`, `vault_busy`,
 //!   `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`,
-//!   `unsupported_vault_layout`, `corrupt_state_file`, …).
+//!   `unsupported_vault_layout`, `corrupt_state_file`, a
+//!   `cloudkit_request_failed` that is an HTTP 4xx, …).
 //! - 2 usage: `usage`, `ambiguous_tracked_file`, `already_cloned_directory`.
 //! - 3 not signed in / not set up for this account: `sign_in_required`,
 //!   `not_cloned_directory`, `unbound_account`, `account_mismatch`,
-//!   `requested_account_mismatch`, `notes_unavailable`. The JSON `code`
-//!   tells them apart; only `sign_in_required` is fixed by signing in.
+//!   `requested_account_mismatch`, `notes_unavailable`, `session_rejected`
+//!   (ckdatabasews keeps answering 401/421 although icloud-sessiond still
+//!   holds the sign-in). The JSON `code` tells them apart; only
+//!   `sign_in_required` and `session_rejected` are fixed by signing in.
 //! - 4 not found: `untracked_file`, `unknown_version_snapshot`, a
 //!   `cloudkit_zone_fetch_failed` whose zone is `ZONE_NOT_FOUND`.
 //! - 5 a service unavailable: `network`, `offline`, `session_service`
-//!   (icloud-sessiond unreachable), `keyring_unavailable`, and iCloud
-//!   failing a request (`cloudkit_request_failed`,
+//!   (icloud-sessiond unreachable), `keyring_unavailable`, `bad_response`
+//!   (an answer that cannot be read), and iCloud failing a request
+//!   (`cloudkit_request_failed` other than a 4xx,
 //!   `cloudkit_zone_fetch_failed`).
+//!
+//! Hints for situations every iCloud tool shares (sign-in, network,
+//! icloud-sessiond, keyring, iCloud trouble) are icloud-session's
+//! (`icloud_session::output::*_HINT`).
 //!
 //! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
 //! `name()` is the error's class name; `code()` is the
@@ -28,6 +36,7 @@
 
 use crate::cloudkit::CkError;
 use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
+use icloud_session::output::{KEYRING_HINT, NETWORK_HINT, SERVICE_TROUBLE_HINT, SESSION_SERVICE_HINT, SIGN_IN_HINT};
 
 pub use icloud_session::cli::{
     EXIT_ERROR, EXIT_INTERNAL, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
@@ -79,8 +88,9 @@ pub enum Error {
     UnknownVersionSnapshot { id: String, file: String },
     #[error("Can't complete this operation: {0}.")]
     VersionContentUnavailable(String),
-    /// Sign-in required: exit 3.
-    #[error("Not signed in to iCloud.")]
+    /// Sign-in required: exit 3. The command line adds why, when
+    /// icloud-sessiond knows (`cmd::output`).
+    #[error("sign in to iCloud required")]
     SignInRequired,
     /// The vault's lock is held (by the Notes window when `app`).
     #[error("{}", if *app { format!("{holder} is open and owns the notes vault while it is open.") } else { format!("{holder} holds the notes vault.") })]
@@ -125,13 +135,21 @@ impl Error {
             {
                 EXIT_NOT_FOUND
             }
+            Error::CloudKit(CkError::SessionRejected { .. }) => EXIT_SIGN_IN,
+            // iCloud refused this request (an expired asset URL, say): not
+            // a service outage.
+            Error::CloudKit(CkError::RequestFailed {
+                status: Some(400..=499),
+                ..
+            }) => EXIT_ERROR,
             Error::CloudKit(
                 CkError::Network(_)
                 | CkError::Offline(_)
                 | CkError::SessionService(_)
                 | CkError::KeyringUnavailable(_)
+                | CkError::UnexpectedResponse(_)
                 | CkError::ZoneFetchFailed { .. }
-                | CkError::RequestFailed(_),
+                | CkError::RequestFailed { .. },
             ) => EXIT_UNAVAILABLE,
             Error::Internal(_) | Error::Io(_) | Error::CloudKit(_) => EXIT_INTERNAL,
             Error::UnsupportedVaultLayout { .. }
@@ -165,7 +183,9 @@ impl Error {
             Error::VaultBusy { .. } => "VaultBusyError",
             Error::VaultLock { .. } => "VaultLockError",
             Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "CloudKitZoneFetchFailedError",
-            Error::CloudKit(CkError::RequestFailed(_)) => "CloudKitRequestFailedError",
+            Error::CloudKit(CkError::RequestFailed { .. }) => "CloudKitRequestFailedError",
+            Error::CloudKit(CkError::SessionRejected { .. }) => "SessionRejectedError",
+            Error::CloudKit(CkError::UnexpectedResponse(_)) => "BadResponseError",
             Error::CloudKit(CkError::Network(_)) => "NetworkError",
             Error::CloudKit(CkError::Offline(_)) => "OfflineError",
             Error::CloudKit(CkError::SessionService(_)) => "SessionServiceError",
@@ -233,7 +253,7 @@ impl Error {
             Error::VersionContentUnavailable(_) => {
                 Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
             }
-            Error::SignInRequired => Some("Run `icloud-session sign-in` to sign in to iCloud again, then retry.".into()),
+            Error::SignInRequired => Some(SIGN_IN_HINT.into()),
             Error::VaultBusy { app: true, .. } => Some(
                 "Notes syncs this vault itself while it is open. Quit it and retry, or pass --wait SECS to wait for it to close."
                     .into(),
@@ -247,18 +267,17 @@ impl Error {
                         .into(),
                 )
             }
-            Error::CloudKit(CkError::ZoneFetchFailed { .. } | CkError::RequestFailed(_)) => Some(
-                "This may be a transient network or iCloud-service issue - wait a moment and try again.".into(),
-            ),
-            Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => {
-                Some("Couldn't reach iCloud - check the network connection, then try again.".into())
-            }
-            Error::CloudKit(CkError::SessionService(_)) => Some(
-                "Check that icloud-sessiond is installed and the D-Bus session bus is running, then try again.".into(),
-            ),
-            Error::CloudKit(CkError::KeyringUnavailable(_)) => {
-                Some("Unlock the keyring (Secret Service) that holds the iCloud session, then try again.".into())
-            }
+            Error::CloudKit(CkError::RequestFailed {
+                status: Some(400..=499),
+                ..
+            }) => Some("iCloud refused the request; try again, and report it if it keeps failing.".into()),
+            Error::CloudKit(
+                CkError::ZoneFetchFailed { .. } | CkError::RequestFailed { .. } | CkError::UnexpectedResponse(_),
+            ) => Some(SERVICE_TROUBLE_HINT.into()),
+            Error::CloudKit(CkError::SessionRejected { .. }) => Some(SIGN_IN_HINT.into()),
+            Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => Some(NETWORK_HINT.into()),
+            Error::CloudKit(CkError::SessionService(_)) => Some(SESSION_SERVICE_HINT.into()),
+            Error::CloudKit(CkError::KeyringUnavailable(_)) => Some(KEYRING_HINT.into()),
             Error::CloudKit(_) | Error::Usage(_) | Error::Internal(_) | Error::Io(_) => None,
         }
     }

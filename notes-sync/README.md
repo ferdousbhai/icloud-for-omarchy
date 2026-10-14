@@ -48,11 +48,11 @@ exit apart:
 | exit | meaning | codes |
 |---|---|---|
 | 0 | ok (`status`, `push --dry-run` and `diff` report their changes in the result) | |
-| 1 | error | `internal`, `io`, `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable` |
+| 1 | error | `internal`, `io`, `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
 | 2 | usage | `usage`, `ambiguous_tracked_file`, `already_cloned_directory` |
-| 3 | not signed in, or the vault isn't set up for this account | `sign_in_required` (sign in with icloud-session), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` |
+| 3 | not signed in, or the vault isn't set up for this account | `sign_in_required` (sign in with icloud-session), `session_rejected` (iCloud keeps answering 401/421 although icloud-sessiond still holds the sign-in: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` |
 | 4 | not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a `ZONE_NOT_FOUND` zone |
-| 5 | a service unavailable | `offline`, `network`, `session_service` (icloud-sessiond unreachable), `keyring_unavailable`, `cloudkit_request_failed`, `cloudkit_zone_fetch_failed` |
+| 5 | a service unavailable | `offline`, `network`, `session_service` (icloud-sessiond unreachable), `keyring_unavailable`, `bad_response` (an answer that cannot be read), `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
 
 Output follows the contract every iCloud tool shares
 ([icloud_session::output](../session/src/output.rs)): text on a terminal;
@@ -72,7 +72,7 @@ snake case; `hint`, when present, says how to fix it), and `error: …` /
 `sync` is for the Notes app: push, then pull, in one run
 over one connection (one icloud-sessiond `Session()` call, one TLS
 connection, one lock). Each half is exactly `push` and `pull`; the pull runs
-unless the push found the sign-in gone or iCloud out of reach. Its data
+unless the push found the sign-in gone or refused (`session_rejected`) or iCloud out of reach. Its data
 is `{"push": HALF, "pull": HALF|null, "vault_info": …}` even when a half
 failed, HALF being `{ok, exit_code, result, lines}` (the command's own data
 and its human report) or `{ok, exit_code, error}` (`{code, message,

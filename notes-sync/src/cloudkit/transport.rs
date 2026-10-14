@@ -22,7 +22,8 @@ pub trait Transport {
     /// `ckdatabasews` base URL, starting with `/database/1/`, query string
     /// included) and return the parsed JSON answer. Non-2xx is
     /// `CkError::Http`; 421/401 that icloud-sessiond confirms is
-    /// `CkError::SignInRequired`.
+    /// `CkError::SignInRequired`, one that persists although it still holds
+    /// the session `CkError::SessionRejected`.
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError>;
 
     /// GET an absolute (signed, cookie-less) asset URL into `dest`; returns
@@ -113,7 +114,10 @@ impl LiveTransport {
 
 impl Transport for LiveTransport {
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, CkError> {
-        let response = self.session.post_json(&format!("{}{path}", self.base), body)?;
+        let response = self
+            .session
+            .post_json(&format!("{}{path}", self.base), body)
+            .map_err(ckdatabasews_error)?;
         serde_json::from_slice(&response.body)
             .map_err(|e| CkError::UnexpectedResponse(format!("invalid JSON from ckdatabasews: {e}")))
     }
@@ -133,6 +137,20 @@ impl Transport for LiveTransport {
     fn shared_downloader(&self) -> Option<SharedDownloader> {
         let session = self.session.clone();
         Some(Arc::new(move |url: &str, dest: &Path| Ok(session.download(url, dest)?)))
+    }
+}
+
+/// A failed ckdatabasews request. It is an iCloud host, so icloud-session
+/// returns a 401/421 only when it persists while the daemon still holds the
+/// sign-in: [`CkError::SessionRejected`]. (An asset host's 401 is an expired
+/// signed URL, a plain `Http`.)
+fn ckdatabasews_error(e: icloud_session::Error) -> CkError {
+    match e {
+        icloud_session::Error::Http {
+            status: status @ (401 | 421),
+            ..
+        } => CkError::SessionRejected { status },
+        e => CkError::from(e),
     }
 }
 
@@ -460,4 +478,33 @@ pub struct LoggedRequest {
     /// matched (the run then got HTTP 599).
     #[serde(default)]
     pub matched: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_persisting_401_or_421_from_ckdatabasews_is_session_rejected() {
+        let http = |status| icloud_session::Error::Http {
+            status,
+            body: String::new(),
+        };
+        assert!(matches!(
+            ckdatabasews_error(http(421)),
+            CkError::SessionRejected { status: 421 }
+        ));
+        assert!(matches!(
+            ckdatabasews_error(http(401)),
+            CkError::SessionRejected { status: 401 }
+        ));
+        assert!(matches!(
+            ckdatabasews_error(http(500)),
+            CkError::Http { status: 500, .. }
+        ));
+        assert!(matches!(
+            ckdatabasews_error(icloud_session::Error::SignInRequired),
+            CkError::SignInRequired
+        ));
+    }
 }

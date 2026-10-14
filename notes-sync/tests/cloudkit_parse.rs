@@ -131,7 +131,8 @@ fn first_zone_keeps_the_transient_hint_for_other_codes() {
     };
     assert_eq!(server_error_code, "INTERNAL_ERROR");
     let hint = icloud_notes_sync::cmd::Error::from(err).hint().unwrap_or_default();
-    assert!(hint.contains("transient"), "{hint}");
+    assert_eq!(hint, icloud_session::output::SERVICE_TROUBLE_HINT);
+    assert!(hint.contains("try again"), "{hint}");
 }
 
 #[test]
