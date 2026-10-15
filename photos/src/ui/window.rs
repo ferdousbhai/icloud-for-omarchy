@@ -154,6 +154,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         .default_width(1100)
         .default_height(760)
         .build();
+    window.add_css_class("cloud-desktop");
     window.set_icon_name(Some("com.ferdousbhai.IcloudPhotos"));
 
     // Sidebar: albums, sync status at the bottom.

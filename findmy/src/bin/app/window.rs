@@ -692,6 +692,7 @@ fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
         .height_request(320)
         .content(&toasts)
         .build();
+    window.add_css_class("cloud-desktop");
     let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 640sp").expect("valid condition"));
     narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
     window.add_breakpoint(narrow);

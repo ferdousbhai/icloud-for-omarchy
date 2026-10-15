@@ -15,14 +15,14 @@ ApplicationWindow {
     readonly property var theme: backend.theme
     function tone(key, fallback) { return theme[key] ? theme[key] : fallback; }
     readonly property color colBg: tone("background", sys.window)
-    readonly property color colPanel: tone("dark_background", Qt.darker(sys.window, 1.08))
-    readonly property color colSidebar: tone("darker_background", Qt.darker(sys.window, 1.16))
-    readonly property color colRaised: tone("lighter_background", sys.base)
+    readonly property color colPanel: colBg
+    readonly property color colSidebar: Qt.tint(colBg, Qt.alpha(colText, 0.025))
+    readonly property color colRaised: Qt.tint(colBg, Qt.alpha(colText, 0.04))
     readonly property color colText: tone("foreground", sys.text)
-    readonly property color colTextDim: tone("light_foreground", sys.text)
-    readonly property color colTextMuted: tone("dark_foreground", sys.mid)
-    readonly property color colLine: tone("muted", sys.mid)
-    readonly property color colSelection: tone("selection", sys.highlight)
+    readonly property color colTextDim: Qt.tint(colBg, Qt.alpha(colText, 0.72))
+    readonly property color colTextMuted: Qt.tint(colBg, Qt.alpha(colText, 0.55))
+    readonly property color colLine: Qt.alpha(colText, 0.14)
+    readonly property color colSelection: Qt.tint(colBg, Qt.alpha(colAccent, 0.12))
     readonly property color colAccent: tone("accent", sys.highlight)
     readonly property color colRed: tone("red", "#e06c75")
     readonly property color colYellow: tone("yellow", "#e5c07b")
@@ -48,6 +48,7 @@ ApplicationWindow {
         toolTipBase: root.colRaised
         toolTipText: root.colText
     }
+    font.family: "monospace"
     color: colBg
 
     // ---- State
@@ -95,13 +96,17 @@ ApplicationWindow {
         property string glyph
         property string tip
         implicitWidth: 34
-        implicitHeight: 28
+        implicitHeight: 34
+        Accessible.name: tip
+        activeFocusOnTab: true
         hoverEnabled: true
         opacity: enabled ? 1 : 0.3
         background: Rectangle {
             radius: 6
             color: iconButton.down || iconButton.checked ? root.colSelection
-                 : iconButton.hovered ? root.colRaised : "transparent"
+                 : iconButton.hovered || iconButton.activeFocus ? root.colRaised : "transparent"
+            border.width: iconButton.activeFocus ? 1 : 0
+            border.color: root.colAccent
         }
         contentItem: Glyph {
             text: iconButton.glyph
@@ -435,7 +440,7 @@ ApplicationWindow {
 
     // ---- Toolbar
     header: Rectangle {
-        height: 44
+        height: 50
         color: root.colPanel
         RowLayout {
             anchors.fill: parent
@@ -757,9 +762,11 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.margins: 12
                         Layout.topMargin: 8
-                        implicitHeight: 30
-                        radius: 7
+                        implicitHeight: 36
+                        radius: 6
                         color: root.colRaised
+                        border.color: searchField.activeFocus ? root.colAccent : root.colLine
+                        border.width: 1
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 10
@@ -769,7 +776,9 @@ ApplicationWindow {
                             TextField {
                                 id: searchField
                                 Layout.fillWidth: true
-                                placeholderText: "Search"
+                                placeholderText: "Search notes…"
+                                placeholderTextColor: root.colTextMuted
+                                selectByMouse: true
                                 background: null
                                 padding: 0
                                 color: root.colText

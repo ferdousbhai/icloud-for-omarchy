@@ -171,7 +171,9 @@ fn style_badge(badge: &gtk::Image, d: &Device, now_ms: i64) {
 }
 
 /// Styles for the map badges, loaded once at startup.
-pub const CSS: &str = "
+pub const CSS: &str = concat!(
+    include_str!("../../../../desktop.css"),
+    "
 .device-marker {
   padding: 7px;
   border-radius: 999px;
@@ -185,4 +187,5 @@ pub const CSS: &str = "
   color: var(--accent-fg-color);
 }
 .device-marker.stale { opacity: 0.6; }
-";
+"
+);

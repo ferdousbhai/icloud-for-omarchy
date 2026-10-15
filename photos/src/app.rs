@@ -4,6 +4,9 @@
 
 mod ui;
 
+#[path = "../../native_theme.rs"]
+mod theme;
+
 use adw::prelude::*;
 
 const APP_ID: &str = "com.ferdousbhai.IcloudPhotos";
@@ -12,13 +15,7 @@ fn main() -> gtk::glib::ExitCode {
     gtk::glib::set_prgname(Some("icloud-photos"));
     gtk::glib::set_application_name("Photos");
     let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_startup(|_| {
-        let css = gtk::CssProvider::new();
-        css.load_from_string(ui::CSS);
-        if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        }
-    });
+    app.connect_startup(|_| theme::install(ui::CSS));
     app.connect_activate(|app| {
         if let Some(w) = app.active_window() {
             w.present();

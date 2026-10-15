@@ -1,0 +1,20 @@
+/* Shared native chrome for the suite; content keeps its own layout. */
+.cloud-desktop { font-family: monospace; font-size: 10pt; background: @window_bg_color; color: @window_fg_color; }
+.cloud-desktop headerbar { min-height: 46px; padding: 4px 12px; background: @window_bg_color; box-shadow: none; border-bottom: 1px solid alpha(@window_fg_color, 0.12); }
+.cloud-desktop button { min-height: 28px; border-radius: 6px; box-shadow: none; font-weight: 500; }
+.cloud-desktop button.flat { background: transparent; }
+.cloud-desktop button.flat:hover { background: alpha(@window_fg_color, 0.07); }
+.cloud-desktop button:focus-visible { outline: 1px solid @accent_bg_color; outline-offset: 2px; }
+.cloud-desktop button.suggested-action { background: alpha(@accent_bg_color, 0.14); color: @accent_color; border: 1px solid alpha(@accent_bg_color, 0.35); }
+.cloud-desktop entry, .cloud-desktop searchentry { min-height: 32px; border-radius: 6px; background: alpha(@window_fg_color, 0.025); border: 1px solid alpha(@window_fg_color, 0.16); box-shadow: none; }
+.cloud-desktop entry:focus-within, .cloud-desktop searchentry:focus-within { border-color: @accent_bg_color; outline: none; }
+.cloud-desktop .navigation-sidebar { background: transparent; }
+.cloud-desktop .navigation-sidebar > row { padding: 8px 10px; margin: 2px 8px; border-radius: 6px; }
+.cloud-desktop .navigation-sidebar > row:hover { background: alpha(@window_fg_color, 0.04); }
+.cloud-desktop .navigation-sidebar > row:selected { background: alpha(@accent_bg_color, 0.12); color: @window_fg_color; box-shadow: inset 2px 0 @accent_bg_color; }
+.cloud-desktop .navigation-sidebar image { color: @accent_color; }
+.cloud-desktop .boxed-list { border: 1px solid alpha(@window_fg_color, 0.12); border-radius: 8px; box-shadow: none; background: alpha(@window_fg_color, 0.025); }
+.cloud-desktop .boxed-list > row { border-bottom-color: alpha(@window_fg_color, 0.08); }
+.cloud-desktop .boxed-list > row:selected { background: alpha(@accent_bg_color, 0.10); color: @window_fg_color; }
+.cloud-desktop .dim-label, .cloud-desktop .subtitle { opacity: 0.65; }
+.cloud-desktop scrollbar slider { min-width: 4px; min-height: 4px; border-radius: 4px; }

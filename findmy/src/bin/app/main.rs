@@ -12,6 +12,9 @@ mod devices;
 mod map;
 mod window;
 
+#[path = "../../../../native_theme.rs"]
+mod theme;
+
 use gtk::{gio, glib};
 
 fn main() {
@@ -47,13 +50,7 @@ fn run() -> glib::ExitCode {
     glib::set_prgname(Some("icloud-findmy"));
     glib::set_application_name("Find My");
     let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_startup(|_| {
-        let css = gtk::CssProvider::new();
-        css.load_from_string(map::CSS);
-        if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        }
-    });
+    app.connect_startup(|_| theme::install(map::CSS));
     app.connect_activate(|app| {
         if let Some(win) = app.active_window() {
             win.present();
