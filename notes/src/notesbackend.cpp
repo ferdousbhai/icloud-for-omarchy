@@ -2,6 +2,7 @@
 #include "markdownhighlighter.h"
 #include "syncmodel.h"
 
+#include <QCryptographicHash>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
@@ -1452,19 +1453,31 @@ QString NotesBackend::deleteCurrentFolder()
 QVariantList NotesBackend::searchVault(const QString &query)
 {
     QVariantList out;
-    const QString q = query.trimmed();
+    const quint64 generation = ++m_semanticGeneration;
+    if (m_semanticProcess) {
+        m_semanticProcess->kill();
+        m_semanticProcess = nullptr;
+    }
+    const bool semantic = query.trimmed().startsWith(u'~');
+    const QString q = semantic ? query.trimmed().mid(1).trimmed() : query.trimmed();
+    QJsonArray records;
+    QMap<QString, QVariantMap> candidates;
     if (q.size() < 2)
         return out;
     const QString mode = vaultTitleMode();
     const QDir root(rootPath());
     QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
-    for (int scanned = 0; it.hasNext() && out.size() < 100 && scanned < 2000; ++scanned) {
+    for (int scanned = 0; it.hasNext() && (semantic || out.size() < 100) && scanned < 2000; ++scanned) {
         const QString rel = root.relativeFilePath(it.next());
         if (!isNotePath(rel))
             continue;
         const QString text = readText(it.filePath(), 1024 * 1024);
         const QString name = rel.section(u'/', -1);
         const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
+        if (semantic) {
+            records.append(QJsonObject{{"id", rel}, {"title", preview.title.left(1000)}, {"text", text.left(4000)}});
+            candidates.insert(rel, QVariantMap{{"folder", rel.section(u'/', 0, -2)}, {"file", name}, {"title", preview.title}, {"snippet", preview.snippet}});
+        }
         if (!text.contains(q, Qt::CaseInsensitive) && !preview.title.contains(q, Qt::CaseInsensitive))
             continue;
         QString snippet;
@@ -1475,10 +1488,40 @@ QVariantList NotesBackend::searchVault(const QString &query)
                 break;
         }
         const QString folder = rel.section(u'/', 0, -2);
+        if (out.size() >= 100) continue;
         out << QVariantMap{ { QStringLiteral("folder"), folder },
                             { QStringLiteral("file"), name },
                             { QStringLiteral("title"), preview.title },
                             { QStringLiteral("snippet"), snippet.isEmpty() ? preview.snippet : snippet } };
+    }
+    if (semantic) {
+        auto *process = new QProcess(this);
+        m_semanticProcess = process;
+        const QString collection = "icloud-notes:" + QString::fromLatin1(QCryptographicHash::hash(rootPath().toUtf8(), QCryptographicHash::Sha256).toHex().left(24));
+        connect(process, &QProcess::finished, this, [this, process, query, generation, candidates](int code, QProcess::ExitStatus status) {
+            if (m_semanticProcess == process) m_semanticProcess = nullptr;
+            const QJsonObject reply = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
+            bool available = code == 0 && status == QProcess::NormalExit && reply.value("api").toInt() == 1 && reply.value("meaning").toBool() && !reply.contains("error");
+            QVariantList hits;
+            for (const auto &value : reply.value("hits").toArray()) {
+                const QString id = value.toObject().value("id").toString();
+                if (!candidates.contains(id)) { available = false; break; }
+                hits << candidates.value(id);
+            }
+            if (generation == m_semanticGeneration) emit semanticSearchFinished(query, hits, available);
+            process->deleteLater();
+        });
+        connect(process, &QProcess::errorOccurred, this, [this, process, query, generation](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart) {
+                if (m_semanticProcess == process) m_semanticProcess = nullptr;
+                if (generation == m_semanticGeneration) emit semanticSearchFinished(query, {}, false);
+                process->deleteLater();
+            }
+        });
+        const QByteArray input = QJsonDocument(records).toJson(QJsonDocument::Compact);
+        connect(process, &QProcess::started, process, [process, input] { process->write(input); process->closeWriteChannel(); });
+        process->start("recall", {"rank", collection, q});
+        QTimer::singleShot(6000, process, [process] { if (process->state() != QProcess::NotRunning) process->kill(); });
     }
     return out;
 }

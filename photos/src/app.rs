@@ -2,6 +2,7 @@
 //! libadwaita). `icloud-photos` with no arguments runs this; the desktop
 //! entry starts it directly. Commands live in `icloud-photos` (`src/cli.rs`).
 
+mod recall_client;
 mod ui;
 
 #[path = "../../native_theme.rs"]

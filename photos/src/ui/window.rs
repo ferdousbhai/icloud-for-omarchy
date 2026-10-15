@@ -106,6 +106,9 @@ pub struct App {
     grid_page: adw::NavigationPage,
     pub split: adw::NavigationSplitView,
     pub status: gtk::Label,
+    search: gtk::SearchEntry,
+    search_hint: gtk::Label,
+    search_query: RefCell<String>,
     pub spinner: adw::Spinner,
     pub grid: Grid,
     pub albums: Albums,
@@ -220,6 +223,19 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     );
     let grid_tv = adw::ToolbarView::new();
     grid_tv.add_top_bar(&grid_header);
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search this album · ~ meaning")
+        .hexpand(true)
+        .build();
+    let search_hint = gtk::Label::builder().xalign(0.0).css_classes(["dim-label"]).build();
+    let search_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    search_box.set_margin_start(12);
+    search_box.set_margin_end(12);
+    search_box.set_margin_bottom(8);
+    search_box.append(&search);
+    search_box.append(&search_hint);
+    search_hint.set_visible(false);
+    grid_tv.add_top_bar(&search_box);
     grid_tv.set_content(Some(&grid.root));
     let grid_page = adw::NavigationPage::builder()
         .title("All Photos")
@@ -263,6 +279,9 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         grid_page,
         split,
         status,
+        search,
+        search_hint,
+        search_query: RefCell::new(String::new()),
         spinner,
         grid,
         albums,
@@ -291,6 +310,18 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             a.handle(msg);
+        }
+    });
+    let a = app.clone();
+    app.search.connect_activate(move |entry| {
+        *a.search_query.borrow_mut() = entry.text().trim().to_owned();
+        a.load_snapshot();
+    });
+    let a = app.clone();
+    app.search.connect_search_changed(move |entry| {
+        if entry.text().is_empty() && !a.search_query.borrow().is_empty() {
+            a.search_query.borrow_mut().clear();
+            a.load_snapshot();
         }
     });
     app.connect();
@@ -613,16 +644,38 @@ impl App {
         let generation = self.reload_gen.get() + 1;
         self.reload_gen.set(generation);
         let (path, album, columns) = (self.dirs.catalog(), self.album.borrow().clone(), self.grid.columns());
+        let query = self.search_query.borrow().clone();
+        self.search_hint.set_visible(!query.is_empty());
+        self.search_hint.set_text(if query.starts_with('~') {
+            "Searching cached thumbnails by meaning…"
+        } else {
+            "Filename matches"
+        });
         let a = self.clone();
         glib::spawn_future_local(async move {
-            let snap = gio::spawn_blocking(move || Catalog::open(&path).ok().map(|cat| snapshot(&cat, album, columns)))
-                .await
-                .ok()
-                .flatten();
+            let snap = gio::spawn_blocking(move || {
+                Catalog::open(&path).ok().map(|cat| {
+                    let mut snap = snapshot(&cat, album, columns);
+                    let notice = filter_snapshot(&mut snap, &query);
+                    (snap, notice)
+                })
+            })
+            .await
+            .ok()
+            .flatten();
             if a.reload_gen.get() != generation {
                 return;
             }
-            let snap = snap.unwrap_or_else(|| snapshot(&a.cat, a.album.borrow().clone(), columns));
+            let (snap, notice) = snap.unwrap_or_else(|| {
+                let mut snap = snapshot(&a.cat, a.album.borrow().clone(), columns);
+                // Do not run inference on the main loop for an in-memory catalog.
+                let q = a.search_query.borrow().trim_start_matches('~').trim().to_owned();
+                snap.tiles
+                    .retain(|tile| tile.filename.to_lowercase().contains(&q.to_lowercase()));
+                snap.rows = super::grid::rows_of(&snap.tiles, columns);
+                (snap, "Recall unavailable · filename matches")
+            });
+            a.search_hint.set_text(notice);
             a.apply_snapshot(snap);
         });
     }
@@ -879,10 +932,64 @@ fn snapshot(cat: &Catalog, mut album: Option<String>, columns: usize) -> Snapsho
     }
 }
 
+/// Search never fetches originals or expands the selected album.
+fn filter_snapshot(snap: &mut Snapshot, query: &str) -> &'static str {
+    let semantic = query.starts_with('~');
+    let q = if semantic { query[1..].trim() } else { query.trim() };
+    if q.is_empty() {
+        return "";
+    }
+    if semantic {
+        let records: Vec<_> = snap
+            .tiles
+            .iter()
+            .filter_map(|tile| {
+                let path = tile.thumb.as_ref().filter(|p| p.is_absolute() && p.is_file())?;
+                Some(serde_json::json!({"id":tile.id,"title":tile.filename,"text":"","kind":"image","path":path}))
+            })
+            .collect();
+        if !records.is_empty()
+            && let Some(ids) = crate::recall_client::rank("icloud-photos", q, &records, 100)
+        {
+            let mut tiles: std::collections::HashMap<_, _> =
+                snap.tiles.drain(..).map(|tile| (tile.id.clone(), tile)).collect();
+            snap.tiles = ids.into_iter().filter_map(|id| tiles.remove(&id)).collect();
+            snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
+            return "Semantic matches · cached thumbnails only";
+        }
+    }
+    snap.tiles
+        .retain(|tile| tile.filename.to_lowercase().contains(&q.to_lowercase()));
+    snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
+    if semantic {
+        "Recall unavailable or warming up · filename matches"
+    } else {
+        "Filename matches"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use icloud_photos::cloudkit::Album;
+
+    #[test]
+    fn semantic_without_cached_thumbnails_retains_filename_search() {
+        let cat = Catalog::open_in_memory().unwrap();
+        let mut snap = snapshot(&cat, None, 4);
+        let tile = |id: &str, filename: &str| super::super::grid::Tile {
+            id: id.into(),
+            filename: filename.into(),
+            thumb: None,
+            kind: icloud_photos::cloudkit::Kind::Photo,
+            is_live: false,
+            month: 1,
+        };
+        snap.tiles = vec![tile("a", "Holiday.jpg").into(), tile("b", "Work.jpg").into()];
+        assert!(filter_snapshot(&mut snap, "~ holiday").contains("filename matches"));
+        assert_eq!(snap.tiles.len(), 1);
+        assert_eq!(snap.tiles[0].id, "a");
+    }
 
     #[test]
     fn album_switch_snapshot_carries_sidebar_changes_and_deleted_album_fallback() {

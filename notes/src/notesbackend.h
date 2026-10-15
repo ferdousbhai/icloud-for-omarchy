@@ -276,6 +276,7 @@ public:
     QJsonObject lastError() const { return m_lastError; }
 
 signals:
+    void semanticSearchFinished(const QString &query, const QVariantList &hits, bool available);
     void foldersChanged();
     void currentFolderChanged();
     void notesChanged();
@@ -483,6 +484,8 @@ private:
     QString m_iconFont;
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_themeWatcher;
+    QProcess *m_semanticProcess = nullptr;
+    quint64 m_semanticGeneration = 0;
     QProcess m_syncProcess;
     mutable VaultInfo m_vaultInfo;
     mutable QString m_vaultInfoKey;

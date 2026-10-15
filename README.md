@@ -296,3 +296,9 @@ the current key, and it is idempotent.
 
 MIT, see [LICENSE](LICENSE). Third-party credits (icloud-md, node-diff3,
 the mdast/micromark utilities, yaml, pyicloud) are in [NOTICE](NOTICE).
+
+## Optional Recall search
+
+Notes: use `~ QUERY` to rank up to 2,000 local Markdown notes. Photos: enter `~ QUERY` and press Enter to search already cached thumbnails in the selected album; originals are never fetched for inference. Find My does not use Recall.
+
+Recall is an optional extra. Normal operation never contacts it. Missing, incompatible, busy, or warming-up Recall leaves Notes text search or Photos filename search available. Requests run in the background with a bounded wait. This project does not install Recall, download embedding weights, or start its own model runtime. When enabled, the owner-local Recall service owns one shared model cache and inference worker; records stay on this machine.

@@ -189,6 +189,45 @@ int main(int argc, char *argv[])
     check(b.searchVault(QStringLiteral("attachment-marker")).isEmpty()
               && b.searchVault(QStringLiteral("hidden-marker")).isEmpty(),
           "backend search excludes Markdown attachments and hidden files");
+    const QByteArray savedPath = qgetenv("PATH");
+    qputenv("PATH", "/nonexistent-recall-test");
+    bool semanticFinished = false;
+    auto semanticConnection = QObject::connect(&b, &NotesBackend::semanticSearchFinished, &b,
+        [&](const QString &query, const QVariantList &, bool available) {
+            if (query == QStringLiteral("~ deep-note-marker")) {
+                check(!available, "missing Recall reports text fallback");
+                semanticFinished = true;
+            }
+        });
+    const auto fallback = b.searchVault(QStringLiteral("~ deep-note-marker"));
+    check(fallback.size() == 1, "optional semantic search immediately retains keyword match");
+    QElapsedTimer semanticTimer;
+    semanticTimer.start();
+    while (!semanticFinished && semanticTimer.elapsed() < 1000) QCoreApplication::processEvents();
+    check(semanticFinished, "missing optional Recall finishes asynchronously");
+    QObject::disconnect(semanticConnection);
+    qputenv("PATH", savedPath);
+    QTemporaryDir recallBin;
+    const QString recallPath = recallBin.filePath(QStringLiteral("recall"));
+    QFile recallScript(recallPath);
+    check(recallScript.open(QIODevice::WriteOnly), "fake Recall script opened");
+    recallScript.write("#!/usr/bin/python3\nimport json,sys\nrecords=json.load(sys.stdin)\nassert not any('attachments/' in r['id'] or '/.hidden/' in r['id'] for r in records)\nprint(json.dumps({'api':1,'meaning':True,'hits':[{'id':'Sub/Deep/Child.md','score':0.9}]}))\n");
+    recallScript.close();
+    QFile::setPermissions(recallPath, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    qputenv("PATH", recallBin.path().toUtf8());
+    semanticFinished = false;
+    semanticConnection = QObject::connect(&b, &NotesBackend::semanticSearchFinished, &b,
+        [&](const QString &, const QVariantList &hits, bool available) {
+            check(available && hits.size() == 1 && hits.first().toMap().value("file").toString() == "Child.md",
+                  "optional semantic result resolves a fresh local note and excludes attachments");
+            semanticFinished = true;
+        });
+    b.searchVault(QStringLiteral("~ descendant"));
+    semanticTimer.restart();
+    while (!semanticFinished && semanticTimer.elapsed() < 2000) QCoreApplication::processEvents();
+    check(semanticFinished, "optional semantic result arrives asynchronously");
+    QObject::disconnect(semanticConnection);
+    qputenv("PATH", savedPath);
     b.openNote(QStringLiteral("Deep/Child.md"));
     check(b.currentFolder() == QStringLiteral("Sub/Deep")
               && b.noteBody().contains(QStringLiteral("deep-note-marker")),

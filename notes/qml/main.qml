@@ -776,7 +776,7 @@ ApplicationWindow {
                             TextField {
                                 id: searchField
                                 Layout.fillWidth: true
-                                placeholderText: "Search notes…"
+                                placeholderText: "Search notes · ~ meaning"
                                 placeholderTextColor: root.colTextMuted
                                 selectByMouse: true
                                 background: null
@@ -1343,6 +1343,11 @@ ApplicationWindow {
     }
     Connections {
         target: backend
+        function onSemanticSearchFinished(query, hits, available) {
+            if (searchField.text !== query || !root.searching) return;
+            if (available) root.searchResults = hits;
+            root.notice = available ? "Semantic matches · local Recall" : "Recall unavailable or warming up · showing text matches";
+        }
         // Counted from the end of the last sync, whatever started it (a
         // focus, a push, Pull), so a poll never follows one within the interval.
         function onSyncChainFinished() {
