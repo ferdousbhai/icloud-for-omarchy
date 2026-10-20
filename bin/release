@@ -2,6 +2,7 @@
 # Build one suite tag on both architectures, sign locally, and publish.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+command -v cargo >/dev/null || export PATH="$HOME/.cargo/bin:$PATH"
 source packaging/PKGBUILD
 [[ $# == 1 && $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Usage: bin/release <major.minor.patch>' >&2; exit 1; }
 version=$1 tag=v$1
