@@ -78,6 +78,13 @@ int main()
         check(s.envelope.isEmpty() && s.body == QStringLiteral("# T\n"), "no envelope");
     }
     check(SyncModel::splitEnvelope(QStringLiteral("---\nunclosed\n")).envelope.isEmpty(), "unterminated is body");
+    {
+        // The engine writes a blank line after the fence; it is not body.
+        const SyncModel::EnvelopeSplit s =
+            SyncModel::splitEnvelope(QStringLiteral("---\napple-note-id: x\n---\n\n# T\n\nbody\n"));
+        check(s.envelope == QStringLiteral("---\napple-note-id: x\n---\n\n"), "blank after fence in envelope");
+        check(s.body == QStringLiteral("# T\n\nbody\n"), "body starts at the title");
+    }
 
     // parseConflicts / resolveConflicts / linesMissingFrom
     {
@@ -291,6 +298,9 @@ int main()
     check(SyncModel::retitleInBody(QStringLiteral("---\napple-note-id: x\n---\n# Old\nbody\n"), QStringLiteral("New"))
               == QStringLiteral("---\napple-note-id: x\n---\n# New\nbody\n"),
           "retitle keeps envelope");
+    check(SyncModel::retitleInBody(QStringLiteral("---\napple-note-id: x\n---\n\n# Old\nbody\n"), QStringLiteral("New"))
+              == QStringLiteral("---\napple-note-id: x\n---\n\n# New\nbody\n"),
+          "retitle in body past the blank line after the fence");
     check(SyncModel::retitleInBody(QStringLiteral("Old\nbody\n"), QStringLiteral("New"))
               == QStringLiteral("New\nbody\n"),
           "retitle bare line stays bare");

@@ -468,14 +468,9 @@ ApplicationWindow {
             IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.insertLink() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton {
-                glyph: "\uf0ed"; tip: "Pull from iCloud"
+                // Sync is automatic; this only shows what is pending or refused.
+                glyph: "\uf021"; tip: "Sync status"
                 enabled: backend.cloned && !backend.syncRunning
-                onClicked: backend.runPull()
-            }
-            IconButton {
-                glyph: "\uf0ee"; tip: "Push to iCloud…"
-                enabled: backend.cloned && !backend.syncRunning
-                // Preview first: push only runs after explicit confirmation.
                 onClicked: { if (root.flushEdits()) backend.refreshPushPreview(); }
             }
             IconButton {
@@ -486,11 +481,6 @@ ApplicationWindow {
                     id: moreMenu
                     y: moreButton.height + 4
                     x: moreButton.width - width
-                MenuItem {
-                    text: "Status preview"
-                    enabled: backend.cloned && !backend.syncRunning
-                    onTriggered: backend.refreshPushPreview()
-                }
                 MenuItem {
                     text: "Note history"
                     enabled: backend.currentNote.length > 0 && backend.cloned && !backend.syncRunning
@@ -1289,7 +1279,7 @@ ApplicationWindow {
 
     // Like Notes, changes reach iCloud on their own. The sync tool keeps this
     // safe: it merges, refuses a note it cannot push safely (the badges say
-    // which; Push… shows why), and deletions only move notes to Recently
+    // which; Sync status shows why), and deletions only move notes to Recently
     // Deleted. Pushes wait until edits settle so a burst of typing is one push.
     Timer {
         id: autoPush
@@ -1579,19 +1569,20 @@ ApplicationWindow {
 
     AppDialog {
         id: previewDialog
-        title: "Push preview"
+        title: "Sync status"
         width: Math.min(root.width - 80, 620)
         height: Math.min(root.height - 80, 460)
         footer: DialogButtonBox {
             PrimaryButton {
-                text: "Push now"
+                text: "Sync now"
                 enabled: !backend.syncRunning
                 onClicked: {
                     previewDialog.close();
-                    backend.runPush();
+                    root.lastFocusSync = Date.now();
+                    backend.runSync();
                 }
             }
-            Button { text: "Cancel"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            Button { text: "Close"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
         }
         ColumnLayout {
             anchors.fill: parent
@@ -1599,9 +1590,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.colTextMuted
-                text: backend.statusUnchanged > 0
-                      ? backend.statusUnchanged + " note(s) already match iCloud."
-                      : "Every tracked note has a pending change."
+                text: backend.statusEntries.length === 0
+                      ? "Nothing to sync: everything matches iCloud."
+                      : backend.statusUnchanged > 0
+                        ? backend.statusUnchanged + " note(s) already match iCloud."
+                        : "Every tracked note has a pending change."
             }
             Label {
                 Layout.fillWidth: true

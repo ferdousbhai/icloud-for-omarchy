@@ -51,8 +51,8 @@ timer's sync). All of it is new, in the app binary: see
 | Conflict: Edit as text | `read --raw`, then `write --force` | added |
 | Unreadable markers: Remove the markers / Use the last synced version | `icloud-notes recover NOTE --strip` / `--synced` | added |
 | Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull, in one engine run) | added |
-| Pull | `icloud-notes pull` | added (the engine's `pull` existed) |
-| Push… preview, then Push now; Status preview | `icloud-notes push --dry-run`, then `icloud-notes push` | added |
+| (not in the window) pull or push only | `icloud-notes pull` / `icloud-notes push` | added (the engine's `pull` existed) |
+| Sync status, then Sync now | `icloud-notes push --dry-run`, then `icloud-notes sync` | added |
 | Note history, diffs | `icloud-notes history NOTE [--records]`, `icloud-notes diff NOTE REF` | added (the engine's existed) |
 | Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (the engine's `restore` existed) |
 | Link your Apple Notes: Clone my notes | `icloud-notes clone` | added |

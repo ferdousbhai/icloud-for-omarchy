@@ -232,7 +232,7 @@ public:
     // icloud-session first when needed, then clones its account (by dsid)
     // without icloud-notes-sync ever opening a window of its own.
     Q_INVOKABLE void runClone();
-    Q_INVOKABLE void runPull();
+    void runPull(); // the CLI's `pull`; the window only syncs
     Q_INVOKABLE void runPush();
     // Push whatever changed locally, then pull: the periodic sync, and what
     // launch does, so edits made while the app was closed or by another

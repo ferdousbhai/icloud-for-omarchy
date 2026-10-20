@@ -21,7 +21,9 @@ namespace SyncModel {
 
 // Split a file into its frontmatter envelope (fences included, byte-exact)
 // and the editable body. No envelope means envelope == "" and the whole
-// file is body; an unterminated fence is content, not an envelope.
+// file is body; an unterminated fence is content, not an envelope. The
+// blank lines icloud-notes-sync writes after the closing fence belong to
+// the envelope, as they do in the engine, so the body starts at the title.
 struct EnvelopeSplit {
     QString envelope;
     QString body;
@@ -37,8 +39,11 @@ inline EnvelopeSplit splitEnvelope(const QString &text)
             if (line == 0)
                 return out;
         } else if (line > 0) {
-            out.envelope = text.left(end);
-            out.body = text.mid(end);
+            qsizetype bodyStart = end;
+            while (bodyStart < text.size() && text.at(bodyStart) == u'\n')
+                ++bodyStart;
+            out.envelope = text.left(bodyStart);
+            out.body = text.mid(bodyStart);
             return out;
         }
         if (nl < 0)

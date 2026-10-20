@@ -175,9 +175,10 @@ Sync is automatic, like Notes:
   (recoverable for ~30 days). Small badges in the note list warn you:
   brand-new notes, unresolved conflicts, notes the push refused, and notes
   changed on another device.
-- **Push…** shows a preview on demand — what would be created, updated,
-  moved, or deleted, plus anything refused and why — and pushes on
-  confirmation. **Pull** fetches now. **Sync log** holds the details.
+- **Sync status** (the toolbar's sync icon) shows what is pending — what
+  would be created, updated, moved, or deleted, plus anything refused and
+  why — with **Sync now** to sync at once instead of waiting. **Sync log**
+  holds the details.
 - Apple ends a web session now and then. Syncing then pauses and a
   banner offers **Sign in**: icloud-session opens Apple's window, which
   skips 2FA for a browser you trusted; syncing resumes on its own once
