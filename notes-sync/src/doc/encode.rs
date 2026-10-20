@@ -148,7 +148,7 @@ pub fn build_note_create_fields(
     let folder = folder_reference(folder_record_name, zone_owner_record_name);
     let mut fields = UpdateFields::new();
     fields.insert("CreationDate".into(), UpdateFieldValue::new(json!(now_ms)));
-    fields.insert("Folders".into(), UpdateFieldValue::new(json!([folder.clone()])));
+    fields.insert("Folders".into(), UpdateFieldValue::new(json!([folder])));
     fields.insert("Folder".into(), UpdateFieldValue::new(folder));
     fields.insert("ModificationDate".into(), UpdateFieldValue::new(json!(now_ms)));
     fields.insert(

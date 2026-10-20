@@ -132,7 +132,7 @@ fn a_run_waits_for_another_holder_as_long_as_wait_says() {
 
     // Released while it waits: the run goes ahead.
     let waiting = std::thread::spawn({
-        let (runtime, vault) = (tmp.path().to_owned(), vault.clone());
+        let (runtime, vault) = (tmp.path().to_owned(), vault);
         move || restore(&runtime, &vault, &["--wait", "10"])
     });
     std::thread::sleep(Duration::from_millis(500));

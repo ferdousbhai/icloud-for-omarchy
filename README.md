@@ -86,10 +86,6 @@ shared dependency. The old apps and per-app installers are no longer built here.
   tiles.
 - **Notes and Photos deletes are recoverable**: a note or photo you
   delete goes to Recently Deleted in iCloud (about 30 days).
-- **Contacts deletes are not**: iCloud has no Recently Deleted for
-  contacts; Cloud Contacts requires an explicit source deletion. Only
-  icloud.com's Data Recovery (Restore Contacts, a whole earlier version of
-  your address book) brings one back.
 - **It's all open source**, and the packages are signed with a key whose
   fingerprint is pinned in [install.sh](install.sh).
 
@@ -184,10 +180,10 @@ session/  sessiond/      icloud-session: client crate / daemon, sign-in window, 
 notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
 notes-sync/              icloud-notes-sync, the sync engine the icloud-notes package ships
 photos/  findmy/         icloud-photos, icloud-findmy
-packaging/PKGBUILD        one split recipe builds all four packages
+packaging/PKGBUILD       one split recipe builds all four packages
 install.sh               the one installer (per-app copies are generated at release)
-bin/                     build, test, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
-tests/                   the add_signed_repo hash pin; install_test.sh, the installers against stubbed pacman
+bin/                     build, check, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
+tests/                   the add_signed_repo hash pin; install_test.sh (installers against stubbed pacman); packaging_test.py
 docs/                    the command-line reference (CLI.md, AGENTS.md, skills/)
 ```
 
@@ -228,19 +224,19 @@ Releases are cut from a checkout with the package-signing key in its
 keyring. Native CI builds unsigned packages; signing stays on your machine:
 
 ```bash
-bin/release 0.8.1
+bin/release 0.9.1
 ```
 
 One suite version in `[workspace.package]` of `Cargo.toml` is inherited by
 all Rust crates and the four packages. Releases use `v<version>` tags;
 older per-app tags remain historical. Development packages add
-`.r<count>.<commit>` to the suite version. The first suite release must be
-newer than the current 0.8.0 baseline so existing installations upgrade.
+`.r<count>.<commit>` to the suite version. `bin/release` refuses a version
+that is not newer than the current one, so installations always upgrade.
 
 `bin/release` updates that one version and the lockfile, runs `bin/check`,
 commits and tags, then dispatches native x86_64 and ARM CI at that commit.
 One split `packaging/PKGBUILD` builds and tests the workspace once and emits
-all six independently installable packages. Before signing,
+all four independently installable packages. Before signing,
 `bin/collect-packages` checks the complete package set, source commit,
 architectures, filenames and exact suite version. Failed builds publish
 nothing and leave the candidate tag for inspection.
@@ -251,7 +247,7 @@ with the same pinned key. Output goes to `dist/release/`, separately from
 build artifacts and download caches.
 
 After publication, CI alone runs `bin/verify-release <tag>` on both
-architectures. It compares all six published installers with the tagged
+architectures. It compares all four published installers with the tagged
 source, installs the complete suite once in a fresh Arch root, then checks
 every installed version. Per-app installer behavior is covered by
 `tests/install_test.sh`. Failures leave releases available for diagnosis;
@@ -292,13 +288,13 @@ machine that installed from those releases trusts only the old key, so its
 next update fails with "unknown trust"; running the one-liner again trusts
 the current key, and it is idempotent.
 
-## License
-
-MIT, see [LICENSE](LICENSE). Third-party credits (icloud-md, node-diff3,
-the mdast/micromark utilities, yaml, pyicloud) are in [NOTICE](NOTICE).
-
 ## Optional Recall search
 
 Notes: use `~ QUERY` to rank up to 2,000 local Markdown notes. Photos: enter `~ QUERY` and press Enter to search already cached thumbnails in the selected album; originals are never fetched for inference. Find My does not use Recall.
 
 Recall is an optional extra. Normal operation never contacts it. Missing, incompatible, busy, or warming-up Recall leaves Notes text search or Photos filename search available. Requests run in the background with a bounded wait. This project does not install Recall, download embedding weights, or start its own model runtime. When enabled, the owner-local Recall service owns one shared model cache and inference worker; records stay on this machine.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Third-party credits (icloud-md, node-diff3,
+the mdast/micromark utilities, yaml, pyicloud) are in [NOTICE](NOTICE).

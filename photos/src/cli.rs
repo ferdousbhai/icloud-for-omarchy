@@ -741,7 +741,7 @@ fn info(ctx: &Ctx, id: &str) -> Res<Response> {
     Ok(
         Response::new(v, format!("{} ({}, {})", r.filename, kind_of(&r), rfc3339(r.created)))
             .human(human)
-            .ids(vec![r.id.clone()]),
+            .ids(vec![r.id]),
     )
 }
 

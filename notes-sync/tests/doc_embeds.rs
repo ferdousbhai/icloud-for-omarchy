@@ -397,4 +397,8 @@ fn has_embed_marker_detects_even_a_truncated_marker_opening() {
     assert!(has_embed_marker("pasted <apple-embed type=... junk"));
     assert!(!has_embed_marker("plain text"));
     assert!(!has_embed_marker("<apple-embedded"));
+    assert!(has_embed_marker("😀<apple-embed>"));
+    assert!(has_embed_marker("<apple-embedé"));
+    assert!(!has_embed_marker("<apple-embed_slot>"));
+    assert!(!has_embed_marker("<APPLE-EMBED>"));
 }

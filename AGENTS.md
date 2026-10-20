@@ -73,7 +73,7 @@ packaging tests, then native x86_64/aarch64 package builds.
 - One suite version in `[workspace.package]` of `Cargo.toml` is inherited by every Rust crate
   and package. `bin/release <version>` tests, tags `v<version>`, dispatches native CI and signs
   locally; published-install verification runs only in CI. Do not release unless asked.
-  Versions must increase from the 0.8.0 baseline; historical per-app tags remain untouched.
+  Versions must increase (`bin/release` refuses otherwise); historical per-app tags remain untouched.
   crates.io publication is a separate explicit `cargo publish --locked -p icloud-session`.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.

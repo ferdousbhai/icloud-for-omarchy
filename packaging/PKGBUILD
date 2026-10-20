@@ -49,17 +49,25 @@ check() {
   notes/bin/test
 }
 
+_release_bin() {
+  install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/$1" "$pkgdir/$2"
+}
+
+_install_licenses() {
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
+
 _package_gtk_app() {
   local app=${pkgname#icloud-} desktop=com.ferdousbhai.$1 binary
   cd "$srcdir/icloud-for-omarchy"
   for binary in "$pkgname" "$pkgname-app"; do
-    install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/$binary" "$pkgdir/usr/bin/$binary"
+    _release_bin "$binary" "usr/bin/$binary"
   done
   install -Dm644 "$app/data/$desktop.desktop" "$pkgdir/usr/share/applications/$desktop.desktop"
   install -Dm644 "$app/data/$desktop.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$desktop.svg"
   install -Dm644 "$app/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+  _install_licenses
 }
 
 package_icloud-session() {
@@ -68,7 +76,7 @@ package_icloud-session() {
   cd "$srcdir/icloud-for-omarchy"
   local bin
   for bin in icloud-sessiond icloud-session-signin; do
-    install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/$bin" "$pkgdir/usr/bin/$bin"
+    _release_bin "$bin" "usr/bin/$bin"
   done
   # One executable: run as icloud-session it is the CLI.
   ln -s icloud-sessiond "$pkgdir/usr/bin/icloud-session"
@@ -79,8 +87,7 @@ package_icloud-session() {
   install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.desktop \
     "$pkgdir/usr/share/applications/io.github.ferdousbhai.ICloudSession.desktop"
   install -Dm644 session/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+  _install_licenses
 }
 
 package_icloud-photos() {
@@ -103,14 +110,13 @@ package_icloud-notes() {
   conflicts=('icloud-notes-sync')
   cd "$srcdir/icloud-for-omarchy"
   # The engine, run by the app and by `icloud-notes`; not a command of its own.
-  install -Dm755 "${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}/release/icloud-notes-sync" "$pkgdir/usr/lib/icloud-notes/icloud-notes-sync"
+  _release_bin icloud-notes-sync usr/lib/icloud-notes/icloud-notes-sync
   install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
+  _install_licenses
   cd notes
   install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
   install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
   install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
-  install -Dm644 ../LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 ../NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
   # Background sync while the app is closed, enabled just below; install.sh
   # only starts it at once instead of at the next login.
   install -Dm644 data/icloud-notes-background.service "$pkgdir/usr/lib/systemd/user/icloud-notes-background.service"

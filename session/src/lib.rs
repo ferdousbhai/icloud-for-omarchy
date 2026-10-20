@@ -911,14 +911,7 @@ impl Session {
     /// GET a URL into memory, as [`Session::download`] fetches it (cookies
     /// attached, no client params appended), without a temp file.
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let response = self.send(&Request {
-            method: "GET",
-            url,
-            content_type: None,
-            body: Body::None,
-            client_params: false,
-            accept: "*/*",
-        })?;
+        let response = self.send_download(url)?;
         let mut body = Vec::new();
         response
             .into_reader()
@@ -927,15 +920,20 @@ impl Session {
         Ok(body)
     }
 
-    fn download_to(&self, url: &str, dest: &Path, durable: bool) -> Result<u64> {
-        let response = self.send(&Request {
+    /// A GET for a file: cookies attached, no client params appended.
+    fn send_download(&self, url: &str) -> Result<ureq::Response> {
+        self.send(&Request {
             method: "GET",
             url,
             content_type: None,
             body: Body::None,
             client_params: false,
             accept: "*/*",
-        })?;
+        })
+    }
+
+    fn download_to(&self, url: &str, dest: &Path, durable: bool) -> Result<u64> {
+        let response = self.send_download(url)?;
         if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent)?;
         }

@@ -37,7 +37,7 @@ pub fn show(app: &Rc<App>) {
     let dialog = adw::PreferencesDialog::new();
     dialog.add(&page);
 
-    let (a, row) = (app.clone(), folder.clone());
+    let (a, row) = (app.clone(), folder);
     choose.connect_clicked(move |_| {
         let picker = gtk::FileDialog::builder()
             .title("Folder for Originals")

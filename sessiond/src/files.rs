@@ -100,6 +100,17 @@ pub struct FindMyJar {
     pub captured_at: String,
 }
 
+impl FindMyJar {
+    /// A jar captured just now.
+    pub fn captured_now(cookies: Vec<Cookie>, client_params: BTreeMap<String, String>) -> Self {
+        Self {
+            cookies,
+            client_params,
+            captured_at: icloud_session::time::rfc3339_millis(icloud_session::time::now_ms()),
+        }
+    }
+}
+
 /// `account.json`: everything but the cookie jars, which are secrets and
 /// live in the keyring ([`SessionSecret`]). This part stays a file so the
 /// daemon knows who is signed in, and when it last validated, without

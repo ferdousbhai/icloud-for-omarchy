@@ -18,12 +18,14 @@ pub mod vault_info;
 
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 pub use errors::Error;
 
-use crate::cloudkit::{CloudKitRecord, NoteZone, SkippedSharedZone, note_zone};
+use crate::cloudkit::{CloudKitRecord, NoteZone, SharedZoneChanges, SkippedSharedZone, note_zone};
 use crate::doc::encode::TRASH_FOLDER_RECORD_NAME;
+use crate::vault::layout::SharedZoneRecords;
 
 /// `SyncNotice`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +71,28 @@ pub(crate) fn used_names_for<'a>(
 /// ? {zoneName, ownerRecordName} : PRIVATE_NOTES_ZONE`).
 pub(crate) fn zone_for_owner(shared_zone_owner: Option<&str>) -> NoteZone {
     note_zone(shared_zone_owner.filter(|o| !o.is_empty()))
+}
+
+/// Each fetched shared zone's sync token and records, keyed by its owner
+/// (a zone with no owner has neither).
+pub(crate) fn shared_zone_tokens_and_records(
+    zones: &[SharedZoneChanges],
+) -> (IndexMap<String, String>, Vec<SharedZoneRecords>) {
+    let mut tokens = IndexMap::new();
+    let mut records = Vec::new();
+    for zone in zones {
+        let Some(owner) = zone.zone_id.owner_record_name.as_ref().filter(|o| !o.is_empty()) else {
+            continue;
+        };
+        if let Some(token) = zone.sync_token.as_ref().filter(|t| !t.is_empty()) {
+            tokens.insert(owner.clone(), token.clone());
+        }
+        records.push(SharedZoneRecords {
+            owner_record_name: owner.clone(),
+            records: zone.records.clone(),
+        });
+    }
+    (tokens, records)
 }
 
 /// A skipped shared zone's owner.

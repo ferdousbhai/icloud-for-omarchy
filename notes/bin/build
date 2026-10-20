@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the app with the Qt6 qmake, mirroring Omawrite's qmake setup.
+# Build the app with the Qt6 qmake.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build

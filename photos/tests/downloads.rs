@@ -41,7 +41,7 @@ fn thumb_comes_from_apples_derivative_into_the_cache() {
     let path = fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).unwrap();
     assert_eq!(path, root.join("cache/thumbs/ASSET-001.jpg"));
     assert_eq!(std::fs::read(&path).unwrap(), b"\xFF\xD8thumb");
-    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().thumb_path, Some(path.clone()));
+    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().thumb_path, Some(path));
     // Second time: already there, no download.
     let n = t.downloads.lock().unwrap().len();
     fetch(&t, &cat, &targets, "ASSET-001", Job::Thumb).unwrap();
@@ -60,7 +60,7 @@ fn original_of_a_live_photo_brings_its_video() {
     let path = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
     assert_eq!(path, root.join("Pictures/2025/09/IMG_0001.HEIC"));
     let row = cat.asset("ASSET-001").unwrap().unwrap();
-    assert_eq!(row.local_path, Some(path.clone()));
+    assert_eq!(row.local_path, Some(path));
     assert_eq!(row.live_path, Some(root.join("Pictures/2025/09/IMG_0001.MOV")));
     assert_eq!(std::fs::read(row.live_path.unwrap()).unwrap(), b"mov");
 }
@@ -217,7 +217,7 @@ fn a_cancelled_job_never_runs_and_old_thumbnail_requests_give_way() {
     let pool = Downloader::start(
         gate.clone(),
         targets.dirs.clone(),
-        targets.library.clone(),
+        targets.library,
         1,
         Box::new(move |e| tx.lock().unwrap().send(e).unwrap()),
     );

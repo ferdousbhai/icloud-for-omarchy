@@ -22,15 +22,20 @@ path = "src/main.rs"
 [[bin]]
 name = "icloud-photos-app"
 path = "src/app.rs"
+required-features = ["ui"]
+
+[features]
+default = ["ui"]
+ui = ["dep:gtk", "dep:adw", "dep:async-channel"]
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
 icloud-session = { workspace = true, features = ["clap"] }
-gtk.workspace = true
-adw.workspace = true
-async-channel.workspace = true
+gtk = { workspace = true, optional = true }
+adw = { workspace = true, optional = true }
+async-channel = { workspace = true, optional = true }
 clap.workspace = true
-base64 = "0.22"
+base64.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

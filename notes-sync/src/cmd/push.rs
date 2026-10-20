@@ -333,8 +333,22 @@ pub(crate) fn list_untracked_markdown_files(
     notes: &IndexMap<String, NoteEntry>,
 ) -> Result<Vec<String>, Error> {
     let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
-    let mut found = Vec::new();
-    fn walk(target_dir: &Path, dir: &str, tracked: &HashSet<&str>, found: &mut Vec<String>) -> Result<(), Error> {
+    let (_, mut found) = walk_vault(target_dir)?;
+    found.retain(|file| !tracked.contains(file.as_str()));
+    found.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    Ok(found)
+}
+
+/// Every directory in the vault that could be a folder's: dot-directories
+/// and `attachments/` skipped, as for note files.
+fn list_vault_dirs(target_dir: &Path) -> Result<HashSet<String>, Error> {
+    Ok(walk_vault(target_dir)?.0)
+}
+
+/// The vault's directories and `.md` files, relative to `target_dir`, with
+/// dot-entries and `attachments/` directories skipped.
+fn walk_vault(target_dir: &Path) -> Result<(HashSet<String>, Vec<String>), Error> {
+    fn walk(target_dir: &Path, dir: &str, dirs: &mut HashSet<String>, files: &mut Vec<String>) -> Result<(), Error> {
         let entries = match std::fs::read_dir(target_dir.join(dir)) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -346,51 +360,23 @@ pub(crate) fn list_untracked_markdown_files(
             if name.starts_with('.') {
                 continue;
             }
-            let relative = if dir.is_empty() {
-                name.clone()
-            } else {
-                format!("{dir}/{name}")
-            };
             let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                if name.to_lowercase() != "attachments" {
-                    walk(target_dir, &relative, tracked, found)?;
-                }
-            } else if file_type.is_file() && name.ends_with(".md") && !tracked.contains(relative.as_str()) {
-                found.push(relative);
-            }
-        }
-        Ok(())
-    }
-    walk(target_dir, "", &tracked, &mut found)?;
-    found.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-    Ok(found)
-}
-
-/// Every directory in the vault that could be a folder's: dot-directories
-/// and `attachments/` skipped, as for note files.
-fn list_vault_dirs(target_dir: &Path) -> Result<HashSet<String>, Error> {
-    fn walk(target_dir: &Path, dir: &str, found: &mut HashSet<String>) -> Result<(), Error> {
-        let entries = match std::fs::read_dir(target_dir.join(dir)) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-        for entry in entries {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || name.to_lowercase() == "attachments" || !entry.file_type()?.is_dir() {
-                continue;
-            }
+            let attachments = name.to_lowercase() == "attachments";
             let relative = if dir.is_empty() { name } else { format!("{dir}/{name}") };
-            walk(target_dir, &relative, found)?;
-            found.insert(relative);
+            if file_type.is_dir() {
+                if !attachments {
+                    walk(target_dir, &relative, dirs, files)?;
+                    dirs.insert(relative);
+                }
+            } else if file_type.is_file() && relative.ends_with(".md") {
+                files.push(relative);
+            }
         }
         Ok(())
     }
-    let mut found = HashSet::new();
-    walk(target_dir, "", &mut found)?;
-    Ok(found)
+    let (mut dirs, mut files) = (HashSet::new(), Vec::new());
+    walk(target_dir, "", &mut dirs, &mut files)?;
+    Ok((dirs, files))
 }
 
 /// A folder directory renamed here (`from` gone, `to` new beside it).
@@ -467,16 +453,16 @@ pub fn plan_folder_dir_changes(
             .map(|(_, _, to)| note_dir_of(to))
             .collect();
         let to = if notes_here.is_empty() {
-            let gone: Vec<&&String> = own
+            let gone = own
                 .iter()
                 .map(|(d, _)| d)
                 .filter(|d| parent_of(d) == parent_of(dir) && missing_empty(d))
-                .collect();
+                .count();
             let fresh: Vec<&&String> = new_dirs
                 .iter()
                 .filter(|d| parent_of(d) == parent && !has_notes(d))
                 .collect();
-            (gone.len() == 1 && fresh.len() == 1).then(|| (*fresh[0]).clone())
+            (gone == 1 && fresh.len() == 1).then(|| (*fresh[0]).clone())
         } else if targets.len() == 1 {
             let to = targets.into_iter().next().unwrap_or_default();
             let all_moved_there = notes_here.iter().all(|rn| {

@@ -2375,7 +2375,7 @@ fn a_450_with_a_jar_replaced_meanwhile_retries_once() {
     let init = init_client_url(&s);
 
     *accepted.lock().unwrap() = "fmip2".into();
-    let s2 = s.clone();
+    let s2 = s;
     let slow = thread::spawn(move || s2.post_json(&init, &json!({})));
     wait_until("the request", Duration::from_secs(5), || server.count(INIT_CLIENT) == 1);
     icloud_session::authorize_find_my_on(&conn).unwrap();
@@ -2892,13 +2892,11 @@ fn skill_prints_the_markdown_and_install_remove_report_paths() {
     let data = envelope_data(&out.stdout);
     let skill_md = home.path().join(".agents/skills/icloud/SKILL.md");
     assert_eq!(fs::read_to_string(&skill_md).unwrap(), body);
-    let paths: Vec<&str> = data["paths"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|p| p.as_str().unwrap())
-        .collect();
-    assert!(paths.contains(&skill_md.to_str().unwrap()), "{data}");
+    let skill_path = skill_md.to_str().unwrap();
+    assert!(
+        data["paths"].as_array().unwrap().iter().any(|p| p == skill_path),
+        "{data}"
+    );
     assert!(data["notices"].is_array(), "{data}");
 
     let out = run(&["skill", "remove", "--ids-only"]);

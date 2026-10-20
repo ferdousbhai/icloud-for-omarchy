@@ -40,7 +40,7 @@ fn browse_download_delete_upload_and_resync() {
 
     // A thumb is a real JPEG from the fake content host.
     let targets = Targets {
-        dirs: dirs.clone(),
+        dirs,
         library: root.join("Pictures"),
     };
     let thumb = fetch(&t, &cat, &targets, &newest.id, Job::Thumb).unwrap();

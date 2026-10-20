@@ -46,7 +46,7 @@ pub fn split_frontmatter(text: &str, options: SplitOptions) -> Envelope {
     if lines[0] != FENCE {
         return whole();
     }
-    if options.filename_as_title && matches!(lines.get(1), Some(&FENCE) | Some(&"") | None) {
+    if options.filename_as_title && matches!(lines.get(1), Some(&FENCE | &"") | None) {
         return whole();
     }
     let Some(closing) = lines.iter().skip(1).position(|l| *l == FENCE).map(|i| i + 1) else {

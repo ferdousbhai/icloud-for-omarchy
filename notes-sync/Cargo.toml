@@ -17,6 +17,7 @@ name = "icloud-notes-sync"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 icloud-session = { workspace = true, features = ["clap"] }

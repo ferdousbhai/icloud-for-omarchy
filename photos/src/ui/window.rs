@@ -492,7 +492,7 @@ impl App {
                 let pool = Downloader::start(
                     t.clone(),
                     self.dirs.clone(),
-                    settings.library_dir.clone(),
+                    settings.library_dir,
                     4,
                     Box::new(move |e| {
                         let _ = tx.send_blocking(Msg::Download(e));
@@ -669,9 +669,8 @@ impl App {
             let (snap, notice) = snap.unwrap_or_else(|| {
                 let mut snap = snapshot(&a.cat, a.album.borrow().clone(), columns);
                 // Do not run inference on the main loop for an in-memory catalog.
-                let q = a.search_query.borrow().trim_start_matches('~').trim().to_owned();
-                snap.tiles
-                    .retain(|tile| tile.filename.to_lowercase().contains(&q.to_lowercase()));
+                let q = a.search_query.borrow().trim_start_matches('~').trim().to_lowercase();
+                snap.tiles.retain(|tile| tile.filename.to_lowercase().contains(&q));
                 snap.rows = super::grid::rows_of(&snap.tiles, columns);
                 (snap, "Recall unavailable · filename matches")
             });
@@ -958,8 +957,9 @@ fn filter_snapshot(snap: &mut Snapshot, query: &str) -> &'static str {
             return "Semantic matches · cached thumbnails only";
         }
     }
+    let filename_query = q.to_lowercase();
     snap.tiles
-        .retain(|tile| tile.filename.to_lowercase().contains(&q.to_lowercase()));
+        .retain(|tile| tile.filename.to_lowercase().contains(&filename_query));
     snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
     if semantic {
         "Recall unavailable or warming up · filename matches"
@@ -986,7 +986,7 @@ mod tests {
             month: 1,
         };
         snap.tiles = vec![tile("a", "Holiday.jpg").into(), tile("b", "Work.jpg").into()];
-        assert!(filter_snapshot(&mut snap, "~ holiday").contains("filename matches"));
+        assert!(filter_snapshot(&mut snap, "~ HOLIDAY").contains("filename matches"));
         assert_eq!(snap.tiles.len(), 1);
         assert_eq!(snap.tiles[0].id, "a");
     }

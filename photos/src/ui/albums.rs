@@ -49,7 +49,7 @@ impl Albums {
         }
         let all = row(None, "All Photos", total, "view-grid-symbolic");
         self.list.append(&all);
-        let mut to_select = all.clone();
+        let mut to_select = all;
         for a in albums {
             let r = row(Some(&a.id), &a.name, a.count, "folder-pictures-symbolic");
             if selected == Some(a.id.as_str()) {

@@ -1124,11 +1124,7 @@ impl Daemon {
         let Some(account) = st.account.as_mut().filter(|_| same) else {
             return Err(LoginError::Failed("signed out meanwhile".into()));
         };
-        account.find_my = Some(FindMyJar {
-            cookies: jar,
-            client_params: params,
-            captured_at: time::rfc3339_millis(time::now_ms()),
-        });
+        account.find_my = Some(FindMyJar::captured_now(jar, params));
         let save = self.save_account(&mut st);
         drop(st);
         self.write(save);
@@ -1541,11 +1537,7 @@ impl Daemon {
             return Err("signed out meanwhile; sign in first".into());
         };
         same_account(dsid, &account.dsid)?;
-        account.find_my = Some(FindMyJar {
-            cookies: jar,
-            client_params: params,
-            captured_at: time::rfc3339_millis(time::now_ms()),
-        });
+        account.find_my = Some(FindMyJar::captured_now(jar, params));
         let save = self.save_account(&mut st);
         drop(st);
         self.write(save);

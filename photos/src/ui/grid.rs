@@ -383,7 +383,7 @@ impl Grid {
             .set_visible_child_name(if objects.is_empty() { "empty" } else { "grid" });
         // The list view anchors on the first row, which would hide the first
         // month header; put the scroll position back explicitly.
-        let adj = adj.clone();
+        let adj = adj;
         glib::idle_add_local_once(move || adj.set_value(fraction * (adj.upper() - adj.page_size()).max(0.0)));
     }
 

@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
-use super::{Error, NoticeLevel, SyncNotice, SyncProgress, skipped_zone_owner, used_names_for, zone_for_owner};
+use super::{
+    Error, NoticeLevel, SyncNotice, SyncProgress, shared_zone_tokens_and_records, skipped_zone_owner, used_names_for,
+    zone_for_owner,
+};
 use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
@@ -17,7 +20,7 @@ use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_
 use crate::md::frontmatter::compose_note_file;
 use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy;
-use crate::vault::layout::{PreviousLayout, SharedZoneRecords, build_vault_layout, place_note};
+use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
 use crate::vault::state::{Account, CloneState, NoteEntry, TitleMode, read_clone_state, write_clone_state};
 
@@ -134,23 +137,14 @@ pub fn run_clone_with(
     let mut table_attachments = IndexMap::new();
     let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
     let mut used_attachment_file_names: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut shared_zone_sync_tokens: IndexMap<String, String> = IndexMap::new();
-
+    let (shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     let mut sources: Vec<(&[CloudKitRecord], Option<String>)> = vec![(&changes.records, None)];
-    let mut shared_zone_records: Vec<SharedZoneRecords> = Vec::new();
-    for zone in &shared.zones {
-        let owner = zone.zone_id.owner_record_name.clone().filter(|o| !o.is_empty());
-        if let (Some(owner), Some(token)) = (&owner, zone.sync_token.as_ref().filter(|t| !t.is_empty())) {
-            shared_zone_sync_tokens.insert(owner.clone(), token.clone());
-        }
-        if let Some(owner) = &owner {
-            shared_zone_records.push(SharedZoneRecords {
-                owner_record_name: owner.clone(),
-                records: zone.records.clone(),
-            });
-        }
-        sources.push((&zone.records, zone.zone_id.owner_record_name.clone()));
-    }
+    sources.extend(
+        shared
+            .zones
+            .iter()
+            .map(|zone| (&zone.records[..], zone.zone_id.owner_record_name.clone())),
+    );
 
     let layout = build_vault_layout(&changes.records, &shared_zone_records, PreviousLayout::default());
     for dir in &layout.all_dirs {

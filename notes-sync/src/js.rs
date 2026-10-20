@@ -50,8 +50,9 @@ pub fn utf16(s: &str) -> Vec<u16> {
 
 /// Whether `needle` (as UTF-16) occurs in `haystack` at unit `at`.
 pub(crate) fn starts_with_at(haystack: &[u16], at: usize, needle: &str) -> bool {
-    let needle = utf16(needle);
-    haystack.len() >= at + needle.len() && haystack[at..at + needle.len()] == needle[..]
+    let Some(tail) = haystack.get(at..) else { return false };
+    let mut units = tail.iter().copied();
+    needle.encode_utf16().all(|unit| units.next() == Some(unit))
 }
 
 /// `.length`: UTF-16 code units.
@@ -69,35 +70,14 @@ pub fn from_utf16(units: &[u16]) -> String {
 /// `s.slice(start, end)` in UTF-16 units (non-negative indexes, clamped like
 /// JS). A cut through a surrogate pair yields U+FFFD for the orphaned half.
 pub fn slice16(s: &str, start: usize, end: usize) -> String {
-    let units = utf16(s);
-    let end = end.min(units.len());
-    let start = start.min(end);
-    from_utf16(&units[start..end])
+    let units: Vec<_> = s.encode_utf16().skip(start).take(end.saturating_sub(start)).collect();
+    from_utf16(&units)
 }
-
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// `Buffer.from(bytes).toString("base64")`.
 pub fn base64_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        out.push(B64[(n >> 18) as usize & 63] as char);
-        out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            B64[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            B64[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// `Buffer.from(s, "base64")`: lenient like Node - both the standard and the
@@ -377,6 +357,20 @@ pub mod posix {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf16_prefixes_and_slices_keep_surrogate_and_boundary_semantics() {
+        let units = super::utf16("😀https://x");
+        assert!(starts_with_at(&units, 2, "https://"));
+        assert!(!starts_with_at(&units, 1, "https://"));
+        assert!(!starts_with_at(&units, 2, "https://longer"));
+        assert!(starts_with_at(&units, units.len(), ""));
+        assert!(!starts_with_at(&units, usize::MAX, "x"));
+        assert_eq!(slice16("a😀b", 2, 3), "\u{FFFD}");
+        assert_eq!(slice16("a😀b", 3, 100), "b");
+        assert_eq!(slice16("a😀b", 100, 200), "");
+        assert_eq!(slice16("a😀b", 3, 1), "");
+    }
 
     #[test]
     fn iso_strings() {

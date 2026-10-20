@@ -346,10 +346,12 @@ pub fn parse_embed_markers(text: &str) -> Vec<ParsedEmbedMarker> {
 
 /// `hasEmbedMarker`: `/<apple-embed\b/`.
 pub fn has_embed_marker(text: &str) -> bool {
-    let units = utf16(text);
-    let open_len = utf16("<apple-embed").len();
-    (0..units.len()).any(|i| {
-        starts_with_at(&units, i, "<apple-embed") && !units.get(i + open_len).is_some_and(|&u| is_word_unit(u))
+    const OPEN: &str = "<apple-embed";
+    text.match_indices(OPEN).any(|(at, _)| {
+        !text
+            .as_bytes()
+            .get(at + OPEN.len())
+            .is_some_and(|&byte| byte.is_ascii_alphanumeric() || byte == b'_')
     })
 }
 

@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, NoticeLevel, SyncNotice, SyncProgress, is_purged, skipped_zone_owner, used_names_for, zone_for_owner,
+    Error, NoticeLevel, SyncNotice, SyncProgress, is_purged, shared_zone_tokens_and_records, skipped_zone_owner,
+    used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -30,9 +31,7 @@ use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{reconcile_note_placements, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
-use crate::vault::layout::{
-    PreviousLayout, SharedZoneRecords, build_vault_layout, note_dir_of, place_note, previous_layout_dirs,
-};
+use crate::vault::layout::{PreviousLayout, build_vault_layout, note_dir_of, place_note, previous_layout_dirs};
 use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
 };
@@ -245,25 +244,12 @@ pub fn run_pull_with(
         shared_zone_owner: None,
         resynced: changes.resynced_from_scratch,
     }];
-    let mut shared_zone_sync_tokens: IndexMap<String, String> = IndexMap::new();
-    let mut shared_zone_records: Vec<SharedZoneRecords> = Vec::new();
-    for zone in &shared.zones {
-        let owner = zone.zone_id.owner_record_name.clone().filter(|o| !o.is_empty());
-        if let (Some(owner), Some(token)) = (&owner, zone.sync_token.as_ref().filter(|t| !t.is_empty())) {
-            shared_zone_sync_tokens.insert(owner.clone(), token.clone());
-        }
-        if let Some(owner) = &owner {
-            shared_zone_records.push(SharedZoneRecords {
-                owner_record_name: owner.clone(),
-                records: zone.records.clone(),
-            });
-        }
-        sources.push(Source {
-            records: zone.records.clone(),
-            shared_zone_owner: zone.zone_id.owner_record_name.clone(),
-            resynced: zone.resynced_from_scratch,
-        });
-    }
+    let (mut shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
+    sources.extend(shared.zones.iter().map(|zone| Source {
+        records: zone.records.clone(),
+        shared_zone_owner: zone.zone_id.owner_record_name.clone(),
+        resynced: zone.resynced_from_scratch,
+    }));
     for skipped in &shared.skipped_zones {
         let owner = skipped_zone_owner(skipped).filter(|o| !o.is_empty());
         if let Some(owner) = owner
@@ -503,9 +489,9 @@ pub fn run_pull_with(
                             modification_date: modification_date_of(record),
                             shared_zone_owner: source.shared_zone_owner.clone(),
                             unpublishable_reason: unpublishable_reason.clone(),
-                            folder_record_name: placement.folder_record_name.clone(),
+                            folder_record_name: placement.folder_record_name,
                             pending_rename: None,
-                            frontmatter_title: recorded_title.clone(),
+                            frontmatter_title: recorded_title,
                         },
                     );
                     summary.added += 1;
@@ -546,13 +532,13 @@ pub fn run_pull_with(
                         if !conflicted {
                             write_base_copy(target_dir, &record.record_name, &body_text)?;
                         }
-                        let mut entry = existing.clone();
+                        let mut entry = existing;
                         if let Some(tag) = &record.record_change_tag {
                             entry.record_change_tag = tag.clone();
                         }
                         entry.modification_date = modification_date_of(record);
-                        entry.unpublishable_reason = unpublishable_reason.clone();
-                        entry.frontmatter_title = recorded_title.clone();
+                        entry.unpublishable_reason = unpublishable_reason;
+                        entry.frontmatter_title = recorded_title;
                         entry.pending_rename = None;
                         tracked.notes.insert(record.record_name.clone(), entry);
                         for claimant in &claimants {
@@ -579,9 +565,9 @@ pub fn run_pull_with(
                         entry.record_change_tag = tag.clone();
                     }
                     entry.modification_date = modification_date_of(record);
-                    entry.unpublishable_reason = unpublishable_reason.clone();
-                    entry.folder_record_name = placement.folder_record_name.clone();
-                    entry.frontmatter_title = recorded_title.clone();
+                    entry.unpublishable_reason = unpublishable_reason;
+                    entry.folder_record_name = placement.folder_record_name;
+                    entry.frontmatter_title = recorded_title;
                     entry.pending_rename = None;
                     tracked.notes.insert(record.record_name.clone(), entry);
                     summary.notices.push(SyncNotice {
@@ -673,7 +659,7 @@ pub fn run_pull_with(
                     title_mode,
                 )?;
                 if merged == MergeStatus::UnresolvedMarkers {
-                    let mut entry = existing.clone();
+                    let mut entry = existing;
                     entry.file = file.clone();
                     entry.pending_rename = pending_rename.clone();
                     tracked.notes.insert(record.record_name.clone(), entry);
@@ -791,7 +777,7 @@ pub fn run_pull_with(
         attachments: Some(tracked.attachments),
         table_attachments: Some(tracked.table_attachments),
         trashed: Some(trashed),
-        extra: state.extra.clone(),
+        extra: state.extra,
         ..Default::default()
     };
     write_clone_state(target_dir, &new_state)?;

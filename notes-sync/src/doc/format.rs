@@ -369,7 +369,7 @@ pub fn trim_trailing_whitespace(paragraph: &FormatParagraph) -> FormatParagraph 
         return paragraph.clone();
     }
     let mut spans = Vec::new();
-    let mut remaining = utf16(text).len();
+    let mut remaining = crate::js::len16(text);
     for span in &paragraph.spans {
         if remaining == 0 {
             break;

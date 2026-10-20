@@ -140,7 +140,7 @@ pub fn resolve_folder_account(
         return Err(Error::AccountMismatch {
             target_dir: target_dir.display().to_string(),
             expected: account.apple_id.clone(),
-            actual: remote.account.apple_id.clone(),
+            actual: remote.account.apple_id,
         });
     }
     Ok(remote)
@@ -155,7 +155,7 @@ pub fn bind_account(connector: &dyn Connector, requested: Option<&str>) -> Resul
     {
         return Err(Error::RequestedAccountMismatch {
             requested: requested.to_owned(),
-            actual: remote.account.apple_id.clone(),
+            actual: remote.account.apple_id,
         });
     }
     Ok(remote)

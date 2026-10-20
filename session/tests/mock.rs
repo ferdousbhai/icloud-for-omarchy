@@ -13,7 +13,7 @@ fn mock_mode_needs_no_dbus_and_rewrites_every_url() {
     let base = format!("http://{}", server.server_addr().to_ip().unwrap());
     let seen = Arc::new(Mutex::new(Vec::<(String, Option<String>)>::new()));
     {
-        let (server, seen) = (server.clone(), seen.clone());
+        let (server, seen) = (server, seen.clone());
         thread::spawn(move || {
             for mut request in server.incoming_requests() {
                 let mut body = Vec::new();
