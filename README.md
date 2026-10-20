@@ -290,9 +290,13 @@ the current key, and it is idempotent.
 
 ## Optional Recall search
 
-Notes: use `~ QUERY` to rank up to 2,000 local Markdown notes. Photos: enter `~ QUERY` and press Enter to search already cached thumbnails in the selected album; originals are never fetched for inference. Find My does not use Recall.
+When Recall (Recall for Omarchy) is installed, search also finds things by meaning, with no extra syntax:
 
-Recall is an optional extra. Normal operation never contacts it. Missing, incompatible, busy, or warming-up Recall leaves Notes text search or Photos filename search available. Requests run in the background with a bounded wait. This project does not install Recall, download embedding weights, or start its own model runtime. When enabled, the owner-local Recall service owns one shared model cache and inference worker; records stay on this machine.
+- **Notes:** text matches show as you type; once typing pauses, Recall ranks up to 2,000 local notes and the ones it adds appear below under "Related by meaning".
+- **Photos:** on Enter, filename matches come first, then Recall's matches by meaning among the selected album's already cached thumbnails. Originals are never fetched for this.
+- **Find My** does not use Recall.
+
+Start a search with `~` (`~ trip to bali`) for matches by meaning alone. Without Recall (missing, incompatible, busy or warming up) search is plain text in Notes and filenames in Photos. Typing a search is the only thing that contacts Recall; requests run in the background with a bounded wait. This project does not install Recall, download embedding weights, or start its own model runtime; Recall's own service keeps one shared model cache and inference worker, and records stay on this machine.
 
 ## License
 

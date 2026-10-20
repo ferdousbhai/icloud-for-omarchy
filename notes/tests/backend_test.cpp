@@ -199,7 +199,7 @@ int main(int argc, char *argv[])
                 semanticFinished = true;
             }
         });
-    const auto fallback = b.searchVault(QStringLiteral("~ deep-note-marker"));
+    const auto fallback = b.searchVault(QStringLiteral("~ deep-note-marker"), true);
     check(fallback.size() == 1, "optional semantic search immediately retains keyword match");
     QElapsedTimer semanticTimer;
     semanticTimer.start();
@@ -222,10 +222,30 @@ int main(int argc, char *argv[])
                   "optional semantic result resolves a fresh local note and excludes attachments");
             semanticFinished = true;
         });
-    b.searchVault(QStringLiteral("~ descendant"));
+    b.searchVault(QStringLiteral("~ descendant"), true);
     semanticTimer.restart();
     while (!semanticFinished && semanticTimer.elapsed() < 2000) QCoreApplication::processEvents();
     check(semanticFinished, "optional semantic result arrives asynchronously");
+    QObject::disconnect(semanticConnection);
+    // A plain query ranks by meaning too, once typing pauses; only the last
+    // query of a burst runs Recall.
+    QStringList rankedQueries;
+    semanticConnection = QObject::connect(&b, &NotesBackend::semanticSearchFinished, &b,
+        [&](const QString &query, const QVariantList &hits, bool available) {
+            check(available && hits.size() == 1, "plain query gains related notes from Recall");
+            rankedQueries << query;
+        });
+    b.searchVault(QStringLiteral("desc"), true);
+    b.searchVault(QStringLiteral("descendant"), true);
+    semanticTimer.restart();
+    while (rankedQueries.isEmpty() && semanticTimer.elapsed() < 3000) QCoreApplication::processEvents();
+    check(rankedQueries == QStringList{ QStringLiteral("descendant") }, "Recall runs once, for the last query");
+    QObject::disconnect(semanticConnection);
+    semanticConnection = QObject::connect(&b, &NotesBackend::semanticSearchFinished, &b,
+        [&](const QString &, const QVariantList &, bool) { check(false, "the command line never runs Recall"); });
+    b.searchVault(QStringLiteral("descendant"));
+    semanticTimer.restart();
+    while (semanticTimer.elapsed() < 700) QCoreApplication::processEvents();
     QObject::disconnect(semanticConnection);
     qputenv("PATH", savedPath);
     b.openNote(QStringLiteral("Deep/Child.md"));

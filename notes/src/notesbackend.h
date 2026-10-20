@@ -3,6 +3,7 @@
 
 #include <QFileSystemWatcher>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
 #include <QProcess>
@@ -225,7 +226,7 @@ public:
     // in iCloud, or sends its notes to Recently Deleted and deletes it.
     Q_INVOKABLE QString renameCurrentFolder(const QString &name);
     Q_INVOKABLE QString deleteCurrentFolder();
-    Q_INVOKABLE QVariantList searchVault(const QString &query);
+    Q_INVOKABLE QVariantList searchVault(const QString &query, bool withMeaning = false);
     Q_INVOKABLE QString toggleCheckbox(const QString &text, int line);
     Q_INVOKABLE QString exportPdf();
     // Clone the account's notes into the vault: signs in through
@@ -386,6 +387,8 @@ private slots:
                                   const QStringList &invalidated);
 
 private:
+    void rankByMeaning(const QString &recall, const QString &query, const QString &q, const QJsonArray &records,
+                       const QMap<QString, QVariantMap> &candidates, quint64 generation);
 
     // What one read of a note yields, kept until the file's mtime or size
     // moves, so a save in a folder of hundreds of notes re-reads one file.
@@ -485,6 +488,7 @@ private:
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_themeWatcher;
     QProcess *m_semanticProcess = nullptr;
+    QTimer m_semanticDelay; // single-shot: Recall runs once typing pauses
     quint64 m_semanticGeneration = 0;
     QProcess m_syncProcess;
     mutable VaultInfo m_vaultInfo;

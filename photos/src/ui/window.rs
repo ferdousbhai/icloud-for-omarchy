@@ -224,7 +224,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     let grid_tv = adw::ToolbarView::new();
     grid_tv.add_top_bar(&grid_header);
     let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search this album · ~ meaning")
+        .placeholder_text("Search this album")
         .hexpand(true)
         .build();
     let search_hint = gtk::Label::builder().xalign(0.0).css_classes(["dim-label"]).build();
@@ -646,11 +646,7 @@ impl App {
         let (path, album, columns) = (self.dirs.catalog(), self.album.borrow().clone(), self.grid.columns());
         let query = self.search_query.borrow().clone();
         self.search_hint.set_visible(!query.is_empty());
-        self.search_hint.set_text(if query.starts_with('~') {
-            "Searching cached thumbnails by meaning…"
-        } else {
-            "Filename matches"
-        });
+        self.search_hint.set_text("Searching…");
         let a = self.clone();
         glib::spawn_future_local(async move {
             let snap = gio::spawn_blocking(move || {
@@ -672,9 +668,9 @@ impl App {
                 let q = a.search_query.borrow().trim_start_matches('~').trim().to_lowercase();
                 snap.tiles.retain(|tile| tile.filename.to_lowercase().contains(&q));
                 snap.rows = super::grid::rows_of(&snap.tiles, columns);
-                (snap, "Recall unavailable · filename matches")
+                (snap, "Filename matches".to_owned())
             });
-            a.search_hint.set_text(notice);
+            a.search_hint.set_text(&notice);
             a.apply_snapshot(snap);
         });
     }
@@ -931,40 +927,58 @@ fn snapshot(cat: &Catalog, mut album: Option<String>, columns: usize) -> Snapsho
     }
 }
 
-/// Search never fetches originals or expands the selected album.
-fn filter_snapshot(snap: &mut Snapshot, query: &str) -> &'static str {
-    let semantic = query.starts_with('~');
-    let q = if semantic { query[1..].trim() } else { query.trim() };
+/// Search never fetches originals or expands the selected album. Filename
+/// matches come first, then local Recall's matches by meaning among the
+/// cached thumbnails; "~ query" asks for the matches by meaning alone.
+/// Without Recall (or cached thumbnails) it is a filename search.
+fn filter_snapshot(snap: &mut Snapshot, query: &str) -> String {
+    filter_snapshot_with(snap, query, |q, records| {
+        crate::recall_client::rank("icloud-photos", q, records, 100)
+    })
+}
+
+fn filter_snapshot_with(
+    snap: &mut Snapshot,
+    query: &str,
+    rank: impl FnOnce(&str, &[serde_json::Value]) -> Option<Vec<String>>,
+) -> String {
+    let meaning_only = query.starts_with('~');
+    let q = if meaning_only { query[1..].trim() } else { query.trim() };
     if q.is_empty() {
-        return "";
+        return String::new();
     }
-    if semantic {
-        let records: Vec<_> = snap
-            .tiles
-            .iter()
-            .filter_map(|tile| {
-                let path = tile.thumb.as_ref().filter(|p| p.is_absolute() && p.is_file())?;
-                Some(serde_json::json!({"id":tile.id,"title":tile.filename,"text":"","kind":"image","path":path}))
-            })
-            .collect();
-        if !records.is_empty()
-            && let Some(ids) = crate::recall_client::rank("icloud-photos", q, &records, 100)
-        {
-            let mut tiles: std::collections::HashMap<_, _> =
-                snap.tiles.drain(..).map(|tile| (tile.id.clone(), tile)).collect();
-            snap.tiles = ids.into_iter().filter_map(|id| tiles.remove(&id)).collect();
-            snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
-            return "Semantic matches · cached thumbnails only";
-        }
-    }
+    let records: Vec<_> = snap
+        .tiles
+        .iter()
+        .filter_map(|tile| {
+            let path = tile.thumb.as_ref().filter(|p| p.is_absolute() && p.is_file())?;
+            Some(serde_json::json!({"id":tile.id,"title":tile.filename,"text":"","kind":"image","path":path}))
+        })
+        .collect();
+    let ranked = if records.is_empty() { None } else { rank(q, &records) };
     let filename_query = q.to_lowercase();
-    snap.tiles
-        .retain(|tile| tile.filename.to_lowercase().contains(&filename_query));
-    snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
-    if semantic {
-        "Recall unavailable or warming up · filename matches"
+    let all = std::mem::take(&mut snap.tiles);
+    let (named, rest): (Vec<_>, Vec<_>) = if meaning_only && ranked.is_some() {
+        (Vec::new(), all)
     } else {
-        "Filename matches"
+        all.into_iter()
+            .partition(|tile| tile.filename.to_lowercase().contains(&filename_query))
+    };
+    let names = named.len();
+    snap.tiles = named;
+    let mut rest: std::collections::HashMap<_, _> = rest.into_iter().map(|tile| (tile.id.clone(), tile)).collect();
+    let before = snap.tiles.len();
+    snap.tiles
+        .extend(ranked.iter().flatten().filter_map(|id| rest.remove(id)));
+    let meaning = snap.tiles.len() - before;
+    snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
+    let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "es" });
+    match (ranked.is_some(), names, meaning) {
+        (true, 0, _) => "Matches by meaning · cached thumbnails only".into(),
+        (true, n, 0) => plural(n, "filename match"),
+        (true, n, m) => format!("{} · {m} by meaning", plural(n, "filename match")),
+        (false, _, _) if meaning_only => "Recall unavailable or warming up · filename matches".into(),
+        (false, _, _) => "Filename matches".into(),
     }
 }
 
@@ -989,6 +1003,58 @@ mod tests {
         assert!(filter_snapshot(&mut snap, "~ HOLIDAY").contains("filename matches"));
         assert_eq!(snap.tiles.len(), 1);
         assert_eq!(snap.tiles[0].id, "a");
+    }
+
+    #[test]
+    fn plain_search_lists_filename_matches_then_matches_by_meaning() {
+        let cached = tempfile::NamedTempFile::new().unwrap();
+        let cat = Catalog::open_in_memory().unwrap();
+        let tile = |id: &str, filename: &str| {
+            super::super::grid::Tile {
+                id: id.into(),
+                filename: filename.into(),
+                thumb: Some(cached.path().to_path_buf()),
+                kind: icloud_photos::cloudkit::Kind::Photo,
+                is_live: false,
+                month: 1,
+            }
+            .into()
+        };
+        let fresh = || {
+            let mut snap = snapshot(&cat, None, 4);
+            snap.tiles = vec![tile("a", "IMG_1.jpg"), tile("b", "beach.jpg"), tile("c", "IMG_2.jpg")];
+            snap
+        };
+        let ids = |snap: &Snapshot| snap.tiles.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        let ranked = |_: &str, records: &[serde_json::Value]| {
+            assert_eq!(records.len(), 3);
+            Some(vec!["c".to_string(), "b".to_string()])
+        };
+
+        let mut snap = fresh();
+        assert_eq!(
+            filter_snapshot_with(&mut snap, "beach", ranked),
+            "1 filename match · 1 by meaning"
+        );
+        assert_eq!(ids(&snap), ["b", "c"]);
+
+        let mut snap = fresh();
+        assert_eq!(
+            filter_snapshot_with(&mut snap, "sunset", ranked),
+            "Matches by meaning · cached thumbnails only"
+        );
+        assert_eq!(ids(&snap), ["c", "b"]);
+
+        let mut snap = fresh();
+        assert_eq!(
+            filter_snapshot_with(&mut snap, "~ beach", ranked),
+            "Matches by meaning · cached thumbnails only"
+        );
+        assert_eq!(ids(&snap), ["c", "b"]);
+
+        let mut snap = fresh();
+        assert_eq!(filter_snapshot_with(&mut snap, "img", |_, _| None), "Filename matches");
+        assert_eq!(ids(&snap), ["a", "c"]);
     }
 
     #[test]

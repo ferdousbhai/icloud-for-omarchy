@@ -766,7 +766,7 @@ ApplicationWindow {
                             TextField {
                                 id: searchField
                                 Layout.fillWidth: true
-                                placeholderText: "Search notes · ~ meaning"
+                                placeholderText: "Search notes"
                                 placeholderTextColor: root.colTextMuted
                                 selectByMouse: true
                                 background: null
@@ -775,7 +775,7 @@ ApplicationWindow {
                                 font.pixelSize: root.pt(12)
                                 onTextChanged: {
                                     if (root.searching)
-                                        root.searchResults = backend.searchVault(text);
+                                        root.searchResults = backend.searchVault(text, true);
                                 }
                                 Keys.onEscapePressed: { text = ""; editor.forceActiveFocus(); }
                             }
@@ -785,8 +785,12 @@ ApplicationWindow {
                         Layout.leftMargin: 20
                         Layout.bottomMargin: 4
                         text: {
-                            if (root.searching)
-                                return root.searchResults.length + " result" + (root.searchResults.length === 1 ? "" : "s");
+                            if (root.searching) {
+                                var related = root.searchResults.filter(function (r) { return r.related; }).length;
+                                var matches = root.searchResults.length - related;
+                                return matches + " result" + (matches === 1 ? "" : "s")
+                                    + (related > 0 ? " · " + related + " related" : "");
+                            }
                             var n = backend.notes.length;
                             return n + " note" + (n === 1 ? "" : "s");
                         }
@@ -808,6 +812,8 @@ ApplicationWindow {
                             property string fileName: isResult ? modelData.file : modelData
                             property bool selected: fileName === backend.currentNote && folder === backend.currentFolder
                             property var pills: isResult ? [] : root.badges(fileName)
+                            property bool firstRelated: isResult && modelData.related === true
+                                && (index === 0 || noteView.model[index - 1].related !== true)
                             HoverHandler { id: noteHover }
                             Rectangle {
                                 anchors.fill: parent
@@ -836,6 +842,14 @@ ApplicationWindow {
                                 anchors.leftMargin: 20
                                 anchors.rightMargin: 20
                                 spacing: 3
+                                Label {
+                                    Layout.bottomMargin: 6
+                                    visible: noteRow.firstRelated
+                                    text: "Related by meaning"
+                                    color: root.colTextDim
+                                    font.pixelSize: root.pt(11)
+                                    font.bold: true
+                                }
                                 Label {
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight
@@ -1333,10 +1347,22 @@ ApplicationWindow {
     }
     Connections {
         target: backend
+        // "~ query" shows Recall's ranking alone; a plain query keeps its
+        // text matches and gains the rest of Recall's hits below them.
         function onSemanticSearchFinished(query, hits, available) {
             if (searchField.text !== query || !root.searching) return;
-            if (available) root.searchResults = hits;
-            root.notice = available ? "Semantic matches · local Recall" : "Recall unavailable or warming up · showing text matches";
+            if (query.trim().startsWith("~")) {
+                if (available) root.searchResults = hits;
+                root.notice = available ? "Matches by meaning · local Recall" : "Recall unavailable or warming up · showing text matches";
+                return;
+            }
+            if (!available) return;
+            var shown = {};
+            root.searchResults.forEach(function (r) { shown[r.folder + "/" + r.file] = true; });
+            var related = hits.filter(function (h) { return !shown[h.folder + "/" + h.file]; })
+                              .map(function (h) { return Object.assign({ related: true }, h); });
+            if (related.length > 0)
+                root.searchResults = root.searchResults.concat(related);
         }
         // Counted from the end of the last sync, whatever started it (a
         // focus, a push, Pull), so a poll never follows one within the interval.
@@ -1431,11 +1457,11 @@ ApplicationWindow {
         }
         function onNotesChanged() {
             if (root.searching)
-                root.searchResults = backend.searchVault(searchField.text);
+                root.searchResults = backend.searchVault(searchField.text, true);
         }
         function onFoldersChanged() {
             if (root.searching)
-                root.searchResults = backend.searchVault(searchField.text);
+                root.searchResults = backend.searchVault(searchField.text, true);
         }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
         // Not on syncRunningChanged: that turns false between runSync's

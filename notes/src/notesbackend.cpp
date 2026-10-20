@@ -284,6 +284,7 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     }
     connect(&m_lockRetry, &QTimer::timeout, this, &NotesBackend::retryLock);
     m_lockRetry.setInterval(500);
+    m_semanticDelay.setSingleShot(true);
 
     // External changes (an icloud-notes-sync pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
@@ -1450,35 +1451,43 @@ QString NotesBackend::deleteCurrentFolder()
     return {};
 }
 
-QVariantList NotesBackend::searchVault(const QString &query)
+// Text matches at once. With `withMeaning` (the window), local Recall then
+// ranks the same notes by meaning once typing pauses, if it is installed:
+// semanticSearchFinished brings its hits. "~ query" asks for those alone.
+QVariantList NotesBackend::searchVault(const QString &query, bool withMeaning)
 {
     QVariantList out;
     const quint64 generation = ++m_semanticGeneration;
+    m_semanticDelay.stop();
     if (m_semanticProcess) {
         m_semanticProcess->kill();
         m_semanticProcess = nullptr;
     }
-    const bool semantic = query.trimmed().startsWith(u'~');
-    const QString q = semantic ? query.trimmed().mid(1).trimmed() : query.trimmed();
-    QJsonArray records;
-    QMap<QString, QVariantMap> candidates;
+    const bool meaningOnly = query.trimmed().startsWith(u'~');
+    const QString q = meaningOnly ? query.trimmed().mid(1).trimmed() : query.trimmed();
     if (q.size() < 2)
         return out;
+    const QString recall = withMeaning ? QStandardPaths::findExecutable(QStringLiteral("recall")) : QString();
+    const bool rank = !recall.isEmpty();
+    QJsonArray records;
+    QMap<QString, QVariantMap> candidates;
     const QString mode = vaultTitleMode();
     const QDir root(rootPath());
     QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
-    for (int scanned = 0; it.hasNext() && (semantic || out.size() < 100) && scanned < 2000; ++scanned) {
+    for (int scanned = 0; it.hasNext() && (rank || out.size() < 100) && scanned < 2000; ++scanned) {
         const QString rel = root.relativeFilePath(it.next());
         if (!isNotePath(rel))
             continue;
         const QString text = readText(it.filePath(), 1024 * 1024);
         const QString name = rel.section(u'/', -1);
+        const QString folder = rel.section(u'/', 0, -2);
         const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
-        if (semantic) {
-            records.append(QJsonObject{{"id", rel}, {"title", preview.title.left(1000)}, {"text", text.left(4000)}});
-            candidates.insert(rel, QVariantMap{{"folder", rel.section(u'/', 0, -2)}, {"file", name}, {"title", preview.title}, {"snippet", preview.snippet}});
+        if (rank) {
+            records.append(QJsonObject{ { "id", rel }, { "title", preview.title.left(1000) }, { "text", text.left(4000) } });
+            candidates.insert(rel, QVariantMap{ { "folder", folder }, { "file", name }, { "title", preview.title },
+                                                { "snippet", preview.snippet } });
         }
-        if (!text.contains(q, Qt::CaseInsensitive) && !preview.title.contains(q, Qt::CaseInsensitive))
+        if (out.size() >= 100 || (!text.contains(q, Qt::CaseInsensitive) && !preview.title.contains(q, Qt::CaseInsensitive)))
             continue;
         QString snippet;
         for (const QString &line : text.split(u'\n')) {
@@ -1487,43 +1496,75 @@ QVariantList NotesBackend::searchVault(const QString &query)
             if (!snippet.isEmpty())
                 break;
         }
-        const QString folder = rel.section(u'/', 0, -2);
-        if (out.size() >= 100) continue;
         out << QVariantMap{ { QStringLiteral("folder"), folder },
                             { QStringLiteral("file"), name },
                             { QStringLiteral("title"), preview.title },
                             { QStringLiteral("snippet"), snippet.isEmpty() ? preview.snippet : snippet } };
     }
-    if (semantic) {
-        auto *process = new QProcess(this);
-        m_semanticProcess = process;
-        const QString collection = "icloud-notes:" + QString::fromLatin1(QCryptographicHash::hash(rootPath().toUtf8(), QCryptographicHash::Sha256).toHex().left(24));
-        connect(process, &QProcess::finished, this, [this, process, query, generation, candidates](int code, QProcess::ExitStatus status) {
-            if (m_semanticProcess == process) m_semanticProcess = nullptr;
-            const QJsonObject reply = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
-            bool available = code == 0 && status == QProcess::NormalExit && reply.value("api").toInt() == 1 && reply.value("meaning").toBool() && !reply.contains("error");
-            QVariantList hits;
-            for (const auto &value : reply.value("hits").toArray()) {
-                const QString id = value.toObject().value("id").toString();
-                if (!candidates.contains(id)) { available = false; break; }
-                hits << candidates.value(id);
-            }
-            if (generation == m_semanticGeneration) emit semanticSearchFinished(query, hits, available);
-            process->deleteLater();
+    if (withMeaning && !rank && meaningOnly) {
+        // Asked for meaning without Recall: say so once the caller has the text matches.
+        QTimer::singleShot(0, this, [this, query, generation] {
+            if (generation == m_semanticGeneration)
+                emit semanticSearchFinished(query, {}, false);
         });
-        connect(process, &QProcess::errorOccurred, this, [this, process, query, generation](QProcess::ProcessError error) {
-            if (error == QProcess::FailedToStart) {
-                if (m_semanticProcess == process) m_semanticProcess = nullptr;
-                if (generation == m_semanticGeneration) emit semanticSearchFinished(query, {}, false);
-                process->deleteLater();
-            }
+    } else if (rank) {
+        m_semanticDelay.disconnect();
+        connect(&m_semanticDelay, &QTimer::timeout, this, [=, this] {
+            if (generation == m_semanticGeneration)
+                rankByMeaning(recall, query, q, records, candidates, generation);
         });
-        const QByteArray input = QJsonDocument(records).toJson(QJsonDocument::Compact);
-        connect(process, &QProcess::started, process, [process, input] { process->write(input); process->closeWriteChannel(); });
-        process->start("recall", {"rank", collection, q});
-        QTimer::singleShot(6000, process, [process] { if (process->state() != QProcess::NotRunning) process->kill(); });
+        m_semanticDelay.start(meaningOnly ? 0 : 400);
     }
     return out;
+}
+
+void NotesBackend::rankByMeaning(const QString &recall, const QString &query, const QString &q,
+                                 const QJsonArray &records, const QMap<QString, QVariantMap> &candidates,
+                                 quint64 generation)
+{
+    auto *process = new QProcess(this);
+    m_semanticProcess = process;
+    const QString collection = "icloud-notes:"
+        + QString::fromLatin1(QCryptographicHash::hash(rootPath().toUtf8(), QCryptographicHash::Sha256).toHex().left(24));
+    connect(process, &QProcess::finished, this,
+            [this, process, query, generation, candidates](int code, QProcess::ExitStatus status) {
+                if (m_semanticProcess == process)
+                    m_semanticProcess = nullptr;
+                const QJsonObject reply = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
+                bool available = code == 0 && status == QProcess::NormalExit && reply.value("api").toInt() == 1
+                    && reply.value("meaning").toBool() && !reply.contains("error");
+                QVariantList hits;
+                for (const auto &value : reply.value("hits").toArray()) {
+                    const QString id = value.toObject().value("id").toString();
+                    if (!candidates.contains(id)) {
+                        available = false;
+                        break;
+                    }
+                    hits << candidates.value(id);
+                }
+                if (generation == m_semanticGeneration)
+                    emit semanticSearchFinished(query, hits, available);
+                process->deleteLater();
+            });
+    connect(process, &QProcess::errorOccurred, this, [this, process, query, generation](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            if (m_semanticProcess == process)
+                m_semanticProcess = nullptr;
+            if (generation == m_semanticGeneration)
+                emit semanticSearchFinished(query, {}, false);
+            process->deleteLater();
+        }
+    });
+    const QByteArray input = QJsonDocument(records).toJson(QJsonDocument::Compact);
+    connect(process, &QProcess::started, process, [process, input] {
+        process->write(input);
+        process->closeWriteChannel();
+    });
+    process->start(recall, { "rank", collection, q });
+    QTimer::singleShot(6000, process, [process] {
+        if (process->state() != QProcess::NotRunning)
+            process->kill();
+    });
 }
 
 QString NotesBackend::toggleCheckbox(const QString &text, int line)

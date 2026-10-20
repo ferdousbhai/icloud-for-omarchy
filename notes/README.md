@@ -109,8 +109,9 @@ without asking.
 
 - **Browse**: folders on the left, notes in the middle (newest first,
   with title, preview line, and date). The search box above the list
-  searches every note; picking a result jumps to it. Right-click a folder
-  to rename or delete it. Window and pane sizes are remembered.
+  searches every note; picking a result jumps to it. With Recall installed,
+  notes related by meaning follow the text matches (see the main README).
+  Right-click a folder to rename or delete it. Window and pane sizes are remembered.
 - **Edit**: edits save on their own once you pause typing, and when you
   switch notes; `Ctrl+S` forces a save when a guardrail has flagged the
   edit. `Ctrl+N` starts a note. The first line is the title: edit it

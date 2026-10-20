@@ -35,7 +35,7 @@ timer's sync). All of it is new, in the app binary: see
 |---|---|---|
 | Folder list with recursive note counts | `icloud-notes folders` | added |
 | Note list: title, preview, date, badges (new, conflict, read-only, ...) | `icloud-notes list [--folder F] [--flag FLAG]` | added |
-| Search box | `icloud-notes search QUERY` | added |
+| Search box (text matches; the window adds Recall's related notes, not the CLI) | `icloud-notes search QUERY` | added |
 | Open a note: text, attachments, read-only reason | `icloud-notes read NOTE [--raw]` | added |
 | Edit (saves on its own) | `icloud-notes write NOTE --body/--file/--stdin [--append]` | added |
 | Ctrl+S past a save warning (conflict markers, duplicate id) | `icloud-notes write ... --force` | added |
