@@ -10,6 +10,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# Validate vendored support before the more expensive product checks.
+python3 bin/check-shared-support
+
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 

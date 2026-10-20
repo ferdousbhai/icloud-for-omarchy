@@ -1,0 +1,7 @@
+{
+  "product": "icloud-for-omarchy",
+  "groups": {
+    "agent_skill.rs": "67ca2428b5930d9be33a6425fa28b83e8ea6d430f75255f2a8eafad5c74af397",
+    "recall_client.rs": "7296ef628cc57f860cd867aaa272b76125c06a18c0b56a782ace36ef1a4e9bd2"
+  }
+}

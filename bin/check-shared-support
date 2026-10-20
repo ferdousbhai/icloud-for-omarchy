@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Check vendored support without importing apps or requiring sibling runtime packages."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+# First member owns the implementation; only these exact files are shared.
+GROUPS = {
+    **{name: [f'cloud-contacts/cloud_contacts/{name}', f'cloud-tasks/cloud_tasks/{name}']
+       for name in ('common.py', 'cli_output.py', 'theme.py', 'recall_client.py', 'agent_skill.py')},
+    'agent_skill.rs': [
+        'icloud-for-omarchy/sessiond/src/agent_skill.rs',
+        'cloud-mail/crates/cloudmail/src/agent_skill.rs',
+        'cloud-calendar/crates/cloud-calendar/src/agent_skill.rs',
+        'omacloud/crates/omacloud/src/agent_skill.rs',
+    ],
+    'recall_client.rs': [
+        'icloud-for-omarchy/photos/src/recall_client.rs',
+        'cloud-mail/crates/cloudmail-gtk/src/recall_client.rs',
+        'cloud-calendar/crates/cloud-calendar-gtk/src/recall_client.rs',
+    ],
+}
+MANIFEST = 'shared-support.json'
+REPOS = sorted({member.split('/')[0] for members in GROUPS.values() for member in members})
+
+
+def inspect(paths, groups, require_all=False, recorded=True):
+    errors, missing, checked = [], [], 0
+    repos = sorted({member.split('/')[0] for name in groups for member in GROUPS[name]})
+    for repo in repos:
+        if not paths[repo].is_dir():
+            missing.append(repo)
+    if require_all and missing:
+        errors.append('Missing sibling repositories: ' + ', '.join(missing))
+    manifests = {}
+    for repo in repos:
+        if repo in missing:
+            continue
+        try:
+            manifests[repo] = json.loads((paths[repo] / MANIFEST).read_text())
+            manifest = manifests[repo]
+            if not isinstance(manifest, dict) or manifest.get('product') != repo or not isinstance(manifest.get('groups'), dict):
+                raise ValueError('manifest must identify the product and its group digests')
+        except (OSError, ValueError) as error:
+            manifests.pop(repo, None)
+            errors.append(f'Invalid manifest {repo}/{MANIFEST}: {error}')
+    for name in groups:
+        reference = None
+        for member in GROUPS[name]:
+            repo = member.split('/')[0]
+            if repo in missing:
+                continue
+            path = paths[repo] / member.split('/', 1)[1]
+            if not path.is_file():
+                errors.append(f'Missing shared file: {member}')
+                continue
+            data = path.read_bytes()
+            checked += 1
+            if reference is None:
+                reference = data
+            elif data != reference:
+                errors.append(f'Product source copies differ: {member} ({name})')
+            if recorded and hashlib.sha256(data).hexdigest() != manifests.get(repo, {}).get('groups', {}).get(name):
+                errors.append(f'Product source digest mismatch: {member}')
+    if checked == 0:
+        errors.append('No supported repository files found')
+    return errors, missing, checked, repos
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--workspace-root', type=Path, default=Path(__file__).resolve().parents[2],
+                        help='directory containing sibling repositories')
+    parser.add_argument('--require-all', action='store_true', help='audit every shared group and require all checkouts')
+    parser.add_argument('--record', nargs='+', choices=GROUPS,
+                        help='record hashes for named groups only, after all copies of those groups agree')
+    args = parser.parse_args()
+    root = args.workspace_root.resolve()
+    own_path = Path(__file__).resolve().parents[1]
+    try:
+        own_manifest = json.loads((own_path / MANIFEST).read_text())
+        own_repo = own_manifest['product']
+        if own_repo not in REPOS:
+            raise ValueError('unknown product')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        parser.error(f'Invalid local {MANIFEST}: {error}')
+    # Release archives and worktrees may have any directory name. The invoking
+    # product always resolves to this checkout; only peers use canonical names.
+    paths = {repo: own_path if repo == own_repo else root / repo for repo in REPOS}
+    groups = args.record or (list(GROUPS) if args.require_all else [
+        name for name, members in GROUPS.items() if any(member.startswith(own_repo + '/') for member in members)
+    ])
+    errors, missing, checked, repos = inspect(paths, groups, args.require_all or bool(args.record), recorded=not args.record)
+    source = Path(__file__).read_bytes()
+    for repo in repos:
+        if repo in missing:
+            continue
+        path = paths[repo] / 'bin/check-shared-support'
+        if not path.is_file() or path.read_bytes() != source:
+            errors.append(f'Checker sync mismatch: {repo}/bin/check-shared-support')
+    if errors:
+        print('\n'.join(errors), file=sys.stderr)
+        return 1
+    if args.record:
+        for repo in repos:
+            path = paths[repo] / MANIFEST
+            manifest = json.loads(path.read_text())
+            for name in groups:
+                if any(member.startswith(repo + '/') for member in GROUPS[name]):
+                    canonical_repo, relative = GROUPS[name][0].split('/', 1)
+                    manifest['groups'][name] = hashlib.sha256((paths[canonical_repo] / relative).read_bytes()).hexdigest()
+            path.write_text(json.dumps(manifest, indent=2) + '\n')
+        print('Recorded agreed group digests in scoped manifests; no product source changed.')
+    else:
+        print(f'Shared support verified ({checked} files).')
+        if missing:
+            print('Sibling checkouts absent; checked recorded digests locally: ' + ', '.join(missing))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
