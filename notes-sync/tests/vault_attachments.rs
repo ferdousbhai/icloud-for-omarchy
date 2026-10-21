@@ -5,6 +5,7 @@ use std::path::Path;
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::doc::embeds::AttachmentReference;
+use icloud_notes_sync::js::base64_encode;
 use icloud_notes_sync::vault::attachments::{
     MatchedAttachment, decode_table_attachment, extract_media_record_names, match_attachment_records,
     remove_attachments_for_note, remove_table_attachments_for_note,
@@ -379,6 +380,31 @@ fn match_attachment_records_disambiguates_collision() {
     assert_eq!(
         matched[0].as_ref().unwrap().relative_file,
         "attachments/_7130093 2.jpeg"
+    );
+}
+
+#[test]
+fn match_attachment_records_keeps_a_server_name_in_the_notes_attachments() {
+    let mut media = image_media_record();
+    media.fields.insert(
+        "FilenameEncrypted".into(),
+        FieldValue {
+            value: json!(base64_encode(b"../../../../outside/x.jpeg")),
+            type_: "ENCRYPTED_BYTES".into(),
+        },
+    );
+    let matched = match_attachment_records(
+        &image_ref(),
+        &[Some(IMAGE_MEDIA.to_owned())],
+        &[media],
+        "NOTE2",
+        &IndexMap::new(),
+        &mut HashSet::new(),
+        "Pat",
+    );
+    assert_eq!(
+        matched[0].as_ref().unwrap().relative_file,
+        "Pat/attachments/.._.._.._.._outside_x.jpeg"
     );
 }
 
