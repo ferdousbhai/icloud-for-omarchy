@@ -1316,6 +1316,23 @@ int main(int argc, char *argv[])
               "background: the app keeps the lock it waited for");
     }
     {
+        // Notes closing while icloud-notes-sync runs: the engine is stopped
+        // and nothing it would report reaches the backend being destroyed.
+        // (It did: finishSync ran on members already gone, a crash on quit.)
+        qputenv("ICLOUD_NOTES_SYNC_STUB_SLEEP", "2");
+        auto *app = new NotesBackend;
+        int reported = 0;
+        QObject::connect(app, &NotesBackend::syncFinished, [&] { ++reported; });
+        app->runSync();
+        waitUntil([] { return false; }, 300); // the engine is up and sleeping
+        const bool running = app->syncRunning() && app->syncLog().contains(QStringLiteral("$ icloud-notes-sync --json sync"));
+        delete app;
+        check(running && reported == 0, "background: closing during a sync reports nothing from it");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
+        // The stub's sleep outlives it, holding the vault lock it inherited.
+        waitUntil([] { return VaultLock(NotesBackend::lockPath()).tryLock() == VaultLock::Locked; });
+    }
+    {
         // A lock that cannot even be opened never means running icloud-notes-sync
         // without it (it used to sync anyway).
         const QByteArray runtime = qgetenv("XDG_RUNTIME_DIR");
