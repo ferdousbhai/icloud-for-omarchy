@@ -184,6 +184,16 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Bring items back from Recently Deleted: undo `delete`.
+    ///
+    /// Takes the ids `delete` printed. The data is [{id, restored, error?}].
+    /// Exits 1 if any item failed (one emptied from Recently Deleted, or
+    /// gone after its 30 days, cannot come back).
+    #[command(after_help = AFTER_HELP)]
+    Restore {
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Remove cached previews of deleted items and trim the preview cache.
     #[command(after_help = AFTER_HELP)]
     PruneCache,
@@ -385,6 +395,7 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
         Command::Open { id, medium } => open(&ctx, &id, medium),
         Command::Upload { files, album, no_sync } => upload_cmd(&ctx, &files, album.as_deref(), no_sync),
         Command::Delete { ids, yes } => delete(&ctx, &ids, yes),
+        Command::Restore { ids } => restore(&ctx, &ids),
         Command::PruneCache => prune(&ctx),
         Command::SignIn => sign_in(),
         Command::Config { library_dir, download } => config(ctx, library_dir, download),
@@ -1195,6 +1206,67 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
         summary.push_str(&format!("; {failed} failed"));
     }
     Ok(Response::new(results, summary).ids(deleted).exit(code))
+}
+
+fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
+    let mut cat = ctx.catalog()?;
+    let mut rows = Vec::new();
+    for id in ids {
+        let r = row_or_fail(&cat, id)?;
+        if !r.deleted {
+            return Err(other(format!("{id} is not deleted")));
+        }
+        rows.push(r);
+    }
+    let t = ctx.transport()?;
+    let ck = CloudKit::connect(&*t)?;
+    let mut results = Vec::new();
+    let mut restored = Vec::new();
+    let mut failed = 0;
+    for row in &rows {
+        let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref());
+        // Changed on another device since the last sync: sync, then try
+        // again with the fresh change tag, as delete does.
+        if matches!(&result, Err(Error::CloudKit { code, .. }) if code == "CONFLICT") {
+            sync::sync(&ck, &mut cat, &|_| {})?;
+            let fresh = row_or_fail(&cat, &row.id)?;
+            result = if fresh.deleted {
+                ck.restore_asset(&fresh.id, fresh.change_tag.as_deref())
+            } else {
+                Ok(Modified {
+                    name: fresh.id,
+                    change_tag: fresh.change_tag,
+                })
+            };
+        }
+        match result {
+            Ok(m) => {
+                cat.mark_restored(&row.id, m.change_tag.as_deref())?;
+                if ctx.text() {
+                    say(&format!("{}\trestored", row.id));
+                }
+                restored.push(row.id.clone());
+                results.push(json!({ "id": row.id, "restored": true }));
+            }
+            Err(e) if e.is_sign_in() => return Err(e.into()),
+            Err(e) => {
+                failed += 1;
+                if ctx.text() {
+                    warn(&format!("error: {}: {e}", row.id));
+                }
+                results.push(json!({ "id": row.id, "restored": false, "error": e.to_string() }));
+            }
+        }
+    }
+    let code = if failed > 0 { EXIT_ERROR } else { 0 };
+    if ctx.text() {
+        return Ok(Response::silent().exit(code));
+    }
+    let mut summary = format!("Restored {}", plural(restored.len(), "item", "items"));
+    if failed > 0 {
+        summary.push_str(&format!("; {failed} failed"));
+    }
+    Ok(Response::new(results, summary).ids(restored).exit(code))
 }
 
 fn prune(ctx: &Ctx) -> Res<Response> {

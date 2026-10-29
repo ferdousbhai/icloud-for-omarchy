@@ -57,7 +57,14 @@ target/release/icloud-photos       # or target/release/icloud-photos-app
   default app. Videos play this way.
 - **Delete** (`Del`) moves the photo to Recently Deleted in iCloud, on every
   device, recoverable there for about 30 days. The downloaded original, if
-  any, stays on disk.
+  any, stays on disk. **Undo** on the toast that follows brings it back.
+- **Copy Image** (`Ctrl+C`, or the ⋮ menu) puts the photo on the clipboard,
+  so it pastes as an image anywhere; a HEIC photo is copied from iCloud's
+  JPEG rendition.
+- **Set as Wallpaper** (the ⋮ menu, on Omarchy) makes the photo your
+  background with `omarchy-theme-bg-set`. A photo you haven't downloaded is
+  kept in `~/.local/share/icloud-photos/wallpaper/`, which holds only the
+  current one.
 - **Upload** (`Ctrl+U`, the + button, or drop files on the window) sends
   photos and videos to your library, with a progress dialog. A file iCloud
   already has is reported as such, not uploaded twice.
@@ -91,6 +98,7 @@ window, when given no arguments; the desktop entry starts
 | `open ID [--medium]` | the viewer's Open: downloads the original if needed (or fetches the preview) and opens it in the default app (`xdg-open`) |
 | `upload FILE... [--album ID] [--no-sync]` | uploads, progress on stderr, prints the new ids, then syncs until they are in the catalog |
 | `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal (text mode), refuses without `--yes` otherwise |
+| `restore ID...` | brings items back from Recently Deleted: the window's Undo |
 | `prune-cache` | drops cached previews of deleted items, trims the preview cache |
 | `sign-in` | opens the iCloud sign-in window |
 | `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
@@ -100,7 +108,7 @@ window, when given no arguments; the desktop entry starts
   stdout is piped, `{"ok":true,"data":…,"summary":"…"}`. `--json` forces the
   envelope, `--styled` text, `--quiet` prints only `data`, `--ids-only` one id
   per line (album ids for `albums`; item ids for `list`, `info`, `thumb`,
-  `open`; the items that succeeded for `download` and `delete`; the new asset
+  `open`; the items that succeeded for `download`, `delete` and `restore`; the new asset
   ids for `upload`), `--count` the number of results (`list`, `albums`, the
   ids above, files removed for `prune-cache`). The flags may be combined;
   the strongest wins: ids-only > count > quiet > json > styled. Every command
@@ -123,7 +131,7 @@ window, when given no arguments; the desktop entry starts
   `error`, and the command exits 1 if any failed.
 - Exit codes, as in every iCloud tool ([docs/CLI.md](../docs/CLI.md)):
   0 ok; 1 error (also `cancelled`, an HTTP 4xx, or some items of a
-  `download`/`upload`/`delete` failed); 2 usage, or `delete` without `--yes`
+  `download`/`upload`/`delete`/`restore` failed); 2 usage, or `delete` without `--yes`
   when nobody can be asked (it asks only in text mode with stdin and stdout
   a terminal); 3 not signed in (`status` also exits 3 when signed out, with
   its data), iCloud Photos not offered for the account, or Apple refusing

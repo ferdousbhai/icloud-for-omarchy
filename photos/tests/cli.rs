@@ -565,6 +565,32 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
 }
 
 #[test]
+fn restore_undoes_delete() {
+    let env = Env::synced("restore", 6);
+    let ids = env.ids(&[]);
+    let (one, two) = (&ids[0], &ids[1]);
+    assert_eq!(env.run(&["delete", one, two, "--yes"]).code, 0);
+
+    let r = env.styled(&["restore", one]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout.trim(), format!("{one}\trestored"));
+    assert!(env.server.asset_ids().contains(one));
+    assert_eq!(env.json(&["info", one])["deleted"], false);
+    assert_eq!(env.ids(&[]).len(), 5, "back in the catalog at once");
+
+    // Edited on another device since the delete: syncs and restores with the fresh tag.
+    env.server.edit_elsewhere(two);
+    let v = env.json(&["restore", two]);
+    assert_eq!(v[0]["restored"], true, "{v}");
+    assert!(env.server.asset_ids().contains(two));
+
+    assert_eq!(env.run(&["restore", one]).code, 1, "not deleted");
+    assert_eq!(env.run(&["restore", "NO-SUCH-ID"]).code, 4);
+    assert_eq!(env.json(&["sync"])["mode"], "incremental");
+    assert_eq!(env.ids(&[]).len(), 6);
+}
+
+#[test]
 fn delete_sends_many_in_one_call_and_reports_each() {
     let env = Env::synced("delete-batch", 6);
     let ids = env.ids(&[]);

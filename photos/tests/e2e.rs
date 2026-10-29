@@ -49,6 +49,12 @@ fn browse_download_delete_upload_and_resync() {
     // Delete moves it to Recently Deleted with the current change tag.
     let m = ck.delete_asset(&newest.id, newest.change_tag.as_deref()).unwrap();
     cat.mark_deleted(&newest.id, m.change_tag.as_deref()).unwrap();
+    // Undo brings it back with the tag the delete returned, then delete again.
+    let r = ck.restore_asset(&newest.id, m.change_tag.as_deref()).unwrap();
+    cat.mark_restored(&newest.id, r.change_tag.as_deref()).unwrap();
+    assert!(!cat.asset(&newest.id).unwrap().unwrap().deleted);
+    let m = ck.delete_asset(&newest.id, r.change_tag.as_deref()).unwrap();
+    cat.mark_deleted(&newest.id, m.change_tag.as_deref()).unwrap();
     // A stale tag conflicts.
     let second = cat.assets(None).unwrap()[0].clone();
     assert!(ck.delete_asset(&second.id, Some("tag-999")).is_err());
@@ -80,7 +86,7 @@ fn browse_download_delete_upload_and_resync() {
         cat.asset(&uploaded.asset_id).unwrap().unwrap().filename,
         "IMG_UPLOAD.JPG"
     );
-    assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("tok-4"));
+    assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("tok-6")); // two more for the undo and re-delete
 
     // Nothing new: an empty incremental sync.
     let r = sync(&ck, &mut cat, &|_| {}).unwrap();

@@ -627,9 +627,22 @@ impl<'t> CloudKit<'t> {
     /// answers a per-record CONFLICT. Shape from a browser capture of
     /// icloud.com (timlaing/pyicloud `photos_browser_mutations/photo_delete_*`).
     pub fn delete_asset(&self, asset_id: &str, change_tag: Option<&str>) -> Result<Modified> {
+        self.set_deleted(asset_id, change_tag, true)
+    }
+
+    /// Bring an asset back from Recently Deleted: the same update with
+    /// isDeleted=0, which undoes [`delete_asset`](Self::delete_asset). The
+    /// change tag is the one that delete returned. UNVERIFIED AGAINST APPLE
+    /// from here; jankeesvw/omarchy-icloud-photos ships this exact update as
+    /// its undo.
+    pub fn restore_asset(&self, asset_id: &str, change_tag: Option<&str>) -> Result<Modified> {
+        self.set_deleted(asset_id, change_tag, false)
+    }
+
+    fn set_deleted(&self, asset_id: &str, change_tag: Option<&str>, deleted: bool) -> Result<Modified> {
         let body = json!({
             "atomic": true,
-            "operations": [{ "operationType": "update", "record": delete_record(asset_id, change_tag) }],
+            "operations": [{ "operationType": "update", "record": deleted_record(asset_id, change_tag, deleted) }],
             "zoneID": Self::zone(),
         });
         let v = self.post("records/modify", &body)?;
@@ -661,7 +674,7 @@ impl<'t> CloudKit<'t> {
             }
             let operations: Vec<Value> = chunk
                 .iter()
-                .map(|(id, tag)| json!({ "operationType": "update", "record": delete_record(id, *tag) }))
+                .map(|(id, tag)| json!({ "operationType": "update", "record": deleted_record(id, *tag, true) }))
                 .collect();
             let body = json!({ "atomic": false, "operations": operations, "zoneID": Self::zone() });
             let v = match self.post("records/modify", &body) {
@@ -735,12 +748,12 @@ impl<'t> CloudKit<'t> {
     }
 }
 
-/// A CPLAsset update to `isDeleted = 1` (Recently Deleted).
-fn delete_record(asset_id: &str, change_tag: Option<&str>) -> Value {
+/// A CPLAsset update to `isDeleted = 1` (Recently Deleted), or back to 0.
+fn deleted_record(asset_id: &str, change_tag: Option<&str>, deleted: bool) -> Value {
     let mut record = json!({
         "recordName": asset_id,
         "recordType": "CPLAsset",
-        "fields": { "isDeleted": { "value": 1 } },
+        "fields": { "isDeleted": { "value": deleted as i64 } },
     });
     if let Some(tag) = change_tag {
         record["recordChangeTag"] = json!(tag);

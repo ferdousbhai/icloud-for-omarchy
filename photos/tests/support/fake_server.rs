@@ -378,8 +378,10 @@ impl State {
                 out.push(json!({ "recordName": name, "serverErrorCode": "CONFLICT", "reason": "client oplock error updating record" }));
                 continue;
             }
-            if rec.pointer("/fields/isDeleted/value").and_then(Value::as_i64) == Some(1) {
-                self.assets[i].deleted = true;
+            match rec.pointer("/fields/isDeleted/value").and_then(Value::as_i64) {
+                Some(1) => self.assets[i].deleted = true,
+                Some(0) => self.assets[i].deleted = false,
+                _ => {}
             }
             self.assets[i].tag += 1;
             let r = self.asset_record(i);

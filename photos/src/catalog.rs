@@ -292,9 +292,18 @@ impl Catalog {
     }
 
     pub fn mark_deleted(&self, asset_id: &str, change_tag: Option<&str>) -> Result<()> {
+        self.set_deleted(asset_id, change_tag, true)
+    }
+
+    /// Undo [`mark_deleted`](Self::mark_deleted) after a restore.
+    pub fn mark_restored(&self, asset_id: &str, change_tag: Option<&str>) -> Result<()> {
+        self.set_deleted(asset_id, change_tag, false)
+    }
+
+    fn set_deleted(&self, asset_id: &str, change_tag: Option<&str>, deleted: bool) -> Result<()> {
         self.conn
-            .prepare_cached("UPDATE assets SET deleted = 1, change_tag = COALESCE(?2, change_tag) WHERE id = ?1")?
-            .execute(params![asset_id, change_tag])?;
+            .prepare_cached("UPDATE assets SET deleted = ?3, change_tag = COALESCE(?2, change_tag) WHERE id = ?1")?
+            .execute(params![asset_id, change_tag, deleted as i64])?;
         Ok(())
     }
 

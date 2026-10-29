@@ -30,6 +30,7 @@ pub enum Msg {
     SyncDone(Result<Report>),
     Download(thumbs::Event),
     Deleted(String, Result<Modified>),
+    Restored(String, Result<Modified>),
     Upload(UploadMsg),
     /// icloud-sessiond's sign-in state changed (or was first read).
     SignIn(SignInState),
@@ -519,6 +520,7 @@ impl App {
             Msg::SyncDone(result) => self.on_sync_done(result),
             Msg::Download(e) => self.on_download(e),
             Msg::Deleted(id, result) => self.on_deleted(&id, result),
+            Msg::Restored(id, result) => self.on_restored(&id, result),
             Msg::Upload(m) => super::upload::on_msg(self, m),
             Msg::SignIn(s) => self.on_sign_in_state(s),
             Msg::SignInFailed(e) => self.on_sign_in_failed(&e),
@@ -875,13 +877,51 @@ impl App {
                 self.viewer.after_delete(self, id);
                 self.reload();
                 self.update_status();
-                self.toast("Moved to Recently Deleted");
+                let toast = adw::Toast::builder()
+                    .title("Moved to Recently Deleted")
+                    .button_label("Undo")
+                    .timeout(10)
+                    .build();
+                let (a, id, tag) = (self.clone(), id.to_owned(), m.change_tag);
+                toast.connect_button_clicked(move |_| a.restore(&id, tag.as_deref()));
+                self.toasts.add_toast(toast);
             }
             Err(Error::CloudKit { code, .. }) if code == "CONFLICT" => {
                 self.toast("This photo changed on another device; syncing, then try again");
                 self.sync();
             }
             Err(e) => self.fail("Delete failed", &e),
+        }
+    }
+
+    /// Undo a delete: bring the photo back from Recently Deleted.
+    fn restore(self: &Rc<Self>, id: &str, change_tag: Option<&str>) {
+        let Some(t) = self.transport() else {
+            self.toast("Not connected to iCloud yet");
+            return;
+        };
+        let (tx, id, tag) = (self.tx.clone(), id.to_owned(), change_tag.map(str::to_owned));
+        std::thread::spawn(move || {
+            let result = CloudKit::connect(&*t).and_then(|ck| ck.restore_asset(&id, tag.as_deref()));
+            let _ = tx.send_blocking(Msg::Restored(id, result));
+        });
+    }
+
+    fn on_restored(self: &Rc<Self>, id: &str, result: Result<Modified>) {
+        match result {
+            Ok(m) => {
+                let _ = self.cat.mark_restored(id, m.change_tag.as_deref());
+                self.reload();
+                self.update_status();
+                self.toast("Restored");
+            }
+            Err(Error::CloudKit { code, .. }) if code == "CONFLICT" => {
+                self.toast(
+                    "This photo changed on another device; it is still in Recently Deleted on your iPhone or Mac",
+                );
+                self.sync();
+            }
+            Err(e) => self.fail("Undo failed", &e),
         }
     }
 

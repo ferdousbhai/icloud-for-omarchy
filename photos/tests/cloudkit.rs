@@ -263,6 +263,20 @@ fn delete_matches_the_browser_capture() {
 }
 
 #[test]
+fn restore_is_the_delete_update_with_is_deleted_zero() {
+    let t = FixtureTransport::new(|_| Ok(fixture("write/delete_response.json")));
+    let ck = CloudKit::connect(&t).unwrap();
+    ck.restore_asset("ASSET-002", Some("t002-after-delete")).unwrap();
+    let mut expected = fixture("write/delete_request_browser.json")["operations"].clone();
+    expected[0]["record"]["fields"]["isDeleted"]["value"] = 0.into();
+    expected[0]["record"]["recordChangeTag"] = "t002-after-delete".into();
+    let call = &t.calls()[0];
+    assert_eq!(call.op, "records/modify");
+    assert_eq!(call.body["atomic"], true);
+    assert_eq!(call.body["operations"], expected);
+}
+
+#[test]
 fn delete_conflict_is_reported() {
     let t = FixtureTransport::new(|_| Ok(fixture("write/delete_conflict_response.json")));
     let ck = CloudKit::connect(&t).unwrap();

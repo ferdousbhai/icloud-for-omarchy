@@ -166,9 +166,10 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
 | `thumb ID [--out P]`, `download ID... \| --all [--medium] [--out DIR]`, `open ID` | fetch (originals go to `~/Pictures/<year>/<month>/` unless `--out`) |
 | `upload FILE... [--album ID] [--no-sync]` | upload, then (unless `--no-sync`) sync until the new ids are in the catalog |
 | `delete ID... --yes` | to Recently Deleted on every device |
+| `restore ID...` | back from Recently Deleted (undoes `delete`) |
 | `config [--library-dir DIR] [--download on-demand\|all]`, `prune-cache` | preferences, cache |
 
-`download`, `delete` and `upload` exit 1 when some items failed, with the
+`download`, `delete`, `restore` and `upload` exit 1 when some items failed, with the
 full result: each failed item carries its own `error`. `--ids-only` lists
 the ids that succeeded. An id not in the catalog is `not_found` (exit 4):
 `sync` first.

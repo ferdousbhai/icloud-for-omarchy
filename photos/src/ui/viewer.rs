@@ -1,5 +1,6 @@
 //! One photo at a time: Apple's medium JPEG (or the downloaded original when
-//! it is a JPEG/PNG), prev/next, download, delete, open in the default app.
+//! it is a JPEG/PNG), prev/next, download, delete, open in the default app,
+//! copy the image, and make it the Omarchy background.
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -46,6 +47,18 @@ impl Viewer {
     pub fn new() -> Viewer {
         let title = adw::WindowTitle::new("", "");
         let header = adw::HeaderBar::builder().title_widget(&title).build();
+        let menu = gio::Menu::new();
+        menu.append(Some("Copy Image"), Some("win.viewer-copy"));
+        if has_wallpaper_command() {
+            menu.append(Some("Set as Wallpaper"), Some("win.viewer-wallpaper"));
+        }
+        header.pack_end(
+            &gtk::MenuButton::builder()
+                .icon_name("view-more-symbolic")
+                .menu_model(&menu)
+                .tooltip_text("More")
+                .build(),
+        );
         header.pack_end(
             &gtk::Button::builder()
                 .icon_name("user-trash-symbolic")
@@ -160,6 +173,10 @@ impl Viewer {
                 }
             }),
         );
+        let a = app.clone();
+        add("viewer-copy", Box::new(move || a.viewer.copy(&a)));
+        let a = app.clone();
+        add("viewer-wallpaper", Box::new(move || a.viewer.set_wallpaper(&a)));
 
         let keys = gtk::ShortcutController::new();
         keys.set_scope(gtk::ShortcutScope::Managed);
@@ -169,6 +186,7 @@ impl Viewer {
             ("Delete", "win.viewer-delete"),
             ("<Primary>s", "win.viewer-download"),
             ("<Primary>o", "win.viewer-open"),
+            ("<Primary>c", "win.viewer-copy"),
         ] {
             keys.add_shortcut(gtk::Shortcut::new(
                 gtk::ShortcutTrigger::parse_string(trigger),
@@ -321,6 +339,71 @@ impl Viewer {
         }
     }
 
+    /// The file the viewer shows for the current photo, or a toast saying why
+    /// there is none yet. Videos are left out: their still is only a poster.
+    fn current_still(&self, app: &App) -> Option<std::path::PathBuf> {
+        let row = app.cat.asset(&self.current()?).ok().flatten()?;
+        if row.kind == Kind::Video {
+            app.toast("Videos can't be used as an image");
+            return None;
+        }
+        let path = display_file(&row);
+        if path.is_none() {
+            app.toast("Still loading the photo");
+        }
+        path
+    }
+
+    /// Put the photo on the clipboard as an image (GTK offers it as PNG, so a
+    /// HEIC original pastes too, from its JPEG rendition).
+    fn copy(&self, app: &Rc<App>) {
+        let Some(path) = self.current_still(app) else { return };
+        let a = app.clone();
+        glib::spawn_future_local(async move {
+            match gio::spawn_blocking(move || gdk::Texture::from_filename(&path)).await {
+                Ok(Ok(tex)) => {
+                    a.window.clipboard().set_texture(&tex);
+                    a.toast("Copied");
+                }
+                Ok(Err(e)) => a.toast(&format!("Copy failed: {e}")),
+                Err(_) => a.toast("Copy failed"),
+            }
+        });
+    }
+
+    /// Make the photo the Omarchy background with `omarchy-theme-bg-set`. A
+    /// rendition from the cache (which is pruned) is copied out of it first,
+    /// into the data folder, which keeps only the current wallpaper.
+    fn set_wallpaper(&self, app: &Rc<App>) {
+        let Some(path) = self.current_still(app) else { return };
+        let (cache, keep) = (app.dirs.cache.clone(), app.dirs.data.join("wallpaper"));
+        let a = app.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || -> Result<(), String> {
+                let path = if path.starts_with(&cache) {
+                    keep_copy(&path, &keep)?
+                } else {
+                    path
+                };
+                let out = std::process::Command::new("omarchy-theme-bg-set")
+                    .arg(&path)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if out.status.success() {
+                    Ok(())
+                } else {
+                    Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+                }
+            })
+            .await
+            .unwrap_or_else(|_| Err("it stopped unexpectedly".into()));
+            match result {
+                Ok(()) => a.toast("Set as wallpaper"),
+                Err(e) => a.toast(&format!("Couldn't set the wallpaper: {e}")),
+            }
+        });
+    }
+
     /// A thumbnail arrived; use it as the stand-in if nothing better is shown.
     pub fn on_thumb(&self, app: &App, id: &str) {
         if self.current().as_deref() == Some(id) && !self.sharp.get() {
@@ -345,6 +428,25 @@ impl Viewer {
 }
 
 /// The best local file to display: a JPEG/PNG original, else Apple's medium JPEG.
+/// Copy `path` into `dir` as the only file there, so the wallpaper outlives
+/// cache pruning without piling up.
+fn keep_copy(path: &Path, dir: &Path) -> Result<std::path::PathBuf, String> {
+    let dest = dir.join(path.file_name().unwrap_or_default());
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    std::fs::copy(path, &dest).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        if entry.path() != dest {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(dest)
+}
+
+fn has_wallpaper_command() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join("omarchy-theme-bg-set").is_file()))
+}
+
 fn display_file(row: &Row) -> Option<std::path::PathBuf> {
     let viewable_original = matches!(row.orig_type.as_deref(), Some("public.jpeg" | "public.png"));
     row.local_path
@@ -352,4 +454,32 @@ fn display_file(row: &Row) -> Option<std::path::PathBuf> {
         .filter(|p| viewable_original && p.exists())
         .or(row.medium_path.as_ref().filter(|p| p.exists()))
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_copy;
+
+    #[test]
+    fn keep_copy_leaves_only_the_new_wallpaper() {
+        let root = std::env::temp_dir().join(format!("icloud-photos-wallpaper-{}", std::process::id()));
+        let (cache, keep) = (root.join("cache"), root.join("keep"));
+        std::fs::create_dir_all(&cache).unwrap();
+        for name in ["A.JPG", "B.JPG"] {
+            std::fs::write(cache.join(name), name).unwrap();
+        }
+        assert_eq!(keep_copy(&cache.join("A.JPG"), &keep).unwrap(), keep.join("A.JPG"));
+        let kept = keep_copy(&cache.join("B.JPG"), &keep).unwrap();
+        // Setting the same one again copies over it in place.
+        assert_eq!(keep_copy(&cache.join("B.JPG"), &keep).unwrap(), kept);
+        let files: Vec<_> = std::fs::read_dir(&keep)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(files, ["B.JPG"]);
+        assert_eq!(std::fs::read(&kept).unwrap(), b"B.JPG");
+        // The cache's files are untouched.
+        assert!(cache.join("A.JPG").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
