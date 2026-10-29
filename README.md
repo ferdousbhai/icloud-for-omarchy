@@ -1,12 +1,17 @@
-# icloud-for-omarchy
+# iCloud for Omarchy
 
 iCloud apps for [Omarchy](https://omarchy.org) (and any Arch Linux), sharing
 one Apple sign-in, published as one signed pacman repository.
 
+![Photos, Notes and Find My, one after another](docs/screenshots/tour.webp)
+
+<sub>Screenshots use demo data.</sub>
+
 - **Notes**: your Apple Notes as a folder of Markdown files, synced both
   ways. Edit, rename, move or delete them in the app, in Neovim or Obsidian,
   or with `mv` and `rm`, and iCloud follows.
-- **Photos**: browse, download, upload and delete your iCloud Photos.
+- **Photos**: browse, download, upload and delete (with undo) your iCloud
+  Photos, copy one or make it your wallpaper.
 - **Find My**: your devices on a map, with play sound, Lost Mode and a
   location trail.
 - Every window action also works from the terminal, with JSON output
@@ -15,12 +20,6 @@ one Apple sign-in, published as one signed pacman repository.
 ```bash
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
 ```
-
-![Notes](docs/screenshots/notes.png)
-![Find My](docs/screenshots/findmy.webp)
-![Photos](docs/screenshots/photos.webp)
-
-<sub>Screenshots use demo data.</sub>
 
 | Directory | Package | What it is |
 |---|---|---|
