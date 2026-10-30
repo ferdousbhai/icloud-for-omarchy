@@ -451,6 +451,77 @@ fn open_downloads_then_hands_the_file_to_the_default_app() {
 }
 
 #[test]
+fn copy_and_wallpaper_use_the_viewers_image() {
+    let env = Env::synced("still", 10);
+    let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
+    let video = env.ids(&["--kind", "video", "--limit", "1"]).remove(0);
+    // Stand-ins for wl-copy and omarchy-theme-bg-set that record what they got.
+    let script = |name: &str, body: &str| {
+        let path = env.root.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        path
+    };
+    let (copied, set) = (env.root.join("copied"), env.root.join("set"));
+    let copier = script(
+        "copier.sh",
+        &format!("echo \"$2\" > '{0}'; cat >> '{0}'", copied.display()),
+    );
+    let setter = script("setter.sh", &format!("echo \"$1\" >> '{}'", set.display()));
+    let data = env.data();
+    let run = |args: &[&str]| {
+        let mut all = vec!["--data-dir", data.to_str().unwrap(), "--json"];
+        all.extend_from_slice(args);
+        env.bare_with(
+            &all,
+            &[
+                ("ICLOUD_PHOTOS_COPIER", &copier),
+                ("ICLOUD_PHOTOS_WALLPAPER_SETTER", &setter),
+            ],
+        )
+    };
+
+    // Nothing local yet: iCloud's preview is fetched, and copied as a JPEG.
+    let r = run(&["copy", &photo]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let v = r.json();
+    assert_eq!(v["type"], "image/jpeg");
+    let preview = PathBuf::from(v["path"].as_str().unwrap());
+    assert!(
+        preview.starts_with(data.join("cache/medium")) && is_jpeg(&preview),
+        "{preview:?}"
+    );
+    let mut expected = b"image/jpeg\n".to_vec();
+    expected.extend(std::fs::read(&preview).unwrap());
+    assert_eq!(std::fs::read(&copied).unwrap(), expected);
+
+    // The wallpaper is a copy out of the cache, which pruning can't take away.
+    let r = run(&["wallpaper", &photo]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let kept = PathBuf::from(r.json()["path"].as_str().unwrap());
+    assert!(kept.starts_with(data.join("data/wallpaper")), "{kept:?}");
+    assert_eq!(std::fs::read(&kept).unwrap(), std::fs::read(&preview).unwrap());
+    assert_eq!(std::fs::read_to_string(&set).unwrap().trim(), kept.to_str().unwrap());
+
+    // A video is a usage error, before anything runs; an unknown id is not_found.
+    for cmd in ["copy", "wallpaper"] {
+        let r = run(&[cmd, &video]);
+        let err = error_doc(&r);
+        assert_eq!((r.code, err["error"]["code"].as_str()), (2, Some("usage")), "{cmd}");
+        let r = run(&[cmd, "NO-SUCH-ID"]);
+        assert_eq!(error_doc(&r)["error"]["code"], "not_found", "{cmd}");
+    }
+    assert_eq!(std::fs::read_to_string(&set).unwrap().lines().count(), 1);
+
+    // A setter that fails is an error.
+    let r = env.bare_with(
+        &["--data-dir", data.to_str().unwrap(), "--json", "wallpaper", &photo],
+        &[("ICLOUD_PHOTOS_WALLPAPER_SETTER", Path::new("/bin/false"))],
+    );
+    assert_eq!(r.code, 1);
+}
+
+#[test]
 fn upload_then_sync_into_the_catalog() {
     let env = Env::synced("upload", 10);
     let a = env.root.join("NEW_A.JPG");

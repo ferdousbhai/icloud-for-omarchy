@@ -167,6 +167,7 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
 | `upload FILE... [--album ID] [--no-sync]` | upload, then (unless `--no-sync`) sync until the new ids are in the catalog |
 | `delete ID... --yes` | to Recently Deleted on every device |
 | `restore ID...` | back from Recently Deleted (undoes `delete`) |
+| `copy ID`, `wallpaper ID` | the photo on the clipboard; as the Omarchy background (a video is a usage error) |
 | `config [--library-dir DIR] [--download on-demand\|all]`, `prune-cache` | preferences, cache |
 
 `download`, `delete`, `restore` and `upload` exit 1 when some items failed, with the

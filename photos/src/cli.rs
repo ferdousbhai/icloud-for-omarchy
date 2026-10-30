@@ -30,6 +30,7 @@ use icloud_photos::catalog::{Catalog, LAST_SYNC_KEY, Row, SYNC_TOKEN_KEY};
 use icloud_photos::cloudkit::{CloudKit, Kind, Modified, sanitize};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
 use icloud_photos::session;
+use icloud_photos::still;
 use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
@@ -154,6 +155,21 @@ enum Command {
         #[arg(long)]
         medium: bool,
     },
+    /// Put a photo on the clipboard as an image (the viewer's Copy Image).
+    ///
+    /// Uses the file the viewer shows (a JPEG or PNG original, else iCloud's
+    /// JPEG preview, fetched if needed), copied with wl-copy. The data is
+    /// {id, path, type}.
+    #[command(after_help = AFTER_HELP)]
+    Copy { id: String },
+    /// Make a photo the Omarchy background (the viewer's Set as Wallpaper).
+    ///
+    /// Uses the file the viewer shows, fetched if needed, and runs
+    /// omarchy-theme-bg-set. A preview from the cache is first copied to the
+    /// data folder, which keeps only the current wallpaper. The data is
+    /// {id, path}.
+    #[command(after_help = AFTER_HELP)]
+    Wallpaper { id: String },
     /// Upload photos and videos, then sync so they appear in the catalog.
     ///
     /// Progress on stderr. The data is {files: [{file, asset_id,
@@ -393,6 +409,8 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
         Command::Thumb { id, out } => thumb(&ctx, &id, out.as_deref()),
         Command::Download { ids, all, medium, out } => download(&ctx, ids, all, medium, out.as_deref()),
         Command::Open { id, medium } => open(&ctx, &id, medium),
+        Command::Copy { id } => copy(&ctx, &id),
+        Command::Wallpaper { id } => wallpaper(&ctx, &id),
         Command::Upload { files, album, no_sync } => upload_cmd(&ctx, &files, album.as_deref(), no_sync),
         Command::Delete { ids, yes } => delete(&ctx, &ids, yes),
         Command::Restore { ids } => restore(&ctx, &ids),
@@ -804,6 +822,48 @@ fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<Response> {
     }
     let text = path.display().to_string();
     Ok(Response::new(json!({ "id": id, "path": path, "opened": true }), text).ids(vec![id.to_owned()]))
+}
+
+/// The file the viewer shows for a photo, fetching iCloud's preview when
+/// nothing local will do. Videos are refused: their still is only a poster.
+fn still_of(ctx: &Ctx, id: &str) -> Res<PathBuf> {
+    let cat = ctx.catalog()?;
+    let row = row_or_fail(&cat, id)?;
+    if row.kind == Kind::Video {
+        return Err(usage(format!("{id} is a video; only photos can be used as an image")).into());
+    }
+    match still::display_file(&row) {
+        Some(p) => Ok(p),
+        None => Ok(thumbs::fetch(
+            &*ctx.transport()?,
+            &cat,
+            &ctx.targets(None),
+            id,
+            Job::Medium,
+        )?),
+    }
+}
+
+fn copy(ctx: &Ctx, id: &str) -> Res<Response> {
+    let path = still_of(ctx, id)?;
+    let mime = still::copy_to_clipboard(&path).map_err(other)?;
+    Ok(Response::new(json!({ "id": id, "path": path, "type": mime }), "Copied").ids(vec![id.to_owned()]))
+}
+
+fn wallpaper(ctx: &Ctx, id: &str) -> Res<Response> {
+    if std::env::var_os("ICLOUD_PHOTOS_WALLPAPER_SETTER").is_none() && !still::has_wallpaper_command() {
+        return Err(CliError::new(
+            "error",
+            EXIT_ERROR,
+            format!("{} is not on PATH", still::WALLPAPER_COMMAND),
+        )
+        .hint("setting the wallpaper needs Omarchy")
+        .into());
+    }
+    let path = still_of(ctx, id)?;
+    let set = still::set_wallpaper(&path, &ctx.dirs).map_err(other)?;
+    let text = set.display().to_string();
+    Ok(Response::new(json!({ "id": id, "path": set }), text).ids(vec![id.to_owned()]))
 }
 
 /// Parallel downloads, as in the app.

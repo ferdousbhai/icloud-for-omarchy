@@ -99,6 +99,8 @@ window, when given no arguments; the desktop entry starts
 | `upload FILE... [--album ID] [--no-sync]` | uploads, progress on stderr, prints the new ids, then syncs until they are in the catalog |
 | `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal (text mode), refuses without `--yes` otherwise |
 | `restore ID...` | brings items back from Recently Deleted: the window's Undo |
+| `copy ID` | the viewer's Copy Image: puts the photo on the clipboard (`wl-copy`) |
+| `wallpaper ID` | the viewer's Set as Wallpaper: makes the photo the Omarchy background |
 | `prune-cache` | drops cached previews of deleted items, trims the preview cache |
 | `sign-in` | opens the iCloud sign-in window |
 | `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
@@ -108,7 +110,7 @@ window, when given no arguments; the desktop entry starts
   stdout is piped, `{"ok":true,"data":…,"summary":"…"}`. `--json` forces the
   envelope, `--styled` text, `--quiet` prints only `data`, `--ids-only` one id
   per line (album ids for `albums`; item ids for `list`, `info`, `thumb`,
-  `open`; the items that succeeded for `download`, `delete` and `restore`; the new asset
+  `open`, `copy`, `wallpaper`; the items that succeeded for `download`, `delete` and `restore`; the new asset
   ids for `upload`), `--count` the number of results (`list`, `albums`, the
   ids above, files removed for `prune-cache`). The flags may be combined;
   the strongest wins: ids-only > count > quiet > json > styled. Every command

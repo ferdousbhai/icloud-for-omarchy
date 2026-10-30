@@ -97,7 +97,8 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 `sync` · `albums` · `list [--album ID] [--since DATE] [--kind photo|video|live] [--limit N]`
 · `info ID` · `download ID...|--all [--medium] [--out DIR]` · `thumb ID` ·
 `open ID` · `upload FILE... [--album ID] [--no-sync]` · `delete ID... --yes` ·
-`restore ID...` (undoes `delete`) · `config` · `status`. An unknown id is `not_found`: `sync` first.
+`restore ID...` (undoes `delete`) · `copy ID` (to the clipboard) ·
+`wallpaper ID` (the Omarchy background) · `config` · `status`. An unknown id is `not_found`: `sync` first.
 
 ## Find My: `icloud-findmy`
 

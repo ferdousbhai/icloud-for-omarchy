@@ -5,6 +5,7 @@ pub mod cloudkit;
 pub mod config;
 pub mod migrate;
 pub mod session;
+pub mod still;
 pub mod sync;
 pub mod thumbs;
 pub mod transport;

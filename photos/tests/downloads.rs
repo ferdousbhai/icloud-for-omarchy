@@ -87,6 +87,47 @@ fn same_filename_in_the_same_month_gets_a_suffix() {
 }
 
 #[test]
+fn a_small_original_with_no_preview_stands_in_for_it() {
+    let tmp = temp_dir("no-medium");
+    let root = tmp.path();
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, root);
+    // iCloud makes no resJPEGMedRes for a small JPEG or PNG (a screenshot).
+    let row = cat.asset("ASSET-002").unwrap().unwrap();
+    let resource = |url: &str, uti: &str| icloud_photos::cloudkit::Resource {
+        url: url.into(),
+        size: 1,
+        file_type: Some(uti.into()),
+    };
+    let mut m = icloud_photos::cloudkit::MasterInfo {
+        master_id: row.master_id.clone(),
+        filename: row.filename.clone(),
+        size: row.size,
+        width: row.w,
+        height: row.h,
+        kind: row.kind,
+        original: Some(resource("https://cvws.icloud-content.com/orig/png", "public.png")),
+        thumb: None,
+        medium: None,
+        live: None,
+    };
+    cat.update_master(&m).unwrap();
+    t.serve("https://cvws.icloud-content.com/orig/png", b"\x89PNG small");
+
+    let path = fetch(&t, &cat, &targets, "ASSET-002", Job::Medium).unwrap();
+    assert_eq!(path, root.join("cache/medium/ASSET-002.png"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"\x89PNG small");
+    // Only the cache: the original is not counted as downloaded.
+    assert_eq!(cat.asset("ASSET-002").unwrap().unwrap().local_path, None);
+
+    // A HEIC original can't stand in: the viewer can't show it.
+    std::fs::remove_file(&path).unwrap();
+    m.original = Some(resource("https://cvws.icloud-content.com/orig/heic", "public.heic"));
+    cat.update_master(&m).unwrap();
+    assert!(fetch(&t, &cat, &targets, "ASSET-002", Job::Medium).is_err());
+}
+
+#[test]
 fn an_expired_url_is_refreshed_once() {
     let tmp = temp_dir("expired");
     let root = tmp.path();

@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use icloud_photos::catalog::Row;
 use icloud_photos::cloudkit::Kind;
+use icloud_photos::still::{self, display_file};
 use icloud_photos::thumbs::{Job, Priority};
 
 use super::window::App;
@@ -49,7 +49,7 @@ impl Viewer {
         let header = adw::HeaderBar::builder().title_widget(&title).build();
         let menu = gio::Menu::new();
         menu.append(Some("Copy Image"), Some("win.viewer-copy"));
-        if has_wallpaper_command() {
+        if still::has_wallpaper_command() {
             menu.append(Some("Set as Wallpaper"), Some("win.viewer-wallpaper"));
         }
         header.pack_end(
@@ -371,34 +371,17 @@ impl Viewer {
         });
     }
 
-    /// Make the photo the Omarchy background with `omarchy-theme-bg-set`. A
-    /// rendition from the cache (which is pruned) is copied out of it first,
-    /// into the data folder, which keeps only the current wallpaper.
+    /// Make the photo the Omarchy background (see [`still::set_wallpaper`]).
     fn set_wallpaper(&self, app: &Rc<App>) {
         let Some(path) = self.current_still(app) else { return };
-        let (cache, keep) = (app.dirs.cache.clone(), app.dirs.data.join("wallpaper"));
+        let dirs = app.dirs.clone();
         let a = app.clone();
         glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || -> Result<(), String> {
-                let path = if path.starts_with(&cache) {
-                    keep_copy(&path, &keep)?
-                } else {
-                    path
-                };
-                let out = std::process::Command::new("omarchy-theme-bg-set")
-                    .arg(&path)
-                    .output()
-                    .map_err(|e| e.to_string())?;
-                if out.status.success() {
-                    Ok(())
-                } else {
-                    Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
-                }
-            })
-            .await
-            .unwrap_or_else(|_| Err("it stopped unexpectedly".into()));
+            let result = gio::spawn_blocking(move || still::set_wallpaper(&path, &dirs))
+                .await
+                .unwrap_or_else(|_| Err("it stopped unexpectedly".into()));
             match result {
-                Ok(()) => a.toast("Set as wallpaper"),
+                Ok(_) => a.toast("Set as wallpaper"),
                 Err(e) => a.toast(&format!("Couldn't set the wallpaper: {e}")),
             }
         });
@@ -424,62 +407,5 @@ impl Viewer {
         } else {
             self.show(app, ids.clone(), i.min(ids.len() - 1));
         }
-    }
-}
-
-/// The best local file to display: a JPEG/PNG original, else Apple's medium JPEG.
-/// Copy `path` into `dir` as the only file there, so the wallpaper outlives
-/// cache pruning without piling up.
-fn keep_copy(path: &Path, dir: &Path) -> Result<std::path::PathBuf, String> {
-    let dest = dir.join(path.file_name().unwrap_or_default());
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    std::fs::copy(path, &dest).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
-        if entry.path() != dest {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-    Ok(dest)
-}
-
-fn has_wallpaper_command() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join("omarchy-theme-bg-set").is_file()))
-}
-
-fn display_file(row: &Row) -> Option<std::path::PathBuf> {
-    let viewable_original = matches!(row.orig_type.as_deref(), Some("public.jpeg" | "public.png"));
-    row.local_path
-        .as_ref()
-        .filter(|p| viewable_original && p.exists())
-        .or(row.medium_path.as_ref().filter(|p| p.exists()))
-        .cloned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::keep_copy;
-
-    #[test]
-    fn keep_copy_leaves_only_the_new_wallpaper() {
-        let root = std::env::temp_dir().join(format!("icloud-photos-wallpaper-{}", std::process::id()));
-        let (cache, keep) = (root.join("cache"), root.join("keep"));
-        std::fs::create_dir_all(&cache).unwrap();
-        for name in ["A.JPG", "B.JPG"] {
-            std::fs::write(cache.join(name), name).unwrap();
-        }
-        assert_eq!(keep_copy(&cache.join("A.JPG"), &keep).unwrap(), keep.join("A.JPG"));
-        let kept = keep_copy(&cache.join("B.JPG"), &keep).unwrap();
-        // Setting the same one again copies over it in place.
-        assert_eq!(keep_copy(&cache.join("B.JPG"), &keep).unwrap(), kept);
-        let files: Vec<_> = std::fs::read_dir(&keep)
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(files, ["B.JPG"]);
-        assert_eq!(std::fs::read(&kept).unwrap(), b"B.JPG");
-        // The cache's files are untouched.
-        assert!(cache.join("A.JPG").exists());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

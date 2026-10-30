@@ -75,7 +75,8 @@ timer's sync). All of it is new, in the app binary: see
 | Viewer: Open in Default App (Ctrl+O) | `icloud-photos open ID [--medium]` | added |
 | Viewer: Delete (Del) | `icloud-photos delete ID... --yes` | existed |
 | Undo on the Moved to Recently Deleted toast | `icloud-photos restore ID...` | added |
-| Viewer: Copy Image (Ctrl+C), Set as Wallpaper | `download ID --medium` gives the file; the clipboard and `omarchy-theme-bg-set` are the desktop's | n/a |
+| Viewer: Copy Image (Ctrl+C) | `icloud-photos copy ID` (with `wl-copy`) | added |
+| Viewer: Set as Wallpaper | `icloud-photos wallpaper ID` (with `omarchy-theme-bg-set`) | added |
 | Viewer: previous / next | the order of `list` | n/a |
 | Sync Now (Ctrl+R) | `icloud-photos sync [--full]` | existed |
 | Upload… (Ctrl+U), Stop After This File | `icloud-photos upload FILE... [--album ID] [--no-sync]` (album, no-sync: command line only) | existed |
@@ -262,7 +263,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 | icloud-session | `validate`: the webservice keys, sorted; `skill install`/`remove`: the paths | the same, counted |
 | icloud-notes | `list`, `search`: note paths; `read`: its path; `folders`: folder paths (not the vault root `""`); a change: the path it touched (`export-pdf`: the PDF); `history`, `push --dry-run`, `diff`, `restore`: the engine's | `list`, `search`: notes; `folders`: folders (not the root); `status`: notes; engine commands: the engine's |
 | icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
-| icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
+| icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
 
 ### Exit codes
@@ -429,6 +430,8 @@ engines: `icloud-md:progress:...`).
 | `thumb` | `{id, path, cache_path}` |
 | `download` | `[{id, path, live_path, live_error} \| {id, error}]`, one per id asked for, in order |
 | `open` | `{id, path, opened}` |
+| `copy` | `{id, path, type:"image/jpeg"\|"image/png"}` |
+| `wallpaper` | `{id, path}` (the file the background now points at) |
 | `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, not_in_catalog}` |
 | `delete` | `[{id, deleted, error?}]` |
 | `restore` | `[{id, restored, error?}]` |

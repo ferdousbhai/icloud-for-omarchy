@@ -80,7 +80,7 @@ pub fn fetch_detailed_with(
         .ok_or_else(|| Error::Other(format!("unknown asset {id}")))?;
     let (dir, kind, url_of): (PathBuf, PathKind, UrlOf) = match job {
         Job::Thumb => (targets.dirs.thumbs(), PathKind::Thumb, |r| r.thumb_url.as_ref()),
-        Job::Medium => (targets.dirs.medium(), PathKind::Medium, |r| r.medium_url.as_ref()),
+        Job::Medium => (targets.dirs.medium(), PathKind::Medium, medium_url),
         Job::Original => return original(t, cat, targets, row, peers),
     };
     let cached = if job == Job::Thumb {
@@ -99,7 +99,13 @@ pub fn fetch_detailed_with(
     }
     // The cache is ours and named by asset id: replacing a file there is fine.
     std::fs::create_dir_all(&dir)?;
-    let dest = dir.join(format!("{}.jpg", sanitize(&row.id)));
+    // A PNG original standing in for the preview keeps its own extension.
+    let ext = if job == Job::Medium && row.medium_url.is_none() && row.orig_type.as_deref() == Some("public.png") {
+        "png"
+    } else {
+        "jpg"
+    };
+    let dest = dir.join(format!("{}.{ext}", sanitize(&row.id)));
     download_fresh(t, cat, &mut row, url_of, job, &dest, peers)?;
     cat.set_path(id, kind, Some(&dest))?;
     Ok(Fetched {
@@ -109,6 +115,14 @@ pub fn fetch_detailed_with(
 }
 
 type UrlOf = fn(&Row) -> Option<&String>;
+
+/// The viewer's image: `resJPEGMedRes`, or for a JPEG/PNG original iCloud
+/// made no preview of (a small one, such as a screenshot), the original.
+fn medium_url(r: &Row) -> Option<&String> {
+    r.medium_url
+        .as_ref()
+        .or(r.orig_url.as_ref().filter(|_| r.viewable_original()))
+}
 
 fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, peers: Peers) -> Result<Fetched> {
     let mut hold = Reservation::default();

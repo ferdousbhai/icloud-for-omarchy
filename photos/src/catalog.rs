@@ -110,6 +110,13 @@ pub struct Row {
     pub live_type: Option<String>,
 }
 
+impl Row {
+    /// Whether the original is a format the viewer shows as is (JPEG, PNG).
+    pub fn viewable_original(&self) -> bool {
+        matches!(self.orig_type.as_deref(), Some("public.jpeg" | "public.png"))
+    }
+}
+
 const ROW_COLUMNS: &str = "id, master_id, filename, created, size, w, h, kind, is_live, local_path, live_path, \
     thumb_path, medium_path, deleted, change_tag, orig_url, orig_type, thumb_url, medium_url, live_url, live_type";
 
