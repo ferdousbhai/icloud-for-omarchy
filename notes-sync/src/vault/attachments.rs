@@ -367,6 +367,18 @@ pub fn resolve_note_attachments<T: Transport>(
     records.ensure(db, zone, &names)?;
     let attachment_records = records.records_named(zone, &names);
     let by_name = |name: &str| attachment_records.iter().rev().find(|r| r.record_name == name);
+    // Record names are unique within a zone only, and a shared zone's owner
+    // picks theirs: a name another note's attachment or table is tracked
+    // under stays a marker, so its file, entry and history are left alone.
+    let tracked_for_another_note = |name: &str| {
+        let other = |owner: &str| owner != note_record_name;
+        existing_attachments
+            .get(name)
+            .is_some_and(|e| other(&e.note_record_name))
+            || existing_table_attachments
+                .get(name)
+                .is_some_and(|e| other(&e.note_record_name))
+    };
 
     let mut replacements: Vec<Option<String>> = vec![None; slots.len()];
     let mut file_refs: Vec<AttachmentReference> = Vec::new();
@@ -385,6 +397,10 @@ pub fn resolve_note_attachments<T: Transport>(
             }
             EmbedSlot::Attachment(r) => r,
         };
+        if tracked_for_another_note(&r.attachment_identifier) {
+            replacements[i] = Some(format_embed_marker(&marker_for(r)));
+            continue;
+        }
         if is_table_uti(&r.type_uti) {
             // A table's versions are kept under its record name
             // (`history/<recordName>/`): one that can't name a file stays a

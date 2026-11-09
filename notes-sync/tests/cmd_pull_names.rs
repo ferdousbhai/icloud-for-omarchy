@@ -84,7 +84,11 @@ fn folder(record_name: &str, title: &str) -> Value {
 /// The tiny cassette, its private zone listing `private` and, with `shared`,
 /// one shared zone (owned by [`OWNER`]) listing those.
 fn listing(private: Vec<Value>, shared: Option<Vec<Value>>) -> Cassette {
-    let mut c = cassette();
+    listing_in(cassette(), private, shared)
+}
+
+/// [`listing`] over cassette `c`.
+fn listing_in(mut c: Cassette, private: Vec<Value>, shared: Option<Vec<Value>>) -> Cassette {
     c.interactions[0].response.body.as_mut().unwrap()["zones"][0]["records"] = json!(private);
     if let Some(shared) = shared {
         let zone = json!({ "zoneName": "Notes", "ownerRecordName": OWNER });
@@ -223,13 +227,18 @@ const TABLE_UTI: &str = "com.apple.notes.table";
 
 /// A note body "Table\n" + one embedded table named `table_record_name`.
 fn text_data_with_table(table_record_name: &str) -> String {
+    text_data_with_embed(table_record_name, TABLE_UTI)
+}
+
+/// A note body "Table\n" + one embedded attachment `record_name` of type `type_uti`.
+fn text_data_with_embed(record_name: &str, type_uti: &str) -> String {
     let runs = vec![
         AttributeRun::with_length(6),
         AttributeRun {
             length: Some(1),
             attachment_info: Some(AttachmentInfo {
-                attachment_identifier: Some(table_record_name.into()),
-                type_uti: Some(TABLE_UTI.into()),
+                attachment_identifier: Some(record_name.into()),
+                type_uti: Some(type_uti.into()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -342,4 +351,173 @@ fn clone_keeps_the_own_note_when_a_shared_one_has_its_name() {
     assert!(!read(&vault, "Notes/Test Note.md").contains("Hijacked"));
     let base = read(&vault, &format!(".icloud-notes/base/{OWN}.md"));
     assert!(!base.contains("Hijacked"), "{base}");
+}
+
+// --- one zone's attachment record name in another zone -------------------------
+
+/// The attach cassette's image attachment, in note [`IMAGE_NOTE`].
+const IMAGE: &str = "7ED80274-4400-4C02-87EA-F542F056FF02";
+const IMAGE_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+const SHARED_NOTE: &str = "a1b2c3d4-0000-4000-8000-0000000000bb";
+
+fn attach_cassette() -> Cassette {
+    Cassette::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/differential/cassettes/attach-clone.json"))
+        .unwrap()
+}
+
+/// A shared-zone `records/lookup` answering `records`, as often as asked.
+fn shared_lookup(c: &mut Cassette, records: Value) {
+    let mut lookup = c.interactions[0].clone();
+    lookup.request.path = Some("/database/1/com.apple.notes/production/shared/records/lookup".into());
+    lookup.repeat = true;
+    lookup.response.body = Some(json!({ "records": records }));
+    c.interactions.push(lookup);
+}
+
+/// The sharer's Attachment named [`IMAGE`]: a table, or a file of type
+/// `uti` whose Media is the sharer's own.
+fn sharers_attachment(uti: &str) -> Vec<Value> {
+    if uti == TABLE_UTI {
+        return vec![json!({
+            "recordName": IMAGE, "recordType": "Attachment", "recordChangeTag": "s1",
+            "fields": {
+                "UTI": { "value": TABLE_UTI, "type": "STRING" },
+                "MergeableDataEncrypted": { "value": TABLE_B64, "type": "ENCRYPTED_BYTES" },
+            },
+        })];
+    }
+    vec![
+        json!({
+            "recordName": IMAGE, "recordType": "Attachment", "recordChangeTag": "s1",
+            "fields": {
+                "UTI": { "value": uti, "type": "STRING" },
+                "Media": { "value": { "recordName": "SHARER-MEDIA", "action": "VALIDATE" }, "type": "REFERENCE" },
+            },
+        }),
+        json!({
+            "recordName": "SHARER-MEDIA", "recordType": "Media", "recordChangeTag": "s2",
+            "fields": { "Asset": { "value": {
+                "fileChecksum": "sharers-checksum", "size": 7,
+                "downloadURL": "https://cvws.icloud-content.com/B/sharers-asset",
+            }, "type": "ASSETID" } },
+        }),
+    ]
+}
+
+/// The attach cassette, its private zone listing `private`, with a shared
+/// zone listing `shared` whose lookups answer [`sharers_attachment`].
+fn with_sharers_attachment(private: Vec<Value>, shared: Vec<Value>, uti: &str) -> Cassette {
+    let mut c = listing_in(attach_cassette(), private, Some(shared));
+    shared_lookup(&mut c, json!(sharers_attachment(uti)));
+    let mut download = attach_cassette().interactions.pop().unwrap();
+    download.request.url = Some("https://cvws.icloud-content.com/B/sharers-asset".into());
+    download.response.body_base64 = Some(base64_encode(b"sharer!"));
+    download.repeat = true;
+    c.interactions.push(download);
+    c
+}
+
+fn pull_with_sharers_attachment(vault: &Path, shared: Vec<Value>, uti: &str) -> PullSummary {
+    pull(vault, with_sharers_attachment(vec![], shared, uti))
+}
+
+/// The sharer's note [`SHARED_NOTE`], embedding [`IMAGE`] as type `uti`.
+fn sharers_note_embedding(uti: &str) -> Value {
+    let mut shared = note(SHARED_NOTE, "x", "s0");
+    shared["fields"]["TextDataEncrypted"]["value"] = json!(text_data_with_embed(IMAGE, uti));
+    shared
+}
+
+#[test]
+fn a_shared_attachment_named_like_an_own_one_leaves_the_own_file_alone() {
+    let (tmp, vault, _) = clone_from(attach_cassette());
+    let own = read_clone_state(&vault).unwrap().unwrap().attachments.unwrap()[IMAGE].clone();
+    assert_eq!(own.note_record_name, IMAGE_NOTE);
+    let own_bytes = std::fs::read(vault.join(&own.file)).unwrap();
+
+    let summary = pull_with_sharers_attachment(&vault, vec![sharers_note_embedding("public.jpeg")], "public.jpeg");
+    assert_contained(tmp.path());
+    assert_eq!(summary.added, 1, "{summary:?}");
+    assert_eq!(std::fs::read(vault.join(&own.file)).unwrap(), own_bytes);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.attachments.unwrap()[IMAGE], own);
+    let shared_file = &state.notes[SHARED_NOTE].file;
+    assert!(
+        read(&vault, shared_file).contains("<apple-embed"),
+        "{}",
+        read(&vault, shared_file)
+    );
+
+    // The sharer deleting their note deletes nothing of the account's.
+    let deleted = json!({ "recordName": SHARED_NOTE, "recordType": "Note", "deleted": true });
+    let summary = pull_with_sharers_attachment(&vault, vec![deleted], "public.jpeg");
+    assert_eq!(summary.removed, 1, "{summary:?}");
+    assert_eq!(std::fs::read(vault.join(&own.file)).unwrap(), own_bytes);
+    assert_eq!(
+        read_clone_state(&vault).unwrap().unwrap().attachments.unwrap()[IMAGE],
+        own
+    );
+}
+
+#[test]
+fn clone_keeps_the_own_attachment_when_a_shared_one_has_its_name() {
+    let (_tmp, own_vault, _) = clone_from(attach_cassette());
+    let own = read_clone_state(&own_vault).unwrap().unwrap().attachments.unwrap()[IMAGE].clone();
+    let own_bytes = std::fs::read(own_vault.join(&own.file)).unwrap();
+
+    let (_tmp, vault, summary) = clone_from(with_sharers_attachment(
+        private_records(&attach_cassette()),
+        vec![sharers_note_embedding("public.jpeg")],
+        "public.jpeg",
+    ));
+    assert_eq!(summary.written_shared, 1, "{summary:?}");
+    assert_eq!(std::fs::read(vault.join(&own.file)).unwrap(), own_bytes);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.attachments.unwrap()[IMAGE], own);
+    assert!(read(&vault, &state.notes[SHARED_NOTE].file).contains("<apple-embed"));
+}
+
+#[test]
+fn a_shared_table_named_like_an_own_attachment_leaves_it_alone() {
+    let (_tmp, vault, _) = clone_from(attach_cassette());
+    let own = read_clone_state(&vault).unwrap().unwrap().attachments.unwrap()[IMAGE].clone();
+    let summary = pull_with_sharers_attachment(&vault, vec![sharers_note_embedding(TABLE_UTI)], TABLE_UTI);
+    assert_eq!(summary.added, 1, "{summary:?}");
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert!(!state.table_attachments.unwrap_or_default().contains_key(IMAGE));
+    assert!(!vault.join(format!(".icloud-notes/history/{IMAGE}")).exists());
+    assert_eq!(state.attachments.unwrap()[IMAGE], own);
+}
+
+#[test]
+fn a_shared_table_named_like_an_own_table_leaves_it_alone() {
+    let (_tmp, vault, _) = clone_from(cassette());
+    let own_note = "a1b2c3d4-0000-4000-8000-0000000000aa";
+    let mut with_table = note(own_note, "x", "4d");
+    with_table["fields"]["TextDataEncrypted"]["value"] = json!(text_data_with_embed(IMAGE, TABLE_UTI));
+    let mut c = listing(vec![with_table], None);
+    let mut lookup = c.interactions[0].clone();
+    lookup.request.path = Some("/database/1/com.apple.notes/production/private/records/lookup".into());
+    lookup.repeat = true;
+    lookup.response.body = Some(json!({ "records": sharers_attachment(TABLE_UTI) }));
+    c.interactions.push(lookup);
+    pull(&vault, c);
+    let history = vault.join(format!(".icloud-notes/history/{IMAGE}"));
+    let snapshots = std::fs::read_dir(&history).unwrap().count();
+
+    let mut table = sharers_attachment(TABLE_UTI);
+    table[0]["recordChangeTag"] = json!("s9");
+    let mut c = listing(vec![], Some(vec![sharers_note_embedding(TABLE_UTI)]));
+    shared_lookup(&mut c, json!(table));
+    let summary = pull(&vault, c);
+    assert_eq!(summary.added, 1, "{summary:?}");
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.table_attachments.unwrap()[IMAGE].note_record_name, own_note);
+    assert_eq!(std::fs::read_dir(&history).unwrap().count(), snapshots);
+    let shared_file = &state.notes[SHARED_NOTE].file;
+    assert!(
+        read(&vault, shared_file).contains("<apple-embed"),
+        "{}",
+        read(&vault, shared_file)
+    );
 }
