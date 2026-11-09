@@ -183,6 +183,24 @@ fn format_attachment_markdown_percent_encodes_path_segments_with_spaces() {
     );
 }
 
+/// The file name is the link text: `[`, `]` and `\` are escaped so it
+/// can't close the link early or start another, and a line break (which
+/// would end it) reads as a space.
+#[test]
+fn format_attachment_markdown_escapes_the_link_text() {
+    assert_eq!(
+        format_attachment_markdown(
+            &reference("A", "public.jpeg"),
+            "attachments/x](https:%2F%2Fevil.example)[y\\z\r\nw.jpeg"
+        ),
+        r"![x\](https:%2F%2Fevil.example)\[y\\z  w.jpeg](attachments/x%5D(https%3A%252F%252Fevil.example)%5By%5Cz%0D%0Aw.jpeg)"
+    );
+    assert_eq!(
+        format_attachment_markdown(&reference("B", "com.apple.m4a-audio"), "attachments/[a].m4a"),
+        r"[\[a\].m4a](attachments/%5Ba%5D.m4a)"
+    );
+}
+
 fn filename_field(value: serde_json::Value) -> FieldValue {
     FieldValue {
         value,

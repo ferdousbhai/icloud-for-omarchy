@@ -208,9 +208,31 @@ pub fn has_attachment_reference(text: &str) -> bool {
     false
 }
 
-/// `formatAttachmentMarkdown`.
+/// `formatAttachmentMarkdown`. The link text is the file name, from the
+/// server: `[`, `]` and `\` are escaped so it can't end the link early or
+/// open another, and a line break, which would end it, reads as a space.
 pub fn format_attachment_markdown(reference: &AttachmentReference, relative_file: &str) -> String {
-    let display_name = posix::basename(relative_file);
+    let mut display_name = String::new();
+    for c in posix::basename(relative_file).chars() {
+        match c {
+            '[' | ']' | '\\' => {
+                display_name.push('\\');
+                display_name.push(c);
+            }
+            '\n' | '\r' => display_name.push(' '),
+            _ => display_name.push(c),
+        }
+    }
+    attachment_link(reference, relative_file, &display_name)
+}
+
+/// The link [`format_attachment_markdown`] wrote before it escaped the
+/// link text, which push still takes for the attachment.
+fn unescaped_attachment_markdown(reference: &AttachmentReference, relative_file: &str) -> String {
+    attachment_link(reference, relative_file, posix::basename(relative_file))
+}
+
+fn attachment_link(reference: &AttachmentReference, relative_file: &str, display_name: &str) -> String {
     let href = relative_file
         .split('/')
         .map(encode_uri_component)
@@ -435,10 +457,14 @@ pub fn plan_embed_representations(
                 continue;
             }
             if let Some(link_path) = tracked_file_attachments.get(&reference.attachment_identifier) {
-                let link = utf16(&format_attachment_markdown(reference, link_path));
                 let from = representations.last().map_or(0, |r| r.end);
-                let Some(start) = (from..=units.len().saturating_sub(link.len()))
-                    .find(|&i| units.len() >= link.len() && units[i..i + link.len()] == link[..])
+                let find = |link: Vec<u16>| {
+                    (from..=units.len().saturating_sub(link.len()))
+                        .find(|&i| units.len() >= link.len() && units[i..i + link.len()] == link[..])
+                        .map(|start| (start, link.len()))
+                };
+                let Some((start, length)) = find(utf16(&format_attachment_markdown(reference, link_path)))
+                    .or_else(|| find(utf16(&unescaped_attachment_markdown(reference, link_path))))
                 else {
                     return Err(format!(
                         "the link to the attachment \"{}\" was removed, changed or moved - attachments can only be \
@@ -448,7 +474,7 @@ pub fn plan_embed_representations(
                 };
                 representations.push(LocalRepresentation {
                     start,
-                    end: start + link.len(),
+                    end: start + length,
                     table: None,
                 });
                 continue;
