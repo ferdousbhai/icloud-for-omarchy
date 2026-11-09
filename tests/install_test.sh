@@ -39,6 +39,13 @@ if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
     exit 0
   fi
   rm -rf "$work"
+  # With subordinate uids the namespace has a desktop user to switch to, so
+  # the sudo case drops privileges for real.
+  if unshare --map-auto --map-root-user -m true 2>/dev/null; then
+    exec env ICLOUD_INSTALL_TEST_INNER=1 ICLOUD_INSTALL_TEST_UIDS=1 \
+      unshare --map-auto --map-root-user -m "$root/tests/install_test.sh"
+  fi
+  echo "note install_test: no subordinate uids, so the sudo case runs as root" >&2
   exec env ICLOUD_INSTALL_TEST_INNER=1 unshare -rm "$root/tests/install_test.sh"
 fi
 
@@ -132,7 +139,7 @@ check "refresh hook Include survives ARM source replacement" grep -qxF 'Include 
 setup
 mkdir -p "$work/plain"
 cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/bin/uname" "$work/plain/"
-for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail awk cmp; do
+for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chmod mv cat env dirname basename tr sort head tail awk cmp; do
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
@@ -188,19 +195,46 @@ check "the hook replaces the planted symlink" not [ -L "$hooks/icloud-for-omarch
 check "the replacement hook is executable" [ -x "$hooks/icloud-for-omarchy" ]
 
 # Under sudo, everything in the desktop user's home happens as that user.
-setup
-mkdir -p "$work/desk/.config/omarchy/hooks/pre-refresh-pacman.d"
-touch "$work/desk/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-notes"
-{ cat /etc/passwd; echo "desk:x:4242:4242::$work/desk:/bin/sh"; } >"$work/passwd"
+# The home sits under /root, the scenario's world-readable mount, so the
+# user can reach it.
+desk=/root/desk
+desk_hooks="$desk/.config/omarchy/hooks/pre-refresh-pacman.d"
+{ cat /etc/passwd; echo "desk:x:4242:4242::$desk:/bin/sh"; } >"$work/passwd"
 mount --bind "$work/passwd" /etc/passwd
-# Logs the call, then runs the command (the namespace has no uid to switch to).
-printf '#!/bin/sh\necho "runuser $*" >>"$PACMAN_LOG"\nshift 3\nexec "$@"\n' >"$work/bin/runuser"
+# Logs the call, then runs the command as the user where the namespace has
+# uids to switch to, and as root where it has not.
+cat >"$work/bin/runuser" <<'STUB'
+#!/bin/sh
+echo "runuser $*" >>"$PACMAN_LOG"
+uid=$(id -u "$2")
+shift 3
+[ "${ICLOUD_INSTALL_TEST_UIDS:-}" = 1 ] || exec "$@"
+exec setpriv --reuid="$uid" --regid="$uid" --clear-groups "$@"
+STUB
 chmod 755 "$work/bin/runuser"
-SUDO_USER=desk bash install.sh icloud-photos >/dev/null 2>&1 || true
-desk_hooks="$work/desk/.config/omarchy/hooks/pre-refresh-pacman.d"
-check "root makes the user's hook directory as the user" grep -qxF "runuser -u desk -- mkdir -p $desk_hooks" "$PACMAN_LOG"
-check "root writes the user's hook as the user" grep -qxF "runuser -u desk -- install -m 755 /dev/stdin $desk_hooks/icloud-for-omarchy" "$PACMAN_LOG"
-check "root removes the user's old hook as the user" grep -qxF "runuser -u desk -- rm -f $desk_hooks/icloud-notes" "$PACMAN_LOG"
+for planted in file link; do
+  setup
+  chmod 755 /root
+  mkdir -p "$desk_hooks"
+  touch "$desk_hooks/icloud-notes"
+  echo outside >"$work/outside"
+  [[ $planted == file ]] || ln -s "$work/outside" "$desk_hooks/icloud-for-omarchy"
+  [[ ${ICLOUD_INSTALL_TEST_UIDS:-} != 1 ]] || chown -R 4242:4242 "$desk"
+  status=0
+  SUDO_USER=desk bash install.sh icloud-photos >"$work/out" 2>&1 || status=$?
+  check "under sudo ($planted) the install succeeds" [ "$status" = 0 ]
+  check "under sudo ($planted) the packages are installed" [ "$(installed)" = icloud-photos ]
+  check "under sudo ($planted) the user's hook is in place" [ -x "$desk_hooks/icloud-for-omarchy" ]
+  check "under sudo ($planted) the hook is a file, not a link" not [ -L "$desk_hooks/icloud-for-omarchy" ]
+  check "under sudo ($planted) nothing is written through a link" [ "$(cat "$work/outside")" = outside ]
+  check "under sudo ($planted) the user's old hook is removed" [ ! -e "$desk_hooks/icloud-notes" ]
+  if [[ ${ICLOUD_INSTALL_TEST_UIDS:-} == 1 ]]; then
+    check "under sudo ($planted) the hook belongs to the user" [ "$(stat -c %u "$desk_hooks/icloud-for-omarchy")" = 4242 ]
+  fi
+  check "under sudo ($planted) root makes the user's hook directory as the user" grep -qxF "runuser -u desk -- mkdir -p $desk_hooks" "$PACMAN_LOG"
+  check "under sudo ($planted) root writes the user's hook as the user" grep -qF "runuser -u desk -- bash -c " "$PACMAN_LOG"
+  check "under sudo ($planted) root removes the user's old hook as the user" grep -qxF "runuser -u desk -- rm -f $desk_hooks/icloud-notes" "$PACMAN_LOG"
+done
 rm "$work/bin/runuser"
 umount /etc/passwd
 

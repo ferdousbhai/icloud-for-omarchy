@@ -98,13 +98,15 @@ add_signed_repo() {
     fi
     hook_dir="$home/.config/omarchy/hooks/pre-refresh-pacman.d"
     "${as_user[@]}" mkdir -p "$hook_dir"
-    # install replaces the hook file, never writing through a link there.
+    # The user's shell reads the pipe it inherits (root's pipe cannot be
+    # reopened by path once runuser drops privileges), and mv replaces the
+    # hook file, never writing through a link there.
     {
       printf '%s\n' '#!/bin/bash' 'set -euo pipefail' \
         "# Restore the [$name] repository before Omarchy's ARM source rewrite."
       declare -f restore_repo_include
       printf 'restore_repo_include %q\n' "$include"
-    } | "${as_user[@]}" install -m 755 /dev/stdin "$hook_dir/$name"
+    } | "${as_user[@]}" bash -c 'umask 022; t=$(mktemp "$1.XXXXXX") && cat >"$t" && chmod 755 "$t" && mv -fT "$t" "$1"' _ "$hook_dir/$name"
   fi
   $sudo pacman -Sy
 }
