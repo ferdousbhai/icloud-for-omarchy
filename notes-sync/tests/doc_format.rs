@@ -275,6 +275,40 @@ fn projection_equality_numbered_start_matters_only_at_a_groups_first_item() {
     assert!(!formats_round_trip_equal(&a, &c));
 }
 
+/// Each line and span used to scan every run from the start (200k runs took
+/// minutes in a debug build).
+#[test]
+fn decode_finds_runs_without_rescanning_them_per_line() {
+    let lines = 100_000;
+    let text = "ab\n".repeat(lines);
+    let runs: Vec<AttributeRun> = (0..lines)
+        .flat_map(|_| {
+            [
+                AttributeRun {
+                    length: Some(1),
+                    font_hints: Some(1),
+                    ..Default::default()
+                },
+                AttributeRun::with_length(0),
+                styled(2, 1),
+            ]
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let result = decode_note_format(&text, &runs).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let bold = InlineStyle {
+        bold: true,
+        ..InlineStyle::PLAIN
+    };
+    assert_eq!(result.len(), lines + 1);
+    for paragraph in &result[..lines] {
+        assert_eq!(paragraph.kind, ParagraphKind::Heading);
+        assert_eq!(paragraph.spans, vec![span(bold.clone(), 1), plain(1)]);
+    }
+    assert_eq!(result[lines].kind, ParagraphKind::Body);
+}
+
 fn nested(length: u32, style: u32, indent: i32, block_quote_level: u32) -> AttributeRun {
     let mut run = styled(length, style);
     let ps = run.paragraph_style.as_mut().unwrap();

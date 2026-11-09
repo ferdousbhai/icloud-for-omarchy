@@ -207,7 +207,11 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
         }
         run_offset += len;
     }
-    let run_at = |index: usize| intervals.iter().find(|(_, start, end)| index >= *start && index < *end);
+    // Sorted and disjoint, so a binary search finds the one covering `index`.
+    let run_at = |index: usize| {
+        let at = intervals.partition_point(|(_, _, end)| *end <= index);
+        intervals.get(at).filter(|(_, start, _)| *start <= index)
+    };
 
     let lines: Vec<&[u16]> = units.split(|&u| u == u16::from(b'\n')).collect();
     let mut paragraphs = Vec::with_capacity(lines.len());
