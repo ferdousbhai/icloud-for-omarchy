@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use crate::cmd::errors::Error;
 
-use super::state::{BASE_DIR_NAME, state_subdir};
+use super::local::split_options;
+use super::state::{BASE_DIR_NAME, TitleMode, state_subdir};
+use crate::md::frontmatter::split_frontmatter;
 
 fn base_copy_path(target_dir: &Path, record_name: &str) -> PathBuf {
     state_subdir(target_dir, BASE_DIR_NAME).join(format!("{record_name}.md"))
@@ -29,6 +31,20 @@ pub fn write_base_copy(target_dir: &Path, record_name: &str, content: &str) -> R
     }
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// The base copy of a note whose file reads `file_text`: the body that file
+/// reads back as, so a file just written is clean. Not always the body it
+/// was composed from: in an in-body vault the envelope takes the blank lines
+/// that open a body.
+pub fn write_base_copy_of(
+    target_dir: &Path,
+    record_name: &str,
+    file_text: &str,
+    title_mode: TitleMode,
+) -> Result<(), Error> {
+    let body = split_frontmatter(file_text, split_options(title_mode)).body;
+    write_base_copy(target_dir, record_name, &body)
 }
 
 /// `removeBaseCopy`: a missing copy is fine.

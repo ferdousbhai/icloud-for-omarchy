@@ -195,3 +195,68 @@ fn clone_skips_a_shared_zone_still_without_text_and_saves_no_token_for_it() {
     assert_eq!(state.sync_token.as_deref(), Some("AQAAAAAAAAAB"));
     assert_eq!(state.shared_zone_sync_tokens, Some(IndexMap::new()));
 }
+
+/// `name` (tiny-clone or one of its pulls) with its one note's text replaced
+/// by `text`.
+fn tiny_with_text(name: &str, text: &str) -> Cassette {
+    use icloud_notes_sync::doc::document::{build_initial_note_document, encode_note_document};
+    use icloud_notes_sync::doc::text::compress_note_document;
+    let doc = build_initial_note_document(text, &[7; 16]).unwrap();
+    let data = icloud_notes_sync::js::base64_encode(&compress_note_document(&encode_note_document(&doc).unwrap()));
+    let mut c = cassette(name);
+    let records = &mut c.interactions[0].response.body.as_mut().unwrap()["zones"][0]["records"];
+    let note = records
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["recordType"] == "Note")
+        .unwrap();
+    note["fields"]["TextDataEncrypted"]["value"] = json!(data);
+    c
+}
+
+/// GitHub issue #21: a note whose body opens with blank lines reads back
+/// without them (the envelope takes them), so the base copy must be what the
+/// file reads back as or a fresh clone has a change to push.
+#[test]
+fn a_fresh_clone_of_a_note_opening_with_blank_lines_has_nothing_to_push() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    let summary = clone_from(
+        tiny_with_text("tiny-clone.json", "\n\nTest Note\nSome text"),
+        &vault,
+        dir.path().join("requests.json"),
+    );
+    assert_eq!(summary.written, 1);
+    assert_nothing_to_push(&vault);
+}
+
+/// The same for a pull that updates a clean note to such a text.
+#[test]
+fn a_pull_to_a_note_opening_with_blank_lines_leaves_nothing_to_push() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    clone_from(cassette("tiny-clone.json"), &vault, dir.path().join("clone.json"));
+    let pulled = run_pull_with(
+        &replay(
+            tiny_with_text("tiny-pull-update.json", "\n\nTest Note\nSome text"),
+            dir.path().join("pull.json"),
+        ),
+        &vault,
+        &mut NoProgress,
+        &mut |_| {},
+        &PullOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(pulled.updated, 1);
+    assert_nothing_to_push(&vault);
+}
+
+fn assert_nothing_to_push(vault: &Path) {
+    use icloud_notes_sync::cmd::push::build_push_plan;
+    // Anything to push would look the note up first.
+    let no_network = FnConnector(|| -> Result<Remote, Error> { panic!("network: the plan found a change") });
+    let plan = build_push_plan(&no_network, vault, &mut |_| {}).unwrap();
+    let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
+    assert!(entries.is_empty(), "{entries:?}");
+}

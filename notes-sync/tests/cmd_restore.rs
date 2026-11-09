@@ -79,3 +79,23 @@ fn leaves_a_frontmatter_only_file_as_envelope_plus_base_copy() {
     run_restore(dir.path(), "Test Note.md").unwrap();
     assert_eq!(note(dir.path()), "---\ntags: [orphan]\n---\nOriginal synced text");
 }
+
+/// A base copy written before #21 kept the blank lines opening the body,
+/// which the restored file's envelope takes: restore leaves it clean.
+#[test]
+fn a_restored_file_reads_back_clean_when_its_base_copy_opens_with_blank_lines() {
+    use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
+    use icloud_notes_sync::vault::state::TitleMode;
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    write_base_copy(dir.path(), "REC1", "\n\nOriginal synced text").unwrap();
+    std::fs::write(
+        dir.path().join("Test Note.md"),
+        "---\ntags: [a]\n---\n\nSome local edit",
+    )
+    .unwrap();
+    run_restore(dir.path(), "Test Note.md").unwrap();
+    let entry = &state().notes["REC1"];
+    let local = local_file_state(dir.path(), entry, "REC1", TitleMode::InBody).unwrap();
+    assert_eq!(local, LocalFileState::Clean);
+}
