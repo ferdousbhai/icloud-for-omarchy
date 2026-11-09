@@ -7,11 +7,12 @@ use std::path::Path;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gio, glib};
 use icloud_photos::cloudkit::Kind;
 use icloud_photos::still::{self, display_file};
 use icloud_photos::thumbs::{Job, Priority};
 
+use super::decode;
 use super::window::App;
 
 pub struct Viewer {
@@ -311,12 +312,19 @@ impl Viewer {
     fn load(&self, app: &Rc<App>, id: &str, path: &Path) {
         self.spinner.set_visible(true);
         self.sharp.set(true);
+        // An original too large to decode falls back to Apple's medium JPEG.
+        let medium = app.cat.asset(id).ok().flatten().and_then(|r| r.medium_path);
+        let medium = medium.filter(|m| m != path);
         let (a, id, path) = (app.clone(), id.to_owned(), path.to_owned());
         glib::spawn_future_local(async move {
-            let tex = gio::spawn_blocking(move || gdk::Texture::from_filename(&path).ok())
-                .await
-                .ok()
-                .flatten();
+            let tex = gio::spawn_blocking(move || {
+                decode::texture(&path)
+                    .or_else(|e| medium.ok_or(e).and_then(|m| decode::texture(&m)))
+                    .ok()
+            })
+            .await
+            .ok()
+            .flatten();
             // Only if the viewer is still on this photo.
             if a.viewer.current().as_deref() == Some(id.as_str()) {
                 a.viewer.spinner.set_visible(false);
@@ -360,7 +368,7 @@ impl Viewer {
         let Some(path) = self.current_still(app) else { return };
         let a = app.clone();
         glib::spawn_future_local(async move {
-            match gio::spawn_blocking(move || gdk::Texture::from_filename(&path)).await {
+            match gio::spawn_blocking(move || decode::texture(&path)).await {
                 Ok(Ok(tex)) => {
                     a.window.clipboard().set_texture(&tex);
                     a.toast("Copied");

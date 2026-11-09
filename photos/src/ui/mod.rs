@@ -1,5 +1,6 @@
 pub mod albums;
 pub mod banner;
+pub mod decode;
 pub mod grid;
 pub mod prefs;
 pub mod upload;

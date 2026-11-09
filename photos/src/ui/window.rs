@@ -20,6 +20,7 @@ use icloud_photos::thumbs::{self, Downloader, Job, Priority};
 use icloud_photos::transport::{Error, Result, SignInState, Transport};
 
 use super::albums::Albums;
+use super::decode;
 use super::grid::Grid;
 use super::upload::UploadMsg;
 use super::viewer::Viewer;
@@ -731,7 +732,7 @@ impl App {
         }
         let (a, id, path) = (self.clone(), id.to_owned(), path.to_owned());
         glib::spawn_future_local(async move {
-            let tex = gio::spawn_blocking(move || gdk::Texture::from_filename(&path).ok())
+            let tex = gio::spawn_blocking(move || decode::texture(&path).ok())
                 .await
                 .ok()
                 .flatten();
