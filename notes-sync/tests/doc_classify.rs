@@ -377,6 +377,22 @@ fn an_absurd_block_quote_level_or_indent_makes_the_note_read_only() {
     }
 }
 
+/// A body past the size cap is undecodable without being decoded (the zlib
+/// reader stops at its stream's end, so the padding alone would not stop it).
+#[test]
+fn an_oversize_body_is_undecodable() {
+    let (key, value, type_) = encode_text_field("small note", vec![]);
+    let mut padded = icloud_notes_sync::js::base64_decode(value.as_str().unwrap());
+    padded.resize(padded.len() + (13 << 20), 0);
+    let record = make_record(vec![(key, json!(base64_encode(&padded)), type_)]);
+    assert_eq!(
+        classify(&record, TitleMode::InBody),
+        NoteDecodeResult::Unsyncable(UnsyncableReason::Undecodable)
+    );
+    let record = make_record(vec![(key, value, type_)]);
+    assert!(ok(classify(&record, TitleMode::InBody)).publishable);
+}
+
 /// Every real fixture note classifies to its golden markdown (first
 /// exported from icloud-md).
 #[test]

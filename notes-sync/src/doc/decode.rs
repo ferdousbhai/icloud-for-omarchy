@@ -82,6 +82,11 @@ pub enum NoteDecodeResult {
 pub const TEXT_DATA_ASSET_UNPUBLISHABLE_REASON: &str =
     "is so large that Apple keeps its text in a separate file, which can't be written back yet";
 
+/// The largest `TextDataEncrypted` (base64) decoded: CloudKit caps an inline
+/// field near 1 MB, so only an inlined `TextDataAsset` comes close, and a
+/// body past this is undecodable rather than inflated.
+pub const MAX_TEXT_DATA_BASE64: usize = 16 << 20;
+
 /// `classifyNoteRecord`.
 ///
 /// A note whose text Apple moved into a `TextDataAsset` (upstream PR #29)
@@ -109,6 +114,9 @@ fn classify_note_body(record: &CloudKitRecord, options: &ClassifyOptions) -> Not
     let Some(Value::String(text_value)) = record.fields.get("TextDataEncrypted").map(|f| &f.value) else {
         return NoteDecodeResult::Unsyncable(UnsyncableReason::MissingBody);
     };
+    if text_value.len() > MAX_TEXT_DATA_BASE64 {
+        return NoteDecodeResult::Unsyncable(UnsyncableReason::Undecodable);
+    }
     let Ok(string) = decode_note_string(&base64_decode(text_value)) else {
         return NoteDecodeResult::Unsyncable(UnsyncableReason::Undecodable);
     };
