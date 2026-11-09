@@ -16,6 +16,9 @@
 #include <QGuiApplication>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextLayout>
 #include <QThread>
 #include <QTimer>
 #include <functional>
@@ -310,6 +313,29 @@ int main(int argc, char *argv[])
         QFile::remove(link);
         writeFile(QStringLiteral("G.md"), g);
         b.refresh();
+    }
+
+    // A hostile line (a pasted blob, a synced note) highlights in bounded
+    // time: emphasis that never closes, or links that never do.
+    {
+        QTextDocument doc;
+        MarkdownHighlighter highlighter(&doc, {});
+        bool fast = true;
+        for (const QString &unit : { QStringLiteral(" **a"), QStringLiteral(" ~~a"), QStringLiteral(" __a"),
+                                     QStringLiteral(" [a"), QStringLiteral(" *a") }) {
+            doc.setPlainText(unit.repeated(200 * 1024 / unit.size()));
+            QElapsedTimer timer;
+            timer.start();
+            highlighter.rehighlight();
+            fast = fast && timer.elapsed() < 2000;
+        }
+        doc.setPlainText(QStringLiteral("**bold** and *it* and ~~gone~~"));
+        highlighter.rehighlight();
+        const QTextLayout *layout = doc.firstBlock().layout();
+        bool bold = false;
+        for (const QTextLayout::FormatRange &r : layout->formats())
+            bold = bold || (r.start == 2 && r.format.fontWeight() == QFont::Bold);
+        check(fast && bold, "backend highlighter: a 200 KB hostile line in bounded time, short lines still styled");
     }
 
     b.openNote(QStringLiteral("A.md"));

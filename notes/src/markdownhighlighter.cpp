@@ -5,6 +5,12 @@
 #include <QTextCharFormat>
 #include <QTextDocument>
 
+namespace {
+// The longest line (in UTF-16 units) whose inline emphasis, code and links
+// are styled.
+constexpr qsizetype kInlineLimit = 8 * 1024;
+} // namespace
+
 MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document, const Colors &colors)
     : QSyntaxHighlighter(document), m_colors(colors)
 {
@@ -89,6 +95,11 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
         setFormat(int(m.capturedStart(1)), int(m.capturedLength(1)), accentFormat);
     }
 
+    // An emphasis that never closes rescans the rest of the line from every
+    // opening mark: quadratic, and seconds per keystroke on a pasted blob.
+    // Lines that long are not prose; they keep their line shape only.
+    if (text.size() > kInlineLimit)
+        return;
     auto eachMatch = [&](const QRegularExpression &re, auto apply) {
         for (const QRegularExpressionMatch &match : re.globalMatch(text))
             apply(match);
