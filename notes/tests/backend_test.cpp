@@ -981,7 +981,7 @@ int main(int argc, char *argv[])
         QObject::connect(app, &NotesBackend::syncFinished, [&] { ++reported; });
         app->runSync();
         waitUntil([] { return false; }, 300); // the engine is up and sleeping
-        const bool running = app->syncRunning() && app->syncLog().contains(QStringLiteral("$ icloud-notes-sync --json sync"));
+        const bool running = app->syncRunning() && app->syncLog().contains(QStringLiteral("$ icloud-notes-sync --quiet sync"));
         delete app;
         check(running && reported == 0, "background: closing during a sync reports nothing from it");
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
