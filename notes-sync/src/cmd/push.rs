@@ -1338,20 +1338,24 @@ pub fn build_push_plan(
         ));
     }
 
-    // --- folders deleted here, once their notes are gone. Not one another
-    // device put a note or folder in since the last pull: that would orphan
-    // it. (One look at the private zone's changes, only when deleting.)
+    // --- folders deleted here, once their notes are gone. Not one still
+    // holding a note or folder this vault doesn't track: deleting it would
+    // orphan that. Another device may have put one there since the last
+    // pull, and pull never tracks locked or unreadable notes, so a folder of
+    // only those looks empty here. (One walk of the whole private zone, only
+    // when deleting.)
     let mut kept_folders: HashSet<String> = HashSet::new();
+    let mut unsyncable_in: HashMap<String, usize> = HashMap::new();
     if !folder_deletes.is_empty() {
         match state.sync_token.as_deref() {
-            Some(token) => {
-                let changes = db.fetch_all_note_records(Some(token), &mut |_| {})?;
-                // Only what this vault doesn't know yet: tracked notes there are
+            Some(_) => {
+                let zone = db.fetch_all_note_records(None, &mut |_| {})?;
+                // Only what this vault doesn't track: tracked notes there are
                 // being trashed or moved by this push.
                 let known = |rn: &String| {
                     state.notes.contains_key(rn) || state.folders.as_ref().is_some_and(|f| f.contains_key(rn))
                 };
-                for record in changes
+                for record in zone
                     .records
                     .iter()
                     .filter(|r| !r.is_deleted() && !is_in_trash(r) && !known(&r.record_name))
@@ -1361,10 +1365,24 @@ pub fn build_push_plan(
                     } else {
                         "Folder"
                     };
-                    if let Some(folder) =
+                    let Some(folder) =
                         crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
-                    {
+                    else {
+                        continue;
+                    };
+                    let syncable = match record.record_type.as_str() {
+                        "Folder" => true,
+                        "Note" => match classify_note_record(record, &ClassifyOptions { title_mode }) {
+                            NoteDecodeResult::Deleted => continue,
+                            NoteDecodeResult::Ok(_) => true,
+                            NoteDecodeResult::Unsyncable(_) => false,
+                        },
+                        _ => false,
+                    };
+                    if syncable {
                         kept_folders.insert(folder);
+                    } else {
+                        *unsyncable_in.entry(folder).or_default() += 1;
                     }
                 }
             }
@@ -1375,6 +1393,17 @@ pub fn build_push_plan(
         if kept_folders.contains(record_name) {
             entries.push(
                 PlanEntry::refused(PlanEntryKind::DeleteFolder, dir.clone(), Refusal::FolderChangedRemotely).into(),
+            );
+            continue;
+        }
+        if let Some(&count) = unsyncable_in.get(record_name) {
+            entries.push(
+                PlanEntry::refused(
+                    PlanEntryKind::DeleteFolder,
+                    dir.clone(),
+                    Refusal::FolderHoldsUnsyncableNotes { count },
+                )
+                .into(),
             );
             continue;
         }

@@ -373,6 +373,9 @@ pub enum Refusal {
     /// A folder deleted here that another device put a note or folder in
     /// since the last pull.
     FolderChangedRemotely,
+    /// A folder deleted here that still holds notes pull never tracks
+    /// (locked or unreadable ones), so it only looked empty.
+    FolderHoldsUnsyncableNotes { count: usize },
     /// (move): `prepareRetitle` refused; `previous_file` = tracked path.
     MoveRetitle {
         refusal: RetitleRefusal,
@@ -476,6 +479,10 @@ impl Refusal {
             FolderChangedRemotely => "another device put a note or folder in it since the last pull - \
                                       run \"pull\", then delete it again"
                 .into(),
+            FolderHoldsUnsyncableNotes { count } => format!(
+                "still holds {count} note(s) this tool can't sync (locked or unreadable ones), which deleting it \
+                 would strand - move or delete them in Notes first; \"pull\" brings the directory back"
+            ),
             MoveGoneRemotely | UpdateGoneRemotely | FolderGoneRemotely => {
                 "no longer exists remotely - run \"pull\" to reconcile".into()
             }

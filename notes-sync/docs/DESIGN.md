@@ -255,11 +255,15 @@ Notes (icloud-md 0.6.2 refuses most of these, some forever):
   directory beside it, or both are empty) retitles the folder record; a
   folder directory deleted moves its notes to Recently Deleted and then
   deletes the folder record (`records/modify` `delete`, deepest first),
-  unless the private zone's changes since the last pull show a note or
-  folder this vault doesn't know in it (`Refusal::FolderChangedRemotely`).
+  unless a walk of the whole private zone finds a record this vault doesn't
+  track in it: a note or folder another device put there since the last pull
+  (`Refusal::FolderChangedRemotely`), or a locked or unreadable note, which
+  pull never tracks, so the directory looked empty
+  (`Refusal::FolderHoldsUnsyncableNotes`).
   The default folder and shared folders are never renamed or deleted.
 
 Tests: tests/cmd_local_delete.rs, tests/cmd_push.rs (folder planning),
+tests/cmd_push_folder_delete.rs,
 tests/vault_folders.rs, tests/doc_embed_push.rs.
 
 ### New notes listed without their text
