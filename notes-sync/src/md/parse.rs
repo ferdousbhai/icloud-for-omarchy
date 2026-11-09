@@ -33,8 +33,12 @@ pub(crate) fn parse_options() -> markdown::ParseOptions {
 }
 
 /// The mdast tree remark would build for `source`, or `None` where
-/// markdown-rs 1.0.0 panics (a few pathological list/fence nestings).
+/// markdown-rs 1.0.0 panics (a few pathological list/fence nestings) or
+/// `source` nests too deeply to parse safely.
 pub(crate) fn to_mdast(source: &str) -> Option<mdast::Node> {
+    if too_deeply_nested(source) {
+        return None;
+    }
     let parsed = std::panic::catch_unwind(|| markdown::to_mdast(source, &parse_options())).ok()?;
     let mut root = parsed.expect("markdown without MDX always parses");
     super::mdast_fix::fix_tree(&mut root, source);
@@ -118,8 +122,56 @@ fn source_lines(markdown: &str) -> Vec<&str> {
     lines
 }
 
+/// How deep a line's quotes and lists may nest. markdown-rs recurses once per
+/// level (thousands overflow the stack) and slows quadratically with depth;
+/// rendered notes stay well below it (`MAX_NESTING` of each, plus indentation).
+const MAX_MARKDOWN_NESTING: usize = 64;
+
+/// Whether some line opens more than `MAX_MARKDOWN_NESTING` containers: its
+/// leading `>` and list markers, plus its indentation counted as a list level
+/// per two columns.
+fn too_deeply_nested(markdown: &str) -> bool {
+    source_lines(markdown).iter().any(|line| {
+        let bytes = line.as_bytes();
+        let (mut at, mut columns, mut markers) = (0, 0, 0);
+        loop {
+            let marker_end = match bytes.get(at) {
+                Some(b' ') => {
+                    columns += 1;
+                    at += 1;
+                    continue;
+                }
+                Some(b'\t') => {
+                    columns += 4;
+                    at += 1;
+                    continue;
+                }
+                Some(b'>') => at + 1,
+                Some(b'-' | b'*' | b'+') => at + 1,
+                Some(b'0'..=b'9') => {
+                    let digits = bytes[at..].iter().take_while(|b| b.is_ascii_digit()).count();
+                    match bytes.get(at + digits) {
+                        Some(b'.' | b')') => at + digits + 1,
+                        _ => break,
+                    }
+                }
+                _ => break,
+            };
+            if bytes[at] != b'>' && !matches!(bytes.get(marker_end), None | Some(b' ' | b'\t')) {
+                break;
+            }
+            markers += 1;
+            at = marker_end;
+        }
+        markers > 0 && markers + columns / 2 > MAX_MARKDOWN_NESTING
+    })
+}
+
 /// `parseNoteMarkdown`.
 pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRefusal> {
+    if too_deeply_nested(markdown) {
+        return refuse("the note nests quotes or lists deeper than this tool can represent");
+    }
     let lines = source_lines(markdown);
     let Some(root) = to_mdast(markdown) else {
         return refuse("the markdown parser couldn't read this note's list structure");

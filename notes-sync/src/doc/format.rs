@@ -166,6 +166,10 @@ fn paragraph_kind_of(ps: Option<&ParagraphStyle>) -> Option<ParagraphKind> {
     }
 }
 
+/// The deepest `blockQuoteLevel` and list `indent` decoded (Apple Notes
+/// writes a few levels; the renderer nests one node per level).
+pub const MAX_NESTING: u32 = 16;
+
 /// `decodeNoteFormat`: split `text` into per-line paragraphs and derive each
 /// one's kind and spans from the attribute runs (paragraph attributes from the
 /// run covering the line's newline). Runs overshooting the text, or an unknown
@@ -184,6 +188,12 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
                 "the note uses a paragraph style ({}) this tool doesn't understand",
                 ps.style.unwrap_or(0)
             ));
+        }
+        if let Some(ps) = &run.paragraph_style
+            && (ps.block_quote_level.unwrap_or(0) > MAX_NESTING
+                || !(0..=MAX_NESTING as i32).contains(&ps.indent.unwrap_or(0)))
+        {
+            return Err("the note nests its paragraphs deeper than this tool can represent".into());
         }
     }
 

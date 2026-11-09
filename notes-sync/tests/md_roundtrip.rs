@@ -547,3 +547,33 @@ fn carriage_returns_keep_their_round_trips() {
     assert_round_trips(&[p(Body, "a\rb")]);
     assert_round_trips(&[p(Monospaced, "a\rb")]);
 }
+
+#[test]
+fn deeply_nested_markdown_is_refused_before_it_is_parsed() {
+    let indented_items: String = (0..5_000).map(|i| format!("{}- x\n", "  ".repeat(i))).collect();
+    for input in [
+        ">".repeat(100_000) + " x",
+        "- ".repeat(10_000) + "x",
+        "1. ".repeat(10_000) + "x",
+        indented_items,
+    ] {
+        let reason = parse_note_markdown(&input).unwrap_err().reason;
+        assert_eq!(
+            reason,
+            "the note nests quotes or lists deeper than this tool can represent"
+        );
+    }
+    let quoted_list = format!("{}- x", "> ".repeat(16));
+    assert_eq!(
+        parse_note_markdown(&quoted_list).unwrap().paragraphs[0].block_quote_level,
+        16
+    );
+    // The deepest nesting a note decodes with stays parseable.
+    let ladder: Vec<FormatParagraph> = (0..=16)
+        .map(|indent| FormatParagraph {
+            block_quote_level: 16,
+            ..indented(NumberedList, "deep", indent)
+        })
+        .collect();
+    assert_round_trips(&ladder);
+}

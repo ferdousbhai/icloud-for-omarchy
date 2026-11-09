@@ -356,6 +356,27 @@ fn carriage_returns_in_monospaced_and_title_paragraphs_decode() {
     assert_eq!(result.markdown_text, "h\rx\n=\nbody");
 }
 
+/// A server-supplied nesting depth used to build one Markdown node per level
+/// and overflow the stack; it now makes the note read-only.
+#[test]
+fn an_absurd_block_quote_level_or_indent_makes_the_note_read_only() {
+    for (indent, block_quote_level) in [(0, 20_000), (20_000, 0)] {
+        let run = AttributeRun {
+            length: Some(5),
+            paragraph_style: Some(ParagraphStyle {
+                style: Some(100),
+                indent: Some(indent),
+                block_quote_level: Some(block_quote_level),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = ok(classify(&titled("item\n", vec![run]), TitleMode::InBody));
+        assert!(!result.publishable);
+        assert_eq!(result.markdown_text, "item\n");
+    }
+}
+
 /// Every real fixture note classifies to its golden markdown (first
 /// exported from icloud-md).
 #[test]

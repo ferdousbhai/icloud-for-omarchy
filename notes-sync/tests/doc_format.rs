@@ -274,3 +274,21 @@ fn projection_equality_numbered_start_matters_only_at_a_groups_first_item() {
     let c = [numbered("one", 4), numbered("two", 0)];
     assert!(!formats_round_trip_equal(&a, &c));
 }
+
+fn nested(length: u32, style: u32, indent: i32, block_quote_level: u32) -> AttributeRun {
+    let mut run = styled(length, style);
+    let ps = run.paragraph_style.as_mut().unwrap();
+    ps.indent = Some(indent);
+    ps.block_quote_level = Some(block_quote_level);
+    run
+}
+
+#[test]
+fn decode_refuses_nesting_deeper_than_apple_notes_writes() {
+    let deep = "the note nests its paragraphs deeper than this tool can represent";
+    assert_eq!(decode_note_format("x", &[nested(1, 3, 0, 20_000)]).unwrap_err(), deep);
+    assert_eq!(decode_note_format("x", &[nested(1, 100, 20_000, 0)]).unwrap_err(), deep);
+    assert_eq!(decode_note_format("x", &[nested(1, 100, -1, 0)]).unwrap_err(), deep);
+    let kept = decode_note_format("x", &[nested(1, 100, 16, 16)]).unwrap();
+    assert_eq!((kept[0].indent, kept[0].block_quote_level), (16, 16));
+}
