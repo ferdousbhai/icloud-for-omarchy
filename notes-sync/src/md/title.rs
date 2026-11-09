@@ -177,15 +177,23 @@ pub fn representability_problem(title: &str) -> Option<String> {
     if RESERVED_DEVICE_NAMES.contains(&carried.to_uppercase().as_str()) {
         return Some("the title is a reserved device name on Windows".into());
     }
-    if carried.chars().any(is_unnameable_control) {
+    // A name spells the title exactly, so nothing collapses the whitespace
+    // controls here: only a tab is a plain enough character to keep (and a
+    // line break, as the name is only ever the title's first line).
+    if carried.chars().any(|c| c.is_control() && !matches!(c, '\t' | '\n')) {
         return Some("the title contains a control character".into());
     }
     None
 }
 
-/// A control character no file name of ours carries: NUL can't be in one
-/// at all, and the rest (whitespace aside, which collapses to a space)
-/// would be invisible or garble a terminal.
+/// A control character the slugged names ([`note_file_name`],
+/// `sanitize_folder_dir_name`) drop: NUL can't be in a file name at all,
+/// and the rest would be invisible or garble a terminal. The whitespace
+/// ones are left for those names to collapse to a space; a filename-as-title
+/// name, which keeps the title's spelling, refuses them all but a tab
+/// ([`representability_problem`]).
+///
+/// [`note_file_name`]: super::filename::note_file_name
 pub fn is_unnameable_control(c: char) -> bool {
     c.is_control() && !js::is_whitespace(c)
 }

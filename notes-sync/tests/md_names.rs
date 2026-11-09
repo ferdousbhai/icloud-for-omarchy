@@ -92,7 +92,14 @@ fn representability() {
     }
     assert!(title_is_representable("CONTACTS"));
     assert!(title_is_representable("COM10"));
-    for title in ["Bad\0Title", "Bell\u{7}", "\u{85}next line"] {
+    for title in [
+        "Bad\0Title",
+        "Bell\u{7}",
+        "\u{85}next line",
+        "Car\rriage",
+        "V\u{b}tab",
+        "Form\u{c}feed",
+    ] {
         assert!(
             representability_problem(title).unwrap().contains("control character"),
             "{title:?}"

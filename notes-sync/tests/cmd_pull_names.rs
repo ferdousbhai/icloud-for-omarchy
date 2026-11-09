@@ -16,7 +16,7 @@ use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
 use icloud_notes_sync::doc::text::compress_note_document;
 use icloud_notes_sync::js::base64_encode;
-use icloud_notes_sync::vault::state::{Account, read_clone_state};
+use icloud_notes_sync::vault::state::{Account, read_clone_state, write_clone_state};
 use serde_json::{Value, json};
 
 /// The tiny clone's one note, in `Notes/Test Note.md`.
@@ -307,6 +307,77 @@ fn a_nul_in_a_note_title_or_folder_title_does_not_abort_the_pull() {
     assert_contained(tmp.path());
     assert_eq!(summary.added, 1, "{summary:?}");
     assert!(vault.join("Folder/BadTitle.md").exists());
+}
+
+/// A filename-as-title vault whose one note, titled `title`, is in
+/// `Notes/<title>.md` with no `apple-note-title`: what 0.9.4, which let
+/// control characters other than NUL into file names, left behind.
+fn filename_vault_named(title: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("a/vault");
+    let options = CloneOptions {
+        filename_as_title: true,
+        ..Default::default()
+    };
+    let c = listing(
+        vec![
+            folder("DefaultFolder-CloudKit", "Notes"),
+            note(OWN, &format!("{title}\n\nbody"), "1x"),
+        ],
+        None,
+    );
+    run_clone_with(&replay(c), &vault, &mut NoProgress, &mut |_| {}, &options).unwrap();
+    let mut state = read_clone_state(&vault).unwrap().unwrap();
+    let cloned = state.notes[OWN].file.clone();
+    let text: String = read(&vault, &cloned)
+        .split_inclusive('\n')
+        .filter(|l| !l.starts_with("apple-note-title:"))
+        .collect();
+    std::fs::remove_file(vault.join(&cloned)).unwrap();
+    let old = format!("Notes/{title}.md");
+    std::fs::write(vault.join(&old), text).unwrap();
+    let entry = state.notes.get_mut(OWN).unwrap();
+    entry.file = old;
+    entry.frontmatter_title = None;
+    write_clone_state(&vault, &state).unwrap();
+    (tmp, vault)
+}
+
+#[test]
+fn a_control_character_file_name_from_0_9_4_is_renamed_once_when_its_note_changes() {
+    for title in ["Bell\u{7}", "Esc\u{1b}[2J", "Car\rriage", "Tab\u{b}vertical"] {
+        let (_tmp, vault) = filename_vault_named(title);
+        let old = format!("Notes/{title}.md");
+
+        // Unchanged remotely: left as it is.
+        let summary = pull(
+            &vault,
+            listing(vec![note(OWN, &format!("{title}\n\nbody"), "1x")], None),
+        );
+        assert_eq!(
+            (summary.added, summary.updated, summary.removed),
+            (0, 0, 0),
+            "{summary:?}"
+        );
+        assert!(vault.join(&old).exists());
+
+        // Changed remotely: one file, renamed, the title kept in the frontmatter.
+        let summary = pull(
+            &vault,
+            listing(vec![note(OWN, &format!("{title}\n\nedited"), "2x")], None),
+        );
+        assert_eq!(
+            (summary.added, summary.updated, summary.removed),
+            (0, 1, 0),
+            "{summary:?}"
+        );
+        assert_eq!(files_under(&vault.join("Notes")), ["Untitled.md"], "{title:?}");
+        let text = read(&vault, "Notes/Untitled.md");
+        assert!(text.contains("edited") && text.contains("apple-note-title:"), "{text}");
+        let state = read_clone_state(&vault).unwrap().unwrap();
+        assert_eq!(state.notes[OWN].file, "Notes/Untitled.md");
+        assert_eq!(state.notes[OWN].frontmatter_title.as_deref(), Some(title));
+    }
 }
 
 // --- one zone's record name in another zone ----------------------------------
