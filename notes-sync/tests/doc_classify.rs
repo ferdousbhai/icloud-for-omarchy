@@ -341,6 +341,21 @@ fn body_text_is_the_notes_raw_text_in_both_modes() {
     assert_eq!(filename.body_text, in_body.body_text);
 }
 
+/// Issue #21: a `\r` inside a code block or title reached the Markdown
+/// gate's parser and panicked it; such notes now decode.
+#[test]
+fn carriage_returns_in_monospaced_and_title_paragraphs_decode() {
+    let record = titled("x\ry\nbody", vec![styled(4, 4), styled(4, 3)]);
+    let result = ok(classify(&record, TitleMode::InBody));
+    assert!(result.publishable, "{:?}", result.unpublishable_reason);
+    assert_eq!(result.markdown_text, "```\nx\ry\n```\nbody");
+
+    let record = titled("h\rx\nbody", vec![styled(4, 0), styled(4, 3)]);
+    let result = ok(classify(&record, TitleMode::InBody));
+    assert!(result.publishable, "{:?}", result.unpublishable_reason);
+    assert_eq!(result.markdown_text, "h\rx\n=\nbody");
+}
+
 /// Every real fixture note classifies to its golden markdown (first
 /// exported from icloud-md).
 #[test]

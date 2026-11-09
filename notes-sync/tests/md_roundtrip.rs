@@ -526,3 +526,24 @@ fn urls_that_could_open_inline_constructs_fall_back_to_escaped_text() {
         assert_round_trips(&[p(Body, text)]);
     }
 }
+
+/// Issue #21: markdown-rs ends lines at `\r\n`, `\r` and `\n`, so a lone
+/// `\r` must not leave a node pointing past the parser's line table.
+#[test]
+fn carriage_returns_never_panic_the_parser() {
+    for input in ["```\n\r", "```\na\rb\n```", "```\r```", "# h\rx", "- a\r- b", "a\r\rb"] {
+        let parsed = std::panic::catch_unwind(|| parse_note_markdown(input));
+        assert!(parsed.is_ok(), "{input:?} panicked");
+    }
+}
+
+#[test]
+fn carriage_returns_keep_their_round_trips() {
+    assert_eq!(parse_note_markdown("a\rb").unwrap().text, "a\rb");
+    assert_eq!(parse_note_markdown("> a\r> b").unwrap().text, "a\rb");
+    assert_eq!(parse_note_markdown("a\r\nb").unwrap().text, "a\r\nb");
+    assert_eq!(parse_note_markdown("```\na\rb\n```").unwrap().text, "a\rb");
+    assert_eq!(parse_note_markdown("# h\rx").unwrap().text, "h\nx");
+    assert_round_trips(&[p(Body, "a\rb")]);
+    assert_round_trips(&[p(Monospaced, "a\rb")]);
+}

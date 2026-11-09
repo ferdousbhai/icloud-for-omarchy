@@ -90,9 +90,37 @@ fn node_lines(node: &mdast::Node) -> (usize, usize) {
     (position.start.line, position.end.line)
 }
 
+/// `markdown`'s lines as markdown-rs numbers them: `\r\n`, a lone `\r` and
+/// `\n` each end one.
+fn source_lines(markdown: &str) -> Vec<&str> {
+    let bytes = markdown.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\n' => {
+                lines.push(&markdown[start..at]);
+                at += 1;
+            }
+            b'\r' => {
+                lines.push(&markdown[start..at]);
+                at += if bytes.get(at + 1) == Some(&b'\n') { 2 } else { 1 };
+            }
+            _ => {
+                at += 1;
+                continue;
+            }
+        }
+        start = at;
+    }
+    lines.push(&markdown[start..]);
+    lines
+}
+
 /// `parseNoteMarkdown`.
 pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRefusal> {
-    let lines: Vec<&str> = markdown.split('\n').collect();
+    let lines = source_lines(markdown);
     let Some(root) = to_mdast(markdown) else {
         return refuse("the markdown parser couldn't read this note's list structure");
     };
@@ -100,6 +128,7 @@ pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRe
         source: markdown,
         lines: &lines,
         line_output: vec![LineOutput::Untouched; lines.len()],
+        line_missed: None,
     };
     for child in root.children().map(Vec::as_slice).unwrap_or(&[]) {
         parser.walk_block(child, 0)?;
@@ -150,10 +179,16 @@ struct Parser<'a> {
     source: &'a str,
     lines: &'a [&'a str],
     line_output: Vec<LineOutput>,
+    /// A node line past `lines` (the two disagreeing on a line ending):
+    /// `sweep` refuses rather than guess.
+    line_missed: Option<usize>,
 }
 
 impl Parser<'_> {
     fn sweep(&self) -> Result<Vec<FormatParagraph>, ParseRefusal> {
+        if let Some(line) = self.line_missed {
+            return refuse(format!("line {line} couldn't be matched to the note's source lines"));
+        }
         let mut out = Vec::new();
         for (index, recorded) in self.line_output.iter().enumerate() {
             match recorded {
@@ -180,8 +215,18 @@ impl Parser<'_> {
         Ok(out)
     }
 
+    fn slot(&mut self, line_number: usize) -> Option<&mut LineOutput> {
+        let slot = line_number
+            .checked_sub(1)
+            .and_then(|index| self.line_output.get_mut(index));
+        if slot.is_none() {
+            self.line_missed.get_or_insert(line_number);
+        }
+        slot
+    }
+
     fn record(&mut self, line_number: usize, paragraph: FormatParagraph) {
-        let slot = &mut self.line_output[line_number - 1];
+        let Some(slot) = self.slot(line_number) else { return };
         match slot {
             LineOutput::Paragraphs(existing) => existing.push(paragraph),
             _ => *slot = LineOutput::Paragraphs(vec![paragraph]),
@@ -189,7 +234,7 @@ impl Parser<'_> {
     }
 
     fn mark_syntax(&mut self, line_number: usize) {
-        let slot = &mut self.line_output[line_number - 1];
+        let Some(slot) = self.slot(line_number) else { return };
         if matches!(slot, LineOutput::Untouched) {
             *slot = LineOutput::Syntax;
         }
@@ -420,6 +465,22 @@ impl Parser<'_> {
                     make_paragraph(ParagraphKind::Body, level, text, spans, &BODY_SEED),
                 );
             }
+        }
+        // A lone `\r` ends a source line but stays inside the text, so the
+        // lines it opens are already held by the paragraphs above.
+        let lone_crs = node.position().map_or(0, |p| {
+            let bytes = self
+                .source
+                .as_bytes()
+                .get(p.start.offset..p.end.offset)
+                .unwrap_or_default();
+            (0..bytes.len())
+                .filter(|&i| bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+                .count()
+        });
+        let covered = start + piece_lines.len();
+        for line in covered..(covered + lone_crs).min(end + 1) {
+            self.mark_syntax(line);
         }
         Ok(())
     }
