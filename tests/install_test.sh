@@ -3,10 +3,12 @@
 # pacman, pacman-key, curl and gpg stubbed, inside a user and mount
 # namespace where /etc/pacman.conf, /etc/pacman.d and /root are scratch
 # copies: nothing on this machine changes. Covers the default package
-# lists, named packages, an unknown name, re-running, the migration from
-# the old [icloud-notes] repository. First, outside the namespace, checks
-# the add_signed_repo hash of install.sh and every generated installer;
-# only the installer runs are skipped where unprivileged namespaces are off.
+# lists, named packages, an unknown name, re-running, a key whose pin is
+# not its one primary, hook writes under sudo, a truncated download, the
+# migration from the old [icloud-notes] repository. First, outside the
+# namespace, checks the add_signed_repo hash of install.sh and every
+# generated installer; only the installer runs are skipped where
+# unprivileged namespaces are off.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -219,6 +221,14 @@ check "migration: unrelated pacman.d files are kept" [ -e /etc/pacman.d/unrelate
 check "migration: unrelated hooks are kept" [ -e "$hooks/unrelated" ]
 check "migration: says what it removed" grep -q 'Removing the old \[icloud-notes\] repository' "$work/out"
 check "migration: then installs" [ "$(installed)" = "icloud-notes" ]
+
+# A download cut short anywhere runs nothing: piped into bash, the script
+# ends wherever the connection dropped.
+setup
+sed '/^ *echo "Installing /,$d' install.sh >"$work/truncated.sh"
+bash "$work/truncated.sh" >/dev/null 2>&1 || true
+check "a truncated installer changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
+check "a truncated installer runs no pacman" [ ! -e "$PACMAN_LOG" ]
 
 for retired in contacts reminders; do
   setup
