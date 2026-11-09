@@ -169,7 +169,7 @@ impl Window {
     }
 
     fn toast(&self, msg: &str) {
-        self.toasts.add_toast(adw::Toast::new(msg));
+        self.toasts.add_toast(adw::Toast::new(&toast_title(msg)));
     }
 
     /// The account just signed in (maybe a different one), or Find My was
@@ -719,5 +719,24 @@ fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
         last_error: RefCell::default(),
         centered: Cell::new(false),
         trail_shown: RefCell::default(),
+    }
+}
+
+/// A toast's title for `msg`, shown as it is: device names come from the
+/// account and must not be read as Pango markup.
+fn toast_title(msg: &str) -> glib::GString {
+    glib::markup_escape_text(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toast_shows_device_names_verbatim() {
+        assert_eq!(
+            toast_title("No location for <b>Tom & Jerry</b>'s iPad"),
+            "No location for &lt;b&gt;Tom &amp; Jerry&lt;/b&gt;&apos;s iPad"
+        );
     }
 }
