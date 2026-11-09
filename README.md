@@ -270,8 +270,13 @@ test debug symbols and incremental state; the chroot discards package downloads
 after installing build dependencies.
 
 The installer retains its pinned `add_signed_repo` hash as a regression
-check. Ghost no longer carries this function; iCloud installer changes
-are tested here.
+check; iCloud installer changes are tested here. Ghost no longer carries
+this function, but the installers of recall-for-omarchy, cloud-mail,
+cloud-calendar, cloud-contacts, cloud-tasks, keep-going, wacli, omacloud
+and omacloud-bucket still carry the copy from before the primary-key pin
+and the hook written as the user, and run their steps at top level rather
+than from `main`. Each needs this version ported, with its own pinned hash
+updated.
 
 ### The signing key
 

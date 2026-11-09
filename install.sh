@@ -35,9 +35,9 @@ OLD_REPOS=(icloud-notes)
 # fingerprint), add its signed pacman repository, and keep the repository
 # across `omarchy refresh pacman`, which rewrites /etc/pacman.conf from
 # Omarchy's defaults and then runs the user's pre-refresh-pacman hooks.
-# Works as root (`sudo bash`) or as a desktop user (sudo inside). This text
-# is identical in every installer that uses it, and each repository's test
-# pins its hash: change it here and in its twins together.
+# Works as root (`sudo bash`) or as a desktop user (sudo inside). Other
+# installers carry copies, each pinned by its repository's test; a copy
+# is only as safe as its last port, so carry a change to every one.
 add_signed_repo() {
   local name="$1" release="$2" fingerprint="$3"
   local conf="/etc/pacman.d/$name.conf" include="Include = /etc/pacman.d/$name.conf"
