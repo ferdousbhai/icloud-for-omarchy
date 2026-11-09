@@ -59,6 +59,44 @@ pub fn is_icloud_domain(domain: &str) -> bool {
     host == "icloud.com" || host.ends_with(".icloud.com")
 }
 
+/// True for apple.com and any subdomain (idmsa.apple.com, Apple's sign-in
+/// frame), with or without a leading dot.
+pub fn is_apple_domain(domain: &str) -> bool {
+    let host = domain.trim_start_matches('.');
+    host == "apple.com" || host.ends_with(".apple.com")
+}
+
+/// icloud.com's mark of a browser trusted after 2FA.
+pub const HSA_TRUST: &str = "X-APPLE-WEBAUTH-HSA-TRUST";
+
+/// Whether a cookie is device trust: what "Trust this browser" leaves for
+/// the next sign-in to skip 2FA, and none of the session itself. That is
+/// icloud.com's [`HSA_TRUST`] and the sign-in frame's `DES…` cookies (one
+/// per trusted Apple ID, holding its trust token).
+pub fn is_trust_cookie(name: &str, domain: &str) -> bool {
+    (name == HSA_TRUST && is_icloud_domain(domain)) || (name.starts_with("DES") && is_apple_domain(domain))
+}
+
+/// The device-trust cookies among `cookies` (see [`is_trust_cookie`]):
+/// none empty or expired at `now`, the last of each name, domain and path.
+pub fn trust_cookies(cookies: impl IntoIterator<Item = Cookie>, now: u64) -> Vec<Cookie> {
+    let mut trust: Vec<Cookie> = Vec::new();
+    for cookie in cookies {
+        if !is_trust_cookie(&cookie.name, &cookie.domain)
+            || cookie.value.is_empty()
+            || cookie.expires.is_some_and(|e| e <= now)
+        {
+            continue;
+        }
+        let same = |c: &Cookie| c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path;
+        match trust.iter_mut().find(|c| same(c)) {
+            Some(existing) => *existing = cookie,
+            None => trust.push(cookie),
+        }
+    }
+    trust
+}
+
 /// `Name1=Value1; Name2=Value2` of the cookies not yet expired at `now`.
 pub fn header(cookies: &[Cookie], now: u64) -> String {
     cookies
@@ -366,5 +404,44 @@ mod tests {
         assert!(is_icloud_domain("setup.icloud.com"));
         assert!(!is_icloud_domain("icloud.com.evil"));
         assert!(!is_icloud_domain("apple.com"));
+        assert!(is_apple_domain("idmsa.apple.com"));
+        assert!(is_apple_domain(".apple.com"));
+        assert!(!is_apple_domain("notapple.com"));
+        assert!(!is_apple_domain("apple.com.evil"));
+    }
+
+    #[test]
+    fn only_device_trust_is_trust() {
+        let c = |name: &str, value: &str, domain: &str, expires: Option<u64>| Cookie {
+            name: name.into(),
+            value: value.into(),
+            domain: domain.into(),
+            path: "/".into(),
+            expires,
+        };
+        let captured = vec![
+            c(TOKEN, "session", ".icloud.com", Some(NOW + 1000)),
+            c("X-APPLE-WEBAUTH-USER", "\"v=1:s=0:d=1\"", ".icloud.com", None),
+            c(HSA_TRUST, "old", ".icloud.com", Some(NOW + 1000)),
+            c("DESabc", "HSARMTKN", "idmsa.apple.com", Some(NOW + 86400)),
+            c("DESdef", "gone", "idmsa.apple.com", Some(NOW - 1)),
+            c("DESghi", "", "idmsa.apple.com", None),
+            c("DESevil", "x", "apple.com.evil", None),
+            c(HSA_TRUST, "elsewhere", "example.com", None),
+            c("myacinfo", "apple-session", ".apple.com", None),
+            c("aasp", "x", "idmsa.apple.com", None),
+            c(HSA_TRUST, "new", ".icloud.com", Some(NOW + 2000)),
+        ];
+        let trust = trust_cookies(captured, NOW);
+        assert_eq!(
+            trust,
+            vec![
+                c(HSA_TRUST, "new", ".icloud.com", Some(NOW + 2000)),
+                c("DESabc", "HSARMTKN", "idmsa.apple.com", Some(NOW + 86400)),
+            ]
+        );
+        // Stored as the jar's cookies are, and read back the same.
+        let text = serde_json::to_string(&trust).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<Cookie>>(&text).unwrap(), trust);
     }
 }

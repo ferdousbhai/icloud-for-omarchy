@@ -549,6 +549,7 @@ impl Daemon {
 
     /// Serves on the session bus until idle. Returns the process exit code.
     pub fn run(self: &Arc<Daemon>) -> zbus::Result<()> {
+        self.remove_old_profile();
         let conn = zbus::blocking::connection::Builder::session()?
             .serve_at(OBJECT_PATH, Service(self.clone()))?
             .build()?;
@@ -597,6 +598,24 @@ impl Daemon {
 
     fn conn(&self) -> Option<&Connection> {
         self.conn.get()
+    }
+
+    /// The sign-in window once kept a WebKit profile on disk, the whole web
+    /// session in plaintext (`cookies.sqlite`). It keeps none now (its
+    /// device trust is in the keyring), so what an older one left goes.
+    fn remove_old_profile(&self) {
+        for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
+            if !dir.exists() {
+                continue;
+            }
+            match files::remove_dir(dir) {
+                Ok(()) => eprintln!(
+                    "icloud-sessiond: removed {}, the sign-in window's old WebKit profile",
+                    dir.display()
+                ),
+                Err(e) => eprintln!("icloud-sessiond: removing {}: {e}", dir.display()),
+            }
+        }
     }
 
     // ----------------------------------------------------------- publish
@@ -810,9 +829,10 @@ impl Daemon {
         }
     }
 
-    /// Removes the session from the keyring for a sign-out that could not
-    /// (see `removal_pending`), unless an account was stored since: at
-    /// start, and on a `SignOut()` with nothing else to forget.
+    /// Removes the session and the device trust from the keyring for a
+    /// sign-out that could not (see `removal_pending`), unless an account
+    /// was stored since: at start, and on a `SignOut()` with nothing else
+    /// to forget.
     fn settle_removal(&self) {
         if !self.cfg.paths.removal_pending.exists() {
             return;
@@ -824,7 +844,7 @@ impl Daemon {
                 return;
             }
         }
-        match self.secrets.remove_session() {
+        match self.secrets.remove_session().and_then(|()| self.secrets.remove_trust()) {
             Ok(_) => {
                 eprintln!("icloud-sessiond: removed the signed-out session from the keyring");
                 self.clear_removal_pending();
@@ -1319,6 +1339,31 @@ impl Daemon {
         });
     }
 
+    /// The cookies a sign-in window starts with (`--cookies`), as its first
+    /// line of stdin: the device trust from the keyring, so Apple can skip
+    /// 2FA, and the account's jar, so a window opened while signed in (Find
+    /// My's, say) is signed in already. Its WebKit profile is in memory
+    /// only, so nothing else carries over from one window to the next.
+    fn window_cookies(&self) -> Zeroizing<String> {
+        let mut jar = match self.secrets.get_trust() {
+            Ok(Some(text)) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_else(|e| {
+                eprintln!("icloud-sessiond: the keyring's device trust is not a cookie list ({e}); not used");
+                Vec::new()
+            }),
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                eprintln!("icloud-sessiond: reading the device trust from the keyring: {e}");
+                Vec::new()
+            }
+        };
+        if let Some(account) = lock(&self.state).account.as_ref() {
+            jar.extend(account.cookies.iter().cloned());
+        }
+        let mut line = Zeroizing::new(serde_json::to_string(&jar).expect("cookies serialize"));
+        line.push('\n');
+        line
+    }
+
     /// Counts a sign-in window in until the guard drops.
     fn window_opened(&self) -> Window<'_> {
         self.windows.fetch_add(1, Ordering::SeqCst);
@@ -1333,8 +1378,9 @@ impl Daemon {
         use std::io::Write;
         let bin = &self.cfg.signin_bin;
         let failed = |m: String| LoginError::Failed(m);
+        let cookies = self.window_cookies();
         let mut child = Command::new(bin)
-            .args(["--find", "--autofill"])
+            .args(["--find", "--autofill", "--cookies"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -1343,7 +1389,7 @@ impl Daemon {
         let _window = self.window_opened();
         {
             let mut stdin = child.stdin.take().expect("stdin is piped");
-            let mut input = zeroize::Zeroizing::new(format!("{apple_id}\n{password}\n"));
+            let mut input = zeroize::Zeroizing::new(format!("{}{apple_id}\n{password}\n", *cookies));
             stdin
                 .write_all(input.as_bytes())
                 .map_err(|e| failed(format!("giving the sign-in window the password: {e}")))?;
@@ -1373,7 +1419,8 @@ impl Daemon {
     fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), String> {
         let bin = &self.cfg.signin_bin;
         let cancelled = || "cancelled by SignOut".to_string();
-        let (mut stdout, window) = {
+        let cookies = self.window_cookies();
+        let (mut stdout, stdin, window) = {
             // Spawned under the slot's lock, so a SignOut either sees the
             // child (and kills it) or has already cancelled this sign-in.
             let mut slot = lock(&self.signin_child);
@@ -1382,15 +1429,23 @@ impl Daemon {
             }
             let mut child = Command::new(bin)
                 .args(find.then_some("--find"))
-                .stdin(Stdio::null())
+                .arg("--cookies")
+                .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
                 .map_err(|e| spawn_error(bin, &e))?;
             let stdout = child.stdout.take().expect("stdout is piped");
+            let stdin = child.stdin.take().expect("stdin is piped");
             *slot = Some((seq, child));
-            (stdout, self.window_opened())
+            (stdout, stdin, self.window_opened())
         };
+        {
+            use std::io::Write;
+            let mut stdin = stdin;
+            // A window that ends without reading them needed none.
+            let _ = stdin.write_all(cookies.as_bytes());
+        }
         let mut out = Vec::new();
         let read = stdout.read_to_end(&mut out);
         let child = {
@@ -1423,7 +1478,9 @@ impl Daemon {
             })?;
             return self.store_find_my(seq, capture);
         }
-        let (mut jar, params) = parse_capture(&out)?.into_parts();
+        let capture = parse_capture(&out)?;
+        let trust = capture.trust();
+        let (mut jar, params) = capture.into_parts();
         if jar.is_empty() {
             return Err("the sign-in window captured no icloud.com cookies".into());
         }
@@ -1493,13 +1550,22 @@ impl Daemon {
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
         written.secret = Some(secret);
         self.clear_removal_pending();
+        // The window's trust replaces what was stored (it started with
+        // that, so still holds what Apple has not dropped). None captured
+        // keeps the old: losing it would only bring 2FA back.
+        if !trust.is_empty() {
+            let text = Zeroizing::new(serde_json::to_string(&trust).expect("cookies serialize"));
+            if let Err(e) = self.secrets.set_trust(&account.apple_id, &text) {
+                eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+            }
+        }
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
             drop(st);
             // A SignOut came in meanwhile, and may have removed the session
-            // before this one was stored.
+            // (and the trust) before this one was stored.
             written.secret = None;
-            match self.secrets.remove_session() {
+            match self.secrets.remove_session().and_then(|()| self.secrets.remove_trust()) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
@@ -1545,7 +1611,8 @@ impl Daemon {
     }
 
     /// Forgets the account, closes an open sign-in window (its result is
-    /// dropped), then deletes the window's WebKit profile.
+    /// dropped), then forgets this browser's device trust and deletes any
+    /// WebKit profile an older window left.
     ///
     /// `KeyringUnavailable`: signed out, but the keyring would not remove
     /// the session's cookies; the next start removes them.
@@ -1567,6 +1634,22 @@ impl Daemon {
             // Already signed out: a removal an earlier SignOut owed is
             // tried again (the keyring may answer now).
             None => self.settle_removal(),
+        }
+        {
+            // After any sign-in's write (`written`), so none stores its
+            // trust after this.
+            let _written = lock(&self.written);
+            if let Err(e) = self.secrets.remove_trust() {
+                eprintln!(
+                    "icloud-sessiond: removing the device trust from the keyring (retried at the next start): {e}"
+                );
+                if let Err(e) = files::touch(&self.cfg.paths.removal_pending) {
+                    eprintln!(
+                        "icloud-sessiond: writing {}: {e}",
+                        self.cfg.paths.removal_pending.display()
+                    );
+                }
+            }
         }
         for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
             if let Err(e) = files::remove_dir(dir) {
@@ -1721,9 +1804,9 @@ impl Daemon {
 }
 
 /// A running sign-in window ([`Daemon::window_opened`]). When the last one
-/// closes, WebKit's HTTP cache (`WebKitCache`, tens of MB of iCloud's
-/// scripts) goes: a sign-in is rare, and the next one fetches afresh. The
-/// rest of the profile (cookies, device trust, HSTS) stays.
+/// closes, a WebKit HTTP cache (`WebKitCache`) left on disk goes. The
+/// window's own profile is in memory only, its device trust kept in the
+/// keyring instead.
 struct Window<'a>(&'a Daemon);
 
 impl Drop for Window<'_> {
@@ -1759,6 +1842,10 @@ fn whole_secs(d: Duration) -> u64 {
 #[derive(Debug, Deserialize)]
 struct Capture {
     cookies: Vec<Cookie>,
+    /// The device-trust cookies, of any Apple domain (see
+    /// [`cookies::is_trust_cookie`]).
+    #[serde(default)]
+    trust: Vec<Cookie>,
     /// The account the window saw (`--find` only).
     #[serde(default)]
     dsid: Option<String>,
@@ -1803,6 +1890,12 @@ fn same_account(found: Option<String>, account_dsid: &str) -> Result<(), String>
 }
 
 impl Capture {
+    /// What of the capture is device trust, and nothing else: a cookie the
+    /// window called trust that is not is dropped.
+    fn trust(&self) -> Vec<Cookie> {
+        cookies::trust_cookies(self.trust.iter().chain(&self.cookies).cloned(), time::now_secs())
+    }
+
     /// The icloud.com cookies, and client params with icloud-md's fallbacks.
     fn into_parts(self) -> (Vec<Cookie>, BTreeMap<String, String>) {
         let mut jar: Vec<Cookie> = Vec::new();

@@ -516,7 +516,8 @@ impl Env {
             .map_or(json!([]), |b| serde_json::from_slice(&b).unwrap())
     }
 
-    /// The test keyring's stored passwords (every item but the session).
+    /// The test keyring's stored passwords (every item without a `kind`:
+    /// not the session, not the device trust).
     fn secrets(&self) -> Value {
         let items = self.all_secrets();
         Value::Array(
@@ -524,7 +525,7 @@ impl Env {
                 .as_array()
                 .unwrap()
                 .iter()
-                .filter(|i| i["attributes"]["kind"] != "session")
+                .filter(|i| i["attributes"].get("kind").is_none())
                 .cloned()
                 .collect(),
         )
@@ -533,7 +534,7 @@ impl Env {
     /// Puts a password in the test keyring, as `set-password` would.
     fn store_password(&self, password: &str) {
         let mut items: Vec<Value> = self.all_secrets().as_array().unwrap().clone();
-        items.retain(|i| i["attributes"]["kind"] == "session");
+        items.retain(|i| i["attributes"].get("kind").is_some());
         items.push(json!({
             "label": "iCloud (icloud-session): someone@example.com",
             "attributes": {"application": "icloud-session", "apple-id": "someone@example.com"},
@@ -1211,6 +1212,117 @@ fn sign_out_forgets_account_and_profile() {
     let status = icloud_session::status_on(&conn).unwrap();
     assert!(!status.signed_in);
     assert_eq!(status.sign_out_reason.as_deref(), Some("Signed out of iCloud"));
+}
+
+/// The test keyring's device-trust item, its cookies parsed.
+fn trust_item(env: &Env) -> Option<(String, Value)> {
+    let items = env.all_secrets();
+    let item = items.as_array()?.iter().find(|i| i["attributes"]["kind"] == "trust")?;
+    let cookies = serde_json::from_str(item["secret"].as_str()?).unwrap();
+    Some((item["label"].as_str()?.to_string(), cookies))
+}
+
+/// The cookies a fake window run got on its stdin (`--cookies`).
+fn given_cookies(dir: &Path, run: usize) -> Value {
+    let stdin = fs::read_to_string(dir.join(format!("stdin-{run}"))).unwrap();
+    serde_json::from_str(stdin.lines().next().unwrap_or("null")).unwrap()
+}
+
+#[test]
+fn device_trust_is_kept_in_the_keyring_and_the_old_profile_goes() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let capture = json!({
+        "cookies": [
+            {"name": "X-APPLE-WEBAUTH-USER", "value": "\"v=1:s=0:d=12345\"", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com", "path": "/", "expires": now() + 1000},
+            {"name": "X-APPLE-WEBAUTH-HSA-TRUST", "value": "hsa", "domain": ".icloud.com", "path": "/", "expires": now() + 86400},
+        ],
+        "trust": [
+            {"name": "X-APPLE-WEBAUTH-HSA-TRUST", "value": "hsa", "domain": ".icloud.com", "path": "/", "expires": now() + 86400},
+            {"name": "DES6a1b2c", "value": "HSARMTKNSRVXWFlatrust", "domain": "idmsa.apple.com", "path": "/", "expires": now() + 86400},
+            // Not trust, though the window said so: never kept.
+            {"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com", "path": "/", "expires": null},
+            {"name": "myacinfo", "value": "apple-only", "domain": ".apple.com", "path": "/", "expires": null},
+        ],
+        "clientId": "page-client-id",
+    });
+    // Records its arguments and stdin per run.
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!(
+            r#"d='{d}'
+n=$(cat "$d/count" 2>/dev/null || echo 0); echo $((n + 1)) > "$d/count"
+echo "$*" > "$d/args-$n"
+cat > "$d/stdin-$n"
+cat <<'EOF'
+{capture}
+EOF"#,
+            d = dir.path().display()
+        ),
+    );
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        seed: false,
+        ..Default::default()
+    });
+    // The profile an older window left: the whole web session in plaintext.
+    let webkit_data = env.root().join("data/icloud-session/webkit");
+    fs::create_dir_all(&webkit_data).unwrap();
+    fs::write(webkit_data.join("cookies.sqlite"), "plaintext").unwrap();
+
+    let conn = env.conn();
+    let watch = changes(&conn);
+    assert!(!webkit_data.exists(), "removed at start");
+
+    // The first window gets no cookies: nothing is trusted yet.
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().signed_in);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("args-0")).unwrap().trim(),
+        "--cookies"
+    );
+    assert_eq!(given_cookies(dir.path(), 0), json!([]));
+    assert!(!webkit_data.exists(), "the window writes no profile");
+
+    // Only the trust cookies are kept, in their own keyring item.
+    let (label, trust) = trust_item(&env).expect("a trust item");
+    assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
+    let mut names: Vec<&str> = trust
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]);
+    assert!(env.secrets().as_array().unwrap().is_empty(), "no password item");
+
+    // The next window starts with them, and the account's jar.
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    watch.window_closed();
+    let given = given_cookies(dir.path(), 1);
+    assert_eq!(cookie_named(&given, "DES6a1b2c").unwrap()["domain"], "idmsa.apple.com");
+    assert_eq!(
+        cookie_named(&given, "X-APPLE-WEBAUTH-HSA-TRUST").unwrap()["value"],
+        "hsa"
+    );
+    assert!(cookie_named(&given, "X-APPLE-WEBAUTH-TOKEN").is_some());
+    assert!(cookie_named(&given, "myacinfo").is_none());
+
+    // ForgetPassword keeps them; SignOut does not.
+    call::<()>(&conn, "ForgetPassword").unwrap();
+    assert!(trust_item(&env).is_some());
+    icloud_session::sign_out_on(&conn).unwrap();
+    watch.until("SignedIn false", |s| !s.signed_in);
+    assert!(trust_item(&env).is_none(), "signing out forgets this browser");
 }
 
 #[test]
@@ -2277,7 +2389,10 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     let done = watch.window_closed();
     assert!(done.signed_in && done.find_my_authorized, "{done:?}");
     assert_eq!(done.dsid.as_deref(), Some(DSID));
-    assert_eq!(fs::read_to_string(dir.path().join("args")).unwrap().trim(), "--find");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("args")).unwrap().trim(),
+        "--find --cookies"
+    );
 
     // Not validated, and the main account is untouched.
     assert_eq!(server.count(VALIDATE), validates);
@@ -2337,7 +2452,7 @@ fn authorize_find_my_keeps_a_separate_jar_until_a_450() {
     assert!(prop::<bool>(&conn, "SignedIn"));
     assert_eq!(
         fs::read_to_string(dir.path().join("args")).unwrap().trim(),
-        "--find",
+        "--find --cookies",
         "no automatic sign-in since the manual one"
     );
 
@@ -2485,10 +2600,12 @@ impl Autofill {
             &format!(
                 r#"d='{d}'
 n=$(($(cat "$d/count" 2>/dev/null || echo 0) + 1)); echo $n > "$d/count"
+IFS= read -r jar || {{ echo "no cookies on stdin" >> "$d/bad"; exit 1; }}
 IFS= read -r id || {{ echo "no Apple ID on stdin" >> "$d/bad"; exit 1; }}
 IFS= read -r pw || {{ echo "no password on stdin" >> "$d/bad"; exit 1; }}
 rest=$(cat)
-[ "$*" = "--find --autofill" ] || {{ echo "args: $*" >> "$d/bad"; exit 1; }}
+[ "$*" = "--find --autofill --cookies" ] || {{ echo "args: $*" >> "$d/bad"; exit 1; }}
+case "$jar" in *'"X-APPLE-WEBAUTH-TOKEN"'*) ;; *) echo "not the account's jar: $jar" >> "$d/bad"; exit 1 ;; esac
 [ "$id" = someone@example.com ] || {{ echo "Apple ID: $id" >> "$d/bad"; exit 1; }}
 [ -z "$rest" ] || {{ echo "more than two lines on stdin" >> "$d/bad"; exit 1; }}
 case "$*" in *"$pw"*) echo "the password in argv" >> "$d/bad"; exit 1 ;; esac

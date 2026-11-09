@@ -6,12 +6,18 @@
 //!   Find My's), as JSON. Attributes `application=icloud-session`,
 //!   `kind=session`; one at a time, labelled `iCloud session
 //!   (icloud-session): <apple id>`.
+//! - The device trust: the cookies "Trust this browser" leaves (see
+//!   [`crate::cookies::is_trust_cookie`]), as JSON, given to the next
+//!   sign-in window so it can skip 2FA. Attributes
+//!   `application=icloud-session`, `kind=trust`; one at a time, labelled
+//!   `iCloud device trust (icloud-session): <apple id>`. Kept when Apple
+//!   ends the session, removed by a sign-out.
 //! - The Apple ID password for automatic Find My re-authorization, only
 //!   if the user stores it. Attributes `application=icloud-session`,
 //!   `apple-id=<apple id>` (no `kind`: as items stored before sessions
 //!   moved here have it), labelled `iCloud (icloud-session): <apple id>`.
 //!
-//! Both are stored base64-encoded (see [`ENCODED`]).
+//! All are stored base64-encoded (see [`ENCODED`]).
 //!
 //! `ICLOUD_SESSION_TEST_SECRET_FILE` swaps the keyring for a JSON file, for
 //! the tests only: they run on a private bus with no Secret Service, and
@@ -30,6 +36,7 @@ use zeroize::Zeroizing;
 const APPLICATION: &str = "icloud-session";
 const KIND: &str = "kind";
 const SESSION: &str = "session";
+const TRUST: &str = "trust";
 
 pub type Password = Zeroizing<String>;
 
@@ -41,7 +48,7 @@ pub trait SecretStore: Send + Sync {
     /// Stores (or replaces) the password for `apple_id`.
     fn set(&self, apple_id: &str, password: &str) -> Result<(), String>;
     /// Removes every stored password (every icloud-session item but the
-    /// session); returns how many.
+    /// session and the device trust); returns how many.
     fn forget_passwords(&self) -> Result<usize, String>;
     /// The session's jars, as stored.
     fn get_session(&self) -> Result<Option<Zeroizing<String>>, String>;
@@ -49,6 +56,12 @@ pub trait SecretStore: Send + Sync {
     fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String>;
     /// Removes the session item.
     fn remove_session(&self) -> Result<(), String>;
+    /// The device-trust cookies, as stored.
+    fn get_trust(&self) -> Result<Option<Zeroizing<String>>, String>;
+    /// Stores (or replaces) the device-trust cookies.
+    fn set_trust(&self, apple_id: &str, secret: &str) -> Result<(), String>;
+    /// Removes the device-trust item.
+    fn remove_trust(&self) -> Result<(), String>;
 }
 
 pub fn label(apple_id: &str) -> String {
@@ -57,6 +70,10 @@ pub fn label(apple_id: &str) -> String {
 
 pub fn session_label(apple_id: &str) -> String {
     format!("iCloud session (icloud-session): {apple_id}")
+}
+
+pub fn trust_label(apple_id: &str) -> String {
+    format!("iCloud device trust (icloud-session): {apple_id}")
 }
 
 fn attributes(apple_id: &str) -> HashMap<&'static str, String> {
@@ -68,6 +85,15 @@ fn attributes(apple_id: &str) -> HashMap<&'static str, String> {
 
 fn session_attributes() -> HashMap<&'static str, String> {
     HashMap::from([("application", APPLICATION.to_string()), (KIND, SESSION.to_string())])
+}
+
+fn trust_attributes() -> HashMap<&'static str, String> {
+    HashMap::from([("application", APPLICATION.to_string()), (KIND, TRUST.to_string())])
+}
+
+/// What removing the passwords leaves: our items that are not passwords.
+fn not_passwords() -> [HashMap<&'static str, String>; 2] {
+    [session_attributes(), trust_attributes()]
 }
 
 /// The keyring, or the test file when `ICLOUD_SESSION_TEST_SECRET_FILE` is set.
@@ -309,10 +335,10 @@ impl Open {
     }
 
     /// Deletes, in every collection, the items matching `attributes` but
-    /// not `keep`; returns how many. The default collection, where ours are
-    /// stored, is unlocked first, so a removal never reports none for want
-    /// of seeing them.
-    fn delete(&self, attributes: &HashMap<&str, String>, keep: Option<&HashMap<&str, String>>) -> zbus::Result<usize> {
+    /// none of `keep`; returns how many. The default collection, where ours
+    /// are stored, is unlocked first, so a removal never reports none for
+    /// want of seeing them.
+    fn delete(&self, attributes: &HashMap<&str, String>, keep: &[HashMap<&str, String>]) -> zbus::Result<usize> {
         self.unlocked_default()?;
         let mut n = 0;
         let collections: OwnedValue = self.call(
@@ -322,10 +348,10 @@ impl Open {
             &(SERVICE, "Collections"),
         )?;
         for collection in Vec::<OwnedObjectPath>::try_from(collections)? {
-            let kept = match keep {
-                Some(keep) => self.search(&collection, keep)?,
-                None => Vec::new(),
-            };
+            let mut kept = Vec::new();
+            for keep in keep {
+                kept.extend(self.search(&collection, keep)?);
+            }
             for item in self.search(&collection, attributes)? {
                 if kept.contains(&item) {
                     continue;
@@ -358,7 +384,7 @@ impl SecretStore for Keyring {
 
     fn forget_passwords(&self) -> Result<usize, String> {
         let ours = HashMap::from([("application", APPLICATION.to_string())]);
-        self.run(|k| k.delete(&ours, Some(&session_attributes())))
+        self.run(|k| k.delete(&ours, &not_passwords()))
     }
 
     fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
@@ -377,7 +403,19 @@ impl SecretStore for Keyring {
     }
 
     fn remove_session(&self) -> Result<(), String> {
-        self.run(|k| k.delete(&session_attributes(), None).map(drop))
+        self.run(|k| k.delete(&session_attributes(), &[]).map(drop))
+    }
+
+    fn get_trust(&self) -> Result<Option<Zeroizing<String>>, String> {
+        self.run(|k| k.read(&trust_attributes(), utf8))
+    }
+
+    fn set_trust(&self, apple_id: &str, secret: &str) -> Result<(), String> {
+        self.run(|k| k.store(trust_label(apple_id), trust_attributes(), secret))
+    }
+
+    fn remove_trust(&self) -> Result<(), String> {
+        self.run(|k| k.delete(&trust_attributes(), &[]).map(drop))
     }
 }
 
@@ -432,14 +470,10 @@ impl TestFile {
             .map(|i| Zeroizing::new(i.secret)))
     }
 
-    fn remove(
-        &self,
-        attributes: &HashMap<&str, String>,
-        keep: Option<&HashMap<&str, String>>,
-    ) -> Result<usize, String> {
+    fn remove(&self, attributes: &HashMap<&str, String>, keep: &[HashMap<&str, String>]) -> Result<usize, String> {
         let mut items = self.load()?;
         let before = items.len();
-        items.retain(|i| !TestFile::has(i, attributes) || keep.is_some_and(|k| TestFile::has(i, k)));
+        items.retain(|i| !TestFile::has(i, attributes) || keep.iter().any(|k| TestFile::has(i, k)));
         let n = before - items.len();
         self.save(&items)?;
         Ok(n)
@@ -461,7 +495,7 @@ impl SecretStore for TestFile {
 
     fn forget_passwords(&self) -> Result<usize, String> {
         let ours = HashMap::from([("application", APPLICATION.to_string())]);
-        self.remove(&ours, Some(&session_attributes()))
+        self.remove(&ours, &not_passwords())
     }
 
     fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
@@ -473,6 +507,18 @@ impl SecretStore for TestFile {
     }
 
     fn remove_session(&self) -> Result<(), String> {
-        self.remove(&session_attributes(), None).map(drop)
+        self.remove(&session_attributes(), &[]).map(drop)
+    }
+
+    fn get_trust(&self) -> Result<Option<Zeroizing<String>>, String> {
+        self.find(&trust_attributes())
+    }
+
+    fn set_trust(&self, apple_id: &str, secret: &str) -> Result<(), String> {
+        self.put(trust_label(apple_id), trust_attributes(), secret)
+    }
+
+    fn remove_trust(&self) -> Result<(), String> {
+        self.remove(&trust_attributes(), &[]).map(drop)
     }
 }
