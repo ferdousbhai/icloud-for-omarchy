@@ -414,15 +414,37 @@ fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) 
     )))
 }
 
+/// The longest file name Linux takes, in bytes.
+const NAME_MAX: usize = 255;
+/// Room a saved name keeps for " (9999)" and a longer Live Photo extension.
+const NAME_ROOM: usize = " (9999)".len() + 8;
+/// A longer "extension" is part of the stem.
+const EXT_MAX: usize = 16;
+
+/// The server's file name made safe to save: no `/`, no control characters
+/// or invisible direction marks (which can make "gpj.exe" show as
+/// "exe.jpg"), and short enough to number.
 fn safe_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+        .filter(|&c| {
+            !c.is_control() && !matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+        })
         .collect();
-    match cleaned.trim() {
-        "" | "." | ".." => "photo".into(),
-        s => s.to_owned(),
+    let s = match cleaned.trim() {
+        "" | "." | ".." => return "photo".into(),
+        s => s,
+    };
+    let (stem, ext) = match split_name(s) {
+        (stem, ext) if ext.len() <= EXT_MAX => (stem, ext),
+        _ => (s, ""),
+    };
+    let mut end = stem.len().min(NAME_MAX - NAME_ROOM - ext.len());
+    while !stem.is_char_boundary(end) {
+        end -= 1;
     }
+    format!("{}{ext}", &stem[..end])
 }
 
 /// The Live Photo video's extension (`.MOV` unless its UTI says otherwise).
@@ -687,5 +709,50 @@ fn worker(inner: Arc<Inner>) {
             result,
             live_error,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_filename;
+
+    #[test]
+    fn safe_filename_keeps_ordinary_names() {
+        assert_eq!(safe_filename("IMG_0001.HEIC"), "IMG_0001.HEIC");
+        assert_eq!(safe_filename("Été à Paris.jpg"), "Été à Paris.jpg");
+        assert_eq!(safe_filename("a/b.jpg"), "a_b.jpg");
+        assert_eq!(safe_filename(".."), "photo");
+    }
+
+    #[test]
+    fn safe_filename_drops_control_and_direction_characters() {
+        // "photo\u{202E}gpj.exe" shows as "photoexe.jpg".
+        assert_eq!(safe_filename("photo\u{202E}gpj.exe"), "photogpj.exe");
+        assert_eq!(safe_filename("a\nb\tc\u{7f}\u{1b}[31m.jpg"), "abc[31m.jpg");
+        for c in [
+            '\u{200E}', '\u{200F}', '\u{202A}', '\u{202D}', '\u{2066}', '\u{2069}', '\u{85}',
+        ] {
+            assert_eq!(safe_filename(&format!("x{c}y.jpg")), "xy.jpg");
+        }
+        assert_eq!(safe_filename("\u{202E}\u{2066}"), "photo");
+    }
+
+    #[test]
+    fn safe_filename_fits_a_numbered_name_and_video_in_255_bytes() {
+        let name = safe_filename(&format!("{}.JPG", "é".repeat(300)));
+        assert!(name.ends_with(".JPG"));
+        assert!(
+            name.len() + " (9999)".len() + ".MOV".len() <= 255,
+            "{} bytes",
+            name.len()
+        );
+        assert!(name.len() > 200);
+        // A huge "extension" is cut too.
+        let name = safe_filename(&format!("a.{}", "x".repeat(400)));
+        assert!(
+            name.len() + " (9999)".len() + ".MOV".len() <= 255,
+            "{} bytes",
+            name.len()
+        );
     }
 }
