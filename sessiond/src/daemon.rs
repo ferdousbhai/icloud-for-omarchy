@@ -1119,9 +1119,9 @@ impl Daemon {
         // My call answering is what completes it.
         let result = self
             .autofill_find_my(apple_id, password)
-            .and_then(|(jar, params, found)| {
+            .and_then(|(jar, params, found, trust)| {
                 same_account(found, dsid).map_err(LoginError::Failed)?;
-                Ok((jar, params))
+                Ok((jar, params, trust))
             });
         let mut st = lock(&self.state);
         let finished = Instant::now();
@@ -1139,7 +1139,7 @@ impl Daemon {
                 st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry))
             }
         }
-        let (jar, params) = result?;
+        let (jar, params, trust) = result?;
         let same = st.generation == generation;
         let Some(account) = st.account.as_mut().filter(|_| same) else {
             return Err(LoginError::Failed("signed out meanwhile".into()));
@@ -1148,6 +1148,14 @@ impl Daemon {
         let save = self.save_account(&mut st);
         drop(st);
         self.write(save);
+        // The window shows itself when Apple asks for a code, and may have
+        // been trusted then.
+        self.keep_trust(&trust, |st| {
+            st.account
+                .as_ref()
+                .filter(|_| st.generation == generation)
+                .map(|a| a.apple_id.clone())
+        });
         Ok(())
     }
 
@@ -1594,7 +1602,7 @@ impl Daemon {
     /// not validated (Apple's `/validate` refuses a one-factor session),
     /// and the main jar and its generation are left alone. The account
     /// it names (see [`find_my_capture`]) must be the signed-in one.
-    fn store_find_my(&self, seq: u64, (jar, params, dsid): FindMyCapture) -> Result<(), String> {
+    fn store_find_my(&self, seq: u64, (jar, params, dsid, trust): FindMyCapture) -> Result<(), String> {
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
             return Err("cancelled by SignOut".into());
@@ -1607,7 +1615,32 @@ impl Daemon {
         let save = self.save_account(&mut st);
         drop(st);
         self.write(save);
+        self.keep_trust(&trust, |st| {
+            st.account
+                .as_ref()
+                .filter(|_| st.signin_seq == seq)
+                .map(|a| a.apple_id.clone())
+        });
         Ok(())
+    }
+
+    /// Keeps a Find My window's device trust in the keyring in place of
+    /// what was stored, as a sign-in's is, if `current` (asked of the
+    /// state) names the Apple ID it is still for. A SignOut since, which
+    /// removes the trust under [`Daemon::written`] after changing the
+    /// state, wins. None captured keeps the old.
+    fn keep_trust(&self, trust: &[Cookie], current: impl FnOnce(&State) -> Option<String>) {
+        if trust.is_empty() {
+            return;
+        }
+        let _written = lock(&self.written);
+        let Some(apple_id) = current(&lock(&self.state)) else {
+            return;
+        };
+        let text = Zeroizing::new(serde_json::to_string(trust).expect("cookies serialize"));
+        if let Err(e) = self.secrets.set_trust(&apple_id, &text) {
+            eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+        }
     }
 
     /// Forgets the account, closes an open sign-in window (its result is
@@ -1858,8 +1891,8 @@ struct Capture {
 }
 
 /// A `--find` capture: its jar (holding Find My's cookie), its client
-/// params, and the account it names, if it names one.
-type FindMyCapture = (Vec<Cookie>, BTreeMap<String, String>, Option<String>);
+/// params, the account it names, if it names one, and its device trust.
+type FindMyCapture = (Vec<Cookie>, BTreeMap<String, String>, Option<String>, Vec<Cookie>);
 
 fn parse_capture(out: &[u8]) -> Result<Capture, String> {
     serde_json::from_slice(out).map_err(|e| format!("reading the sign-in window's output: {e}"))
@@ -1871,12 +1904,13 @@ fn parse_capture(out: &[u8]) -> Result<Capture, String> {
 fn find_my_capture(out: &[u8]) -> Result<FindMyCapture, String> {
     let capture = parse_capture(out)?;
     let window_dsid = capture.dsid.clone().filter(|d| !d.is_empty());
+    let trust = capture.trust();
     let (jar, params) = capture.into_parts();
     if !cookies::find_my_cookie(&jar, time::now_secs()) {
         return Err(format!("the Find My window captured no {} cookie", cookies::FIND_MY));
     }
     let dsid = window_dsid.or_else(|| cookies::user_dsid(&jar).filter(|d| !d.is_empty()));
-    Ok((jar, params, dsid))
+    Ok((jar, params, dsid, trust))
 }
 
 /// Refuses a Find My jar made for another account than `account_dsid`.

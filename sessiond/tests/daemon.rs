@@ -2589,6 +2589,10 @@ impl Autofill {
                 {"name": "X-APPLE-WEBAUTH-TOKEN", "value": "onefactor-auto", "domain": ".icloud.com", "path": "/", "expires": null},
                 {"name": "X-APPLE-WEBAUTH-FMIP", "value": "auto$n", "domain": ".icloud.com", "path": "/", "expires": null},
             ],
+            // Trusted, as if Apple asked for a code in the shown window.
+            "trust": [
+                {"name": "DES0auto", "value": "autotrust", "domain": "idmsa.apple.com", "path": "/", "expires": now() + 86400},
+            ],
             "dsid": DSID,
             "clientId": "autofill-client-id",
             "clientBuildNumber": "2640Build5",
@@ -2796,6 +2800,69 @@ fn with_no_find_my_jar_the_stored_password_signs_in_first() {
     assert_eq!(server.count(INIT_CLIENT), 1, "sent once, with the new jar");
     assert_eq!(autofill.runs(), 1);
     assert!(prop::<bool>(&conn, "FindMyAuthorized"));
+}
+
+/// The device trust a Find My window captured (the user ticked "Trust this
+/// browser" at a 2FA prompt there) is kept as the main sign-in's is.
+#[test]
+fn find_my_windows_keep_the_device_trust() {
+    let trust_names = |env: &Env| -> Vec<String> {
+        let (label, trust) = trust_item(env).expect("a trust item");
+        assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
+        let mut names: Vec<String> = trust
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect();
+        names.sort();
+        names
+    };
+
+    // AuthorizeFindMy's window (`--find`).
+    let server = find_my_server(Arc::new(Mutex::new("fmip1".into())), 0);
+    let dir = tempfile::tempdir().unwrap();
+    let mut capture: Value = serde_json::from_str(&find_capture(DSID)).unwrap();
+    capture["trust"] = json!([
+        {"name": "X-APPLE-WEBAUTH-HSA-TRUST", "value": "hsa", "domain": ".icloud.com", "path": "/", "expires": now() + 86400},
+        {"name": "DES0find", "value": "findtrust", "domain": "idmsa.apple.com", "path": "/", "expires": now() + 86400},
+        // Not trust: never kept.
+        {"name": "X-APPLE-WEBAUTH-TOKEN", "value": "onefactor", "domain": ".icloud.com", "path": "/", "expires": null},
+    ]);
+    let signin = find_window(dir.path(), &capture.to_string(), "0");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    assert!(trust_item(&env).is_none());
+    let watch = changes(&conn);
+    icloud_session::authorize_find_my_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().find_my_authorized);
+    assert_eq!(trust_names(&env), ["DES0find", "X-APPLE-WEBAUTH-HSA-TRUST"]);
+    icloud_session::sign_out_on(&conn).unwrap();
+    watch.until("SignedIn false", |s| !s.signed_in);
+    assert!(trust_item(&env).is_none(), "signing out forgets this browser");
+
+    // The stored password's window (`--find --autofill`).
+    let (_accepted, server) = accepting("auto1");
+    let autofill = Autofill::new();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&autofill.bin),
+        ..Default::default()
+    });
+    env.store_password(PASSWORD);
+    let conn = env.conn();
+    wait_until("the keyring look", Duration::from_secs(5), || {
+        prop::<bool>(&conn, "FindMyPasswordStored")
+    });
+    let s = Session::connect_on(&conn).unwrap();
+    s.post_json(&init_client_url(&s), &json!({})).unwrap();
+    assert_eq!(autofill.runs(), 1);
+    assert_eq!(trust_names(&env), ["DES0auto"]);
 }
 
 #[test]
