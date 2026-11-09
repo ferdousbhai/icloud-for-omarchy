@@ -292,6 +292,25 @@ int main(int argc, char *argv[])
                   && at.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("my notes.pdf"),
               "backend file attachment decoded");
     }
+    // A link never reaches outside the folder's attachments/ directory: not
+    // through `..` (plain or URL-encoded), nor through a symlink placed there.
+    {
+        const QString g = readFile(QStringLiteral("G.md"));
+        writeFile(QStringLiteral("outside.txt"), QStringLiteral("not the vault's"), scratch.path());
+        const QString link = testVault() + QStringLiteral("/attachments/link.png");
+        QFile::link(scratch.path() + QStringLiteral("/outside.txt"), link);
+        writeFile(QStringLiteral("G.md"),
+                  QStringLiteral("---\napple-note-id: id-g\n---\n# Pics\n[a](attachments/../../outside.txt)\n"
+                                 "[b](attachments/%2E%2E/%2E%2E/outside.txt)\n[c](attachments/../A.md)\n"
+                                 "![d](attachments/link.png)\n![pic.png](attachments/pic.png)\n"));
+        b.refresh();
+        const QVariantList at = b.noteAttachments();
+        check(at.size() == 1 && at.at(0).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("pic.png"),
+              "backend attachment links stay inside attachments/");
+        QFile::remove(link);
+        writeFile(QStringLiteral("G.md"), g);
+        b.refresh();
+    }
 
     b.openNote(QStringLiteral("A.md"));
     check(b.noteAttachments().isEmpty(), "backend attachments follow the note");

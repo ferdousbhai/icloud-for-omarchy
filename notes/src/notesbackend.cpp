@@ -135,11 +135,16 @@ QVariantList attachmentsFor(const QString &notePath, const QString &text)
                                             QStringLiteral("webp"), QStringLiteral("svg") };
     static const QRegularExpression linkRe(QStringLiteral(R"(\[[^\]]*\]\((attachments/[^)\s]+)\))"));
     const QDir dir = QFileInfo(notePath).dir();
+    // Only files really inside that directory: a link's `..` or a symlink
+    // there could otherwise point the preview (and `read`) anywhere.
+    const QString inside = QFileInfo(dir.filePath(QStringLiteral("attachments"))).canonicalFilePath() + u'/';
     QVariantList found;
     QSet<QString> seen;
     for (const QRegularExpressionMatch &match : linkRe.globalMatch(text)) {
-        const QString abs = dir.absoluteFilePath(QUrl(match.captured(1)).path()); // links are URL-encoded
-        if (seen.contains(abs) || !QFile::exists(abs))
+        // Links are URL-encoded.
+        const QString abs = QDir::cleanPath(dir.absoluteFilePath(QUrl(match.captured(1)).path()));
+        const QString real = QFileInfo(abs).canonicalFilePath(); // empty when it does not exist
+        if (inside.size() == 1 || !real.startsWith(inside) || seen.contains(abs))
             continue;
         seen.insert(abs);
         const QFileInfo info(abs);
