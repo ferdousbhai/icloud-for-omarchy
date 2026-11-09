@@ -76,9 +76,11 @@ cat >"$work/bin/uname" <<'STUB'
 echo x86_64
 STUB
 fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
-printf '#!/bin/sh\necho "fpr:::::::::%s:"\n' "$fingerprint" >"$work/bin/gpg"
+printf 'pub:u:255:22:A89CA1A6A1E74251:1:::::scESC::::::23::0:\nfpr:::::::::%s:\n' "$fingerprint" >"$work/key.colons"
+# gpg lists whatever $GPG_COLONS holds: by default the pinned primary key.
+printf '#!/bin/sh\ncat "$GPG_COLONS"\n' >"$work/bin/gpg"
 chmod 755 "$work/bin/"*
-export PATH="$work/bin:$PATH" PACMAN_LOG="$work/pacman.log" SUDO_USER=root
+export PATH="$work/bin:$PATH" PACMAN_LOG="$work/pacman.log" SUDO_USER=root GPG_COLONS="$work/key.colons"
 bin/make-installers "$work/dist" >/dev/null
 
 # A fresh scratch /etc and /root for each scenario.
@@ -128,7 +130,7 @@ check "refresh hook Include survives ARM source replacement" grep -qxF 'Include 
 setup
 mkdir -p "$work/plain"
 cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/bin/uname" "$work/plain/"
-for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail awk cmp; do
+for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail awk cmp; do
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
@@ -158,6 +160,47 @@ status=0
 bash install.sh icloud-nope >/dev/null 2>&1 || status=$?
 check "an unknown package exits 64" [ "$status" = 64 ]
 check "an unknown package changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
+
+# The pin names the primary key: as a subkey's fingerprint, or next to a
+# second primary key, it is refused before anything changes.
+other=0123456789ABCDEF0123456789ABCDEF01234567
+printf 'pub:u:255:22:89ABCDEF01234567:1:::::scESC::::::23::0:\nfpr:::::::::%s:\n' "$other" >"$work/other.colons"
+printf 'sub:u:255:18:A89CA1A6A1E74251:1::::::e::::::23:\nfpr:::::::::%s:\n' "$fingerprint" >"$work/sub.colons"
+cat "$work/other.colons" "$work/sub.colons" >"$work/subkey.colons"
+cat "$work/key.colons" "$work/other.colons" >"$work/bundled.colons"
+for listing in subkey bundled; do
+  setup
+  status=0
+  GPG_COLONS="$work/$listing.colons" bash install.sh >"$work/out" 2>&1 || status=$?
+  check "a key file with the pin as a $listing key is refused" [ "$status" != 0 ]
+  check "a $listing key file changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
+done
+
+# A link planted at the hook path is replaced, not written through.
+setup
+echo outside >"$work/outside"
+ln -s "$work/outside" "$hooks/icloud-for-omarchy"
+bash install.sh icloud-notes >/dev/null 2>&1
+check "a planted hook symlink is not written through" [ "$(cat "$work/outside")" = outside ]
+check "the hook replaces the planted symlink" not [ -L "$hooks/icloud-for-omarchy" ]
+check "the replacement hook is executable" [ -x "$hooks/icloud-for-omarchy" ]
+
+# Under sudo, everything in the desktop user's home happens as that user.
+setup
+mkdir -p "$work/desk/.config/omarchy/hooks/pre-refresh-pacman.d"
+touch "$work/desk/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-notes"
+{ cat /etc/passwd; echo "desk:x:4242:4242::$work/desk:/bin/sh"; } >"$work/passwd"
+mount --bind "$work/passwd" /etc/passwd
+# Logs the call, then runs the command (the namespace has no uid to switch to).
+printf '#!/bin/sh\necho "runuser $*" >>"$PACMAN_LOG"\nshift 3\nexec "$@"\n' >"$work/bin/runuser"
+chmod 755 "$work/bin/runuser"
+SUDO_USER=desk bash install.sh icloud-photos >/dev/null 2>&1 || true
+desk_hooks="$work/desk/.config/omarchy/hooks/pre-refresh-pacman.d"
+check "root makes the user's hook directory as the user" grep -qxF "runuser -u desk -- mkdir -p $desk_hooks" "$PACMAN_LOG"
+check "root writes the user's hook as the user" grep -qxF "runuser -u desk -- install -m 755 /dev/stdin $desk_hooks/icloud-for-omarchy" "$PACMAN_LOG"
+check "root removes the user's old hook as the user" grep -qxF "runuser -u desk -- rm -f $desk_hooks/icloud-notes" "$PACMAN_LOG"
+rm "$work/bin/runuser"
+umount /etc/passwd
 
 # Migration: the released [icloud-notes] (conf, Include, hook).
 setup
