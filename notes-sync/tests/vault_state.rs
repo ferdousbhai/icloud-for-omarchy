@@ -222,6 +222,27 @@ fn reads_a_pre_table_history_state_file() {
 }
 
 #[test]
+fn drops_an_attachment_entry_whose_file_leaves_the_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = |file: &str| {
+        format!(r#"{{"file":"{file}","mediaRecordName":"M","mediaFileChecksum":"C","noteRecordName":"N"}}"#)
+    };
+    write_raw(
+        dir.path(),
+        &format!(
+            r#"{{"layoutVersion":{CURRENT_LAYOUT_VERSION},"notes":{{}},"attachments":{{"OK":{},"UP":{},"ABS":{},"DOT":{},"EMPTY":{}}}}}"#,
+            entry("Notes/attachments/x.jpeg"),
+            entry("Pat/attachments/../../../../outside.jpeg"),
+            entry("/abs/x.jpeg"),
+            entry("Notes/./attachments/x.jpeg"),
+            entry(""),
+        ),
+    );
+    let attachments = read_clone_state(dir.path()).unwrap().unwrap().attachments.unwrap();
+    assert_eq!(attachments.keys().collect::<Vec<_>>(), ["OK"]);
+}
+
+#[test]
 fn corrupt_for_a_malformed_table_attachment_entry() {
     let dir = tempfile::tempdir().unwrap();
     write_raw(

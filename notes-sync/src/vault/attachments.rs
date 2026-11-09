@@ -59,15 +59,34 @@ fn extension_for_uti(type_uti: &str) -> &'static str {
 }
 
 /// `decodeAttachmentFilename`: the Media record's own file name, else
-/// `<recordName><ext for the UTI>`.
+/// `<recordName><ext for the UTI>`. Both come from the server, a shared
+/// note's from whoever owns it, and the name is joined under the note's
+/// `attachments/` as it is, so it is made one plain file name first.
 pub fn decode_attachment_filename(field: Option<&FieldValue>, record_name: &str, type_uti: &str) -> String {
     if let Some(Value::String(b64)) = field.map(|f| &f.value) {
-        let name = String::from_utf8_lossy(&base64_decode(b64)).into_owned();
+        let name = plain_file_name(&String::from_utf8_lossy(&base64_decode(b64)));
         if !name.is_empty() {
             return name;
         }
     }
-    format!("{record_name}{}", extension_for_uti(type_uti))
+    let ext = extension_for_uti(type_uti);
+    match plain_file_name(&format!("{record_name}{ext}")) {
+        name if name.is_empty() => format!("attachment{ext}"),
+        name => name,
+    }
+}
+
+/// `name` as one file name: `/` and NUL become `_`, and `.` and `..`
+/// (which `posix::join` would resolve) become empty.
+fn plain_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+        .collect();
+    match cleaned.as_str() {
+        "." | ".." => String::new(),
+        _ => cleaned,
+    }
 }
 
 /// `MatchedAttachment`.
