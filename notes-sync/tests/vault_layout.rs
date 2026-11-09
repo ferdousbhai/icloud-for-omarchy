@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue, Participant};
 use icloud_notes_sync::vault::layout::{
     FolderInfo, FolderTree, NotePlacement, PreviousLayout, SharedZoneRecords, build_folder_tree, build_vault_layout,
-    decode_folder_record, note_dir_of, place_note, sanitize_folder_dir_name, sharer_display_name,
+    decode_folder_record, expected_note_dir, note_dir_of, place_note, sanitize_folder_dir_name, sharer_display_name,
 };
-use icloud_notes_sync::vault::state::{FolderEntry, SharerHomeEntry};
+use icloud_notes_sync::vault::state::{FolderEntry, NoteEntry, SharerHomeEntry};
 use indexmap::IndexMap;
 use serde_json::json;
 
@@ -617,4 +617,64 @@ fn build_vault_layout_keeps_dir_when_only_siblings_changed() {
     let h = homes(&[]);
     let layout = build_vault_layout(&[folder_record("NEW", "Aardvark", None)], &[], prev(&f, &h));
     assert_eq!(layout.folder_dirs["F"], "Recipes");
+}
+
+// --- record names other zones reuse ---------------------------------------------------
+
+/// A shared zone sets its own record names, so it can send one this
+/// account's folders already have: the own folder keeps its entry.
+#[test]
+fn a_shared_folder_never_takes_an_own_folders_entry() {
+    let f = folders(&[("F-RECIPES", FolderEntry::new("Recipes", "My Recipes"))]);
+    let h = homes(&[]);
+    let z = zone(
+        "_owner1",
+        vec![
+            share_record(Some("Pat"), None, None),
+            folder_record("F-RECIPES", "Hijacked", None),
+            folder_record("DefaultFolder-CloudKit", "Hijacked Too", None),
+            folder_record("TrashFolder-CloudKit", "Trash", None),
+            folder_record("F-SHARED", "Shared Recipes", Some("F-RECIPES")),
+        ],
+    );
+    let mut own = own_records();
+    own.retain(|r| r.record_name != "F-RECIPES" && r.record_name != "F-DESSERTS");
+    let layout = build_vault_layout(&own, &[z], prev(&f, &h));
+    assert_eq!(layout.folder_dirs["F-RECIPES"], "My Recipes");
+    assert_eq!(
+        layout.state_folders["F-RECIPES"],
+        FolderEntry::new("Recipes", "My Recipes")
+    );
+    assert_eq!(layout.folder_dirs["DefaultFolder-CloudKit"], "Notes");
+    assert_eq!(layout.state_folders["DefaultFolder-CloudKit"].shared_zone_owner, None);
+    assert!(!layout.folder_dirs.contains_key("TrashFolder-CloudKit"));
+    // The sharer's folder whose parent was refused sits at the top of their area.
+    assert_eq!(layout.folder_dirs["F-SHARED"], "Pat/Shared Recipes");
+    assert!(
+        layout.all_dirs.iter().all(|d| d == "Pat" || !d.contains("Hijacked")),
+        "{:?}",
+        layout.all_dirs
+    );
+}
+
+#[test]
+fn an_own_note_never_goes_in_a_sharers_folder() {
+    let z = zone(
+        "_owner1",
+        vec![
+            share_record(Some("Pat"), None, None),
+            folder_record("F-SHARED", "Shared Recipes", None),
+        ],
+    );
+    let layout = build_vault_layout(&own_records(), &[z], PreviousLayout::default());
+    assert_eq!(
+        place_note(&layout, &note_record("N1", Some("F-SHARED")), None),
+        NotePlacement {
+            dir: "Notes".into(),
+            folder_record_name: None,
+        }
+    );
+    let mut entry = NoteEntry::new("Pat/Shared Recipes/Pie.md", "1a", 1);
+    entry.folder_record_name = Some("F-SHARED".into());
+    assert_eq!(expected_note_dir(&layout, &entry).as_deref(), Some("Notes"));
 }

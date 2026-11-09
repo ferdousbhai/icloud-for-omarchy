@@ -108,6 +108,10 @@ pub(crate) fn skipped_note_notice(record_name: &str, shared_zone_owner: Option<&
 /// [`skipped_note_notice`]'s `why` for a record name that can't name a file.
 pub(crate) const UNSAFE_RECORD_NAME: &str = "its record name isn't one plain file name";
 
+/// [`skipped_note_notice`]'s `why` for a record name another zone's note
+/// already has here.
+pub(crate) const OTHER_ZONES_RECORD_NAME: &str = "a note from another zone is already tracked under its record name";
+
 /// A skipped shared zone's owner.
 pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     match skipped {

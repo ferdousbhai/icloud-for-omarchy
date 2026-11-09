@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
-    Error, NoticeLevel, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, shared_zone_tokens_and_records,
-    skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
+    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
+    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
@@ -175,6 +175,17 @@ pub fn run_clone_with(
                     summary
                         .notices
                         .push(skipped_note_notice(&record.record_name, owner, UNSAFE_RECORD_NAME));
+                    return Ok(());
+                }
+                // Unique within a zone only: the private zone, cloned first,
+                // keeps its note.
+                if notes
+                    .get(&record.record_name)
+                    .is_some_and(|e| e.shared_zone_owner != *shared_zone_owner)
+                {
+                    summary
+                        .notices
+                        .push(skipped_note_notice(&record.record_name, owner, OTHER_ZONES_RECORD_NAME));
                     return Ok(());
                 }
                 let decoded = match classify_note_record(record, &ClassifyOptions { title_mode }) {

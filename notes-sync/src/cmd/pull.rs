@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, NoticeLevel, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, is_purged, shared_zone_tokens_and_records,
-    skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
+    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, is_purged,
+    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -332,6 +332,20 @@ pub fn run_pull_with(
                     return Ok(());
                 }
                 let existing = tracked.notes.get(&record.record_name).cloned();
+                // A record name is unique within its zone only: a note from
+                // another zone (a sharer's, or this account's own) under a
+                // tracked name is never that note's update or deletion.
+                if existing
+                    .as_ref()
+                    .is_some_and(|e| e.shared_zone_owner != source.shared_zone_owner)
+                {
+                    summary.notices.push(skipped_note_notice(
+                        &record.record_name,
+                        source.shared_zone_owner.as_deref(),
+                        OTHER_ZONES_RECORD_NAME,
+                    ));
+                    return Ok(());
+                }
                 // Already at this version: a resync re-listing it, or the
                 // push just before this pull writing it. Nothing to apply.
                 if let (Some(existing), Some(tag)) = (&existing, &record.record_change_tag)
@@ -342,7 +356,11 @@ pub fn run_pull_with(
 
                 let decoded = match classify_note_record(record, &ClassifyOptions { title_mode }) {
                     NoteDecodeResult::Deleted => {
-                        if trashed.contains_key(&record.record_name) && (record.is_deleted() || is_purged(record)) {
+                        // Trashed notes are this account's own.
+                        if source.shared_zone_owner.is_none()
+                            && trashed.contains_key(&record.record_name)
+                            && (record.is_deleted() || is_purged(record))
+                        {
                             trashed.shift_remove(&record.record_name);
                         }
                         if let Some(existing) = &existing {

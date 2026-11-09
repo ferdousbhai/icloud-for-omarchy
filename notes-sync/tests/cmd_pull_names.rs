@@ -1,5 +1,6 @@
-//! `clone` and `pull` against record names that would put files outside the
-//! vault: such a record is skipped with a notice and everything else syncs.
+//! `clone` and `pull` against records whose names would put files outside
+//! the vault or overwrite another zone's note: such a record is skipped
+//! with a notice and everything else syncs.
 
 use std::path::{Path, PathBuf};
 
@@ -257,4 +258,48 @@ fn pull_leaves_a_table_whose_record_name_is_a_path_as_a_marker() {
     assert!(!state.table_attachments.unwrap_or_default().contains_key(CLIMBING));
     let file = &state.notes["a1b2c3d4-0000-4000-8000-0000000000aa"].file;
     assert!(read(&vault, file).contains("<apple-embed"), "{}", read(&vault, file));
+}
+
+// --- one zone's record name in another zone ----------------------------------
+
+#[test]
+fn a_shared_note_named_like_an_own_note_leaves_the_own_note_alone() {
+    let (tmp, vault, _) = clone_from(cassette());
+    let before = read(&vault, "Notes/Test Note.md");
+    let summary = pull(
+        &vault,
+        listing(vec![], Some(vec![note(OWN, "Hijacked\n\nby the sharer", "zz")])),
+    );
+    assert_contained(tmp.path());
+    assert!(warned(&summary.notices, OWNER), "{:?}", summary.notices);
+    assert_eq!(read(&vault, "Notes/Test Note.md"), before);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.notes[OWN].shared_zone_owner, None);
+    assert_eq!(state.notes[OWN].file, "Notes/Test Note.md");
+    assert_ne!(state.notes[OWN].record_change_tag, "zz");
+}
+
+#[test]
+fn a_shared_deletion_named_like_an_own_note_deletes_nothing() {
+    let (_tmp, vault, _) = clone_from(cassette());
+    let deleted = json!({ "recordName": OWN, "recordType": "Note", "deleted": true });
+    let summary = pull(&vault, listing(vec![], Some(vec![deleted])));
+    assert!(vault.join("Notes/Test Note.md").exists(), "{summary:?}");
+    assert_eq!(summary.removed, 0);
+    assert!(read_clone_state(&vault).unwrap().unwrap().notes.contains_key(OWN));
+}
+
+#[test]
+fn clone_keeps_the_own_note_when_a_shared_one_has_its_name() {
+    let (_tmp, vault, summary) = clone_from(listing(
+        private_records(&cassette()),
+        Some(vec![note(OWN, "Hijacked\n\nby the sharer", "zz")]),
+    ));
+    assert!(warned(&summary.notices, OWNER), "{:?}", summary.notices);
+    assert_eq!(summary.written_shared, 0);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.notes[OWN].shared_zone_owner, None);
+    assert!(!read(&vault, "Notes/Test Note.md").contains("Hijacked"));
+    let base = read(&vault, &format!(".icloud-notes/base/{OWN}.md"));
+    assert!(!base.contains("Hijacked"), "{base}");
 }
