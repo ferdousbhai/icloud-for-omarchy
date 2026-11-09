@@ -12,7 +12,7 @@ use super::history::{
     read_json_dir, recording_suppressed,
 };
 use super::rt;
-use super::state::to_js_json;
+use super::state::{plain_record_name, to_js_json};
 use crate::cmd::errors::Error;
 use crate::js;
 
@@ -27,8 +27,10 @@ pub struct NoteEpoch {
     pub snapshots: IndexMap<String, Option<String>>,
 }
 
-pub(crate) fn epoch_dir(target_dir: &Path, note_record_name: &str) -> PathBuf {
-    history_dir(target_dir).join(note_record_name).join("epochs")
+pub(crate) fn epoch_dir(target_dir: &Path, note_record_name: &str) -> Result<PathBuf, Error> {
+    Ok(history_dir(target_dir)
+        .join(plain_record_name(note_record_name)?)
+        .join("epochs"))
 }
 
 /// `recordEpoch`: `record_names` conventionally the note first, then its
@@ -52,7 +54,7 @@ pub fn record_epoch(target_dir: &Path, note_record_name: &str, record_names: &[S
         note_record_name: note_record_name.to_owned(),
         snapshots,
     };
-    let dir = epoch_dir(target_dir, note_record_name);
+    let dir = epoch_dir(target_dir, note_record_name)?;
     std::fs::create_dir_all(&dir)?;
     let existing = json_file_names(&dir)?;
     let json = serde_json::to_value(&epoch).expect("epoch serializes");
@@ -66,10 +68,10 @@ pub fn record_epoch(target_dir: &Path, note_record_name: &str, record_names: &[S
 
 /// `listEpochs`: oldest first.
 pub fn list_epochs(target_dir: &Path, note_record_name: &str) -> Result<Vec<NoteEpoch>, Error> {
-    read_json_dir(&epoch_dir(target_dir, note_record_name))
+    read_json_dir(&epoch_dir(target_dir, note_record_name)?)
 }
 
 /// `findEpochById`.
 pub fn find_epoch_by_id(target_dir: &Path, note_record_name: &str, id: &str) -> Result<Option<NoteEpoch>, Error> {
-    find_json_by_id(&epoch_dir(target_dir, note_record_name), id, |e: &NoteEpoch| &e.id)
+    find_json_by_id(&epoch_dir(target_dir, note_record_name)?, id, |e: &NoteEpoch| &e.id)
 }

@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, NoticeLevel, SyncNotice, SyncProgress, is_purged, shared_zone_tokens_and_records, skipped_zone_owner,
-    used_names_for, zone_for_owner,
+    Error, NoticeLevel, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, is_purged, shared_zone_tokens_and_records,
+    skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -38,7 +38,8 @@ use crate::vault::local::{
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
-    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry, TitleMode, write_clone_state,
+    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry, TitleMode, is_plain_record_name,
+    write_clone_state,
 };
 
 /// `PullOptions`.
@@ -320,6 +321,14 @@ pub fn run_pull_with(
         for record in &source.records {
             let result = (|| -> Result<(), Error> {
                 if record.record_type != "Note" {
+                    return Ok(());
+                }
+                if !is_plain_record_name(&record.record_name) {
+                    summary.notices.push(skipped_note_notice(
+                        &record.record_name,
+                        source.shared_zone_owner.as_deref(),
+                        UNSAFE_RECORD_NAME,
+                    ));
                     return Ok(());
                 }
                 let existing = tracked.notes.get(&record.record_name).cloned();

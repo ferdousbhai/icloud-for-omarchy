@@ -95,6 +95,19 @@ pub(crate) fn shared_zone_tokens_and_records(
     (tokens, records)
 }
 
+/// The warning for a note record clone or pull leaves alone: "Skipped the
+/// note <recordName> (shared by <owner>): `why`".
+pub(crate) fn skipped_note_notice(record_name: &str, shared_zone_owner: Option<&str>, why: &str) -> SyncNotice {
+    let shared_by = shared_zone_owner.map(|o| format!(" shared by {o}")).unwrap_or_default();
+    SyncNotice {
+        level: NoticeLevel::Warn,
+        message: format!("Skipped the note {record_name:?}{shared_by}: {why} - nothing was written for it"),
+    }
+}
+
+/// [`skipped_note_notice`]'s `why` for a record name that can't name a file.
+pub(crate) const UNSAFE_RECORD_NAME: &str = "its record name isn't one plain file name";
+
 /// A skipped shared zone's owner.
 pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     match skipped {

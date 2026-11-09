@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use super::layout::reference_record_name;
-use super::state::{AttachmentEntry, TableAttachmentEntry};
+use super::state::{AttachmentEntry, TableAttachmentEntry, is_plain_record_name};
 use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, Database, FieldValue, NoteZone, Transport};
 use crate::cmd::errors::Error;
@@ -369,7 +369,10 @@ pub fn resolve_note_attachments<T: Transport>(
             EmbedSlot::Attachment(r) => r,
         };
         if is_table_uti(&r.type_uti) {
-            let record = by_name(&r.attachment_identifier);
+            // A table's versions are kept under its record name
+            // (`history/<recordName>/`): one that can't name a file stays a
+            // marker, like a table that can't be decoded.
+            let record = by_name(&r.attachment_identifier).filter(|_| is_plain_record_name(&r.attachment_identifier));
             match decode_table_attachment(record) {
                 None => replacements[i] = Some(format_embed_marker(&marker_for(r))),
                 Some(markdown) => {

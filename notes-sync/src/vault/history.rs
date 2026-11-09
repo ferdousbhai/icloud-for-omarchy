@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::rt;
-use super::state::{CloneState, HISTORY_DIR_NAME, NoteEntry, state_subdir, to_js_json};
+use super::state::{CloneState, HISTORY_DIR_NAME, NoteEntry, plain_record_name, state_subdir, to_js_json};
 use crate::cmd::errors::Error;
 use crate::js::{self, posix};
 
@@ -79,8 +79,8 @@ pub(crate) fn history_dir(target_dir: &Path) -> PathBuf {
     state_subdir(target_dir, HISTORY_DIR_NAME)
 }
 
-fn record_history_dir(target_dir: &Path, record_name: &str) -> PathBuf {
-    history_dir(target_dir).join(record_name)
+fn record_history_dir(target_dir: &Path, record_name: &str) -> Result<PathBuf, Error> {
+    Ok(history_dir(target_dir).join(plain_record_name(record_name)?))
 }
 
 /// Versions a record keeps whatever their age (and epochs a note keeps).
@@ -204,7 +204,7 @@ pub fn record_version(target_dir: &Path, input: &VersionSnapshotInput) -> Result
     if recording_suppressed() {
         return Ok(false);
     }
-    let dir = record_history_dir(target_dir, &input.record_name);
+    let dir = record_history_dir(target_dir, &input.record_name)?;
     let names = json_file_names(&dir)?;
     if let Some(last) = names.last() {
         let last: VersionSnapshot = read_json_file(&dir.join(last))?;
@@ -237,12 +237,12 @@ pub fn record_version(target_dir: &Path, input: &VersionSnapshotInput) -> Result
 
 /// `listVersions`: oldest first.
 pub fn list_versions(target_dir: &Path, record_name: &str) -> Result<Vec<VersionSnapshot>, Error> {
-    read_json_dir(&record_history_dir(target_dir, record_name))
+    read_json_dir(&record_history_dir(target_dir, record_name)?)
 }
 
 /// A record's latest snapshot, parsing only that one file.
 pub fn latest_version(target_dir: &Path, record_name: &str) -> Result<Option<VersionSnapshot>, Error> {
-    let dir = record_history_dir(target_dir, record_name);
+    let dir = record_history_dir(target_dir, record_name)?;
     match json_file_names(&dir)?.last() {
         Some(name) => Ok(Some(read_json_file(&dir.join(name))?)),
         None => Ok(None),
@@ -253,7 +253,7 @@ pub fn latest_version(target_dir: &Path, record_name: &str) -> Result<Option<Ver
 /// carry it.
 pub fn find_version(target_dir: &Path, record_name: &str, id: &str) -> Result<Option<VersionSnapshot>, Error> {
     find_json_by_id(
-        &record_history_dir(target_dir, record_name),
+        &record_history_dir(target_dir, record_name)?,
         id,
         |s: &VersionSnapshot| &s.id,
     )
@@ -287,7 +287,7 @@ pub fn retention_keeps(names: &[String], now_ms: i64) -> Vec<bool> {
 pub fn prune_history(target_dir: &Path, note_record_name: &str, record_names: &[String]) -> Result<usize, Error> {
     let now = rt::now_ms();
     let mut deleted = 0;
-    let epochs_dir = super::epoch::epoch_dir(target_dir, note_record_name);
+    let epochs_dir = super::epoch::epoch_dir(target_dir, note_record_name)?;
     let epoch_names = json_file_names(&epochs_dir)?;
     let epoch_keeps = retention_keeps(&epoch_names, now);
     for (name, keep) in epoch_names.iter().zip(&epoch_keeps) {
@@ -299,7 +299,7 @@ pub fn prune_history(target_dir: &Path, note_record_name: &str, record_names: &[
     // can't be read, and then no snapshot is pruned.
     let mut referenced: Option<Option<HashSet<String>>> = None;
     for record_name in record_names {
-        let dir = record_history_dir(target_dir, record_name);
+        let dir = record_history_dir(target_dir, record_name)?;
         let names = json_file_names(&dir)?;
         let keeps = retention_keeps(&names, now);
         if keeps.iter().all(|k| *k) {

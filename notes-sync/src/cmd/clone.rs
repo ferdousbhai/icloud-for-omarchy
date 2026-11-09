@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
-    Error, NoticeLevel, SyncNotice, SyncProgress, shared_zone_tokens_and_records, skipped_zone_owner, used_names_for,
-    zone_for_owner,
+    Error, NoticeLevel, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, shared_zone_tokens_and_records,
+    skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
@@ -22,7 +22,9 @@ use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy;
 use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
-use crate::vault::state::{Account, CloneState, NoteEntry, TitleMode, read_clone_state, write_clone_state};
+use crate::vault::state::{
+    Account, CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
+};
 
 /// `CloneOptions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -167,6 +169,12 @@ pub fn run_clone_with(
         for record in records.iter() {
             let result = (|| -> Result<(), Error> {
                 if record.record_type != "Note" {
+                    return Ok(());
+                }
+                if !is_plain_record_name(&record.record_name) {
+                    summary
+                        .notices
+                        .push(skipped_note_notice(&record.record_name, owner, UNSAFE_RECORD_NAME));
                     return Ok(());
                 }
                 let decoded = match classify_note_record(record, &ClassifyOptions { title_mode }) {

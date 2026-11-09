@@ -421,8 +421,34 @@ fn num(v: Option<&Value>) -> Option<i64> {
 
 /// Whether `path` stays inside the vault: relative, with no empty, `.` or
 /// `..` segment and no NUL.
-fn is_vault_relative(path: &str) -> bool {
+pub(crate) fn is_vault_relative(path: &str) -> bool {
     !path.is_empty() && !path.contains('\0') && path.split('/').all(|segment| !matches!(segment, "" | "." | ".."))
+}
+
+/// Whether `name` is one path segment: [`is_vault_relative`] with no `/`.
+pub(crate) fn is_single_component(name: &str) -> bool {
+    is_vault_relative(name) && !name.contains('/')
+}
+
+/// Whether a record name from the server can name a file in the state
+/// directory (`base/<recordName>.md`, `history/<recordName>/`): one plain
+/// file name short enough to take `.md` within 255 bytes, no `\`, not
+/// hidden. Real ones are uuids and names like `DefaultFolder-CloudKit`;
+/// anything else, a shared note's from whoever owns it, is skipped rather
+/// than joined into a path.
+pub fn is_plain_record_name(name: &str) -> bool {
+    is_single_component(name) && name.len() <= 255 - ".md".len() && !name.contains('\\') && !name.starts_with('.')
+}
+
+/// `record_name`, or an error when it isn't [`is_plain_record_name`].
+pub(crate) fn plain_record_name(record_name: &str) -> Result<&str, Error> {
+    if is_plain_record_name(record_name) {
+        Ok(record_name)
+    } else {
+        Err(Error::Internal(format!(
+            "refusing the record name {record_name:?}: it isn't one plain file name"
+        )))
+    }
 }
 
 /// The layout version check for a state file read without migrating.
