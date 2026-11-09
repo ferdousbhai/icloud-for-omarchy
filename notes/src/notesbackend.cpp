@@ -21,6 +21,7 @@
 #include <QJsonObject>
 #include <QPrinter>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QTextDocument>
 #include <QTextStream>
@@ -73,15 +74,22 @@ QString readText(const QString &path, qsizetype limit = -1)
     return limit < 0 ? in.readAll() : in.read(limit);
 }
 
+// Whole or not at all: the text goes to a temporary file that replaces the
+// note only once every byte is written, so a full disk never truncates it.
 bool writeText(const QString &path, const QString &text)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
         return false;
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
     out << text;
-    return true;
+    out.flush();
+    if (out.status() != QTextStream::Ok) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
 }
 
 // Dot-directories (the sync tool's bookkeeping, .git) hold no notes.

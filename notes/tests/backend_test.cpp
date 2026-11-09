@@ -21,7 +21,9 @@
 #include <QTextLayout>
 #include <QThread>
 #include <QTimer>
+#include <csignal>
 #include <functional>
+#include <sys/resource.h>
 
 namespace {
 bool hasFlag(const NotesBackend &b, const QString &note, const char *flag)
@@ -336,6 +338,23 @@ int main(int argc, char *argv[])
         for (const QTextLayout::FormatRange &r : layout->formats())
             bold = bold || (r.start == 2 && r.format.fontWeight() == QFont::Bold);
         check(fast && bold, "backend highlighter: a 200 KB hostile line in bounded time, short lines still styled");
+    }
+
+    // A write that fails part way (here: past the file size limit, as a full
+    // disk would) is reported, and the note on disk is left as it was.
+    b.openNote(QStringLiteral("A.md"));
+    {
+        const QString before = readFile(QStringLiteral("A.md"));
+        struct rlimit saved;
+        getrlimit(RLIMIT_FSIZE, &saved);
+        const auto previous = std::signal(SIGXFSZ, SIG_IGN);
+        struct rlimit small = saved;
+        small.rlim_cur = 4096;
+        setrlimit(RLIMIT_FSIZE, &small);
+        const bool wrote = b.saveCurrentNote(QStringLiteral("# Alpha\n") + QStringLiteral("x").repeated(64 * 1024));
+        setrlimit(RLIMIT_FSIZE, &saved);
+        std::signal(SIGXFSZ, previous);
+        check(!wrote && readFile(QStringLiteral("A.md")) == before, "backend failed write reported, note intact");
     }
 
     b.openNote(QStringLiteral("A.md"));
