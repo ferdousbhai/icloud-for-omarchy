@@ -4,6 +4,51 @@
 #include "check.h"
 
 #include <QRandomGenerator>
+#include <QRegularExpression>
+
+namespace {
+// The Label and Text elements of the window's QML that would render their
+// text as rich text: every one whose text is not a single string literal
+// must say textFormat: Text.PlainText. Note titles, folder names, snippets,
+// attachment names and the engine's messages come from iCloud, and rich
+// text there loads <img src="https://..."> (a tracking pixel) as it renders.
+// The offenders' line numbers.
+QStringList richTextLabels(const QString &qml)
+{
+    static const QRegularExpression start(QStringLiteral(R"(^[ \t]*(Label|Text)[ \t]*\{)"),
+                                          QRegularExpression::MultilineOption);
+    static const QRegularExpression literal(QStringLiteral(R"((^|[;\n])\s*text:\s*"(?:[^"\\\n]|\\.)*"\s*(;|\n|$))"));
+    static const QRegularExpression plain(QStringLiteral(R"((^|[;\n])\s*textFormat:\s*Text\.PlainText\s*(;|\n|$))"));
+    QStringList offenders;
+    for (const QRegularExpressionMatch &m : start.globalMatch(qml)) {
+        // The element's own properties: what is between its braces, less
+        // its children and any JavaScript block.
+        QString own;
+        int depth = 1;
+        bool inString = false;
+        for (qsizetype i = m.capturedEnd(0); i < qml.size() && depth > 0; ++i) {
+            const QChar c = qml.at(i);
+            if (inString && c == u'\\' && i + 1 < qml.size()) {
+                if (depth == 1)
+                    own += QString(c) + qml.at(i + 1);
+                ++i;
+                continue;
+            }
+            if (c == u'"')
+                inString = !inString;
+            else if (!inString && c == u'{')
+                ++depth;
+            else if (!inString && c == u'}')
+                --depth;
+            if (depth == 1 && !(c == u'}' && !inString))
+                own += c;
+        }
+        if (!literal.match(own).hasMatch() && !plain.match(own).hasMatch())
+            offenders << QString::number(qml.left(m.capturedStart(0)).count(u'\n') + 1);
+    }
+    return offenders;
+}
+} // namespace
 
 int main()
 {
@@ -435,6 +480,28 @@ int main()
     check(!SyncModel::hasTable(QStringLiteral("text\n| a |\nmore\n| b |\n")), "table broken rows ignored");
     check(!SyncModel::hasTable(QStringLiteral("a | b\nplain\n")), "table single pipe");
     check(!SyncModel::hasTable(QStringLiteral("# T\n- [ ] x\n")), "table clean note");
+
+    // The window's QML never renders note, folder or engine text as rich text.
+    {
+        check(richTextLabels(QStringLiteral("Label { text: modelData.title }\nLabel { text: \"Static\" }\n"
+                                            "Label {\n    text: x\n    textFormat: Text.PlainText\n}\n"
+                                            "Text {\n    Rectangle { textFormat: Text.PlainText }\n    text: y\n}\n"
+                                            "Label { text: \"a\" + name }\n"))
+                  == QStringList{ QStringLiteral("1"), QStringLiteral("7"), QStringLiteral("11") },
+              "qml rich text check finds bound labels, even with a plain child");
+        QFile file(QStringLiteral(NOTES_QML));
+        const QString qml = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+        const QStringList offenders = richTextLabels(qml);
+        if (!offenders.isEmpty())
+            QTextStream(stdout) << "rich text at main.qml lines " << offenders.join(QStringLiteral(", ")) << "\n";
+        // Nor as Markdown or HTML anywhere (TextArea, TextEdit included).
+        static const QRegularExpression format(QStringLiteral(R"(textFormat:\s*([^;\n]*))"));
+        bool onlyPlain = true;
+        for (const QRegularExpressionMatch &m : format.globalMatch(qml))
+            onlyPlain = onlyPlain && m.captured(1).trimmed().endsWith(QStringLiteral(".PlainText"));
+        check(qml.contains(QStringLiteral("ApplicationWindow")) && offenders.isEmpty() && onlyPlain,
+              "qml labels showing note, folder or engine text are plain text");
+    }
 
     return report();
 }

@@ -141,6 +141,7 @@ ApplicationWindow {
         radius: 8
         color: Qt.rgba(tint.r, tint.g, tint.b, 0.2)
         Text {
+            textFormat: Text.PlainText
             id: pillText
             anchors.centerIn: parent
             text: parent.label
@@ -176,9 +177,10 @@ ApplicationWindow {
                 spacing: 8
                 Glyph { text: card.selected ? "" : ""; color: card.selected ? root.colAccent : root.colTextMuted }
                 Glyph { text: card.glyph; color: root.colTextDim; font.pixelSize: 13 }
-                Label { text: card.label; font.bold: true; color: root.colText; font.pixelSize: root.pt(13) }
+                Label { textFormat: Text.PlainText; text: card.label; font.bold: true; color: root.colText; font.pixelSize: root.pt(13) }
                 Item { Layout.fillWidth: true }
                 Label {
+                    textFormat: Text.PlainText
                     text: card.changedCount === 0 ? "" : card.changedCount === 1 ? "1 line differs"
                         : card.changedCount + " lines differ"
                     color: root.colTextMuted
@@ -214,10 +216,10 @@ ApplicationWindow {
                         x: 8
                         y: 2
                         width: parent.width - 12
-                        // Rendered as Markdown so it reads like the note; blank
-                        // lines keep their height.
+                        // The Markdown as written: rendered, a line from iCloud could
+                        // load remote images. Blank lines keep their height.
                         text: parent.modelData.text.trim().length > 0 ? parent.modelData.text : " "
-                        textFormat: parent.modelData.text.trim().length > 0 ? Text.MarkdownText : Text.PlainText
+                        textFormat: Text.PlainText
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         color: parent.modelData.changed ? root.colText : root.colTextDim
                         linkColor: root.colAccent
@@ -252,6 +254,7 @@ ApplicationWindow {
                 onAccepted: prompt.accept()
             }
             Label {
+                textFormat: Text.PlainText
                 id: hintLabel
                 Layout.preferredWidth: 300
                 wrapMode: Text.WordWrap
@@ -530,6 +533,7 @@ ApplicationWindow {
                 RotationAnimation on rotation { from: 0; to: 360; duration: 1200; loops: Animation.Infinite; running: backend.syncRunning }
             }
             Label {
+                textFormat: Text.PlainText
                 text: backend.syncMessage
                 color: root.colTextMuted
                 font.pixelSize: 11
@@ -537,6 +541,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
             Label {
+                textFormat: Text.PlainText
                 visible: root.notice.length > 0
                 text: root.notice
                 color: root.colAccent
@@ -572,6 +577,7 @@ ApplicationWindow {
                 spacing: 12
                 Glyph { text: backend.syncToolAvailable ? "\uf0c2" : "\uf071"; color: backend.syncToolAvailable ? root.colAccent : root.colYellow }
                 Label {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
@@ -604,6 +610,7 @@ ApplicationWindow {
                 spacing: 12
                 Glyph { text: ""; color: root.colYellow }
                 Label {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
@@ -632,6 +639,7 @@ ApplicationWindow {
                 spacing: 12
                 Glyph { text: "\uf071"; color: root.colYellow }
                 Label {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: root.colTextDim
@@ -707,6 +715,7 @@ ApplicationWindow {
                                 spacing: 8
                                 Glyph { text: modelData.length === 0 ? "\uf07c" : "\uf07b"; font.pixelSize: 13; color: root.colAccent }
                                 Label {
+                                    textFormat: Text.PlainText
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight
                                     text: root.folderLabel(modelData)
@@ -714,6 +723,7 @@ ApplicationWindow {
                                     font.pixelSize: root.pt(13)
                                 }
                                 Label {
+                                    textFormat: Text.PlainText
                                     text: backend.folderNoteCounts[modelData] || ""
                                     color: root.colTextMuted
                                     font.pixelSize: 11
@@ -744,6 +754,7 @@ ApplicationWindow {
                     anchors.fill: parent
                     spacing: 0
                     Label {
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true
                         Layout.leftMargin: 20
                         Layout.rightMargin: 20
@@ -788,6 +799,7 @@ ApplicationWindow {
                         }
                     }
                     Label {
+                        textFormat: Text.PlainText
                         Layout.leftMargin: 20
                         Layout.bottomMargin: 4
                         text: {
@@ -857,6 +869,7 @@ ApplicationWindow {
                                     font.bold: true
                                 }
                                 Label {
+                                    textFormat: Text.PlainText
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight
                                     text: noteRow.isResult ? modelData.title : root.displayTitle(noteRow.fileName)
@@ -868,6 +881,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     spacing: 8
                                     Label {
+                                        textFormat: Text.PlainText
                                         visible: text.length > 0
                                         text: noteRow.isResult ? (modelData.folder || "All Notes")
                                                                : ((root.detail(noteRow.fileName).modifiedMs || 0) > 0
@@ -876,6 +890,7 @@ ApplicationWindow {
                                         font.pixelSize: root.pt(11)
                                     }
                                     Label {
+                                        textFormat: Text.PlainText
                                         Layout.fillWidth: true
                                         elide: Text.ElideRight
                                         text: noteRow.isResult ? (modelData.snippet || "") : (root.detail(noteRow.fileName).snippet || "")
@@ -924,6 +939,7 @@ ApplicationWindow {
                     spacing: 0
 
                     Label {
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true
                         Layout.topMargin: 16
                         horizontalAlignment: Text.AlignHCenter
@@ -968,6 +984,7 @@ ApplicationWindow {
                         Keys.onEscapePressed: { text = current; editor.forceActiveFocus(); }
                     }
                     Label {
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true
                         Layout.leftMargin: 32
                         Layout.rightMargin: 32
@@ -1014,6 +1031,7 @@ ApplicationWindow {
                                     }
                                     Glyph { Layout.alignment: Qt.AlignHCenter; text: "\uf016"; visible: !modelData.image; font.pixelSize: 22; color: root.colTextDim }
                                     Label {
+                                        textFormat: Text.PlainText
                                         Layout.maximumWidth: 90
                                         elide: Text.ElideMiddle
                                         text: modelData.name
@@ -1084,6 +1102,7 @@ ApplicationWindow {
                                     Layout.rightMargin: 32
                                     spacing: 8
                                     Label {
+                                        textFormat: Text.PlainText
                                         visible: root.conflicts.length > 1
                                         text: "Change " + (hunk.index + 1) + " of " + root.conflicts.length
                                         color: root.colTextMuted
@@ -1091,6 +1110,7 @@ ApplicationWindow {
                                         font.bold: true
                                     }
                                     Label {
+                                        textFormat: Text.PlainText
                                         Layout.fillWidth: true
                                         visible: hunk.modelData.before.length > 0
                                         text: hunk.modelData.before.join("\n")
@@ -1137,6 +1157,7 @@ ApplicationWindow {
                                         onClicked: root.chooseConflict(hunk.index, "both")
                                     }
                                     Label {
+                                        textFormat: Text.PlainText
                                         Layout.fillWidth: true
                                         visible: hunk.modelData.after.length > 0
                                         text: hunk.modelData.after.join("\n")
@@ -1553,6 +1574,7 @@ ApplicationWindow {
         standardButtons: Dialog.Yes | Dialog.No
         ColumnLayout {
             Label {
+                textFormat: Text.PlainText
                 Layout.preferredWidth: 340
                 wrapMode: Text.WordWrap
                 text: "Move \"" + root.folderLabel(backend.currentFolder) + "\" and its "
@@ -1575,6 +1597,7 @@ ApplicationWindow {
         standardButtons: Dialog.Yes | Dialog.No
         ColumnLayout {
             Label {
+                textFormat: Text.PlainText
                 id: saveWarnText
                 Layout.preferredWidth: 340
                 wrapMode: Text.WordWrap
@@ -1589,6 +1612,7 @@ ApplicationWindow {
         standardButtons: Dialog.Yes | Dialog.No
         ColumnLayout {
             Label {
+                textFormat: Text.PlainText
                 Layout.preferredWidth: 300
                 wrapMode: Text.WordWrap
                 text: "Move \"" + root.noteLabel(backend.currentNote) + "\" to the trash? The next Push moves it to Recently Deleted in iCloud."
@@ -1623,6 +1647,7 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             Label {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.colTextMuted
@@ -1633,6 +1658,7 @@ ApplicationWindow {
                         : "Every tracked note has a pending change."
             }
             Label {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 visible: backend.statusNotices.length > 0
@@ -1661,9 +1687,10 @@ ApplicationWindow {
                                 tint: modelData.resolution === "ready" ? root.colGreen
                                     : modelData.resolution === "refused" ? root.colRed : root.colYellow
                             }
-                            Label { Layout.fillWidth: true; elide: Text.ElideRight; text: modelData.file; color: root.colText }
+                            Label { textFormat: Text.PlainText; Layout.fillWidth: true; elide: Text.ElideRight; text: modelData.file; color: root.colText }
                         }
                         Label {
+                            textFormat: Text.PlainText
                             Layout.fillWidth: true
                             Layout.leftMargin: 2
                             wrapMode: Text.WordWrap
