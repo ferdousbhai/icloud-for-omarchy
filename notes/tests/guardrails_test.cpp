@@ -19,6 +19,8 @@ QStringList richTextLabels(const QString &qml)
                                           QRegularExpression::MultilineOption);
     static const QRegularExpression literal(QStringLiteral(R"((^|[;\n])\s*text:\s*"(?:[^"\\\n]|\\.)*"\s*(;|\n|$))"));
     static const QRegularExpression plain(QStringLiteral(R"((^|[;\n])\s*textFormat:\s*Text\.PlainText\s*(;|\n|$))"));
+    // A line that opens with an operator goes on with the line before it.
+    static const QRegularExpression continued(QStringLiteral(R"(\s*\n\s*(?=[-+*/%?:&|.,(\[]))"));
     QStringList offenders;
     for (const QRegularExpressionMatch &m : start.globalMatch(qml)) {
         // The element's own properties: what is between its braces, less
@@ -43,6 +45,7 @@ QStringList richTextLabels(const QString &qml)
             if (depth == 1 && !(c == u'}' && !inString))
                 own += c;
         }
+        own.replace(continued, QStringLiteral(" "));
         if (!literal.match(own).hasMatch() && !plain.match(own).hasMatch())
             offenders << QString::number(qml.left(m.capturedStart(0)).count(u'\n') + 1);
     }
@@ -489,6 +492,11 @@ int main()
                                             "Label { text: \"a\" + name }\n"))
                   == QStringList{ QStringLiteral("1"), QStringLiteral("7"), QStringLiteral("11") },
               "qml rich text check finds bound labels, even with a plain child");
+        check(richTextLabels(QStringLiteral("Label {\n    text: \"Moved \"\n        + modelData.title\n}\n"
+                                            "Label {\n    text: \"a\"\n        ? x : y\n}\n"
+                                            "Label {\n    text: \"Static\"\n    color: red\n}\n"))
+                  == QStringList{ QStringLiteral("1"), QStringLiteral("5") },
+              "qml rich text check follows a literal continued on the next line");
         QFile file(QStringLiteral(NOTES_QML));
         const QString qml = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
         const QStringList offenders = richTextLabels(qml);

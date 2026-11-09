@@ -1080,6 +1080,7 @@ ApplicationWindow {
                                         Label {
                                             Layout.fillWidth: true
                                             wrapMode: Text.Wrap
+                                            textFormat: Text.PlainText
                                             color: root.colTextDim
                                             font.pixelSize: root.pt(12)
                                             text: "It was edited on this computer and in iCloud before the two could sync. "
@@ -1225,6 +1226,7 @@ ApplicationWindow {
                                     Label {
                                         Layout.fillWidth: true
                                         wrapMode: Text.Wrap
+                                        textFormat: Text.PlainText
                                         color: root.colTextDim
                                         font.pixelSize: root.pt(12)
                                         text: "\"Remove the markers\" keeps every line from both versions and drops only the marker lines, for you to read over. "
@@ -1771,6 +1773,7 @@ ApplicationWindow {
             Label {
                 Layout.preferredWidth: 380
                 wrapMode: Text.WordWrap
+                textFormat: Text.PlainText
                 text: "This downloads all your Apple Notes into ~/Documents/Notes as Markdown, one file per note with the title as its first line, like in Notes. "
                       + (backend.signedIn ? "It uses the iCloud account signed in on this computer, " + backend.appleId + ". "
                                           : "Apple's own sign-in window opens first (password and 2FA stay on Apple's pages); the sign-in is shared with the other iCloud apps. ")
