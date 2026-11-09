@@ -93,6 +93,28 @@ fn deflate_round_trips_on_fixtures_and_corpus() {
     }
 }
 
+/// A small payload inflating past the cap (gzip members concatenated, or
+/// one zlib stream of zeros) is an error, not 1 GiB of memory.
+#[test]
+fn a_document_inflating_past_the_cap_is_refused() {
+    use std::io::Write;
+    let mut member = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    member.write_all(&[0u8; 1 << 20]).unwrap();
+    let member = member.finish().unwrap();
+    let bomb = member.repeat(65);
+    assert!(bomb.len() < 1 << 20);
+    let err = decompress_note_document(&bomb)
+        .map(|out| out.len())
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, "the note's document inflates past 64 MiB");
+
+    let zlib_bomb = compress_note_document(&vec![0u8; (64 << 20) + 1]);
+    assert!(decompress_note_document(&zlib_bomb).is_err());
+    let under = compress_note_document(&vec![0u8; 1 << 20]);
+    assert_eq!(decompress_note_document(&under).unwrap().len(), 1 << 20);
+}
+
 /// A zlib stream (RFC 1950 header, not gzip's 1f 8b), at the default level.
 #[test]
 fn compressed_documents_are_zlib_streams() {
