@@ -76,15 +76,32 @@ pub fn decode_attachment_filename(field: Option<&FieldValue>, record_name: &str,
     }
 }
 
-/// `name` as one file name: `/` and NUL become `_`, and `.` and `..`
-/// (which `posix::join` would resolve) become empty.
+/// The longest attachment file name: a file name holds 255 bytes, and this
+/// one may still take [`unique_file_name`]'s ` N` and, while it downloads,
+/// a `.<pid>.tmp` suffix.
+const MAX_ATTACHMENT_NAME_BYTES: usize = 200;
+
+/// `name` as one file name: `/` and control characters (NUL among them)
+/// become `_`, `.` and `..` (which `posix::join` would resolve) become
+/// empty, and a name over [`MAX_ATTACHMENT_NAME_BYTES`] is cut on a
+/// character boundary, keeping a short extension.
 fn plain_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+        .map(|c| if c == '/' || c.is_control() { '_' } else { c })
         .collect();
     match cleaned.as_str() {
         "." | ".." => String::new(),
+        _ if cleaned.len() > MAX_ATTACHMENT_NAME_BYTES => {
+            let ext = Some(posix::extname(&cleaned))
+                .filter(|e| e.len() <= 16)
+                .unwrap_or_default();
+            let mut cut = MAX_ATTACHMENT_NAME_BYTES - ext.len();
+            while !cleaned.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            format!("{}{ext}", &cleaned[..cut])
+        }
         _ => cleaned,
     }
 }

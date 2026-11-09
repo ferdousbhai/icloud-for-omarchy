@@ -177,7 +177,17 @@ pub fn representability_problem(title: &str) -> Option<String> {
     if RESERVED_DEVICE_NAMES.contains(&carried.to_uppercase().as_str()) {
         return Some("the title is a reserved device name on Windows".into());
     }
+    if carried.chars().any(is_unnameable_control) {
+        return Some("the title contains a control character".into());
+    }
     None
+}
+
+/// A control character no file name of ours carries: NUL can't be in one
+/// at all, and the rest (whitespace aside, which collapses to a space)
+/// would be invisible or garble a terminal.
+pub fn is_unnameable_control(c: char) -> bool {
+    c.is_control() && !js::is_whitespace(c)
 }
 
 /// `carriedTitleSpelling`: `title.trimEnd()` (JS whitespace set).

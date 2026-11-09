@@ -9,6 +9,7 @@ use super::state::{CloneState, FolderEntry, NoteEntry, SharerHomeEntry};
 use crate::cloudkit::CloudKitRecord;
 use crate::doc::encode::{DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME};
 use crate::js::{self, posix};
+use crate::md::title::is_unnameable_control;
 
 /// Directory names the clone reserves at the top level.
 pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[super::state::STATE_DIR_NAME, super::state::LEGACY_STATE_DIR_NAME];
@@ -85,6 +86,7 @@ pub fn sanitize_folder_dir_name(title: &str) -> String {
     let stripped: String = first_line
         .chars()
         .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .filter(|c| !is_unnameable_control(*c))
         .collect();
     let mut collapsed = String::with_capacity(stripped.len());
     let mut in_ws = false;

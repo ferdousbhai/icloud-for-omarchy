@@ -1,6 +1,7 @@
-//! `clone` and `pull` against records whose names would put files outside
-//! the vault or overwrite another zone's note: such a record is skipped
-//! with a notice and everything else syncs.
+//! `clone` and `pull` against records whose names, titles or zones would
+//! put files outside the vault, abort the run, or overwrite another zone's
+//! note: such a record is skipped with a notice, or named safely, and the
+//! rest syncs.
 
 use std::path::{Path, PathBuf};
 
@@ -61,6 +62,22 @@ fn note(record_name: &str, text: &str, tag: &str) -> Value {
     record["recordName"] = json!(record_name);
     record["recordChangeTag"] = json!(tag);
     record["fields"]["TextDataEncrypted"]["value"] = json!(text_data(text));
+    record
+}
+
+fn in_folder(mut record: Value, folder: &str) -> Value {
+    record["fields"]["Folder"]["value"]["recordName"] = json!(folder);
+    record["fields"]["Folders"]["value"][0]["recordName"] = json!(folder);
+    record
+}
+
+fn folder(record_name: &str, title: &str) -> Value {
+    let mut record = private_records(&cassette())
+        .into_iter()
+        .find(|r| r["recordName"] == "DefaultFolder-CloudKit")
+        .unwrap();
+    record["recordName"] = json!(record_name);
+    record["fields"]["TitleEncrypted"]["value"] = json!(base64_encode(title.as_bytes()));
     record
 }
 
@@ -258,6 +275,29 @@ fn pull_leaves_a_table_whose_record_name_is_a_path_as_a_marker() {
     assert!(!state.table_attachments.unwrap_or_default().contains_key(CLIMBING));
     let file = &state.notes["a1b2c3d4-0000-4000-8000-0000000000aa"].file;
     assert!(read(&vault, file).contains("<apple-embed"), "{}", read(&vault, file));
+}
+
+// --- titles that can't be file names ------------------------------------------
+
+#[test]
+fn a_nul_in_a_note_title_or_folder_title_does_not_abort_the_pull() {
+    let (tmp, vault, _) = clone_from(cassette());
+    let summary = pull(
+        &vault,
+        listing(
+            vec![
+                folder("F-NUL", "Fol\0der\u{1}"),
+                in_folder(
+                    note("a1b2c3d4-0000-4000-8000-000000000001", "Bad\0Ti\u{7}tle\n\nbody", "3c"),
+                    "F-NUL",
+                ),
+            ],
+            None,
+        ),
+    );
+    assert_contained(tmp.path());
+    assert_eq!(summary.added, 1, "{summary:?}");
+    assert!(vault.join("Folder/BadTitle.md").exists());
 }
 
 // --- one zone's record name in another zone ----------------------------------

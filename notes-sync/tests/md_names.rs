@@ -92,6 +92,18 @@ fn representability() {
     }
     assert!(title_is_representable("CONTACTS"));
     assert!(title_is_representable("COM10"));
+    for title in ["Bad\0Title", "Bell\u{7}", "\u{85}next line"] {
+        assert!(
+            representability_problem(title).unwrap().contains("control character"),
+            "{title:?}"
+        );
+        assert_eq!(note_file_name_for(title, TitleMode::Filename), "Untitled.md");
+        assert_eq!(
+            title_needing_frontmatter(title, TitleMode::Filename).as_deref(),
+            Some(title)
+        );
+    }
+    assert!(title_is_representable("Tab\tin title"));
     assert!(!title_is_representable(""));
     assert!(!title_is_representable("   "));
 }
@@ -128,6 +140,10 @@ fn note_file_names() {
     assert_eq!(note_file_name("Grocery list\nmilk, eggs"), "Grocery list.md");
     assert_eq!(note_file_name(""), "Untitled.md");
     assert_eq!(note_file_name("a/b:c*d?e\"f<g>h|i"), "abcdefghi.md");
+    // NUL can't be in a file name; other control characters go too, while
+    // whitespace ones collapse to a space as before.
+    assert_eq!(note_file_name("Bad\0Ti\u{7}tle\u{85}\tx"), "BadTitle x.md");
+    assert_eq!(note_file_name("\0\u{1}"), "Untitled.md");
 
     let set = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
     assert_eq!(unique_file_name("New Note.md", &set(&[])), "New Note.md");

@@ -147,6 +147,8 @@ fn decode_folder_record_tolerates_missing_title() {
 fn sanitize_folder_dir_name_strips_unsafe_and_trailing_dots() {
     assert_eq!(sanitize_folder_dir_name("Recipes: a/b?"), "Recipes ab");
     assert_eq!(sanitize_folder_dir_name("ends with dot."), "ends with dot");
+    assert_eq!(sanitize_folder_dir_name("Fol\0der\u{1}\tx"), "Folder x");
+    assert_eq!(sanitize_folder_dir_name("\0"), "Untitled Folder");
 }
 
 #[test]
