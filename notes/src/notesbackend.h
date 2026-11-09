@@ -358,6 +358,7 @@ private:
     bool keepEditsAsNewNote(const QString &mine, const QString &why);
     QString syncedCopyPath() const;
     void writeQueuedSave();
+    void writeQueuedSaveOnClose();
     void rewatch();
     void startSync(Mode mode, const QStringList &args, const QString &label);
     void finishSync(int exitCode);
