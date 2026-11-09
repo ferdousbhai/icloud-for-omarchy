@@ -119,7 +119,8 @@ without asking.
   checklists are styled as you type, their Markdown marks show only on
   the line you are editing, and the file stays plain Markdown on disk. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`),
   a checklist toggle (`Ctrl+Enter`), and PDF export (saved next to the
-  note) are in the toolbar. The window follows the active Omarchy theme.
+  note) are in the toolbar. `Ctrl++` and `Ctrl+-` zoom the note's text
+  (remembered), `Ctrl+0` resets it. The window follows the active Omarchy theme.
 - **History** shows past versions of the current note with diffs,
   read-only. It keeps a note's newest 20 versions, plus one a day for
   the last 30 days; older ones are dropped as new ones arrive. Throwing away a note's local edits is a deliberate terminal
