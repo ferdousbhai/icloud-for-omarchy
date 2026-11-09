@@ -28,21 +28,82 @@ fn refuse<T>(reason: impl Into<String>) -> Result<T, ParseRefusal> {
 }
 
 /// remark-parse + remark-gfm, as markdown-rs options.
-pub(crate) fn parse_options() -> markdown::ParseOptions {
+fn parse_options() -> markdown::ParseOptions {
     markdown::ParseOptions::gfm()
 }
 
-/// The mdast tree remark would build for `source`, or `None` where
-/// markdown-rs 1.0.0 panics (a few pathological list/fence nestings) or
-/// `source` nests too deeply to parse safely.
-pub(crate) fn to_mdast(source: &str) -> Option<mdast::Node> {
-    if too_deeply_nested(source) {
-        return None;
+/// Why `to_mdast` has no tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unparsed {
+    /// markdown-rs 1.0.0 panicked (a few pathological list/fence nestings), or
+    /// no thread could be started to run it.
+    Panicked,
+    /// The tree would be deeper than `MAX_TREE_DEPTH`.
+    TooDeep,
+}
+
+/// How deep a parsed tree may be: `MAX_NESTING` quotes around `MAX_NESTING`
+/// nested lists (two nodes a level) and a few inline styles, with room to
+/// spare. The fix-ups, the parser and the tree's own drop all recurse per
+/// level, so a deeper tree never leaves `parse_bounded`.
+const MAX_TREE_DEPTH: usize = 128;
+
+/// markdown-rs tokenizes without recursing per level (10000 levels parse on a
+/// 64 KiB stack), but it runs on its own generous stack all the same: nothing
+/// a vault file holds may abort the process.
+const PARSER_STACK_BYTES: usize = 32 << 20;
+
+/// markdown-rs's tree for `source`, refused where it panics or nests deeper
+/// than `MAX_TREE_DEPTH`.
+pub(crate) fn parse_bounded(source: &str) -> Result<mdast::Node, Unparsed> {
+    let parsed = std::thread::scope(|scope| {
+        let parser = std::thread::Builder::new()
+            .stack_size(PARSER_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                let root = markdown::to_mdast(source, &parse_options()).expect("markdown without MDX always parses");
+                if exceeds_depth(&root, MAX_TREE_DEPTH) {
+                    dismantle(root);
+                    return Err(Unparsed::TooDeep);
+                }
+                Ok(root)
+            })
+            .map_err(|_| Unparsed::Panicked)?;
+        parser.join().map_err(|_| Unparsed::Panicked)
+    });
+    parsed?
+}
+
+/// Whether `root` has a node more than `limit` levels down, without recursing.
+fn exceeds_depth(root: &mdast::Node, limit: usize) -> bool {
+    let mut pending = vec![(root, 1)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > limit {
+            return true;
+        }
+        pending.extend(node.children().into_iter().flatten().map(|child| (child, depth + 1)));
     }
-    let parsed = std::panic::catch_unwind(|| markdown::to_mdast(source, &parse_options())).ok()?;
-    let mut root = parsed.expect("markdown without MDX always parses");
+    false
+}
+
+/// Drop `root` a node at a time: dropping it whole recurses per level.
+fn dismantle(root: mdast::Node) {
+    let mut pending = vec![root];
+    while let Some(mut node) = pending.pop() {
+        if let Some(children) = node.children_mut() {
+            pending.append(children);
+        }
+    }
+}
+
+/// The mdast tree remark would build for `source`, refused where `source`
+/// nests too deeply to parse safely or markdown-rs panics.
+pub(crate) fn to_mdast(source: &str) -> Result<mdast::Node, Unparsed> {
+    if too_deeply_nested(source) {
+        return Err(Unparsed::TooDeep);
+    }
+    let mut root = parse_bounded(source)?;
     super::mdast_fix::fix_tree(&mut root, source);
-    Some(root)
+    Ok(root)
 }
 
 /// The mdast `type` of a markdown-rs node.
@@ -173,8 +234,12 @@ pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRe
         return refuse("the note nests quotes or lists deeper than this tool can represent");
     }
     let lines = source_lines(markdown);
-    let Some(root) = to_mdast(markdown) else {
-        return refuse("the markdown parser couldn't read this note's list structure");
+    let root = match to_mdast(markdown) {
+        Ok(root) => root,
+        Err(Unparsed::TooDeep) => {
+            return refuse("the note nests its Markdown (quotes, lists, emphasis or links) too deeply to read");
+        }
+        Err(Unparsed::Panicked) => return refuse("the markdown parser couldn't read this note's list structure"),
     };
     let mut parser = Parser {
         source: markdown,

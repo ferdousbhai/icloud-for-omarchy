@@ -577,3 +577,22 @@ fn deeply_nested_markdown_is_refused_before_it_is_parsed() {
         .collect();
     assert_round_trips(&ladder);
 }
+
+/// Nesting no line-start scan sees: emphasis nests a node per level, and
+/// 1000 levels of `**` used to overflow the stack and abort the whole push
+/// or pull.
+#[test]
+fn deeply_nested_inline_markdown_is_refused_without_overflowing_the_stack() {
+    let too_deep = "the note nests its Markdown (quotes, lists, emphasis or links) too deeply to read";
+    for input in [
+        "**".repeat(5_000) + "x" + &"**".repeat(5_000),
+        format!("{}{}x{}", "> - ".repeat(16), "**".repeat(100), "**".repeat(100)),
+    ] {
+        let reason = parse_note_markdown(&input).err().map(|refusal| refusal.reason);
+        assert_eq!(reason.as_deref(), Some(too_deep), "{}...", &input[..40]);
+    }
+    // Delimiters that don't pair up stay text, however many there are.
+    assert_eq!(parse_note_markdown(&"*a ".repeat(5_000)).unwrap().paragraphs.len(), 1);
+    let styled = parse_note_markdown("> - ***~~[a <u>b</u>](https://example.com)~~***").unwrap();
+    assert_eq!(styled.text, "a b");
+}
