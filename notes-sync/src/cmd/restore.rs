@@ -8,7 +8,7 @@ use super::Error;
 use crate::md::frontmatter::{join_frontmatter, split_frontmatter};
 use crate::vault::base::{read_base_copy, write_base_copy_of};
 use crate::vault::history::resolve_tracked_note;
-use crate::vault::local::{read_text, split_options};
+use crate::vault::local::{read_text, split_options, write_note_file};
 use crate::vault::migrate::require_vault;
 
 /// `RestoreResult`.
@@ -32,7 +32,7 @@ pub fn run_restore(target_dir: &Path, file: &str) -> Result<RestoreResult, Error
     let existing = read_text(&path)?.unwrap_or_default();
     let envelope = split_frontmatter(&existing, split_options(state.mode()));
     let restored = join_frontmatter(&envelope.frontmatter, &base);
-    std::fs::write(&path, &restored)?;
+    write_note_file(&path, &restored)?;
     // A base copy from before blank lines opening a body were left out of it
     // would otherwise leave the restored file reading as modified.
     write_base_copy_of(target_dir, &tracked.record_name, &restored, state.mode())?;

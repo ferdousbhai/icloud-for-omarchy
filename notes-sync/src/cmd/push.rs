@@ -57,7 +57,7 @@ use crate::vault::history::{
 use crate::vault::layout::{PreviousLayout, StateDirInfo, note_dir_of, state_dir_index};
 use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
-    read_local_note, read_text, split_options,
+    read_local_note, read_text, split_options, write_note_file,
 };
 use crate::vault::migrate::{read_vault, require_vault};
 use crate::vault::pairing::{UntrackedFile, pending_rename_target, resolve_note_ids, settle_pending_renames};
@@ -1502,7 +1502,7 @@ pub fn apply_remote_merge(
     entry: &NoteEntry,
     merged: &RemoteMerge,
 ) -> Result<(), Error> {
-    std::fs::write(target_dir.join(&entry.file), &merged.file_text)?;
+    write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
     if !merged.has_conflict {
         write_base_copy(target_dir, record_name, &merged.remote_text)?;
     }
@@ -2356,9 +2356,9 @@ fn execute<T: Transport>(
             let path = target_dir.join(file);
             let text = read_text(&path)?.unwrap_or_default();
             let envelope = split_frontmatter(&text, split_options(state.mode()));
-            std::fs::write(
+            write_note_file(
                 &path,
-                join_frontmatter(&set_note_id(&envelope.frontmatter, &record_name), &envelope.body),
+                &join_frontmatter(&set_note_id(&envelope.frontmatter, &record_name), &envelope.body),
             )?;
             apply_note_file_times(&path, &created)?;
             if let Some(value) = created.fields.get("TextDataEncrypted").and_then(|f| f.value.as_str()) {
@@ -2392,7 +2392,7 @@ fn execute<T: Transport>(
             merged,
         } => {
             if let Some(merged) = merged {
-                std::fs::write(target_dir.join(file), &merged.file_text)?;
+                write_note_file(&target_dir.join(file), &merged.file_text)?;
                 if let Some(entry) = state.notes.get_mut(record_name) {
                     entry.record_change_tag = merged.remote_tag.clone();
                 }
@@ -2440,7 +2440,7 @@ fn execute<T: Transport>(
                 return Ok(ExecuteOutcome::failed(message));
             }
             if let Some(merged) = merged {
-                std::fs::write(target_dir.join(&entry.file), &merged.file_text)?;
+                write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
                 if let Some(tracked) = state.notes.get_mut(record_name) {
                     tracked.record_change_tag = merged.remote_tag.clone();
                 }

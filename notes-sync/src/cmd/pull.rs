@@ -34,6 +34,7 @@ use crate::vault::history::{VersionSnapshotInput, record_version};
 use crate::vault::layout::{PreviousLayout, build_vault_layout, note_dir_of, place_note, previous_layout_dirs};
 use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
+    write_note_file,
 };
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
@@ -476,7 +477,7 @@ pub fn run_pull_with(
                     let relative_file = posix::join(&[&note_dir, &file_name]);
                     let file_path = target_dir.join(&relative_file);
                     let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                    std::fs::write(&file_path, &file_text)?;
+                    write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
                     write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     tracked.notes.insert(
@@ -636,7 +637,7 @@ pub fn run_pull_with(
                     }
                     let file_text =
                         compose_note_file(&frontmatter, &body_text, &record.record_name, recorded_title.as_deref());
-                    std::fs::write(&file_path, &file_text)?;
+                    write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
                     write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     tracked
@@ -1034,9 +1035,9 @@ fn handle_remote_deletion(
     let path = target_dir.join(&existing.file);
     let text = read_text(&path)?.unwrap_or_default();
     let envelope = split_frontmatter(&text, split_options(title_mode));
-    std::fs::write(
+    write_note_file(
         &path,
-        join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
+        &join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
     )?;
     // Its attachment files stay with the kept text; only tracking goes.
     tracked.notes.shift_remove(record_name);
@@ -1119,9 +1120,9 @@ pub fn merge_remote_change_into_local_file(
         return Ok(MergeStatus::UnresolvedMarkers);
     }
     let outcome = merge_note_versions(&base, &envelope.body, remote_body_text);
-    std::fs::write(
+    write_note_file(
         &path,
-        compose_note_file(&envelope.frontmatter, &outcome.text, record_name, unrepresentable_title),
+        &compose_note_file(&envelope.frontmatter, &outcome.text, record_name, unrepresentable_title),
     )?;
     if !outcome.has_conflict {
         let remote_file_text = compose_note_file(
