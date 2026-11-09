@@ -65,6 +65,8 @@ ApplicationWindow {
     property var conflictChoices: []
     property bool conflictAsText: false
     readonly property bool resolving: conflicts.length > 0 && !conflictAsText && !noteLocked
+    // Live per-editor zoom factor (persisted). Ctrl++/Ctrl+- only affect the note body.
+    property real editorZoom: 1.0
     // Markers with no versions to pick from (nested or out of order): the
     // note opens on a way out instead, read-only until "Edit as text".
     readonly property bool unreadableConflict: backend.noteConflictsUnreadable && !conflictAsText && !noteLocked
@@ -437,6 +439,12 @@ ApplicationWindow {
         editor.select(s + sel.length + 3, s + sel.length + 3 + proto.length);
         editor.forceActiveFocus();
     }
+
+    // Editor zoom helpers (used by the four new shortcuts below). Bounded and live.
+    // 20% steps for clean increments (inspired by common editor/reader zoom).
+    function zoomIn()  { editorZoom = Math.min(4.0, editorZoom * 1.2); }
+    function zoomOut() { editorZoom = Math.max(0.5, editorZoom / 1.2); }
+    function zoomReset() { editorZoom = 1.0; }
 
     // ---- Toolbar
     header: Rectangle {
@@ -1249,7 +1257,7 @@ ApplicationWindow {
                             color: root.colText
                             selectionColor: root.colAccent
                             selectedTextColor: root.colBg
-                            font.pixelSize: root.pt(14)
+                            font.pixelSize: root.pt(14 * root.editorZoom)
                             leftPadding: 32
                             rightPadding: 32
                             topPadding: 4
@@ -1406,12 +1414,18 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }
     Shortcut { sequence: "Ctrl+Return"; enabled: editor.activeFocus; onActivated: root.toggleTask() }
+    // Editor font zoom shortcuts (standard on many text editors and browsers).
+    Shortcut { sequence: "Ctrl++"; onActivated: root.zoomIn() }
+    Shortcut { sequence: "Ctrl+="; onActivated: root.zoomIn() }
+    Shortcut { sequence: "Ctrl+-"; onActivated: root.zoomOut() }
+    Shortcut { sequence: "Ctrl+0";  onActivated: root.zoomReset() }
 
     Settings {
         id: settings
         property alias windowWidth: root.width
         property alias windowHeight: root.height
         property var panes
+        property alias editorZoom: root.editorZoom
     }
     Component.onDestruction: settings.panes = panes.saveState()
     Shortcut { sequence: StandardKey.Find; onActivated: searchField.forceActiveFocus() }
