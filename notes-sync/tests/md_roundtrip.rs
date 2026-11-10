@@ -560,7 +560,7 @@ fn deeply_nested_markdown_is_refused_before_it_is_parsed() {
         let reason = parse_note_markdown(&input).unwrap_err().reason;
         assert_eq!(
             reason,
-            "the note nests quotes or lists deeper than this tool can represent"
+            "the note nests quotes or lists more than 16 levels deep, deeper than this tool can represent"
         );
     }
     let quoted_list = format!("{}- x", "> ".repeat(16));
@@ -576,6 +576,36 @@ fn deeply_nested_markdown_is_refused_before_it_is_parsed() {
         })
         .collect();
     assert_round_trips(&ladder);
+}
+
+/// A note decodes with at most 16 quote levels and 16 list indents, so a
+/// local note nesting deeper is refused when it is parsed, not when the
+/// push re-decodes what it uploaded.
+#[test]
+fn markdown_nesting_past_what_a_note_decodes_with_is_refused() {
+    let ladder = |levels: usize| -> String { (0..levels).map(|i| format!("{}- x\n", "  ".repeat(i))).collect() };
+    for input in [
+        "> ".repeat(17) + "x",
+        format!("{}- x", "> ".repeat(17)),
+        ladder(18),
+        format!(
+            "{}{}",
+            "> ".repeat(16),
+            ladder(18).replace('\n', &format!("\n{}", "> ".repeat(16)))
+        ),
+    ] {
+        let reason = parse_note_markdown(&input).unwrap_err().reason;
+        assert_eq!(
+            reason, "the note nests quotes or lists more than 16 levels deep, deeper than this tool can represent",
+            "{input:?}"
+        );
+    }
+    let deepest = parse_note_markdown(&ladder(17)).unwrap();
+    assert_eq!(deepest.paragraphs.iter().map(|p| p.indent).max(), Some(16));
+    assert_eq!(
+        parse_note_markdown(&("> ".repeat(16) + "x")).unwrap().paragraphs[0].block_quote_level,
+        16
+    );
 }
 
 /// Nesting no line-start scan sees: emphasis nests a node per level, and
@@ -595,4 +625,22 @@ fn deeply_nested_inline_markdown_is_refused_without_overflowing_the_stack() {
     assert_eq!(parse_note_markdown(&"*a ".repeat(5_000)).unwrap().paragraphs.len(), 1);
     let styled = parse_note_markdown("> - ***~~[a <u>b</u>](https://example.com)~~***").unwrap();
     assert_eq!(styled.text, "a b");
+}
+
+/// The line-start scan reads fenced code as code: a code block whose lines
+/// start with `>` or list markers is not nesting.
+#[test]
+fn markers_inside_a_fenced_code_block_are_not_nesting() {
+    for fence in ["```", "~~~", "  ````"] {
+        let close = fence.trim_start();
+        let input = format!("{fence}\n{}x\n{}x\n{close}\nafter", "> ".repeat(100), "- ".repeat(100));
+        let parsed = parse_note_markdown(&input).unwrap_or_else(|r| panic!("{fence}: {}", r.reason));
+        assert!(parsed.text.ends_with("after"), "{:?}", parsed.text);
+    }
+    // A closing fence ends it: nesting after it is still seen.
+    let after_close = format!("```\ncode\n```\n{}x", ">".repeat(100_000));
+    assert!(parse_note_markdown(&after_close).is_err());
+    // A fence inside a quote ends with the quote, so it hides nothing.
+    let quoted = format!("> ```\n{}x", ">".repeat(100_000));
+    assert!(parse_note_markdown(&quoted).is_err());
 }

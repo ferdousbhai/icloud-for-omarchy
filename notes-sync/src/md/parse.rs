@@ -4,7 +4,10 @@
 
 use markdown::mdast;
 
-use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind, trim_trailing_whitespace};
+use crate::doc::format::{
+    FormatParagraph, InlineSpan, InlineStyle, MAX_NESTING, ParagraphKind, too_deeply_nested_reason,
+    trim_trailing_whitespace,
+};
 use crate::js;
 
 /// `{status: "ok", paragraphs, text}`.
@@ -190,9 +193,24 @@ const MAX_MARKDOWN_NESTING: usize = 64;
 
 /// Whether some line opens more than `MAX_MARKDOWN_NESTING` containers: its
 /// leading `>` and list markers, plus its indentation counted as a list level
-/// per two columns.
+/// per two columns. Lines of a fenced code block opened outside any container
+/// are code, however they start: such a fence runs to its closing fence or
+/// the end of the note, so skipping them hides no nesting.
 fn too_deeply_nested(markdown: &str) -> bool {
+    let mut fence: Option<(u8, usize)> = None;
     source_lines(markdown).iter().any(|line| {
+        if let Some((marker, length)) = fence {
+            if top_level_fence(line).is_some_and(|(m, l, info)| m == marker && l >= length && info.trim().is_empty()) {
+                fence = None;
+            }
+            return false;
+        }
+        if let Some((marker, length, info)) = top_level_fence(line)
+            && !(marker == b'`' && info.contains('`'))
+        {
+            fence = Some((marker, length));
+            return false;
+        }
         let bytes = line.as_bytes();
         let (mut at, mut columns, mut markers) = (0, 0, 0);
         loop {
@@ -228,10 +246,22 @@ fn too_deeply_nested(markdown: &str) -> bool {
     })
 }
 
+/// `line` as a code fence outside any container: up to three spaces, then
+/// three or more backticks or tildes. Its marker, length and the rest.
+fn top_level_fence(line: &str) -> Option<(u8, usize, &str)> {
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let marker = *rest.as_bytes().first().filter(|b| matches!(b, b'`' | b'~'))?;
+    let length = rest.bytes().take_while(|&b| b == marker).count();
+    (length >= 3).then(|| (marker, length, &rest[length..]))
+}
+
 /// `parseNoteMarkdown`.
 pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRefusal> {
     if too_deeply_nested(markdown) {
-        return refuse("the note nests quotes or lists deeper than this tool can represent");
+        return refuse(too_deeply_nested_reason());
     }
     let lines = source_lines(markdown);
     let root = match to_mdast(markdown) {
@@ -367,6 +397,7 @@ impl Parser<'_> {
                 self.record_code(&code.value, lines, block_quote_level);
                 Ok(())
             }
+            N::Blockquote(_) if block_quote_level >= MAX_NESTING => refuse(too_deeply_nested_reason()),
             N::Blockquote(quote) => {
                 for child in &quote.children {
                     self.walk_block(child, block_quote_level + 1)?;
@@ -517,6 +548,7 @@ impl Parser<'_> {
                         self.record_paragraph_lines(child, &p.children, block_quote_level, seed, start_line)?;
                         first_paragraph_seen = true;
                     }
+                    mdast::Node::List(_) if indent >= MAX_NESTING as i32 => return refuse(too_deeply_nested_reason()),
                     mdast::Node::List(nested) => self.walk_list(nested, block_quote_level, indent + 1)?,
                     other => {
                         return refuse(format!(

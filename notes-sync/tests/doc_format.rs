@@ -319,7 +319,7 @@ fn nested(length: u32, style: u32, indent: i32, block_quote_level: u32) -> Attri
 
 #[test]
 fn decode_refuses_nesting_deeper_than_apple_notes_writes() {
-    let deep = "the note nests its paragraphs deeper than this tool can represent";
+    let deep = "the note nests quotes or lists more than 16 levels deep, deeper than this tool can represent";
     assert_eq!(decode_note_format("x", &[nested(1, 3, 0, 20_000)]).unwrap_err(), deep);
     assert_eq!(decode_note_format("x", &[nested(1, 100, 20_000, 0)]).unwrap_err(), deep);
     assert_eq!(decode_note_format("x", &[nested(1, 100, -1, 0)]).unwrap_err(), deep);

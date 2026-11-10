@@ -166,9 +166,15 @@ fn paragraph_kind_of(ps: Option<&ParagraphStyle>) -> Option<ParagraphKind> {
     }
 }
 
-/// The deepest `blockQuoteLevel` and list `indent` decoded (Apple Notes
-/// writes a few levels; the renderer nests one node per level).
+/// The deepest `blockQuoteLevel` and list `indent` a note may have, decoded
+/// from iCloud or parsed from Markdown (Apple Notes writes a few levels, the
+/// real corpora at most 3; the renderer nests one node per level).
 pub const MAX_NESTING: u32 = 16;
+
+/// Why a note nesting deeper than `MAX_NESTING` is refused, either way.
+pub fn too_deeply_nested_reason() -> String {
+    format!("the note nests quotes or lists more than {MAX_NESTING} levels deep, deeper than this tool can represent")
+}
 
 /// `decodeNoteFormat`: split `text` into per-line paragraphs and derive each
 /// one's kind and spans from the attribute runs (paragraph attributes from the
@@ -193,7 +199,7 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
             && (ps.block_quote_level.unwrap_or(0) > MAX_NESTING
                 || !(0..=MAX_NESTING as i32).contains(&ps.indent.unwrap_or(0)))
         {
-            return Err("the note nests its paragraphs deeper than this tool can represent".into());
+            return Err(too_deeply_nested_reason());
         }
     }
 
