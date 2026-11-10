@@ -3,10 +3,12 @@
 # pacman, pacman-key, curl and gpg stubbed, inside a user and mount
 # namespace where /etc/pacman.conf, /etc/pacman.d and /root are scratch
 # copies: nothing on this machine changes. Covers the default package
-# lists, named packages, an unknown name, re-running, the migration from
-# the old [icloud-notes] repository. First, outside the namespace, checks
-# the add_signed_repo hash of install.sh and every generated installer;
-# only the installer runs are skipped where unprivileged namespaces are off.
+# lists, named packages, an unknown name, re-running, a key whose pin is
+# not its one primary, hook writes under sudo, a truncated download, the
+# migration from the old [icloud-notes] repository. First, outside the
+# namespace, checks the add_signed_repo hash of install.sh and every
+# generated installer; only the installer runs are skipped where
+# unprivileged namespaces are off.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -37,6 +39,13 @@ if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
     exit 0
   fi
   rm -rf "$work"
+  # With subordinate uids the namespace has a desktop user to switch to, so
+  # the sudo case drops privileges for real.
+  if unshare --map-auto --map-root-user -m true 2>/dev/null; then
+    exec env ICLOUD_INSTALL_TEST_INNER=1 ICLOUD_INSTALL_TEST_UIDS=1 \
+      unshare --map-auto --map-root-user -m "$root/tests/install_test.sh"
+  fi
+  echo "note install_test: no subordinate uids, so the sudo case runs as root" >&2
   exec env ICLOUD_INSTALL_TEST_INNER=1 unshare -rm "$root/tests/install_test.sh"
 fi
 
@@ -76,9 +85,11 @@ cat >"$work/bin/uname" <<'STUB'
 echo x86_64
 STUB
 fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
-printf '#!/bin/sh\necho "fpr:::::::::%s:"\n' "$fingerprint" >"$work/bin/gpg"
+printf 'pub:u:255:22:A89CA1A6A1E74251:1:::::scESC::::::23::0:\nfpr:::::::::%s:\n' "$fingerprint" >"$work/key.colons"
+# gpg lists whatever $GPG_COLONS holds: by default the pinned primary key.
+printf '#!/bin/sh\ncat "$GPG_COLONS"\n' >"$work/bin/gpg"
 chmod 755 "$work/bin/"*
-export PATH="$work/bin:$PATH" PACMAN_LOG="$work/pacman.log" SUDO_USER=root
+export PATH="$work/bin:$PATH" PACMAN_LOG="$work/pacman.log" SUDO_USER=root GPG_COLONS="$work/key.colons"
 bin/make-installers "$work/dist" >/dev/null
 
 # A fresh scratch /etc and /root for each scenario.
@@ -128,7 +139,7 @@ check "refresh hook Include survives ARM source replacement" grep -qxF 'Include 
 setup
 mkdir -p "$work/plain"
 cp "$work/bin/pacman" "$work/bin/pacman-key" "$work/bin/curl" "$work/bin/gpg" "$work/bin/uname" "$work/plain/"
-for tool in bash sh sed grep mktemp rm tee id getent cut install chown chmod cat env dirname basename tr sort head tail awk cmp; do
+for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chmod mv cat env dirname basename tr sort head tail awk cmp; do
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
@@ -159,6 +170,74 @@ bash install.sh icloud-nope >/dev/null 2>&1 || status=$?
 check "an unknown package exits 64" [ "$status" = 64 ]
 check "an unknown package changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
 
+# The pin names the primary key: as a subkey's fingerprint, or next to a
+# second primary key, it is refused before anything changes.
+other=0123456789ABCDEF0123456789ABCDEF01234567
+printf 'pub:u:255:22:89ABCDEF01234567:1:::::scESC::::::23::0:\nfpr:::::::::%s:\n' "$other" >"$work/other.colons"
+printf 'sub:u:255:18:A89CA1A6A1E74251:1::::::e::::::23:\nfpr:::::::::%s:\n' "$fingerprint" >"$work/sub.colons"
+cat "$work/other.colons" "$work/sub.colons" >"$work/subkey.colons"
+cat "$work/key.colons" "$work/other.colons" >"$work/bundled.colons"
+for listing in subkey bundled; do
+  setup
+  status=0
+  GPG_COLONS="$work/$listing.colons" bash install.sh >"$work/out" 2>&1 || status=$?
+  check "a key file with the pin as a $listing key is refused" [ "$status" != 0 ]
+  check "a $listing key file changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
+done
+
+# A link planted at the hook path is replaced, not written through.
+setup
+echo outside >"$work/outside"
+ln -s "$work/outside" "$hooks/icloud-for-omarchy"
+bash install.sh icloud-notes >/dev/null 2>&1
+check "a planted hook symlink is not written through" [ "$(cat "$work/outside")" = outside ]
+check "the hook replaces the planted symlink" not [ -L "$hooks/icloud-for-omarchy" ]
+check "the replacement hook is executable" [ -x "$hooks/icloud-for-omarchy" ]
+
+# Under sudo, everything in the desktop user's home happens as that user.
+# The home sits under /root, the scenario's world-readable mount, so the
+# user can reach it.
+desk=/root/desk
+desk_hooks="$desk/.config/omarchy/hooks/pre-refresh-pacman.d"
+{ cat /etc/passwd; echo "desk:x:4242:4242::$desk:/bin/sh"; } >"$work/passwd"
+mount --bind "$work/passwd" /etc/passwd
+# Logs the call, then runs the command as the user where the namespace has
+# uids to switch to, and as root where it has not.
+cat >"$work/bin/runuser" <<'STUB'
+#!/bin/sh
+echo "runuser $*" >>"$PACMAN_LOG"
+uid=$(id -u "$2")
+shift 3
+[ "${ICLOUD_INSTALL_TEST_UIDS:-}" = 1 ] || exec "$@"
+exec setpriv --reuid="$uid" --regid="$uid" --clear-groups "$@"
+STUB
+chmod 755 "$work/bin/runuser"
+for planted in file link; do
+  setup
+  chmod 755 /root
+  mkdir -p "$desk_hooks"
+  touch "$desk_hooks/icloud-notes"
+  echo outside >"$work/outside"
+  [[ $planted == file ]] || ln -s "$work/outside" "$desk_hooks/icloud-for-omarchy"
+  [[ ${ICLOUD_INSTALL_TEST_UIDS:-} != 1 ]] || chown -R 4242:4242 "$desk"
+  status=0
+  SUDO_USER=desk bash install.sh icloud-photos >"$work/out" 2>&1 || status=$?
+  check "under sudo ($planted) the install succeeds" [ "$status" = 0 ]
+  check "under sudo ($planted) the packages are installed" [ "$(installed)" = icloud-photos ]
+  check "under sudo ($planted) the user's hook is in place" [ -x "$desk_hooks/icloud-for-omarchy" ]
+  check "under sudo ($planted) the hook is a file, not a link" not [ -L "$desk_hooks/icloud-for-omarchy" ]
+  check "under sudo ($planted) nothing is written through a link" [ "$(cat "$work/outside")" = outside ]
+  check "under sudo ($planted) the user's old hook is removed" [ ! -e "$desk_hooks/icloud-notes" ]
+  if [[ ${ICLOUD_INSTALL_TEST_UIDS:-} == 1 ]]; then
+    check "under sudo ($planted) the hook belongs to the user" [ "$(stat -c %u "$desk_hooks/icloud-for-omarchy")" = 4242 ]
+  fi
+  check "under sudo ($planted) root makes the user's hook directory as the user" grep -qxF "runuser -u desk -- mkdir -p $desk_hooks" "$PACMAN_LOG"
+  check "under sudo ($planted) root writes the user's hook as the user" grep -qF "runuser -u desk -- bash -c " "$PACMAN_LOG"
+  check "under sudo ($planted) root removes the user's old hook as the user" grep -qxF "runuser -u desk -- rm -f $desk_hooks/icloud-notes" "$PACMAN_LOG"
+done
+rm "$work/bin/runuser"
+umount /etc/passwd
+
 # Migration: the released [icloud-notes] (conf, Include, hook).
 setup
 printf '[icloud-notes]\nServer = x\n' >/etc/pacman.d/icloud-notes.conf
@@ -176,6 +255,14 @@ check "migration: unrelated pacman.d files are kept" [ -e /etc/pacman.d/unrelate
 check "migration: unrelated hooks are kept" [ -e "$hooks/unrelated" ]
 check "migration: says what it removed" grep -q 'Removing the old \[icloud-notes\] repository' "$work/out"
 check "migration: then installs" [ "$(installed)" = "icloud-notes" ]
+
+# A download cut short anywhere runs nothing: piped into bash, the script
+# ends wherever the connection dropped.
+setup
+sed '/^ *echo "Installing /,$d' install.sh >"$work/truncated.sh"
+bash "$work/truncated.sh" >/dev/null 2>&1 || true
+check "a truncated installer changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
+check "a truncated installer runs no pacman" [ ! -e "$PACMAN_LOG" ]
 
 for retired in contacts reminders; do
   setup
