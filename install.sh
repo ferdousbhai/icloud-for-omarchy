@@ -142,7 +142,7 @@ remove_old_repos() {
       if (( EUID == 0 )) && [[ $(id -u "$user") != 0 ]]; then
         runuser -u "$user" -- rm -f "$hook"
       else
-        $sudo rm -f "$hook"
+        rm -f "$hook"
       fi
     fi
   done
