@@ -7,3 +7,5 @@ TEMPLATE = app
 
 SOURCES += guardrails_test.cpp
 INCLUDEPATH += ../src
+# The window's QML, which a guardrail reads.
+DEFINES += NOTES_QML=\\\"$$PWD/../qml/main.qml\\\"

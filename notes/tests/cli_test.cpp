@@ -475,6 +475,31 @@ int main(int argc, char *argv[])
                   && readFile(QStringLiteral("Work/Grid.md")).contains(QStringLiteral("huge")),
               "cli write refuses a read-only note");
         check(cli({ QStringLiteral("write"), QStringLiteral("alpha") }).code == 2, "cli write needs the text");
+        // An emptied note is deleted by the next push, as Notes discards one:
+        // write never empties a note unless told to, however the text came.
+        {
+            const QString kept = readFile(QStringLiteral("Notes/Alpha.md"));
+            writeFile(QStringLiteral("empty.txt"), QString(), g_scratch);
+            bool refused = true;
+            for (const QStringList &source :
+                 { QStringList{ QStringLiteral("--body"), QString() }, QStringList{ QStringLiteral("--stdin") },
+                   QStringList{ QStringLiteral("--file"), g_scratch + QStringLiteral("/empty.txt") },
+                   QStringList{ QStringLiteral("--body"), QStringLiteral("\n\n") } }) {
+                const Run r = cliJson(QStringList{ QStringLiteral("write"), QStringLiteral("alpha") } + source);
+                refused = refused && r.code == 2 && r.isMachineError(QStringLiteral("usage"))
+                    && r.error().value(QStringLiteral("hint")).toString().contains(QStringLiteral("icloud-notes delete"))
+                    && readFile(QStringLiteral("Notes/Alpha.md")) == kept;
+            }
+            check(refused, "cli write refuses to empty a note without --yes, hinting at delete");
+            const Run text = cliText({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--body"), QString() });
+            check(text.code == 2 && text.isTextError() && readFile(QStringLiteral("Notes/Alpha.md")) == kept,
+                  "cli write refuses to empty a note in text mode with no terminal");
+            const Run yes = cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--yes"),
+                                      QStringLiteral("--body"), QString() });
+            check(yes.code == 0 && readFile(QStringLiteral("Notes/Alpha.md")) == QStringLiteral("---\napple-note-id: id-a\n---\n"),
+                  "cli write --yes empties it");
+            writeFile(QStringLiteral("Notes/Alpha.md"), kept);
+        }
 
         const Run t1 = cliJson({ QStringLiteral("toggle"), QStringLiteral("alpha"), QStringLiteral("2") });
         const Run t2 = cliJson({ QStringLiteral("toggle"), QStringLiteral("alpha"), QStringLiteral("3") });

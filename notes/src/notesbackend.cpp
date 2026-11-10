@@ -21,6 +21,7 @@
 #include <QJsonObject>
 #include <QPrinter>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QTextDocument>
 #include <QTextStream>
@@ -73,15 +74,22 @@ QString readText(const QString &path, qsizetype limit = -1)
     return limit < 0 ? in.readAll() : in.read(limit);
 }
 
+// Whole or not at all: the text goes to a temporary file that replaces the
+// note only once every byte is written, so a full disk never truncates it.
 bool writeText(const QString &path, const QString &text)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
         return false;
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
     out << text;
-    return true;
+    out.flush();
+    if (out.status() != QTextStream::Ok) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
 }
 
 // Dot-directories (the sync tool's bookkeeping, .git) hold no notes.
@@ -135,11 +143,16 @@ QVariantList attachmentsFor(const QString &notePath, const QString &text)
                                             QStringLiteral("webp"), QStringLiteral("svg") };
     static const QRegularExpression linkRe(QStringLiteral(R"(\[[^\]]*\]\((attachments/[^)\s]+)\))"));
     const QDir dir = QFileInfo(notePath).dir();
+    // Only files really inside that directory: a link's `..` or a symlink
+    // there could otherwise point the preview (and `read`) anywhere.
+    const QString inside = QFileInfo(dir.filePath(QStringLiteral("attachments"))).canonicalFilePath() + u'/';
     QVariantList found;
     QSet<QString> seen;
     for (const QRegularExpressionMatch &match : linkRe.globalMatch(text)) {
-        const QString abs = dir.absoluteFilePath(QUrl(match.captured(1)).path()); // links are URL-encoded
-        if (seen.contains(abs) || !QFile::exists(abs))
+        // Links are URL-encoded.
+        const QString abs = QDir::cleanPath(dir.absoluteFilePath(QUrl(match.captured(1)).path()));
+        const QString real = QFileInfo(abs).canonicalFilePath(); // empty when it does not exist
+        if (inside.size() == 1 || !real.startsWith(inside) || seen.contains(abs))
             continue;
         seen.insert(abs);
         const QFileInfo info(abs);

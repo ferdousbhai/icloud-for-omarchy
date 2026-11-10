@@ -186,7 +186,8 @@ const char *const kFooter =
     "`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.\n"
     "Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to\n"
     "wait for the vault's lock; 30 when a background sync holds it, none while the Notes window\n"
-    "holds it). Nothing asks without a terminal: delete, delete-folder and restore need --yes.\n"
+    "holds it). Nothing asks without a terminal: delete, delete-folder, restore and a write that\n"
+    "empties a note need --yes.\n"
     "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,\n"
     "session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),\n"
     "4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,\n"
@@ -243,14 +244,15 @@ const QList<Spec> &specs()
           { QStringLiteral("--folder"), QStringLiteral("--body"), QStringLiteral("--file"), QStringLiteral("--stdin"),
             QStringLiteral("--push") },
           1, 1 },
-        { "write", "write NOTE (--body TEXT | --file PATH | --stdin) [--append] [--force] [--push]",
+        { "write", "write NOTE (--body TEXT | --file PATH | --stdin) [--append] [--force] [--yes] [--push]",
           "Replace the note's text (everything `read` prints: in the default vault shape its first line\n"
           "is the title), or with --append add it at the end. The ID block is kept as it is. Refused for a\n"
           "read-only note, and (unless --force) when the text would add conflict markers or another\n"
-          "note's id, the checks the window warns about.\n"
+          "note's id, the checks the window warns about. Empty text (blank lines only) empties the note,\n"
+          "which the next push deletes in iCloud: it asks first, or needs --yes (use `delete` to delete).\n"
           "JSON: {action, path, changed, sync?}",
           { QStringLiteral("--body"), QStringLiteral("--file"), QStringLiteral("--stdin"), QStringLiteral("--append"),
-            QStringLiteral("--force"), QStringLiteral("--push") },
+            QStringLiteral("--force"), QStringLiteral("--yes"), QStringLiteral("--push") },
           1, 1 },
         { "rename", "rename NOTE TITLE [--push]",
           "Retitle a note: its first line, or its file name in a filename-as-title vault.\n"
@@ -1341,6 +1343,18 @@ Result write(NotesBackend &b, const Args &a)
     }
     if (!body.isEmpty() && !body.endsWith(u'\n'))
         body += u'\n';
+    // Notes discards a note left empty, and so does the next push: emptying
+    // one deletes it in iCloud, which is `delete`'s to do (or --yes). Blank
+    // lines are no text either: the engine drops them after the ID block.
+    if (QString(body).remove(u'\n').isEmpty() && b.vaultTitleMode() != u"filename") {
+        if (auto f = confirm(a, QStringLiteral("Empty %1? The next push moves it to Recently Deleted in iCloud.").arg(n.path()))) {
+            if (f->code == u"usage") {
+                f->message = QStringLiteral("the text is empty, and the next push would delete %1 in iCloud").arg(n.path());
+                f->hint = QStringLiteral("To delete it, use `icloud-notes delete NOTE --yes`; to empty it anyway, pass --yes.");
+            }
+            return *f;
+        }
+    }
     const QString warning = b.saveWarning(body);
     if (!warning.isEmpty() && !a.has("--force"))
         return Failure{ QStringLiteral("guardrail"), warning, kExitError,

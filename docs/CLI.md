@@ -246,7 +246,8 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
   lists them all, with the output modes and the exit codes.
 - **Nothing asks unless it is in text mode with stdin and stdout on a
   terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
-  `restore`; `icloud-photos delete`; `icloud-findmy play-sound`,
+  `restore`, and a `write` that empties a note, which the next push deletes;
+  `icloud-photos delete`; `icloud-findmy play-sound`,
   `lost-mode`) ask there; anywhere else they refuse with `usage` (exit 2)
   unless `--yes` is given. (`icloud-session set-password` reads the password
   from a terminal without echo, or from stdin.)
@@ -297,7 +298,7 @@ Every code each tool can emit, by exit.
 | Exit | Codes |
 |---|---|
 | 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `cancelled`, `error` |
-| 2 | `usage`, `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
+| 2 | `usage` (also `delete`, `delete-folder`, `restore`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
 | 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |

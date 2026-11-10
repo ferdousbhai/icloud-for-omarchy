@@ -37,7 +37,8 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
   not there are changes.
 - Nothing prompts without a terminal. Destructive commands refuse (exit 2,
   `usage`) unless given `--yes`: `icloud-notes delete | delete-folder |
-  restore`, `icloud-photos delete`, `icloud-findmy play-sound | lost-mode`.
+  restore` (and a `write` that empties a note), `icloud-photos delete`,
+  `icloud-findmy play-sound | lost-mode`.
   Pass `--yes` only when the user asked for that exact action.
 - `TOOL COMMAND --help` describes any command and its `data`.
 
@@ -132,7 +133,7 @@ Work/Plan.md
 | `status` | vault, sign-in, lock holder, notes flagged `conflict`/`new`/`read-only`/... (exit 3 signed out) |
 | `folders`, `list [--folder F] [--flag FLAG]`, `read NOTE [--raw]`, `search QUERY` | read |
 | `new TITLE [--folder F] [--body T \| --file P \| --stdin]` | create (default folder: the account's "Notes"; the body goes below the title line) |
-| `write NOTE (--body T \| --file P \| --stdin) [--append] [--force]` | replace the text `read` shows (its first line is the title), or append to it |
+| `write NOTE (--body T \| --file P \| --stdin) [--append] [--force] [--yes]` | replace the text `read` shows (its first line is the title), or append to it; empty text needs `--yes` (the next push deletes an empty note) |
 | `rename NOTE TITLE`, `move NOTE FOLDER`, `delete NOTE --yes`, `toggle NOTE LINE` | as in the window (LINE counts from 1 in `read`'s body) |
 | `resolve NOTE --all local\|remote\|both` / `--choices C1,C2,...` | settle conflict blocks (`local` = this computer, `remote` = iCloud) |
 | `recover NOTE --strip \| --synced` | unreadable conflict markers (`conflicts_unreadable`): keep every line, or the last synced text; backs up first |
@@ -141,7 +142,9 @@ Work/Plan.md
 | `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`, `export-pdf NOTE` | versions, discard local edits, PDF next to the note |
 
 `write` refuses (`guardrail`) text that adds conflict markers or another
-note's id; `--force` overrides, but prefer `resolve`. Conflicts: `read`
+note's id; `--force` overrides, but prefer `resolve`. It refuses (`usage`,
+exit 2) to leave a note empty without `--yes`, since the next push deletes
+it in iCloud: use `delete NOTE --yes` to delete a note. Conflicts: `read`
 lists each block's `local` and `remote` lines; ask the user which to keep
 when it is not obvious.
 

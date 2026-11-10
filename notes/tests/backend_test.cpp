@@ -16,9 +16,14 @@
 #include <QGuiApplication>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextLayout>
 #include <QThread>
 #include <QTimer>
+#include <csignal>
 #include <functional>
+#include <sys/resource.h>
 
 namespace {
 bool hasFlag(const NotesBackend &b, const QString &note, const char *flag)
@@ -291,6 +296,65 @@ int main(int argc, char *argv[])
         check(!at.at(1).toMap().value(QStringLiteral("image")).toBool()
                   && at.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("my notes.pdf"),
               "backend file attachment decoded");
+    }
+    // A link never reaches outside the folder's attachments/ directory: not
+    // through `..` (plain or URL-encoded), nor through a symlink placed there.
+    {
+        const QString g = readFile(QStringLiteral("G.md"));
+        writeFile(QStringLiteral("outside.txt"), QStringLiteral("not the vault's"), scratch.path());
+        const QString link = testVault() + QStringLiteral("/attachments/link.png");
+        QFile::link(scratch.path() + QStringLiteral("/outside.txt"), link);
+        writeFile(QStringLiteral("G.md"),
+                  QStringLiteral("---\napple-note-id: id-g\n---\n# Pics\n[a](attachments/../../outside.txt)\n"
+                                 "[b](attachments/%2E%2E/%2E%2E/outside.txt)\n[c](attachments/../A.md)\n"
+                                 "![d](attachments/link.png)\n![pic.png](attachments/pic.png)\n"));
+        b.refresh();
+        const QVariantList at = b.noteAttachments();
+        check(at.size() == 1 && at.at(0).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("pic.png"),
+              "backend attachment links stay inside attachments/");
+        QFile::remove(link);
+        writeFile(QStringLiteral("G.md"), g);
+        b.refresh();
+    }
+
+    // A hostile line (a pasted blob, a synced note) highlights in bounded
+    // time: emphasis that never closes, or links that never do.
+    {
+        QTextDocument doc;
+        MarkdownHighlighter highlighter(&doc, {});
+        bool fast = true;
+        for (const QString &unit : { QStringLiteral(" **a"), QStringLiteral(" ~~a"), QStringLiteral(" __a"),
+                                     QStringLiteral(" [a"), QStringLiteral(" *a") }) {
+            doc.setPlainText(unit.repeated(200 * 1024 / unit.size()));
+            QElapsedTimer timer;
+            timer.start();
+            highlighter.rehighlight();
+            fast = fast && timer.elapsed() < 2000;
+        }
+        doc.setPlainText(QStringLiteral("**bold** and *it* and ~~gone~~"));
+        highlighter.rehighlight();
+        const QTextLayout *layout = doc.firstBlock().layout();
+        bool bold = false;
+        for (const QTextLayout::FormatRange &r : layout->formats())
+            bold = bold || (r.start == 2 && r.format.fontWeight() == QFont::Bold);
+        check(fast && bold, "backend highlighter: a 200 KB hostile line in bounded time, short lines still styled");
+    }
+
+    // A write that fails part way (here: past the file size limit, as a full
+    // disk would) is reported, and the note on disk is left as it was.
+    b.openNote(QStringLiteral("A.md"));
+    {
+        const QString before = readFile(QStringLiteral("A.md"));
+        struct rlimit saved;
+        getrlimit(RLIMIT_FSIZE, &saved);
+        const auto previous = std::signal(SIGXFSZ, SIG_IGN);
+        struct rlimit small = saved;
+        small.rlim_cur = 4096;
+        setrlimit(RLIMIT_FSIZE, &small);
+        const bool wrote = b.saveCurrentNote(QStringLiteral("# Alpha\n") + QStringLiteral("x").repeated(64 * 1024));
+        setrlimit(RLIMIT_FSIZE, &saved);
+        std::signal(SIGXFSZ, previous);
+        check(!wrote && readFile(QStringLiteral("A.md")) == before, "backend failed write reported, note intact");
     }
 
     b.openNote(QStringLiteral("A.md"));
