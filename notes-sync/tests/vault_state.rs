@@ -242,6 +242,67 @@ fn drops_an_attachment_entry_whose_file_leaves_the_vault() {
     assert_eq!(attachments.keys().collect::<Vec<_>>(), ["OK"]);
 }
 
+/// Every other path state.json holds: a note's file, its pending rename
+/// (a file name), a trashed note's file, a folder's or sharer home's
+/// directory name (one segment), and the record names joined under
+/// `base/` and `history/`. An entry that would leave the vault is dropped
+/// (a note then syncs again), a bad pending rename forgotten.
+#[test]
+fn drops_entries_whose_paths_leave_the_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let note = |file: &str| format!(r#"{{"file":"{file}","recordChangeTag":"t","modificationDate":1}}"#);
+    let pending = |to: &str| {
+        format!(r#"{{"file":"Notes/P.md","recordChangeTag":"t","modificationDate":1,"pendingRename":"{to}"}}"#)
+    };
+    let trashed = |file: &str| format!(r#"{{"file":"{file}","trashedAt":1}}"#);
+    let folder = |dir: &str| format!(r#"{{"name":"F","dirName":"{dir}"}}"#);
+    write_raw(
+        dir.path(),
+        &format!(
+            r#"{{"layoutVersion":{CURRENT_LAYOUT_VERSION},
+            "notes":{{"OK":{},"UP":{},"ABS":{},"DOT":{},"EMPTY":{},"../../KEY":{},"P-OK":{},"P-UP":{},"P-SUB":{},"P-DOTS":{}}},
+            "trashed":{{"OK":{},"UP":{},"ABS":{}}},
+            "folders":{{"OK":{},"UP":{},"SUB":{},"DOTS":{},"EMPTY":{}}},
+            "sharerHomes":{{"_ok":{},"_up":{},"_sub":{}}},
+            "tableAttachments":{{"OK":{{"noteRecordName":"OK"}},"../../T":{{"noteRecordName":"OK"}}}}}}"#,
+            note("Notes/Pie.md"),
+            note("../../outside.md"),
+            note("/etc/x.md"),
+            note("Notes/./Pie.md"),
+            note(""),
+            note("Notes/Key.md"),
+            pending("Tart.md"),
+            pending("../../outside.md"),
+            pending("Sub/Tart.md"),
+            pending(".."),
+            trashed("Notes/Old.md"),
+            trashed("../outside.md"),
+            trashed("/tmp/x.md"),
+            folder("Recipes"),
+            folder("../up"),
+            folder("a/b"),
+            folder(".."),
+            folder(""),
+            folder("Pat"),
+            folder(".."),
+            folder("Pat/../.."),
+        ),
+    );
+    let state = read_clone_state(dir.path()).unwrap().unwrap();
+    assert_eq!(
+        state.notes.keys().collect::<Vec<_>>(),
+        ["OK", "P-OK", "P-UP", "P-SUB", "P-DOTS"]
+    );
+    assert_eq!(state.notes["P-OK"].pending_rename.as_deref(), Some("Tart.md"));
+    for rn in ["P-UP", "P-SUB", "P-DOTS"] {
+        assert_eq!(state.notes[rn].pending_rename, None, "{rn}");
+    }
+    assert_eq!(state.trashed.unwrap().keys().collect::<Vec<_>>(), ["OK"]);
+    assert_eq!(state.folders.unwrap().keys().collect::<Vec<_>>(), ["OK"]);
+    assert_eq!(state.sharer_homes.unwrap().keys().collect::<Vec<_>>(), ["_ok"]);
+    assert_eq!(state.table_attachments.unwrap().keys().collect::<Vec<_>>(), ["OK"]);
+}
+
 #[test]
 fn corrupt_for_a_malformed_table_attachment_entry() {
     let dir = tempfile::tempdir().unwrap();

@@ -161,6 +161,21 @@ fn a_file_attachment_link_maps_back_to_its_placeholder() {
     assert_eq!(plan.reconstructed_body_text, format!("Edited intro\n{O}\nmore"));
 }
 
+/// A link text with brackets is escaped now; one an earlier release wrote
+/// unescaped still stands for its attachment.
+#[test]
+fn an_attachment_link_with_brackets_maps_back_escaped_or_as_written_before() {
+    let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/a]b.m4a".to_string())].into();
+    for link in [r"[a\]b.m4a](attachments/a%5Db.m4a)", "[a]b.m4a](attachments/a%5Db.m4a)"] {
+        let plan = ok(plan_embed_representations(
+            &format!("Intro\n{link}\nmore"),
+            &[slot("FILE-1", "com.apple.m4a-audio")],
+            &tracked,
+        ));
+        assert_eq!(plan.reconstructed_body_text, format!("Intro\n{O}\nmore"), "{link}");
+    }
+}
+
 #[test]
 fn a_removed_or_changed_attachment_link_refuses_the_push() {
     let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();

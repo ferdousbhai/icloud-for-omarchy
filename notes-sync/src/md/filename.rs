@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use super::title::{carried_title_spelling, encode_title_stem, title_is_representable};
+use super::title::{carried_title_spelling, encode_title_stem, is_unnameable_control, title_is_representable};
 use crate::js;
 use crate::vault::state::TitleMode;
 
@@ -74,6 +74,7 @@ pub fn note_file_name(title: &str) -> String {
     let stripped: String = first
         .chars()
         .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .filter(|c| !is_unnameable_control(*c))
         .collect();
     // `.replace(/\s+/g, " ")`
     let mut collapsed = String::with_capacity(stripped.len());

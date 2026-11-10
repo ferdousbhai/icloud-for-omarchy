@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use super::layout::reference_record_name;
-use super::state::{AttachmentEntry, TableAttachmentEntry};
+use super::state::{AttachmentEntry, TableAttachmentEntry, is_plain_record_name};
 use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, Database, FieldValue, NoteZone, Transport};
 use crate::cmd::errors::Error;
@@ -76,15 +76,32 @@ pub fn decode_attachment_filename(field: Option<&FieldValue>, record_name: &str,
     }
 }
 
-/// `name` as one file name: `/` and NUL become `_`, and `.` and `..`
-/// (which `posix::join` would resolve) become empty.
+/// The longest attachment file name: a file name holds 255 bytes, and this
+/// one may still take [`unique_file_name`]'s ` N` and, while it downloads,
+/// a `.<pid>.tmp` suffix.
+const MAX_ATTACHMENT_NAME_BYTES: usize = 200;
+
+/// `name` as one file name: `/` and control characters (NUL among them)
+/// become `_`, `.` and `..` (which `posix::join` would resolve) become
+/// empty, and a name over [`MAX_ATTACHMENT_NAME_BYTES`] is cut on a
+/// character boundary, keeping a short extension.
 fn plain_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+        .map(|c| if c == '/' || c.is_control() { '_' } else { c })
         .collect();
     match cleaned.as_str() {
         "." | ".." => String::new(),
+        _ if cleaned.len() > MAX_ATTACHMENT_NAME_BYTES => {
+            let ext = Some(posix::extname(&cleaned))
+                .filter(|e| e.len() <= 16)
+                .unwrap_or_default();
+            let mut cut = MAX_ATTACHMENT_NAME_BYTES - ext.len();
+            while !cleaned.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            format!("{}{ext}", &cleaned[..cut])
+        }
         _ => cleaned,
     }
 }
@@ -350,6 +367,18 @@ pub fn resolve_note_attachments<T: Transport>(
     records.ensure(db, zone, &names)?;
     let attachment_records = records.records_named(zone, &names);
     let by_name = |name: &str| attachment_records.iter().rev().find(|r| r.record_name == name);
+    // Record names are unique within a zone only, and a shared zone's owner
+    // picks theirs: a name another note's attachment or table is tracked
+    // under stays a marker, so its file, entry and history are left alone.
+    let tracked_for_another_note = |name: &str| {
+        let other = |owner: &str| owner != note_record_name;
+        existing_attachments
+            .get(name)
+            .is_some_and(|e| other(&e.note_record_name))
+            || existing_table_attachments
+                .get(name)
+                .is_some_and(|e| other(&e.note_record_name))
+    };
 
     let mut replacements: Vec<Option<String>> = vec![None; slots.len()];
     let mut file_refs: Vec<AttachmentReference> = Vec::new();
@@ -368,8 +397,15 @@ pub fn resolve_note_attachments<T: Transport>(
             }
             EmbedSlot::Attachment(r) => r,
         };
+        if tracked_for_another_note(&r.attachment_identifier) {
+            replacements[i] = Some(format_embed_marker(&marker_for(r)));
+            continue;
+        }
         if is_table_uti(&r.type_uti) {
-            let record = by_name(&r.attachment_identifier);
+            // A table's versions are kept under its record name
+            // (`history/<recordName>/`): one that can't name a file stays a
+            // marker, like a table that can't be decoded.
+            let record = by_name(&r.attachment_identifier).filter(|_| is_plain_record_name(&r.attachment_identifier));
             match decode_table_attachment(record) {
                 None => replacements[i] = Some(format_embed_marker(&marker_for(r))),
                 Some(markdown) => {

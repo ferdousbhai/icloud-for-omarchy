@@ -421,8 +421,34 @@ fn num(v: Option<&Value>) -> Option<i64> {
 
 /// Whether `path` stays inside the vault: relative, with no empty, `.` or
 /// `..` segment and no NUL.
-fn is_vault_relative(path: &str) -> bool {
+pub(crate) fn is_vault_relative(path: &str) -> bool {
     !path.is_empty() && !path.contains('\0') && path.split('/').all(|segment| !matches!(segment, "" | "." | ".."))
+}
+
+/// Whether `name` is one path segment: [`is_vault_relative`] with no `/`.
+pub(crate) fn is_single_component(name: &str) -> bool {
+    is_vault_relative(name) && !name.contains('/')
+}
+
+/// Whether a record name from the server can name a file in the state
+/// directory (`base/<recordName>.md`, `history/<recordName>/`): one plain
+/// file name short enough to take `.md` within 255 bytes, no `\`, not
+/// hidden. Real ones are uuids and names like `DefaultFolder-CloudKit`;
+/// anything else, a shared note's from whoever owns it, is skipped rather
+/// than joined into a path.
+pub fn is_plain_record_name(name: &str) -> bool {
+    is_single_component(name) && name.len() <= 255 - ".md".len() && !name.contains('\\') && !name.starts_with('.')
+}
+
+/// `record_name`, or an error when it isn't [`is_plain_record_name`].
+pub(crate) fn plain_record_name(record_name: &str) -> Result<&str, Error> {
+    if is_plain_record_name(record_name) {
+        Ok(record_name)
+    } else {
+        Err(Error::Internal(format!(
+            "refusing the record name {record_name:?}: it isn't one plain file name"
+        )))
+    }
 }
 
 /// The layout version check for a state file read without migrating.
@@ -491,6 +517,13 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                 )));
             }
         };
+        // Sync writes, moves and removes these paths as they are: an entry
+        // that would leave the vault (or whose record name can't name its
+        // base copy) is dropped, as attachments are below, and the note
+        // syncs again.
+        if !is_plain_record_name(&record_name) || !opt_str(m, "file").is_some_and(|file| is_vault_relative(&file)) {
+            continue;
+        }
         notes.insert(
             record_name,
             NoteEntry {
@@ -500,7 +533,9 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                 shared_zone_owner: opt_str(m, "sharedZoneOwner"),
                 unpublishable_reason: opt_str(m, "unpublishableReason"),
                 folder_record_name: opt_str(m, "folderRecordName"),
-                pending_rename: opt_str(m, "pendingRename"),
+                // A file name in the note's directory; anything else is
+                // forgotten, and the next pull works the rename out again.
+                pending_rename: opt_str(m, "pendingRename").filter(|to| is_single_component(to)),
                 frontmatter_title: opt_str(m, "frontmatterTitle"),
             },
         );
@@ -524,6 +559,10 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                         )));
                     }
                 };
+                // One directory name; the folder is laid out afresh otherwise.
+                if !opt_str(m, "dirName").is_some_and(|dir| is_single_component(&dir)) {
+                    continue;
+                }
                 folders.insert(
                     record_name,
                     FolderEntry {
@@ -557,6 +596,9 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                         )));
                     }
                 };
+                if !opt_str(m, "dirName").is_some_and(|dir| is_single_component(&dir)) {
+                    continue;
+                }
                 homes.insert(
                     owner,
                     SharerHomeEntry {
@@ -642,6 +684,10 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                         "{fp} has a malformed entry for table attachment \"{record_name}\"."
                     )));
                 };
+                // Its versions live in `history/<recordName>/`.
+                if !is_plain_record_name(&record_name) {
+                    continue;
+                }
                 out.insert(record_name, TableAttachmentEntry { note_record_name: note });
             }
             Some(out)
@@ -666,6 +712,9 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                         )));
                     }
                 };
+                if !opt_str(m, "file").is_some_and(|file| is_vault_relative(&file)) {
+                    continue;
+                }
                 out.insert(
                     record_name,
                     TrashedEntry {

@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use icloud_notes_sync::cmd::Error;
+use icloud_notes_sync::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use icloud_notes_sync::vault::epoch::{find_epoch_by_id, list_epochs, record_epoch};
 use icloud_notes_sync::vault::history::{
     HISTORY_KEEP_RECENT, HISTORY_RETENTION_DAYS, VersionSnapshotInput, find_snapshot_by_id, find_version,
@@ -581,4 +582,56 @@ fn without_recording_writes_no_history_and_then_records_again() {
     assert!(!wrote);
     assert!(!dir.path().join(".icloud-notes").exists());
     assert!(record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap());
+}
+
+// --- record names from the server ------------------------------------------------
+
+/// A record name is joined under `base/` and `history/`, so only one plain
+/// file name is accepted: never a path out of the state directory.
+#[test]
+fn a_record_name_that_is_not_one_plain_file_name_writes_nothing() {
+    // `base/<recordName>.md` must stay within 255 bytes.
+    let too_long = "x".repeat(253);
+    let unsafe_names = [
+        "../../../outside",
+        "../../outside",
+        "a/b",
+        "a\\b",
+        "",
+        ".",
+        "..",
+        ".hidden",
+        "nul\0byte",
+        too_long.as_str(),
+    ];
+    for name in unsafe_names {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        assert!(
+            record_version(&vault, &note_input(name, "tag-1", "AAAA")).is_err(),
+            "{name:?}"
+        );
+        assert!(record_epoch(&vault, name, &names(&[name])).is_err(), "{name:?}");
+        assert!(write_base_copy(&vault, name, "body").is_err(), "{name:?}");
+        assert!(read_base_copy(&vault, name).is_err(), "{name:?}");
+        assert!(remove_base_copy(&vault, name).is_err(), "{name:?}");
+        assert!(list_versions(&vault, name).is_err(), "{name:?}");
+        assert!(list_epochs(&vault, name).is_err(), "{name:?}");
+        assert!(!tmp.path().join("outside").exists(), "{name:?}");
+        assert!(!tmp.path().join("outside.md").exists(), "{name:?}");
+    }
+    // What real record names look like.
+    let tmp = tempfile::tempdir().unwrap();
+    let longest = "x".repeat(252);
+    for name in [
+        "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+        "DefaultFolder-CloudKit",
+        longest.as_str(),
+    ] {
+        assert!(record_version(tmp.path(), &note_input(name, "tag-1", "AAAA")).unwrap());
+        record_epoch(tmp.path(), name, &names(&[name])).unwrap();
+        write_base_copy(tmp.path(), name, "body").unwrap();
+        assert_eq!(read_base_copy(tmp.path(), name).unwrap().as_deref(), Some("body"));
+    }
 }

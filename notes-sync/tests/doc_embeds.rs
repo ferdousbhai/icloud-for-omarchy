@@ -183,6 +183,24 @@ fn format_attachment_markdown_percent_encodes_path_segments_with_spaces() {
     );
 }
 
+/// The file name is the link text: `[`, `]` and `\` are escaped so it
+/// can't close the link early or start another, and a line break (which
+/// would end it) reads as a space.
+#[test]
+fn format_attachment_markdown_escapes_the_link_text() {
+    assert_eq!(
+        format_attachment_markdown(
+            &reference("A", "public.jpeg"),
+            "attachments/x](https:%2F%2Fevil.example)[y\\z\r\nw.jpeg"
+        ),
+        r"![x\](https:%2F%2Fevil.example)\[y\\z  w.jpeg](attachments/x%5D(https%3A%252F%252Fevil.example)%5By%5Cz%0D%0Aw.jpeg)"
+    );
+    assert_eq!(
+        format_attachment_markdown(&reference("B", "com.apple.m4a-audio"), "attachments/[a].m4a"),
+        r"[\[a\].m4a](attachments/%5Ba%5D.m4a)"
+    );
+}
+
 fn filename_field(value: serde_json::Value) -> FieldValue {
     FieldValue {
         value,
@@ -241,6 +259,39 @@ fn decode_attachment_filename_makes_the_record_name_one_file_name() {
         ".._.._x.jpeg"
     );
     assert_eq!(decode_attachment_filename(None, "..", ""), "attachment");
+}
+
+#[test]
+fn decode_attachment_filename_replaces_control_characters() {
+    let field = filename_field(json!(base64_encode(b"line\none\x01.jpeg")));
+    assert_eq!(
+        decode_attachment_filename(Some(&field), "REC1", "public.jpeg"),
+        "line_one_.jpeg"
+    );
+}
+
+/// A file name holds 255 bytes, and the name also takes a " 2" when taken
+/// and a download's ".<pid>.tmp" sibling: a longer name is cut, on a
+/// character boundary, keeping its extension.
+#[test]
+fn decode_attachment_filename_caps_a_long_name_keeping_its_extension() {
+    for (name, ext) in [
+        ("a".repeat(300) + ".jpeg", ".jpeg"),
+        ("日".repeat(100) + ".pdf", ".pdf"),
+        ("x.".to_owned() + &"b".repeat(300), ""),
+    ] {
+        let field = filename_field(json!(base64_encode(name.as_bytes())));
+        let capped = decode_attachment_filename(Some(&field), "REC1", "public.jpeg");
+        assert!(capped.len() <= 200, "{} bytes", capped.len());
+        assert!(capped.len() > 190, "{} bytes", capped.len());
+        assert!(capped.ends_with(ext), "{capped}");
+        assert!(name.starts_with(&capped[..capped.len() - ext.len()]), "{capped}");
+    }
+    let short = filename_field(json!(base64_encode(b"photo.jpg")));
+    assert_eq!(
+        decode_attachment_filename(Some(&short), "REC1", "public.jpeg"),
+        "photo.jpg"
+    );
 }
 
 fn asset(value: serde_json::Value, type_: &str) -> FieldValue {

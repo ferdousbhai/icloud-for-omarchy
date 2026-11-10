@@ -9,6 +9,7 @@ use super::state::{CloneState, FolderEntry, NoteEntry, SharerHomeEntry};
 use crate::cloudkit::CloudKitRecord;
 use crate::doc::encode::{DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME};
 use crate::js::{self, posix};
+use crate::md::title::is_unnameable_control;
 
 /// Directory names the clone reserves at the top level.
 pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[super::state::STATE_DIR_NAME, super::state::LEGACY_STATE_DIR_NAME];
@@ -85,6 +86,7 @@ pub fn sanitize_folder_dir_name(title: &str) -> String {
     let stripped: String = first_line
         .chars()
         .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .filter(|c| !is_unnameable_control(*c))
         .collect();
     let mut collapsed = String::with_capacity(stripped.len());
     let mut in_ws = false;
@@ -385,7 +387,8 @@ pub fn build_vault_layout(
             if !record.is_deleted()
                 && let Some(decoded) = decode_folder_record(record)
             {
-                current_titles.insert(decoded.record_name, decoded.title);
+                // An own folder's title stands (see the zone loop below).
+                current_titles.entry(decoded.record_name).or_insert(decoded.title);
             }
         }
     }
@@ -484,6 +487,18 @@ pub fn build_vault_layout(
                 .collect(),
             &zone.records,
         );
+        // The zone's owner picks its record names: a folder named like one
+        // already laid out (the account's own, or another sharer's), or like
+        // the account's default or trash folder, is left out, and its
+        // children become roots of the sharer's area.
+        let zone_folders: Vec<FolderInfo> = zone_folders
+            .into_iter()
+            .filter(|info| {
+                !layout.folder_dirs.contains_key(&info.record_name)
+                    && info.record_name != DEFAULT_FOLDER_RECORD_NAME
+                    && info.record_name != TRASH_FOLDER_RECORD_NAME
+            })
+            .collect();
         let zone_tree = build_folder_tree(&zone_folders, Some(&preferred));
 
         let mut share_permissions: HashMap<String, String> = HashMap::new();
@@ -544,12 +559,22 @@ pub struct NotePlacement {
     pub folder_record_name: Option<String>,
 }
 
+/// The directory of one of the account's own folders: never a sharer's,
+/// whatever an own note's folder reference says.
+fn own_folder_dir<'a>(layout: &'a VaultLayout, folder_record_name: &str) -> Option<&'a String> {
+    let own = layout
+        .state_folders
+        .get(folder_record_name)
+        .is_none_or(|e| e.shared_zone_owner.is_none());
+    layout.folder_dirs.get(folder_record_name).filter(|_| own)
+}
+
 /// `placeNote`.
 pub fn place_note(layout: &VaultLayout, record: &CloudKitRecord, shared_zone_owner: Option<&str>) -> NotePlacement {
     let folder_record_name = reference_record_name(record.fields.get("Folder").map(|f| &f.value));
     match shared_zone_owner {
         None => {
-            if let Some(dir) = folder_record_name.as_ref().and_then(|f| layout.folder_dirs.get(f)) {
+            if let Some(dir) = folder_record_name.as_ref().and_then(|f| own_folder_dir(layout, f)) {
                 return NotePlacement {
                     dir: dir.clone(),
                     folder_record_name,
@@ -595,7 +620,7 @@ pub fn expected_note_dir(layout: &VaultLayout, entry: &NoteEntry) -> Option<Stri
             let dir = entry
                 .folder_record_name
                 .as_ref()
-                .and_then(|f| layout.folder_dirs.get(f));
+                .and_then(|f| own_folder_dir(layout, f));
             Some(
                 dir.or_else(|| layout.folder_dirs.get(DEFAULT_FOLDER_RECORD_NAME))
                     .cloned()
