@@ -977,6 +977,7 @@ dependencies = [
  "clap",
  "icloud-session",
  "rpassword",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

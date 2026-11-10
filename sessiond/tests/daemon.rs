@@ -1325,6 +1325,139 @@ EOF"#,
     assert!(trust_item(&env).is_none(), "signing out forgets this browser");
 }
 
+/// The cookies.sqlite a v0.9.4 sign-in window left (libsoup's
+/// `moz_cookies`), with `rows` of (name, value, host, expiry).
+fn old_profile(env: &Env, rows: &[(&str, &str, &str, u64)]) -> PathBuf {
+    let webkit_data = env.root().join("data/icloud-session/webkit");
+    fs::create_dir_all(&webkit_data).unwrap();
+    let db = rusqlite::Connection::open(webkit_data.join("cookies.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT, path TEXT, \
+         expiry INTEGER, lastAccessed INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER)",
+    )
+    .unwrap();
+    for (name, value, host, expiry) in rows {
+        db.execute(
+            "INSERT INTO moz_cookies (name, value, host, path, expiry, lastAccessed, isSecure, isHttpOnly, sameSite) \
+             VALUES (?1, ?2, ?3, '/', ?4, 0, 1, 1, 0)",
+            rusqlite::params![name, value, host, *expiry as i64],
+        )
+        .unwrap();
+    }
+    webkit_data
+}
+
+/// The names of the cookies left in an old profile's cookies.sqlite.
+fn old_profile_names(webkit_data: &Path) -> Vec<String> {
+    let db = rusqlite::Connection::open(webkit_data.join("cookies.sqlite")).unwrap();
+    let mut names: Vec<String> = db
+        .prepare("SELECT name FROM moz_cookies")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    names.sort();
+    names
+}
+
+/// A v0.9.4 profile's rows: Apple's trust token (`DES…`, which only ever
+/// lived there), icloud.com's mark, an expired trust and the session.
+fn old_rows() -> [(&'static str, &'static str, &'static str, u64); 5] {
+    [
+        ("DES6a1b2c", "HSARMTKNSRVXWFlaold", "idmsa.apple.com", now() + 86400),
+        ("X-APPLE-WEBAUTH-HSA-TRUST", "hsa-old", ".icloud.com", now() + 86400),
+        ("DESexpired", "gone", "idmsa.apple.com", now() - 10),
+        ("X-APPLE-WEBAUTH-TOKEN", "old-token", ".icloud.com", now() + 1000),
+        ("myacinfo", "apple-session", ".apple.com", now() + 1000),
+    ]
+}
+
+#[test]
+fn the_old_profile_s_device_trust_moves_to_the_keyring() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!("cat > '{}/stdin-0'\necho '{{}}'", dir.path().display()),
+    );
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let webkit_data = old_profile(&env, &old_rows());
+
+    let conn = env.conn();
+    icloud_session::status_on(&conn).unwrap();
+    wait_until("the old profile's removal", Duration::from_secs(5), || {
+        !webkit_data.exists()
+    });
+    let (label, trust) = trust_item(&env).expect("the old profile's trust kept");
+    assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
+    let mut names: Vec<&str> = trust
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]);
+    let des = cookie_named(&trust, "DES6a1b2c").unwrap();
+    assert_eq!(des["domain"], "idmsa.apple.com");
+    assert_eq!(des["value"], "HSARMTKNSRVXWFlaold");
+
+    // The next window starts with it, so Apple can skip 2FA.
+    let watch = changes(&conn);
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    watch.window_closed();
+    let given = given_cookies(dir.path(), 0);
+    assert_eq!(
+        cookie_named(&given, "DES6a1b2c").unwrap()["value"],
+        "HSARMTKNSRVXWFlaold"
+    );
+}
+
+#[test]
+fn a_keyring_that_refuses_the_old_trust_keeps_only_it_until_the_next_start() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let webkit_data = old_profile(&env, &old_rows());
+    let webkit_cache = env.root().join("cache/icloud-session/webkit");
+    fs::create_dir_all(&webkit_cache).unwrap();
+    // The test keyring cannot be read: a directory where its file goes.
+    fs::create_dir(env.secrets_path()).unwrap();
+
+    let conn = env.conn();
+    icloud_session::status_on(&conn).unwrap();
+    // The session leaves the plaintext file at once; the trust waits.
+    wait_until("the old session's removal", Duration::from_secs(5), || {
+        old_profile_names(&webkit_data) == ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]
+    });
+    assert!(!webkit_cache.exists());
+
+    // The keyring answers by the next start: the trust moves, the file goes.
+    fs::remove_dir(env.secrets_path()).unwrap();
+    env.kill_daemon(&conn);
+    icloud_session::status_on(&conn).unwrap();
+    wait_until("the old profile's removal", Duration::from_secs(5), || {
+        !webkit_data.exists()
+    });
+    let (_, trust) = trust_item(&env).expect("the old profile's trust kept");
+    assert!(cookie_named(&trust, "DES6a1b2c").is_some());
+}
+
 #[test]
 fn client_lib_against_the_daemon() {
     let data_421 = Arc::new(Mutex::new(0usize));

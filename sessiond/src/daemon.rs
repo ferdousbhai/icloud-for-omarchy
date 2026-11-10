@@ -19,6 +19,7 @@ use zbus::zvariant::Value;
 use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
 use crate::files::{self, Account, FindMyJar, Paths, SessionSecret, Stored};
+use crate::old_profile;
 use crate::secrets::{self, Password, SecretStore};
 use zeroize::Zeroizing;
 
@@ -549,7 +550,6 @@ impl Daemon {
 
     /// Serves on the session bus until idle. Returns the process exit code.
     pub fn run(self: &Arc<Daemon>) -> zbus::Result<()> {
-        self.remove_old_profile();
         let conn = zbus::blocking::connection::Builder::session()?
             .serve_at(OBJECT_PATH, Service(self.clone()))?
             .build()?;
@@ -574,6 +574,10 @@ impl Daemon {
             if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
                 eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
             }
+            // After the keyring's look, so the trust is labelled with the
+            // account, and (with a keyring that answers) before the name is
+            // taken, so the first window gets it.
+            me.move_old_profile();
             me.look_for_password();
             let _ = looked.send(());
             me.publish();
@@ -601,10 +605,43 @@ impl Daemon {
     }
 
     /// The sign-in window once kept a WebKit profile on disk, the whole web
-    /// session in plaintext (`cookies.sqlite`). It keeps none now (its
-    /// device trust is in the keyring), so what an older one left goes.
-    fn remove_old_profile(&self) {
-        for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
+    /// session in plaintext (`cookies.sqlite`). It keeps none now, so what
+    /// an older one left goes, once its device trust (Apple's `DES…` token
+    /// lived only there) is in the keyring, merged under what is stored.
+    /// A keyring that will not take it leaves the profile with only the
+    /// trust, for the next start. A sign-out still owed takes it all.
+    ///
+    /// Under [`Daemon::written`], as a SignOut's removal of the trust is.
+    fn move_old_profile(&self) {
+        let _written = lock(&self.written);
+        let paths = &self.cfg.paths;
+        let db = paths.webkit_data.join("cookies.sqlite");
+        let mut keep = false;
+        if db.exists() && !paths.removal_pending.exists() {
+            match old_profile::trust(&db, time::now_secs()) {
+                Ok(trust) if trust.is_empty() => {}
+                Ok(trust) => match self.store_old_trust(trust) {
+                    Ok(()) => eprintln!("icloud-sessiond: moved the old WebKit profile's device trust to the keyring"),
+                    Err(e) => {
+                        eprintln!(
+                            "icloud-sessiond: storing the old WebKit profile's device trust in the keyring \
+                             (retried at the next start): {e}"
+                        );
+                        match old_profile::keep_only_trust(&db, time::now_secs()) {
+                            Ok(()) => keep = true,
+                            Err(e) => eprintln!("icloud-sessiond: removing the old session from {e}"),
+                        }
+                    }
+                },
+                Err(e) => eprintln!("icloud-sessiond: reading the old device trust from {e}; not kept"),
+            }
+        }
+        let dirs = if keep {
+            vec![&paths.webkit_cache]
+        } else {
+            vec![&paths.webkit_data, &paths.webkit_cache]
+        };
+        for dir in dirs {
             if !dir.exists() {
                 continue;
             }
@@ -616,6 +653,19 @@ impl Daemon {
                 Err(e) => eprintln!("icloud-sessiond: removing {}: {e}", dir.display()),
             }
         }
+    }
+
+    /// Stores the old profile's device trust with what the keyring has, a
+    /// newer window's trust winning over the old.
+    fn store_old_trust(&self, old: Vec<Cookie>) -> Result<(), String> {
+        let stored = match self.secrets.get_trust()? {
+            Some(text) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let trust = cookies::trust_cookies(old.into_iter().chain(stored), time::now_secs());
+        let apple_id = lock(&self.state).props().apple_id;
+        let text = Zeroizing::new(serde_json::to_string(&trust).expect("cookies serialize"));
+        self.secrets.set_trust(&apple_id, &text)
     }
 
     // ----------------------------------------------------------- publish
@@ -1683,10 +1733,12 @@ impl Daemon {
                     );
                 }
             }
-        }
-        for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
-            if let Err(e) = files::remove_dir(dir) {
-                eprintln!("icloud-sessiond: removing {}: {e}", dir.display());
+            // An old profile's trust too, before the start-up's move could
+            // store it.
+            for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
+                if let Err(e) = files::remove_dir(dir) {
+                    eprintln!("icloud-sessiond: removing {}: {e}", dir.display());
+                }
             }
         }
         self.publish();
