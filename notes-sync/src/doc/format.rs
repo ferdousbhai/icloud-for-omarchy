@@ -166,6 +166,16 @@ fn paragraph_kind_of(ps: Option<&ParagraphStyle>) -> Option<ParagraphKind> {
     }
 }
 
+/// The deepest `blockQuoteLevel` and list `indent` a note may have, decoded
+/// from iCloud or parsed from Markdown (Apple Notes writes a few levels, the
+/// real corpora at most 3; the renderer nests one node per level).
+pub const MAX_NESTING: u32 = 16;
+
+/// Why a note nesting deeper than `MAX_NESTING` is refused, either way.
+pub fn too_deeply_nested_reason() -> String {
+    format!("the note nests quotes or lists more than {MAX_NESTING} levels deep, deeper than this tool can represent")
+}
+
 /// `decodeNoteFormat`: split `text` into per-line paragraphs and derive each
 /// one's kind and spans from the attribute runs (paragraph attributes from the
 /// run covering the line's newline). Runs overshooting the text, or an unknown
@@ -185,6 +195,12 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
                 ps.style.unwrap_or(0)
             ));
         }
+        if let Some(ps) = &run.paragraph_style
+            && (ps.block_quote_level.unwrap_or(0) > MAX_NESTING
+                || !(0..=MAX_NESTING as i32).contains(&ps.indent.unwrap_or(0)))
+        {
+            return Err(too_deeply_nested_reason());
+        }
     }
 
     // Absolute [start, end) intervals of the non-empty runs.
@@ -197,7 +213,11 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
         }
         run_offset += len;
     }
-    let run_at = |index: usize| intervals.iter().find(|(_, start, end)| index >= *start && index < *end);
+    // Sorted and disjoint, so a binary search finds the one covering `index`.
+    let run_at = |index: usize| {
+        let at = intervals.partition_point(|(_, _, end)| *end <= index);
+        intervals.get(at).filter(|(_, start, _)| *start <= index)
+    };
 
     let lines: Vec<&[u16]> = units.split(|&u| u == u16::from(b'\n')).collect();
     let mut paragraphs = Vec::with_capacity(lines.len());

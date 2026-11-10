@@ -274,3 +274,55 @@ fn projection_equality_numbered_start_matters_only_at_a_groups_first_item() {
     let c = [numbered("one", 4), numbered("two", 0)];
     assert!(!formats_round_trip_equal(&a, &c));
 }
+
+/// Each line and span used to scan every run from the start (200k runs took
+/// minutes in a debug build).
+#[test]
+fn decode_finds_runs_without_rescanning_them_per_line() {
+    let lines = 100_000;
+    let text = "ab\n".repeat(lines);
+    let runs: Vec<AttributeRun> = (0..lines)
+        .flat_map(|_| {
+            [
+                AttributeRun {
+                    length: Some(1),
+                    font_hints: Some(1),
+                    ..Default::default()
+                },
+                AttributeRun::with_length(0),
+                styled(2, 1),
+            ]
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let result = decode_note_format(&text, &runs).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let bold = InlineStyle {
+        bold: true,
+        ..InlineStyle::PLAIN
+    };
+    assert_eq!(result.len(), lines + 1);
+    for paragraph in &result[..lines] {
+        assert_eq!(paragraph.kind, ParagraphKind::Heading);
+        assert_eq!(paragraph.spans, vec![span(bold.clone(), 1), plain(1)]);
+    }
+    assert_eq!(result[lines].kind, ParagraphKind::Body);
+}
+
+fn nested(length: u32, style: u32, indent: i32, block_quote_level: u32) -> AttributeRun {
+    let mut run = styled(length, style);
+    let ps = run.paragraph_style.as_mut().unwrap();
+    ps.indent = Some(indent);
+    ps.block_quote_level = Some(block_quote_level);
+    run
+}
+
+#[test]
+fn decode_refuses_nesting_deeper_than_apple_notes_writes() {
+    let deep = "the note nests quotes or lists more than 16 levels deep, deeper than this tool can represent";
+    assert_eq!(decode_note_format("x", &[nested(1, 3, 0, 20_000)]).unwrap_err(), deep);
+    assert_eq!(decode_note_format("x", &[nested(1, 100, 20_000, 0)]).unwrap_err(), deep);
+    assert_eq!(decode_note_format("x", &[nested(1, 100, -1, 0)]).unwrap_err(), deep);
+    let kept = decode_note_format("x", &[nested(1, 100, 16, 16)]).unwrap();
+    assert_eq!((kept[0].indent, kept[0].block_quote_level), (16, 16));
+}

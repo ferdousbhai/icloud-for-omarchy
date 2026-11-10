@@ -13,14 +13,30 @@ pub struct VersionedDocument {
     pub data: Vec<u8>,
 }
 
+/// The most a note's document may inflate to: far above any real note's
+/// text, far below what a small hostile payload can claim (1 MiB of deflate
+/// inflates to 1 GiB).
+pub const MAX_INFLATED_DOCUMENT: u64 = 64 << 20;
+
 /// `decompressNoteDocument`: gunzip when the gzip magic is present, else
-/// zlib-inflate.
+/// zlib-inflate. Past `MAX_INFLATED_DOCUMENT` it is `Err`, so the note is
+/// undecodable rather than the sync out of memory.
 pub fn decompress_note_document(buf: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     if buf.len() >= 2 && buf[0] == 0x1f && buf[1] == 0x8b {
-        flate2::read::MultiGzDecoder::new(buf).read_to_end(&mut out)?;
+        flate2::read::MultiGzDecoder::new(buf)
+            .take(MAX_INFLATED_DOCUMENT + 1)
+            .read_to_end(&mut out)?;
     } else {
-        flate2::read::ZlibDecoder::new(buf).read_to_end(&mut out)?;
+        flate2::read::ZlibDecoder::new(buf)
+            .take(MAX_INFLATED_DOCUMENT + 1)
+            .read_to_end(&mut out)?;
+    }
+    if out.len() as u64 > MAX_INFLATED_DOCUMENT {
+        return Err(DocError::Invalid(format!(
+            "the note's document inflates past {} MiB",
+            MAX_INFLATED_DOCUMENT >> 20
+        )));
     }
     Ok(out)
 }

@@ -1834,7 +1834,9 @@ fn prepare_note_text_update(
     if record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) {
         return Ok(Err(TextUpdateRefusal::TextAsAsset));
     }
-    let raw = decompress_note_document(&js::base64_decode(text_b64)).map_err(|e| Error::Internal(e.to_string()))?;
+    let Ok(raw) = decompress_note_document(&js::base64_decode(text_b64)) else {
+        return Ok(Err(TextUpdateRefusal::NoTextData));
+    };
     if !note_document_round_trips(&raw) {
         return Ok(Err(TextUpdateRefusal::NotRoundTrip));
     }

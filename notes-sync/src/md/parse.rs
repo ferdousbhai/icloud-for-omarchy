@@ -4,7 +4,10 @@
 
 use markdown::mdast;
 
-use crate::doc::format::{FormatParagraph, InlineSpan, InlineStyle, ParagraphKind, trim_trailing_whitespace};
+use crate::doc::format::{
+    FormatParagraph, InlineSpan, InlineStyle, MAX_NESTING, ParagraphKind, too_deeply_nested_reason,
+    trim_trailing_whitespace,
+};
 use crate::js;
 
 /// `{status: "ok", paragraphs, text}`.
@@ -28,17 +31,82 @@ fn refuse<T>(reason: impl Into<String>) -> Result<T, ParseRefusal> {
 }
 
 /// remark-parse + remark-gfm, as markdown-rs options.
-pub(crate) fn parse_options() -> markdown::ParseOptions {
+fn parse_options() -> markdown::ParseOptions {
     markdown::ParseOptions::gfm()
 }
 
-/// The mdast tree remark would build for `source`, or `None` where
-/// markdown-rs 1.0.0 panics (a few pathological list/fence nestings).
-pub(crate) fn to_mdast(source: &str) -> Option<mdast::Node> {
-    let parsed = std::panic::catch_unwind(|| markdown::to_mdast(source, &parse_options())).ok()?;
-    let mut root = parsed.expect("markdown without MDX always parses");
+/// Why `to_mdast` has no tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unparsed {
+    /// markdown-rs 1.0.0 panicked (a few pathological list/fence nestings), or
+    /// no thread could be started to run it.
+    Panicked,
+    /// The tree would be deeper than `MAX_TREE_DEPTH`.
+    TooDeep,
+}
+
+/// How deep a parsed tree may be: `MAX_NESTING` quotes around `MAX_NESTING`
+/// nested lists (two nodes a level) and a few inline styles, with room to
+/// spare. The fix-ups, the parser and the tree's own drop all recurse per
+/// level, so a deeper tree never leaves `parse_bounded`.
+const MAX_TREE_DEPTH: usize = 128;
+
+/// markdown-rs tokenizes without recursing per level (10000 levels parse on a
+/// 64 KiB stack), but it runs on its own generous stack all the same: nothing
+/// a vault file holds may abort the process.
+const PARSER_STACK_BYTES: usize = 32 << 20;
+
+/// markdown-rs's tree for `source`, refused where it panics or nests deeper
+/// than `MAX_TREE_DEPTH`.
+pub(crate) fn parse_bounded(source: &str) -> Result<mdast::Node, Unparsed> {
+    let parsed = std::thread::scope(|scope| {
+        let parser = std::thread::Builder::new()
+            .stack_size(PARSER_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                let root = markdown::to_mdast(source, &parse_options()).expect("markdown without MDX always parses");
+                if exceeds_depth(&root, MAX_TREE_DEPTH) {
+                    dismantle(root);
+                    return Err(Unparsed::TooDeep);
+                }
+                Ok(root)
+            })
+            .map_err(|_| Unparsed::Panicked)?;
+        parser.join().map_err(|_| Unparsed::Panicked)
+    });
+    parsed?
+}
+
+/// Whether `root` has a node more than `limit` levels down, without recursing.
+fn exceeds_depth(root: &mdast::Node, limit: usize) -> bool {
+    let mut pending = vec![(root, 1)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > limit {
+            return true;
+        }
+        pending.extend(node.children().into_iter().flatten().map(|child| (child, depth + 1)));
+    }
+    false
+}
+
+/// Drop `root` a node at a time: dropping it whole recurses per level.
+fn dismantle(root: mdast::Node) {
+    let mut pending = vec![root];
+    while let Some(mut node) = pending.pop() {
+        if let Some(children) = node.children_mut() {
+            pending.append(children);
+        }
+    }
+}
+
+/// The mdast tree remark would build for `source`, refused where `source`
+/// nests too deeply to parse safely or markdown-rs panics.
+pub(crate) fn to_mdast(source: &str) -> Result<mdast::Node, Unparsed> {
+    if too_deeply_nested(source) {
+        return Err(Unparsed::TooDeep);
+    }
+    let mut root = parse_bounded(source)?;
     super::mdast_fix::fix_tree(&mut root, source);
-    Some(root)
+    Ok(root)
 }
 
 /// The mdast `type` of a markdown-rs node.
@@ -90,16 +158,124 @@ fn node_lines(node: &mdast::Node) -> (usize, usize) {
     (position.start.line, position.end.line)
 }
 
+/// `markdown`'s lines as markdown-rs numbers them: `\r\n`, a lone `\r` and
+/// `\n` each end one.
+fn source_lines(markdown: &str) -> Vec<&str> {
+    let bytes = markdown.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\n' => {
+                lines.push(&markdown[start..at]);
+                at += 1;
+            }
+            b'\r' => {
+                lines.push(&markdown[start..at]);
+                at += if bytes.get(at + 1) == Some(&b'\n') { 2 } else { 1 };
+            }
+            _ => {
+                at += 1;
+                continue;
+            }
+        }
+        start = at;
+    }
+    lines.push(&markdown[start..]);
+    lines
+}
+
+/// How deep a line's quotes and lists may nest. markdown-rs recurses once per
+/// level (thousands overflow the stack) and slows quadratically with depth;
+/// rendered notes stay well below it (`MAX_NESTING` of each, plus indentation).
+const MAX_MARKDOWN_NESTING: usize = 64;
+
+/// Whether some line opens more than `MAX_MARKDOWN_NESTING` containers: its
+/// leading `>` and list markers, plus its indentation counted as a list level
+/// per two columns. Lines of a fenced code block opened outside any container
+/// are code, however they start: such a fence runs to its closing fence or
+/// the end of the note, so skipping them hides no nesting.
+fn too_deeply_nested(markdown: &str) -> bool {
+    let mut fence: Option<(u8, usize)> = None;
+    source_lines(markdown).iter().any(|line| {
+        if let Some((marker, length)) = fence {
+            if top_level_fence(line).is_some_and(|(m, l, info)| m == marker && l >= length && info.trim().is_empty()) {
+                fence = None;
+            }
+            return false;
+        }
+        if let Some((marker, length, info)) = top_level_fence(line)
+            && !(marker == b'`' && info.contains('`'))
+        {
+            fence = Some((marker, length));
+            return false;
+        }
+        let bytes = line.as_bytes();
+        let (mut at, mut columns, mut markers) = (0, 0, 0);
+        loop {
+            let marker_end = match bytes.get(at) {
+                Some(b' ') => {
+                    columns += 1;
+                    at += 1;
+                    continue;
+                }
+                Some(b'\t') => {
+                    columns += 4;
+                    at += 1;
+                    continue;
+                }
+                Some(b'>') => at + 1,
+                Some(b'-' | b'*' | b'+') => at + 1,
+                Some(b'0'..=b'9') => {
+                    let digits = bytes[at..].iter().take_while(|b| b.is_ascii_digit()).count();
+                    match bytes.get(at + digits) {
+                        Some(b'.' | b')') => at + digits + 1,
+                        _ => break,
+                    }
+                }
+                _ => break,
+            };
+            if bytes[at] != b'>' && !matches!(bytes.get(marker_end), None | Some(b' ' | b'\t')) {
+                break;
+            }
+            markers += 1;
+            at = marker_end;
+        }
+        markers > 0 && markers + columns / 2 > MAX_MARKDOWN_NESTING
+    })
+}
+
+/// `line` as a code fence outside any container: up to three spaces, then
+/// three or more backticks or tildes. Its marker, length and the rest.
+fn top_level_fence(line: &str) -> Option<(u8, usize, &str)> {
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let marker = *rest.as_bytes().first().filter(|b| matches!(b, b'`' | b'~'))?;
+    let length = rest.bytes().take_while(|&b| b == marker).count();
+    (length >= 3).then(|| (marker, length, &rest[length..]))
+}
+
 /// `parseNoteMarkdown`.
 pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRefusal> {
-    let lines: Vec<&str> = markdown.split('\n').collect();
-    let Some(root) = to_mdast(markdown) else {
-        return refuse("the markdown parser couldn't read this note's list structure");
+    if too_deeply_nested(markdown) {
+        return refuse(too_deeply_nested_reason());
+    }
+    let lines = source_lines(markdown);
+    let root = match to_mdast(markdown) {
+        Ok(root) => root,
+        Err(Unparsed::TooDeep) => {
+            return refuse("the note nests its Markdown (quotes, lists, emphasis or links) too deeply to read");
+        }
+        Err(Unparsed::Panicked) => return refuse("the markdown parser couldn't read this note's list structure"),
     };
     let mut parser = Parser {
         source: markdown,
         lines: &lines,
         line_output: vec![LineOutput::Untouched; lines.len()],
+        line_missed: None,
     };
     for child in root.children().map(Vec::as_slice).unwrap_or(&[]) {
         parser.walk_block(child, 0)?;
@@ -150,10 +326,16 @@ struct Parser<'a> {
     source: &'a str,
     lines: &'a [&'a str],
     line_output: Vec<LineOutput>,
+    /// A node line past `lines` (the two disagreeing on a line ending):
+    /// `sweep` refuses rather than guess.
+    line_missed: Option<usize>,
 }
 
 impl Parser<'_> {
     fn sweep(&self) -> Result<Vec<FormatParagraph>, ParseRefusal> {
+        if let Some(line) = self.line_missed {
+            return refuse(format!("line {line} couldn't be matched to the note's source lines"));
+        }
         let mut out = Vec::new();
         for (index, recorded) in self.line_output.iter().enumerate() {
             match recorded {
@@ -180,8 +362,18 @@ impl Parser<'_> {
         Ok(out)
     }
 
+    fn slot(&mut self, line_number: usize) -> Option<&mut LineOutput> {
+        let slot = line_number
+            .checked_sub(1)
+            .and_then(|index| self.line_output.get_mut(index));
+        if slot.is_none() {
+            self.line_missed.get_or_insert(line_number);
+        }
+        slot
+    }
+
     fn record(&mut self, line_number: usize, paragraph: FormatParagraph) {
-        let slot = &mut self.line_output[line_number - 1];
+        let Some(slot) = self.slot(line_number) else { return };
         match slot {
             LineOutput::Paragraphs(existing) => existing.push(paragraph),
             _ => *slot = LineOutput::Paragraphs(vec![paragraph]),
@@ -189,7 +381,7 @@ impl Parser<'_> {
     }
 
     fn mark_syntax(&mut self, line_number: usize) {
-        let slot = &mut self.line_output[line_number - 1];
+        let Some(slot) = self.slot(line_number) else { return };
         if matches!(slot, LineOutput::Untouched) {
             *slot = LineOutput::Syntax;
         }
@@ -205,6 +397,7 @@ impl Parser<'_> {
                 self.record_code(&code.value, lines, block_quote_level);
                 Ok(())
             }
+            N::Blockquote(_) if block_quote_level >= MAX_NESTING => refuse(too_deeply_nested_reason()),
             N::Blockquote(quote) => {
                 for child in &quote.children {
                     self.walk_block(child, block_quote_level + 1)?;
@@ -355,6 +548,7 @@ impl Parser<'_> {
                         self.record_paragraph_lines(child, &p.children, block_quote_level, seed, start_line)?;
                         first_paragraph_seen = true;
                     }
+                    mdast::Node::List(_) if indent >= MAX_NESTING as i32 => return refuse(too_deeply_nested_reason()),
                     mdast::Node::List(nested) => self.walk_list(nested, block_quote_level, indent + 1)?,
                     other => {
                         return refuse(format!(
@@ -420,6 +614,22 @@ impl Parser<'_> {
                     make_paragraph(ParagraphKind::Body, level, text, spans, &BODY_SEED),
                 );
             }
+        }
+        // A lone `\r` ends a source line but stays inside the text, so the
+        // lines it opens are already held by the paragraphs above.
+        let lone_crs = node.position().map_or(0, |p| {
+            let bytes = self
+                .source
+                .as_bytes()
+                .get(p.start.offset..p.end.offset)
+                .unwrap_or_default();
+            (0..bytes.len())
+                .filter(|&i| bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+                .count()
+        });
+        let covered = start + piece_lines.len();
+        for line in covered..(covered + lone_crs).min(end + 1) {
+            self.mark_syntax(line);
         }
         Ok(())
     }

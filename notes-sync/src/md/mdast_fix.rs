@@ -136,8 +136,7 @@ fn fix_missed_tables(root: &mut Node, source: &str) {
             i += 1;
             continue;
         }
-        let Ok(Ok(alone)) = std::panic::catch_unwind(|| markdown::to_mdast(slice, &super::parse::parse_options()))
-        else {
+        let Ok(alone) = super::parse::parse_bounded(slice) else {
             i += 1;
             continue;
         };

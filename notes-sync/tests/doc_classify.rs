@@ -341,6 +341,58 @@ fn body_text_is_the_notes_raw_text_in_both_modes() {
     assert_eq!(filename.body_text, in_body.body_text);
 }
 
+/// Issue #21: a `\r` inside a code block or title reached the Markdown
+/// gate's parser and panicked it; such notes now decode.
+#[test]
+fn carriage_returns_in_monospaced_and_title_paragraphs_decode() {
+    let record = titled("x\ry\nbody", vec![styled(4, 4), styled(4, 3)]);
+    let result = ok(classify(&record, TitleMode::InBody));
+    assert!(result.publishable, "{:?}", result.unpublishable_reason);
+    assert_eq!(result.markdown_text, "```\nx\ry\n```\nbody");
+
+    let record = titled("h\rx\nbody", vec![styled(4, 0), styled(4, 3)]);
+    let result = ok(classify(&record, TitleMode::InBody));
+    assert!(result.publishable, "{:?}", result.unpublishable_reason);
+    assert_eq!(result.markdown_text, "h\rx\n=\nbody");
+}
+
+/// A server-supplied nesting depth used to build one Markdown node per level
+/// and overflow the stack; it now makes the note read-only.
+#[test]
+fn an_absurd_block_quote_level_or_indent_makes_the_note_read_only() {
+    for (indent, block_quote_level) in [(0, 20_000), (20_000, 0)] {
+        let run = AttributeRun {
+            length: Some(5),
+            paragraph_style: Some(ParagraphStyle {
+                style: Some(100),
+                indent: Some(indent),
+                block_quote_level: Some(block_quote_level),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = ok(classify(&titled("item\n", vec![run]), TitleMode::InBody));
+        assert!(!result.publishable);
+        assert_eq!(result.markdown_text, "item\n");
+    }
+}
+
+/// A body past the size cap is undecodable without being decoded (the zlib
+/// reader stops at its stream's end, so the padding alone would not stop it).
+#[test]
+fn an_oversize_body_is_undecodable() {
+    let (key, value, type_) = encode_text_field("small note", vec![]);
+    let mut padded = icloud_notes_sync::js::base64_decode(value.as_str().unwrap());
+    padded.resize(padded.len() + (13 << 20), 0);
+    let record = make_record(vec![(key, json!(base64_encode(&padded)), type_)]);
+    assert_eq!(
+        classify(&record, TitleMode::InBody),
+        NoteDecodeResult::Unsyncable(UnsyncableReason::Undecodable)
+    );
+    let record = make_record(vec![(key, value, type_)]);
+    assert!(ok(classify(&record, TitleMode::InBody)).publishable);
+}
+
 /// Every real fixture note classifies to its golden markdown (first
 /// exported from icloud-md).
 #[test]

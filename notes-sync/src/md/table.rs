@@ -102,7 +102,7 @@ pub fn find_markdown_table_blocks(text: &str) -> Vec<MarkdownTableBlock> {
     let mut from_line = 0;
     while from_line < lines.len() {
         let remainder = lines[from_line..].join("\n");
-        let Some(root) = to_mdast(&remainder) else {
+        let Ok(root) = to_mdast(&remainder) else {
             break;
         };
         let Some(table) = root
