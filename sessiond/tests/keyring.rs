@@ -484,14 +484,46 @@ fn keyring_speaks_the_secret_service() {
         Some(awkward)
     );
 
+    // The device trust: its own item too, never taken for the session or
+    // a password.
+    assert_eq!(keyring.get_trust().unwrap(), None);
+    keyring
+        .set_trust("someone@example.com", r#"[{"name":"DES1"}]"#)
+        .unwrap();
+    keyring
+        .set_trust("someone@example.com", r#"[{"name":"DES2"}]"#)
+        .unwrap();
+    let trusts: Vec<FakeItem> = st()
+        .items
+        .iter()
+        .filter(|i| i.attributes.get("kind").map(String::as_str) == Some("trust"))
+        .cloned()
+        .collect();
+    assert_eq!(trusts.len(), 1);
+    assert_eq!(
+        trusts[0].label,
+        "iCloud device trust (icloud-session): someone@example.com"
+    );
+    assert_eq!(
+        keyring.get_trust().unwrap().as_deref().map(String::as_str),
+        Some(r#"[{"name":"DES2"}]"#)
+    );
+    assert_eq!(
+        keyring.get_session().unwrap().as_deref().map(String::as_str),
+        Some(awkward)
+    );
+
     // Forgetting passwords removes every other icloud-session item in every
-    // collection, and nobody else's, but not the session.
+    // collection, and nobody else's, but not the session or the trust.
     assert_eq!(keyring.forget_passwords().unwrap(), 2);
     let mut left: Vec<String> = st().items.iter().map(|i| i.attributes["application"].clone()).collect();
     left.sort();
-    assert_eq!(left, ["icloud-session", "something-else"]);
+    assert_eq!(left, ["icloud-session", "icloud-session", "something-else"]);
     assert!(!keyring.contains("someone@example.com").unwrap());
     assert!(keyring.get_session().unwrap().is_some());
+    assert!(keyring.get_trust().unwrap().is_some());
+    keyring.remove_trust().unwrap();
+    assert_eq!(keyring.get_trust().unwrap(), None);
     // The error above dropped the session; the next call opened another.
     assert_eq!(st().sessions.len(), 2);
 

@@ -3,12 +3,17 @@
 //! and exits 0; closing the window exits 1. icloud-sessiond runs it for
 //! `SignIn()` (no flags), `AuthorizeFindMy()` (`--find`) and the stored
 //! password's Find My sign-in (`--find --autofill`); run it by hand to try
-//! a sign-in (it stores nothing but its WebKit profile).
+//! a sign-in. It stores nothing: its WebKit profile is in memory only.
 //!
 //! ```json
 //! {"cookies":[{"name":"X-APPLE-WEBAUTH-TOKEN","value":"…","domain":".icloud.com","path":"/","expires":1790000000}],
+//!  "trust":[{"name":"DES…","value":"…","domain":"idmsa.apple.com","path":"/","expires":1800000000}],
 //!  "clientId":"…","clientBuildNumber":"…","clientMasteringNumber":"…","dsid":"…"}
 //! ```
+//!
+//! `cookies` are the icloud.com ones; `trust` the device trust of any
+//! Apple domain ([`is_trust_cookie`]), which the daemon keeps in the keyring
+//! and hands the next window, so a browser trusted once skips 2FA.
 //!
 //! The client params are the default build numbers and a clientId this
 //! window generates. Once the jar holds an X-APPLE-WEBAUTH-TOKEN (on a
@@ -26,6 +31,9 @@
 //!   stdin, fills them in on Apple's page unseen, and shows the window
 //!   only if it has not finished within 40 s (a 2FA code, say). Apple
 //!   saying the password is wrong exits 3.
+//! - `--cookies` reads a JSON list of cookies (as printed, of icloud.com
+//!   and apple.com only) from the first line of stdin, before the Apple ID,
+//!   and puts them in the jar before the page loads.
 //!
 //! Environment:
 //! - `ICLOUD_SESSION_SIGNIN_UA`: `safari` for a macOS Safari user agent,
@@ -38,8 +46,8 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
 
-use icloud_sessiond::cookies::{TOKEN, is_icloud_domain};
-use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER, Paths, create_private_dir};
+use icloud_sessiond::cookies::{Cookie, TOKEN, is_apple_domain, is_icloud_domain, is_trust_cookie};
+use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER};
 use serde_json::{Value, json};
 use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
@@ -274,24 +282,70 @@ fn stays_in_window(uri: &str) -> bool {
     }
 }
 
-fn cookies_json(cookies: Vec<soup::Cookie>) -> Vec<Value> {
-    cookies
-        .into_iter()
-        .filter_map(|mut c| {
-            let domain = c.domain()?.to_string();
-            if !is_icloud_domain(&domain) {
-                return None;
-            }
-            let expires = c.expires().map(|t| t.to_unix()).filter(|&t| t > 0);
-            Some(json!({
-                "name": c.name()?.as_str(),
-                "value": c.value().map(|v| v.to_string()).unwrap_or_default(),
-                "domain": domain,
-                "path": c.path().map_or_else(|| "/".to_string(), |p| p.to_string()),
-                "expires": expires,
-            }))
-        })
-        .collect()
+fn from_soup(mut c: soup::Cookie) -> Option<Cookie> {
+    Some(Cookie {
+        name: c.name()?.to_string(),
+        value: c.value().map(|v| v.to_string()).unwrap_or_default(),
+        domain: c.domain()?.to_string(),
+        path: c.path().map_or_else(|| "/".to_string(), |p| p.to_string()),
+        expires: c.expires().map(|t| t.to_unix()).filter(|&t| t > 0).map(|t| t as u64),
+    })
+}
+
+/// A cookie as WebKit's jar takes it. Every Apple cookie is Secure, and
+/// `SameSite=None` lets the sign-in frame (idmsa.apple.com inside
+/// www.icloud.com) send its own.
+fn to_soup(c: &Cookie) -> soup::Cookie {
+    let mut cookie = soup::Cookie::new(&c.name, &c.value, &c.domain, &c.path, -1);
+    if let Some(expires) = c.expires.and_then(|e| glib::DateTime::from_unix_utc(e as i64).ok()) {
+        cookie.set_expires(&expires);
+    }
+    cookie.set_secure(true);
+    cookie.set_same_site_policy(soup::SameSitePolicy::None);
+    cookie
+}
+
+/// What is printed of the jar: its icloud.com cookies, and its device
+/// trust from any Apple domain.
+fn capture_cookies(jar: Vec<Cookie>) -> (Vec<Cookie>, Vec<Cookie>) {
+    let trust = jar
+        .iter()
+        .filter(|c| is_trust_cookie(&c.name, &c.domain))
+        .cloned()
+        .collect();
+    let icloud = jar.into_iter().filter(|c| is_icloud_domain(&c.domain)).collect();
+    (icloud, trust)
+}
+
+/// What stdin holds: with `cookies`, a line of cookies for the jar (only
+/// icloud.com and apple.com ones are kept); with `autofill`, then the
+/// Apple ID and the password, one per line.
+type Input = (Vec<Cookie>, Option<(String, String)>);
+
+fn read_input(
+    mut lines: impl Iterator<Item = std::io::Result<String>>,
+    cookies: bool,
+    autofill: bool,
+) -> Result<Input, String> {
+    let jar = if cookies {
+        let line = lines.next().and_then(Result::ok).unwrap_or_default();
+        let jar: Vec<Cookie> =
+            serde_json::from_str(&line).map_err(|e| format!("--cookies needs a JSON list of cookies on stdin: {e}"))?;
+        jar.into_iter()
+            .filter(|c| !c.name.is_empty() && (is_icloud_domain(&c.domain) || is_apple_domain(&c.domain)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let credentials = if autofill {
+        match (lines.next(), lines.next()) {
+            (Some(Ok(id)), Some(Ok(pw))) if !id.is_empty() && !pw.is_empty() => Some((id, pw)),
+            _ => return Err("--autofill needs the Apple ID and the password on stdin".into()),
+        }
+    } else {
+        None
+    };
+    Ok((jar, credentials))
 }
 
 struct Capture {
@@ -331,7 +385,9 @@ impl Capture {
                 match result {
                     Ok(cookies) => {
                         let mut out = client_params(&me2.client_id);
-                        out["cookies"] = Value::Array(cookies_json(cookies));
+                        let (icloud, trust) = capture_cookies(cookies.into_iter().filter_map(from_soup).collect());
+                        out["cookies"] = json!(icloud);
+                        out["trust"] = json!(trust);
                         if let Some(dsid) = me2.dsid.borrow().as_ref() {
                             out["dsid"] = Value::String(dsid.clone());
                         }
@@ -432,36 +488,34 @@ impl Capture {
 const APP_ID: &str = "io.github.ferdousbhai.ICloudSession";
 
 fn main() -> ExitCode {
-    let (mut find, mut autofill) = (false, false);
+    let (mut find, mut autofill, mut with_cookies) = (false, false, false);
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--find" => find = true,
             "--autofill" => autofill = true,
+            "--cookies" => with_cookies = true,
             "-V" | "--version" => {
                 println!("icloud-session-signin {}", env!("CARGO_PKG_VERSION"));
                 return ExitCode::SUCCESS;
             }
             _ => {
                 eprintln!(
-                    "usage: icloud-session-signin [--find] [--autofill]   (prints the captured session as JSON)\n\
-                     --autofill reads the Apple ID and the password, one per line, from stdin"
+                    "usage: icloud-session-signin [--find] [--autofill] [--cookies]   (prints the captured session as JSON)\n\
+                     --cookies reads a JSON list of cookies for the jar from the first line of stdin\n\
+                     --autofill then reads the Apple ID and the password, one per line"
                 );
                 return ExitCode::from(64);
             }
         }
     }
-    // Read before any window opens; kept only in the page script below.
-    let credentials = if autofill {
-        let mut lines = std::io::stdin().lines();
-        match (lines.next(), lines.next()) {
-            (Some(Ok(id)), Some(Ok(pw))) if !id.is_empty() && !pw.is_empty() => Some((id, pw)),
-            _ => {
-                eprintln!("icloud-session-signin: --autofill needs the Apple ID and the password on stdin");
-                return ExitCode::from(64);
-            }
+    // Read before any window opens; the credentials are kept only in the
+    // page script below, the cookies only in WebKit's jar.
+    let (jar, credentials) = match read_input(std::io::stdin().lines(), with_cookies, autofill) {
+        Ok(input) => input,
+        Err(e) => {
+            eprintln!("icloud-session-signin: {e}");
+            return ExitCode::from(64);
         }
-    } else {
-        None
     };
     // No GtkApplication here, so the Wayland app_id is the program name: make
     // it ours, matching the desktop entry, not "GTK Application".
@@ -472,23 +526,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let Paths {
-        webkit_data: data_dir,
-        webkit_cache: cache_dir,
-        ..
-    } = Paths::from_env();
-    for dir in [&data_dir, &cache_dir] {
-        let _ = create_private_dir(dir);
-    }
-    let session = webkit6::NetworkSession::new(data_dir.to_str(), cache_dir.to_str());
+    // In memory only: the jar holds the whole web session, which belongs
+    // in the keyring (the daemon's), never in a file. What should outlive
+    // the window, the device trust, comes in with `--cookies`.
+    let session = webkit6::NetworkSession::new_ephemeral();
     let Some(cookies) = session.cookie_manager() else {
         eprintln!("icloud-session-signin: WebKit has no cookie manager");
         return ExitCode::FAILURE;
     };
-    cookies.set_persistent_storage(
-        data_dir.join("cookies.sqlite").to_str().unwrap_or_default(),
-        webkit6::CookiePersistentStorage::Sqlite,
-    );
     // Apple's sign-in form is an idmsa.apple.com frame inside
     // www.icloud.com, so its cookies are third-party ones, which WebKitGTK 6
     // refuses by default. The window only ever loads Apple (see below).
@@ -659,7 +704,18 @@ fn main() -> ExitCode {
             glib::Propagation::Proceed
         });
     }
-    view.load_uri(if find { FIND } else { HOME });
+    {
+        // The page loads once the jar holds what `--cookies` gave.
+        let (manager, view) = (capture.cookies.clone(), view.clone());
+        glib::MainContext::default().spawn_local(async move {
+            for cookie in &jar {
+                if let Err(e) = manager.add_cookie_future(&to_soup(cookie)).await {
+                    eprintln!("icloud-session-signin: adding cookie {}: {e}", cookie.name);
+                }
+            }
+            view.load_uri(if find { FIND } else { HOME });
+        });
+    }
     if autofill {
         // Filled in unseen; shown only if Apple wants more than the password
         // (a 2FA code, a new-terms page) and it hasn't finished by then.
@@ -696,6 +752,56 @@ mod tests {
         assert!(!stays_in_window("https://example.com/?u=https://www.icloud.com/"));
         assert!(!stays_in_window("file:///etc/passwd"));
         assert!(!stays_in_window("not a url"));
+    }
+
+    fn cookie(name: &str, domain: &str) -> Cookie {
+        Cookie {
+            domain: domain.into(),
+            ..Cookie::new(name, "v")
+        }
+    }
+
+    #[test]
+    fn the_capture_prints_icloud_cookies_and_trust_apart() {
+        let jar = vec![
+            cookie(TOKEN, ".icloud.com"),
+            cookie("X-APPLE-WEBAUTH-HSA-TRUST", ".icloud.com"),
+            cookie("DES1f2e", "idmsa.apple.com"),
+            cookie("myacinfo", ".apple.com"),
+            cookie("aasp", "idmsa.apple.com"),
+            cookie("other", "example.com"),
+        ];
+        let (icloud, trust) = capture_cookies(jar);
+        let names = |v: &[Cookie]| v.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&icloud), [TOKEN, "X-APPLE-WEBAUTH-HSA-TRUST"]);
+        assert_eq!(names(&trust), ["X-APPLE-WEBAUTH-HSA-TRUST", "DES1f2e"]);
+        // Printed as the daemon reads it.
+        let printed = json!(trust).to_string();
+        assert_eq!(serde_json::from_str::<Vec<Cookie>>(&printed).unwrap(), trust);
+    }
+
+    #[test]
+    fn stdin_holds_the_cookies_then_the_credentials() {
+        let lines = |text: &str| text.lines().map(|l| Ok(l.to_string())).collect::<Vec<_>>().into_iter();
+        let given = json!([
+            cookie("DES1", "idmsa.apple.com"),
+            cookie(TOKEN, ".icloud.com"),
+            cookie("tracker", "example.com"),
+            cookie("", ".icloud.com"),
+        ]);
+        let (jar, credentials) = read_input(lines(&format!("{given}\nme@example.com\npw\n")), true, true).unwrap();
+        assert_eq!(jar, [cookie("DES1", "idmsa.apple.com"), cookie(TOKEN, ".icloud.com")]);
+        assert_eq!(credentials, Some(("me@example.com".into(), "pw".into())));
+
+        let (jar, credentials) = read_input(lines("me@example.com\npw\n"), false, true).unwrap();
+        assert!(jar.is_empty());
+        assert_eq!(credentials.unwrap().0, "me@example.com");
+        assert_eq!(read_input(lines("[]\n"), true, false).unwrap(), (vec![], None));
+        // Nothing is read without a flag (a window run by hand).
+        assert_eq!(read_input(lines("garbage"), false, false).unwrap(), (vec![], None));
+        assert!(read_input(lines("not json\n"), true, false).is_err());
+        assert!(read_input(lines(""), true, false).is_err());
+        assert!(read_input(lines("[]\nme@example.com\n"), true, true).is_err());
     }
 
     #[test]

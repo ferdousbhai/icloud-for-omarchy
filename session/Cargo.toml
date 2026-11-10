@@ -27,5 +27,6 @@ url.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
+flate2 = "1"
 tempfile.workspace = true
 tiny_http.workspace = true

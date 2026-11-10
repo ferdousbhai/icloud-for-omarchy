@@ -27,8 +27,11 @@ no truncated-read retries and no status polling.
 
 - **Sign-in.** `SignIn()` runs `icloud-session-signin`, a window showing
   `https://www.icloud.com/`: Apple's own page, so every 2FA flavour and
-  "Trust this browser" work. Its WebKit profile persists, so a later
-  sign-in usually needs no 2FA. Once the jar holds a session token, the
+  "Trust this browser" work. Its WebKit profile is in memory only; the
+  device trust any window leaves (icloud.com's `X-APPLE-WEBAUTH-HSA-TRUST`, the
+  sign-in frame's `DES…` cookies) is kept in the keyring and handed to the
+  next window with the account's jar, on its stdin (`--cookies`), so a
+  later sign-in usually needs no 2FA. Once the jar holds a session token, the
   window makes its own `/validate` call from the page (the default build
   numbers and a clientId it generates); when that answers with `dsInfo`
   and no pending `hsaChallengeRequired` (icloud-md's rule), the window
@@ -212,7 +215,7 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `FindMyPasswordStored` | property | `b`, the keyring holds the Apple ID password for the signed-in account (false when signed out) |
 | `SetPassword(s)` | method | signs in to Find My once with the password (the autofill window, below). If Apple refuses it, nothing is stored (`…Error.PasswordRejected`); otherwise it is stored in the keyring, and a sign-in that failed for another reason is reported as `…Error.Failed` ("stored the password, but the Find My sign-in with it failed: …"). Also `…Error.Failed` (keyring), `…Error.SignInRequired` |
 | `ForgetPassword()` | method | removes the stored password(s) from the keyring; the session's item stays |
-| `SignOut()` | method | forgets the account (and its Find My jar) and the WebKit profile. `…Error.KeyringUnavailable`: signed out, but the keyring would not remove the session's item; the next start removes it |
+| `SignOut()` | method | forgets the account (and its Find My jar) and the device trust. `…Error.KeyringUnavailable`: signed out, but the keyring would not remove the session's item; the next start removes it |
 
 Property changes are announced with the standard
 `org.freedesktop.DBus.Properties.PropertiesChanged` signal, one signal per
@@ -282,8 +285,8 @@ Exit codes, the table every iCloud tool shares ([docs/CLI.md](../docs/CLI.md)):
 | Secret Service (keyring), default collection | daemon | The cookie jars: one item labelled `iCloud session (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=session`, its secret JSON `{dsid, cookies, find_my}`: the main jar (name, value, domain, path, expires; session-only cookies too) and, once authorized, the Find My jar (`cookies`, `client_params`, `captured_at`). Written only when a jar changes. |
 | `$XDG_STATE_HOME/icloud-session/session-removal-pending` (0600, empty) | daemon | Present while a sign-out still owes the keyring's session item a removal (the keyring was unavailable); the next start removes the item, then this file. A sign-in replacing the item removes it too. |
 | `$XDG_STATE_HOME/icloud-session/sign-out-reason` (0600) | daemon | `SignOutReason` as text, written at a sign-out, removed by a sign-in; absent before anyone ever signed in. |
-| `$XDG_DATA_HOME/icloud-session/webkit/` | sign-in window | its WebKit profile (cookies.sqlite, storage): device trust for later sign-ins |
-| `$XDG_CACHE_HOME/icloud-session/webkit/` | sign-in window | WebKit cache; its HTTP cache (`WebKitCache`) is deleted when the last sign-in window closes |
+| Secret Service (keyring), default collection | daemon | The device trust: one item labelled `iCloud device trust (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=trust`, its secret the JSON list of the cookies "Trust this browser" left (`X-APPLE-WEBAUTH-HSA-TRUST`, idmsa.apple.com's `DES…`), handed to the next sign-in window. Kept when Apple ends the session or a password is forgotten; removed by `SignOut()`. |
+| `$XDG_DATA_HOME/icloud-session/webkit/`, `$XDG_CACHE_HOME/icloud-session/webkit/` | older sign-in windows | their WebKit profile, the web session in plaintext (`cookies.sqlite`). The window keeps none now; the daemon deletes both at start. |
 
 `$XDG_STATE_HOME` defaults to `~/.local/state`, `$XDG_DATA_HOME` to
 `~/.local/share`, `$XDG_CACHE_HOME` to `~/.cache`. Every daemon
@@ -369,9 +372,10 @@ lockout), and once Find My's `initClient` answers prints the capture as
 `--find` does: the one-factor jar with `X-APPLE-WEBAUTH-FMIP`, the
 `dsid`, and the page's client params, which become the Find My jar's. If
 Apple wants more than the password (a 2FA code, a new-browser check) the
-window shows itself after 40 s for the user to finish. The window uses
-its own WebKit profile, as `--find` does; the daemon hands it no cookies,
-and the main jar is left alone. The client then
+window shows itself after 40 s for the user to finish. Like every
+window, it starts from the device trust and the account's jar
+(`--cookies`), and the trust it leaves replaces the stored one; the main
+jar is left alone. The client then
 retries its request once. Concurrent reports share one sign-in. Apple
 saying the password is wrong (the window exits 3), or Find My refusing
 the session it just made, stops automatic sign-in until the stored
@@ -425,12 +429,13 @@ cargo run -p icloud-sessiond --bin icloud-session-signin
 Sign in (password, 2FA, "Trust this browser"). When the page has signed in
 the window closes by itself and the captured session is printed as JSON:
 cookies for `.icloud.com` including `X-APPLE-WEBAUTH-TOKEN` with an
-`expires`, plus `clientId`, `clientBuildNumber`, `clientMasteringNumber`
-(`null` when the page's setup call did not carry them; the daemon then uses
-icloud-md's defaults and a fresh clientId). Progress goes to stderr. It uses
-the real profile directory, `~/.local/share/icloud-session/webkit/`; point
-`XDG_DATA_HOME`/`XDG_CACHE_HOME` elsewhere for a throwaway one. If Apple
-refuses the browser, retry with `ICLOUD_SESSION_SIGNIN_UA=safari`.
+`expires`, the device-trust cookies as `trust`, plus `clientId`,
+`clientBuildNumber`, `clientMasteringNumber` (`null` when the page's setup
+call did not carry them; the daemon then uses icloud-md's defaults and a
+fresh clientId). Progress goes to stderr. Nothing is written to disk: run
+by hand, without `--cookies`, it starts with an empty jar, so Apple asks
+for 2FA. If Apple refuses the browser, retry with
+`ICLOUD_SESSION_SIGNIN_UA=safari`.
 
 To check that `/validate` accepts the capture, run the whole flow:
 `icloud-session sign-in`, then `icloud-session validate` (installed

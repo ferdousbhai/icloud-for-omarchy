@@ -956,6 +956,7 @@ name = "icloud-session"
 version = "0.9.4"
 dependencies = [
  "clap",
+ "flate2",
  "futures-lite",
  "serde",
  "serde_json",
@@ -976,6 +977,7 @@ dependencies = [
  "clap",
  "icloud-session",
  "rpassword",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

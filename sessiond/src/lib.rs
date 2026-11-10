@@ -8,4 +8,5 @@ pub mod cli;
 pub mod cookies;
 pub mod daemon;
 pub mod files;
+mod old_profile;
 pub mod secrets;

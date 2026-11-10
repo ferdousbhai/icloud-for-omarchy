@@ -40,8 +40,12 @@ uuid.workspace = true
 zbus.workspace = true
 webkit6 = { version = "0.6", features = ["v2_42", "gtk_v4_18"], optional = true }
 rpassword = "7"
+# The cookies.sqlite an older sign-in window left, read once for its
+# device trust.
+rusqlite.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true
 tiny_http.workspace = true

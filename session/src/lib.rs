@@ -103,6 +103,15 @@ pub const MOCK_WEBSERVICES: &[&str] = &[
 /// it sooner.
 pub const SESSION_CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// The most a JSON answer may hold: far above any real CloudKit, Photos or
+/// Find My page, so a broken or hostile server (or a gzip bomb) cannot make
+/// a caller allocate without bound.
+const MAX_BODY: u64 = 64 << 20;
+/// The same for [`Session::get_bytes`], whose callers read small assets (a
+/// note's text) into memory; large files stream to disk with
+/// [`Session::download`].
+const MAX_BYTES: u64 = 32 << 20;
+
 const ORIGIN: &str = "https://www.icloud.com";
 const REFERER: &str = "https://www.icloud.com/";
 
@@ -909,15 +918,10 @@ impl Session {
     }
 
     /// GET a URL into memory, as [`Session::download`] fetches it (cookies
-    /// attached, no client params appended), without a temp file.
+    /// attached, no client params appended), without a temp file. A body
+    /// over 32 MiB is [`Error::BadResponse`]: download larger files.
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let response = self.send_download(url)?;
-        let mut body = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|e| Error::Network(format!("download interrupted: {e}")))?;
-        Ok(body)
+        read_limited(self.send_download(url)?, MAX_BYTES, "download interrupted")
     }
 
     /// A GET for a file: cookies attached, no client params appended.
@@ -1204,11 +1208,21 @@ fn temp_sibling(path: &Path) -> PathBuf {
 }
 
 fn read_body(response: ureq::Response) -> Result<Vec<u8>> {
+    read_limited(response, MAX_BODY, "reading response")
+}
+
+/// A body of at most `limit` bytes, counted after ureq has ungzipped it: a
+/// longer one is a `BadResponse`, never read on.
+fn read_limited(response: ureq::Response, limit: u64, interrupted: &str) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     response
         .into_reader()
+        .take(limit + 1)
         .read_to_end(&mut body)
-        .map_err(|e| Error::Network(format!("reading response: {e}")))?;
+        .map_err(|e| Error::Network(format!("{interrupted}: {e}")))?;
+    if body.len() as u64 > limit {
+        return Err(Error::BadResponse(format!("response larger than {} MiB", limit >> 20)));
+    }
     Ok(body)
 }
 

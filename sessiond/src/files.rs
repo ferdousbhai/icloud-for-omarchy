@@ -33,7 +33,8 @@ pub struct Paths {
     /// `$XDG_STATE_HOME/icloud-session/sign-out-reason`: why the account was
     /// last signed out (`SignOutReason`); removed by a sign-in.
     pub sign_out_reason: PathBuf,
-    /// `$XDG_DATA_HOME/icloud-session/webkit` (the sign-in window's profile)
+    /// `$XDG_DATA_HOME/icloud-session/webkit`: the WebKit profile older
+    /// sign-in windows kept, deleted at start (the window keeps none now)
     pub webkit_data: PathBuf,
     /// `$XDG_CACHE_HOME/icloud-session/webkit`
     pub webkit_cache: PathBuf,
