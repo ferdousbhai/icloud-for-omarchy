@@ -27,13 +27,14 @@ use crate::vault::attachments::{
     AttachmentRecords, remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments,
     safe_unlink,
 };
-use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
+use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy_of};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{reconcile_note_placements, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
 use crate::vault::layout::{PreviousLayout, build_vault_layout, note_dir_of, place_note, previous_layout_dirs};
 use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
+    write_note_file,
 };
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
@@ -475,12 +476,10 @@ pub fn run_pull_with(
                     used_in_dir.insert(file_name.clone());
                     let relative_file = posix::join(&[&note_dir, &file_name]);
                     let file_path = target_dir.join(&relative_file);
-                    std::fs::write(
-                        &file_path,
-                        compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref()),
-                    )?;
+                    let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
+                    write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
-                    write_base_copy(target_dir, &record.record_name, &body_text)?;
+                    write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     tracked.notes.insert(
                         record.record_name.clone(),
                         NoteEntry {
@@ -505,6 +504,9 @@ pub fn run_pull_with(
                 // A note someone shared with you can't be deleted from here
                 // (push refuses), so its file comes back below.
                 if local == LocalFileState::Missing && existing.shared_zone_owner.is_none() {
+                    // The base copy is the remote text as a file freshly written for it reads back.
+                    let fresh_file_text =
+                        compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
                     // Moved or renamed here and not pushed yet: the file that
                     // carries this note's id takes the remote change, merged
                     // against the old base, and the next push pairs the move.
@@ -530,7 +532,7 @@ pub fn run_pull_with(
                         }
                         let conflicted = statuses.contains(&MergeStatus::Conflict);
                         if !conflicted {
-                            write_base_copy(target_dir, &record.record_name, &body_text)?;
+                            write_base_copy_of(target_dir, &record.record_name, &fresh_file_text, title_mode)?;
                         }
                         let mut entry = existing;
                         if let Some(tag) = &record.record_change_tag {
@@ -559,7 +561,7 @@ pub fn run_pull_with(
                     // the note to Recently Deleted. Tracking follows the remote
                     // record, so the base copy is the text being deleted.
                     // (icloud-md writes the file back.)
-                    write_base_copy(target_dir, &record.record_name, &body_text)?;
+                    write_base_copy_of(target_dir, &record.record_name, &fresh_file_text, title_mode)?;
                     let mut entry = existing.clone();
                     if let Some(tag) = &record.record_change_tag {
                         entry.record_change_tag = tag.clone();
@@ -633,12 +635,11 @@ pub fn run_pull_with(
                             ),
                         });
                     }
-                    std::fs::write(
-                        &file_path,
-                        compose_note_file(&frontmatter, &body_text, &record.record_name, recorded_title.as_deref()),
-                    )?;
+                    let file_text =
+                        compose_note_file(&frontmatter, &body_text, &record.record_name, recorded_title.as_deref());
+                    write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
-                    write_base_copy(target_dir, &record.record_name, &body_text)?;
+                    write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     tracked
                         .notes
                         .insert(record.record_name.clone(), updated_entry(&existing));
@@ -1034,9 +1035,9 @@ fn handle_remote_deletion(
     let path = target_dir.join(&existing.file);
     let text = read_text(&path)?.unwrap_or_default();
     let envelope = split_frontmatter(&text, split_options(title_mode));
-    std::fs::write(
+    write_note_file(
         &path,
-        join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
+        &join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
     )?;
     // Its attachment files stay with the kept text; only tracking goes.
     tracked.notes.shift_remove(record_name);
@@ -1119,12 +1120,18 @@ pub fn merge_remote_change_into_local_file(
         return Ok(MergeStatus::UnresolvedMarkers);
     }
     let outcome = merge_note_versions(&base, &envelope.body, remote_body_text);
-    std::fs::write(
+    write_note_file(
         &path,
-        compose_note_file(&envelope.frontmatter, &outcome.text, record_name, unrepresentable_title),
+        &compose_note_file(&envelope.frontmatter, &outcome.text, record_name, unrepresentable_title),
     )?;
     if !outcome.has_conflict {
-        write_base_copy(target_dir, record_name, remote_body_text)?;
+        let remote_file_text = compose_note_file(
+            &envelope.frontmatter,
+            remote_body_text,
+            record_name,
+            unrepresentable_title,
+        );
+        write_base_copy_of(target_dir, record_name, &remote_file_text, title_mode)?;
     }
     Ok(if outcome.has_conflict {
         MergeStatus::Conflict

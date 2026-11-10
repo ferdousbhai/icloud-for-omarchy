@@ -19,7 +19,7 @@ use crate::js::posix;
 use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_file_name};
 use crate::md::frontmatter::compose_note_file;
 use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
-use crate::vault::base::write_base_copy;
+use crate::vault::base::write_base_copy_of;
 use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of};
 use crate::vault::state::{Account, CloneState, NoteEntry, TitleMode, read_clone_state, write_clone_state};
@@ -212,12 +212,10 @@ pub fn run_clone_with(
 
                 let file_path = target_dir.join(&relative_file);
                 let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
-                std::fs::write(
-                    &file_path,
-                    compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref()),
-                )?;
+                let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
+                std::fs::write(&file_path, &file_text)?;
                 apply_note_file_times(&file_path, record)?;
-                write_base_copy(target_dir, &record.record_name, &body_text)?;
+                write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                 if owner.is_some() {
                     summary.written_shared += 1;
                 } else {

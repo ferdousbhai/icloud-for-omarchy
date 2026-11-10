@@ -233,3 +233,24 @@ pub fn reference(id: &str, uti: &str) -> AttachmentReference {
         type_uti: uti.into(),
     }
 }
+
+/// Set in the child [`run_with_file_size_limit`] starts: the vault to work on.
+pub const LIMITED_VAULT_ENV: &str = "ICLOUD_NOTES_SYNC_TEST_LIMITED_VAULT";
+
+/// Runs `test` (this test binary's test of that name) again in a child whose
+/// writes stop at 512 bytes a file, as on a full disk (SIGXFSZ ignored, so a
+/// write past it fails with EFBIG), with [`LIMITED_VAULT_ENV`] set to `vault`.
+/// The test calls this when that variable is unset and does its writing when
+/// it is set.
+pub fn run_with_file_size_limit(test: &str, vault: &Path) {
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("trap '' XFSZ; ulimit -f 1 && exec \"$0\" --exact \"$1\" --test-threads 1 --quiet")
+        .arg(std::env::current_exe().unwrap())
+        .arg(test)
+        .env(LIMITED_VAULT_ENV, vault)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "the child run of {test} failed: {status}");
+}

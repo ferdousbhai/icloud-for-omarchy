@@ -189,6 +189,13 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             "another device put a note or folder in it since the last pull - run \"pull\", then delete it again".into(),
         ),
         (
+            Refusal::FolderHoldsUnsyncableNotes { count: 2 },
+            Refused,
+            "still holds 2 note(s) this tool can't sync (locked or unreadable ones), which deleting it would strand - \
+             move or delete them in Notes first; \"pull\" brings the directory back"
+                .into(),
+        ),
+        (
             Refusal::MoveChangedRemotely,
             Conflict,
             "changed remotely since the last pull - run \"pull\" first".into(),
@@ -486,6 +493,7 @@ fn every_refusal_variant_is_listed() {
             | MoveChangedRemotely
             | FolderGoneRemotely
             | FolderChangedRemotely
+            | FolderHoldsUnsyncableNotes { .. }
             | MoveRetitle { .. }
             | CreateMarkdown { .. }
             | CreateReconcile { .. }
@@ -502,7 +510,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 33, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 34, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()

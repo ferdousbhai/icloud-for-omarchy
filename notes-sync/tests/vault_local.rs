@@ -9,7 +9,7 @@ use icloud_notes_sync::md::frontmatter::compose_note_file;
 use icloud_notes_sync::vault::base::write_base_copy;
 use icloud_notes_sync::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, creation_date_of, display_path_from, find_vault_root,
-    local_file_state, modification_date_of, read_local_note,
+    local_file_state, modification_date_of, read_local_note, write_note_file,
 };
 use icloud_notes_sync::vault::state::{NoteEntry, TitleMode};
 
@@ -269,4 +269,33 @@ fn display_path_renders_a_vault_file_relative_to_the_cwd() {
         "../Work/Standup.md"
     );
     assert_eq!(display_path_from(&root, "Pie.md", &root), "Pie.md");
+}
+
+// --- writing a note file -----------------------------------------------------
+
+#[test]
+fn write_note_file_replaces_the_file_and_leaves_no_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Note.md");
+    std::fs::write(&path, "old text, longer than the new").unwrap();
+    write_note_file(&path, "new").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["Note.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_note_file_writes_through_a_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("elsewhere.md");
+    std::fs::write(&target, "old").unwrap();
+    let link = dir.path().join("Note.md");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    write_note_file(&link, "new").unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
 }

@@ -10,7 +10,7 @@ use super::base::{read_base_copy, write_base_copy};
 use super::layout::{
     RESERVED_SIBLING_DIR_NAMES, RESERVED_TOP_LEVEL_DIR_NAMES, StateDirInfo, VaultLayout, expected_note_dir, note_dir_of,
 };
-use super::local::read_text;
+use super::local::{read_text, write_note_file};
 use super::pairing::claim_names_on_disk;
 use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
@@ -193,7 +193,7 @@ fn rewrite_attachment_link(
     let new_link = format!("attachments/{}", js::encode_uri_component(new_base));
     let note_path = target_dir.join(note_file);
     if let Some(content) = read_text(&note_path)? {
-        std::fs::write(&note_path, content.replace(&old_link, &new_link))?;
+        write_note_file(&note_path, &content.replace(&old_link, &new_link))?;
     }
     if let Some(base) = read_base_copy(target_dir, record_name)? {
         write_base_copy(target_dir, record_name, &base.replace(&old_link, &new_link))?;

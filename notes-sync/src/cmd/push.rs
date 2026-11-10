@@ -57,7 +57,7 @@ use crate::vault::history::{
 use crate::vault::layout::{PreviousLayout, StateDirInfo, note_dir_of, state_dir_index};
 use crate::vault::local::{
     LocalFileState, LocalNote, apply_note_file_times, local_file_state, modification_date_of, mtime_ms,
-    read_local_note, read_text, split_options,
+    read_local_note, read_text, split_options, write_note_file,
 };
 use crate::vault::migrate::{read_vault, require_vault};
 use crate::vault::pairing::{UntrackedFile, pending_rename_target, resolve_note_ids, settle_pending_renames};
@@ -1338,20 +1338,24 @@ pub fn build_push_plan(
         ));
     }
 
-    // --- folders deleted here, once their notes are gone. Not one another
-    // device put a note or folder in since the last pull: that would orphan
-    // it. (One look at the private zone's changes, only when deleting.)
+    // --- folders deleted here, once their notes are gone. Not one still
+    // holding a note or folder this vault doesn't track: deleting it would
+    // orphan that. Another device may have put one there since the last
+    // pull, and pull never tracks locked or unreadable notes, so a folder of
+    // only those looks empty here. (One walk of the whole private zone, only
+    // when deleting.)
     let mut kept_folders: HashSet<String> = HashSet::new();
+    let mut unsyncable_in: HashMap<String, usize> = HashMap::new();
     if !folder_deletes.is_empty() {
         match state.sync_token.as_deref() {
-            Some(token) => {
-                let changes = db.fetch_all_note_records(Some(token), &mut |_| {})?;
-                // Only what this vault doesn't know yet: tracked notes there are
+            Some(_) => {
+                let zone = db.fetch_all_note_records(None, &mut |_| {})?;
+                // Only what this vault doesn't track: tracked notes there are
                 // being trashed or moved by this push.
                 let known = |rn: &String| {
                     state.notes.contains_key(rn) || state.folders.as_ref().is_some_and(|f| f.contains_key(rn))
                 };
-                for record in changes
+                for record in zone
                     .records
                     .iter()
                     .filter(|r| !r.is_deleted() && !is_in_trash(r) && !known(&r.record_name))
@@ -1361,10 +1365,24 @@ pub fn build_push_plan(
                     } else {
                         "Folder"
                     };
-                    if let Some(folder) =
+                    let Some(folder) =
                         crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
-                    {
+                    else {
+                        continue;
+                    };
+                    let syncable = match record.record_type.as_str() {
+                        "Folder" => true,
+                        "Note" => match classify_note_record(record, &ClassifyOptions { title_mode }) {
+                            NoteDecodeResult::Deleted => continue,
+                            NoteDecodeResult::Ok(_) => true,
+                            NoteDecodeResult::Unsyncable(_) => false,
+                        },
+                        _ => false,
+                    };
+                    if syncable {
                         kept_folders.insert(folder);
+                    } else {
+                        *unsyncable_in.entry(folder).or_default() += 1;
                     }
                 }
             }
@@ -1375,6 +1393,17 @@ pub fn build_push_plan(
         if kept_folders.contains(record_name) {
             entries.push(
                 PlanEntry::refused(PlanEntryKind::DeleteFolder, dir.clone(), Refusal::FolderChangedRemotely).into(),
+            );
+            continue;
+        }
+        if let Some(&count) = unsyncable_in.get(record_name) {
+            entries.push(
+                PlanEntry::refused(
+                    PlanEntryKind::DeleteFolder,
+                    dir.clone(),
+                    Refusal::FolderHoldsUnsyncableNotes { count },
+                )
+                .into(),
             );
             continue;
         }
@@ -1473,7 +1502,7 @@ pub fn apply_remote_merge(
     entry: &NoteEntry,
     merged: &RemoteMerge,
 ) -> Result<(), Error> {
-    std::fs::write(target_dir.join(&entry.file), &merged.file_text)?;
+    write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
     if !merged.has_conflict {
         write_base_copy(target_dir, record_name, &merged.remote_text)?;
     }
@@ -2327,9 +2356,9 @@ fn execute<T: Transport>(
             let path = target_dir.join(file);
             let text = read_text(&path)?.unwrap_or_default();
             let envelope = split_frontmatter(&text, split_options(state.mode()));
-            std::fs::write(
+            write_note_file(
                 &path,
-                join_frontmatter(&set_note_id(&envelope.frontmatter, &record_name), &envelope.body),
+                &join_frontmatter(&set_note_id(&envelope.frontmatter, &record_name), &envelope.body),
             )?;
             apply_note_file_times(&path, &created)?;
             if let Some(value) = created.fields.get("TextDataEncrypted").and_then(|f| f.value.as_str()) {
@@ -2363,7 +2392,7 @@ fn execute<T: Transport>(
             merged,
         } => {
             if let Some(merged) = merged {
-                std::fs::write(target_dir.join(file), &merged.file_text)?;
+                write_note_file(&target_dir.join(file), &merged.file_text)?;
                 if let Some(entry) = state.notes.get_mut(record_name) {
                     entry.record_change_tag = merged.remote_tag.clone();
                 }
@@ -2411,7 +2440,7 @@ fn execute<T: Transport>(
                 return Ok(ExecuteOutcome::failed(message));
             }
             if let Some(merged) = merged {
-                std::fs::write(target_dir.join(&entry.file), &merged.file_text)?;
+                write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
                 if let Some(tracked) = state.notes.get_mut(record_name) {
                     tracked.record_change_tag = merged.remote_tag.clone();
                 }

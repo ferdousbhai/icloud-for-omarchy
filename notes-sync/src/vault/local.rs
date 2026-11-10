@@ -1,6 +1,7 @@
 //! Working-file state, file times and vault-root discovery. Originally
 //! derived from icloud-md.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +23,36 @@ pub fn read_text(path: &Path) -> Result<Option<String>, Error> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Writes a note file whole or not at all: a temp file beside it, then a
+/// rename, so a crash or a full disk never leaves a truncated note for push
+/// to upload. An existing file keeps its permissions; a symlink keeps
+/// pointing where it did, its target replaced.
+pub fn write_note_file(path: &Path, contents: &str) -> Result<(), Error> {
+    let path = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path)?,
+        _ => path.to_path_buf(),
+    };
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()?;
+        std::fs::rename(&tmp, &path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(written?)
 }
 
 /// `SplitFrontmatterOptions` for a vault of `mode`.

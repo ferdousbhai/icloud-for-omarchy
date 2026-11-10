@@ -79,3 +79,60 @@ fn leaves_a_frontmatter_only_file_as_envelope_plus_base_copy() {
     run_restore(dir.path(), "Test Note.md").unwrap();
     assert_eq!(note(dir.path()), "---\ntags: [orphan]\n---\nOriginal synced text");
 }
+
+/// A base copy written before #21 kept the blank lines opening the body,
+/// which the restored file's envelope takes: restore leaves it clean.
+#[test]
+fn a_restored_file_reads_back_clean_when_its_base_copy_opens_with_blank_lines() {
+    use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
+    use icloud_notes_sync::vault::state::TitleMode;
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    write_base_copy(dir.path(), "REC1", "\n\nOriginal synced text").unwrap();
+    std::fs::write(
+        dir.path().join("Test Note.md"),
+        "---\ntags: [a]\n---\n\nSome local edit",
+    )
+    .unwrap();
+    run_restore(dir.path(), "Test Note.md").unwrap();
+    let entry = &state().notes["REC1"];
+    let local = local_file_state(dir.path(), entry, "REC1", TitleMode::InBody).unwrap();
+    assert_eq!(local, LocalFileState::Clean);
+}
+
+/// A restore that can't write the file whole (here a file size limit, as on
+/// a full disk) leaves the file as it was, not truncated.
+#[test]
+fn a_restore_that_cannot_be_written_whole_leaves_the_file_as_it_was() {
+    let edit = "Some local edit that can't be pushed\n".repeat(20);
+    if let Some(dir) = std::env::var_os(common::LIMITED_VAULT_ENV) {
+        assert!(
+            run_restore(Path::new(&dir), "Test Note.md").is_err(),
+            "the write was meant to fail"
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &state()).unwrap();
+    write_base_copy(dir.path(), "REC1", &"Original synced text\n".repeat(40)).unwrap();
+    std::fs::write(dir.path().join("Test Note.md"), &edit).unwrap();
+    common::run_with_file_size_limit(
+        "a_restore_that_cannot_be_written_whole_leaves_the_file_as_it_was",
+        dir.path(),
+    );
+    assert_eq!(note(dir.path()), edit);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_restored_file_keeps_its_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    let path = dir.path().join("Test Note.md");
+    std::fs::write(&path, "edited").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    run_restore(dir.path(), "Test Note.md").unwrap();
+    assert_eq!(note(dir.path()), "Original synced text");
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+}

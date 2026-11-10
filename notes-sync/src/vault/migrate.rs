@@ -54,7 +54,7 @@ fn record_title_mode_and_ids(target_dir: &Path, mut state: RawStateFile) -> Resu
             let envelope = split_frontmatter(&existing, SplitOptions::default());
             let stamped = join_frontmatter(&set_note_id(&envelope.frontmatter, record_name), &envelope.body);
             if stamped != existing {
-                std::fs::write(&path, stamped)?;
+                super::local::write_note_file(&path, &stamped)?;
             }
         }
     }

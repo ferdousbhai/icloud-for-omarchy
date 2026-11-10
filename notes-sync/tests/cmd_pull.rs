@@ -787,3 +787,29 @@ fn report_shows_deferred_rename_as_remark_not_arrow() {
         ]
     );
 }
+
+/// A merge whose file can't be written whole (here a file size limit, as on
+/// a full disk) leaves the note as it was, not truncated for push to upload.
+#[test]
+fn a_merge_that_cannot_be_written_whole_leaves_the_note_as_it_was() {
+    let local = format!("{}\n\nline two\n", "line one edited locally ".repeat(40));
+    if let Some(dir) = std::env::var_os(common::LIMITED_VAULT_ENV) {
+        let remote = format!("{}\n\nline two edited remotely\n", "line one ".repeat(40));
+        let result = merge_remote_change_into_local_file(
+            Path::new(&dir),
+            "REC1",
+            "Notes/Note.md",
+            &remote,
+            None,
+            TitleMode::InBody,
+        );
+        assert!(result.is_err(), "the write was meant to fail");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write_base_copy(dir, "REC1", &format!("{}\n\nline two\n", "line one ".repeat(40))).unwrap();
+    write_vault_file(dir, "Notes/Note.md", &local);
+    common::run_with_file_size_limit("a_merge_that_cannot_be_written_whole_leaves_the_note_as_it_was", dir);
+    assert_eq!(read(dir, "Notes/Note.md"), local);
+}
