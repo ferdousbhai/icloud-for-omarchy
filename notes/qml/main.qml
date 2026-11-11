@@ -417,8 +417,8 @@ ApplicationWindow {
         var md = noteView.model[index];
         if (typeof md === "string")
             root.openNote(backend.currentFolder, md);
-        else
-            root.openNote(md.folder || backend.currentFolder, md.file);
+        else // a search result; its folder is "" at the vault root
+            root.openNote(md.folder, md.file);
     }
 
     function kbKey(event, pane) {
@@ -455,7 +455,7 @@ ApplicationWindow {
                 root.kbFocus("notes");
             } else if (view.count > 0) {
                 var md = view.model[Math.max(0, view.currentIndex)];
-                var folder = typeof md === "string" ? backend.currentFolder : (md.folder || backend.currentFolder);
+                var folder = typeof md === "string" ? backend.currentFolder : md.folder;
                 var file = typeof md === "string" ? md : md.file;
                 if (!(file === backend.currentNote && folder === backend.currentFolder))
                     root.kbOpenNoteAt(view.currentIndex);
