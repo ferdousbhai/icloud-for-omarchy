@@ -338,10 +338,7 @@ links to its attachments stay as they are.
   exactly. Edit it in Apple Notes; the changes still sync here.
 - A note edited daily for years grows large, because Apple keeps every
   edit ever made to it; past a size, iCloud stores its text as a separate
-  file. Such a note is edited here like any other. `icloud-notes renew
-  NOTE` replaces one with a fresh copy that has none of that history, with
-  the same text, pin and creation date, and moves the old one to Recently
-  Deleted; links to the old note stop working.
+  file. Such a note is edited here like any other.
 - Folder directories sync like folders in Notes: renaming one renames the
   folder in iCloud, deleting one moves its notes to Recently Deleted and
   deletes the folder (unless another device put something in it since the

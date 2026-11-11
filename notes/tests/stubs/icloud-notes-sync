@@ -28,8 +28,6 @@
 # ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED=1: a push (alone, or as a sync's half)
 # runs but has a change refused by iCloud: its result with the failed entry,
 # exit 1, and in a sync the half's error `push_rejected` beside the result.
-# ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS=1: a sync gives every note file that has
-# no ID block one, as pushing a new note does.
 # ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR=1: such a failure also ends stderr with
 # an older engine's one-line error (sorted keys), which the app must keep
 # out of its log.
@@ -174,13 +172,6 @@ elif [ "$1" = "sync" ]; then
     [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-notes:progress:fetch:3" >&2 && echo "icloud-md:progress:fetch:3" >&2
     printf '{"ok":true,"exit_code":0,"result":{"stub":"%s","ok":true},"lines":["stub %s ok"]}' "$1" "$1"
   }
-  if [ -n "${ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS:-}" ]; then
-    while IFS= read -r -d '' f; do
-      [ "$(head -c 3 "$f")" = "---" ] && continue
-      body=$(cat "$f"; printf x)
-      printf -- '---\napple-note-id: stub-%s\n---\n%s' "$(printf %s "$f" | cksum | cut -d' ' -f1)" "${body%x}" > "$f"
-    done < <(find . -name '*.md' -not -path './.icloud-notes/*' -print0)
-  fi
   push_json=$(half push)
   pull_json=null
   case "$push_json" in
@@ -220,13 +211,6 @@ elif [ "$1" = "history" ]; then
     result '{"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}' \
       "e9  2026-09-01T00:00:00Z  changed: $2"
   fi
-elif [ "$1" = "carry-over" ]; then
-  # ICLOUD_NOTES_SYNC_STUB_LOG gets "carry-over FROM TO".
-  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "carry-over $2 $3" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
-  # ICLOUD_NOTES_SYNC_STUB_CARRY_FAIL=1: iCloud refuses it.
-  [ -n "${ICLOUD_NOTES_SYNC_STUB_CARRY_FAIL:-}" ] && fail internal "iCloud refused to carry it over: CONFLICT" "" 1
-  stub_fail
-  result "{\"from\":\"$2\",\"to\":\"$3\",\"carried\":[\"IsPinned\"]}" "Carried IsPinned over" '{"lines":["Carried IsPinned over"]}'
 elif [ "$1" = "restore" ]; then
   # Stands for "back to the last synced copy": the file gets a marker line.
   printf 'restored\n' >> "$2"

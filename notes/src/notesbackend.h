@@ -244,9 +244,6 @@ public:
     Q_INVOKABLE void runClone();
     void runPull(); // the CLI's `pull`; the window only syncs
     Q_INVOKABLE void runPush();
-    // `carry-over FROM TO`: the engine writes what Notes shows of one note
-    // besides its text (its pin, creation date, paper style) on another.
-    void runCarryOver(const QString &from, const QString &to);
     // Push whatever changed locally, then pull: the periodic sync, and what
     // launch does, so edits made while the app was closed or by another
     // program in any folder reach iCloud without a click. One engine run

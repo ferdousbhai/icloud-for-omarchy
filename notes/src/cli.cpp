@@ -186,8 +186,8 @@ const char *const kFooter =
     "`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.\n"
     "Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to\n"
     "wait for the vault's lock; 30 when a background sync holds it, none while the Notes window\n"
-    "holds it). Nothing asks without a terminal: delete, delete-folder, restore, renew and a write\n"
-    "that empties a note need --yes.\n"
+    "holds it). Nothing asks without a terminal: delete, delete-folder, restore and a write that\n"
+    "empties a note need --yes.\n"
     "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,\n"
     "session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),\n"
     "4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,\n"
@@ -268,18 +268,6 @@ const QList<Spec> &specs()
           "there for about 30 days). Asks on a terminal; without one, --yes is required.\n"
           "JSON: {action, path, sync?}",
           { QStringLiteral("--yes"), QStringLiteral("--push") }, 1, 1 },
-        { "renew", "renew NOTE [--yes]",
-          "Replace a note with a fresh copy that has none of its edit history. Apple keeps every edit\n"
-          "ever made to a note, so one edited daily for years holds megabytes of history around a page\n"
-          "of text, and every change to it uploads all of that. A new note with the same text is small\n"
-          "again. renew syncs, creates the copy, checks in iCloud that it matches, gives it the old\n"
-          "note's pin, creation date and paper style, moves the old note to Recently Deleted\n"
-          "(recoverable there for about 30 days) and gives the copy the old file name. The copy is\n"
-          "still a new note: links to the old one and its version history do not carry over. Refused\n"
-          "for a note that is read-only here, has attachments, or changed in iCloud meanwhile (both\n"
-          "notes are kept then). Asks on a terminal; without one, --yes is required.\n"
-          "JSON: {action, path, id, replaced}",
-          { QStringLiteral("--yes") }, 1, 1 },
         { "toggle", "toggle NOTE LINE [--push]",
           "Tick or untick the checklist item on LINE (1 is the first line `read` prints); a plain list\n"
           "item gains a box, as Ctrl+Enter does in the window.\n"
@@ -864,11 +852,10 @@ struct SyncOutcome {
     std::optional<Failure> failure;
 };
 
-// `what`: "carry-over" (of the note `notes[0]` to `notes[1]`), or
-// "sync" (push, then pull, in one engine run), "pull", "push" or
+// `what`: "sync" (push, then pull, in one engine run), "pull", "push" or
 // "clone", through the backend with its lock held, as the window runs them.
 // A sync still reports two runs, one per half.
-SyncOutcome runSync(NotesBackend &b, const QString &what, const QStringList &notes = {})
+SyncOutcome runSync(NotesBackend &b, const QString &what)
 {
     SyncOutcome result;
     if (auto f = needSyncTool(b)) {
@@ -931,8 +918,6 @@ SyncOutcome runSync(NotesBackend &b, const QString &what, const QStringList &not
         b.runPull();
     else if (what == u"push")
         b.runPush();
-    else if (what == u"carry-over")
-        b.runCarryOver(notes.value(0), notes.value(1));
     else
         b.runClone();
     waitFor([&] { return b.idle() && (what != u"clone" || cloneDone); });
@@ -1403,8 +1388,6 @@ Failure backendFailure(const QString &message)
         code = QStringLiteral("read_only");
     else if (message.contains(QStringLiteral("already exists")))
         code = QStringLiteral("exists");
-    else if (message.contains(QStringLiteral("attachments")))
-        code = QStringLiteral("has_attachments");
     return { code, message, code == u"exists" ? kExitUsage : kExitError, {} };
 }
 
@@ -1620,155 +1603,6 @@ Result deleteFolder(NotesBackend &b, const Args &a)
                  QStringLiteral("Moved folder %1 to the trash").arg(folder) };
 }
 
-// The most text `renew` copies: past this the copy would itself be stored
-// as a separate file, and nothing would be gained.
-constexpr qsizetype kRenewMaxBytes = 200 * 1024;
-
-// Why `renew` does not apply to the open note `n`, if it doesn't: it is
-// read-only here (a copy could not be checked against what it copies), or
-// has attachments (a new note cannot be given them from here).
-std::optional<Failure> renewRefusal(NotesBackend &b, const Note &n)
-{
-    if (!b.readOnlyReason().isEmpty())
-        return Failure{ QStringLiteral("read_only"),
-                        QStringLiteral("%1 is read-only here (this note %2), which a fresh copy does not fix").arg(n.path(), b.readOnlyReason()),
-                        kExitError, QStringLiteral("Edit it in Apple Notes; the changes still sync here.") };
-    if (!b.noteAttachments().isEmpty())
-        return Failure{ QStringLiteral("has_attachments"),
-                        QStringLiteral("%1 has attachments, which a fresh copy would not carry over").arg(n.path()), kExitError,
-                        QStringLiteral("In Apple Notes, copy everything in it into a new note and delete the old one.") };
-    return std::nullopt;
-}
-
-// A fresh copy of the note at `path`, without its edit history, in place of
-// it: what `renew` does once it may (`syncFirst` false when the caller has
-// just synced). Every step
-// that could lose text is checked against iCloud first, and a check that
-// fails stops with both notes kept.
-Result renewNote(NotesBackend &b, const QString &path, bool syncFirst)
-{
-    Note old;
-    if (syncFirst) {
-        // What iCloud has now, so the copy is of the latest text.
-        if (const SyncOutcome synced = runSync(b, QStringLiteral("sync")); synced.failure) {
-            Failure f = *synced.failure;
-            f.message = QStringLiteral("nothing was changed: the sync before the copy failed: %1").arg(f.message);
-            return f;
-        }
-        b.refresh();
-    }
-    if (auto f = resolveAndOpen(b, path, old))
-        return *f;
-    if (auto f = renewRefusal(b, old))
-        return *f;
-    const QString text = b.noteBody();
-    if (text.toUtf8().size() > kRenewMaxBytes)
-        return Failure{ QStringLiteral("too_large"),
-                        QStringLiteral("%1 has too much text of its own for a fresh copy to be any smaller").arg(old.path()), kExitError,
-                        QStringLiteral("Split it into several notes in Apple Notes.") };
-
-    // The copy, under a name of its own while both exist.
-    const QString copyTitle = old.file.chopped(3) + QStringLiteral(" (fresh copy)");
-    const QString copyFile = copyTitle + QStringLiteral(".md");
-    const QString copyPath = old.folder.isEmpty() ? copyFile : old.folder + u'/' + copyFile;
-    const QDir dir(QDir(NotesBackend::rootPath()).filePath(old.folder));
-    b.setCurrentFolder(old.folder);
-    b.refresh();
-    if (b.notes().contains(copyFile) || dir.exists(copyFile))
-        return Failure{ QStringLiteral("exists"),
-                        QStringLiteral("%1 is already there, perhaps from an earlier renew that stopped").arg(copyPath), kExitUsage,
-                        QStringLiteral("Check it against %1, delete the one you don't want, then run renew again if needed.").arg(old.path()) };
-    b.newNote(copyTitle);
-    if (b.currentNote() != copyFile)
-        return Failure{ QStringLiteral("error"), QStringLiteral("could not create %1").arg(copyPath), kExitError, {} };
-    if (!b.saveCurrentNote(text))
-        return Failure{ QStringLiteral("error"), QStringLiteral("created %1 but could not write its text").arg(copyPath), kExitError, {} };
-    const QString kept = QStringLiteral("Both notes are kept: %1 is untouched and the copy is %2.").arg(old.path(), copyPath);
-    if (const SyncOutcome synced = runSync(b, QStringLiteral("sync")); synced.failure) {
-        Failure f = *synced.failure;
-        f.message = QStringLiteral("the copy was made here but not synced: %1").arg(f.message);
-        f.hint = kept + (f.hint.isEmpty() ? QString() : u' ' + f.hint);
-        return f;
-    }
-
-    // The copy as iCloud has it: the same text, and editable.
-    b.refresh();
-    Note copy;
-    if (auto f = resolveAndOpen(b, copyPath, copy))
-        return *f;
-    if (copy.id.isEmpty() || b.noteBody() != text || !b.readOnlyReason().isEmpty())
-        return Failure{ QStringLiteral("copy_differs"),
-                        QStringLiteral("the copy of %1 did not come back from iCloud as an editable note with the same text").arg(old.path()),
-                        kExitError, kept };
-    // The copy stands where the old note stood: pinned if it was, with its
-    // creation date and paper style. Without that it would drop out of the
-    // pinned notes and sort as a note made today.
-    if (const SyncOutcome carried = runSync(b, QStringLiteral("carry-over"), { old.path(), copyPath }); carried.failure) {
-        Failure f = *carried.failure;
-        f.message = QStringLiteral("the copy is in iCloud, but the old note's pin and dates could not be carried over to it: %1").arg(f.message);
-        f.hint = kept;
-        return f;
-    }
-    // The old note, unchanged since it was copied.
-    Note still;
-    if (auto f = resolveAndOpen(b, old.path(), still))
-        return *f;
-    if (still.id != old.id || b.noteBody() != text)
-        return Failure{ QStringLiteral("changed"),
-                        QStringLiteral("%1 changed in iCloud while it was being copied").arg(old.path()), kExitError,
-                        kept + QStringLiteral(" Delete the copy and run renew again.") };
-    if (const QString err = b.deleteCurrentNote(); !err.isEmpty()) {
-        Failure f = backendFailure(err);
-        f.hint = kept;
-        return f;
-    }
-    if (const SyncOutcome synced = runSync(b, QStringLiteral("sync")); synced.failure) {
-        Failure f = *synced.failure;
-        f.message = QStringLiteral("the copy is at %1, but the old note could not be moved to Recently Deleted: %2").arg(copyPath, f.message);
-        f.hint = QStringLiteral("Delete the old note in Apple Notes; it is the one you cannot edit here.");
-        return f;
-    }
-
-    // The copy takes the old file name (and, where the file name is the
-    // title, the old title with it).
-    b.refresh();
-    QString finalPath = copyPath;
-    if (!dir.exists(old.file) && QFile::rename(dir.filePath(copyFile), dir.filePath(old.file)))
-        finalPath = old.path();
-    std::optional<Failure> lastSync = runSync(b, QStringLiteral("sync")).failure;
-    b.refresh();
-    Done done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("renew") },
-                            { QStringLiteral("path"), finalPath },
-                            { QStringLiteral("id"), copy.id },
-                            { QStringLiteral("replaced"), old.id } },
-               QStringLiteral("Replaced %1 with a fresh copy; the old note is in Recently Deleted").arg(finalPath) };
-    if (lastSync) {
-        done.text += QStringLiteral("\nThe last sync failed, so run `icloud-notes sync`: %1").arg(lastSync->message);
-        done.exit = lastSync->exit;
-    }
-    return done;
-}
-
-// `renew`: asks, then replaces the note.
-Result renew(NotesBackend &b, const Args &a)
-{
-    Note old;
-    if (auto f = resolveAndOpen(b, a.positional.at(0), old))
-        return *f;
-    if (auto f = renewRefusal(b, old))
-        return *f;
-    if (auto f = needSyncTool(b))
-        return *f;
-    if (auto f = needSignIn(b))
-        return *f;
-    if (auto f = confirm(a, QStringLiteral("Replace \"%1\" with a fresh copy that has none of its edit history? The old note goes to Recently "
-                                           "Deleted; the copy keeps its pin and creation date, but links to the old note and its "
-                                           "version history do not carry over.")
-                                .arg(old.path())))
-        return *f;
-    return renewNote(b, old.path(), true);
-}
-
 int syncCommand(NotesBackend &b, const Args &a, const QString &what)
 {
     if (what == u"clone") {
@@ -1867,8 +1701,6 @@ int runCommand(const Args &a, const Spec &spec)
         return finish(b, a, move(b, a));
     if (cmd == u"delete")
         return finish(b, a, deleteNote(b, a));
-    if (cmd == u"renew")
-        return finish(b, a, renew(b, a));
     if (cmd == u"toggle")
         return finish(b, a, toggle(b, a));
     if (cmd == u"resolve")

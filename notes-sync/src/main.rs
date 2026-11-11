@@ -33,8 +33,8 @@ use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{error_json, usage_error};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
-    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, carry_over, clone, diff, history, pull, push, restore,
-    status, sync, vault_info,
+    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
+    vault_info,
 };
 use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
@@ -122,14 +122,6 @@ enum Command {
     Status { directory: Option<PathBuf> },
     /// Discard a tracked note's local edits, reverting it to the last synced copy
     Restore { file: String, directory: Option<PathBuf> },
-    /// Give note TO what Notes shows of note FROM besides its text: its pin, creation date, paper style and
-    /// attachment view (what `icloud-notes renew` runs so a fresh copy stands where the old note stood)
-    #[command(after_help = "data is {from, to, carried: [the Note record fields copied]}.")]
-    CarryOver {
-        from: String,
-        to: String,
-        directory: Option<PathBuf>,
-    },
     /// List a note's epoch timeline, newest first
     History {
         file: String,
@@ -575,18 +567,6 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let summary = format!("Restored {} to match the last synced copy.", r.file);
             let ids = vec![r.file.clone()];
             Response::new(&r, summary).ids(ids)
-        }
-        Command::CarryOver { from, to, directory } => {
-            let target = resolve_target_dir(directory)?;
-            let _lock = lock_vault(&target, wait)?;
-            let r = carry_over::run_carry_over(&target, &from, &to)?;
-            let summary = if r.carried.is_empty() {
-                format!("{} already matches {}.", r.to, r.from)
-            } else {
-                format!("Carried {} from {} over to {}.", r.carried.join(", "), r.from, r.to)
-            };
-            let ids = vec![r.to.clone()];
-            Response::new(&r, summary.clone()).meta("lines", vec![summary]).ids(ids)
         }
         Command::VaultInfo { directory } => {
             let target = resolve_target_dir(directory)?;

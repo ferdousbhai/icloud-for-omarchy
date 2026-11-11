@@ -151,12 +151,6 @@ update for an ordinary note does, leaves the record with no text, which
 iCloud refuses ("Note record must have either TextDataEncrypted or
 TextDataAsset").
 
-`icloud-notes renew` replaces a note with a fresh copy that has none of its
-history: it pushes the copy, runs `carry-over` (`cmd::carry_over`: the old
-record's `IsPinned`, `CreationDate`, `PaperStyleType` and
-`AttachmentViewType` written on the new one, so the copy stays pinned and
-keeps its date) and trashes the old note.
-
 A push that ran but had a change refused by iCloud returns its result as
 before and exits 1 (`PushResult::failures`); in `sync` that half is
 `{ok:false, exit_code:1, result, lines, error}` with the error
@@ -165,7 +159,7 @@ before and exits 1 (`PushResult::failures`); in `sync` that half is
 Tests: tests/cloudkit_asset_body.rs (reading, and the upload on update);
 the `asset-*` scenarios cover clone, a failed download, status, push (with
 its upload) and pull end to end; tests/doc_encode.rs the trash and move
-fields; tests/cmd_carry_over.rs; tests/cmd_sync.rs the exit code.
+fields; tests/cmd_sync.rs the exit code.
 
 ### Records listed twice by CloudKit
 

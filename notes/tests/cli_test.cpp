@@ -222,7 +222,7 @@ int main(int argc, char *argv[])
         // help and --help print text, piped or not.
         check(help.code == 0 && help.out.contains("Exit codes"), "cli help");
         const QStringList commands{ "status", "folders", "list", "read", "search", "new", "write", "rename", "move",
-                                    "delete", "renew", "toggle", "resolve", "recover", "export-pdf", "new-folder",
+                                    "delete", "toggle", "resolve", "recover", "export-pdf", "new-folder",
                                     "rename-folder", "delete-folder", "sync", "pull", "push", "clone", "history",
                                     "diff", "restore" };
         bool all = true;
@@ -875,7 +875,7 @@ int main(int argc, char *argv[])
         check(nothing.code == 3 && nothing.errorCode() == QStringLiteral("not_cloned"), "cli list without a vault: not_cloned, exit 3");
     }
 
-    // ---- a push with a refused change, and renew ---------------------------------
+    // ---- a push with a refused change ------------------------------------------
     {
         const QHash<QString, QString> refusedEnv{ { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED"), QStringLiteral("1") } };
         // iCloud refusing a change is a failure, not a clean sync: exit 1,
@@ -890,71 +890,6 @@ int main(int argc, char *argv[])
         check(refusedPush.code == 1 && refusedPush.errorCode() == QStringLiteral("push_rejected")
                   && refusedPush.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral("Pushed 0 note(s)")),
               "cli push with a change iCloud refused: push_rejected, exit 1");
-
-        // renew: a fresh copy of a note, without its edit history.
-        const QString bigText = QStringLiteral("## Big\n- [ ] one\nlast line\n");
-        const auto seedBig = [&] {
-            seedVault();
-            writeFile(QStringLiteral(".icloud-notes/state.json"),
-                      stateJson(QStringLiteral("in-body"),
-                                { { "id-a", "Notes/Alpha.md" },
-                                  { "id-g", "Work/Grid.md", "is too large" },
-                                  { "id-p", "Work/Pics.md" },
-                                  { "id-big", "Notes/Big.md" } },
-                                QStringLiteral("Notes")));
-            writeFile(QStringLiteral("Notes/Big.md"), QStringLiteral("---\napple-note-id: id-big\n---\n") + bigText);
-        };
-        seedBig();
-        QFile::remove(g_scratch + QStringLiteral("/stub.log"));
-        const Run readOnly = cliJson({ QStringLiteral("renew"), QStringLiteral("grid"), QStringLiteral("--yes") });
-        const Run withFiles = cliJson({ QStringLiteral("renew"), QStringLiteral("pics"), QStringLiteral("--yes") });
-        check(readOnly.code == 1 && readOnly.errorCode() == QStringLiteral("read_only") && withFiles.code == 1
-                  && withFiles.errorCode() == QStringLiteral("has_attachments") && stubLog().filter(QStringLiteral("sync")).isEmpty(),
-              "cli renew refuses a read-only note and one with attachments, before any sync");
-        QFile::remove(g_scratch + QStringLiteral("/stub.log"));
-        check(cliJson({ QStringLiteral("renew"), QStringLiteral("big") }).code == 2 && stubLog().isEmpty(),
-              "cli renew without --yes and no terminal: refused, nothing synced");
-        // The sync before the copy fails: nothing is changed.
-        const Run early = cliJson({ QStringLiteral("renew"), QStringLiteral("big"), QStringLiteral("--yes") }, refusedEnv);
-        check(early.code == 1 && early.errorCode() == QStringLiteral("push_rejected") && exists(QStringLiteral("Notes/Big.md"))
-                  && !exists(QStringLiteral("Notes/Big (fresh copy).md")),
-              "cli renew stops before the copy when the sync fails");
-        // The whole replacement: the copy pushed, checked, the old note
-        // trashed, and the copy under the old file name.
-        QFile::remove(g_scratch + QStringLiteral("/stub.log"));
-        const Run renewed = cliJson({ QStringLiteral("renew"), QStringLiteral("big"), QStringLiteral("--yes") },
-                                    { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS"), QStringLiteral("1") } });
-        const QJsonObject made = renewed.json().toObject();
-        const QString now = readFile(QStringLiteral("Notes/Big.md"));
-        check(renewed.code == 0 && made.value(QStringLiteral("action")).toString() == QStringLiteral("renew")
-                  && made.value(QStringLiteral("path")).toString() == QStringLiteral("Notes/Big.md")
-                  && made.value(QStringLiteral("replaced")).toString() == QStringLiteral("id-big")
-                  && made.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("stub-"))
-                  && now.startsWith(QStringLiteral("---\napple-note-id: stub-")) && now.endsWith(bigText)
-                  && !exists(QStringLiteral("Notes/Big (fresh copy).md"))
-                  && QDir(g_scratch + QStringLiteral("/xdg-data/Trash/files")).entryList(QDir::Files).contains(QStringLiteral("Big.md"))
-                  && stubLog()
-                         == QStringList{ QStringLiteral("sync"), QStringLiteral("sync"),
-                                         QStringLiteral("carry-over Notes/Big.md Notes/Big (fresh copy).md"), QStringLiteral("sync"),
-                                         QStringLiteral("sync") },
-              "cli renew replaces the note with a fresh copy under the old name, carrying its pin over; the old one is trashed");
-        // The pin could not be carried over: both notes are kept.
-        seedBig();
-        const Run unpinned = cliJson({ QStringLiteral("renew"), QStringLiteral("big"), QStringLiteral("--yes") },
-                                     { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS"), QStringLiteral("1") },
-                                       { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_CARRY_FAIL"), QStringLiteral("1") } });
-        check(unpinned.code == 1 && unpinned.error().value(QStringLiteral("message")).toString().contains(QStringLiteral("could not be carried over"))
-                  && exists(QStringLiteral("Notes/Big.md")) && exists(QStringLiteral("Notes/Big (fresh copy).md"))
-                  && readFile(QStringLiteral("Notes/Big.md")).contains(QStringLiteral("apple-note-id: id-big")),
-              "cli renew keeps both notes when the pin cannot be carried over");
-        // A copy left by an earlier run is not overwritten.
-        seedBig();
-        writeFile(QStringLiteral("Notes/Big (fresh copy).md"), QStringLiteral("# Big\nleft over\n"));
-        const Run leftover = cliJson({ QStringLiteral("renew"), QStringLiteral("Notes/Big.md"), QStringLiteral("--yes") });
-        check(leftover.code == 2 && leftover.errorCode() == QStringLiteral("exists") && exists(QStringLiteral("Notes/Big.md")),
-              "cli renew refuses when a fresh copy is already there");
-
-        seedVault();
     }
 
     // ---- export-pdf (a GUI application, offscreen) -----------------------------

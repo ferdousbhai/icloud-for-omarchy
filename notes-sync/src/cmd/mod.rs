@@ -1,6 +1,5 @@
 //! Commands, their output and errors. Originally derived from icloud-md.
 
-pub mod carry_over;
 pub mod clone;
 pub mod diff;
 pub mod errors;

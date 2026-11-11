@@ -1727,11 +1727,6 @@ void NotesBackend::runPush()
     startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("push") }, QStringLiteral("Push"));
 }
 
-void NotesBackend::runCarryOver(const QString &from, const QString &to)
-{
-    startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("carry-over"), from, to }, QStringLiteral("Carry-over"));
-}
-
 void NotesBackend::runSync()
 {
     startSync(Mode::Sync, { QStringLiteral("--quiet"), QStringLiteral("sync") }, QStringLiteral("Sync"));
