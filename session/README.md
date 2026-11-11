@@ -87,7 +87,8 @@ no truncated-read retries and no status polling.
 
 ```toml
 [dependencies]
-icloud-session = "=0.7.0"
+# Not on crates.io yet: pin a suite tag (or a commit with `rev`).
+icloud-session = { git = "https://github.com/ferdousbhai/icloud-for-omarchy", tag = "v0.10.1" }
 ```
 
 ```rust
@@ -503,7 +504,7 @@ The client and daemon inherit the suite version from the root Cargo workspace;
 see [Releasing](../README.md#releasing). Historical `session-v*` tags remain.
 Publishing the app suite does not publish the client crate. When a crates.io
 release is needed, run `cargo publish --locked -p icloud-session` explicitly
-from the verified suite checkout. The dependency example above is independent of suite releases.
+from the verified suite checkout.
 
 ## License
 

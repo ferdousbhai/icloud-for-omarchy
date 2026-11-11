@@ -29,7 +29,7 @@ fi
 notes/bin/test
 
 # One file per call: `bash -n a b` parses only a and passes b to it as $1.
-for f in install.sh packaging/PKGBUILD bin/build-packages bin/arch-run bin/collect-packages bin/release bin/verify-release; do
+for f in install.sh packaging/PKGBUILD bin/build bin/build-packages bin/arch-run bin/check bin/collect-packages bin/dev-install bin/dev-uninstall bin/make-installers bin/release bin/verify-release; do
   bash -n "$f"
 done
 tests/install_test.sh

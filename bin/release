@@ -66,5 +66,7 @@ bin/make-installers dist/release
 
 gh release create "$tag" dist/release/* --repo "$gh_repo" --title "iCloud suite $version" \
   --notes "All ${#pkgname[@]} packages built from $source_commit for ${arch[*]}." --latest
-git push -q origin main
+# main may have moved while CI built. Merge, never rebase: the tag is on the
+# release commit, which must stay as it is.
+git push -q origin main || { git pull -q --no-rebase --no-edit origin main && git push -q origin main; }
 echo "Published https://github.com/$gh_repo/releases/tag/$tag; installation verification runs in CI."

@@ -204,7 +204,7 @@ impl<R: Remote> Engine<'_, R> {
                 out.push(kid);
             }
         }
-        if !fresh_enough {
+        if !trust_cache {
             self.state.set_meta("full_listing_ms", &now_ms().to_string())?;
         }
         self.state.store_remote(&out)?;
