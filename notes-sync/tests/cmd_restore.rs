@@ -136,3 +136,38 @@ fn a_restored_file_keeps_its_permissions() {
     assert_eq!(note(dir.path()), "Original synced text");
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
 }
+
+/// A missing file restore recreates is stamped like a pulled one: its
+/// apple-note-id, and in a filename-as-title vault the apple-note-title its
+/// file name can't carry (a leading dot would hide the file), so the next
+/// push doesn't retitle the note to "Untitled".
+#[test]
+fn a_recreated_file_keeps_its_note_id_and_the_title_its_name_cannot_carry() {
+    use icloud_notes_sync::cmd::push::build_push_plan;
+    use icloud_notes_sync::md::frontmatter::{read_note_id, read_note_title, split_frontmatter};
+    use icloud_notes_sync::vault::local::split_options;
+    use icloud_notes_sync::vault::state::{CloneState, NoteEntry, TitleMode};
+    let dir = tempfile::tempdir().unwrap();
+    let record = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0";
+    let title = ".plan";
+    let mut entry = NoteEntry::new("Untitled.md", "1a", 100);
+    entry.frontmatter_title = Some(title.into());
+    let state = CloneState {
+        sync_token: Some("token".into()),
+        title_mode: Some(TitleMode::Filename),
+        notes: [(record.to_owned(), entry)].into_iter().collect(),
+        ..Default::default()
+    };
+    write_clone_state(dir.path(), &state).unwrap();
+    write_base_copy(dir.path(), record, "Original synced text").unwrap();
+
+    run_restore(dir.path(), "Untitled.md").unwrap();
+
+    let text = std::fs::read_to_string(dir.path().join("Untitled.md")).unwrap();
+    let envelope = split_frontmatter(&text, split_options(TitleMode::Filename));
+    assert_eq!(read_note_id(&envelope.frontmatter).as_deref(), Some(record), "{text}");
+    assert_eq!(read_note_title(&envelope.frontmatter).as_deref(), Some(title), "{text}");
+    let plan = build_push_plan(&common::no_network(), dir.path(), &mut |_| {}).unwrap();
+    let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
+    assert!(entries.is_empty(), "{entries:?}");
+}

@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::Error;
-use crate::md::frontmatter::{join_frontmatter, split_frontmatter};
+use crate::md::frontmatter::{compose_note_file, split_frontmatter};
 use crate::vault::base::{read_base_copy, write_base_copy_of};
 use crate::vault::history::resolve_tracked_note;
 use crate::vault::local::{read_text, split_options, write_note_file};
@@ -31,7 +31,15 @@ pub fn run_restore(target_dir: &Path, file: &str) -> Result<RestoreResult, Error
     let path = target_dir.join(&tracked.entry.file);
     let existing = read_text(&path)?.unwrap_or_default();
     let envelope = split_frontmatter(&existing, split_options(state.mode()));
-    let restored = join_frontmatter(&envelope.frontmatter, &base);
+    // Stamped like every other writer: a file recreated from nothing (or
+    // stripped of its frontmatter) gets its apple-note-id back, and the
+    // apple-note-title a file name can't carry, or push would retitle it.
+    let restored = compose_note_file(
+        &envelope.frontmatter,
+        &base,
+        &tracked.record_name,
+        tracked.entry.frontmatter_title.as_deref(),
+    );
     write_note_file(&path, &restored)?;
     // A base copy from before blank lines opening a body were left out of it
     // would otherwise leave the restored file reading as modified.
