@@ -368,7 +368,7 @@ ApplicationWindow {
             backend.currentFolder = folder;
     }
 
-    // ----- Arrow-key navigation (STRATA-style) -----
+    // ----- Arrow-key navigation -----
     // kbPane tracks which pane owns the arrow keys: the folder list, the
     // note list or the editor. "" means mouse mode. Up/Down walk the
     // active list (opening rows as they pass), Right/Enter walk deeper
@@ -383,24 +383,19 @@ ApplicationWindow {
         view.positionViewAtIndex(view.currentIndex, ListView.Contain);
     }
 
-    // Enter a pane: land on the row that is already open (current folder /
-    // current note), else the first row, then move focus there.
+    // Enter a pane: land on the row that is open (the current folder or
+    // note, however it was opened), else keep the row the arrows left,
+    // then move focus there.
     function kbFocus(pane) {
         var view = pane === "folders" ? folderView : noteView;
-        if (view.count > 0 && (view.currentIndex < 0 || view.currentIndex >= view.count)) {
-            var want = pane === "folders" ? backend.currentFolder
-                     : (root.searching ? "" : backend.currentNote);
-            if (want.length > 0) {
-                for (var i = 0; i < view.count; i++) {
-                    var md = view.model[i];
-                    if ((pane === "folders" ? md : (typeof md === "string" ? md : md.file)) === want) {
-                        view.currentIndex = i;
-                        break;
-                    }
-                }
+        var lookFor = pane === "folders" || (!root.searching && backend.currentNote.length > 0);
+        for (var i = 0; lookFor && i < view.count; i++) {
+            var md = view.model[i];
+            if (pane === "folders" ? md === backend.currentFolder
+                    : (typeof md === "string" ? md : md.file) === backend.currentNote) {
+                view.currentIndex = i;
+                break;
             }
-            if (view.currentIndex < 0)
-                view.currentIndex = 0;
         }
         root.kbSyncIndex(view);
         kbPane = pane;
@@ -550,9 +545,7 @@ ApplicationWindow {
         editor.forceActiveFocus();
     }
 
-    // Editor zoom helpers (used by the four new shortcuts below). Bounded and live.
-    // 20% steps for clean increments (inspired by common editor/reader zoom).
-    function zoomIn()  { editorZoom = Math.min(4.0, editorZoom * 1.2); }
+    function zoomIn() { editorZoom = Math.min(4.0, editorZoom * 1.2); }
     function zoomOut() { editorZoom = Math.max(0.5, editorZoom / 1.2); }
     function zoomReset() { editorZoom = 1.0; }
 
@@ -1398,7 +1391,7 @@ ApplicationWindow {
                             }
                             // Arrow keys move the caret here (TextArea default);
                             // Escape walks back out to the note list.
-                            Keys.onEscapePressed: {
+                            Keys.onEscapePressed: function (event) {
                                 event.accepted = true;
                                 root.kbFocus("notes");
                             }
@@ -1578,11 +1571,9 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }
     Shortcut { sequence: "Ctrl+Return"; enabled: editor.activeFocus; onActivated: root.toggleTask() }
-    // Editor font zoom shortcuts (standard on many text editors and browsers).
-    Shortcut { sequence: "Ctrl++"; onActivated: root.zoomIn() }
-    Shortcut { sequence: "Ctrl+="; onActivated: root.zoomIn() }
-    Shortcut { sequence: "Ctrl+-"; onActivated: root.zoomOut() }
-    Shortcut { sequence: "Ctrl+0";  onActivated: root.zoomReset() }
+    Shortcut { sequences: [StandardKey.ZoomIn, "Ctrl+="]; onActivated: root.zoomIn() }
+    Shortcut { sequences: [StandardKey.ZoomOut]; onActivated: root.zoomOut() }
+    Shortcut { sequence: "Ctrl+0"; onActivated: root.zoomReset() }
 
     Settings {
         id: settings
