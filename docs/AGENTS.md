@@ -205,6 +205,33 @@ exit 2, lists the candidates in `hint`: use the ID; no match is
 the user asked for them. Lost Mode locks the device; never turn it on
 without an explicit request.
 
+## iCloud Drive: `icloud-drive`
+
+iCloud Drive is a folder, `~/iCloud Drive`, kept in sync both ways by a
+background service. Read and write files there with ordinary tools; the
+command only reports and controls the sync.
+
+```console
+$ icloud-drive --quiet status
+{"files":93,"folder":"/home/me/iCloud Drive","folders":19,"last_sync":"2026-11-11T02:50:06Z",
+ "not_synced":[{"path":"letter.pages","reason":"a package (a Pages document, say), which is not synced"}],
+ "problem":null,"signed_in":true,"starts_at_login":true,"sync":"on"}
+$ icloud-drive --quiet sync --dry-run
+{"done":["upload notes/todo.txt"],"dry_run":true,"pending":[],"problems":[],"skipped":[]}
+```
+
+| Command | Does |
+|---|---|
+| `status` | whether the sync is on, the last sync, a `problem` if it is stuck, what is `not_synced` (exit 3 with data when signed out) |
+| `sync [--dry-run] [--allow-deletes]` | one sync now; `--dry-run` lists what it would do (`busy`, exit 1, while the service is syncing) |
+| `start`, `stop` | turn the background service on (now and at login) or off |
+
+The first sync downloads the whole Drive: ask before `start`. A file
+written into the folder reaches iCloud within about a minute. Removals go
+to the trash on the other side, never away for good. A sync that would
+remove many items stops with `too_many_deletions` (exit 2): show the user
+`sync --dry-run` and run `sync --allow-deletes` only with their yes.
+
 ## Contacts and tasks
 
 The standalone Contacts and Reminders apps are retired. Use Cloud Contacts and

@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep ~/iCloud Drive in sync with iCloud Drive
+Documentation=https://github.com/ferdousbhai/icloud-for-omarchy/tree/main/drive
+
+[Service]
+# Syncs every half minute. Off until `icloud-drive start` enables it for a
+# user; waits (and says so in `icloud-drive status`) while signed out or
+# offline.
+ExecStart=/usr/bin/icloud-drive run
+Restart=on-failure
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=default.target

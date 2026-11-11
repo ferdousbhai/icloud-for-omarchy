@@ -1,6 +1,6 @@
 ---
 name: icloud
-description: Use iCloud Notes, Photos, Find My, and shared Apple sign-in from Linux through their CLIs. Contacts and reminders use the unified cloud-contacts and cloud-tasks products.
+description: Use iCloud Notes, Photos, Find My, iCloud Drive, and shared Apple sign-in from Linux through their CLIs. Contacts and reminders use the unified cloud-contacts and cloud-tasks products.
 
 ---
 
@@ -15,7 +15,7 @@ in ferdousbhai/icloud-for-omarchy.
 
 Check `command -v icloud-session` and the requested app's CLI first. On
 Omarchy/Arch, install only the missing app (`icloud-notes`, `icloud-photos`,
-`icloud-findmy`, or `icloud-session`):
+`icloud-findmy`, `icloud-drive`, or `icloud-session`):
 
 ```bash
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash -s -- icloud-photos
@@ -109,6 +109,17 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 `history NAME|ID [--since 24h]`. NAME: case-insensitive, a unique part is
 enough (`ambiguous` → use the ID from `hint`). Show coordinates only when
 asked; never Lost Mode without an explicit request.
+
+## iCloud Drive: `icloud-drive`
+
+iCloud Drive is the folder `~/iCloud Drive`: read and write files there with
+ordinary file tools; there is no file command. `status` (`data.sync` on|off,
+`problem`, `not_synced`) · `sync [--dry-run] [--allow-deletes]` · `start` ·
+`stop`. If `status` says off, ask before `icloud-drive start`: the first sync
+downloads the whole Drive. A file you write appears in iCloud within a
+minute; removals go to a trash on the other side. `too_many_deletions`
+(exit 2): show the user `sync --dry-run`, and only with their yes run
+`sync --allow-deletes`.
 
 ## Contacts and tasks
 

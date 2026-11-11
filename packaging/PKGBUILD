@@ -1,7 +1,7 @@
 # Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
-# One committed workspace build emits the four independently installable packages.
+# One committed workspace build emits the five independently installable packages.
 pkgbase=icloud-for-omarchy
-pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes)
+pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-drive)
 _root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 _suite_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_root/Cargo.toml")
 _rustflags=${RUSTFLAGS:-}
@@ -127,4 +127,16 @@ package_icloud-notes() {
   # turns it on too; it does nothing for a user with no cloned notes.
   install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
   ln -s ../icloud-notes-background.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-notes-background.timer"
+}
+
+package_icloud-drive() {
+  pkgdesc='iCloud Drive on Omarchy: ~/iCloud Drive kept in sync both ways'
+  depends=('icloud-session' 'sqlite' 'gcc-libs' 'glibc')
+  cd "$srcdir/icloud-for-omarchy"
+  _release_bin icloud-drive usr/bin/icloud-drive
+  # Off until `icloud-drive start`: a first sync downloads the whole Drive,
+  # which a package must not begin by itself.
+  install -Dm644 drive/data/icloud-drive.service "$pkgdir/usr/lib/systemd/user/icloud-drive.service"
+  install -Dm644 drive/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  _install_licenses
 }

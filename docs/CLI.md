@@ -101,6 +101,18 @@ timer's sync). All of it is new, in the app binary: see
 | Find My password banner (Enter Password) | exit 3 (code `find_my_auth_required`), then `icloud-session authorize-find-my` (or `set-password` once) | existed |
 | Old positions dropped after 30 days | `icloud-findmy prune-history` | existed |
 
+### iCloud Drive (`drive/`)
+
+No window: the folder `~/iCloud Drive` is the interface, and files are read
+and written there. The command covers what a tray icon would.
+
+| What a sync client shows | Command |
+|---|---|
+| Syncing or not, last sync, problems, what is left out | `icloud-drive status` |
+| Sync now | `icloud-drive sync` (`--dry-run` to look first) |
+| Turn syncing on or off | `icloud-drive start`, `icloud-drive stop` |
+| Confirm a large removal | `icloud-drive sync --allow-deletes` |
+
 ### Sign-in (`sessiond`)
 
 | In the window / daemon | Command | |
@@ -266,6 +278,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 | icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
 | icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
+| icloud-drive | `sync`: one line per change made (or planned) | `sync`: changes made (or planned) |
 
 ### Exit codes
 
@@ -449,6 +462,17 @@ engines: `icloud-md:progress:...`).
 | `play-sound`, `lost-mode` | `{action:"play_sound"\|"lost_mode", device:{id, name}}` |
 | `history` | `{device:{id, name}, since, points:[{time, timestamp, lat, lon, accuracy_m, battery_percent}]}` |
 | `prune-history` | `{deleted, remaining, retention_days}` |
+
+### icloud-drive
+
+| Command | `data` |
+|---|---|
+| `status` | `{sync:"on"\|"off", starts_at_login, signed_in, folder, files, folders, last_sync \| null, problem:{code, message, hint \| null} \| null, not_synced:[{path, reason}]}` |
+| `sync` | `{done:[line], problems:[line], pending:[path], skipped:[line], dry_run}`; `done` is what was carried out (with `--dry-run`: what would be), one line each; exit 1 with data when `problems` is not empty |
+| `start`, `stop` | `{sync:"on"\|"off", folder}` |
+
+Its own error codes: `too_many_deletions` and `other_account` (exit 2),
+`drive_unavailable` (exit 3), `folder_missing` (exit 4), `busy` (exit 1).
 
 ### Contacts and tasks
 
