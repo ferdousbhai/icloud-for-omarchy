@@ -93,6 +93,8 @@ package_icloud-session() {
 package_icloud-photos() {
   pkgdesc='iCloud Photos on Omarchy: browse, download, upload and delete'
   depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme' 'sqlite')
+  optdepends=('wl-clipboard: icloud-photos copy (clipboard)'
+              'xdg-utils: icloud-photos open (default app)')
   _package_gtk_app IcloudPhotos
 }
 
