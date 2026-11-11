@@ -4,7 +4,7 @@
 //! on the wire; `text` is held as a `String` and converted where needed.
 
 use super::proto::topotext::vector_timestamp::{Clock, clock::ReplicaClock};
-use super::proto::topotext::{self, AttributeRun, CharID, Substring};
+use super::proto::topotext::{self, AttachmentInfo, AttributeRun, CharID, Substring};
 use super::proto::{Message, versioned_document};
 use super::text::parse_versioned_document;
 use super::{DocError, Result};
@@ -150,6 +150,18 @@ pub fn apply_text_edit(doc: &mut NoteDocument, new_text: &str, options: &ApplyTe
     validate_document_invariants(doc)?;
 
     let splices = compute_splices(&doc.text, new_text);
+    apply_splices(doc, &splices, new_text, options)?;
+    Ok(true)
+}
+
+/// Applies `splices` (ascending, in the old text's offsets), which turn the
+/// document's text into `new_text`.
+fn apply_splices(
+    doc: &mut NoteDocument,
+    splices: &[Splice],
+    new_text: &str,
+    options: &ApplyTextEditOptions,
+) -> Result<()> {
     let replica_index = ensure_replica(doc, &options.replica_id);
     let style_clock_floor = style_clock_seed(doc, replica_index)?;
     let mut max_assigned_style_clock: i64 = -1;
@@ -157,7 +169,7 @@ pub fn apply_text_edit(doc: &mut NoteDocument, new_text: &str, options: &ApplyTe
     let mut structural_change = false;
     let mut inserted_new_run = false;
     let mut delta: i64 = 0;
-    for splice in &splices {
+    for splice in splices {
         let start = (splice.start as i64 + delta) as usize;
         let insert_len = len16(&splice.insert_text);
         if splice.delete_length > 0 {
@@ -189,8 +201,77 @@ pub fn apply_text_edit(doc: &mut NoteDocument, new_text: &str, options: &ApplyTe
     }
 
     doc.text = new_text.to_string();
+    validate_document_invariants(doc)
+}
+
+const PLACEHOLDER: u16 = 0xfffc;
+
+/// Puts a new embed in the note: a U+FFFC inserted at `offset` (UTF-16
+/// units) as this replica's edit, carrying `info` as an embed made in Notes
+/// does. Nothing else in the text moves, so the placeholders already there
+/// keep their characters and their attachments.
+pub fn insert_attachment_placeholder(
+    doc: &mut NoteDocument,
+    offset: usize,
+    info: AttachmentInfo,
+    options: &ApplyTextEditOptions,
+) -> Result<()> {
     validate_document_invariants(doc)?;
-    Ok(true)
+    let mut units = utf16(&doc.text);
+    if offset > units.len() {
+        return Err(invalid("An attachment's place is past the end of the note text"));
+    }
+    units.insert(offset, PLACEHOLDER);
+    let splice = Splice {
+        start: offset,
+        delete_length: 0,
+        insert_text: from_utf16(&[PLACEHOLDER]),
+    };
+    apply_splices(doc, &[splice], &from_utf16(&units), options)?;
+    mark_attachment_placeholder(doc, offset, info)
+}
+
+/// Gives the U+FFFC at `offset` (UTF-16 units) its embed: the character
+/// gets an attribute run of its own carrying `info`, with the paragraph
+/// style of the run it was part of.
+pub fn mark_attachment_placeholder(doc: &mut NoteDocument, offset: usize, info: AttachmentInfo) -> Result<()> {
+    if utf16(&doc.text).get(offset) != Some(&PLACEHOLDER) {
+        return Err(invalid("There is no attachment placeholder where one is expected"));
+    }
+    let mut run_start = 0usize;
+    for index in 0..doc.attribute_runs.len() {
+        let length = doc.attribute_runs[index].len() as usize;
+        if offset >= run_start + length {
+            run_start += length;
+            continue;
+        }
+        let run = doc.attribute_runs[index].clone();
+        if run.attachment_info.is_some() {
+            return Err(invalid("The attachment placeholder already holds an attachment"));
+        }
+        let piece = |length: usize| AttributeRun {
+            length: Some(length as u32),
+            ..run.clone()
+        };
+        let mut pieces = Vec::with_capacity(3);
+        if offset > run_start {
+            pieces.push(piece(offset - run_start));
+        }
+        pieces.push(AttributeRun {
+            length: Some(1),
+            paragraph_style: run.paragraph_style.clone(),
+            attachment_info: Some(info),
+            ..AttributeRun::default()
+        });
+        if run_start + length > offset + 1 {
+            pieces.push(piece(run_start + length - offset - 1));
+        }
+        doc.attribute_runs.splice(index..=index, pieces);
+        return Ok(());
+    }
+    Err(invalid(
+        "Attribute runs are shorter than the note text - document model out of sync",
+    ))
 }
 
 fn set_counter(counters: &mut Vec<u32>, index: usize, value: u32) {

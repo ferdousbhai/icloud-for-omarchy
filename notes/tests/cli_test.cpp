@@ -222,7 +222,7 @@ int main(int argc, char *argv[])
         // help and --help print text, piped or not.
         check(help.code == 0 && help.out.contains("Exit codes"), "cli help");
         const QStringList commands{ "status", "folders", "list", "read", "search", "new", "write", "rename", "move",
-                                    "delete", "toggle", "resolve", "recover", "export-pdf", "new-folder",
+                                    "delete", "toggle", "attach", "resolve", "recover", "export-pdf", "new-folder",
                                     "rename-folder", "delete-folder", "sync", "pull", "push", "clone", "history",
                                     "diff", "restore" };
         bool all = true;
@@ -509,6 +509,98 @@ int main(int argc, char *argv[])
         check(cliJson({ QStringLiteral("toggle"), QStringLiteral("alpha"), QStringLiteral("1") }).errorCode()
                   == QStringLiteral("not_a_list_item"),
               "cli toggle leaves a non-list line alone");
+
+        // attach: the file is copied beside the note and linked at its end,
+        // the way the engine links an attachment (and so takes it for one).
+        {
+            const QString alpha = readFile(QStringLiteral("Notes/Alpha.md"));
+            const auto source = [](const QString &name, const QByteArray &bytes) {
+                const QString path = g_scratch + u'/' + name;
+                QFile f(path);
+                if (f.open(QIODevice::WriteOnly))
+                    f.write(bytes);
+                return path;
+            };
+            const auto bytesOf = [](const QString &rel) {
+                QFile f(g_vault + u'/' + rel);
+                return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+            };
+            const QString photo = source(QStringLiteral("photo.PNG"), QByteArray("\x89PNG\r\n\x1a\n\0binary", 15));
+            const Run at = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), photo });
+            const QJsonObject atJson = at.json().toObject();
+            check(at.code == 0 && atJson.value(QStringLiteral("action")).toString() == QStringLiteral("attach")
+                      && atJson.value(QStringLiteral("path")).toString() == QStringLiteral("Notes/Alpha.md")
+                      && atJson.value(QStringLiteral("file")).toString() == QStringLiteral("Notes/attachments/photo.PNG")
+                      && atJson.value(QStringLiteral("link")).toString() == QStringLiteral("![photo.PNG](attachments/photo.PNG)")
+                      && !atJson.contains(QStringLiteral("sync")),
+                  "cli attach reports the note, the copy and the link");
+            check(bytesOf(QStringLiteral("Notes/attachments/photo.PNG")) == QByteArray("\x89PNG\r\n\x1a\n\0binary", 15)
+                      && readFile(QStringLiteral("Notes/Alpha.md")) == alpha + QStringLiteral("![photo.PNG](attachments/photo.PNG)\n")
+                      && QFile::exists(photo),
+                  "cli attach copies the file byte for byte and links it at the end of the note");
+            const QJsonArray listed = cliJson({ QStringLiteral("read"), QStringLiteral("alpha") }).json().toObject()
+                                          .value(QStringLiteral("attachments")).toArray();
+            check(listed.size() == 1 && listed.at(0).toObject().value(QStringLiteral("name")).toString() == QStringLiteral("photo.PNG"),
+                  "cli read lists the attached file");
+
+            // A name already taken there: another name, never over the file.
+            QDir(g_scratch).mkpath(QStringLiteral("other"));
+            const QString second = source(QStringLiteral("other/photo.PNG"), "second");
+            const Run again = cliJson({ QStringLiteral("attach"), QStringLiteral("Notes/Alpha.md"), second });
+            check(again.code == 0
+                      && again.json().toObject().value(QStringLiteral("file")).toString() == QStringLiteral("Notes/attachments/photo 2.PNG")
+                      && again.json().toObject().value(QStringLiteral("link")).toString()
+                             == QStringLiteral("![photo 2.PNG](attachments/photo%202.PNG)")
+                      && bytesOf(QStringLiteral("Notes/attachments/photo 2.PNG")) == "second"
+                      && bytesOf(QStringLiteral("Notes/attachments/photo.PNG")).size() == 15,
+                  "cli attach picks a free name and leaves the file that was there alone");
+
+            // A file that is no image is a plain link; its name is escaped.
+            const QString doc = source(QStringLiteral("plan [v1] (a).pdf"), "%PDF");
+            const Run pdf = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), doc });
+            check(pdf.code == 0
+                      && pdf.json().toObject().value(QStringLiteral("link")).toString()
+                             == QStringLiteral("[plan \\[v1\\] (a).pdf](attachments/plan%20%5Bv1%5D%20(a).pdf)")
+                      && readFile(QStringLiteral("Notes/Alpha.md")).endsWith(
+                             QStringLiteral("](attachments/photo%202.PNG)\n[plan \\[v1\\] (a).pdf](attachments/plan%20%5Bv1%5D%20(a).pdf)\n")),
+                  "cli attach links other files plainly, escaping the name as the engine does");
+
+            QFile::remove(g_scratch + QStringLiteral("/stub.log"));
+            const QString gif = source(QStringLiteral("anim.gif"), "GIF89a");
+            const Run pushed = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), gif, QStringLiteral("--push") });
+            check(pushed.code == 0
+                      && pushed.json().toObject().value(QStringLiteral("link")).toString() == QStringLiteral("[anim.gif](attachments/anim.gif)")
+                      && pushed.json().toObject().value(QStringLiteral("sync")).toObject().value(QStringLiteral("ok")).toBool()
+                      && stubLog() == QStringList{ QStringLiteral("sync") },
+                  "cli attach --push syncs afterwards");
+
+            // Refusals: nothing is copied, nothing is written.
+            const QString before = readFile(QStringLiteral("Notes/Alpha.md"));
+            const Run ro = cliJson({ QStringLiteral("attach"), QStringLiteral("grid"), photo });
+            check(ro.code == 1 && ro.errorCode() == QStringLiteral("read_only") && !exists(QStringLiteral("Work/attachments/photo.PNG")),
+                  "cli attach refuses a read-only note");
+            const Run missing = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), g_scratch + QStringLiteral("/nope.png") });
+            check(missing.code == 4 && missing.errorCode() == QStringLiteral("not_found"), "cli attach: a missing file is not_found, exit 4");
+            const Run noNote = cliJson({ QStringLiteral("attach"), QStringLiteral("no such note"), photo });
+            check(noNote.code == 4 && noNote.errorCode() == QStringLiteral("not_found"), "cli attach: a missing note is not_found, exit 4");
+            const Run dirArg = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), g_scratch + QStringLiteral("/other") });
+            check(dirArg.code == 1 && dirArg.errorCode() == QStringLiteral("error"), "cli attach: a directory cannot be read as a file");
+            const QString locked = source(QStringLiteral("locked.txt"), "secret");
+            QFile::setPermissions(locked, QFileDevice::Permissions());
+            const Run unreadable = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), locked });
+            check(unreadable.code == 1 && unreadable.errorCode() == QStringLiteral("error")
+                      && !exists(QStringLiteral("Notes/attachments/locked.txt")),
+                  "cli attach: an unreadable file is an error, exit 1");
+            const Run empty = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), source(QStringLiteral("empty.txt"), QByteArray()) });
+            check(empty.code == 1 && !exists(QStringLiteral("Notes/attachments/empty.txt")), "cli attach refuses an empty file");
+            check(cliJson({ QStringLiteral("attach"), QStringLiteral("alpha") }).code == 2, "cli attach needs NOTE and FILE");
+            check(readFile(QStringLiteral("Notes/Alpha.md")) == before
+                      && QDir(g_vault + QStringLiteral("/Notes/attachments")).entryList(QDir::Files).size() == 4,
+                  "cli attach: a refusal changes nothing");
+
+            QDir(g_vault + QStringLiteral("/Notes/attachments")).removeRecursively();
+            writeFile(QStringLiteral("Notes/Alpha.md"), alpha);
+        }
 
         const Run rn = cliJson({ QStringLiteral("rename"), QStringLiteral("groceries"), QStringLiteral("Shopping") });
         check(rn.code == 0 && readFile(QStringLiteral("Notes/Groceries.md")).startsWith(QStringLiteral("# Shopping\n"))

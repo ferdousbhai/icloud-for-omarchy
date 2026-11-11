@@ -12,6 +12,7 @@ use super::state::{AttachmentEntry, TableAttachmentEntry, is_plain_record_name};
 use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::{CloudKitRecord, Database, FieldValue, NoteZone, Transport};
 use crate::cmd::errors::Error;
+use crate::doc::attach::{MAX_NEW_ATTACHMENT_BYTES, uti_for_file_name};
 use crate::doc::decode::is_deleted;
 use crate::doc::embeds::{
     AttachmentReference, EmbedMarkerContent, EmbedSlot, decode_note_embed_slots, format_attachment_markdown,
@@ -19,6 +20,7 @@ use crate::doc::embeds::{
 };
 use crate::doc::tables::decode_table_markdown;
 use crate::js::base64_decode;
+use crate::js::decode_uri_component;
 use crate::js::posix;
 use crate::md::filename::unique_file_name;
 
@@ -44,7 +46,7 @@ pub fn parse_asset_field(field: Option<&FieldValue>) -> Option<AttachmentAsset> 
     })
 }
 
-fn extension_for_uti(type_uti: &str) -> &'static str {
+pub fn extension_for_uti(type_uti: &str) -> &'static str {
     match type_uti {
         "public.jpeg" => ".jpeg",
         "public.png" => ".png",
@@ -492,6 +494,98 @@ fn marker_for(r: &AttachmentReference) -> EmbedMarkerContent {
         type_uti: Some(r.type_uti.clone()),
         attachment_identifier: Some(r.attachment_identifier.clone()),
     }
+}
+
+/// A file linked from a note that push adds to it as a new attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAttachmentFile {
+    /// Vault-root-relative, e.g. `Notes/attachments/plan.pdf`.
+    pub file: String,
+    /// From the note's directory: `attachments/plan.pdf`.
+    pub link_path: String,
+    pub name: String,
+    pub type_uti: &'static str,
+    pub size: u64,
+}
+
+/// The file a new attachment link (`href`, as written in a note in
+/// `note_dir`) names, or why it can't be added: it has to be a regular,
+/// non-empty file of at most [`MAX_NEW_ATTACHMENT_BYTES`] directly in the
+/// note folder's own `attachments/` directory. A `..`, a deeper path or a
+/// symbolic link could point anywhere, so none is followed, and the
+/// directory itself has to resolve to a place inside the vault (the app's
+/// preview applies the same test).
+pub fn resolve_new_attachment_file(
+    target_dir: &Path,
+    note_dir: &str,
+    href: &str,
+) -> Result<std::result::Result<NewAttachmentFile, String>, Error> {
+    let refuse = |why: String| Ok(Err(why));
+    let outside = || {
+        format!(
+            "the link \"{href}\" doesn't name a file directly in this folder's {ATTACHMENTS_DIR}/ directory - \
+             only a file there can be added as an attachment"
+        )
+    };
+    let Some(link_path) = decode_uri_component(href) else {
+        return refuse(outside());
+    };
+    let name = match link_path.strip_prefix("attachments/") {
+        Some(name) if name.len() > MAX_ATTACHMENT_NAME_BYTES => {
+            return refuse(format!(
+                "the linked file's name is longer than {MAX_ATTACHMENT_NAME_BYTES} bytes - give it a shorter one"
+            ));
+        }
+        Some(name) if !name.is_empty() && plain_file_name(name) == name => name.to_owned(),
+        _ => return refuse(outside()),
+    };
+    let directory = target_dir.join(note_dir).join(ATTACHMENTS_DIR);
+    let path = directory.join(&name);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return refuse(format!(
+                "the linked file \"{link_path}\" doesn't exist - put the file in this folder's {ATTACHMENTS_DIR}/ \
+                 directory, or remove the link"
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if !metadata.file_type().is_file() {
+        return refuse(format!(
+            "the linked file \"{link_path}\" is not a regular file (a directory or a symbolic link can't be added \
+             as an attachment)"
+        ));
+    }
+    // Where the directory really is: inside the vault, and holding the file.
+    let contained = match (
+        std::fs::canonicalize(target_dir),
+        std::fs::canonicalize(&directory),
+        std::fs::canonicalize(&path),
+    ) {
+        (Ok(vault), Ok(directory), Ok(real)) => directory.starts_with(&vault) && real.parent() == Some(&directory),
+        _ => false,
+    };
+    if !contained {
+        return refuse(outside());
+    }
+    let size = metadata.len();
+    if size == 0 {
+        return refuse(format!("the linked file \"{link_path}\" is empty"));
+    }
+    if size > MAX_NEW_ATTACHMENT_BYTES {
+        return refuse(format!(
+            "the linked file \"{link_path}\" is larger than {} MB, the most this tool adds as an attachment",
+            MAX_NEW_ATTACHMENT_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(Ok(NewAttachmentFile {
+        file: posix::join(&[note_dir, ATTACHMENTS_DIR, &name]),
+        link_path,
+        type_uti: uti_for_file_name(&name),
+        name,
+        size,
+    }))
 }
 
 /// `removeAttachmentsForNote`: delete the note's attachment files; returns

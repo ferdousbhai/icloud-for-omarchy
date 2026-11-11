@@ -220,6 +220,77 @@ pub fn build_note_update_fields(
     fields
 }
 
+/// A reference to a record of the user's own Notes zone, as the web client
+/// writes one: `{recordName, action: "VALIDATE", zoneID}`.
+fn own_zone_reference(record_name: &str) -> Value {
+    folder_reference(record_name, None)
+}
+
+/// The fields of the `Media` record that holds a new attachment's file:
+/// `asset` is what `Database::upload_asset` answered for its `Asset` field.
+pub fn build_media_create_fields(asset: Value, file_name: &str) -> UpdateFields {
+    let mut fields = UpdateFields::new();
+    fields.insert("Asset".into(), UpdateFieldValue::new(asset));
+    fields.insert(
+        "FilenameEncrypted".into(),
+        UpdateFieldValue::new(json!(base64_encode(file_name.as_bytes()))),
+    );
+    fields.insert("MinimumSupportedNotesVersion".into(), UpdateFieldValue::new(json!(0)));
+    fields.insert("Deleted".into(), UpdateFieldValue::new(json!(0)));
+    fields
+}
+
+/// What a new `Attachment` record says about its file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewAttachmentFields<'a> {
+    pub type_uti: &'a str,
+    /// The file's name: a file attachment's title.
+    pub file_name: &'a str,
+    pub media_record_name: &'a str,
+    pub note_record_name: &'a str,
+    pub file_size: u64,
+    pub now_ms: i64,
+    /// An image's pixel size (width, height), when its header gives it.
+    pub dimensions: Option<(u32, u32)>,
+}
+
+/// The fields of a new file attachment's `Attachment` record, as one made
+/// in Notes carries them (measured 2026-11-11), without what Apple's
+/// devices add later (previews, summaries). The cropping quad is the whole
+/// image; the doubles are sent as doubles.
+pub fn build_attachment_create_fields(attachment: &NewAttachmentFields) -> UpdateFields {
+    let mut fields = UpdateFields::new();
+    let mut set = |name: &str, value: Value| {
+        fields.insert(name.into(), UpdateFieldValue::new(value));
+    };
+    set("UTI", json!(attachment.type_uti));
+    set("UTIEncrypted", json!(base64_encode(attachment.type_uti.as_bytes())));
+    set("TitleEncrypted", json!(base64_encode(attachment.file_name.as_bytes())));
+    set("Media", own_zone_reference(attachment.media_record_name));
+    set("Note", own_zone_reference(attachment.note_record_name));
+    set("FileSize", json!(attachment.file_size));
+    set("CreationDate", json!(attachment.now_ms));
+    set("LastModificationDate", json!(attachment.now_ms));
+    set("MinimumSupportedNotesVersion", json!(0));
+    set("Deleted", json!(0));
+    set("Orientation", json!(0));
+    set("ImageFilterType", json!(0));
+    for (corner, x, y) in [
+        ("TopLeft", 0.0, 1.0),
+        ("TopRight", 1.0, 1.0),
+        ("BottomRight", 1.0, 0.0),
+        ("BottomLeft", 0.0, 0.0),
+    ] {
+        set(&format!("CroppingQuad{corner}X"), json!(x));
+        set(&format!("CroppingQuad{corner}Y"), json!(y));
+    }
+    if let Some((width, height)) = attachment.dimensions {
+        set("Width", json!(f64::from(width)));
+        set("Height", json!(f64::from(height)));
+    }
+    fields
+}
+
 /// `FolderCreateFields`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FolderCreateFields {

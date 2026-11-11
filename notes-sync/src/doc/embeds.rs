@@ -7,9 +7,10 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::Result;
+use super::attach::uti_for_file_name;
 use super::proto::topotext;
 use super::text::decode_note_string;
-use crate::js::{encode_uri_component, from_utf16, posix, starts_with_at, utf16};
+use crate::js::{encode_uri_component, from_utf16, is_whitespace16, posix, starts_with_at, utf16};
 use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
 /// U+FFFC, one per embed in a note's visible text.
@@ -104,6 +105,35 @@ pub struct EmbedRepresentation {
     pub reconstructed_body_text: String,
     /// Table slots in document order.
     pub tables: Vec<MatchedTableBlock>,
+    /// Attachment links that stand for no embed the note has: files to add
+    /// as new attachments. Each one's U+FFFC is in the text too.
+    pub new_links: Vec<NewAttachmentLink>,
+}
+
+/// A link of the kind pull writes for a file attachment,
+/// `[name](attachments/file)` or `![name](attachments/file)`, found in a
+/// note's text (offsets in UTF-16 units).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentLink {
+    /// Where the link starts, its `!` included.
+    pub start: usize,
+    pub end: usize,
+    /// Where its `[` is.
+    pub bracket: usize,
+    /// The link as written.
+    pub text: String,
+    /// Its target as written (percent-encoded), `attachments/...`.
+    pub href: String,
+}
+
+/// An [`AttachmentLink`] to a file that is not an attachment of the note yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAttachmentLink {
+    /// Which of the reconstructed text's U+FFFC placeholders is this
+    /// link's, counting from 0.
+    pub slot_index: usize,
+    pub text: String,
+    pub href: String,
 }
 
 const ADMONITION_HEADER: &str = "> [!danger] Unparsed content";
@@ -176,29 +206,97 @@ pub fn is_table_uti(type_uti: &str) -> bool {
     type_uti == TABLE_UTI
 }
 
-/// `hasAttachmentReference`: `/!?\[[^\]]*\]\(attachments\/[^)]+\)/`.
+/// Whether `text` holds something written as a link into `attachments/`
+/// (`hasAttachmentReference`), readable as an attachment link or not.
 pub fn has_attachment_reference(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let needle = b"(attachments/";
-    for (i, &b) in bytes.iter().enumerate() {
-        if b != b'[' {
+    let scan = scan_attachment_links(&utf16(text));
+    !scan.links.is_empty() || !scan.unreadable.is_empty()
+}
+
+/// Every attachment link in `text`, in order: an unescaped `[`, the link
+/// text up to the first unescaped `]` on the same line, then
+/// `(attachments/...)` with no space or line break in it. A `!` right
+/// before the `[` of a link to an image belongs to the link.
+pub fn find_attachment_links(text: &str) -> Vec<AttachmentLink> {
+    scan_attachment_links(&utf16(text)).links
+}
+
+struct AttachmentLinkScan {
+    links: Vec<AttachmentLink>,
+    /// Where a `[` opens something that points into `attachments/` and is
+    /// not a link as above (its text runs over a line break, or its target
+    /// holds a space or never closes).
+    unreadable: Vec<usize>,
+}
+
+fn scan_attachment_links(units: &[u16]) -> AttachmentLinkScan {
+    let is = |at: usize, c: u8| units.get(at) == Some(&u16::from(c));
+    let target = utf16("(attachments/");
+    let mut scan = AttachmentLinkScan {
+        links: Vec::new(),
+        unreadable: Vec::new(),
+    };
+    let mut i = 0usize;
+    while i < units.len() {
+        if is(i, b'\\') {
+            i += 2;
             continue;
         }
-        let Some(close) = bytes[i + 1..].iter().position(|&c| c == b']').map(|p| p + i + 1) else {
-            return false;
+        if !is(i, b'[') {
+            i += 1;
+            continue;
+        }
+        let mut close = i + 1;
+        let mut one_line = true;
+        while close < units.len() && !is(close, b']') {
+            one_line = one_line && !is(close, b'\n');
+            close += if is(close, b'\\') { 2 } else { 1 };
+        }
+        if !is(close, b']') || !units[close + 1..].starts_with(&target) {
+            i += 1;
+            continue;
+        }
+        let href_start = close + 1 + target.len();
+        if is(href_start, b')') {
+            // `attachments/` itself: no file is named.
+            i += 1;
+            continue;
+        }
+        let length = units[href_start..]
+            .iter()
+            .position(|&u| u == u16::from(b')') || is_whitespace16(u))
+            .filter(|&length| is(href_start + length, b')'));
+        let (Some(length), true) = (length, one_line) else {
+            scan.unreadable.push(i);
+            i = href_start;
+            continue;
         };
-        let after = close + 1;
-        if !bytes[after..].starts_with(needle) {
-            continue;
-        }
-        let rest = after + needle.len();
-        if let Some(paren) = bytes[rest..].iter().position(|&c| c == b')')
-            && paren > 0
-        {
-            return true;
-        }
+        let end = href_start + length + 1;
+        let href = from_utf16(&units[close + 2..end - 1]);
+        // Only an image's link is written with a `!`: before any other
+        // file's, it is the note's own text.
+        let embedded = i > 0 && is(i - 1, b'!') && is_image_uti(uti_for_file_name(&href));
+        let start = if embedded { i - 1 } else { i };
+        scan.links.push(AttachmentLink {
+            start,
+            end,
+            bracket: i,
+            text: from_utf16(&units[start..end]),
+            href,
+        });
+        i = end;
     }
-    false
+    scan
+}
+
+/// The two ways the link pull writes for `relative_file` may be spelled:
+/// as [`format_attachment_markdown`] writes it now, and as it did before it
+/// escaped the link text.
+pub fn attachment_link_spellings(reference: &AttachmentReference, relative_file: &str) -> [String; 2] {
+    [
+        format_attachment_markdown(reference, relative_file),
+        unescaped_attachment_markdown(reference, relative_file),
+    ]
 }
 
 /// `formatAttachmentMarkdown`. The link text is the file name, from the
@@ -379,6 +477,8 @@ struct LocalRepresentation {
 /// `planEmbedRepresentations`. `tracked_file_attachments` maps each file
 /// attachment this note tracks to its link path from the note's directory:
 /// the link pull wrote for it stands for the attachment, as a marker does.
+/// Any other attachment link (outside a table or marker) is a file to add:
+/// it becomes a placeholder too, and is listed in `new_links`.
 pub fn plan_embed_representations(
     local_text: &str,
     slots: &[EmbedSlot],
@@ -522,6 +622,75 @@ pub fn plan_embed_representations(
         previous_end = representation.end as i64;
     }
 
+    finish_embed_plan(units, representations)
+}
+
+/// The plan of a note that has no embeds yet (a new note's file): its
+/// attachment links are the files to add.
+pub fn plan_new_attachment_links(local_text: &str) -> std::result::Result<EmbedRepresentation, String> {
+    finish_embed_plan(utf16(local_text), Vec::new())
+}
+
+/// Adds the attachment links that stand for no existing embed to
+/// `representations` (the existing ones, in order) and puts a placeholder
+/// in place of each.
+fn finish_embed_plan(
+    units: Vec<u16>,
+    representations: Vec<LocalRepresentation>,
+) -> std::result::Result<EmbedRepresentation, String> {
+    let existing = representations.len();
+    let scan = scan_attachment_links(&units);
+    // One inside a table or a marker is that embed's own text.
+    let covered = |at: usize| representations.iter().any(|r| at >= r.start && at < r.end);
+    if scan.unreadable.iter().any(|&at| !covered(at)) {
+        return Err(
+            "contains an \"attachments/...\" reference that isn't written the way this tool writes attachment \
+             links, like [plan.pdf](attachments/plan.pdf) - rewrite it that way, or remove it"
+                .into(),
+        );
+    }
+    let new: Vec<AttachmentLink> = scan.links.into_iter().filter(|link| !covered(link.bracket)).collect();
+    // (representation, the new link it is for)
+    let mut all: Vec<(LocalRepresentation, Option<AttachmentLink>)> =
+        representations.into_iter().map(|r| (r, None)).collect();
+    for link in new {
+        all.push((
+            LocalRepresentation {
+                start: link.start,
+                end: link.end,
+                table: None,
+            },
+            Some(link),
+        ));
+    }
+    // Stable: the existing ones keep their order among themselves.
+    all.sort_by_key(|(r, _)| r.start);
+    if all.len() > existing {
+        let mut previous_end = 0usize;
+        for (representation, _) in &all {
+            if representation.start < previous_end {
+                return Err(
+                    "an attachment link overlaps an embed marker, a table or another attachment's link - \
+                     put it on a line of its own"
+                        .into(),
+                );
+            }
+            previous_end = representation.end;
+        }
+    }
+    let new_links: Vec<NewAttachmentLink> = all
+        .iter()
+        .enumerate()
+        .filter_map(|(slot_index, (_, link))| {
+            link.as_ref().map(|link| NewAttachmentLink {
+                slot_index,
+                text: link.text.clone(),
+                href: link.href.clone(),
+            })
+        })
+        .collect();
+    let representations: Vec<LocalRepresentation> = all.into_iter().map(|(r, _)| r).collect();
+
     let mut reconstructed = units;
     for representation in representations.iter().rev() {
         // `slice(0, start) + ORC + slice(end)`, clamped like JS.
@@ -536,5 +705,6 @@ pub fn plan_embed_representations(
     Ok(EmbedRepresentation {
         reconstructed_body_text: from_utf16(&reconstructed),
         tables: representations.into_iter().filter_map(|r| r.table).collect(),
+        new_links,
     })
 }

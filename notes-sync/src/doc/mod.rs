@@ -6,6 +6,7 @@
 //! (Apple's topotext and icloud-md's JS strings both count UTF-16), while
 //! text is held as `String`. See `format.rs`.
 
+pub mod attach;
 pub mod decode;
 pub mod document;
 pub mod embeds;

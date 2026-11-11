@@ -1,0 +1,18 @@
+{
+  "dryRun": false,
+  "pushed": 1,
+  "entries": [
+    {
+      "kind": "update",
+      "file": "Notes/Test Note.md",
+      "resolution": "ready",
+      "remark": "adds the attachment hello.txt",
+      "outcome": {
+        "succeeded": true,
+        "message": "Pushed Notes/Test Note.md, with its new attachment"
+      }
+    }
+  ],
+  "unchanged": 0,
+  "notices": []
+}

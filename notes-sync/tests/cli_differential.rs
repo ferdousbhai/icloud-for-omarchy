@@ -971,3 +971,73 @@ fn asset_push_uploads_the_text_and_names_the_new_asset() {
         "0"
     );
 }
+
+/// `attach-push`: a file linked from a note goes up as a new attachment.
+/// Its bytes are uploaded for the new Media record, and one atomic
+/// `records/modify` updates the note and creates the Media and Attachment
+/// records; the vault then tracks it, and `attach-push-status` is clean
+/// without asking iCloud anything.
+#[test]
+fn attach_push_uploads_the_file_and_creates_its_records_atomically() {
+    let all = requests("attach-push");
+    let paths: Vec<&str> = all
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(paths, ["lookup", "upload", "AnewMedia1", "modify"]);
+    assert!(all.iter().all(|r| r["matched"].is_number()));
+    let (media, attachment) = (
+        "00000000-0000-4000-8000-000000000003",
+        "00000000-0000-4000-8000-000000000002",
+    );
+    assert_eq!(
+        all[1]["body"]["tokens"],
+        serde_json::json!([{ "recordType": "Media", "recordName": media, "fieldName": "Asset" }])
+    );
+    let body = &all[3]["body"];
+    assert_eq!(body["atomic"], true);
+    let operations = body["operations"].as_array().unwrap();
+    let sent: Vec<(&str, &str, &str)> = operations
+        .iter()
+        .map(|op| {
+            (
+                op["operationType"].as_str().unwrap(),
+                op["record"]["recordType"].as_str().unwrap(),
+                op["record"]["recordName"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("update", "Note", "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"),
+            ("create", "Media", media),
+            ("create", "Attachment", attachment),
+        ]
+    );
+    assert_eq!(
+        operations[1]["record"]["fields"]["Asset"]["value"]["receipt"],
+        "aGVsbG8tcmVjZWlwdA=="
+    );
+    let fields = &operations[2]["record"]["fields"];
+    assert_eq!(fields["UTI"]["value"], "public.plain-text");
+    assert_eq!(fields["Media"]["value"]["recordName"], media);
+    assert_eq!(fields["FileSize"]["value"], 17);
+    assert!(fields.get("Width").is_none() && fields.get("PreviewImages").is_none());
+
+    let state = state_of("attach-push");
+    assert_eq!(state["attachments"][attachment]["file"], "Notes/attachments/hello.txt");
+    assert_eq!(state["attachments"][attachment]["mediaRecordName"], media);
+    assert_eq!(
+        state["notes"]["03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"]["recordChangeTag"],
+        "26c"
+    );
+    let stdout = read_json(&expected("attach-push/stdout.json"));
+    assert_eq!(stdout["pushed"], 1);
+    assert_eq!(stdout["entries"][0]["remark"], "adds the attachment hello.txt");
+
+    assert!(requests("attach-push-status").is_empty());
+    let status = read_json(&expected("attach-push-status/stdout.json"));
+    assert_eq!(status["entries"], serde_json::json!([]));
+    assert_eq!(status["unchanged"], 1);
+}

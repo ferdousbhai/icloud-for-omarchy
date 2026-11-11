@@ -220,6 +220,22 @@
       "args": ["--quiet", "push", "@VAULT@"]
     },
     {
+      "name": "attach-push",
+      "cassette": "attach-push.json",
+      "vaultFrom": "tiny-clone",
+      "edits": [
+        { "file": "Notes/attachments/hello.txt", "write": "hello from Linux\n" },
+        { "file": "Notes/Test Note.md", "append": "\n[hello.txt](attachments/hello.txt)\n" }
+      ],
+      "args": ["--quiet", "push", "@VAULT@"]
+    },
+    {
+      "name": "attach-push-status",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "attach-push",
+      "args": ["--quiet", "status", "@VAULT@"]
+    },
+    {
       "name": "asset-pull-update",
       "cassette": "asset-pull-update.json",
       "vaultFrom": "asset-clone",

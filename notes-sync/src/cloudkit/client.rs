@@ -484,6 +484,39 @@ impl<T: Transport> Database<T> {
         Ok(results)
     }
 
+    /// One atomic `records/modify`: every operation is applied or none is
+    /// (a record that would have gone through answers `ATOMIC_ERROR` beside
+    /// the one that was refused). Results in request order. A Note update
+    /// among them has its text uploaded as [`Database::update_records`]
+    /// uploads it.
+    pub fn modify_records_atomically(
+        &self,
+        zone: &NoteZone,
+        ops: &[RecordOp],
+    ) -> Result<Vec<RecordUpdateResult>, CkError> {
+        let mut uploaded = HashMap::new();
+        let mut sent = Vec::with_capacity(ops.len());
+        for op in ops {
+            sent.push(match op {
+                RecordOp::Update(update) => {
+                    let (mut updates, texts) = self.upload_text_assets(zone, std::slice::from_ref(update))?;
+                    uploaded.extend(texts);
+                    RecordOp::Update(updates.remove(0))
+                }
+                other => other.clone(),
+            });
+        }
+        let mut body = modify_body(&sent, &zone.zone_id);
+        body["atomic"] = Value::Bool(true);
+        let response = self.post_database(zone.database, "records/modify", &body)?;
+        let mut results = parse_record_update_response(&response)?;
+        if results.len() != ops.len() {
+            return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
+        }
+        inline_uploaded_text(&mut results, &uploaded);
+        Ok(results)
+    }
+
     /// The updates as they are sent: a Note update that carries new text
     /// (`TextDataEncrypted`) for a note whose text Apple keeps in a
     /// `TextDataAsset` (the update echoes that field) has its text uploaded

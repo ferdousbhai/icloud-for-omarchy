@@ -17,24 +17,29 @@ use super::plan::{
 use super::remote::{Connector, DefaultConnector, Remote, resolve_folder_account};
 use super::{Error, NoticeLevel, SyncNotice, is_in_trash, is_purged};
 use crate::cloudkit::{
-    CloudKitRecord, CreateExtras, Database, NoteZone, RecordUpdate, RecordUpdateResult, Transport, UpdateFieldValue,
-    UpdateFields, note_zone,
+    CloudKitRecord, CreateExtras, Database, NoteZone, RecordOp, RecordUpdate, RecordUpdateResult, Transport,
+    UpdateFieldValue, UpdateFields, note_zone,
 };
 use crate::diff3::{has_conflict_markers, merge_note_versions};
+use crate::doc::attach::{MAX_NEW_ATTACHMENT_BYTES, image_dimensions};
 use crate::doc::decode::{ClassifyOptions, DecodedNote, NoteDecodeResult, classify_note_record};
 use crate::doc::document::{
     ApplyTextEditOptions, apply_text_edit, build_initial_note_document, compute_splices, encode_note_document,
-    note_document_round_trips, parse_note_document, validate_document_invariants,
+    insert_attachment_placeholder, mark_attachment_placeholder, note_document_round_trips, parse_note_document,
+    validate_document_invariants,
 };
 use crate::doc::embeds::{
-    EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, decode_note_embed_slots, has_attachment_reference, has_embed_marker,
-    has_unknown_content_marker, plan_embed_representations,
+    AttachmentReference, EmbedSlot, NewAttachmentLink, OBJECT_REPLACEMENT_CHARACTER, attachment_link_spellings,
+    decode_note_embed_slots, has_attachment_reference, has_embed_marker, has_unknown_content_marker,
+    plan_embed_representations, plan_new_attachment_links,
 };
 use crate::doc::encode::{
-    DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME, build_folder_create_fields, build_note_create_fields,
-    build_note_move_fields, build_note_trash_fields, build_note_update_fields,
+    DEFAULT_FOLDER_RECORD_NAME, NewAttachmentFields, TRASH_FOLDER_RECORD_NAME, build_attachment_create_fields,
+    build_folder_create_fields, build_media_create_fields, build_note_create_fields, build_note_move_fields,
+    build_note_trash_fields, build_note_update_fields,
 };
 use crate::doc::format::{FormatParagraph, decode_note_format, formats_round_trip_equal};
+use crate::doc::proto::topotext::AttachmentInfo;
 use crate::doc::reconcile::reconcile_note_format;
 use crate::doc::table_edit::prepare_table_attachment_update;
 use crate::doc::text::{compress_note_document, decode_note_body_text, decode_note_string, decompress_note_document};
@@ -48,7 +53,9 @@ use crate::md::title::{
     carried_title_spelling, representability_problem, restore_title_paragraph_text, split_title_paragraph,
     title_from_note_file_name, title_is_representable, title_paragraph_from_filename,
 };
-use crate::vault::attachments::{remove_attachments_for_note, remove_table_attachments_for_note, safe_unlink};
+use crate::vault::attachments::{
+    remove_attachments_for_note, remove_table_attachments_for_note, resolve_new_attachment_file, safe_unlink,
+};
 use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{PlannedFolder, plan_folder_creates, relocate_note_attachments};
@@ -63,7 +70,9 @@ use crate::vault::local::{
 use crate::vault::migrate::{read_vault, require_vault};
 use crate::vault::pairing::{UntrackedFile, pending_rename_target, resolve_note_ids, settle_pending_renames};
 use crate::vault::rt;
-use crate::vault::state::{CloneState, FolderEntry, NoteEntry, TitleMode, TrashedEntry, write_clone_state};
+use crate::vault::state::{
+    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TitleMode, TrashedEntry, write_clone_state,
+};
 
 /// The body plus formatting a push builds a document from (`{text,
 /// paragraphs}`).
@@ -228,6 +237,8 @@ pub enum Action {
         folder_record_name: String,
         shared_zone_owner: Option<String>,
         modification_date_ms: i64,
+        /// Files the note links to, created with it as its attachments.
+        new_attachments: Vec<NewAttachment>,
     },
     /// A byte-level difference with nothing to send: re-sync the base copy
     /// (and, after merging a remote change, the file and the tag).
@@ -254,7 +265,49 @@ pub enum Action {
         requested_title: Option<String>,
         modification_date_ms: i64,
         merged: Option<RemoteMerge>,
+        /// Files newly linked from the note: uploaded and created as its
+        /// attachments in the same request as `updates`.
+        new_attachments: Vec<NewAttachment>,
     },
+}
+
+/// A file a push adds to a note as an attachment: what is planned of the
+/// `Attachment` and `Media` records it becomes. Nothing is read or sent
+/// until the plan executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAttachment {
+    /// The attachment identifier the note's text names: the `Attachment`
+    /// record's name.
+    pub attachment_record_name: String,
+    pub media_record_name: String,
+    /// Vault-root-relative.
+    pub file: String,
+    pub name: String,
+    pub type_uti: String,
+}
+
+impl NewAttachment {
+    fn reference(&self) -> AttachmentReference {
+        AttachmentReference {
+            attachment_identifier: self.attachment_record_name.clone(),
+            type_uti: self.type_uti.clone(),
+        }
+    }
+}
+
+/// What the plan entry of a note that gains attachments says of them.
+fn new_attachments_remark(new_attachments: &[NewAttachment]) -> Option<String> {
+    let names: Vec<&str> = new_attachments.iter().map(|a| a.name.as_str()).collect();
+    match names.as_slice() {
+        [] => None,
+        [name] => Some(format!("adds the attachment {name}")),
+        names => Some(format!("adds the attachments {}", names.join(", "))),
+    }
+}
+
+fn join_remarks(remarks: [Option<String>; 2]) -> Option<String> {
+    let remarks: Vec<String> = remarks.into_iter().flatten().collect();
+    (!remarks.is_empty()).then(|| remarks.join("; "))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -337,6 +390,10 @@ struct ReadyMove {
 struct CreateCandidate {
     file: String,
     local_text: String,
+    /// `local_text` with a placeholder in place of each new attachment's
+    /// link.
+    document_text: String,
+    new_attachments: Vec<NewAttachment>,
     folder_record_name: String,
     shared_zone_owner: Option<String>,
 }
@@ -700,23 +757,6 @@ pub fn build_push_plan(
             );
             continue;
         }
-        let previously_had_attachments = state
-            .attachments
-            .as_ref()
-            .is_some_and(|a| a.values().any(|a| a.note_record_name == *record_name));
-        if !previously_had_attachments && has_attachment_reference(&local_text) {
-            entries.push(
-                PlanEntry::refused(
-                    PlanEntryKind::Update,
-                    entry.file.clone(),
-                    Refusal::UpdateNewAttachmentReference {
-                        file: entry.file.clone(),
-                    },
-                )
-                .into(),
-            );
-            continue;
-        }
         update_candidates.push(PushCandidate {
             record_name: record_name.clone(),
             entry: entry.clone(),
@@ -1000,13 +1040,34 @@ pub fn build_push_plan(
             entries.push(refuse(Refusal::CreateEmbedMarker));
             continue;
         }
-        if has_attachment_reference(local_text) {
-            entries.push(refuse(Refusal::CreateAttachmentReference));
-            continue;
-        }
+        // A link to a file in the folder's attachments/ is a file to attach.
+        let (document_text, new_attachments) = if has_attachment_reference(local_text) {
+            let planned = match plan_new_attachment_links(local_text) {
+                Ok(plan) => resolve_new_attachments(
+                    target_dir,
+                    file,
+                    info.shared_zone_owner().is_some(),
+                    &TrackedAttachments::of(&state, "", file),
+                    &plan.new_links,
+                )?
+                .map(|new_attachments| (plan.reconstructed_body_text, new_attachments)),
+                Err(reason) => Err(reason),
+            };
+            match planned {
+                Ok(planned) => planned,
+                Err(reason) => {
+                    entries.push(refuse(Refusal::CreateNewAttachment { reason }));
+                    continue;
+                }
+            }
+        } else {
+            (local_text.clone(), Vec::new())
+        };
         create_candidates.push(CreateCandidate {
             file: file.clone(),
             local_text: local_text.clone(),
+            document_text,
+            new_attachments,
             folder_record_name: info.folder_record_name().unwrap_or_default().to_owned(),
             shared_zone_owner: info.shared_zone_owner().map(str::to_owned),
         });
@@ -1195,7 +1256,14 @@ pub fn build_push_plan(
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             PlanEntry::refused(PlanEntryKind::Create, c.file.clone(), refusal).into()
         };
-        let built = build_create_payload(&c.file, &c.local_text, title_mode, &recorded_titles, &replica_bytes);
+        let built = build_create_payload(
+            &c.file,
+            &c.document_text,
+            &c.new_attachments,
+            title_mode,
+            &recorded_titles,
+            &replica_bytes,
+        );
         let (payload_base64, plain_text) = match built {
             Ok(built) => built,
             Err(refusal) => {
@@ -1204,8 +1272,10 @@ pub fn build_push_plan(
             }
         };
         let modification_date_ms = mtime_ms(&target_dir.join(&c.file))?;
+        let mut e = PlanEntry::new(PlanEntryKind::Create, c.file.clone(), PlanResolution::Ready);
+        e.remark = new_attachments_remark(&c.new_attachments);
         entries.push(ExecutablePlanEntry::with(
-            PlanEntry::new(PlanEntryKind::Create, c.file.clone(), PlanResolution::Ready),
+            e,
             Action::Create {
                 file: c.file.clone(),
                 local_text: c.local_text.clone(),
@@ -1214,6 +1284,7 @@ pub fn build_push_plan(
                 folder_record_name: c.folder_record_name.clone(),
                 shared_zone_owner: c.shared_zone_owner.clone(),
                 modification_date_ms,
+                new_attachments: c.new_attachments.clone(),
             },
         ));
     }
@@ -1299,7 +1370,7 @@ pub fn build_push_plan(
 
         let modification_date_ms = mtime_ms(&target_dir.join(&c.entry.file))?;
         let zone = note_zone(c.entry.shared_zone_owner.as_deref());
-        let tracked_ids = note_attachment_links(&state, &c.record_name, &c.entry.file);
+        let tracked = TrackedAttachments::of(&state, &c.record_name, &c.entry.file);
         let prepared = prepare_update(
             db,
             &zone,
@@ -1307,7 +1378,7 @@ pub fn build_push_plan(
             record,
             &c.entry,
             local_text,
-            &tracked_ids,
+            &tracked,
             &replica_bytes,
             modification_date_ms,
             title_mode,
@@ -1345,7 +1416,10 @@ pub fn build_push_plan(
             continue;
         }
         let mut e = PlanEntry::new(PlanEntryKind::Update, file.clone(), PlanResolution::Ready);
-        e.remark = prepared.retitled_to.as_deref().map(retitle_remark);
+        e.remark = join_remarks([
+            prepared.retitled_to.as_deref().map(retitle_remark),
+            new_attachments_remark(&prepared.new_attachments),
+        ]);
         entries.push(ExecutablePlanEntry::with(
             e,
             Action::Update {
@@ -1358,6 +1432,7 @@ pub fn build_push_plan(
                 requested_title: c.requested_title.clone(),
                 modification_date_ms,
                 merged,
+                new_attachments: prepared.new_attachments,
             },
         ));
     }
@@ -1462,6 +1537,7 @@ pub fn build_push_plan(
 fn build_create_payload(
     file: &str,
     local_text: &str,
+    new_attachments: &[NewAttachment],
     title_mode: TitleMode,
     recorded_titles: &HashMap<String, String>,
     replica: &[u8; 16],
@@ -1479,6 +1555,20 @@ fn build_create_payload(
     // the refusal reason.
     let thrown = |e: crate::doc::DocError| Refusal::CreateBuildError { message: e.to_string() };
     let mut doc = build_initial_note_document(&desired.text, replica).map_err(thrown)?;
+    // Each new attachment's placeholder, in the order of their links.
+    let expected_slots: Vec<EmbedSlot> = new_attachments
+        .iter()
+        .map(|a| EmbedSlot::Attachment(a.reference()))
+        .collect();
+    if !new_attachments.is_empty() {
+        let placeholders = placeholder_offsets(&desired.text);
+        if placeholders.len() != new_attachments.len() {
+            return Err(Refusal::CreateVerificationFailed);
+        }
+        for (attachment, offset) in new_attachments.iter().zip(placeholders) {
+            mark_attachment_placeholder(&mut doc, offset, attachment_info(&attachment.reference())).map_err(thrown)?;
+        }
+    }
     reconcile_note_format(&mut doc, &desired.paragraphs, replica)
         .map_err(thrown)?
         .map_err(|reason| Refusal::CreateReconcile { reason })?;
@@ -1489,7 +1579,9 @@ fn build_create_payload(
     let verified = rebuilt_text == desired.text
         && format
             .as_ref()
-            .is_ok_and(|f| formats_round_trip_equal(f, &desired.paragraphs));
+            .is_ok_and(|f| formats_round_trip_equal(f, &desired.paragraphs))
+        && (new_attachments.is_empty()
+            || crate::doc::embeds::embed_slots_of(&rebuilt).is_some_and(|slots| slots == expected_slots));
     if !verified {
         return Err(Refusal::CreateVerificationFailed);
     }
@@ -1542,6 +1634,128 @@ struct PreparedCandidate {
     pub updates: Vec<RecordUpdate>,
     note_text_updated: bool,
     retitled_to: Option<String>,
+    /// Files to add as attachments along with `updates`.
+    new_attachments: Vec<NewAttachment>,
+}
+
+impl PreparedCandidate {
+    fn unchanged() -> Self {
+        PreparedCandidate {
+            updates: Vec::new(),
+            note_text_updated: false,
+            retitled_to: None,
+            new_attachments: Vec::new(),
+        }
+    }
+}
+
+/// The attachment files this vault tracks, as a note being pushed sees them.
+#[derive(Debug, Default)]
+struct TrackedAttachments {
+    /// The note's own file attachments, each with its link path from the
+    /// note's directory (what pull wrote into the note for it).
+    links: HashMap<String, String>,
+    /// Every tracked attachment file, of any note (vault-root-relative).
+    files: HashSet<String>,
+}
+
+impl TrackedAttachments {
+    fn of(state: &CloneState, record_name: &str, note_file: &str) -> Self {
+        let note_dir = note_dir_of(note_file);
+        let all = || state.attachments.iter().flatten();
+        TrackedAttachments {
+            links: all()
+                .filter(|(_, att)| att.note_record_name == record_name)
+                .map(|(k, att)| (k.clone(), posix::relative(&note_dir, &att.file)))
+                .collect(),
+            files: all().map(|(_, att)| att.file.clone()).collect(),
+        }
+    }
+}
+
+/// The UTF-16 offsets of the U+FFFC placeholders in `text`, in order.
+fn placeholder_offsets(text: &str) -> Vec<usize> {
+    text.encode_utf16()
+        .enumerate()
+        .filter(|(_, unit)| *unit == OBJECT_REPLACEMENT_CHARACTER as u16)
+        .map(|(offset, _)| offset)
+        .collect()
+}
+
+/// What a new attachment's placeholder carries in the note's text.
+fn attachment_info(reference: &AttachmentReference) -> AttachmentInfo {
+    AttachmentInfo {
+        attachment_identifier: Some(reference.attachment_identifier.clone()),
+        type_uti: Some(reference.type_uti.clone()),
+        ..Default::default()
+    }
+}
+
+/// The files the note's new attachment links name, each with the record
+/// names it will be created under, or why one can't be added. The file has
+/// to be in the note folder's own `attachments/` (see
+/// [`resolve_new_attachment_file`]), attached to no note yet, and linked
+/// the way pull writes an attachment's link, so that the link stands for
+/// the attachment from then on.
+fn resolve_new_attachments(
+    target_dir: &Path,
+    note_file: &str,
+    shared: bool,
+    tracked: &TrackedAttachments,
+    links: &[NewAttachmentLink],
+) -> Result<Result<Vec<NewAttachment>, String>, Error> {
+    if links.is_empty() {
+        return Ok(Ok(Vec::new()));
+    }
+    if shared {
+        return Ok(Err(
+            "attachments can't be added to a shared note from here - add them in Notes itself".into(),
+        ));
+    }
+    let note_dir = note_dir_of(note_file);
+    let mut new_attachments: Vec<NewAttachment> = Vec::new();
+    for link in links {
+        let file = match resolve_new_attachment_file(target_dir, &note_dir, &link.href)? {
+            Ok(file) => file,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        if tracked.files.contains(&file.file) {
+            let whose = if tracked.links.values().any(|path| *path == file.link_path) {
+                "this note"
+            } else {
+                "another note"
+            };
+            return Ok(Err(format!(
+                "\"{}\" is already an attachment of {whose} - to attach the file again, copy it under another name",
+                file.link_path
+            )));
+        }
+        if new_attachments.iter().any(|a| a.file == file.file) {
+            return Ok(Err(format!(
+                "\"{}\" is linked more than once - a file is attached once",
+                file.link_path
+            )));
+        }
+        let mut attachment = NewAttachment {
+            attachment_record_name: String::new(),
+            media_record_name: String::new(),
+            file: file.file,
+            name: file.name,
+            type_uti: file.type_uti.to_owned(),
+        };
+        let spellings = attachment_link_spellings(&attachment.reference(), &file.link_path);
+        if !spellings.contains(&link.text) {
+            return Ok(Err(format!(
+                "the link to \"{}\" isn't written the way this tool writes an attachment's link - write it as {}",
+                file.link_path, spellings[0]
+            )));
+        }
+        // Record names as Notes makes them: uppercase UUIDs.
+        attachment.attachment_record_name = rt::random_uuid().to_uppercase();
+        attachment.media_record_name = rt::random_uuid().to_uppercase();
+        new_attachments.push(attachment);
+    }
+    Ok(Ok(new_attachments))
 }
 
 fn classify_for_edit(record: &CloudKitRecord, title_mode: TitleMode) -> Result<Box<DecodedNote>, String> {
@@ -1561,7 +1775,7 @@ fn prepare_update<T: Transport>(
     record: &CloudKitRecord,
     entry: &NoteEntry,
     local_text: &str,
-    tracked_ids: &HashMap<String, String>,
+    tracked: &TrackedAttachments,
     replica: &[u8; 16],
     modification_date_ms: i64,
     title_mode: TitleMode,
@@ -1578,7 +1792,8 @@ fn prepare_update<T: Transport>(
             file,
         }));
     }
-    if !classified.embed_slots.is_empty() {
+    // A note with embeds, or one linking to a file to attach.
+    if !classified.embed_slots.is_empty() || has_attachment_reference(local_text) {
         return prepare_embed_candidate(
             db,
             zone,
@@ -1587,7 +1802,7 @@ fn prepare_update<T: Transport>(
             &classified,
             entry,
             local_text,
-            tracked_ids,
+            tracked,
             replica,
             modification_date_ms,
             requested_title,
@@ -1606,6 +1821,7 @@ fn prepare_update<T: Transport>(
         &classified.body_text,
         &desired,
         &classified.embed_slots,
+        &[],
         replica,
         &file,
     )? {
@@ -1613,17 +1829,14 @@ fn prepare_update<T: Transport>(
         Err(r) => return Ok(Err(PrepareRefusal::TextUpdate(r))),
     };
     let Some(payload) = text_update else {
-        return Ok(Ok(PreparedCandidate {
-            updates: Vec::new(),
-            note_text_updated: false,
-            retitled_to: None,
-        }));
+        return Ok(Ok(PreparedCandidate::unchanged()));
     };
     let fields = build_note_update_fields(record, &payload, &desired.text, modification_date_ms);
     Ok(Ok(PreparedCandidate {
         updates: vec![note_record_update(record, entry, fields)],
         note_text_updated: true,
         retitled_to: requested_retitle(&classified, requested_title),
+        new_attachments: Vec::new(),
     }))
 }
 
@@ -1637,16 +1850,35 @@ fn prepare_embed_candidate<T: Transport>(
     classified: &DecodedNote,
     entry: &NoteEntry,
     local_text: &str,
-    tracked_ids: &HashMap<String, String>,
+    tracked: &TrackedAttachments,
     replica: &[u8; 16],
     modification_date_ms: i64,
     requested_title: Option<&str>,
 ) -> Result<Result<PreparedCandidate, PrepareRefusal>, Error> {
     let file = entry.file.clone();
-    let plan = match plan_embed_representations(local_text, &classified.embed_slots, tracked_ids) {
+    let plan = match plan_embed_representations(local_text, &classified.embed_slots, &tracked.links) {
         Ok(p) => p,
         Err(reason) => return Ok(Err(PrepareRefusal::EmbedPlan { reason, file })),
     };
+    let new_attachments = match resolve_new_attachments(
+        target_dir,
+        &file,
+        entry.shared_zone_owner.is_some(),
+        tracked,
+        &plan.new_links,
+    )? {
+        Ok(new_attachments) => new_attachments,
+        Err(reason) => return Ok(Err(PrepareRefusal::NewAttachment { reason, file })),
+    };
+    // The placeholders the pushed text has to hold, in order: the note's
+    // embeds as they are, and each new attachment where its link is.
+    let mut expected_slots: Vec<EmbedSlot> = classified.embed_slots.clone();
+    let mut new_slots: Vec<usize> = Vec::new();
+    for (link, attachment) in plan.new_links.iter().zip(&new_attachments) {
+        let at = link.slot_index.min(expected_slots.len());
+        expected_slots.insert(at, EmbedSlot::Attachment(attachment.reference()));
+        new_slots.push(at);
+    }
     let parsed = match parse_note_markdown(&plan.reconstructed_body_text) {
         Ok(p) => p,
         Err(r) => return Ok(Err(PrepareRefusal::EmbedMarkdown { reason: r.reason, file })),
@@ -1724,7 +1956,8 @@ fn prepare_embed_candidate<T: Transport>(
             record,
             &classified.body_text,
             &desired,
-            &classified.embed_slots,
+            &expected_slots,
+            &new_slots,
             replica,
             &file,
         )? {
@@ -1737,17 +1970,18 @@ fn prepare_embed_candidate<T: Transport>(
             note_text_updated = true;
         }
     }
+    if !new_attachments.is_empty() && !note_text_updated {
+        // The new placeholders always change the text.
+        return Ok(Err(PrepareRefusal::TextUpdate(TextUpdateRefusal::RebuiltEmbedFailed)));
+    }
     if updates.is_empty() {
-        return Ok(Ok(PreparedCandidate {
-            updates: Vec::new(),
-            note_text_updated: false,
-            retitled_to: None,
-        }));
+        return Ok(Ok(PreparedCandidate::unchanged()));
     }
     Ok(Ok(PreparedCandidate {
         updates,
         note_text_updated,
         retitled_to,
+        new_attachments,
     }))
 }
 
@@ -1787,6 +2021,7 @@ pub fn prepare_retitle(
         &classified.body_text,
         &desired,
         &classified.embed_slots,
+        &[],
         replica,
         to_file,
     )? {
@@ -1844,11 +2079,20 @@ fn note_record_update(record: &CloudKitRecord, entry: &NoteEntry, fields: Update
 /// `prepareNoteTextUpdate`: `Ok(Ok(Some(payload)))`, `Ok(Ok(None))` for
 /// "unchanged", or the refusal. `file` is the entry's file as the caller
 /// sees it (the move target for a retitle).
+///
+/// `expected_slots` are the embeds `desired.text` holds a placeholder for,
+/// in order; those at the indexes in `new_slots` (ascending) are new
+/// attachments, whose placeholders the note doesn't have yet. The text is
+/// edited as if they weren't there, so that edit may neither add nor remove
+/// a placeholder, and each is then inserted at its place carrying its
+/// attachment: the placeholders the note has keep their characters, and
+/// the rebuilt document must decode to exactly `expected_slots`.
 fn prepare_note_text_update(
     record: &CloudKitRecord,
     current_body_text: &str,
     desired: &NoteText,
     expected_slots: &[EmbedSlot],
+    new_slots: &[usize],
     replica: &[u8; 16],
     file: &str,
 ) -> Result<Result<Option<String>, TextUpdateRefusal>, Error> {
@@ -1861,7 +2105,28 @@ fn prepare_note_text_update(
     if !note_document_round_trips(&raw) {
         return Ok(Err(TextUpdateRefusal::NotRoundTrip));
     }
-    let touches_placeholder = compute_splices(current_body_text, &desired.text).iter().any(|splice| {
+    let placeholders = placeholder_offsets(&desired.text);
+    if !new_slots.is_empty() && placeholders.len() != expected_slots.len() {
+        return Ok(Err(TextUpdateRefusal::RebuiltEmbedFailed));
+    }
+    // The text before the new attachments' placeholders go in.
+    let edited_text: String = if new_slots.is_empty() {
+        desired.text.clone()
+    } else {
+        let skipped: HashSet<usize> = new_slots
+            .iter()
+            .filter_map(|&slot| placeholders.get(slot).copied())
+            .collect();
+        let units: Vec<u16> = desired
+            .text
+            .encode_utf16()
+            .enumerate()
+            .filter(|(offset, _)| !skipped.contains(offset))
+            .map(|(_, unit)| unit)
+            .collect();
+        js::from_utf16(&units)
+    };
+    let touches_placeholder = compute_splices(current_body_text, &edited_text).iter().any(|splice| {
         js::slice16(current_body_text, splice.start, splice.start + splice.delete_length)
             .contains(OBJECT_REPLACEMENT_CHARACTER)
             || splice.insert_text.contains(OBJECT_REPLACEMENT_CHARACTER)
@@ -1878,10 +2143,25 @@ fn prepare_note_text_update(
     if doc.text != current_body_text {
         return Ok(Err(TextUpdateRefusal::DecoderDisagreement));
     }
-    let text_changed = match apply_text_edit(&mut doc, &desired.text, &ApplyTextEditOptions { replica_id: *replica }) {
+    let edit_options = ApplyTextEditOptions { replica_id: *replica };
+    let mut text_changed = match apply_text_edit(&mut doc, &edited_text, &edit_options) {
         Ok(changed) => changed,
         Err(e) => return Ok(Err(exception(e))),
     };
+    for &slot in new_slots {
+        let (Some(EmbedSlot::Attachment(reference)), Some(&offset)) =
+            (expected_slots.get(slot), placeholders.get(slot))
+        else {
+            return Ok(Err(TextUpdateRefusal::RebuiltEmbedFailed));
+        };
+        if let Err(e) = insert_attachment_placeholder(&mut doc, offset, attachment_info(reference), &edit_options) {
+            return Ok(Err(exception(e)));
+        }
+        text_changed = true;
+    }
+    if doc.text != desired.text {
+        return Ok(Err(TextUpdateRefusal::RebuiltDecodeFailed));
+    }
     let format_changed = match reconcile_note_format(&mut doc, &desired.paragraphs, replica) {
         Ok(Ok(changed)) => changed,
         Err(e) => return Ok(Err(exception(e))),
@@ -1956,19 +2236,6 @@ fn apply_local_note_deletion(
     Ok(local)
 }
 
-/// The file attachments a note tracks, each with its link path from the
-/// note's directory (what pull wrote into the note for it).
-fn note_attachment_links(state: &CloneState, record_name: &str, note_file: &str) -> HashMap<String, String> {
-    let note_dir = note_dir_of(note_file);
-    state
-        .attachments
-        .iter()
-        .flatten()
-        .filter(|(_, att)| att.note_record_name == record_name)
-        .map(|(k, att)| (k.clone(), posix::relative(&note_dir, &att.file)))
-        .collect()
-}
-
 /// Records a note moved to Recently Deleted in the trash registry.
 fn remember_trashed_note(state: &mut CloneState, record_name: &str, file: &str) {
     let trashed = state.trashed.get_or_insert_with(IndexMap::new);
@@ -1994,6 +2261,107 @@ fn rejection(result: &RecordUpdateResult) -> Option<String> {
     }
 }
 
+/// The rejection to report of a `records/modify` answer: in an atomic
+/// request every record is refused when one is, the others with
+/// `ATOMIC_ERROR`, so the one that says why comes first.
+fn first_rejection(results: &[RecordUpdateResult]) -> Option<&RecordUpdateResult> {
+    let rejected = |r: &&RecordUpdateResult| !r.is_ok();
+    let cause = |r: &&RecordUpdateResult| matches!(r, RecordUpdateResult::Rejected { server_error_code, .. } if server_error_code != "ATOMIC_ERROR");
+    results.iter().find(cause).or_else(|| results.iter().find(rejected))
+}
+
+/// What a write that carries new attachments did.
+struct SentWrite {
+    /// One result per record sent: the note's first, as in `updates`.
+    results: Vec<RecordUpdateResult>,
+    /// The state entry of each attachment created, by `Attachment` record
+    /// name: to track once every result is ok.
+    attachments: Vec<(String, AttachmentEntry)>,
+}
+
+/// Sends a note's write (`note_ops`: its update or create first, then any
+/// table updates) together with its new attachments. Each file is read and
+/// uploaded for the `Asset` field of the `Media` record it will be
+/// (CloudKit's asset upload, which names the record the asset is for), and
+/// then one atomic `records/modify` carries the note, and a `Media` and an
+/// `Attachment` record per file: all of it is applied, or none.
+///
+/// `Ok(Err(why))` when a file can no longer be read as planned: nothing was
+/// sent for the note. An upload that fails is an error like any other
+/// request's; iCloud keeps nothing of an upload no record names.
+fn send_with_new_attachments<T: Transport>(
+    db: &Database<T>,
+    zone: &NoteZone,
+    target_dir: &Path,
+    note_record_name: &str,
+    note_ops: Vec<RecordOp>,
+    new_attachments: &[NewAttachment],
+) -> Result<Result<SentWrite, String>, Error> {
+    let mut ops = note_ops;
+    let mut attachments = Vec::with_capacity(new_attachments.len());
+    let now_ms = rt::now_ms();
+    for attachment in new_attachments {
+        let path = target_dir.join(&attachment.file);
+        let link = format!("attachments/{}", attachment.name);
+        // As planned: still a regular file of a size this tool uploads.
+        let regular = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file());
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) if regular && !bytes.is_empty() && bytes.len() as u64 <= MAX_NEW_ATTACHMENT_BYTES => bytes,
+            Ok(_) => return Ok(Err(format!("{link} changed while it was being pushed"))),
+            Err(e) => return Ok(Err(format!("{link} couldn't be read: {e}"))),
+        };
+        let asset = db.upload_asset(zone, "Media", &attachment.media_record_name, "Asset", &bytes)?;
+        let checksum = asset
+            .get("fileChecksum")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        let parent = CreateExtras {
+            parent_record_name: Some(note_record_name.to_owned()),
+            create_short_guid: false,
+        };
+        ops.push(RecordOp::Create {
+            record_name: attachment.media_record_name.clone(),
+            record_type: "Media".into(),
+            fields: build_media_create_fields(asset, &attachment.name),
+            extras: parent.clone(),
+        });
+        ops.push(RecordOp::Create {
+            record_name: attachment.attachment_record_name.clone(),
+            record_type: "Attachment".into(),
+            fields: build_attachment_create_fields(&NewAttachmentFields {
+                type_uti: &attachment.type_uti,
+                file_name: &attachment.name,
+                media_record_name: &attachment.media_record_name,
+                note_record_name,
+                file_size: bytes.len() as u64,
+                now_ms,
+                dimensions: image_dimensions(&bytes),
+            }),
+            extras: parent,
+        });
+        attachments.push((
+            attachment.attachment_record_name.clone(),
+            AttachmentEntry {
+                file: attachment.file.clone(),
+                media_record_name: attachment.media_record_name.clone(),
+                media_file_checksum: checksum,
+                note_record_name: note_record_name.to_owned(),
+            },
+        ));
+    }
+    let results = db.modify_records_atomically(zone, &ops)?;
+    Ok(Ok(SentWrite { results, attachments }))
+}
+
+/// Tracks the attachments a write created: from here on each one's link
+/// stands for it, and its file is the download pull would have made.
+fn track_new_attachments(state: &mut CloneState, attachments: Vec<(String, AttachmentEntry)>) {
+    if !attachments.is_empty() {
+        state.attachments.get_or_insert_with(IndexMap::new).extend(attachments);
+    }
+}
+
 /// Sends every trash and every single-record update of the plan together,
 /// one `records/modify` per zone (non-atomic, so each note stands alone),
 /// when there are several: their results, by record name, for `execute`.
@@ -2012,7 +2380,12 @@ fn batch_writes<T: Transport>(
                     .or_default()
                     .push(trash_update(record_name, record));
             }
-            Action::Update { zone, updates, .. } if updates.len() == 1 => {
+            Action::Update {
+                zone,
+                updates,
+                new_attachments,
+                ..
+            } if updates.len() == 1 && new_attachments.is_empty() => {
                 by_zone.entry(zone.clone()).or_default().push(updates[0].clone());
             }
             _ => {}
@@ -2240,7 +2613,7 @@ fn execute<T: Transport>(
             let text = read_text(&target_dir.join(to_file))?.unwrap_or_default();
             let local_text = split_frontmatter(&text, split_options(state.mode())).body;
             // The edit made along with the move goes up now, not a sync later.
-            let tracked_ids = note_attachment_links(state, record_name, to_file);
+            let tracked = TrackedAttachments::of(state, record_name, to_file);
             let prepared = prepare_update(
                 db,
                 &private,
@@ -2248,7 +2621,7 @@ fn execute<T: Transport>(
                 &current,
                 &updated,
                 &local_text,
-                &tracked_ids,
+                &tracked,
                 &edit.replica,
                 mtime_ms(&target_dir.join(to_file))?,
                 state.mode(),
@@ -2264,12 +2637,36 @@ fn execute<T: Transport>(
                 }
             };
             if !prepared.updates.is_empty() {
-                let results = db.update_records(&private, &prepared.updates)?;
-                if let Some(failure) = results.iter().find_map(rejection) {
+                let sent = if prepared.new_attachments.is_empty() {
+                    SentWrite {
+                        results: db.update_records(&private, &prepared.updates)?,
+                        attachments: Vec::new(),
+                    }
+                } else {
+                    let ops = prepared.updates.iter().cloned().map(RecordOp::Update).collect();
+                    match send_with_new_attachments(
+                        db,
+                        &private,
+                        target_dir,
+                        record_name,
+                        ops,
+                        &prepared.new_attachments,
+                    )? {
+                        Ok(sent) => sent,
+                        Err(failure) => {
+                            return Ok(ExecuteOutcome::ok(format!(
+                                "{moved} (its edits weren't pushed: {failure})"
+                            )));
+                        }
+                    }
+                };
+                let results = sent.results;
+                if let Some(failure) = first_rejection(&results).and_then(rejection) {
                     return Ok(ExecuteOutcome::ok(format!(
                         "{moved} (its edits weren't pushed: {failure})"
                     )));
                 }
+                track_new_attachments(state, sent.attachments);
                 if let Some(RecordUpdateResult::Ok(note)) = results.first()
                     && note.record_name == *record_name
                 {
@@ -2330,6 +2727,7 @@ fn execute<T: Transport>(
             folder_record_name,
             shared_zone_owner,
             modification_date_ms,
+            new_attachments,
         } => {
             if failed_folders.contains(folder_record_name) {
                 return Ok(ExecuteOutcome::failed(format!(
@@ -2353,7 +2751,40 @@ fn execute<T: Transport>(
             } else {
                 CreateExtras::default()
             };
-            let created = match db.create_note_record(&zone, &record_name, &fields, &extras)? {
+            let (result, attachments) = if new_attachments.is_empty() {
+                (
+                    db.create_note_record(&zone, &record_name, &fields, &extras)?,
+                    Vec::new(),
+                )
+            } else {
+                // The note and its attachments are created together, or not
+                // at all.
+                let create = RecordOp::Create {
+                    record_name: record_name.clone(),
+                    record_type: "Note".into(),
+                    fields,
+                    extras,
+                };
+                let sent = match send_with_new_attachments(
+                    db,
+                    &zone,
+                    target_dir,
+                    &record_name,
+                    vec![create],
+                    new_attachments,
+                )? {
+                    Ok(sent) => sent,
+                    Err(failure) => return Ok(ExecuteOutcome::failed(format!("{file}: {failure}"))),
+                };
+                match first_rejection(&sent.results) {
+                    Some(rejected) => (rejected.clone(), Vec::new()),
+                    None => match sent.results.into_iter().next() {
+                        Some(note) => (note, sent.attachments),
+                        None => return Ok(ExecuteOutcome::failed(format!("{file}: the server gave no answer"))),
+                    },
+                }
+            };
+            let created = match result {
                 RecordUpdateResult::Ok(r) => *r,
                 rejected => {
                     return Ok(ExecuteOutcome::failed(format!(
@@ -2362,6 +2793,7 @@ fn execute<T: Transport>(
                     )));
                 }
             };
+            track_new_attachments(state, attachments);
             state.notes.insert(
                 record_name.clone(),
                 NoteEntry {
@@ -2396,7 +2828,11 @@ fn execute<T: Transport>(
                 )?;
             }
             record_epoch(target_dir, &record_name, &history_record_names(state, &record_name))?;
-            Ok(ExecuteOutcome::ok(format!("Created {file}")))
+            Ok(ExecuteOutcome::ok(match new_attachments.len() {
+                0 => format!("Created {file}"),
+                1 => format!("Created {file}, with its attachment"),
+                n => format!("Created {file}, with its {n} attachments"),
+            }))
         }
         Action::WriteMerge {
             record_name,
@@ -2434,12 +2870,27 @@ fn execute<T: Transport>(
             requested_title,
             modification_date_ms,
             merged,
+            new_attachments,
         } => {
-            let results = match batched.remove(record_name) {
-                Some(results) => results,
-                None => db.update_records(zone, updates)?,
+            let sent = match batched.remove(record_name) {
+                Some(results) => SentWrite {
+                    results,
+                    attachments: Vec::new(),
+                },
+                None if new_attachments.is_empty() => SentWrite {
+                    results: db.update_records(zone, updates)?,
+                    attachments: Vec::new(),
+                },
+                None => {
+                    let ops = updates.iter().cloned().map(RecordOp::Update).collect();
+                    match send_with_new_attachments(db, zone, target_dir, record_name, ops, new_attachments)? {
+                        Ok(sent) => sent,
+                        Err(failure) => return Ok(ExecuteOutcome::failed(format!("{}: {failure}", entry.file))),
+                    }
+                }
             };
-            if let Some(failed) = results.iter().find(|r| !r.is_ok())
+            let results = sent.results;
+            if let Some(failed) = first_rejection(&results)
                 && let RecordUpdateResult::Rejected {
                     server_error_code,
                     reason,
@@ -2463,6 +2914,7 @@ fn execute<T: Transport>(
                 };
                 return Ok(ExecuteOutcome::failed(message));
             }
+            track_new_attachments(state, sent.attachments);
             if let Some(merged) = merged {
                 write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
                 if let Some(tracked) = state.notes.get_mut(record_name) {
@@ -2487,7 +2939,11 @@ fn execute<T: Transport>(
             }
             write_base_copy(target_dir, record_name, local_text)?;
             record_epoch(target_dir, record_name, &history_record_names(state, record_name))?;
-            Ok(ExecuteOutcome::ok(format!("Pushed {}", entry.file)))
+            Ok(ExecuteOutcome::ok(match new_attachments.len() {
+                0 => format!("Pushed {}", entry.file),
+                1 => format!("Pushed {}, with its new attachment", entry.file),
+                n => format!("Pushed {}, with its {n} new attachments", entry.file),
+            }))
         }
     }
 }

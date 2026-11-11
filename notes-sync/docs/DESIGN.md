@@ -284,6 +284,9 @@ Notes (icloud-md 0.6.2 refuses most of these, some forever):
   attachment stands for it, as an embed marker does. Removing, changing or
   moving the link is still refused. Moving such a note to another folder
   takes its attachment files along.
+- A link of that kind to a file in the note folder's `attachments/` that
+  is no attachment yet adds the file to the note ("Adding an attachment",
+  below).
 - Folder directories: a new directory (even empty) becomes a folder; a
   folder directory renamed in place (its notes all turn up in one new
   directory beside it, or both are empty) retitles the folder record; a
@@ -401,6 +404,112 @@ in the same order. Recorded: `attach-clone` and `attach-pull` (two notes,
 one file attachment each) send 2 lookups instead of 4.
 
 Tests: tests/cli_differential.rs `attach_*`, tests/cloudkit_downloads.rs.
+
+### Adding an attachment
+
+A note's text that links to a file the way pull links an attachment
+(`[plan.pdf](attachments/plan.pdf)`, with a leading `!` for the image
+types `is_image_uti` knows), where the file is in the note folder's
+`attachments/` and is no tracked attachment, asks for that file to be
+attached. This works for an edited note and for a new note's file.
+`icloud-notes attach NOTE FILE` writes exactly that: a copy of the file and
+the link.
+
+What a file attachment is in iCloud (measured on a real account,
+2026-11-11, for a PNG):
+
+- a `Media` record, `parent` the note: `Asset` (the file), `FilenameEncrypted`
+  (base64 of the name), `MinimumSupportedNotesVersion` 0, `Deleted` 0;
+- an `Attachment` record, `parent` the note, whose record name is the
+  attachment identifier (an uppercase UUID): `UTI`, `UTIEncrypted`,
+  `TitleEncrypted` (the file name), `Media` and `Note` (references,
+  `{recordName, action: "VALIDATE", zoneID: {zoneName: "Notes"}}`),
+  `FileSize`, `CreationDate`, `LastModificationDate`,
+  `MinimumSupportedNotesVersion` 0, `Deleted` 0, `Orientation` 0,
+  `ImageFilterType` 0, the cropping quad as the whole image
+  (`CroppingQuadTopLeftX` 0, `TopLeftY` 1, `TopRightX` 1, `TopRightY` 1,
+  `BottomRightX` 1, `BottomRightY` 0, `BottomLeftX` 0, `BottomLeftY` 0) and,
+  for an image, `Width` and `Height` in pixels;
+- in the note's text, a U+FFFC whose attribute run (one unit long, with its
+  paragraph's style) carries the attachment identifier and the type.
+
+Apple's devices later add previews and summaries to the `Attachment`
+record (`PreviewImages`, `OcrSummaryEncrypted`, ...). The engine sends none
+of those (`doc::encode::build_media_create_fields`,
+`build_attachment_create_fields`); the cropping quad and the image size go
+up as JSON doubles, everything untyped like the engine's other writes.
+
+Planning (`status`, `push --dry-run` and the first half of `push`) reads
+nothing of the file but its metadata and sends nothing for it:
+
+- `doc::embeds::plan_embed_representations` gives every attachment link
+  that stands for no embed of the note a placeholder of its own
+  (`new_links`), in the place of the link. A link inside a table or an
+  embed marker is that embed's text. Something written like a link into
+  `attachments/` that can't be read as one (its text over a line break, a
+  space in its target) is refused rather than pushed as an ordinary link.
+- `cmd::push::resolve_new_attachments` turns each into a `NewAttachment`
+  or a refusal (`PrepareRefusal::NewAttachment`,
+  `Refusal::CreateNewAttachment`). The file must be a regular file named
+  directly in `attachments/` (`vault::attachments::resolve_new_attachment_file`:
+  no `..`, no deeper path, no symbolic link, and the directory itself
+  resolving inside the vault, the test the app's preview applies),
+  non-empty and at most 100 MB (`MAX_NEW_ATTACHMENT_BYTES`), not an
+  attachment of this or another note already, linked once, and linked
+  exactly as pull would link it (`attachment_link_spellings`), since that
+  spelling is what stands for the attachment from then on. The type comes
+  from the extension (`doc::attach::uti_for_file_name`, `public.data` when
+  it says nothing). A note in someone else's shared zone is refused.
+- The record names (uppercase UUIDs) are drawn here, as a new folder's is,
+  because the note's document names the attachment: the plan entry gets
+  the remark "adds the attachment NAME".
+- The document is built by `prepare_note_text_update`. The text edit is
+  applied as if the new placeholders weren't there, under the existing
+  rule that an edit may neither add nor remove a placeholder; then each new
+  one is inserted at its offset by
+  `doc::document::insert_attachment_placeholder` (one character of this
+  replica, with its attachment run). Diffing the whole text instead could
+  not tell a new placeholder from the one beside it, and would hand an
+  existing attachment's character to the new one (a link appended after a
+  note's last attachment did exactly that). Every check on the rebuilt
+  document still runs, the embed check against the note's embeds plus the
+  new ones in order. A new note's document marks its placeholders with
+  `mark_attachment_placeholder` and is checked the same way.
+
+Executing (`send_with_new_attachments`): each file is read and uploaded
+with `Database::upload_asset` for the `Asset` field of the `Media` record
+it is about to become, and one `records/modify` with `atomic: true`
+(`Database::modify_records_atomically`) carries the note's update (or
+create) first, any table updates, then a `Media` and an `Attachment`
+create per file. Such a note is left out of the batched non-atomic write.
+If iCloud refuses any record nothing is applied: the entry fails with the
+refusal of the record that caused it (the others answer `ATOMIC_ERROR`),
+and state, base copy and files are as they were, so the next push tries
+again. A failed upload fails the push like any failed request, before
+anything is sent for the note; an uploaded asset no record names is
+iCloud's to discard. On success `state.attachments` gets the entry pull
+would have written (the file where it is, the upload's `fileChecksum`), so
+the link is an existing attachment to the next plan, and the base copy and
+history are written as for any pushed edit.
+
+Not measured against a real account: `assets/upload` was measured for a
+field of a record that exists (a Note's `TextDataAsset`), not for a record
+the same push is about to create; that the untyped doubles are accepted;
+that the cropping quad is wanted on a file that is no image; and that
+Apple's apps show a record without the previews they add themselves.
+
+Still refused: removing, changing or moving the link of an attachment the
+note has; a link to a file that isn't there, or outside the folder's
+`attachments/`; a file over 100 MB; a shared note. GIF and WebP files are
+linked as files, not embeds, as pull links the ones Notes makes
+(`is_image_uti` doesn't list their types).
+
+Tests: tests/doc_attach.rs (types, image sizes, the records' exact JSON,
+links, placeholders through the decoders), tests/cmd_push_attach.rs (the
+upload and the exact atomic request over a fake server, a second
+attachment, a failed upload, a refused request, every refusal, a new
+note), and the scenarios `attach-push` and `attach-push-status`
+(`attach_push_*`).
 
 ### Shared zones: the shared-database listing resumes
 

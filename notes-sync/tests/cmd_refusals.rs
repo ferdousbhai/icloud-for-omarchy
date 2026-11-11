@@ -52,13 +52,6 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            Refusal::UpdateNewAttachmentReference { file: FILE.into() },
-            Refused,
-            format!(
-                "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it, or run \"icloud-notes restore {FILE}\" to discard the edit."
-            ),
-        ),
-        (
             Refusal::AmbiguousNoteId {
                 other_count: 2,
                 others: vec!["Notes/B.md".into(), "Notes/C.md".into()],
@@ -169,9 +162,11 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             "contains an embed marker, but this tool can't create embeds - remove it before pushing".into(),
         ),
         (
-            Refusal::CreateAttachmentReference,
+            Refusal::CreateNewAttachment {
+                reason: "the linked file \"attachments/plan.pdf\" is empty".into(),
+            },
             Refused,
-            "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first.".into(),
+            "the linked file \"attachments/plan.pdf\" is empty".into(),
         ),
         (
             Refusal::MoveGoneRemotely,
@@ -318,6 +313,14 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             }),
             Refused,
             format!("an embed moved. {restore}"),
+        ),
+        (
+            Refusal::UpdatePrepare(PrepareRefusal::NewAttachment {
+                reason: "the linked file \"attachments/plan.pdf\" is empty".into(),
+                file: FILE.into(),
+            }),
+            Refused,
+            format!("the linked file \"attachments/plan.pdf\" is empty. {restore}"),
         ),
         (
             Refusal::UpdatePrepare(PrepareRefusal::EmbedMarkdown {
@@ -470,7 +473,6 @@ fn every_refusal_variant_is_listed() {
             | UpdateSharedNote(_)
             | UpdateConflictMarkers
             | UpdateUnknownContent { .. }
-            | UpdateNewAttachmentReference { .. }
             | AmbiguousNoteId { .. }
             | DeleteSharedNote { .. }
             | MoveSharedNote { .. }
@@ -483,7 +485,7 @@ fn every_refusal_variant_is_listed() {
             | CreateConflictMarkers
             | CreateUnknownContent
             | CreateEmbedMarker
-            | CreateAttachmentReference
+            | CreateNewAttachment { .. }
             | MoveGoneRemotely
             | MoveChangedRemotely
             | FolderGoneRemotely
@@ -505,7 +507,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 34, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 33, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()
@@ -514,7 +516,7 @@ fn every_refusal_variant_is_listed() {
             _ => None,
         })
         .collect();
-    assert_eq!(prepare.len(), 10, "one row per PrepareRefusal variant");
+    assert_eq!(prepare.len(), 11, "one row per PrepareRefusal variant");
     let text: std::collections::HashSet<std::mem::Discriminant<TextUpdateRefusal>> = listed
         .iter()
         .filter_map(|r| match r {

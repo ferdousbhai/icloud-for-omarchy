@@ -144,6 +144,29 @@ pub fn encode_uri_component(s: &str) -> String {
     out
 }
 
+/// `decodeURIComponent`: `None` where JS throws (a `%` not followed by two
+/// hex digits, or bytes that aren't UTF-8).
+pub fn decode_uri_component(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = bytes.get(i + 1..i + 3)?;
+            let hex = std::str::from_utf8(hex).ok()?;
+            if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// `path.posix` - the subset icloud-md uses on vault-relative paths.
 pub mod posix {
     /// `path.posix.basename(p)`.

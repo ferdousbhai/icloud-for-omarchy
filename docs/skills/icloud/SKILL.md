@@ -81,8 +81,9 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   `read NOTE` (`.body`; first line is the title), `search QUERY`.
 - Change: `new TITLE [--folder F] [--body T|--file P|--stdin]`,
   `write NOTE --body T [--append] [--yes]`, `rename NOTE TITLE`, `move NOTE FOLDER`,
-  `delete NOTE --yes`, `toggle NOTE LINE`, `new-folder`, `rename-folder`,
-  `delete-folder --yes`, `export-pdf NOTE`. Names starting with a dot (and
+  `delete NOTE --yes`, `toggle NOTE LINE`, `attach NOTE FILE` (adds FILE to
+  the note as an attachment, uploaded by the next push), `new-folder`,
+  `rename-folder`, `delete-folder --yes`, `export-pdf NOTE`. Names starting with a dot (and
   folders named `attachments`) are never synced, so they are refused.
 - Conflicts: `read` → `.conflicts[i].local|remote`; `resolve NOTE --choices
   local,remote,both,...` or `--all local`; if `.conflicts_unreadable`:

@@ -42,6 +42,7 @@ timer's sync). All of it is new, in the app binary: see
 | Ctrl+S past a save warning (conflict markers, duplicate id) | `icloud-notes write ... --force` | added |
 | Bold, italic, link buttons | `write` (they only insert Markdown) | added |
 | Checklist toggle (Ctrl+Enter) | `icloud-notes toggle NOTE LINE` | added |
+| (not in the window) add a file to a note as an attachment | `icloud-notes attach NOTE FILE` | added |
 | New note (Ctrl+N) | `icloud-notes new TITLE [--folder F] [--body ...]` | added |
 | Rename (edit the title line) | `icloud-notes rename NOTE TITLE` | added |
 | Delete note (to the trash) | `icloud-notes delete NOTE --yes` | added |
@@ -311,10 +312,10 @@ Every code each tool can emit, by exit.
 
 | Exit | Codes |
 |---|---|
-| 1 | `read_only`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
+| 1 | `read_only`, `error` (also an `attach` FILE that cannot be read, is not a regular file, is empty or is larger than 100 MB), `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
 | 2 | `usage` (also `delete`, `delete-folder`, `restore`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
 | 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
-| 4 | `not_found` (no such note or folder) |
+| 4 | `not_found` (no such note or folder, or no such FILE for `attach`) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
 
 `push --dry-run`, `history`, `diff` and `restore` are the engine itself, so
@@ -406,6 +407,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `rename`, `move` | `{action, path, from, title?, sync?}` |
 | `delete` | `{action:"delete", path, sync?}` |
 | `toggle` | `{action:"toggle", path, line, text, sync?}` |
+| `attach` | `{action:"attach", path, file, link, sync?}` (`file`: the copy, a vault path under the note folder's `attachments/`, renamed `name 2.ext` when the name was taken; `link`: the line added at the end of the note, `![name](attachments/name)` for a PNG, JPEG, HEIC or TIFF and `[name](attachments/name)` for anything else. The next push uploads the file; `status` and `push --dry-run` show the note as `update` with `remark: "adds the attachment NAME"`. FILE is a regular, non-empty file of at most 100 MB) |
 | `resolve` | `{action:"resolve", path, choices, sync?}` |
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |

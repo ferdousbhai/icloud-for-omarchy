@@ -273,6 +273,13 @@ const QList<Spec> &specs()
           "item gains a box, as Ctrl+Enter does in the window.\n"
           "JSON: {action, path, line, text, sync?}",
           { QStringLiteral("--push") }, 2, 2 },
+        { "attach", "attach NOTE FILE [--push]",
+          "Add FILE to the note as an attachment: it is copied into the note folder's attachments/\n"
+          "(under another name if one is taken, never over a file) and a link to it is added at the end\n"
+          "of the note. The next push uploads it to iCloud; until then, removing the link and the copy\n"
+          "undoes it. FILE is a regular file of at most 100 MB. Refused for a read-only note.\n"
+          "JSON: {action, path, file, link, sync?}",
+          { QStringLiteral("--push") }, 2, 2 },
         { "resolve", "resolve NOTE (--all local|remote|both | --choices C1,C2,...) [--push]",
           "Settle a note's conflict blocks as the window's version picker does: keep this computer's\n"
           "version (local), iCloud's (remote) or both (local first), for every block (--all) or block by\n"
@@ -1465,6 +1472,102 @@ Result toggle(NotesBackend &b, const Args &a)
                  text, QStringLiteral("Line %1 of %2: %3").arg(line).arg(relPath(b), text) };
 }
 
+// The link the sync engine writes for an attachment file, and so the one
+// it takes for a file to add (notes-sync `format_attachment_markdown`): an
+// embed for the image types it knows, the file's name as the link text with
+// its brackets and backslashes escaped, and the path percent-encoded as
+// JavaScript's encodeURIComponent does.
+QString attachmentLink(const QString &name)
+{
+    static const QStringList embedded{ QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                                       QStringLiteral("heic"), QStringLiteral("tiff"), QStringLiteral("tif") };
+    QString text;
+    for (const QChar c : name) {
+        if (c == u'[' || c == u']' || c == u'\\')
+            text += u'\\';
+        text += c;
+    }
+    const int dot = name.lastIndexOf(u'.');
+    const bool image = dot > 0 && embedded.contains(name.mid(dot + 1).toLower());
+    return QStringLiteral("%1[%2](attachments/%3)")
+        .arg(image ? QStringLiteral("!") : QString(), text,
+             QString::fromLatin1(QUrl::toPercentEncoding(name, QByteArrayLiteral("!*'()"))));
+}
+
+// The most the sync engine uploads as one attachment (notes-sync
+// MAX_NEW_ATTACHMENT_BYTES).
+constexpr qint64 kMaxAttachmentBytes = 100LL * 1024 * 1024;
+
+Result attach(NotesBackend &b, const Args &a)
+{
+    Note n;
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
+        return *f;
+    if (!b.readOnlyReason().isEmpty())
+        return Failure{ QStringLiteral("read_only"), QStringLiteral("%1 is read-only here: this note %2").arg(n.path(), b.readOnlyReason()),
+                        kExitError, QStringLiteral("Add the attachment in Apple Notes; it still syncs here.") };
+    const QString source = a.positional.at(1);
+    const QFileInfo info(source);
+    if (!info.exists())
+        return Failure{ QStringLiteral("not_found"), QStringLiteral("no file \"%1\"").arg(source), kExitNotFound, {} };
+    QFile in(info.absoluteFilePath());
+    if (!info.isFile() || !in.open(QIODevice::ReadOnly))
+        return Failure{ QStringLiteral("error"),
+                        QStringLiteral("cannot read %1: %2")
+                            .arg(source, info.isFile() ? in.errorString() : QStringLiteral("not a regular file")),
+                        kExitError, {} };
+    in.close();
+    if (info.size() == 0)
+        return Failure{ QStringLiteral("error"), QStringLiteral("%1 is empty: there is nothing to attach").arg(source), kExitError, {} };
+    if (info.size() > kMaxAttachmentBytes)
+        return Failure{ QStringLiteral("error"),
+                        QStringLiteral("%1 is larger than 100 MB, the most that can be added as an attachment").arg(source),
+                        kExitError, QStringLiteral("Add it in Apple Notes instead.") };
+    // One plain file name, as the engine wants an attachment's.
+    const QString name = info.fileName();
+    bool plain = !name.isEmpty() && name.toUtf8().size() <= 190;
+    for (const QChar c : name)
+        plain = plain && c.unicode() >= 0x20 && c.unicode() != 0x7f;
+    if (!plain)
+        return usageError(QStringLiteral("\"%1\" cannot be an attachment's name: rename the file first (no control "
+                                         "characters, at most 190 bytes)")
+                              .arg(name));
+
+    const QDir folder(QDir(NotesBackend::rootPath()).filePath(b.currentFolder()));
+    if (!folder.mkpath(QStringLiteral("attachments")))
+        return Failure{ QStringLiteral("error"), QStringLiteral("could not create %1").arg(folder.filePath(QStringLiteral("attachments"))),
+                        kExitError, {} };
+    const QDir dir(folder.filePath(QStringLiteral("attachments")));
+    // Never over a file that is there: "name 2.ext", as a pull names a
+    // second attachment of the same name.
+    const int dot = name.lastIndexOf(u'.');
+    const QString stem = dot > 0 ? name.left(dot) : name;
+    const QString ext = dot > 0 ? name.mid(dot) : QString();
+    QString stored = name;
+    for (int i = 2; QFileInfo::exists(dir.filePath(stored)) || QFileInfo(dir.filePath(stored)).isSymLink(); ++i)
+        stored = QStringLiteral("%1 %2%3").arg(stem).arg(i).arg(ext);
+    // QFile::copy refuses to replace a file, should one appear meanwhile.
+    QFile copy(info.absoluteFilePath());
+    if (!copy.copy(dir.filePath(stored)))
+        return Failure{ QStringLiteral("error"), QStringLiteral("could not copy %1 to %2: %3").arg(source, dir.filePath(stored), copy.errorString()),
+                        kExitError, {} };
+    QFile::setPermissions(dir.filePath(stored), QFile::permissions(dir.filePath(stored)) | QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+
+    const QString link = attachmentLink(stored);
+    const QString old = b.noteBody();
+    const QString body = (old.isEmpty() || old.endsWith(u'\n') ? old : old + u'\n') + link + u'\n';
+    if (!b.saveCurrentNote(body)) {
+        QFile::remove(dir.filePath(stored));
+        return Failure{ QStringLiteral("error"), QStringLiteral("could not write %1").arg(n.path()), kExitError, {} };
+    }
+    const QString file = (b.currentFolder().isEmpty() ? QString() : b.currentFolder() + u'/') + QStringLiteral("attachments/") + stored;
+    return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("attach") },
+                              { QStringLiteral("path"), relPath(b) },
+                              { QStringLiteral("file"), file },
+                              { QStringLiteral("link"), link } },
+                 QStringLiteral("Attached %1 to %2").arg(stored, relPath(b)) };
+}
+
 Result resolve(NotesBackend &b, const Args &a)
 {
     const auto all = a.value("--all");
@@ -1703,6 +1806,8 @@ int runCommand(const Args &a, const Spec &spec)
         return finish(b, a, deleteNote(b, a));
     if (cmd == u"toggle")
         return finish(b, a, toggle(b, a));
+    if (cmd == u"attach")
+        return finish(b, a, attach(b, a));
     if (cmd == u"resolve")
         return finish(b, a, resolve(b, a));
     if (cmd == u"recover")

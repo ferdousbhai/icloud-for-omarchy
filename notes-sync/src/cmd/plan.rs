@@ -206,6 +206,8 @@ pub enum PrepareRefusal {
     EmbedPlan { reason: String, file: String },
     /// `parseNoteMarkdown`'s reason (embed path).
     EmbedMarkdown { reason: String, file: String },
+    /// Why a linked file can't be added as a new attachment.
+    NewAttachment { reason: String, file: String },
     /// (conflict)
     TableGoneRemotely,
     /// `prepareTableAttachmentUpdate`'s reason.
@@ -241,6 +243,7 @@ impl PrepareRefusal {
             PrepareRefusal::Markdown { reason, file }
             | PrepareRefusal::EmbedPlan { reason, file }
             | PrepareRefusal::EmbedMarkdown { reason, file }
+            | PrepareRefusal::NewAttachment { reason, file }
             | PrepareRefusal::TableUpdate { reason, file } => format!("{reason}. {}", restore_advice(file)),
             PrepareRefusal::TableGoneRemotely => {
                 "a table in this note no longer exists remotely - run \"pull\" to reconcile".into()
@@ -319,8 +322,6 @@ pub enum Refusal {
     UpdateConflictMarkers,
     /// (update, refused); `file` = entry.file
     UpdateUnknownContent { file: String },
-    /// (update, refused)
-    UpdateNewAttachmentReference { file: String },
     /// (create, refused): one of several files sharing an `apple-note-id`
     /// whose note's own file is gone. `others` = the other claiming files in
     /// claim order; `other_count` = `claim.files.length - 1`.
@@ -357,8 +358,9 @@ pub enum Refusal {
     CreateUnknownContent,
     /// (create, refused)
     CreateEmbedMarker,
-    /// (create, refused)
-    CreateAttachmentReference,
+    /// (create, refused): why a linked file can't be added as a new
+    /// attachment.
+    CreateNewAttachment { reason: String },
 
     // --- after the live lookup ---
     /// (move, conflict)
@@ -434,10 +436,6 @@ impl Refusal {
                 "this note contains content this tool can't parse and can never be pushed - \
                  run \"icloud-notes restore {file}\" to discard your local edit."
             ),
-            UpdateNewAttachmentReference { file } => format!(
-                "contains an \"attachments/...\" reference, but this tool can't upload new attachments - \
-                 remove it, or run \"icloud-notes restore {file}\" to discard the edit."
-            ),
             AmbiguousNoteId { other_count, others, tracked_file } => format!(
                 "shares its \"{NOTE_ID_KEY}\" with {other_count} other file(s) ({}), and the note's own file ({}) is gone, \
                  so which one is the original can't be told apart - remove the \"{NOTE_ID_KEY}\" line from every copy but \
@@ -469,10 +467,6 @@ impl Refusal {
             CreateEmptyFile => "the file is empty - nothing to create".into(),
             CreateUnknownContent => "this file contains the unknown-content banner - remove it before pushing".into(),
             CreateEmbedMarker => "contains an embed marker, but this tool can't create embeds - remove it before pushing".into(),
-            CreateAttachmentReference => {
-                "contains an \"attachments/...\" reference, but this tool can't upload new attachments - remove it first."
-                    .into()
-            }
             FolderChangedRemotely => "another device put a note or folder in it since the last pull - \
                                       run \"pull\", then delete it again"
                 .into(),
@@ -487,7 +481,7 @@ impl Refusal {
                 "changed remotely since the last pull - run \"pull\" first".into()
             }
             MoveRetitle { refusal, previous_file } => refusal.message(previous_file),
-            CreateMarkdown { reason } | CreateReconcile { reason } => reason.clone(),
+            CreateMarkdown { reason } | CreateReconcile { reason } | CreateNewAttachment { reason } => reason.clone(),
             CreateVerificationFailed => "built document failed decode verification - refusing to create".into(),
             CreateBuildError { message } => message.clone(),
             UpdateChangedRemotelyUnmergeable => {
