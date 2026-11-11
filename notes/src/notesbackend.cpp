@@ -145,7 +145,7 @@ double readUiScale()
 // attachments/ directory per folder, shared by every note in it and named
 // after the attachment, and always rewrites each attachment into the note
 // text as a link (an embed for images), so the links are the full list.
-// Preview-only: attachment-bearing notes are read-only upstream.
+// The links themselves must stay as written: each stands for its attachment.
 QVariantList attachmentsFor(const QString &notePath, const QString &text)
 {
     static const QStringList imageSuffixes{ QStringLiteral("png"), QStringLiteral("jpg"),

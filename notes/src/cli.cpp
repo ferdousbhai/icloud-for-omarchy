@@ -260,7 +260,7 @@ const QList<Spec> &specs()
           { QStringLiteral("--push") }, 2, 2 },
         { "move", "move NOTE FOLDER [--push]",
           "Move a note to another existing folder (\"\" is the vault root); the next push moves it in\n"
-          "Notes. Refused for read-only notes and notes with attachments.\n"
+          "Notes, and takes the note's attachment files along. Refused for read-only notes.\n"
           "JSON: {action, path, from, sync?}",
           { QStringLiteral("--push") }, 2, 2 },
         { "delete", "delete NOTE [--yes] [--push]",
