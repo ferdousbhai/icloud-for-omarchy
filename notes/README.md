@@ -338,10 +338,13 @@ preview-only: notes with attachments can't be edited back to iCloud.
   icloud-notes-sync reads but does not write back.
   Edit it in Apple Notes; the changes still sync here. Such a note is
   rarely large in itself: Apple keeps every edit ever made to it, and years
-  of daily edits add up. `icloud-notes renew NOTE` (with the window closed)
-  replaces it with a fresh copy that can be edited here, and moves the old
-  one to Recently Deleted; the copy is a new note, so a pin or a link to
-  the old one does not carry over.
+  of daily edits add up. The background sync (the timer, which runs while
+  the window is closed) replaces such a note with a fresh copy that can be
+  edited here, once the note has gone an hour without a change, and moves
+  the old one to Recently Deleted; a desktop notification says so. The
+  copy is a new note, so a pin or a link to the old one does not carry
+  over. A note with attachments is left alone. `icloud-notes renew NOTE`
+  does the same at once.
 - Folder directories sync like folders in Notes: renaming one renames the
   folder in iCloud, deleting one moves its notes to Recently Deleted and
   deletes the folder (unless another device put something in it since the

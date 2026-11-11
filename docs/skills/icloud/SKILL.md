@@ -95,8 +95,9 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 - `read_only` notes cannot be changed here; `guardrail` = the text would add
   conflict markers (don't `--force`; use `resolve`). If `read_only` says
   Apple "keeps its text in a separate file", the note is large only from
-  edit history: `renew NOTE --yes` swaps it for a fresh editable copy (old
-  one to Recently Deleted; pin and links are lost, so ask first).
+  edit history: the background sync swaps it for a fresh editable copy
+  within hours, and `renew NOTE --yes` does it now (old one to Recently
+  Deleted; pin and links are lost, so ask first).
 - `push_rejected` (exit 1): the sync ran but iCloud refused a change; the
   message names it.
 

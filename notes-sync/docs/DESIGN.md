@@ -132,7 +132,7 @@ record with no text, which iCloud refuses ("Note record must have either
 TextDataEncrypted or TextDataAsset"). The size is nearly always edit
 history (the CRDT keeps every deleted run), so a new note with the same
 text is small again: `icloud-notes renew` makes that copy and trashes the
-old note.
+old note, and so does the app's background sync, unasked.
 
 A push that ran but had a change refused by iCloud returns its result as
 before and exits 1 (`PushResult::failures`); in `sync` that half is

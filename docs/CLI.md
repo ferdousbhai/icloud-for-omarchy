@@ -45,7 +45,7 @@ timer's sync). All of it is new, in the app binary: see
 | New note (Ctrl+N) | `icloud-notes new TITLE [--folder F] [--body ...]` | added |
 | Rename (edit the title line) | `icloud-notes rename NOTE TITLE` | added |
 | Delete note (to the trash) | `icloud-notes delete NOTE --yes` | added |
-| (not in the window) replace a note that is read-only because of its size with a fresh, editable copy | `icloud-notes renew NOTE --yes` | added |
+| (not in the window; the background sync does it by itself once the note has gone an hour without a change) replace a note that is read-only because of its size with a fresh, editable copy | `icloud-notes renew NOTE --yes` | added |
 | (not in the window) move a note to another folder | `icloud-notes move NOTE FOLDER` | added |
 | Export PDF | `icloud-notes export-pdf NOTE` | added |
 | New folder / Rename folder… / Delete folder… | `icloud-notes new-folder`, `rename-folder`, `delete-folder --yes` | added |

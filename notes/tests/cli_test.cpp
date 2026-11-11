@@ -938,6 +938,36 @@ int main(int argc, char *argv[])
         const Run leftover = cliJson({ QStringLiteral("renew"), QStringLiteral("Notes/Big.md"), QStringLiteral("--yes") });
         check(leftover.code == 2 && leftover.errorCode() == QStringLiteral("exists") && exists(QStringLiteral("Notes/Big.md")),
               "cli renew refuses when a fresh copy is already there");
+
+        // A background sync replaces such a note by itself, but not one
+        // that changed within the last hour, nor one with attachments.
+        const QHash<QString, QString> ids{ { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS"), QStringLiteral("1") } };
+        const auto age = [](const QString &rel, int hours) {
+            QFile f(g_vault + u'/' + rel);
+            return f.open(QIODevice::ReadWrite)
+                && f.setFileTime(QDateTime::currentDateTimeUtc().addSecs(-3600 * hours), QFileDevice::FileModificationTime);
+        };
+        seedBig();
+        const Run recent = cli({ QStringLiteral("--as-sync") }, ids);
+        check(recent.code == 0 && recent.out.contains("once it has gone an hour without a change")
+                  && readFile(QStringLiteral("Notes/Big.md")).contains(QStringLiteral("apple-note-id: id-big")),
+              "background sync leaves a note that changed within the hour");
+        check(age(QStringLiteral("Notes/Big.md"), 2), "cli test: the note's file time set back");
+        const Run automatic = cli({ QStringLiteral("--as-sync") }, ids);
+        const QString replaced = readFile(QStringLiteral("Notes/Big.md"));
+        check(automatic.code == 0 && automatic.out.contains("Replaced Notes/Big.md with a fresh copy")
+                  && replaced.startsWith(QStringLiteral("---\napple-note-id: stub-")) && replaced.endsWith(bigText)
+                  && !exists(QStringLiteral("Notes/Big (fresh copy).md")),
+              "background sync replaces a note kept as a separate file with a fresh copy");
+        seedBig();
+        writeFile(QStringLiteral("Notes/Big.md"),
+                  QStringLiteral("---\napple-note-id: id-big\n---\n") + bigText + QStringLiteral("![pic.png](attachments/pic.png)\n"));
+        writeFile(QStringLiteral("Notes/attachments/pic.png"), QStringLiteral("png"));
+        check(age(QStringLiteral("Notes/Big.md"), 2), "cli test: the note's file time set back");
+        const Run attached = cli({ QStringLiteral("--as-sync") }, ids);
+        check(attached.code == 0 && attached.out.contains("has attachments")
+                  && readFile(QStringLiteral("Notes/Big.md")).contains(QStringLiteral("apple-note-id: id-big")),
+              "background sync leaves a note with attachments");
         seedVault();
     }
 

@@ -113,10 +113,12 @@ rules, takes the vault's lock, and reaches every engine command you need.
 - Read-only notes (`read_only` set: very large notes, attachments Apple
   keeps elsewhere) cannot be written, renamed or moved: say so. One whose
   `read_only` says Apple "keeps its text in a separate file" is that large
-  from years of edit history, not its text: `icloud-notes renew NOTE --yes`
-  replaces it with a fresh copy that can be edited (it syncs, checks the
-  copy in iCloud, and moves the old note to Recently Deleted). The copy is
-  a new note, so its pin and links to it are lost: ask before running it.
+  from years of edit history, not its text: the background sync replaces it
+  with a fresh copy that can be edited once it has gone an hour without a
+  change, and `icloud-notes renew NOTE --yes` does so at once (it syncs,
+  checks the copy in iCloud, and moves the old note to Recently Deleted).
+  The copy is a new note, so its pin and links to it are lost: ask before
+  running it yourself.
 - A sync or push that exits 1 with `push_rejected` ran, but iCloud refused
   a change: the message names it. The rest of the sync still happened.
 

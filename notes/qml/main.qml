@@ -1121,7 +1121,7 @@ ApplicationWindow {
                         text: "Read-only here: this note " + backend.readOnlyReason
                             + ". Edit it in Apple Notes, and the changes still sync here."
                             + (backend.readOnlyReason.indexOf("keeps its text in a separate file") >= 0
-                               ? " Its size is edit history, not its text: with Notes closed, `icloud-notes renew` in a terminal replaces it with a fresh copy you can edit here."
+                               ? " Its size is edit history, not its text: once this window is closed and the note has gone an hour without a change, Notes replaces it with a fresh copy you can edit here."
                                : "")
                     }
 
