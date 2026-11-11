@@ -241,7 +241,7 @@ bin/release 0.9.1
 ```
 
 One suite version in `[workspace.package]` of `Cargo.toml` is inherited by
-all Rust crates and the four packages. Releases use `v<version>` tags;
+all Rust crates and the five packages. Releases use `v<version>` tags;
 older per-app tags remain historical. Development packages add
 `.r<count>.<commit>` to the suite version. `bin/release` refuses a version
 that is not newer than the current one, so installations always upgrade.
@@ -249,7 +249,7 @@ that is not newer than the current one, so installations always upgrade.
 `bin/release` updates that one version and the lockfile, runs `bin/check`,
 commits and tags, then dispatches native x86_64 and ARM CI at that commit.
 One split `packaging/PKGBUILD` builds and tests the workspace once and emits
-all four independently installable packages. Before signing,
+all five independently installable packages. Before signing,
 `bin/collect-packages` checks the complete package set, source commit,
 architectures, filenames and exact suite version. Failed builds publish
 nothing and leave the candidate tag for inspection.
@@ -260,7 +260,7 @@ with the same pinned key. Output goes to `dist/release/`, separately from
 build artifacts and download caches.
 
 After publication, CI alone runs `bin/verify-release <tag>` on both
-architectures. It compares all four published installers with the tagged
+architectures. It compares all five published installers with the tagged
 source, installs the complete suite once in a fresh Arch root, then checks
 every installed version. Per-app installer behavior is covered by
 `tests/install_test.sh`. Failures leave releases available for diagnosis;

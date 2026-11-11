@@ -111,7 +111,7 @@ and written there. The command covers what a tray icon would.
 | Syncing or not, last sync, problems, what is left out | `icloud-drive status` |
 | Sync now | `icloud-drive sync` (`--dry-run` to look first) |
 | Turn syncing on or off | `icloud-drive start`, `icloud-drive stop` |
-| Confirm a large removal | `icloud-drive sync --allow-deletes` |
+| Confirm a large removal | `icloud-drive sync --yes` |
 
 ### Sign-in (`sessiond`)
 
@@ -169,8 +169,8 @@ PATH (a development build).
 
 ## Conventions every tool follows
 
-All five tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
-`icloud-photos`, `icloud-findmy`) follow the same output contract
+All six tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
+`icloud-photos`, `icloud-findmy`, `icloud-drive`) follow the same output contract
 (`session/src/output.rs` for the Rust tools; `notes/src/cli.cpp` mirrors it).
 
 ### Output modes
@@ -349,6 +349,16 @@ they exit with the engine's codes, below.
 | 4 | `not_found` (no device matches; the hint lists them) |
 | 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
+**icloud-drive**
+
+| Exit | Codes |
+|---|---|
+| 1 | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data) |
+| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID) |
+| 3 | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data) |
+| 4 | `folder_missing` (the local folder is gone, so nothing is synced) |
+| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+
 In mock mode (`ICLOUD_SESSION_MOCK=1`) there is no daemon to confirm a
 session, so a 401/421 is `sign_in_required`, not `session_rejected`.
 
@@ -471,8 +481,7 @@ engines: `icloud-md:progress:...`).
 | `sync` | `{done:[line], problems:[line], pending:[path], skipped:[line], dry_run}`; `done` is what was carried out (with `--dry-run`: what would be), one line each; exit 1 with data when `problems` is not empty |
 | `start`, `stop` | `{sync:"on"\|"off", folder}` |
 
-Its own error codes: `too_many_deletions` and `other_account` (exit 2),
-`drive_unavailable` (exit 3), `folder_missing` (exit 4), `busy` (exit 1).
+Its error codes are in the table under [Error codes](#error-codes).
 
 ### Contacts and tasks
 

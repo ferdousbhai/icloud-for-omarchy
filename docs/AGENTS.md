@@ -24,7 +24,7 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
   | 0 | ok | |
   | 1 | other failure | read `error.code` |
   | 2 | usage: bad arguments, an ambiguous name, it already exists, or a destructive command without `--yes` | fix the call |
-  | 3 | sign-in needed or refused, or not set up | `sign_in_required`/`session_rejected`: ask the user to run `icloud-session sign-in`; `find_my_auth_required`: `icloud-session authorize-find-my`; `photos_unavailable`/`find_my_unavailable`/`notes_unavailable`: the service is off for this Apple ID; `not_cloned`: `icloud-notes clone` |
+  | 3 | sign-in needed or refused, or not set up | `sign_in_required`/`session_rejected`: ask the user to run `icloud-session sign-in`; `find_my_auth_required`: `icloud-session authorize-find-my`; `photos_unavailable`/`find_my_unavailable`/`notes_unavailable`/`drive_unavailable`: the service is off for this Apple ID; `not_cloned`: `icloud-notes clone` |
   | 4 | not found | check the name or id |
   | 5 | a service unavailable: no network (`offline`, `network`), icloud-sessiond unreachable (`session_service`), keyring locked, iCloud failing | retry later, or tell the user what `hint` says |
 
@@ -223,14 +223,14 @@ $ icloud-drive --quiet sync --dry-run
 | Command | Does |
 |---|---|
 | `status` | whether the sync is on, the last sync, a `problem` if it is stuck, what is `not_synced` (exit 3 with data when signed out) |
-| `sync [--dry-run] [--allow-deletes]` | one sync now; `--dry-run` lists what it would do (`busy`, exit 1, while the service is syncing) |
+| `sync [--dry-run] [--yes]` | one sync now; `--dry-run` lists what it would do. While the service is mid-sync it waits up to two minutes, then `busy` (exit 1) |
 | `start`, `stop` | turn the background service on (now and at login) or off |
 
 The first sync downloads the whole Drive: ask before `start`. A file
 written into the folder reaches iCloud within about a minute. Removals go
 to the trash on the other side, never away for good. A sync that would
 remove many items stops with `too_many_deletions` (exit 2): show the user
-`sync --dry-run` and run `sync --allow-deletes` only with their yes.
+`sync --dry-run` and run `sync --yes` only with their yes.
 
 ## Contacts and tasks
 

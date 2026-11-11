@@ -32,9 +32,9 @@ After that it syncs every half minute while you are signed in.
 - **A rename or a move:** the same rename or move on the other side; the
   file is not sent again.
 - **Many removals at once** (more than 20, or a quarter of what is in
-  sync): the sync stops and says so in `icloud-drive status`. Look with
+  sync, or a folder emptied of everything): the sync stops and says so in `icloud-drive status`. Look with
   `icloud-drive sync --dry-run`, then allow them once with
-  `icloud-drive sync --allow-deletes`.
+  `icloud-drive sync --yes`.
 - **The folder itself is missing** (an unmounted disk, say): nothing is
   synced, so its absence is never read as everything having been deleted.
 

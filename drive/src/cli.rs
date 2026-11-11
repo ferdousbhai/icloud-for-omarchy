@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use icloud_session::cli::{EXIT_ERROR, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
@@ -21,6 +21,8 @@ use crate::remote::{self, DriveApi, ROOT_ID};
 use crate::state::State;
 
 const SERVICE: &str = "icloud-drive.service";
+/// How long `sync` waits for the background service's pass to end.
+const SYNC_WAIT: Duration = Duration::from_secs(120);
 
 const AFTER_HELP: &str = "\
 iCloud Drive is the folder ~/iCloud Drive: read and write files there with
@@ -33,18 +35,18 @@ App folders (Pages, Shortcuts), packages and hidden names are not synced.
 
 Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"}
 when piped. --json forces the envelope, --styled text, --quiet prints only
-the data, --ids-only the paths a sync touched, --count their number. A
+the data, --ids-only one line per change a sync made, --count their number. A
 failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
 error:/hint: lines on stderr in text mode.
 
 Exit codes:
   0 ok
-  1 error (io, error, http 4xx), or a sync that left some items for later
-  2 usage; too_many_deletions (run `icloud-drive sync --allow-deletes`
-    after checking `icloud-drive sync --dry-run`); other_account
-  3 sign_in_required (icloud-session sign-in)
+  1 error (io, error, busy, http 4xx), or a sync that left some items for later
+  2 usage; too_many_deletions (run `icloud-drive sync --yes` after checking
+    `icloud-drive sync --dry-run`); other_account
+  3 sign_in_required, session_rejected, drive_unavailable; status while signed out
   4 folder_missing
-  5 offline, network, session_service, keyring_unavailable, http 5xx";
+  5 offline, network, session_service, keyring_unavailable, bad_response, http 5xx";
 
 #[derive(Parser)]
 #[command(
@@ -79,7 +81,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
         /// Go ahead with a sync that removes many items at once.
-        #[arg(long)]
+        #[arg(long = "yes", alias = "allow-deletes")]
         allow_deletes: bool,
     },
     /// Turn the background sync on, now and at every login.
@@ -136,7 +138,7 @@ pub fn run() -> u8 {
         Cmd::Status => status(&paths),
         Cmd::Sync { dry_run, allow_deletes } => sync_once(&paths, dry_run, allow_deletes, mode),
         Cmd::Start => service(&["enable", "--now", SERVICE], "on", &paths),
-        Cmd::Stop => service(&["disable", "--now", SERVICE], "off", &paths),
+        Cmd::Stop => service(&["disable", "--now", SERVICE], "off", &paths).inspect(|_| record(&paths, None)),
         Cmd::Run { interval } => run_forever(&paths, Duration::from_secs(interval.max(5))),
     };
     match result {
@@ -158,7 +160,7 @@ fn failure(e: &engine::Error) -> CliError {
             folder.display()
         )),
         E::TooManyDeletions { .. } => CliError::new("too_many_deletions", EXIT_USAGE, e.to_string())
-            .hint("see them with `icloud-drive sync --dry-run`, then run `icloud-drive sync --allow-deletes`"),
+            .hint("see them with `icloud-drive sync --dry-run`, then run `icloud-drive sync --yes`"),
         E::OtherAccount { .. } => CliError::new("other_account", EXIT_USAGE, e.to_string())
             .hint("sign in to that account again, or use another folder with --dir"),
         E::Io(_) => CliError::new("io", EXIT_ERROR, e.to_string()),
@@ -171,13 +173,24 @@ fn open_state(paths: &Paths) -> Result<State, CliError> {
 }
 
 /// One sync at a time: the background service and `sync` share the state.
-fn lock(paths: &Paths) -> Result<fs::File, CliError> {
+/// The service holds the lock only while it syncs, so `sync` waits up to
+/// `wait` for the service's pass to end.
+fn lock(paths: &Paths, wait: Duration) -> Result<fs::File, CliError> {
     fs::create_dir_all(&paths.state_dir).map_err(|e| failure(&engine::Error::Io(e)))?;
     let file = fs::File::create(paths.state_dir.join("lock")).map_err(|e| failure(&engine::Error::Io(e)))?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(_) => Err(CliError::new("busy", EXIT_ERROR, "a sync is running already")
-            .hint("the background service is syncing; see `icloud-drive status`")),
+    let until = Instant::now().checked_add(wait);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) if until.is_none_or(|u| Instant::now() < u) => {
+                std::thread::sleep(Duration::from_secs(1))
+            }
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(CliError::new("busy", EXIT_ERROR, "a sync is running already")
+                    .hint("the background service is in the middle of a sync; try again in a few minutes"));
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(failure(&engine::Error::Io(e))),
+        }
     }
 }
 
@@ -211,13 +224,17 @@ fn one_sync(
 }
 
 fn sync_once(paths: &Paths, dry_run: bool, allow_deletes: bool, mode: Mode) -> Result<Response, CliError> {
-    let _lock = lock(paths)?;
+    let _lock = lock(paths, SYNC_WAIT)?;
     let progress: Box<dyn Fn(&str)> = if mode == Mode::Human && !dry_run {
         Box::new(|line| eprintln!("{line}"))
     } else {
         Box::new(|_| {})
     };
-    let outcome = one_sync(paths, dry_run, allow_deletes, progress).map_err(|e| failure(&e))?;
+    let outcome = one_sync(paths, dry_run, allow_deletes, progress).map_err(|e| {
+        let error = failure(&e);
+        record(paths, Some(&error));
+        error
+    })?;
     record(paths, None);
     let n = outcome.done.len();
     let summary = match (dry_run, n) {
@@ -260,10 +277,13 @@ fn record(paths: &Paths, error: Option<&CliError>) {
 }
 
 fn run_forever(paths: &Paths, interval: Duration) -> Result<Response, CliError> {
-    let _lock = lock(paths)?;
     let mut last_code = String::new();
     loop {
-        match one_sync(paths, false, false, Box::new(|line| println!("{line}"))) {
+        // Held only for the pass, so a `sync` from the command line can run
+        // between passes.
+        let held = lock(paths, Duration::MAX)?;
+        let result = one_sync(paths, false, false, Box::new(|line| println!("{line}")));
+        match result {
             Ok(outcome) => {
                 for problem in &outcome.problems {
                     eprintln!("failed: {problem}");
@@ -281,6 +301,7 @@ fn run_forever(paths: &Paths, interval: Duration) -> Result<Response, CliError> 
                 record(paths, Some(&error));
             }
         }
+        drop(held);
         std::thread::sleep(interval);
     }
 }
@@ -330,7 +351,8 @@ fn status(paths: &Paths) -> Result<Response, CliError> {
     let not_synced = state.ignored_list().map_err(db)?;
     let running = service_state("is-active");
     let enabled = service_state("is-enabled");
-    let signed_in = icloud_session::status().map(|s| s.signed_in).unwrap_or(false);
+    // None: icloud-sessiond could not be asked, which is not the same as signed out.
+    let signed_in = icloud_session::status().ok().map(|s| s.signed_in);
 
     let data = json!({
         "sync": if running { "on" } else { "off" },
@@ -356,8 +378,10 @@ fn status(paths: &Paths) -> Result<Response, CliError> {
         format!("In sync: {files} files in {folders} folders"),
         format!("Last sync: {}", last_sync.as_deref().unwrap_or("never")),
     ];
-    if !signed_in {
-        text.push("Not signed in to iCloud: run `icloud-session sign-in`".to_string());
+    match signed_in {
+        Some(false) => text.push("Not signed in to iCloud: run `icloud-session sign-in`".to_string()),
+        None => text.push("Sign-in state unknown: icloud-sessiond did not answer".to_string()),
+        Some(true) => {}
     }
     if let Some(message) = &last_error {
         text.push(format!("Problem: {message}"));
@@ -368,11 +392,32 @@ fn status(paths: &Paths) -> Result<Response, CliError> {
     for (path, reason) in &not_synced {
         text.push(format!("Not synced: {path} ({reason})"));
     }
-    let summary = match (&last_error, running) {
-        (Some(message), _) => format!("iCloud Drive sync has a problem: {message}"),
-        (None, true) => format!("iCloud Drive sync is on, {files} files in sync"),
-        (None, false) => "iCloud Drive sync is off".to_string(),
+    let summary = match (&last_error, running, signed_in) {
+        (_, _, Some(false)) => "Not signed in to iCloud".to_string(),
+        (Some(message), _, _) => format!("iCloud Drive sync has a problem: {message}"),
+        (None, true, _) => format!("iCloud Drive sync is on, {files} files in sync"),
+        (None, false, _) => "iCloud Drive sync is off".to_string(),
     };
-    let exit = if signed_in { 0 } else { EXIT_SIGN_IN };
+    let exit = if signed_in == Some(false) { EXIT_SIGN_IN } else { 0 };
     Ok(Response::new(data, summary).human(text.join("\n")).exit(exit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_waits_for_the_service_pass_then_gives_up_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            folder: dir.path().join("Drive"),
+            state_dir: dir.path().join("state"),
+            top: ROOT_ID.to_string(),
+        };
+        let service = lock(&paths, Duration::ZERO).unwrap();
+        let refused = lock(&paths, Duration::from_millis(1500)).unwrap_err();
+        assert_eq!(refused.code, "busy");
+        drop(service);
+        assert!(lock(&paths, Duration::ZERO).is_ok());
+    }
 }
