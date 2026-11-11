@@ -189,9 +189,15 @@ impl<'t> Uploader<'t> {
                 .pointer("/response/errorMessage")
                 .and_then(Value::as_str)
                 .unwrap_or("rejected");
-            return Err(Error::Http {
-                status: status as u16,
-                body: format!("putAsset: {msg}"),
+            // The upload service's verdict in a 200 answer: a 401/421 here
+            // is not Apple refusing the session (that comes as the HTTP
+            // status, which icloud-session handles).
+            return Err(match status {
+                401 | 421 => Error::Other(format!("putAsset refused the upload (status {status}): {msg}")),
+                _ => Error::Http {
+                    status: status as u16,
+                    body: format!("putAsset: {msg}"),
+                },
             });
         }
         Ok(Uploaded {

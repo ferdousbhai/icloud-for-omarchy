@@ -320,7 +320,7 @@ they exit with the engine's codes, below.
 
 | Exit | Codes |
 |---|---|
-| 1 | `cancelled`, `io`, `error`, `http` (a 4xx); a batch with failed items (the data lists them) |
+| 1 | `cancelled`, `io`, `error` (also a signed download URL Apple refused even after a fresh lookup: not the session), `http` (a 4xx); a batch with failed items (the data lists them) |
 | 2 | `usage` (also `delete` without `--yes` when nobody can be asked) |
 | 3 | `sign_in_required`, `photos_unavailable` (iCloud Photos is not on for this Apple ID), `session_rejected`; also `status` while signed out (the status is printed) |
 | 4 | `not_found` (no such item or album in the catalog: `sync` first) |

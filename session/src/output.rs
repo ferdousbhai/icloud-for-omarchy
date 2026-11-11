@@ -477,11 +477,15 @@ pub fn sign_in_required() -> CliError {
     .hint(SIGN_IN_HINT)
 }
 
-/// An HTTP failure with `status`, the shared way: a 401/421 (which the
-/// session library only returns when it persists although icloud-sessiond
-/// still holds the session) is `session_rejected`, exit 3, with
-/// [`SIGN_IN_HINT`]; a 5xx is `http`, exit 5, with [`SERVICE_TROUBLE_HINT`];
-/// any other status `http`, exit 1. `message` describes the failure.
+/// An HTTP failure with `status`, the shared way: a 401/421 (from one of
+/// the session's own hosts, where the session library only returns it when
+/// it persists although icloud-sessiond still holds the session) is
+/// `session_rejected`, exit 3, with [`SIGN_IN_HINT`]; a 5xx is `http`, exit
+/// 5, with [`SERVICE_TROUBLE_HINT`]; any other status `http`, exit 1.
+/// `message` describes the failure. A content host's 401 (a signed URL
+/// refused) comes back as a plain [`Error::Http`](crate::Error::Http) too,
+/// and says nothing about the session: the tool classifies it before it
+/// gets here, as notes-sync and Photos do.
 pub fn http_failure(status: u16, message: impl Into<String>) -> CliError {
     use crate::cli::{EXIT_ERROR, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
     let message = message.into();
@@ -504,7 +508,7 @@ pub fn http_failure(status: u16, message: impl Into<String>) -> CliError {
 /// |---|---|---|
 /// | `SignInRequired` | `sign_in_required` (message with the reason, see [`sign_in_required`]) | 3 |
 /// | `FindMyAuthRequired` | `find_my_auth_required` | 3 |
-/// | `Http` | see [`http_failure`] | 3 / 5 / 1 |
+/// | `Http` | see [`http_failure`] (a session host's status only) | 3 / 5 / 1 |
 /// | `Offline`, `Network` | `offline`, `network` | 5 |
 /// | `Service` | `session_service` | 5 |
 /// | `KeyringUnavailable` | `keyring_unavailable` | 5 |

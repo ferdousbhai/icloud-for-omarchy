@@ -213,10 +213,23 @@ fn download_fresh(
                 Some(r) if url_of(&r).is_some_and(|u| *u != url) => r,
                 _ => refresh(t, cat, row, peers)?,
             };
-            let url = url_of(row).cloned().ok_or(e)?;
-            get(&url).map(drop)
+            let url = url_of(row).cloned().ok_or_else(|| url_refused(e))?;
+            get(&url).map(drop).map_err(url_refused)
         }
-        Err(e) => Err(e),
+        Err(e) => Err(url_refused(e)),
+    }
+}
+
+/// A 401/421 from a signed content URL is that URL refused, not the
+/// session (icloud-session judges the session only on its own hosts), so it
+/// must not read as `session_rejected` and a request to sign in again.
+fn url_refused(e: Error) -> Error {
+    match e {
+        Error::Http {
+            status: status @ (401 | 421),
+            body,
+        } => Error::Other(format!("the signed download URL was refused (HTTP {status}): {body}")),
+        e => e,
     }
 }
 

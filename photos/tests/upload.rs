@@ -141,6 +141,21 @@ fn a_rejected_registration_is_an_error() {
 }
 
 #[test]
+fn a_registration_refused_with_401_is_not_a_refused_session() {
+    let t = FixtureTransport::new(|call| match call.op.as_str() {
+        "/photosupload/createUploadUrl" => Ok(fixture("write/create_upload_url.json")),
+        "/photosupload/putAsset" => Ok(json!([{ "cplMaster": "M", "cplAsset": "A", "response": { "status": 401 } }])),
+        _ => Ok(fixture("write/single_file_upload.json")),
+    });
+    let err = Uploader::connect(&t)
+        .unwrap()
+        .upload(&photo("refused"), CLIENT, &|_| {})
+        .unwrap_err();
+    assert!(err.to_string().contains("status 401"), "{err}");
+    assert!(err.into_session().is_err(), "not an icloud-session failure");
+}
+
+#[test]
 fn refuses_a_plain_http_upload_target() {
     let t = FixtureTransport::new(|call| match call.op.as_str() {
         "/photosupload/createUploadUrl" => {

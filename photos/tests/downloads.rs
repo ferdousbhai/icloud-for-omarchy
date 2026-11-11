@@ -171,6 +171,44 @@ fn an_expired_url_is_refreshed_once() {
 }
 
 #[test]
+fn a_signed_url_refused_after_its_refresh_is_not_a_refused_session() {
+    let tmp = temp_dir("refused");
+    let root = tmp.path();
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, root);
+    // A content host that answers 401 to every URL, the fresh one too.
+    struct Refusing(FixtureTransport);
+    impl Transport for Refusing {
+        fn service_url(&self, key: &str) -> Result<String> {
+            self.0.service_url(key)
+        }
+        fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
+            self.0.post_json(url, body)
+        }
+        fn post_file(&self, url: &str, ct: &str, path: &std::path::Path) -> Result<Value> {
+            self.0.post_file(url, ct, path)
+        }
+        fn download(&self, url: &str, _dest: &std::path::Path) -> Result<u64> {
+            self.0.downloads.lock().unwrap().push(url.to_owned());
+            Err(icloud_photos::transport::Error::Http {
+                status: 401,
+                body: "denied".into(),
+            })
+        }
+    }
+    let t = Refusing(t);
+    let err = fetch(&t, &cat, &targets, "ASSET-002", Job::Medium).unwrap_err();
+    assert_eq!(
+        t.0.downloads.lock().unwrap().len(),
+        2,
+        "tried once more with a fresh URL"
+    );
+    assert!(t.0.ops().contains(&"records/lookup".to_string()));
+    assert!(err.to_string().contains("HTTP 401"), "{err}");
+    assert!(err.into_session().is_err(), "not an icloud-session failure");
+}
+
+#[test]
 fn an_expired_url_refreshes_the_queued_peers_in_the_same_lookup() {
     let tmp = temp_dir("expired-batch");
     let root = tmp.path();
