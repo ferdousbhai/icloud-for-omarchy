@@ -156,6 +156,27 @@ fn first_zone_parses_a_deletion_tombstone() {
     );
 }
 
+#[test]
+fn first_zone_keeps_a_tombstones_record_type() {
+    let body = json!({
+        "zones": [{
+            "zoneID": { "zoneName": "Notes", "zoneType": "REGULAR_CUSTOM_ZONE" },
+            "syncToken": "AQAAAZ9XZ9gy",
+            "records": [{ "recordName": "F-1", "recordType": "Folder", "deleted": true }],
+        }],
+    });
+    let zone = first_zone(&body).unwrap();
+    assert_eq!(
+        zone.records.unwrap(),
+        vec![CloudKitRecord {
+            record_name: "F-1".into(),
+            record_type: "Folder".into(),
+            deleted: Some(true),
+            ..Default::default()
+        }]
+    );
+}
+
 fn field(value: &str) -> FieldValue {
     FieldValue {
         value: json!(value),

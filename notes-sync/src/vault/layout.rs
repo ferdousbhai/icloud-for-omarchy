@@ -282,6 +282,11 @@ pub struct VaultLayout {
 pub struct PreviousLayout<'a> {
     pub folders: Option<&'a IndexMap<String, FolderEntry>>,
     pub sharer_homes: Option<&'a IndexMap<String, SharerHomeEntry>>,
+    /// Zones listed from scratch this time, by shared-zone owner (`None` is
+    /// the private zone). Their listing is complete, so their carried folders
+    /// are not merged back in: one deleted meanwhile, whose tombstone the
+    /// listing no longer holds, is dropped. Their directory names still are.
+    pub complete_zones: Option<&'a HashSet<Option<String>>>,
 }
 
 impl<'a> PreviousLayout<'a> {
@@ -289,7 +294,15 @@ impl<'a> PreviousLayout<'a> {
         PreviousLayout {
             folders: state.folders.as_ref(),
             sharer_homes: state.sharer_homes.as_ref(),
+            complete_zones: None,
         }
+    }
+
+    /// Whether the carried folders of the zone owned by `owner` (`None`: the
+    /// private zone) still stand where this listing says nothing of them.
+    fn carries(&self, owner: Option<&str>) -> bool {
+        self.complete_zones
+            .is_none_or(|zones| !zones.contains(&owner.map(str::to_owned)))
     }
 }
 
@@ -299,11 +312,13 @@ fn merge_folder_infos(carried: Vec<FolderInfo>, records: &[CloudKitRecord]) -> V
         merged.insert(info.record_name.clone(), info);
     }
     for record in records {
-        if record.record_type != "Folder" {
-            continue;
-        }
+        // A tombstone of any type: record names are unique within a zone, and
+        // one may come through without its type.
         if record.is_deleted() {
             merged.shift_remove(&record.record_name);
+            continue;
+        }
+        if record.record_type != "Folder" {
             continue;
         }
         if let Some(decoded) = decode_folder_record(record) {
@@ -367,7 +382,7 @@ pub fn build_vault_layout(
     let own_folders = merge_folder_infos(
         prev_folders
             .iter()
-            .filter(|(_, e)| e.shared_zone_owner.is_none())
+            .filter(|(_, e)| e.shared_zone_owner.is_none() && previous.carries(None))
             .map(|(rn, e)| FolderInfo {
                 record_name: rn.clone(),
                 title: e.name.clone(),
@@ -476,7 +491,10 @@ pub fn build_vault_layout(
         let zone_folders = merge_folder_infos(
             prev_folders
                 .iter()
-                .filter(|(_, e)| e.shared_zone_owner.as_deref() == Some(zone.owner_record_name.as_str()))
+                .filter(|(_, e)| {
+                    e.shared_zone_owner.as_deref() == Some(zone.owner_record_name.as_str())
+                        && previous.carries(Some(&zone.owner_record_name))
+                })
                 .map(|(rn, e)| FolderInfo {
                     record_name: rn.clone(),
                     title: e.name.clone(),

@@ -1,6 +1,6 @@
 //! The folder tree and where notes go in the vault. Originally derived from icloud-md's tests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue, Participant};
 use icloud_notes_sync::vault::layout::{
@@ -346,6 +346,7 @@ fn prev<'a>(
     PreviousLayout {
         folders: Some(folders),
         sharer_homes: Some(homes),
+        ..Default::default()
     }
 }
 
@@ -438,6 +439,65 @@ fn build_vault_layout_drops_tombstoned_folder() {
     let h = homes(&[]);
     let layout = build_vault_layout(&[tombstone], &[], prev(&f, &h));
     assert!(!layout.folder_dirs.contains_key("F-GONE"));
+}
+
+#[test]
+fn build_vault_layout_drops_a_folder_whose_tombstone_has_no_type() {
+    // A tombstone that came through without its recordType reads as a Note.
+    let tombstone = CloudKitRecord {
+        record_name: "F-GONE".into(),
+        record_type: "Note".into(),
+        deleted: Some(true),
+        ..Default::default()
+    };
+    let f = folders(&[
+        ("F-GONE", FolderEntry::new("Old", "Old")),
+        ("F-KEPT", FolderEntry::new("Kept", "Kept")),
+    ]);
+    let h = homes(&[]);
+    let layout = build_vault_layout(&[tombstone], &[], prev(&f, &h));
+    assert!(!layout.folder_dirs.contains_key("F-GONE"));
+    assert!(!layout.state_folders.contains_key("F-GONE"));
+    assert_eq!(layout.folder_dirs["F-KEPT"], "Kept");
+}
+
+#[test]
+fn build_vault_layout_rebuilds_a_zone_listed_from_scratch() {
+    // F-GONE was deleted while the sync token was stale: the fresh listing
+    // has neither it nor its tombstone. F-KEPT keeps its directory name.
+    let f = folders(&[
+        ("F-GONE", FolderEntry::new("Old", "Old")),
+        ("F-KEPT", FolderEntry::new("Kept", "Kept 2")),
+        ("F-SHARED", shared_folder_entry("Shared", "_owner1", "READ_ONLY")),
+        ("F-SHARED-GONE", shared_folder_entry("Gone", "_owner1", "READ_ONLY")),
+    ]);
+    let h = homes(&[("_owner1", "Pat")]);
+    let z = zone("_owner1", vec![folder_record("F-SHARED", "Shared", None)]);
+    let complete: HashSet<Option<String>> = [None, Some("_owner1".to_owned())].into();
+    let previous = PreviousLayout {
+        complete_zones: Some(&complete),
+        ..prev(&f, &h)
+    };
+    let layout = build_vault_layout(&[folder_record("F-KEPT", "Kept", None)], &[z], previous);
+    assert!(!layout.folder_dirs.contains_key("F-GONE"));
+    assert!(!layout.folder_dirs.contains_key("F-SHARED-GONE"));
+    assert_eq!(layout.folder_dirs["F-KEPT"], "Kept 2");
+    assert_eq!(layout.folder_dirs["F-SHARED"], "Pat/Shared");
+    assert_eq!(
+        layout.state_folders["F-SHARED"].permission.as_deref(),
+        Some("READ_ONLY")
+    );
+
+    // A zone that was not resynced still carries what it did not resend.
+    let only_private: HashSet<Option<String>> = [None].into();
+    let z = zone("_owner1", vec![]);
+    let previous = PreviousLayout {
+        complete_zones: Some(&only_private),
+        ..prev(&f, &h)
+    };
+    let layout = build_vault_layout(&[], &[z], previous);
+    assert!(!layout.folder_dirs.contains_key("F-KEPT"));
+    assert_eq!(layout.folder_dirs["F-SHARED-GONE"], "Pat/Gone");
 }
 
 #[test]

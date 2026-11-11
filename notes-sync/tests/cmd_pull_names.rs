@@ -309,6 +309,41 @@ fn a_nul_in_a_note_title_or_folder_title_does_not_abort_the_pull() {
     assert!(vault.join("Folder/BadTitle.md").exists());
 }
 
+// --- a folder deleted on another device -----------------------------------------
+
+/// A pull of `tombstone` into a vault cloned with the folder `F-1`
+/// ("Cooking") drops its directory and its state entry.
+fn assert_folder_tombstone_drops_it(tombstone: Value) {
+    let mut cloned = private_records(&cassette());
+    cloned.push(folder("F-1", "Cooking"));
+    let (_tmp, vault, _) = clone_from(listing(cloned, None));
+    assert!(vault.join("Cooking").is_dir());
+    assert!(
+        read_clone_state(&vault)
+            .unwrap()
+            .unwrap()
+            .folders
+            .unwrap()
+            .contains_key("F-1")
+    );
+
+    let summary = pull(&vault, listing(vec![tombstone], None));
+    assert!(!vault.join("Cooking").exists(), "{summary:?}");
+    assert!(vault.join("Notes/Test Note.md").exists());
+    let folders = read_clone_state(&vault).unwrap().unwrap().folders.unwrap_or_default();
+    assert!(!folders.contains_key("F-1"), "{folders:?}");
+}
+
+#[test]
+fn pull_drops_a_folder_deleted_remotely() {
+    assert_folder_tombstone_drops_it(json!({ "recordName": "F-1", "recordType": "Folder", "deleted": true }));
+}
+
+#[test]
+fn pull_drops_a_folder_whose_tombstone_has_no_type() {
+    assert_folder_tombstone_drops_it(json!({ "recordName": "F-1", "deleted": true }));
+}
+
 /// A filename-as-title vault whose one note, titled `title`, is in
 /// `Notes/<title>.md` with no `apple-note-title`: what 0.9.4, which let
 /// control characters other than NUL into file names, left behind.

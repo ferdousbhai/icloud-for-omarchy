@@ -294,7 +294,22 @@ pub fn run_pull_with(
         });
     }
 
-    let layout = build_vault_layout(&changes.records, &shared_zone_records, PreviousLayout::of(&state));
+    // A zone listed from scratch holds no tombstones: its folders are the
+    // listing's alone.
+    let mut complete_zones: HashSet<Option<String>> = HashSet::new();
+    if changes.resynced_from_scratch {
+        complete_zones.insert(None);
+    }
+    for zone in shared.zones.iter().filter(|z| z.resynced_from_scratch) {
+        if let Some(owner) = zone.zone_id.owner_record_name.as_ref().filter(|o| !o.is_empty()) {
+            complete_zones.insert(Some(owner.clone()));
+        }
+    }
+    let previous = PreviousLayout {
+        complete_zones: Some(&complete_zones),
+        ..PreviousLayout::of(&state)
+    };
+    let layout = build_vault_layout(&changes.records, &shared_zone_records, previous);
     for dir in &layout.all_dirs {
         std::fs::create_dir_all(target_dir.join(dir))?;
     }

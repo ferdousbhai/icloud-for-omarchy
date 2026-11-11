@@ -942,9 +942,9 @@ fn parse_record_stamp(value: Option<&Value>) -> Option<Stamp> {
     })
 }
 
-/// `parseZoneRecord`: a `{recordName, deleted: true}` tombstone becomes a
-/// fieldless `Note` record with `deleted: Some(true)`; anything else
-/// `parse_record`.
+/// `parseZoneRecord`: a `{recordName, recordType?, deleted: true}` tombstone
+/// becomes a fieldless record of that type (`Note` when it carries none) with
+/// `deleted: Some(true)`; anything else `parse_record`.
 fn parse_zone_record(value: &Value) -> Result<CloudKitRecord, CkError> {
     if let Some(record_name) = get_str(value, "recordName")
         && get(value, "deleted") == Some(&Value::Bool(true))
@@ -952,7 +952,7 @@ fn parse_zone_record(value: &Value) -> Result<CloudKitRecord, CkError> {
     {
         return Ok(CloudKitRecord {
             record_name: record_name.to_owned(),
-            record_type: "Note".into(),
+            record_type: get_str(value, "recordType").unwrap_or("Note").to_owned(),
             deleted: Some(true),
             ..CloudKitRecord::default()
         });

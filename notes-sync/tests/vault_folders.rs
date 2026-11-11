@@ -84,6 +84,7 @@ fn remote_folder_rename_moves_note_and_empties_old_dir() {
         PreviousLayout {
             folders: Some(&folders),
             sharer_homes: Some(&homes),
+            ..Default::default()
         },
     );
     assert_eq!(layout.folder_dirs["F"], "Cooking");
