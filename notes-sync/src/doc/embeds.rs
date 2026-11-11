@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::Result;
-use super::proto::{Message, topotext};
-use super::text::{decompress_note_document, parse_versioned_document};
+use super::proto::topotext;
+use super::text::decode_note_string;
 use crate::js::{encode_uri_component, from_utf16, posix, starts_with_at, utf16};
 use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
@@ -113,17 +113,10 @@ pub const UNKNOWN_CONTENT_BANNER: &str = "> [!danger] Unparsed content\n\
 > This note contains content this tool can't parse or place precisely. \
 It stays read-only here until that's resolved (e.g. by editing the note in Notes directly).\n\n";
 
-fn decode_string(compressed: &[u8]) -> Result<topotext::String> {
-    let raw = decompress_note_document(compressed)?;
-    let versioned = parse_versioned_document(&raw)?;
-    Ok(topotext::String::decode(&versioned.data)?)
-}
-
 /// `decodeNoteEmbedSlots`: `Ok(None)` when the embed structure defies the
 /// model (the note then gets the banner and stays read-only).
 pub fn decode_note_embed_slots(compressed: &[u8]) -> Result<Option<Vec<EmbedSlot>>> {
-    let s = decode_string(compressed)?;
-    Ok(embed_slots_of(&s))
+    Ok(embed_slots_of(&decode_note_string(compressed)?))
 }
 
 /// The pure part of `decodeNoteEmbedSlots`, on an already-decoded string.

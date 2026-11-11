@@ -1983,7 +1983,6 @@ fn rejection(result: &RecordUpdateResult) -> Option<String> {
     }
 }
 
-/// Runs one entry's action - icloud-md's `execute()`.
 /// Sends every trash and every single-record update of the plan together,
 /// one `records/modify` per zone (non-atomic, so each note stands alone),
 /// when there are several: their results, by record name, for `execute`.
@@ -2028,6 +2027,7 @@ fn trash_update(record_name: &str, record: &CloudKitRecord) -> RecordUpdate {
     }
 }
 
+/// Runs one entry's action - icloud-md's `execute()`.
 fn execute<T: Transport>(
     action: &Action,
     db: &Database<T>,
@@ -2116,14 +2116,15 @@ fn execute<T: Transport>(
             dir,
             record,
         } => {
-            let folders = state.folders.clone().unwrap_or_default();
             let still_holds = state
                 .notes
                 .values()
                 .filter(|n| n.folder_record_name.as_deref() == Some(record_name.as_str()))
                 .count()
-                + folders
-                    .values()
+                + state
+                    .folders
+                    .iter()
+                    .flat_map(|folders| folders.values())
                     .filter(|f| f.parent_record_name.as_deref() == Some(record_name.as_str()))
                     .count();
             if still_holds > 0 {

@@ -24,7 +24,7 @@ use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of, write_note_file};
 use crate::vault::pairing::claim_names_on_disk;
 use crate::vault::state::{
-    Account, CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
+    CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
 };
 
 /// `CloneOptions`.
@@ -86,20 +86,13 @@ pub fn run_clone_with(
 
     progress.on_fetch_start();
     let mut fetched = 0usize;
-    let mut changes = {
-        let mut on_page = |n: usize| {
-            fetched += n;
-            progress.on_fetch_page(fetched);
-        };
-        db.fetch_all_note_records(None, &mut on_page)?
+    let mut on_page = |n: usize| {
+        fetched += n;
+        progress.on_fetch_page(fetched);
     };
-    let shared = {
-        let mut on_page = |n: usize| {
-            fetched += n;
-            progress.on_fetch_page(fetched);
-        };
-        db.fetch_shared_note_records_since(&IndexMap::new(), None, crate::vault::rt::now_ms(), &mut on_page)?
-    };
+    let mut changes = db.fetch_all_note_records(None, &mut on_page)?;
+    let shared =
+        db.fetch_shared_note_records_since(&IndexMap::new(), None, crate::vault::rt::now_ms(), &mut on_page)?;
     let held_back = backfill_new_note_bodies(db, &IndexMap::new(), &mut changes.records)?;
 
     let mut summary = CloneSummary::default();
@@ -275,10 +268,7 @@ pub fn run_clone_with(
     downloads.finish()?;
 
     let state = CloneState {
-        account: Some(Account {
-            apple_id: remote.account.apple_id.clone(),
-            dsid: remote.account.dsid.clone(),
-        }),
+        account: Some(remote.account.clone()),
         title_mode: Some(title_mode),
         // Held back: no token, so the first pull walks from scratch and sees them.
         sync_token: if held_back.is_empty() {

@@ -55,9 +55,7 @@ impl Env {
 
     /// A human-readable run: `--styled` forces text even when piped.
     fn styled(&self, args: &[&str]) -> Output {
-        let mut a = args.to_vec();
-        a.push("--styled");
-        self.run(&a)
+        styled_at(&self.base, self.dir.path(), args)
     }
 
     fn actions(&self) -> Vec<Value> {

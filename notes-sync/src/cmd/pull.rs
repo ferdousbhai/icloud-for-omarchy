@@ -149,8 +149,8 @@ pub fn run_pull(
 }
 
 /// One source of records: the private zone or one shared zone.
-struct Source {
-    records: Vec<CloudKitRecord>,
+struct Source<'a> {
+    records: &'a [CloudKitRecord],
     shared_zone_owner: Option<String>,
     resynced: bool,
 }
@@ -179,25 +179,17 @@ pub fn run_pull_with(
 
     progress.on_fetch_start();
     let mut fetched = 0usize;
-    let mut changes = {
-        let mut on_page = |n: usize| {
-            fetched += n;
-            progress.on_fetch_page(fetched);
-        };
-        db.fetch_all_note_records(state.sync_token.as_deref(), &mut on_page)?
+    let mut on_page = |n: usize| {
+        fetched += n;
+        progress.on_fetch_page(fetched);
     };
-    let mut shared = {
-        let mut on_page = |n: usize| {
-            fetched += n;
-            progress.on_fetch_page(fetched);
-        };
-        db.fetch_shared_note_records_since(
-            &state.shared_zone_sync_tokens.clone().unwrap_or_default(),
-            state.shared_database.as_ref(),
-            crate::vault::rt::now_ms(),
-            &mut on_page,
-        )?
-    };
+    let mut changes = db.fetch_all_note_records(state.sync_token.as_deref(), &mut on_page)?;
+    let mut shared = db.fetch_shared_note_records_since(
+        &state.shared_zone_sync_tokens.clone().unwrap_or_default(),
+        state.shared_database.as_ref(),
+        crate::vault::rt::now_ms(),
+        &mut on_page,
+    )?;
     backfill_share_permissions(db, state.folders.as_ref(), &mut shared.zones)?;
     let held_back = backfill_new_note_bodies(db, &state.notes, &mut changes.records)?;
 
@@ -242,13 +234,13 @@ pub fn run_pull_with(
     }
 
     let mut sources = vec![Source {
-        records: changes.records.clone(),
+        records: &changes.records,
         shared_zone_owner: None,
         resynced: changes.resynced_from_scratch,
     }];
     let (mut shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     sources.extend(shared.zones.iter().map(|zone| Source {
-        records: zone.records.clone(),
+        records: &zone.records,
         shared_zone_owner: zone.zone_id.owner_record_name.clone(),
         resynced: zone.resynced_from_scratch,
     }));
@@ -341,7 +333,7 @@ pub fn run_pull_with(
     let mut failure: Option<Error> = None;
     let mut downloading: Vec<String> = Vec::new();
     'records: for source in &sources {
-        for record in &source.records {
+        for record in source.records {
             let queued_before = downloads.len();
             let result = (|| -> Result<(), Error> {
                 if record.record_type != "Note" {
@@ -840,7 +832,7 @@ pub fn run_pull_with(
 /// scratch, and the shared zones that are gone.
 fn reconcile_listings(
     target_dir: &Path,
-    sources: &[Source],
+    sources: &[Source<'_>],
     shared: &SharedNoteRecords,
     tracked: &mut Tracked,
     summary: &mut PullSummary,

@@ -61,10 +61,6 @@ impl DeviceMap {
         })
     }
 
-    fn map(&self) -> Option<shumate::Map> {
-        self.widget.map()
-    }
-
     /// Shows a marker per located device, the selected one highlighted.
     /// Markers are kept per device and moved and restyled in place; only
     /// devices that appear or lose their location add or remove one.
@@ -126,14 +122,14 @@ impl DeviceMap {
 
     /// Animates to `fix` at street zoom.
     pub fn center_on(&self, fix: &Fix) {
-        if let Some(map) = self.map() {
+        if let Some(map) = self.widget.map() {
             map.go_to_full(fix.lat, fix.lon, DEVICE_ZOOM);
         }
     }
 
     /// Jumps (no animation) to the first located device, for first load.
     pub fn show_initial(&self, fix: &Fix) {
-        if let Some(map) = self.map() {
+        if let Some(map) = self.widget.map() {
             map.center_on(fix.lat, fix.lon);
             if let Some(viewport) = self.widget.viewport() {
                 viewport.set_zoom_level(DEVICE_ZOOM - 2.0);

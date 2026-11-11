@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -490,6 +490,24 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Takes the bus name, never queueing behind another instance: whether
+/// this one now owns it.
+fn take_name(conn: &Connection) -> zbus::Result<bool> {
+    let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+    Ok(conn.request_name_with_flags(icloud_session::BUS_NAME, flags)? == zbus::fdo::RequestNameReply::PrimaryOwner)
+}
+
+/// Kills a sign-in window and reaps it.
+fn kill(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// A client-params or webservices map as D-Bus replies carry it.
+fn reply_map(m: &BTreeMap<String, String>) -> HashMap<String, String> {
+    m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
 impl Daemon {
     pub fn new(cfg: Config) -> Arc<Daemon> {
         let secrets = secrets::from_env();
@@ -552,7 +570,7 @@ impl Daemon {
         })
     }
 
-    /// Serves on the session bus until idle. Returns the process exit code.
+    /// Serves on the session bus until idle.
     pub fn run(self: &Arc<Daemon>) -> zbus::Result<()> {
         let conn = zbus::blocking::connection::Builder::session()?
             .serve_at(OBJECT_PATH, Service(self.clone()))?
@@ -587,9 +605,7 @@ impl Daemon {
             me.publish();
         });
         let _ = keyring_looked.recv_timeout(KEYRING_LOOK_WAIT);
-        // Never queue behind another instance; fail instead.
-        let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
-        if conn.request_name_with_flags(icloud_session::BUS_NAME, flags)? != zbus::fdo::RequestNameReply::PrimaryOwner {
+        if !take_name(&conn)? {
             return Err(zbus::Error::NameTaken);
         }
         // A restarted daemon may differ from the one watchers last heard
@@ -668,8 +684,13 @@ impl Daemon {
         };
         let trust = cookies::trust_cookies(old.into_iter().chain(stored), time::now_secs());
         let apple_id = lock(&self.state).props().apple_id;
-        let text = Zeroizing::new(serde_json::to_string(&trust).expect("cookies serialize"));
-        self.secrets.set_trust(&apple_id, &text)
+        self.set_trust(&apple_id, &trust)
+    }
+
+    /// Stores `trust` as the keyring's device trust, labelled with `apple_id`.
+    fn set_trust(&self, apple_id: &str, trust: &[Cookie]) -> Result<(), String> {
+        let text = Zeroizing::new(serde_json::to_string(trust).expect("cookies serialize"));
+        self.secrets.set_trust(apple_id, &text)
     }
 
     // ----------------------------------------------------------- publish
@@ -1044,21 +1065,31 @@ impl Daemon {
         }
         let st = lock(&self.state);
         let a = st.account.as_ref().ok_or_else(|| st.sign_in_required())?;
-        let map = |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         Ok((
             a.cookie_header(time::now_secs()),
-            map(&a.client_params),
-            map(&a.webservices),
+            reply_map(&a.client_params),
+            reply_map(&a.webservices),
         ))
     }
 
     fn merge_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.merge_into(set_cookies, |a| Some(&mut a.cookies))
+    }
+
+    /// Merges `Set-Cookie`s a client got into the jar `jar` picks of the
+    /// account (none: nothing to do), and stores the account if it changed.
+    fn merge_into(
+        &self,
+        set_cookies: &[String],
+        jar: impl FnOnce(&mut Account) -> Option<&mut Vec<Cookie>>,
+    ) -> Result<(), ServiceError> {
         self.retry_keyring()?;
         let mut st = lock(&self.state);
         let changed = st
             .account
             .as_mut()
-            .is_some_and(|a| cookies::merge_set_cookies(&mut a.cookies, set_cookies, time::now_secs()));
+            .and_then(jar)
+            .is_some_and(|jar| cookies::merge_set_cookies(jar, set_cookies, time::now_secs()));
         let save = changed.then(|| self.save_account(&mut st));
         drop(st);
         if let Some(save) = save {
@@ -1088,8 +1119,10 @@ impl Daemon {
         let held = |st: &State| -> Result<Option<FindMyReply>, ServiceError> {
             let a = st.account.as_ref().ok_or_else(|| st.sign_in_required())?;
             Ok(a.find_my.as_ref().map(|f| {
-                let params = f.client_params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                (cookies::header(&f.cookies, time::now_secs()), params)
+                (
+                    cookies::header(&f.cookies, time::now_secs()),
+                    reply_map(&f.client_params),
+                )
             }))
         };
         if let Some(jar) = held(&lock(&self.state))? {
@@ -1101,20 +1134,7 @@ impl Daemon {
 
     /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
     fn merge_find_my_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
-        self.retry_keyring()?;
-        let mut st = lock(&self.state);
-        let changed = st
-            .account
-            .as_mut()
-            .and_then(|a| a.find_my.as_mut())
-            .is_some_and(|f| cookies::merge_set_cookies(&mut f.cookies, set_cookies, time::now_secs()));
-        let save = changed.then(|| self.save_account(&mut st));
-        drop(st);
-        if let Some(save) = save {
-            self.write(save);
-        }
-        self.publish();
-        Ok(())
+        self.merge_into(set_cookies, |a| a.find_my.as_mut().map(|f| &mut f.cookies))
     }
 
     /// A client got HTTP 450 from Find My: its session is spent. Forgets
@@ -1464,7 +1484,6 @@ impl Daemon {
     /// My answers. The password reaches it only on its stdin. A SignOut
     /// meanwhile (the account's `generation` gone) closes it.
     fn autofill_find_my(&self, generation: u64, apple_id: &str, password: &str) -> Result<FindMyCapture, LoginError> {
-        use std::io::Write;
         let bin = &self.cfg.signin_bin;
         let failed = |m: String| LoginError::Failed(m);
         let cancelled = || failed("cancelled by SignOut".into());
@@ -1491,14 +1510,12 @@ impl Daemon {
         // Back out of the slot, unless SignOut killed and reaped it.
         let take = || lock(&self.autofill_child).take().ok_or_else(cancelled);
         {
-            let mut input = zeroize::Zeroizing::new(format!("{}{apple_id}\n{password}\n", *cookies));
+            let mut input = Zeroizing::new(format!("{}{apple_id}\n{password}\n", *cookies));
             let written = stdin.write_all(input.as_bytes());
             zeroize::Zeroize::zeroize(&mut *input);
             drop(stdin);
             if let Err(e) = written {
-                let mut child = take()?;
-                let _ = child.kill();
-                let _ = child.wait();
+                kill(take()?);
                 return Err(failed(format!("giving the sign-in window the password: {e}")));
             }
         }
@@ -1528,7 +1545,7 @@ impl Daemon {
         let bin = &self.cfg.signin_bin;
         let cancelled = || NotKept::Closed("cancelled by SignOut".into());
         let cookies = self.window_cookies();
-        let (mut stdout, stdin, window) = {
+        let (mut stdout, mut stdin, window) = {
             // Spawned under the slot's lock, so a SignOut either sees the
             // child (and kills it) or has already cancelled this sign-in.
             let mut slot = lock(&self.signin_child);
@@ -1548,12 +1565,9 @@ impl Daemon {
             *slot = Some((seq, child));
             (stdout, stdin, self.window_opened())
         };
-        {
-            use std::io::Write;
-            let mut stdin = stdin;
-            // A window that ends without reading them needed none.
-            let _ = stdin.write_all(cookies.as_bytes());
-        }
+        // A window that ends without reading them needed none.
+        let _ = stdin.write_all(cookies.as_bytes());
+        drop(stdin);
         let mut out = Vec::new();
         let read = stdout.read_to_end(&mut out);
         let child = {
@@ -1666,11 +1680,10 @@ impl Daemon {
         // The window's trust replaces what was stored (it started with
         // that, so still holds what Apple has not dropped). None captured
         // keeps the old: losing it would only bring 2FA back.
-        if !trust.is_empty() {
-            let text = Zeroizing::new(serde_json::to_string(&trust).expect("cookies serialize"));
-            if let Err(e) = self.secrets.set_trust(&account.apple_id, &text) {
-                eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
-            }
+        if !trust.is_empty()
+            && let Err(e) = self.set_trust(&account.apple_id, &trust)
+        {
+            eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
         }
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
@@ -1742,8 +1755,7 @@ impl Daemon {
         let Some(apple_id) = current(&lock(&self.state)) else {
             return;
         };
-        let text = Zeroizing::new(serde_json::to_string(trust).expect("cookies serialize"));
-        if let Err(e) = self.secrets.set_trust(&apple_id, &text) {
+        if let Err(e) = self.set_trust(&apple_id, trust) {
             eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
         }
     }
@@ -1757,14 +1769,12 @@ impl Daemon {
     fn sign_out(&self) -> Result<(), ServiceError> {
         let save = {
             let mut slot = lock(&self.signin_child);
-            if let Some((_, mut child)) = slot.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+            if let Some((_, child)) = slot.take() {
+                kill(child);
             }
             let mut autofill = lock(&self.autofill_child);
-            if let Some(mut child) = autofill.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+            if let Some(child) = autofill.take() {
+                kill(child);
             }
             let mut st = lock(&self.state);
             st.signin_seq += 1;
@@ -1922,18 +1932,10 @@ impl Daemon {
             }
             Err(e) => eprintln!("icloud-sessiond: pinging itself before exiting: {e}"),
         }
-        if lock(&self.state).last_call >= decided {
-            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
-            if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
-                conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
-            {
-                return false;
-            }
+        if lock(&self.state).last_call >= decided && take_name(conn).unwrap_or(false) {
+            return false;
         }
-        let start = Instant::now();
-        while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
-            thread::sleep(Duration::from_millis(5));
-        }
+        self.wait_for_calls();
         // A window opened by one of those calls (a sign-in, or Find My's
         // hidden autofill one, which can wait minutes on a 2FA code): serve
         // on if the name is still free, else let it finish storing what it
@@ -1941,21 +1943,23 @@ impl Daemon {
         // opened it, after the window closes.
         let window_open = || lock(&self.state).signing_in || self.windows.load(Ordering::SeqCst) > 0;
         if window_open() {
-            let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
-            if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
-                conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
-            {
+            if take_name(conn).unwrap_or(false) {
                 return false;
             }
             while window_open() {
                 thread::sleep(Duration::from_millis(50));
             }
-            let start = Instant::now();
-            while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
-                thread::sleep(Duration::from_millis(5));
-            }
+            self.wait_for_calls();
         }
         true
+    }
+
+    /// Waits, at most `FLUSH_WAIT`, for the calls in flight to be answered.
+    fn wait_for_calls(&self) {
+        let start = Instant::now();
+        while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
@@ -1992,7 +1996,7 @@ impl Drop for Window<'_> {
 
 /// Why the sign-in window could not be started, saying how to install it
 /// when it is not there.
-fn spawn_error(bin: &std::path::Path, e: &std::io::Error) -> String {
+fn spawn_error(bin: &Path, e: &std::io::Error) -> String {
     if e.kind() == std::io::ErrorKind::NotFound {
         format!(
             "the sign-in window ({}) is not installed; reinstall icloud-session (sudo pacman -S icloud-session)",
@@ -2107,6 +2111,14 @@ impl Service {
     fn props(&self) -> Props {
         lock(&self.0.state).props()
     }
+
+    /// Answers a method call with `f`, off the bus's executor, counting it
+    /// as in flight meanwhile.
+    async fn call<T: Send + 'static>(&self, f: impl FnOnce(&Arc<Daemon>) -> T + Send + 'static) -> T {
+        let _busy = Busy::new(&self.0);
+        let d = self.0.clone();
+        blocking::unblock(move || f(&d)).await
+    }
 }
 
 #[zbus::interface(name = "io.github.ferdousbhai.ICloudSession")]
@@ -2156,17 +2168,13 @@ impl Service {
     #[zbus(name = "Session", out_args("cookie_header", "client_params", "webservices"))]
     // The literal tuple (not `SessionReply`) lets the macro see three out args.
     async fn session(&self) -> Result<(String, HashMap<String, String>, HashMap<String, String>), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.session()).await
+        self.call(|d| d.session()).await
     }
 
     /// Raw `Set-Cookie` header values a client received from Apple.
     #[zbus(name = "MergeCookies")]
     async fn merge_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.merge_cookies(&set_cookies)).await
+        self.call(move |d| d.merge_cookies(&set_cookies)).await
     }
 
     /// A client got 421/401 with the current cookie. The daemon confirms
@@ -2174,9 +2182,7 @@ impl Service {
     /// once), false = signed out.
     #[zbus(name = "ReportSignInRequired", out_args("still_signed_in"))]
     async fn report_sign_in_required(&self) -> Result<bool, ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.report_sign_in_required()).await
+        self.call(|d| d.report_sign_in_required()).await
     }
 
     #[zbus(property, name = "FindMyAuthorized")]
@@ -2187,9 +2193,7 @@ impl Service {
     /// Opens the sign-in window unless it is open; returns at once.
     #[zbus(name = "SignIn")]
     async fn sign_in(&self) {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.sign_in(false)).await
+        self.call(|d| d.sign_in(false)).await
     }
 
     /// Opens the sign-in window on Find My, where Apple asks for the
@@ -2197,26 +2201,20 @@ impl Service {
     /// once. The captured jar becomes the Find My session.
     #[zbus(name = "AuthorizeFindMy")]
     async fn authorize_find_my(&self) {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.sign_in(true)).await
+        self.call(|d| d.sign_in(true)).await
     }
 
     /// `(cookie_header, client_params)` of the Find My session, for the
     /// `findme` host only; error `FindMyAuthRequired` when there is none.
     #[zbus(name = "FindMySession", out_args("cookie_header", "client_params"))]
     async fn find_my_session(&self) -> Result<(String, HashMap<String, String>), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.find_my_session()).await
+        self.call(|d| d.find_my_session()).await
     }
 
     /// Raw `Set-Cookie` header values a client received from Find My.
     #[zbus(name = "MergeFindMyCookies")]
     async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.merge_find_my_cookies(&set_cookies)).await
+        self.call(move |d| d.merge_find_my_cookies(&set_cookies)).await
     }
 
     /// A client got HTTP 450 from Find My: forgets the Find My session and,
@@ -2224,9 +2222,7 @@ impl Service {
     /// Find My session is held (retry once).
     #[zbus(name = "ReportFindMyAuthRequired", out_args("reauthorized"))]
     async fn report_find_my_auth_required(&self) -> Result<bool, ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.report_find_my_auth_required()).await
+        self.call(|d| d.report_find_my_auth_required()).await
     }
 
     #[zbus(property, name = "FindMyPasswordStored")]
@@ -2238,25 +2234,19 @@ impl Service {
     /// it in the keyring for automatic Find My re-authorization.
     #[zbus(name = "SetPassword")]
     async fn set_password(&self, password: String) -> Result<(), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
         let password = Password::new(password);
-        blocking::unblock(move || d.set_password(password)).await
+        self.call(move |d| d.set_password(password)).await
     }
 
     /// Removes the stored password(s) from the keyring.
     #[zbus(name = "ForgetPassword")]
     async fn forget_password(&self) -> Result<(), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.forget_password()).await
+        self.call(|d| d.forget_password()).await
     }
 
     /// Forgets the account and the sign-in window's WebKit profile.
     #[zbus(name = "SignOut")]
     async fn sign_out(&self) -> Result<(), ServiceError> {
-        let _busy = Busy::new(&self.0);
-        let d = self.0.clone();
-        blocking::unblock(move || d.sign_out()).await
+        self.call(|d| d.sign_out()).await
     }
 }

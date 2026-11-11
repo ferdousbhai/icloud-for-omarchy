@@ -9,7 +9,7 @@ use super::state::{CloneState, FolderEntry, NoteEntry, SharerHomeEntry};
 use crate::cloudkit::CloudKitRecord;
 use crate::doc::encode::{DEFAULT_FOLDER_RECORD_NAME, TRASH_FOLDER_RECORD_NAME};
 use crate::js::{self, posix};
-use crate::md::title::is_unnameable_control;
+use crate::md::filename::name_slug;
 
 /// Directory names the clone reserves at the top level.
 pub const RESERVED_TOP_LEVEL_DIR_NAMES: &[&str] = &[super::state::STATE_DIR_NAME, super::state::LEGACY_STATE_DIR_NAME];
@@ -82,26 +82,7 @@ pub fn decode_folder_record(record: &CloudKitRecord) -> Option<FolderInfo> {
 
 /// `sanitizeFolderDirName`.
 pub fn sanitize_folder_dir_name(title: &str) -> String {
-    let first_line = js::trim(title.split('\n').next().unwrap_or(""));
-    let stripped: String = first_line
-        .chars()
-        .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-        .filter(|c| !is_unnameable_control(*c))
-        .collect();
-    let mut collapsed = String::with_capacity(stripped.len());
-    let mut in_ws = false;
-    for c in stripped.chars() {
-        if js::is_whitespace(c) {
-            if !in_ws {
-                collapsed.push(' ');
-            }
-            in_ws = true;
-        } else {
-            collapsed.push(c);
-            in_ws = false;
-        }
-    }
-    let sliced = js::slice16(js::trim(&collapsed), 0, 80);
+    let sliced = name_slug(title);
     let slug = sliced.trim_end_matches(['.', ' ']);
     if slug.is_empty() {
         "Untitled Folder".into()

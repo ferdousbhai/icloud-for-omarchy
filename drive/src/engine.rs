@@ -9,7 +9,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::local::{self, Entry};
-use crate::plan::{self, Op, Plan, Snapshot};
+use icloud_session::time::{now_ms, rfc3339};
+
+use crate::plan::{self, Op, Plan, Snapshot, parent_of};
 use crate::remote::{self, Kind, Node, Remote};
 use crate::state::{Row, State};
 
@@ -88,14 +90,6 @@ pub fn top_node(id: &str) -> Node {
         size: 0,
         mtime_ms: 0,
     }
-}
-
-fn now_ms() -> i64 {
-    icloud_session::time::now_ms()
-}
-
-fn parent_of(path: &str) -> &str {
-    path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
 fn name_of(path: &str) -> &str {
@@ -274,7 +268,8 @@ impl<R: Remote> Engine<'_, R> {
             // An emptied folder is never read as removals without being told:
             // it is as likely an unmounted disk's mount point as a clear-out.
             let emptied = entries.is_empty() && plan.ops.iter().any(|op| matches!(op, Op::TrashRemote { .. }));
-            if (plan.deletions > allowed || emptied) && !allow_deletes {
+            // A dry run is how the removals are looked at, so it lists them.
+            if (plan.deletions > allowed || emptied) && !allow_deletes && !dry_run {
                 return Err(Error::TooManyDeletions {
                     deletions: plan.deletions,
                     total: base.len(),
@@ -309,9 +304,7 @@ impl<R: Remote> Engine<'_, R> {
                 // both are kept, ours as a conflicted copy, and the next
                 // round downloads iCloud's and uploads the copy.
                 (Err(Error::Remote(remote::Error::Stale(_))), Op::Replace { id, path }) => {
-                    let from = self.abs(path);
-                    let date = &icloud_session::time::rfc3339(now_ms() / 1000)[..10];
-                    fs::rename(&from, local::conflict_path(&from, &self.host, date))?;
+                    self.set_aside(path)?;
                     self.state.forget(id)?;
                     outcome.done.push(format!(
                         "keep {path} as a conflicted copy (it changed in iCloud meanwhile)"
@@ -327,6 +320,22 @@ impl<R: Remote> Engine<'_, R> {
 
     fn abs(&self, path: &str) -> PathBuf {
         self.root.join(path)
+    }
+
+    /// Renames the local file to a conflicted copy, freeing its name.
+    fn set_aside(&self, path: &str) -> io::Result<()> {
+        let from = self.abs(path);
+        let date = &rfc3339(now_ms() / 1000)[..10];
+        fs::rename(&from, local::conflict_path(&from, &self.host, date))
+    }
+
+    /// Records the item as in step at `path`.
+    fn put(&self, node: Node, path: &str, local: Entry) -> Result<()> {
+        Ok(self.state.put(&Row {
+            node,
+            path: path.to_string(),
+            local,
+        })?)
     }
 
     /// The folder in iCloud that holds `path`, once it is in step.
@@ -387,11 +396,7 @@ impl<R: Remote> Engine<'_, R> {
                     fs::rename(self.abs(from), self.abs(to))?;
                 }
                 self.state.move_paths(&row.path, to)?;
-                self.state.put(&Row {
-                    node,
-                    path: to.clone(),
-                    local: row.local,
-                })?;
+                self.put(node, to, row.local)?;
             }
             Op::RemoteMove { id, to } => {
                 let Some(row) = self.state.row(id)? else {
@@ -407,48 +412,35 @@ impl<R: Remote> Engine<'_, R> {
                     node = self.remote.rename(&node, name_of(to))?;
                 }
                 self.state.move_paths(&row.path, to)?;
-                self.state.put(&Row {
-                    node,
-                    path: to.clone(),
-                    // A file keeps the stamp it was in step with, so an edit
-                    // made along with the move still shows as one.
-                    local: if entry.is_dir {
-                        entry
-                    } else {
-                        Entry {
-                            ino: entry.ino,
-                            ..row.local
-                        }
-                    },
-                })?;
+                // A file keeps the stamp it was in step with, so an edit
+                // made along with the move still shows as one.
+                let local = if entry.is_dir {
+                    entry
+                } else {
+                    Entry {
+                        ino: entry.ino,
+                        ..row.local
+                    }
+                };
+                self.put(node, to, local)?;
             }
             Op::SetAside { path } => {
-                let from = self.abs(path);
-                if !from.exists() {
+                if !self.abs(path).exists() {
                     return Ok(false);
                 }
-                let date = &icloud_session::time::rfc3339(now_ms() / 1000)[..10];
-                fs::rename(&from, local::conflict_path(&from, &self.host, date))?;
+                self.set_aside(path)?;
             }
             Op::MkdirLocal { id, path } => {
                 let node = node_of(id)?;
                 fs::create_dir_all(self.abs(path))?;
                 let local = self.need_stat(path)?;
-                self.state.put(&Row {
-                    node,
-                    path: path.clone(),
-                    local,
-                })?;
+                self.put(node, path, local)?;
             }
             Op::MkdirRemote { path } => {
                 let local = self.need_stat(path)?;
                 let parent = self.parent_node(path)?;
                 let node = self.remote.create_folder(&parent.id, name_of(path))?;
-                self.state.put(&Row {
-                    node,
-                    path: path.clone(),
-                    local,
-                })?;
+                self.put(node, path, local)?;
             }
             Op::Download { id, path } => {
                 let node = node_of(id)?;
@@ -496,11 +488,7 @@ impl<R: Remote> Engine<'_, R> {
                     return Err(e.into());
                 }
                 let local = self.need_stat(path)?;
-                self.state.put(&Row {
-                    node,
-                    path: path.clone(),
-                    local,
-                })?;
+                self.put(node, path, local)?;
             }
             Op::Upload { path } => {
                 let before = self.need_stat(path)?;
@@ -514,11 +502,7 @@ impl<R: Remote> Engine<'_, R> {
                 let node = self.listed(&parent.id, &sent.id)?;
                 // Recorded as it was before the upload: a change made while
                 // it was going up shows as a change next time.
-                self.state.put(&Row {
-                    node,
-                    path: path.clone(),
-                    local: before,
-                })?;
+                self.put(node, path, before)?;
             }
             Op::Replace { id, path } => {
                 let Some(row) = self.state.row(id)? else {
@@ -529,11 +513,7 @@ impl<R: Remote> Engine<'_, R> {
                     .remote
                     .replace(&row.node, &self.abs(path), before.mtime_ns / 1_000_000_000 * 1000)?;
                 let node = self.listed(&row.node.parent, &sent.id)?;
-                self.state.put(&Row {
-                    node,
-                    path: path.clone(),
-                    local: before,
-                })?;
+                self.put(node, path, before)?;
             }
             Op::TrashLocal { id, path } => {
                 let Some(row) = self.state.row(id)? else {
@@ -580,11 +560,7 @@ impl<R: Remote> Engine<'_, R> {
             Op::Adopt { id, path } => {
                 let node = node_of(id)?;
                 let local = self.need_stat(path)?;
-                self.state.put(&Row {
-                    node,
-                    path: path.clone(),
-                    local,
-                })?;
+                self.put(node, path, local)?;
             }
             Op::Forget { id, .. } => self.state.forget(id)?,
         }
@@ -592,7 +568,7 @@ impl<R: Remote> Engine<'_, R> {
     }
 
     fn trash(&self, path: &str) -> Result<()> {
-        let stamp = icloud_session::time::rfc3339(now_ms() / 1000);
+        let stamp = rfc3339(now_ms() / 1000);
         match local::trash(&self.abs(path), &self.trash_dir, &stamp) {
             Ok(_) => Ok(()),
             // The trash is on another file system (the folder is a disk of

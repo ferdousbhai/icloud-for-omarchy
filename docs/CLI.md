@@ -12,11 +12,12 @@ to the command that does it, then fixes the conventions all the tools share.
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
+| `icloud-drive <command>` | icloud-drive | the sync of the folder `~/iCloud Drive`: status, a sync now, on and off (no window) |
 
 `icloud-notes`, `icloud-photos`, and `icloud-findmy` open their window without
 arguments and run their CLI without GUI initialization when given a command.
 Photos and Find My use GTK-free CLI binaries and separate native windows.
-Contacts and tasks are now separate unified products; see the migration section.
+Contacts and tasks are now separate unified products; see [Contacts and tasks](#contacts-and-tasks).
 
 ## The audit: GUI feature → command
 
@@ -221,8 +222,8 @@ and exits non-zero:
   with its `error`, in `data.sync`, and exits with the sync's code.
 - `icloud-notes-sync sync`: a failed half is `{ok:false, exit_code, error}`
   inside `data`; the exit is the worse half's.
-- `status` in `icloud-session`, `icloud-photos` and `icloud-notes` prints
-  the status and exits 3 when signed out.
+- `status` in `icloud-session`, `icloud-photos`, `icloud-notes` and
+  `icloud-drive` prints the status and exits 3 when signed out.
 
 ### Errors
 

@@ -65,15 +65,21 @@ pub fn run_history(target_dir: &Path, file: &str, options: &HistoryOptions) -> R
     Ok(HistoryResult::Epochs { epochs: rows })
 }
 
+/// How a record of the note is named in a row: the note itself, or one of
+/// its tables.
+fn record_label(record_name: &str, note_record_name: &str) -> String {
+    if record_name == note_record_name {
+        "note".to_owned()
+    } else {
+        format!("table {record_name}")
+    }
+}
+
 fn describe_epoch(epoch: &NoteEpoch, previous: Option<&NoteEpoch>, note_record_name: &str) -> HistoryEpochRow {
     let mut changed = Vec::new();
     let mut carried = Vec::new();
     for (record_name, snapshot_id) in &epoch.snapshots {
-        let label = if record_name == note_record_name {
-            "note".to_owned()
-        } else {
-            format!("table {record_name}")
-        };
+        let label = record_label(record_name, note_record_name);
         match previous {
             Some(prev) if prev.snapshots.get(record_name) == Some(snapshot_id) => carried.push(label),
             _ => changed.push(label),
@@ -94,11 +100,7 @@ fn build_record_history(
 ) -> Result<Vec<HistoryRecordRow>, Error> {
     let mut rows: Vec<(VersionSnapshot, String)> = Vec::new();
     for rn in record_names {
-        let label = if rn == note_record_name {
-            "note".to_owned()
-        } else {
-            format!("table {rn}")
-        };
+        let label = record_label(rn, note_record_name);
         for snapshot in list_versions(target_dir, rn)?.into_iter().rev() {
             rows.push((snapshot, label.clone()));
         }

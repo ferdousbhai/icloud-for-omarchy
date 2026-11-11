@@ -8,7 +8,7 @@
 //! icloud-md edits the YAML with the `yaml` package's Document API, which
 //! re-serializes the whole block on any change. `super::yaml` reproduces
 //! that byte for byte on the YAML subset it models; for YAML outside it
-//! (comments, block scalars, anchors, ...) this falls back to editing just
+//! (comments, anchors, ...) this falls back to editing just
 //! the one `key: value` line, which is where the output can differ from
 //! icloud-md's (never in what the keys read back as).
 

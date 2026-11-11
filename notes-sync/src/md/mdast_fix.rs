@@ -10,7 +10,7 @@
 //!   continuation text.
 
 use markdown::mdast::{self, Node};
-use markdown::unist::{Point, Position};
+use markdown::unist::Position;
 
 pub(crate) fn fix_tree(root: &mut Node, source: &str) {
     fix_missed_tables(root, source);
@@ -290,10 +290,6 @@ fn dropped_heading_sequence(source: &str, at: usize, first: usize) -> Option<&st
     (gap.starts_with('#') && gap.bytes().all(|b| matches!(b, b'#' | b' ' | b'\t'))).then_some(gap)
 }
 
-fn position(node: &Node) -> Option<&Position> {
-    node.position()
-}
-
 fn text(value: &str) -> Node {
     Node::Text(mdast::Text {
         value: value.to_string(),
@@ -375,7 +371,7 @@ fn fix_interrupts(node: &mut Node, source: &str) {
             i += 1;
             continue;
         };
-        let (Some(lp), Some(first)) = (position(left).cloned(), list.children.first()) else {
+        let (Some(lp), Some(first)) = (left.position().cloned(), list.children.first()) else {
             i += 1;
             continue;
         };
@@ -433,7 +429,7 @@ fn fix_interrupts(node: &mut Node, source: &str) {
             }
             para.position = Some(Position {
                 start: lp.start.clone(),
-                end: Point { ..ip.end.clone() },
+                end: ip.end.clone(),
             });
         }
         renumber(source, list);

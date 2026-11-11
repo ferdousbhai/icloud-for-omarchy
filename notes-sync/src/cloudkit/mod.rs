@@ -24,7 +24,7 @@ pub use types::*;
 /// `Offline`, `SessionService`, `KeyringUnavailable` and
 /// `UnexpectedResponse` (`bad_response`) exit 5.
 ///
-/// Not in the plan's sketch: `Conflict`. A changeTag conflict is not an error
+/// There is no `Conflict` variant: a changeTag conflict is not an error
 /// in icloud-md - it arrives per record inside an HTTP 200 and is returned as
 /// [`RecordUpdateResult::Rejected`].
 #[derive(Debug, thiserror::Error)]

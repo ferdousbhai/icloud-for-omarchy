@@ -363,11 +363,10 @@ for arch in ("x86_64", "aarch64"):
         hooks.mkdir(parents=True)
         etc = self.work / "etc"
         (etc / "pacman.d").mkdir(parents=True)
-        (etc / "pacman.conf").write_text("[options]\nInclude = /etc/pacman.d/icloud-for-omarchy.conf\n")
         (etc / "pacman.d/icloud-for-omarchy.conf").write_text("old repository")
         (hooks / "icloud-for-omarchy").touch()
         source = (ROOT / "install.sh").read_text().replace("/etc/pacman", str(etc / "pacman"))
-        # Existing config refers to transplanted scratch path, too.
+        # The existing config refers to the transplanted scratch path, too.
         (etc / "pacman.conf").write_text(f"[options]\nInclude = {etc}/pacman.d/icloud-for-omarchy.conf\n")
         script = self.work / "install.sh"
         script.write_text(source)

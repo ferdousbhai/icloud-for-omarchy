@@ -65,6 +65,8 @@ ApplicationWindow {
     property var conflictChoices: []
     property bool conflictAsText: false
     readonly property bool resolving: conflicts.length > 0 && !conflictAsText && !noteLocked
+    // The formatting buttons work on the open note's text in the editor.
+    readonly property bool canFormat: backend.currentNote.length > 0 && !noteLocked && !resolving
     // The note body's font zoom (Ctrl++ / Ctrl+- / Ctrl+0), kept across restarts.
     property real editorZoom: 1.0
     // Markers with no versions to pick from (nested or out of order): the
@@ -73,6 +75,10 @@ ApplicationWindow {
     onConflictsChanged: conflictChoices = conflicts.map(function () { return ""; })
     property bool searching: searchField.text.trim().length >= 2
     property var searchResults: []
+    function refreshSearch() {
+        if (searching)
+            searchResults = backend.searchVault(searchField.text, true);
+    }
     property string historyEpoch: ""
     // file → resolution, for entries the last push preview would not simply apply.
     property var statusByFile: {
@@ -573,10 +579,10 @@ ApplicationWindow {
                 onClicked: root.selectTitle()
             }
             Item { Layout.fillWidth: true }
-            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.toggleTask() }
-            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.wrapSelection("**", "**") }
-            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.wrapSelection("*", "*") }
-            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: backend.currentNote.length > 0 && !root.noteLocked && !root.resolving; onClicked: root.insertLink() }
+            IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: root.canFormat; onClicked: root.toggleTask() }
+            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: root.canFormat; onClicked: root.wrapSelection("**", "**") }
+            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: root.canFormat; onClicked: root.wrapSelection("*", "*") }
+            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: root.canFormat; onClicked: root.insertLink() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton {
                 // Sync is automatic; this only shows what is pending or refused.
@@ -896,10 +902,7 @@ ApplicationWindow {
                                 padding: 0
                                 color: root.colText
                                 font.pixelSize: root.pt(12)
-                                onTextChanged: {
-                                    if (root.searching)
-                                        root.searchResults = backend.searchVault(text, true);
-                                }
+                                onTextChanged: root.refreshSearch()
                                 Keys.onEscapePressed: { text = ""; editor.forceActiveFocus(); }
                             }
                         }
@@ -1625,14 +1628,8 @@ ApplicationWindow {
         function onEditsKeptAsNote(message) {
             root.keptNotice = message;
         }
-        function onNotesChanged() {
-            if (root.searching)
-                root.searchResults = backend.searchVault(searchField.text, true);
-        }
-        function onFoldersChanged() {
-            if (root.searching)
-                root.searchResults = backend.searchVault(searchField.text, true);
-        }
+        function onNotesChanged() { root.refreshSearch(); }
+        function onFoldersChanged() { root.refreshSearch(); }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
         // Not on syncRunningChanged: that turns false between runSync's
         // push and its pull, which would unlock the editor too early.

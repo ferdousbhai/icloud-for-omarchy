@@ -1,5 +1,4 @@
 #include "notesbackend.h"
-#include "markdownhighlighter.h"
 #include "syncmodel.h"
 
 #include <QCryptographicHash>
@@ -91,6 +90,15 @@ bool writeText(const QString &path, const QString &text)
         return false;
     }
     return file.commit();
+}
+
+// A file's mtime and size, "-" when there is none: what tells a changed
+// state file from the one last read.
+QString fileStamp(const QString &path)
+{
+    const QFileInfo file(path);
+    return file.exists() ? QString::number(file.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(file.size())
+                         : QStringLiteral("-");
 }
 
 // Dot-directories (the sync tool's bookkeeping, .git) hold no notes.
@@ -231,6 +239,15 @@ QJsonObject successEnvelope(const QByteArray &output)
     const QJsonObject object = QJsonDocument::fromJson(output.trimmed()).object();
     const QJsonValue ok = object.value(QStringLiteral("ok"));
     return ok.isBool() && ok.toBool() ? object : QJsonObject();
+}
+
+// The log's lines for a failed run or half (`name`: "push", "sync"): the
+// error's message, then its hint, when it has one, on a line of its own.
+QString failedLog(const QString &name, const QJsonObject &error)
+{
+    const QString hint = error.value(QStringLiteral("hint")).toString();
+    return name + QStringLiteral(" failed: ") + error.value(QStringLiteral("message")).toString()
+        + (hint.isEmpty() ? QString() : u'\n' + hint);
 }
 
 QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
@@ -680,18 +697,12 @@ bool NotesBackend::isLoggedStderrLine(const QByteArray &line)
 
 QString NotesBackend::vaultInfoKey(const QString &stateFile) const
 {
-    const QFileInfo state(stateFile);
-    return syncToolPath() + u'\n' + QFileInfo(rootPath()).absoluteFilePath() + u'\n'
-        + (!stateFile.isEmpty() && state.exists()
-               ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
-               : QStringLiteral("-"));
+    return syncToolPath() + u'\n' + QFileInfo(rootPath()).absoluteFilePath() + u'\n' + fileStamp(stateFile);
 }
 
 QString NotesBackend::stateFileStamp()
 {
-    const QFileInfo state(stateDir() + QStringLiteral("/state.json"));
-    return state.exists() ? QString::number(state.lastModified().toMSecsSinceEpoch()) + u':' + QString::number(state.size())
-                          : QStringLiteral("-");
+    return fileStamp(stateDir() + QStringLiteral("/state.json"));
 }
 
 void NotesBackend::adoptVaultInfo(const QJsonObject &o) const
@@ -1827,11 +1838,10 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // it as a sync half's is (finishSyncHalves logs the halves'), and say it
     // in the preview's or history's error rather than "see log".
     if (m_mode != Mode::Sync && !m_lastError.isEmpty()) {
-        const QString hint = m_lastError.value(QStringLiteral("hint")).toString();
         if (offline)
             appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(label.toLower(), message));
         else
-            appendLog(label.toLower() + QStringLiteral(" failed: ") + message + (hint.isEmpty() ? QString() : u'\n' + hint));
+            appendLog(failedLog(label.toLower(), m_lastError));
     }
     const QString error = ok                    ? parsed.value(QStringLiteral("error")).toString()
                           : !message.isEmpty() ? QStringLiteral("%1 failed: %2").arg(label, message)
@@ -1932,12 +1942,11 @@ void NotesBackend::finishSyncHalves(int exitCode)
             const QJsonObject error = half.value(QStringLiteral("error")).toObject();
             output.insert(QStringLiteral("error"), error);
             const QString code = error.value(QStringLiteral("code")).toString();
-            const QString message = error.value(QStringLiteral("message")).toString();
-            const QString hint = error.value(QStringLiteral("hint")).toString();
             if (isNetworkError(code)) {
-                appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(name, message));
+                appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.")
+                              .arg(name, error.value(QStringLiteral("message")).toString()));
             } else {
-                appendLog(name + QStringLiteral(" failed: ") + message + (hint.isEmpty() ? QString() : u'\n' + hint));
+                appendLog(failedLog(name, error));
                 quiet = quiet && (code == u"sign_in_required" || isSessionRejected(code));
             }
         }
@@ -1955,9 +1964,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
         const QJsonObject error = engineError(m_captured, m_capturedErr);
         QByteArray output;
         if (!error.isEmpty()) {
-            const QString hint = error.value(QStringLiteral("hint")).toString();
-            appendLog(QStringLiteral("sync failed: ") + error.value(QStringLiteral("message")).toString()
-                      + (hint.isEmpty() ? QString() : u'\n' + hint));
+            appendLog(failedLog(QStringLiteral("sync"), error));
             output = QJsonDocument(QJsonObject{ { QStringLiteral("error"), error } }).toJson(QJsonDocument::Compact);
         }
         halves << Half{ QStringLiteral("Push"), code, output };

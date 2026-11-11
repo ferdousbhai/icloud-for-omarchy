@@ -68,8 +68,10 @@ pub fn file_name_carries_title(file_name: &str, title_line: &str) -> bool {
         }
 }
 
-/// `noteFileName`: the in-body vault's slug (≤ 80 UTF-16 units).
-pub fn note_file_name(title: &str) -> String {
+/// The slug of a title's first line (≤ 80 UTF-16 units) that note files and
+/// folder directories are named from: characters a file name can't hold
+/// dropped, whitespace runs collapsed to one space. May be empty.
+pub(crate) fn name_slug(title: &str) -> String {
     let first = js::trim(first_line(title));
     let stripped: String = first
         .chars()
@@ -90,7 +92,12 @@ pub fn note_file_name(title: &str) -> String {
             in_space = false;
         }
     }
-    let slug = js::slice16(js::trim(&collapsed), 0, 80);
+    js::slice16(js::trim(&collapsed), 0, 80)
+}
+
+/// `noteFileName`: the in-body vault's slug.
+pub fn note_file_name(title: &str) -> String {
+    let slug = name_slug(title);
     let base = if slug.is_empty() { "Untitled" } else { slug.as_str() };
     format!("{base}.md")
 }

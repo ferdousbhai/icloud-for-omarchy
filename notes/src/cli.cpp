@@ -765,6 +765,13 @@ std::optional<Failure> resolveFolder(NotesBackend &b, const QString &arg, QStrin
 
 // ---- the lock, the sign-in, syncing -----------------------------------------
 
+// The lock's holder is the Notes window (NotesBackend::lockVault's words
+// for Role::App), which keeps it for as long as it is open.
+bool isAppHolder(const QString &holder)
+{
+    return holder.startsWith(QStringLiteral("Notes (pid"));
+}
+
 // The vault's lock, as the window and the background sync take it. The
 // window holds it for as long as it is open: refused at once then (unless
 // --wait), since it may be syncing this very vault. A background sync or
@@ -791,7 +798,7 @@ std::optional<Failure> takeLock(NotesBackend &b, const Args &a)
             break;
         }
         const QString holder = b.lockHolder();
-        const bool app = holder.startsWith(QStringLiteral("Notes (pid"));
+        const bool app = isAppHolder(holder);
         const int limitMs = waitSecs.value_or(app ? 0 : kDefaultWaitSecs) * 1000;
         if (timer.elapsed() >= limitMs)
             return Failure{ QStringLiteral("vault_busy"),
@@ -1121,7 +1128,7 @@ Done status(NotesBackend &b)
                 flagged.insert(flag, paths);
             }
     }
-    const bool appOpen = holder.startsWith(QStringLiteral("Notes (pid"));
+    const bool appOpen = isAppHolder(holder);
     QJsonObject json{
         { QStringLiteral("vault"), NotesBackend::rootPath() },
         { QStringLiteral("cloned"), cloned },

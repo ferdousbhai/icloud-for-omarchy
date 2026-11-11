@@ -295,31 +295,17 @@ mod tests {
         assert_eq!(state.update(status(true, false, true)), Change::None);
         assert_eq!(state.view(), None);
     }
-}
-
-#[cfg(test)]
-mod password_hint_tests {
-    use super::*;
 
     #[test]
     fn the_find_my_banner_mentions_set_password_when_none_is_stored() {
         let mut state = State::default();
-        let mut status = icloud_session::Status {
-            signed_in: true,
-            apple_id: None,
-            full_name: None,
-            dsid: None,
-            expires_at: None,
-            signing_in: false,
-            find_my_authorized: false,
+        state.update(icloud_session::Status {
             find_my_password_stored: false,
-            sign_out_reason: None,
-        };
-        state.update(status.clone());
+            ..status(true, false, false)
+        });
         state.find_my_needed = true;
         assert_eq!(state.view().unwrap().title, FIND_MY_TITLE_HINT);
-        status.find_my_password_stored = true;
-        state.update(status);
+        state.update(status(true, false, false));
         assert_eq!(state.view().unwrap().title, FIND_MY_TITLE);
     }
 }

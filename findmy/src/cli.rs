@@ -463,15 +463,14 @@ impl<T: Transport> Cli<T> {
     }
 
     fn history(&mut self, query: &str, since_secs: i64) -> Outcome {
-        let query = query.to_string();
         let since = icloud_session::time::now_ms() / 1000 - since_secs;
         // A device ID already in the history needs no network; a NAME is
         // resolved against the live list (which is recorded first).
-        let (id, name) = if self.open_history()?.last(&query).map_err(db)?.is_some() {
-            (query, None)
+        let (id, name) = if self.open_history()?.last(query).map_err(db)?.is_some() {
+            (query.to_string(), None)
         } else {
             let devices = self.fetch(false)?;
-            let d = resolve(&devices, &query)?;
+            let d = resolve(&devices, query)?;
             (d.id.clone(), Some(d.name.clone()))
         };
         let points = self.open_history()?.trail(&id, since).map_err(db)?;

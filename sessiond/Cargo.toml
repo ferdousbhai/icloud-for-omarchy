@@ -46,6 +46,5 @@ rusqlite.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
-rusqlite.workspace = true
 tempfile.workspace = true
 tiny_http.workspace = true

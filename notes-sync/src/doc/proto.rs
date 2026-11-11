@@ -486,13 +486,6 @@ pub trait Message: Default + Clone + fmt::Debug + PartialEq {
     }
 }
 
-fn write_unknown(w: &mut Writer, unknown: &[UnknownField]) {
-    for field in unknown {
-        w.tag(field.no, field.wire_type);
-        w.buf.extend_from_slice(&field.data);
-    }
-}
-
 fn required_error(name: &str) -> ProtoError {
     ProtoError(format!("cannot encode field {name} to binary: required field not set"))
 }
@@ -673,9 +666,14 @@ macro_rules! message {
     };
 }
 
+/// The unknown fields, in arrival order, each as `tag(no, wireType) + data`
+/// (called by the `message!` macro).
 #[doc(hidden)]
 pub fn write_unknown_fields(w: &mut Writer, unknown: &[UnknownField]) {
-    write_unknown(w, unknown);
+    for field in unknown {
+        w.tag(field.no, field.wire_type);
+        w.buf.extend_from_slice(&field.data);
+    }
 }
 
 /// `proto/versioned_document.proto`.

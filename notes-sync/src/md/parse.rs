@@ -814,6 +814,16 @@ fn line_from_pieces(pieces: &[Piece]) -> (String, Vec<InlineSpan>) {
 
 /// `countQuoteMarkers`.
 pub fn count_quote_markers(raw_line: &str) -> usize {
+    split_quote_markers(raw_line).0
+}
+
+fn strip_quote_markers(raw_line: &str) -> &str {
+    split_quote_markers(raw_line).1
+}
+
+/// A line's leading quote markers (each up to three spaces, `>`, and one
+/// optional space): how many, and what follows them.
+fn split_quote_markers(raw_line: &str) -> (usize, &str) {
     let bytes = raw_line.as_bytes();
     let mut count = 0;
     let mut at = 0;
@@ -823,28 +833,10 @@ pub fn count_quote_markers(raw_line: &str) -> usize {
             spaces += 1;
         }
         if bytes.get(at + spaces) != Some(&b'>') {
-            return count;
+            return (count, &raw_line[at..]);
         }
         at += spaces + 1;
         count += 1;
-        if bytes.get(at) == Some(&b' ') {
-            at += 1;
-        }
-    }
-}
-
-fn strip_quote_markers(raw_line: &str) -> &str {
-    let bytes = raw_line.as_bytes();
-    let mut at = 0;
-    loop {
-        let mut spaces = 0;
-        while spaces < 3 && bytes.get(at + spaces) == Some(&b' ') {
-            spaces += 1;
-        }
-        if bytes.get(at + spaces) != Some(&b'>') {
-            return &raw_line[at..];
-        }
-        at += spaces + 1;
         if bytes.get(at) == Some(&b' ') {
             at += 1;
         }

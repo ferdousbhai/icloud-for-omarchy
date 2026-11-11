@@ -15,6 +15,7 @@ use super::pairing::claim_names_on_disk;
 use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
 use crate::cmd::plan::FolderRefusal;
+use crate::cmd::used_names_for;
 use crate::js::{self, posix};
 use crate::md::filename::unique_file_name;
 
@@ -25,10 +26,6 @@ use crate::md::filename::unique_file_name;
 pub struct Relocation {
     pub from: String,
     pub to: String,
-}
-
-fn names<'a>(by_dir: &'a mut HashMap<String, HashSet<String>>, dir: &str) -> &'a mut HashSet<String> {
-    by_dir.entry(dir.to_owned()).or_default()
 }
 
 fn try_rename(from: &Path, to: &Path) -> Result<bool, Error> {
@@ -66,14 +63,15 @@ pub fn reconcile_note_placements(
         match to_dir {
             Some(to_dir) if to_dir != note_dir_of(&entry.file) => moves.push((record_name.clone(), to_dir)),
             _ => {
-                names(&mut claimed_names, &note_dir_of(&entry.file)).insert(posix::basename(&entry.file).to_owned());
+                used_names_for(&mut claimed_names, &note_dir_of(&entry.file))
+                    .insert(posix::basename(&entry.file).to_owned());
             }
         }
     }
     let moving: HashSet<&str> = moves.iter().map(|(rn, _)| rn.as_str()).collect();
     for attachment in attachments.values() {
         if !moving.contains(attachment.note_record_name.as_str()) {
-            names(
+            used_names_for(
                 &mut claimed_attachment_names,
                 &note_dir_of(&posix::dirname(&attachment.file)),
             )
@@ -87,16 +85,16 @@ pub fn reconcile_note_placements(
             continue;
         };
         let from_file = entry.file.clone();
-        claim_names_on_disk(target_dir, to_dir, names(&mut claimed_names, to_dir))?;
-        let base_name = unique_file_name(posix::basename(&from_file), names(&mut claimed_names, to_dir));
+        claim_names_on_disk(target_dir, to_dir, used_names_for(&mut claimed_names, to_dir))?;
+        let base_name = unique_file_name(posix::basename(&from_file), used_names_for(&mut claimed_names, to_dir));
         let to_file = posix::join(&[to_dir, &base_name]);
 
         std::fs::create_dir_all(parent_dir_of(target_dir, &to_file))?;
         if !try_rename(&target_dir.join(&from_file), &target_dir.join(&to_file))? {
-            names(&mut claimed_names, &note_dir_of(&from_file)).insert(posix::basename(&from_file).to_owned());
+            used_names_for(&mut claimed_names, &note_dir_of(&from_file)).insert(posix::basename(&from_file).to_owned());
             continue;
         }
-        names(&mut claimed_names, to_dir).insert(base_name);
+        used_names_for(&mut claimed_names, to_dir).insert(base_name);
         notes[record_name].file = to_file.clone();
         relocations.push(Relocation {
             from: from_file,
@@ -110,13 +108,13 @@ pub fn reconcile_note_placements(
                 continue;
             }
             let old_base = posix::basename(&attachment.file).to_owned();
-            let new_base = unique_file_name(&old_base, names(&mut claimed_attachment_names, to_dir));
+            let new_base = unique_file_name(&old_base, used_names_for(&mut claimed_attachment_names, to_dir));
             let to_attachment = posix::join(&[to_dir, "attachments", &new_base]);
             std::fs::create_dir_all(parent_dir_of(target_dir, &to_attachment))?;
             if !try_rename(&target_dir.join(&attachment.file), &target_dir.join(&to_attachment))? {
                 continue;
             }
-            names(&mut claimed_attachment_names, to_dir).insert(new_base.clone());
+            used_names_for(&mut claimed_attachment_names, to_dir).insert(new_base.clone());
             attachments[&attachment_record_name].file = to_attachment;
             if new_base != old_base {
                 rewrite_attachment_link(target_dir, &to_file, record_name, &old_base, &new_base)?;

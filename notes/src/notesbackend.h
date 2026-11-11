@@ -17,7 +17,6 @@
 #include <QVariant>
 
 class QDBusMessage;
-class QJsonObject;
 class QDBusServiceWatcher;
 
 // The vault on disk plus the icloud-notes-sync CLI, exposed to QML. One sync

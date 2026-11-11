@@ -895,7 +895,7 @@ impl Session {
     fn request(&self, request: Request<'_>) -> Result<Response> {
         let response = self.send(&request)?;
         let status = response.status();
-        let body = read_body(response)?;
+        let body = read_limited(response, MAX_BODY, "reading response")?;
         Ok(Response { status, body })
     }
 
@@ -1173,7 +1173,7 @@ fn is_session_host(url: &str, webservices: &HashMap<String, String>) -> bool {
         || host.ends_with(".icloud.com")
         || webservices
             .values()
-            .any(|service| origin(service) == Some((host.clone(), port)))
+            .any(|service| origin(service).is_some_and(|(h, p)| h == host && p == port))
 }
 
 /// Whether `url` is on the `findme` web service's host.
@@ -1205,10 +1205,6 @@ fn temp_sibling(path: &Path) -> PathBuf {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
-}
-
-fn read_body(response: ureq::Response) -> Result<Vec<u8>> {
-    read_limited(response, MAX_BODY, "reading response")
 }
 
 /// A body of at most `limit` bytes, counted after ureq has ungzipped it: a

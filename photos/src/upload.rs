@@ -114,13 +114,14 @@ impl<'t> Uploader<'t> {
     /// keyed by (random in the app, fixed in tests).
     pub fn upload(&self, path: &Path, client_id: &str, progress: &dyn Fn(Step)) -> Result<Uploaded> {
         // Streamed from disk by post_file: a multi-GB video is never in memory.
-        let size = std::fs::metadata(path)?.len();
+        let meta = std::fs::metadata(path)?;
+        let size = meta.len();
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "photo".into());
-        let modified_ms = std::fs::metadata(path)
-            .and_then(|m| m.modified())
+        let modified_ms = meta
+            .modified()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or_else(icloud_session::time::now_ms, |d| d.as_millis() as i64);

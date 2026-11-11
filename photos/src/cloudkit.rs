@@ -349,7 +349,7 @@ pub fn pair_assets(records: &[Record]) -> Paired {
         .map(|r| (r.name.as_str(), r))
         .collect();
     let mut out = Paired::default();
-    let mut used = std::collections::HashSet::new();
+    let mut used = HashSet::new();
     for rec in records.iter().filter(|r| r.is_type("CPLAsset")) {
         let Some(part) = AssetPart::from_record(rec) else {
             continue;
@@ -410,10 +410,6 @@ impl<'t> CloudKit<'t> {
             t,
             base: format!("{}{}", ckdatabasews.trim_end_matches('/'), DB_PATH),
         }
-    }
-
-    pub fn transport(&self) -> &'t dyn Transport {
-        self.t
     }
 
     /// The session appends the client params (clientBuildNumber, dsid, ...);

@@ -96,17 +96,16 @@ impl Flags {
         }
     }
 
-    /// Sets the flag `arg` names (`--json`, …); false for anything else.
-    fn set(&mut self, arg: &str) -> bool {
+    /// Sets the flag `arg` names (`--json`, …); anything else is ignored.
+    fn set(&mut self, arg: &str) {
         match arg {
             "--json" => self.json = true,
             "--styled" => self.styled = true,
             "--quiet" => self.quiet = true,
             "--ids-only" => self.ids_only = true,
             "--count" => self.count = true,
-            _ => return false,
+            _ => {}
         }
-        true
     }
 }
 

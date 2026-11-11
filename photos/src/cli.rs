@@ -448,10 +448,7 @@ fn status(ctx: &Ctx) -> Res<Response> {
     } else {
         (0, 0, 0, None, false)
     };
-    let mode = match ctx.settings.download {
-        DownloadMode::OnDemand => "on-demand",
-        DownloadMode::All => "all",
-    };
+    let mode = download_mode_name(ctx.settings.download);
     let v = json!({
         "signed_in": signed_in,
         "sign_in_error": sign_in_error,
@@ -511,6 +508,13 @@ fn status(ctx: &Ctx) -> Res<Response> {
     } else {
         resp
     })
+}
+
+fn download_mode_name(mode: DownloadMode) -> &'static str {
+    match mode {
+        DownloadMode::OnDemand => "on-demand",
+        DownloadMode::All => "all",
+    }
 }
 
 fn report_json(r: &Report) -> Value {
@@ -596,10 +600,7 @@ fn config(mut ctx: Ctx, library_dir: Option<PathBuf>, download: Option<DownloadA
     if changed {
         ctx.settings.save(&ctx.dirs)?;
     }
-    let mode = match ctx.settings.download {
-        DownloadMode::OnDemand => "on-demand",
-        DownloadMode::All => "all",
-    };
+    let mode = download_mode_name(ctx.settings.download);
     let v = json!({ "library_dir": ctx.settings.library_dir, "download": mode, "file": ctx.dirs.settings(), "saved": changed });
     let summary = if changed {
         "Saved the preferences"

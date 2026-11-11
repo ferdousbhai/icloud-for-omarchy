@@ -50,7 +50,7 @@ pub struct Participant {
 
 /// `CloudKitRecord`, as `parseRecord`/`parseZoneRecord` produce it.
 ///
-/// Differences from the plan's sketch, following the TypeScript: the share
+/// Following the TypeScript: the share
 /// link is `share_record_name` (TS `shareRecordName`, from `share.recordName`),
 /// and `current_user_permission` (from `currentUserParticipant.permission`,
 /// `cloudkit.share` records only) is carried too - `folderLayout` needs it for

@@ -36,7 +36,7 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   against an in-memory Drive that mirrors what was measured of the real one; read the notes at the
   top of `remote.rs` before changing how changes are detected.
 - `packaging/PKGBUILD` — one split recipe for all five packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
-- `bin/` — `build`, `check`, `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
+- `bin/` — `build`, `check`, `check-shared-support` (vendored copies shared with sibling repos; see `SHARED_SUPPORT.md`), `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
   `make-installers`, `release`, `verify-release`, `dev-install`/`dev-uninstall` (puts a release
   sessiond in `~/.local/bin` with a user D-Bus activation file).
 - `tests/` — installer tests (`install_test.sh`, stubbed pacman in a user namespace),

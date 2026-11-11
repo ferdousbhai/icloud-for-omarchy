@@ -194,33 +194,22 @@ impl Window {
     }
 
     fn install_actions(self: &Rc<Self>) {
-        let refresh = gio::SimpleAction::new("refresh", None);
-        let weak = Rc::downgrade(self);
-        refresh.connect_activate(move |_, _| {
-            if let Some(this) = weak.upgrade() {
-                *this.last_error.borrow_mut() = None;
-                this.refresh(true);
-            }
+        let add = |name: &str, run: fn(&Rc<Self>)| {
+            let action = gio::SimpleAction::new(name, None);
+            let weak = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                if let Some(this) = weak.upgrade() {
+                    run(&this);
+                }
+            });
+            self.window.add_action(&action);
+        };
+        add("refresh", |this| {
+            *this.last_error.borrow_mut() = None;
+            this.refresh(true);
         });
-        self.window.add_action(&refresh);
-
-        let sound = gio::SimpleAction::new("play-sound", None);
-        let weak = Rc::downgrade(self);
-        sound.connect_activate(move |_, _| {
-            if let Some(this) = weak.upgrade() {
-                this.play_sound();
-            }
-        });
-        self.window.add_action(&sound);
-
-        let lost = gio::SimpleAction::new("lost-mode", None);
-        let weak = Rc::downgrade(self);
-        lost.connect_activate(move |_, _| {
-            if let Some(this) = weak.upgrade() {
-                this.ask_lost_mode();
-            }
-        });
-        self.window.add_action(&lost);
+        add("play-sound", Self::play_sound);
+        add("lost-mode", Self::ask_lost_mode);
         self.update_actions();
     }
 
@@ -301,7 +290,8 @@ impl Window {
                     Ok(Ok(devices)) => this.show_devices(devices),
                     // Started before the latest sign-in; the refresh queued
                     // by the sign-in answers for the new session.
-                    Ok(Err(findme::Error::SignInRequired)) if !this.sign_in_is_current(sign_in_gen) => {}
+                    Ok(Err(findme::Error::SignInRequired | findme::Error::FindMyAuthRequired))
+                        if !this.sign_in_is_current(sign_in_gen) => {}
                     Ok(Err(findme::Error::SignInRequired)) => {
                         this.banner.show();
                         if this.devices.borrow().is_empty() {
@@ -309,7 +299,6 @@ impl Window {
                                 .set_placeholder("Sign in required", Some("Sign in to iCloud with the button above."));
                         }
                     }
-                    Ok(Err(findme::Error::FindMyAuthRequired)) if !this.sign_in_is_current(sign_in_gen) => {}
                     Ok(Err(findme::Error::FindMyAuthRequired)) => {
                         this.banner.show_find_my();
                         if this.devices.borrow().is_empty() {

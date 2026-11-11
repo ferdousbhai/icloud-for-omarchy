@@ -181,15 +181,15 @@ pub fn parse_response(resp: Value) -> Result<Snapshot> {
     Ok(Snapshot { server_ctx, devices })
 }
 
-fn play_sound_body(device_id: &str, subject: &str) -> Value {
+fn play_sound_body(device_id: &str) -> Value {
     json!({
         "device": device_id,
-        "subject": subject,
+        "subject": "Find My iPhone Alert",
         "clientContext": { "fmly": true },
     })
 }
 
-fn lost_mode_body(device_id: &str, phone: &str, message: &str, passcode: &str) -> Value {
+fn lost_mode_body(device_id: &str, phone: &str, message: &str) -> Value {
     json!({
         "text": message,
         "userText": true,
@@ -197,7 +197,7 @@ fn lost_mode_body(device_id: &str, phone: &str, message: &str, passcode: &str) -
         "lostModeEnabled": true,
         "trackingEnabled": true,
         "device": device_id,
-        "passcode": passcode,
+        "passcode": "",
     })
 }
 
@@ -288,8 +288,7 @@ impl<T: Transport> FindMe<T> {
             return Err(Error::Unsupported("This device cannot play a sound."));
         }
         let url = self.url("playSound")?;
-        self.transport
-            .post_json(&url, &play_sound_body(&device.id, "Find My iPhone Alert"))?;
+        self.transport.post_json(&url, &play_sound_body(&device.id))?;
         Ok(())
     }
 
@@ -301,7 +300,7 @@ impl<T: Transport> FindMe<T> {
         }
         let url = self.url("lostDevice")?;
         self.transport
-            .post_json(&url, &lost_mode_body(&device.id, phone, message, ""))?;
+            .post_json(&url, &lost_mode_body(&device.id, phone, message))?;
         Ok(())
     }
 }

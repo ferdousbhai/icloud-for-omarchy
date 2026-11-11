@@ -1,5 +1,5 @@
 //! The daemon's secrets, in the Secret Service (GNOME Keyring) and nowhere
-//! else; only the daemon reads or writes them. Both kinds of item are in
+//! else; only the daemon reads or writes them. Every kind of item is in
 //! the default collection:
 //!
 //! - The session: the signed-in account's cookie jars (the main one and
@@ -89,6 +89,11 @@ fn session_attributes() -> HashMap<&'static str, String> {
 
 fn trust_attributes() -> HashMap<&'static str, String> {
     HashMap::from([("application", APPLICATION.to_string()), (KIND, TRUST.to_string())])
+}
+
+/// Every item of ours, whatever its kind.
+fn ours() -> HashMap<&'static str, String> {
+    HashMap::from([("application", APPLICATION.to_string())])
 }
 
 /// What removing the passwords leaves: our items that are not passwords.
@@ -383,8 +388,7 @@ impl SecretStore for Keyring {
     }
 
     fn forget_passwords(&self) -> Result<usize, String> {
-        let ours = HashMap::from([("application", APPLICATION.to_string())]);
-        self.run(|k| k.delete(&ours, &not_passwords()))
+        self.run(|k| k.delete(&ours(), &not_passwords()))
     }
 
     fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
@@ -494,8 +498,7 @@ impl SecretStore for TestFile {
     }
 
     fn forget_passwords(&self) -> Result<usize, String> {
-        let ours = HashMap::from([("application", APPLICATION.to_string())]);
-        self.remove(&ours, &not_passwords())
+        self.remove(&ours(), &not_passwords())
     }
 
     fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {

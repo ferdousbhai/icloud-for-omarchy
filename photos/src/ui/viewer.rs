@@ -413,7 +413,8 @@ impl Viewer {
         if ids.is_empty() {
             app.nav.pop();
         } else {
-            self.show(app, ids.clone(), i.min(ids.len() - 1));
+            let next = i.min(ids.len() - 1);
+            self.show(app, ids, next);
         }
     }
 }

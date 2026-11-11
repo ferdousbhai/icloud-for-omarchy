@@ -53,7 +53,7 @@ aren't available from iCloud on the web either.
 
 ## Command line and agents
 
-Notes, Photos, Find My, and shared sign-in have scriptable CLIs with one
+Notes, Photos, Find My, iCloud Drive and the shared sign-in have scriptable CLIs with one
 output contract: text on a terminal, a JSON envelope when piped (`--quiet`
 for the bare result), JSON errors with stable codes, and shared exit codes;
 see [docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
@@ -195,7 +195,7 @@ photos/  findmy/         icloud-photos, icloud-findmy
 drive/                   icloud-drive: the sync of ~/iCloud Drive and its service
 packaging/PKGBUILD       one split recipe builds all five packages
 install.sh               the one installer (per-app copies are generated at release)
-bin/                     build, check, release, verify-release, make-installers; dev-install/dev-uninstall for the daemon
+bin/                     build, check, build-packages, arch-run, collect-packages, make-installers, release, verify-release; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh (installers against stubbed pacman); packaging_test.py
 docs/                    the command-line reference (CLI.md, AGENTS.md, skills/)
 ```

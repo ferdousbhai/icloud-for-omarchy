@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cmd::errors::Error;
 
-use super::local::split_options;
+use super::local::{read_text, split_options};
 use super::state::{BASE_DIR_NAME, TitleMode, plain_record_name, state_subdir};
 use crate::md::frontmatter::split_frontmatter;
 
@@ -17,11 +17,7 @@ fn base_copy_path(target_dir: &Path, record_name: &str) -> Result<PathBuf, Error
 
 /// `readBaseCopy`: `None` when there is none.
 pub fn read_base_copy(target_dir: &Path, record_name: &str) -> Result<Option<String>, Error> {
-    match std::fs::read(base_copy_path(target_dir, record_name)?) {
-        Ok(bytes) => Ok(Some(super::local::decode_utf8(&bytes))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    read_text(&base_copy_path(target_dir, record_name)?)
 }
 
 /// `writeBaseCopy`.

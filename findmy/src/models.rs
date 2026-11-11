@@ -89,25 +89,15 @@ impl DeviceClass {
 #[serde(rename_all = "camelCase")]
 struct RawDevice {
     id: String,
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
     device_display_name: Option<String>,
-    #[serde(default)]
     device_class: Option<String>,
-    #[serde(default)]
     battery_level: Option<f64>,
-    #[serde(default)]
     battery_status: Option<String>,
-    #[serde(default)]
     device_status: Option<String>,
-    #[serde(default)]
     location: Option<RawLocation>,
-    #[serde(default)]
     features: Option<RawFeatures>,
-    #[serde(default)]
     lost_mode_capable: Option<bool>,
-    #[serde(default)]
     lost_mode_enabled: Option<bool>,
 }
 
@@ -116,9 +106,9 @@ struct RawDevice {
 /// whole device.
 #[derive(Deserialize)]
 struct RawFeatures {
-    #[serde(default, rename = "LOC")]
+    #[serde(rename = "LOC")]
     loc: Option<serde_json::Value>,
-    #[serde(default, rename = "SND")]
+    #[serde(rename = "SND")]
     snd: Option<serde_json::Value>,
 }
 
@@ -127,11 +117,8 @@ struct RawFeatures {
 struct RawLocation {
     latitude: f64,
     longitude: f64,
-    #[serde(default)]
     horizontal_accuracy: Option<f64>,
-    #[serde(default)]
     time_stamp: Option<i64>,
-    #[serde(default)]
     is_old: Option<bool>,
 }
 

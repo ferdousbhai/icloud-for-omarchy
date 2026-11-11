@@ -3,7 +3,7 @@
 //!
 //! Field order matters (it is the request JSON's key order, matched to
 //! captured web-client requests), hence `UpdateFields` (an `IndexMap`), not
-//! the plan's `BTreeMap`.
+//! a `BTreeMap`.
 
 use serde_json::{Value, json};
 

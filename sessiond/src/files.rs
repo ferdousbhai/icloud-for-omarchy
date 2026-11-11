@@ -153,10 +153,6 @@ pub struct SessionSecret {
 }
 
 impl Account {
-    pub fn param(&self, name: &str) -> &str {
-        self.client_params.get(name).map(String::as_str).unwrap_or_default()
-    }
-
     pub fn cookie_header(&self, now: u64) -> String {
         cookies::header(&self.cookies, now)
     }

@@ -335,7 +335,7 @@ impl DriveApi {
         // before the upload URL is asked for, so a large file's copy does
         // not use up the signed URL's lifetime.
         let boundary = format!("----icloud-drive-{}", uuid::Uuid::new_v4().simple());
-        let mut form = tempfile_in_tmp()?;
+        let mut form = new_upload_form()?;
         let safe_name = name.replace(['"', '\r', '\n'], "_");
         write!(
             form.file,
@@ -403,7 +403,7 @@ fn upload_dir() -> std::path::PathBuf {
     cache.join("icloud-drive")
 }
 
-fn tempfile_in_tmp() -> std::io::Result<TempFile> {
+fn new_upload_form() -> std::io::Result<TempFile> {
     let dir = upload_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("upload-{}", uuid::Uuid::new_v4().simple()));
@@ -417,7 +417,9 @@ impl Drop for TempFile {
     }
 }
 
-const FILE_FLAGS: &str = r#"{"is_writable":true,"is_executable":false,"is_hidden":false}"#;
+fn file_flags() -> Value {
+    json!({"is_writable": true, "is_executable": false, "is_hidden": false})
+}
 
 impl Remote for DriveApi {
     fn changes(&self, token: Option<&str>) -> Result<Changes> {
@@ -472,7 +474,6 @@ impl Remote for DriveApi {
 
     fn upload_new(&self, parent: &Node, name: &str, path: &Path, mtime_ms: i64) -> Result<Node> {
         let (document_id, data) = self.send_content(&parent.zone, name, path)?;
-        let flags: Value = serde_json::from_str(FILE_FLAGS).expect("constant JSON");
         self.update_document(
             &parent.zone,
             &json!({
@@ -482,7 +483,7 @@ impl Remote for DriveApi {
                 "allow_conflict": true,
                 "path": {"starting_document_id": parent.docwsid, "path": name},
                 "data": data,
-                "file_flags": flags,
+                "file_flags": file_flags(),
                 "mtime": mtime_ms,
                 "btime": mtime_ms,
             }),
@@ -491,7 +492,6 @@ impl Remote for DriveApi {
 
     fn replace(&self, node: &Node, path: &Path, mtime_ms: i64) -> Result<Node> {
         let (_, data) = self.send_content(&node.zone, &node.name, path)?;
-        let flags: Value = serde_json::from_str(FILE_FLAGS).expect("constant JSON");
         // `allow_conflict: false` makes iCloud check the etag: a file that
         // changed there since it was listed is refused, not overwritten.
         let mut replaced = self
@@ -503,7 +503,7 @@ impl Remote for DriveApi {
                     "etag": node.etag,
                     "allow_conflict": false,
                     "data": data,
-                    "file_flags": flags,
+                    "file_flags": file_flags(),
                     "mtime": mtime_ms,
                 }),
             )

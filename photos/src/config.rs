@@ -100,15 +100,6 @@ pub struct Settings {
     pub download: DownloadMode,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            library_dir: pictures(),
-            download: DownloadMode::OnDemand,
-        }
-    }
-}
-
 impl Settings {
     /// The saved settings, or the defaults; first moving a library still
     /// in the old default folder into the Pictures folder (`migrate`), so

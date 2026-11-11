@@ -600,9 +600,7 @@ inline QString restoreEditorChars(const QString &original, const QString &edited
     const bool special = std::any_of(original.cbegin(), original.cend(), [](QChar c) { return editorChar(c) != c; });
     if (!special)
         return edited;
-    QString normalized = original;
-    for (QChar &c : normalized)
-        c = editorChar(c);
+    const QString normalized = editorForm(original);
 
     // Lines untouched by the edit keep the original's characters; each run
     // of changed lines keeps them around its own edited stretch.

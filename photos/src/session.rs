@@ -98,25 +98,30 @@ pub fn sign_in_state() -> Result<SignInState> {
             crate::cloudkit::DB_PATH
         );
         return match t.post_json(&url, &Value::Object(Default::default())) {
-            Ok(_) => Ok(SignInState {
-                signed_in: true,
-                signing_in: false,
-                sign_out_reason: None,
-            }),
-            Err(Error::SignInRequired) => Ok(SignInState {
-                signed_in: false,
-                signing_in: false,
-                sign_out_reason: None,
-            }),
+            Ok(_) => Ok(mock_state(true)),
+            Err(Error::SignInRequired) => Ok(mock_state(false)),
             Err(e) => Err(e),
         };
     }
-    let s = icloud_session::status()?;
-    Ok(SignInState {
+    Ok(state(icloud_session::status()?))
+}
+
+/// The daemon's status as the banner's inputs.
+fn state(s: icloud_session::Status) -> SignInState {
+    SignInState {
         signed_in: s.signed_in,
         signing_in: s.signing_in,
         sign_out_reason: s.sign_out_reason,
-    })
+    }
+}
+
+/// The fake server's account: signed in or out, nothing in between.
+fn mock_state(signed_in: bool) -> SignInState {
+    SignInState {
+        signed_in,
+        signing_in: false,
+        sign_out_reason: None,
+    }
 }
 
 /// Asks the daemon to open its sign-in window and returns at once; the
@@ -126,11 +131,7 @@ pub fn sign_in_state() -> Result<SignInState> {
 pub fn start_sign_in(notify: &dyn Fn(SignInState)) -> Result<()> {
     icloud_session::sign_in()?;
     if is_mock() {
-        notify(SignInState {
-            signed_in: true,
-            signing_in: false,
-            sign_out_reason: None,
-        });
+        notify(mock_state(true));
     }
     Ok(())
 }
@@ -143,11 +144,7 @@ pub fn watch_sign_in(notify: Box<dyn Fn(SignInState) + Send>) {
         .name("sign-in watch".into())
         .spawn(move || {
             icloud_session::watch_forever(|s| {
-                notify(SignInState {
-                    signed_in: s.signed_in,
-                    signing_in: s.signing_in,
-                    sign_out_reason: s.sign_out_reason,
-                });
+                notify(state(s));
                 true
             })
         })

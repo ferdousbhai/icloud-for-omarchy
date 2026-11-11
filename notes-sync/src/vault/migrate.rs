@@ -46,10 +46,8 @@ fn record_title_mode_and_ids(target_dir: &Path, mut state: RawStateFile) -> Resu
                 continue;
             };
             let path = target_dir.join(file);
-            let existing = match std::fs::read(&path) {
-                Ok(bytes) => super::local::decode_utf8(&bytes),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
+            let Some(existing) = super::local::read_text(&path)? else {
+                continue;
             };
             let envelope = split_frontmatter(&existing, SplitOptions::default());
             let stamped = join_frontmatter(&set_note_id(&envelope.frontmatter, record_name), &envelope.body);

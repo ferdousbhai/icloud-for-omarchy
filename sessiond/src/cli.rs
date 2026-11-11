@@ -306,21 +306,17 @@ fn authorize_find_my() -> Outcome {
     if s.find_my_authorized {
         return Ok(status_response(&s, Some("Find My is authorized.")));
     }
-    let e = match (&s.apple_id, s.signed_in) {
-        (Some(who), true) => CliError::new(
-            "find_my_auth_not_completed",
-            EXIT_FIND_MY_AUTH,
+    let (message, hint) = match (&s.apple_id, s.signed_in) {
+        (Some(who), true) => (
             format!("Find My authorization did not complete: still not authorized for {who}"),
-        )
-        .hint(FIND_MY_AUTH_HINT),
-        _ => CliError::new(
-            "find_my_auth_not_completed",
-            EXIT_FIND_MY_AUTH,
-            "Find My authorization did not complete: not signed in",
-        )
-        .hint(SIGN_IN_HINT),
+            FIND_MY_AUTH_HINT,
+        ),
+        _ => (
+            "Find My authorization did not complete: not signed in".to_string(),
+            SIGN_IN_HINT,
+        ),
     };
-    Err(e)
+    Err(CliError::new("find_my_auth_not_completed", EXIT_FIND_MY_AUTH, message).hint(hint))
 }
 
 /// `SignIn()` or `AuthorizeFindMy()`, then waits for the window to close

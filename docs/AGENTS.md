@@ -1,7 +1,7 @@
 # Driving the iCloud apps as an agent
 
 A compact reference for an AI agent (or a script) using iCloud Notes,
-Photos, and Find My on this computer through their command lines. The full
+Photos, Find My and iCloud Drive on this computer through their command lines. The full
 audit, every JSON shape and every error code are in [CLI.md](CLI.md).
 
 ## The rules that always hold
@@ -32,7 +32,7 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
   but not everything succeeded: a batch where some items failed (each has
   its own `error`), or an `icloud-notes` sync/pull/push/clone that ran and
   failed (`data.error` says why; `data.sync.error` for a change's `--push`).
-  `status` (icloud-session, icloud-photos, icloud-notes) prints the status
+  `status` (icloud-session, icloud-photos, icloud-notes, icloud-drive) prints the status
   and exits 3 when signed out. `push --dry-run` and `diff` exit 0 whether or
   not there are changes.
 - Nothing prompts without a terminal. Destructive commands refuse (exit 2,

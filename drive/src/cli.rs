@@ -11,7 +11,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{EXIT_ERROR, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use icloud_session::time::rfc3339;
 use serde_json::json;
@@ -155,7 +155,7 @@ fn failure(e: &engine::Error) -> CliError {
             .hint("turn on iCloud Drive for this Apple ID"),
         E::Remote(remote::Error::Listing { .. }) => CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string())
             .hint("iCloud gave an incomplete answer; nothing was changed. Try again later"),
-        E::FolderMissing(folder) => CliError::new("folder_missing", 4, e.to_string()).hint(format!(
+        E::FolderMissing(folder) => CliError::new("folder_missing", EXIT_NOT_FOUND, e.to_string()).hint(format!(
             "put {} back, or remove the state folder to start over",
             folder.display()
         )),
@@ -166,10 +166,6 @@ fn failure(e: &engine::Error) -> CliError {
         E::Io(_) => CliError::new("io", EXIT_ERROR, e.to_string()),
         _ => CliError::new("error", EXIT_ERROR, e.to_string()),
     }
-}
-
-fn open_state(paths: &Paths) -> Result<State, CliError> {
-    State::open(&paths.state_dir).map_err(|e| failure(&engine::Error::Db(e)))
 }
 
 /// One sync at a time: the background service and `sync` share the state.
@@ -337,8 +333,8 @@ fn service(args: &[&str], now: &str, paths: &Paths) -> Result<Response, CliError
 }
 
 fn status(paths: &Paths) -> Result<Response, CliError> {
-    let state = open_state(paths)?;
     let db = |e: rusqlite::Error| failure(&engine::Error::Db(e));
+    let state = State::open(&paths.state_dir).map_err(db)?;
     let (files, folders) = state.count().map_err(db)?;
     let last_sync = state
         .meta("last_sync_ms")

@@ -219,13 +219,7 @@ fn sign_in_required_resets_to_init_client() {
     fm.refresh(false).unwrap();
     assert!(matches!(fm.refresh(false), Err(Error::SignInRequired)));
     fm.refresh(false).unwrap();
-    let urls: Vec<_> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(u, _)| u.rsplit('/').next().unwrap().to_string())
-        .collect();
-    assert_eq!(urls, ["initClient", "refreshClient", "initClient"]);
+    assert_eq!(endpoints(&log), ["initClient", "refreshClient", "initClient"]);
 }
 
 fn endpoints(log: &Log) -> Vec<String> {

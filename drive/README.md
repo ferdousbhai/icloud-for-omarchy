@@ -31,8 +31,9 @@ After that it syncs every half minute while you are signed in.
   file comes back.
 - **A rename or a move:** the same rename or move on the other side; the
   file is not sent again.
-- **Many removals at once** (more than 20, or a quarter of what is in
-  sync, or a folder emptied of everything): the sync stops and says so in `icloud-drive status`. Look with
+- **Many removals at once** (more than 20 and more than a quarter of what
+  is in sync, or a folder emptied of everything): the sync stops and says so
+  in `icloud-drive status`. Look with
   `icloud-drive sync --dry-run`, then allow them once with
   `icloud-drive sync --yes`.
 - **The folder itself is missing** (an unmounted disk, say): nothing is
@@ -46,7 +47,8 @@ After that it syncs every half minute while you are signed in.
 - Packages: Pages, Numbers and Keynote documents and other bundles, which
   are folders that iCloud presents as one file.
 - Hidden names (starting with a dot), links, and names iCloud does not take
-  (containing `:` or a line break).
+  (containing `:` or a line break). A folder removed in iCloud goes to the
+  trash here whole, with any hidden files in it.
 - Two names in one folder that differ only by case: neither is synced.
 - Folders shared with you by other people.
 

@@ -23,7 +23,6 @@ pub struct UploadUi {
     progress: gtk::ProgressBar,
     detail: gtk::Label,
     button: gtk::Button,
-    stop: Arc<AtomicBool>,
     total: usize,
     errors: Vec<String>,
 }
@@ -136,7 +135,6 @@ fn start(app: &Rc<App>, paths: Vec<PathBuf>) {
         progress,
         detail,
         button,
-        stop: stop.clone(),
         total: paths.len(),
         errors: Vec::new(),
     });
@@ -222,7 +220,6 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
             ui.dialog.set_can_close(true);
             ui.button.set_label("Close");
             ui.button.set_sensitive(true);
-            let _ = ui.stop.load(Ordering::Relaxed);
             let (d, a) = (ui.dialog.clone(), app.clone());
             d.connect_closed(move |_| {
                 a.upload.borrow_mut().take();

@@ -140,9 +140,8 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, p
             };
             let tmp = Temp::beside(&dest)?;
             download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?;
-            let library = targets.library.clone();
             let photo = settle(tmp, dest, &mut hold, |taken| {
-                Ok(plan_original(cat, &library, &row, taken)?.0)
+                Ok(plan_original(cat, &targets.library, &row, taken)?.0)
             })?;
             cat.set_path(&row.id, PathKind::Original, Some(&photo))?;
             row.local_path = Some(photo.clone());

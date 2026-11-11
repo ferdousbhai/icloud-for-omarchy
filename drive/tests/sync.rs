@@ -337,6 +337,9 @@ impl Bed {
         local::scan(&self.root()).unwrap().0.into_keys().collect()
     }
     fn try_sync(&self, allow_deletes: bool) -> Result<Outcome, Error> {
+        self.run(false, allow_deletes)
+    }
+    fn run(&self, dry_run: bool, allow_deletes: bool) -> Result<Outcome, Error> {
         let mut engine = Engine {
             remote: &self.cloud,
             state: State::open(&self.dir.path().join("state")).unwrap(),
@@ -346,7 +349,7 @@ impl Bed {
             host: "desk".into(),
             progress: Box::new(|_| {}),
         };
-        engine.sync(false, allow_deletes)
+        engine.sync(dry_run, allow_deletes)
     }
     fn sync(&self) -> Outcome {
         let outcome = self.try_sync(false).unwrap();
@@ -531,13 +534,11 @@ fn a_rename_in_icloud_is_a_rename_here() {
     let docs = bed.cloud.folder(ROOT_ID, "Docs");
     let a = bed.cloud.file(&docs.id, "a.txt", "one", bed.time());
     bed.settle();
-    let before = local::stat(&bed.root().join("Docs/a.txt")).unwrap().unwrap().ino;
     bed.cloud.rename_item(&docs.id, "Papers");
     bed.cloud.edit(&a.id, "two", bed.time());
     bed.settle();
     assert_eq!(bed.read("Papers/a.txt").as_deref(), Some("two"));
     assert!(!bed.root().join("Docs").exists());
-    let _ = before;
     assert!(!bed.dir.path().join("Trash").exists(), "nothing was trashed");
 }
 
@@ -583,6 +584,10 @@ fn many_removals_at_once_wait_to_be_allowed() {
         "{result:?}"
     );
     assert_eq!(bed.cloud.paths().len(), 30, "nothing was removed");
+    // A dry run is how they are looked at: it lists them and removes nothing.
+    let looked = bed.run(true, false).unwrap();
+    assert_eq!(looked.done.len(), 30, "{:?}", looked.done);
+    assert_eq!(bed.cloud.paths().len(), 30);
     bed.try_sync(true).unwrap();
     assert!(bed.cloud.paths().is_empty());
 }

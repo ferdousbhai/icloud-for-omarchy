@@ -162,7 +162,8 @@ const SETTLE_NS: i64 = 2_000_000_000;
 /// Clocks and file systems round: within this, two times are one time.
 const SAME_TIME_MS: i64 = 2_000;
 
-fn parent_of(path: &str) -> &str {
+/// The folder a path is in; empty at the top.
+pub(crate) fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 

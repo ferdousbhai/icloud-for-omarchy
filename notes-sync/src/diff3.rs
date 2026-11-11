@@ -436,8 +436,7 @@ pub fn merge_diff3(a: &[&str], o: &[&str], b: &[&str], options: &MergeDiff3Optio
 
 /// `mergeNoteVersions(base, local, remote)`: split on `\n`, `mergeDiff3(local,
 /// base, remote, {label: {a: "local", o: "base", b: "remote"},
-/// excludeFalseConflicts: true})`, join with `\n`. (The plan's
-/// `merge_diff3(base, local, remote)`.)
+/// excludeFalseConflicts: true})`, join with `\n`.
 pub fn merge_note_versions(base: &str, local: &str, remote: &str) -> MergeOutcome {
     fn split(text: &str) -> Vec<&str> {
         text.split('\n').collect()

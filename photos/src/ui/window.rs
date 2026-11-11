@@ -352,7 +352,7 @@ impl App {
             *a.album.borrow_mut() = Albums::id_of(row);
             a.grid_page.set_title(&Albums::title_of(row));
             a.nav.pop_to_tag("grid");
-            a.show_assets();
+            a.load_snapshot();
             a.split.set_show_content(true);
         });
 
@@ -430,7 +430,7 @@ impl App {
 
     /// Show what the catalog has, then connect to iCloud and sync.
     pub fn start(self: &Rc<Self>) {
-        self.reload();
+        self.load_snapshot();
         self.update_status();
         self.window.present();
         self.load_transport();
@@ -610,7 +610,7 @@ impl App {
                 }
                 // Relationship and master-only changes do not increment the
                 // report's asset/album counts, but still change the view.
-                self.reload();
+                self.load_snapshot();
                 self.update_status();
                 if self.settings.borrow().download == DownloadMode::All {
                     self.queue_all_originals();
@@ -631,18 +631,10 @@ impl App {
         }
     }
 
-    /// Re-read albums and the current grid from the catalog.
-    fn reload(self: &Rc<Self>) {
-        self.load_snapshot();
-    }
-
-    fn show_assets(self: &Rc<Self>) {
-        self.load_snapshot();
-    }
-
-    /// Query the catalog (and chunk the grid rows) on a worker thread with
-    /// its own connection, then apply the result on the main loop. Falls back
-    /// to the main-loop connection when the catalog is not on disk.
+    /// Re-read albums and the current grid from the catalog: query it (and
+    /// chunk the grid rows) on a worker thread with its own connection, then
+    /// apply the result on the main loop. Falls back to the main-loop
+    /// connection when the catalog is not on disk.
     fn load_snapshot(self: &Rc<Self>) {
         let generation = self.reload_gen.get() + 1;
         self.reload_gen.set(generation);
@@ -876,7 +868,7 @@ impl App {
             Ok(m) => {
                 let _ = self.cat.mark_deleted(id, m.change_tag.as_deref());
                 self.viewer.after_delete(self, id);
-                self.reload();
+                self.load_snapshot();
                 self.update_status();
                 let toast = adw::Toast::builder()
                     .title("Moved to Recently Deleted")
@@ -912,7 +904,7 @@ impl App {
         match result {
             Ok(m) => {
                 let _ = self.cat.mark_restored(id, m.change_tag.as_deref());
-                self.reload();
+                self.load_snapshot();
                 self.update_status();
                 self.toast("Restored");
             }
@@ -1007,7 +999,7 @@ fn filter_snapshot_with(
     };
     let names = named.len();
     snap.tiles = named;
-    let mut rest: std::collections::HashMap<_, _> = rest.into_iter().map(|tile| (tile.id.clone(), tile)).collect();
+    let mut rest: HashMap<_, _> = rest.into_iter().map(|tile| (tile.id.clone(), tile)).collect();
     let before = snap.tiles.len();
     snap.tiles
         .extend(ranked.iter().flatten().filter_map(|id| rest.remove(id)));

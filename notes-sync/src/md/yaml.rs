@@ -5,19 +5,20 @@
 //!
 //! - a block mapping (or nothing) at the top level, nested block mappings;
 //! - keys: plain scalars that resolve to strings;
-//! - values: plain / single-quoted / double-quoted one-line scalars
-//!   (strings, and core-schema null, bool, int, float), block sequences of
-//!   those, and one-line flow sequences/mappings of those;
+//! - values: plain / single-quoted / double-quoted scalars (strings, and
+//!   core-schema null, bool, int, float; a quoted one may continue over
+//!   lines), `|` / `>` block scalars without an indentation indicator,
+//!   block sequences of one-line scalars, and flow sequences/mappings of
+//!   scalars (which may continue over lines);
 //! - blank lines (kept as yaml's `spaceBefore`).
 //!
-//! Anything else - comments, block scalars, anchors, aliases, tags,
-//! multi-line flow collections or plain scalars, directives - is
-//! [`Parsed::Unsupported`]: the caller then falls back to a line-level edit
-//! (see `frontmatter`). A document yaml rejects outright (e.g. duplicate
-//! keys) is [`Parsed::Invalid`].
+//! Anything else - comments, anchors, aliases, tags, multi-line plain
+//! scalars, directives - is [`Parsed::Unsupported`]: the caller then falls
+//! back to a line-level edit (see `frontmatter`). A document yaml rejects
+//! outright (e.g. duplicate keys) is [`Parsed::Invalid`].
 //!
 //! The stringifier is a port of `stringifyString` (plain, single- and
-//! double-quoted), `foldFlowLines`, `stringifyNumber`, `stringifyPair`,
+//! double-quoted, block), `foldFlowLines`, `stringifyNumber`, `stringifyPair`,
 //! `stringifyCollection` and `stringifyDocument` with the default options.
 
 use crate::js;
@@ -359,18 +360,7 @@ impl<'a> BlockParser<'a> {
             text.push_str(next);
             depth = bracket_depth(&text);
         }
-        let mut p = FlowParser {
-            s: text.as_bytes(),
-            text: &text,
-            at: 0,
-        };
-        let value = p.collection()?;
-        p.skip_spaces();
-        if p.at == p.s.len() {
-            Ok(value)
-        } else {
-            Err(Parsed::Unsupported)
-        }
+        flow_collection(&text)
     }
 
     fn block_map(&mut self, indent: usize) -> Result<Vec<Pair>, Parsed> {
@@ -534,19 +524,7 @@ fn plain_start_ok(text: &str) -> bool {
 fn inline_value(rest: &str) -> Result<Value, Parsed> {
     let first = rest.as_bytes()[0];
     match first {
-        b'[' | b'{' => {
-            let mut p = FlowParser {
-                s: rest.as_bytes(),
-                text: rest,
-                at: 0,
-            };
-            let value = p.collection()?;
-            p.skip_spaces();
-            if p.at != p.s.len() {
-                return Err(Parsed::Unsupported);
-            }
-            Ok(value)
-        }
+        b'[' | b'{' => flow_collection(rest),
         b'\'' | b'"' => {
             let (scalar, used) = quoted(rest)?;
             if !rest[used..].trim_start_matches(' ').is_empty() {
@@ -564,6 +542,22 @@ fn inline_value(rest: &str) -> Result<Value, Parsed> {
             }
             Ok(Value::Scalar(resolve_plain(rest)))
         }
+    }
+}
+
+/// `text` as one whole flow collection (only spaces may follow it).
+fn flow_collection(text: &str) -> Result<Value, Parsed> {
+    let mut p = FlowParser {
+        s: text.as_bytes(),
+        text,
+        at: 0,
+    };
+    let value = p.collection()?;
+    p.skip_spaces();
+    if p.at == p.s.len() {
+        Ok(value)
+    } else {
+        Err(Parsed::Unsupported)
     }
 }
 
