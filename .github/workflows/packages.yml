@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           cargo fmt --all -- --check
-          bash -n install.sh packaging/PKGBUILD bin/build-packages bin/arch-run bin/collect-packages bin/release bin/verify-release
+          for f in install.sh packaging/PKGBUILD bin/build-packages bin/arch-run bin/collect-packages bin/release bin/verify-release; do bash -n "$f"; done
           tests/install_test.sh
           python3 tests/packaging_test.py
   build:
