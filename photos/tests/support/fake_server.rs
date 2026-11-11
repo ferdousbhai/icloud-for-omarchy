@@ -44,6 +44,8 @@ struct State {
     /// Changed records, in order; the sync token is "tok-<len>".
     log: Vec<Value>,
     signed_out: bool,
+    /// Answer 503 to the listings a sync makes (`changes/zone`, `records/query`).
+    listings_down: bool,
     uploads: HashMap<String, Arc<Vec<u8>>>,
     jpegs: HashMap<(usize, &'static str), Arc<Vec<u8>>>,
     next_id: usize,
@@ -90,6 +92,11 @@ impl FakeServer {
     /// Answer 421 to every Apple call until `/mock/reauthenticate`.
     pub fn sign_out(&self) {
         self.state.lock().unwrap().signed_out = true;
+    }
+
+    /// Make every sync fail with a 503 (writes still go through) until called with false.
+    pub fn fail_syncs(&self, down: bool) {
+        self.state.lock().unwrap().listings_down = down;
     }
 
     /// Simulate an edit made on another device: the asset's change tag moves on.
@@ -178,6 +185,7 @@ impl State {
             members,
             log: Vec::new(),
             signed_out: false,
+            listings_down: false,
             uploads: HashMap::new(),
             jpegs: HashMap::new(),
             next_id: count,
@@ -532,6 +540,16 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
                 })
                 .unwrap_or_default();
             json_ok(Value::Object(m))
+        }
+        p if p.starts_with(DB)
+            && s.listings_down
+            && (p.ends_with("/changes/zone") || p.ends_with("/records/query")) =>
+        {
+            (
+                503,
+                "application/json",
+                br#"{"serverErrorCode":"SERVICE_UNAVAILABLE"}"#.to_vec(),
+            )
         }
         p if p.starts_with(DB) => match &p[DB.len()..] {
             "records/query" => json_ok(s.query(&body)),

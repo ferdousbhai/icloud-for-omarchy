@@ -696,6 +696,45 @@ fn delete_sends_many_in_one_call_and_reports_each() {
 }
 
 #[test]
+fn a_failed_resync_still_reports_what_was_deleted_or_restored() {
+    let env = Env::synced("delete-resync", 6);
+    let ids = env.ids(&[]);
+    // The conflict needs a sync, and the sync fails: the item that went
+    // through is still recorded and reported, the conflicting one fails.
+    env.server.edit_elsewhere(&ids[1]);
+    env.server.fail_syncs(true);
+    let r = env.run(&["--json", "delete", &ids[0], &ids[1], "--yes"]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    let v = r.json();
+    assert_eq!(
+        (v[0]["deleted"].as_bool(), v[1]["deleted"].as_bool()),
+        (Some(true), Some(false)),
+        "{v}"
+    );
+    assert!(v[1]["error"].as_str().unwrap().contains("re-sync failed"), "{v}");
+    assert_eq!(env.json(&["info", &ids[0]])["deleted"], true);
+    assert!(!env.server.asset_ids().contains(&ids[0]) && env.server.asset_ids().contains(&ids[1]));
+    let r = env.run(&["--ids-only", "delete", &ids[2], "--yes"]);
+    assert_eq!((r.code, r.stdout.trim()), (0, ids[2].as_str()));
+
+    // restore: the conflicting item fails, the next one is still restored.
+    env.server.edit_elsewhere(&ids[0]);
+    let r = env.run(&["--json", "restore", &ids[0], &ids[2]]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    let v = r.json();
+    assert_eq!(
+        (v[0]["restored"].as_bool(), v[1]["restored"].as_bool()),
+        (Some(false), Some(true)),
+        "{v}"
+    );
+    assert!(v[0]["error"].as_str().unwrap().contains("re-sync failed"), "{v}");
+    assert!(env.server.asset_ids().contains(&ids[2]));
+
+    env.server.fail_syncs(false);
+    assert_eq!(env.json(&["restore", &ids[0]])[0]["restored"], true);
+}
+
+#[test]
 fn prune_cache_drops_renditions_of_deleted_items() {
     let env = Env::synced("prune", 5);
     let ids = env.ids(&[]);

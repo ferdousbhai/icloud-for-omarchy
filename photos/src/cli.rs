@@ -1203,12 +1203,20 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     // because another record did; send it again as it was.
     let conflicts = outcome.iter().any(|r| code_of(r).as_deref() == Some("CONFLICT"));
     let mut retry: Vec<(usize, String, Option<String>)> = Vec::new();
-    if conflicts {
-        sync::sync(&ck, &mut cat, &|_| {})?;
-    }
+    // A failed re-sync must not lose the deletions that already went
+    // through: report the conflicting items as failed instead.
+    let resynced = match conflicts.then(|| sync::sync(&ck, &mut cat, &|_| {})) {
+        Some(Err(e)) if e.is_sign_in() => return Err(e.into()),
+        Some(Err(e)) => Err(e.to_string()),
+        _ => Ok(()),
+    };
     for (i, r) in outcome.iter_mut().enumerate() {
         match code_of(r).as_deref() {
             Some("CONFLICT") => {
+                if let Err(e) = &resynced {
+                    *r = Err(Error::Other(format!("changed on another device; re-sync failed: {e}")));
+                    continue;
+                }
                 let fresh = row_or_fail(&cat, &rows[i].id)?;
                 if fresh.deleted {
                     *r = Err(Error::Other("already deleted on another device".into()));
@@ -1287,16 +1295,22 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
         let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref());
         // Changed on another device since the last sync: sync, then try
         // again with the fresh change tag, as delete does.
+        // A failed re-sync fails only this item; the others are still tried.
         if matches!(&result, Err(Error::CloudKit { code, .. }) if code == "CONFLICT") {
-            sync::sync(&ck, &mut cat, &|_| {})?;
-            let fresh = row_or_fail(&cat, &row.id)?;
-            result = if fresh.deleted {
-                ck.restore_asset(&fresh.id, fresh.change_tag.as_deref())
-            } else {
-                Ok(Modified {
-                    name: fresh.id,
-                    change_tag: fresh.change_tag,
-                })
+            result = match sync::sync(&ck, &mut cat, &|_| {}) {
+                Err(e) if e.is_sign_in() => return Err(e.into()),
+                Err(e) => Err(Error::Other(format!("changed on another device; re-sync failed: {e}"))),
+                Ok(_) => {
+                    let fresh = row_or_fail(&cat, &row.id)?;
+                    if fresh.deleted {
+                        ck.restore_asset(&fresh.id, fresh.change_tag.as_deref())
+                    } else {
+                        Ok(Modified {
+                            name: fresh.id,
+                            change_tag: fresh.change_tag,
+                        })
+                    }
+                }
             };
         }
         match result {
