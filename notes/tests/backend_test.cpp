@@ -640,6 +640,24 @@ int main(int argc, char *argv[])
         check(b.searchVault(QStringLiteral("x")).isEmpty(), "backend search needs 2 chars");
     }
 
+    // A vault larger than the window's search bound: the CLI's search reads
+    // every note (attachment files count for nothing), the window's says it
+    // stopped. 92 matches among 2190 notes, so a 2000-file cut misses some.
+    {
+        for (int i = 0; i < 2190; ++i)
+            writeFile(QStringLiteral("Big/N%1.md").arg(i),
+                      i % 24 == 0 ? QStringLiteral("# N\nhaystack needle\n") : QStringLiteral("# N\nhaystack\n"));
+        for (int i = 0; i < 50; ++i)
+            writeFile(QStringLiteral("Big/attachments/A%1.md").arg(i), QStringLiteral("needle\n"));
+        check(b.searchVault(QStringLiteral("needle")).size() == 92 && !b.searchTruncated(),
+              "backend search reads every note of a large vault");
+        b.searchVault(QStringLiteral("needle"), true);
+        check(b.searchTruncated(), "backend window search says it read only the first notes");
+        b.searchVault(QStringLiteral("zz-none"));
+        check(!b.searchTruncated(), "backend search truncation clears");
+        QDir(testVault() + QStringLiteral("/Big")).removeRecursively();
+    }
+
     // Folders: rename moves the directory (and the selection with it),
     // delete trashes it and falls back to All Notes.
     b.setCurrentFolder(QStringLiteral("Sub"));

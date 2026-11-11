@@ -45,6 +45,7 @@ class NotesBackend : public QObject
     Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY noteContentChanged)
     Q_PROPERTY(QString syncMessage READ syncMessage NOTIFY syncMessageChanged)
     Q_PROPERTY(QString vaultNotice READ vaultNotice CONSTANT)
+    Q_PROPERTY(bool searchTruncated READ searchTruncated NOTIFY searchTruncatedChanged)
     Q_PROPERTY(QString syncLog READ syncLog NOTIFY syncLogChanged)
     Q_PROPERTY(bool syncRunning READ syncRunning NOTIFY syncRunningChanged)
     // The iCloud sign-in is gone (icloud-session says signed out, or
@@ -232,6 +233,10 @@ public:
     Q_INVOKABLE QString renameCurrentFolder(const QString &name);
     Q_INVOKABLE QString deleteCurrentFolder();
     Q_INVOKABLE QVariantList searchVault(const QString &query, bool withMeaning = false);
+    // The last search (with meaning: the window's, as the user types) read
+    // only the first kWindowSearchNotes notes of a larger vault.
+    bool searchTruncated() const { return m_searchTruncated; }
+    static constexpr int kWindowSearchNotes = 2000;
     Q_INVOKABLE QString toggleCheckbox(const QString &text, int line);
     Q_INVOKABLE QString exportPdf();
     // Clone the account's notes into the vault: signs in through
@@ -283,6 +288,7 @@ public:
 
 signals:
     void semanticSearchFinished(const QString &query, const QVariantList &hits, bool available);
+    void searchTruncatedChanged();
     void foldersChanged();
     void currentFolderChanged();
     void notesChanged();
@@ -496,6 +502,7 @@ private:
     QProcess *m_semanticProcess = nullptr;
     QTimer m_semanticDelay; // single-shot: Recall runs once typing pauses
     quint64 m_semanticGeneration = 0;
+    bool m_searchTruncated = false;
     QProcess m_syncProcess;
     mutable VaultInfo m_vaultInfo;
     mutable QString m_vaultInfoKey;

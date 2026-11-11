@@ -22,6 +22,7 @@
 #include <QPrinter>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTextDocument>
 #include <QTextStream>
@@ -1483,9 +1484,18 @@ QString NotesBackend::deleteCurrentFolder()
 // Text matches at once. With `withMeaning` (the window), local Recall then
 // ranks the same notes by meaning once typing pauses, if it is installed:
 // semanticSearchFinished brings its hits. "~ query" asks for those alone.
+// The window searches on every keystroke, so it reads at most the first
+// kWindowSearchNotes notes and says so (searchTruncated); the CLI reads all.
 QVariantList NotesBackend::searchVault(const QString &query, bool withMeaning)
 {
     QVariantList out;
+    bool truncated = false;
+    const auto finish = qScopeGuard([&] {
+        if (truncated != m_searchTruncated) {
+            m_searchTruncated = truncated;
+            emit searchTruncatedChanged();
+        }
+    });
     const quint64 generation = ++m_semanticGeneration;
     m_semanticDelay.stop();
     if (m_semanticProcess) {
@@ -1503,10 +1513,15 @@ QVariantList NotesBackend::searchVault(const QString &query, bool withMeaning)
     const QString mode = vaultTitleMode();
     const QDir root(rootPath());
     QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
-    for (int scanned = 0; it.hasNext() && (rank || out.size() < 100) && scanned < 2000; ++scanned) {
+    int scanned = 0;
+    while (it.hasNext() && (rank || out.size() < 100)) {
         const QString rel = root.relativeFilePath(it.next());
         if (!isNotePath(rel))
             continue;
+        if (withMeaning && scanned++ == kWindowSearchNotes) {
+            truncated = true;
+            break;
+        }
         const QString text = readText(it.filePath(), 1024 * 1024);
         const QString name = rel.section(u'/', -1);
         const QString folder = rel.section(u'/', 0, -2);

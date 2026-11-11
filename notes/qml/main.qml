@@ -913,7 +913,8 @@ ApplicationWindow {
                                 var related = root.searchResults.filter(function (r) { return r.related; }).length;
                                 var matches = root.searchResults.length - related;
                                 return matches + " result" + (matches === 1 ? "" : "s")
-                                    + (related > 0 ? " · " + related + " related" : "");
+                                    + (related > 0 ? " · " + related + " related" : "")
+                                    + (backend.searchTruncated ? " · searched the first 2000 notes" : "");
                             }
                             var n = backend.notes.length;
                             return n + " note" + (n === 1 ? "" : "s");
