@@ -106,7 +106,8 @@ checking it against the fingerprint pinned in the script), adds the signed
 on aarch64, with the matching `/etc/pacman.d/<repository>.conf`
 with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 `pre-refresh-pacman` hook that restores the repository after
-`omarchy refresh pacman`, and installs the packages in one `pacman -Syu`.
+`omarchy refresh pacman`, and installs the packages (with `omarchy-pkg-add`
+on Omarchy, otherwise in one `pacman -Syu`).
 Re-running it is safe. Updates then arrive with `omarchy update`.
 
 In the app launcher they are Notes, Photos, and Find My; searching "iCloud" finds them all. Photos saves originals straight into
@@ -167,9 +168,10 @@ e.g. `.../releases/latest/download/install-photos.sh`, so
 <https://ferdousbhai.com/icloud>.
 
 To uninstall: `omarchy pkg drop <packages>`, then remove
-`/etc/pacman.d/icloud-for-omarchy.conf`, its `Include` line in
-`/etc/pacman.conf`, and
-`~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-for-omarchy`.
+`/etc/pacman.d/icloud-for-omarchy.conf` (`icloud-for-omarchy-aarch64.conf`
+on aarch64), its `Include` line in `/etc/pacman.conf`, and
+`~/.config/omarchy/hooks/pre-refresh-pacman.d/icloud-for-omarchy`
+(`icloud-for-omarchy-aarch64` on aarch64).
 
 ## Layout
 
