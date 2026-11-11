@@ -1397,6 +1397,50 @@ int main(int argc, char *argv[])
         waitUntil([] { return VaultLock(NotesBackend::lockPath()).tryLock() == VaultLock::Locked; });
     }
     {
+        // A save waiting on a sync is written when Notes closes before the sync is done.
+        const QString id = QStringLiteral("---\napple-note-id: id-w\n---\n");
+        const QString note = id + QStringLiteral("# W\none\n\ntwo\n");
+        const QString mine = QStringLiteral("# W\none, mine\n\ntwo\n");
+        const auto closeWithSaveWaiting = [&](const std::function<void()> &underTheSync) {
+            writeFile(QStringLiteral("W.md"), note);
+            qputenv("ICLOUD_NOTES_SYNC_STUB_SLEEP", "2");
+            auto *app = new NotesBackend;
+            app->openNote(QStringLiteral("W.md"));
+            app->runSync();
+            waitUntil([] { return false; }, 300); // the engine is up and sleeping
+            const bool waiting = app->syncRunning() && !app->saveCurrentNote(mine);
+            underTheSync();
+            delete app;
+            qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
+            waitUntil([] { return VaultLock(NotesBackend::lockPath()).tryLock() == VaultLock::Locked; });
+            return waiting;
+        };
+        check(closeWithSaveWaiting([] {}) && readFile(QStringLiteral("W.md")) == id + mine,
+              "background: closing during a sync writes the save waiting on it");
+        const QString theirs = id + QStringLiteral("# W\none\n\ntwo from iCloud\n");
+        check(closeWithSaveWaiting([&] { writeFile(QStringLiteral("W.md"), theirs); })
+                  && readFile(QStringLiteral("W.md")) == id + QStringLiteral("# W\none, mine\n\ntwo from iCloud\n"),
+              "background: closing during a sync merges the save waiting on it with the sync's change");
+        check(closeWithSaveWaiting([] { QFile::remove(testVault() + QStringLiteral("/W.md")); })
+                  && readFile(QStringLiteral("W (unsaved edits).md")) == mine,
+              "background: closing during a sync that deleted the note keeps the save waiting on it as a new note");
+        QFile::remove(testVault() + QStringLiteral("/W (unsaved edits).md"));
+
+        // A background sync holding the vault may be writing the note.
+        writeFile(QStringLiteral("W.md"), note);
+        VaultLock background(NotesBackend::lockPath());
+        background.tryLock(QStringLiteral("a background sync (icloud-notes --sync, pid 1)"));
+        auto *app = new NotesBackend;
+        app->openNote(QStringLiteral("W.md"));
+        app->runSync();
+        const bool waiting = app->syncRunning() && !app->saveCurrentNote(mine);
+        delete app;
+        check(waiting && readFile(QStringLiteral("W.md")) == note,
+              "background: closing while another sync holds the vault writes nothing under it");
+        background.release();
+        QFile::remove(testVault() + QStringLiteral("/W.md"));
+    }
+    {
         // A lock that cannot even be opened never means running icloud-notes-sync
         // without it (it used to sync anyway).
         const QByteArray runtime = qgetenv("XDG_RUNTIME_DIR");

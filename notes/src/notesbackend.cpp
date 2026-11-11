@@ -2017,6 +2017,22 @@ void NotesBackend::clearLog()
 NotesBackend::~NotesBackend()
 {
     m_syncProcess.disconnect(this);
+    writeQueuedSaveOnClose();
+}
+
+void NotesBackend::writeQueuedSaveOnClose()
+{
+    const bool holdingVault = m_lock.fd() >= 0;
+    if (!m_queuedSave.valid || !holdingVault)
+        return;
+    m_syncProcess.kill();
+    m_syncProcess.waitForFinished();
+    m_syncRunning = false;
+    refresh();
+    if (m_currentNote.isEmpty())
+        keepEditsAsConflict({}, std::exchange(m_queuedSave, {}).body);
+    else
+        writeQueuedSave();
 }
 
 QDBusMessage NotesBackend::sessionCall(const QString &method) const
