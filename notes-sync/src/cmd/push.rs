@@ -2548,14 +2548,23 @@ pub fn run_push_with(
             });
             continue;
         };
-        let outcome = execute(
+        let outcome = match execute(
             action,
             &remote.db,
             target_dir,
             &mut state,
             &mut failed_folders,
             &mut batched,
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                // What the entries before this one did is in iCloud and in
+                // the vault already (a created note's file carries its new
+                // id): record it, or the next push creates those notes again.
+                let _ = write_clone_state(target_dir, &state);
+                return Err(e);
+            }
+        };
         if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded {
             pushed += 1;
         }
