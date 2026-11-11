@@ -1226,16 +1226,32 @@ fn read_limited(response: ureq::Response, limit: u64, interrupted: &str) -> Resu
     Ok(body)
 }
 
+/// Up to 64 KiB of an error body as text. Bytes, not `read_to_string`,
+/// which drops everything on invalid UTF-8, as a cut inside a character is.
 fn read_body_lossy(response: ureq::Response) -> String {
-    let mut body = String::new();
-    let _ = response.into_reader().take(64 * 1024).read_to_string(&mut body);
-    body
+    let mut body = Vec::new();
+    let _ = response.into_reader().take(64 * 1024).read_to_end(&mut body);
+    String::from_utf8_lossy(&body).into_owned()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ERROR_PASSWORD_REJECTED, ERROR_SIGN_IN_REQUIRED, Error};
+    use super::{ERROR_PASSWORD_REJECTED, ERROR_SIGN_IN_REQUIRED, Error, read_body_lossy};
     use zbus::names::OwnedErrorName;
+
+    #[test]
+    fn an_error_body_cut_inside_a_character_keeps_its_text() {
+        // The 64 KiB cut falls in the middle of the two-byte "é".
+        let text = format!("{}é tail", "a".repeat(64 * 1024 - 1));
+        let response = ureq::Response::new(500, "Internal Server Error", &text).unwrap();
+        let body = read_body_lossy(response);
+        assert_eq!(body.len(), 64 * 1024 - 1 + '\u{FFFD}'.len_utf8());
+        assert!(
+            body.starts_with("aaaa") && body.ends_with('\u{FFFD}'),
+            "{}",
+            &body[body.len() - 8..]
+        );
+    }
 
     fn method_error(name: &str, message: Option<&str>) -> zbus::Error {
         let msg = zbus::message::Message::method_call("/", "M")
