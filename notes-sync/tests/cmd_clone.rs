@@ -260,3 +260,36 @@ fn assert_nothing_to_push(vault: &Path) {
     let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
     assert!(entries.is_empty(), "{entries:?}");
 }
+
+/// Clone into a directory that already holds a file where a note would go
+/// (a Markdown folder of the user's own) writes the note beside it, never
+/// over it.
+#[test]
+fn a_clone_never_writes_over_a_file_already_in_the_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "Groceries\nMilk";
+    let probe = dir.path().join("probe");
+    clone_from(
+        tiny_with_text("tiny-clone.json", text),
+        &probe,
+        dir.path().join("probe.json"),
+    );
+    let probed = read_clone_state(&probe).unwrap().unwrap();
+    let file = probed.notes.values().next().unwrap().file.clone();
+
+    let vault = dir.path().join("vault");
+    let own = vault.join(&file);
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, "my own list, not from iCloud").unwrap();
+    let summary = clone_from(
+        tiny_with_text("tiny-clone.json", text),
+        &vault,
+        dir.path().join("requests.json"),
+    );
+    assert_eq!(summary.written, 1);
+    assert_eq!(std::fs::read_to_string(&own).unwrap(), "my own list, not from iCloud");
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    let cloned = &state.notes.values().next().unwrap().file;
+    assert_ne!(cloned, &file);
+    assert!(std::fs::read_to_string(vault.join(cloned)).unwrap().contains("Milk"));
+}

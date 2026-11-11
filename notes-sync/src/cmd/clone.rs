@@ -21,7 +21,8 @@ use crate::md::frontmatter::compose_note_file;
 use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy_of;
 use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
-use crate::vault::local::{apply_note_file_times, modification_date_of};
+use crate::vault::local::{apply_note_file_times, modification_date_of, write_note_file};
+use crate::vault::pairing::claim_names_on_disk;
 use crate::vault::state::{
     Account, CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
 };
@@ -139,6 +140,10 @@ pub fn run_clone_with(
     let mut table_attachments = IndexMap::new();
     let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
     let mut used_attachment_file_names: HashMap<String, HashSet<String>> = HashMap::new();
+    // Directories whose existing files are claimed: clone writes beside
+    // what is already there, never over it (anything there afterwards is
+    // in the set already, so once per directory is enough).
+    let mut claimed_dirs: HashSet<String> = HashSet::new();
     let (shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     let mut sources: Vec<(&[CloudKitRecord], Option<String>)> = vec![(&changes.records, None)];
     sources.extend(
@@ -225,6 +230,9 @@ pub fn run_clone_with(
                 }
 
                 let used_in_dir = used_names_for(&mut used_file_names, &placement.dir);
+                if claimed_dirs.insert(placement.dir.clone()) {
+                    claim_names_on_disk(target_dir, &placement.dir, used_in_dir)?;
+                }
                 let file_name = unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir);
                 used_in_dir.insert(file_name.clone());
                 let relative_file = posix::join(&[&placement.dir, &file_name]);
@@ -232,7 +240,7 @@ pub fn run_clone_with(
                 let file_path = target_dir.join(&relative_file);
                 let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
                 let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                std::fs::write(&file_path, &file_text)?;
+                write_note_file(&file_path, &file_text)?;
                 apply_note_file_times(&file_path, record)?;
                 write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                 if owner.is_some() {

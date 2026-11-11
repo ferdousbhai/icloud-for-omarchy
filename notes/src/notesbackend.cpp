@@ -521,7 +521,9 @@ QString NotesBackend::lockPath()
 }
 
 // In the runtime directory, or beside the vault without one: never inside
-// it, since icloud-notes-sync clones only into an empty directory. One per
+// it, which is meant to hold only the vault (icloud-notes-sync clones beside
+// files already there, never over them, but a clone wants a fresh or empty
+// directory). One per
 // vault, named by a hash of its canonical path (its cleaned absolute path
 // until it exists), so tests never share the real vault's. icloud-notes-sync
 // computes the same path (notes-sync/src/cmd/lock.rs): change both or
