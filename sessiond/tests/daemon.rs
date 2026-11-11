@@ -2737,6 +2737,7 @@ impl Autofill {
             &format!(
                 r#"d='{d}'
 n=$(($(cat "$d/count" 2>/dev/null || echo 0) + 1)); echo $n > "$d/count"
+echo $$ > "$d/pid"
 IFS= read -r jar || {{ echo "no cookies on stdin" >> "$d/bad"; exit 1; }}
 IFS= read -r id || {{ echo "no Apple ID on stdin" >> "$d/bad"; exit 1; }}
 IFS= read -r pw || {{ echo "no password on stdin" >> "$d/bad"; exit 1; }}
@@ -2748,7 +2749,7 @@ case "$jar" in *'"X-APPLE-WEBAUTH-TOKEN"'*) ;; *) echo "not the account's jar: $
 case "$*" in *"$pw"*) echo "the password in argv" >> "$d/bad"; exit 1 ;; esac
 env | grep -qF -- "$pw" && {{ echo "the password in env" >> "$d/bad"; exit 1; }}
 printf '%s' "$pw" > "$d/got"
-sleep "$(cat "$d/delay" 2>/dev/null || echo 0)"
+sleep "$(cat "$d/delay" 2>/dev/null || echo 0)" >/dev/null
 [ -e "$d/fail" ] && exit 1
 [ "$pw" = "$(cat "$d/good")" ] || exit 3
 cat <<EOF
@@ -2933,6 +2934,92 @@ fn with_no_find_my_jar_the_stored_password_signs_in_first() {
     assert_eq!(server.count(INIT_CLIENT), 1, "sent once, with the new jar");
     assert_eq!(autofill.runs(), 1);
     assert!(prop::<bool>(&conn, "FindMyAuthorized"));
+}
+
+/// A Find My autofill window can wait minutes on a 2FA code with its
+/// caller gone: the daemon neither exits under it nor loses what it
+/// captures.
+#[test]
+fn the_idle_exit_waits_for_the_autofill_window() {
+    let (_accepted, server) = accepting("auto1");
+    let autofill = Autofill::new();
+    autofill.set_delay("3");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&autofill.bin),
+        idle_secs: 0.5,
+        ..Default::default()
+    });
+    env.store_password(PASSWORD);
+    let observer = env.conn();
+    // `FindMySession()` from a process that goes away once the window is
+    // up, as a CLI given up on would.
+    let mut caller = Command::new("dbus-send")
+        .env_clear()
+        .env("DBUS_SESSION_BUS_ADDRESS", &env.address)
+        .args([
+            "--session".to_string(),
+            "--print-reply".to_string(),
+            format!("--dest={BUS_NAME}"),
+            OBJECT_PATH.to_string(),
+            format!("{INTERFACE}.FindMySession"),
+        ])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_until("the window to start", Duration::from_secs(10), || {
+        fs::read_to_string(autofill.file("pid")).is_ok_and(|p| p.ends_with('\n'))
+    });
+    let _ = caller.kill();
+    let _ = caller.wait();
+    let open = Instant::now();
+    while open.elapsed() < Duration::from_millis(2500) {
+        assert!(env.daemon_running(&observer), "the daemon left with the window open");
+        thread::sleep(Duration::from_millis(50));
+    }
+    wait_until("the Find My jar", Duration::from_secs(10), || {
+        env.account()
+            .and_then(|a| a.get("find_my").and_then(|f| find_my_cookie(&f["cookies"])))
+            .as_deref()
+            == Some("auto1")
+    });
+    assert_eq!(autofill.runs(), 1);
+    wait_until("idle exit", Duration::from_secs(10), || !env.daemon_running(&observer));
+}
+
+/// SignOut closes the hidden Find My window too, as it does a sign-in one.
+#[test]
+fn sign_out_closes_the_autofill_window() {
+    let (_accepted, server) = accepting("auto1");
+    let autofill = Autofill::new();
+    autofill.set_delay("20");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&autofill.bin),
+        ..Default::default()
+    });
+    env.store_password(PASSWORD);
+    let conn = env.conn();
+    let caller = env.conn();
+    let asked = Instant::now();
+    let call = thread::spawn(move || call::<(String, HashMap<String, String>)>(&caller, "FindMySession").is_ok());
+    let pid_file = autofill.file("pid");
+    wait_until("the window to start", Duration::from_secs(10), || {
+        fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
+    });
+    let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "the window was killed and reaped"
+    );
+    assert!(!call.join().unwrap(), "signed out: no Find My jar");
+    assert!(
+        asked.elapsed() < Duration::from_secs(15),
+        "the call did not wait for the window"
+    );
+    assert!(env.account().is_none());
 }
 
 /// The device trust a Find My window captured (the user ticked "Trust this

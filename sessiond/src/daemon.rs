@@ -322,6 +322,9 @@ pub struct Daemon {
     windows: AtomicUsize,
     /// The open sign-in window, with the `signin_seq` that opened it.
     signin_child: Mutex<Option<(u64, Child)>>,
+    /// The hidden Find My autofill window (one at a time, under
+    /// `find_my_login_lock`), so a SignOut closes it too.
+    autofill_child: Mutex<Option<Child>>,
     /// The keyring holding the Apple ID password (opt-in).
     secrets: Box<dyn SecretStore>,
     /// One Find My one-factor sign-in at a time; a waiter shares its answer.
@@ -539,6 +542,7 @@ impl Daemon {
             refreshing: AtomicBool::new(false),
             windows: AtomicUsize::new(0),
             signin_child: Mutex::new(None),
+            autofill_child: Mutex::new(None),
             secrets,
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
@@ -1168,7 +1172,7 @@ impl Daemon {
         // (a plain-password accountLogin answers 421 now). The page's Find
         // My call answering is what completes it.
         let result = self
-            .autofill_find_my(apple_id, password)
+            .autofill_find_my(generation, apple_id, password)
             .and_then(|(jar, params, found, trust)| {
                 same_account(found, dsid).map_err(LoginError::Failed)?;
                 Ok((jar, params, trust))
@@ -1185,6 +1189,8 @@ impl Daemon {
                 st.find_my_last_ok = Some((finished, fingerprint));
             }
             Err(LoginError::Rejected) => st.find_my_block = Some(LoginBlock::Password(fingerprint)),
+            // A SignOut closed the window: that says nothing about Apple.
+            Err(LoginError::Failed(_)) if st.generation != generation => {}
             Err(LoginError::Failed(_)) => {
                 st.find_my_block = Some(LoginBlock::Until(finished + self.cfg.validate_retry))
             }
@@ -1431,30 +1437,50 @@ impl Daemon {
     /// Runs the sign-in window hidden in `--find --autofill` mode: it signs
     /// in on Apple's own page with the stored password (showing itself only
     /// if Apple asks for more, like a 2FA code) and prints the jar once Find
-    /// My answers. The password reaches it only on its stdin.
-    fn autofill_find_my(&self, apple_id: &str, password: &str) -> Result<FindMyCapture, LoginError> {
+    /// My answers. The password reaches it only on its stdin. A SignOut
+    /// meanwhile (the account's `generation` gone) closes it.
+    fn autofill_find_my(&self, generation: u64, apple_id: &str, password: &str) -> Result<FindMyCapture, LoginError> {
         use std::io::Write;
         let bin = &self.cfg.signin_bin;
         let failed = |m: String| LoginError::Failed(m);
+        let cancelled = || failed("cancelled by SignOut".into());
         let cookies = self.window_cookies();
-        let mut child = Command::new(bin)
-            .args(["--find", "--autofill", "--cookies"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| failed(spawn_error(bin, &e)))?;
-        let _window = self.window_opened();
+        let (mut stdout, mut stdin, _window) = {
+            // Spawned under the slot's lock, so a SignOut either sees the
+            // child (and kills it) or has already moved the generation on.
+            let mut slot = lock(&self.autofill_child);
+            if lock(&self.state).generation != generation {
+                return Err(cancelled());
+            }
+            let mut child = Command::new(bin)
+                .args(["--find", "--autofill", "--cookies"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .map_err(|e| failed(spawn_error(bin, &e)))?;
+            let stdout = child.stdout.take().expect("stdout is piped");
+            let stdin = child.stdin.take().expect("stdin is piped");
+            *slot = Some(child);
+            (stdout, stdin, self.window_opened())
+        };
+        // Back out of the slot, unless SignOut killed and reaped it.
+        let take = || lock(&self.autofill_child).take().ok_or_else(cancelled);
         {
-            let mut stdin = child.stdin.take().expect("stdin is piped");
             let mut input = zeroize::Zeroizing::new(format!("{}{apple_id}\n{password}\n", *cookies));
-            stdin
-                .write_all(input.as_bytes())
-                .map_err(|e| failed(format!("giving the sign-in window the password: {e}")))?;
+            let written = stdin.write_all(input.as_bytes());
             zeroize::Zeroize::zeroize(&mut *input);
+            drop(stdin);
+            if let Err(e) = written {
+                let mut child = take()?;
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(failed(format!("giving the sign-in window the password: {e}")));
+            }
         }
         let mut out = Vec::new();
-        let read = child.stdout.take().expect("stdout is piped").read_to_end(&mut out);
+        let read = stdout.read_to_end(&mut out);
+        let mut child = take()?;
         let status = child
             .wait()
             .map_err(|e| failed(format!("waiting for {}: {e}", bin.display())))?;
@@ -1706,6 +1732,11 @@ impl Daemon {
                 let _ = child.kill();
                 let _ = child.wait();
             }
+            let mut autofill = lock(&self.autofill_child);
+            if let Some(mut child) = autofill.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             let mut st = lock(&self.state);
             st.signin_seq += 1;
             st.signing_in = false;
@@ -1810,7 +1841,10 @@ impl Daemon {
                 for name in &gone {
                     st.clients.remove(name);
                 }
-                let idle = st.clients.is_empty() && !st.signing_in && st.last_activity.elapsed() >= self.cfg.idle;
+                let idle = st.clients.is_empty()
+                    && !st.signing_in
+                    && self.windows.load(Ordering::SeqCst) == 0
+                    && st.last_activity.elapsed() >= self.cfg.idle;
                 if !idle {
                     st.account.is_some() && st.last_call.elapsed() < ACTIVE_WINDOW
                 } else {
@@ -1871,17 +1905,25 @@ impl Daemon {
         while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
             thread::sleep(Duration::from_millis(5));
         }
-        // A sign-in window opened by one of those calls: serve on if the
-        // name is still free, else let it finish storing what it captures.
-        if lock(&self.state).signing_in {
+        // A window opened by one of those calls (a sign-in, or Find My's
+        // hidden autofill one, which can wait minutes on a 2FA code): serve
+        // on if the name is still free, else let it finish storing what it
+        // captures. An autofill window's result is stored by the call that
+        // opened it, after the window closes.
+        let window_open = || lock(&self.state).signing_in || self.windows.load(Ordering::SeqCst) > 0;
+        if window_open() {
             let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
             if let Ok(zbus::fdo::RequestNameReply::PrimaryOwner) =
                 conn.request_name_with_flags(icloud_session::BUS_NAME, flags)
             {
                 return false;
             }
-            while lock(&self.state).signing_in {
+            while window_open() {
                 thread::sleep(Duration::from_millis(50));
+            }
+            let start = Instant::now();
+            while self.in_flight.load(Ordering::SeqCst) > 0 && start.elapsed() < FLUSH_WAIT {
+                thread::sleep(Duration::from_millis(5));
             }
         }
         true
