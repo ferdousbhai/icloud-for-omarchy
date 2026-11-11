@@ -1,0 +1,29 @@
+[package]
+name = "icloud-drive"
+version.workspace = true
+edition.workspace = true
+description = "iCloud Drive for Omarchy: keeps ~/iCloud Drive in sync, over the shared icloud-session sign-in"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "icloud_drive"
+path = "src/lib.rs"
+
+[[bin]]
+name = "icloud-drive"
+path = "src/main.rs"
+
+[dependencies]
+# The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
+icloud-session = { workspace = true, features = ["clap"] }
+clap.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

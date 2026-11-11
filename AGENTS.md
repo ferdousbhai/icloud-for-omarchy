@@ -1,8 +1,8 @@
 # icloud-for-omarchy
 
-Native iCloud apps for Omarchy/Arch — Notes, Photos, Find My — sharing one
+Native iCloud apps for Omarchy/Arch — Notes, Photos, Find My, iCloud Drive — sharing one
 Apple web sign-in held by the `icloud-session` D-Bus daemon. Each app is a GUI plus a
-scriptable `--json` CLI.
+scriptable `--json` CLI; iCloud Drive is a synced folder with a small control command.
 
 This file is for working on the code. For *using* the CLIs as an agent, read
 [docs/AGENTS.md](docs/AGENTS.md) (short) and [docs/CLI.md](docs/CLI.md) (every command, JSON shape
@@ -29,7 +29,13 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`). Each has a fake Apple server
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
-- `packaging/PKGBUILD` — one split recipe for all four packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
+- `drive/` — `icloud-drive`: keeps `~/iCloud Drive` in sync both ways. No window: a library
+  (`remote.rs` the Drive web API behind a trait, `plan.rs` the pure sync rules, `engine.rs`,
+  `state.rs`, `local.rs`), the `icloud-drive` command (`status`, `sync`, `start`, `stop`) and a
+  systemd user service in `data/`, off until `icloud-drive start`. `tests/sync.rs` runs the engine
+  against an in-memory Drive that mirrors what was measured of the real one; read the notes at the
+  top of `remote.rs` before changing how changes are detected.
+- `packaging/PKGBUILD` — one split recipe for all five packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
 - `bin/` — `build`, `check`, `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
   `make-installers`, `release`, `verify-release`, `dev-install`/`dev-uninstall` (puts a release
   sessiond in `~/.local/bin` with a user D-Bus activation file).

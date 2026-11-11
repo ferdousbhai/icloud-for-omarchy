@@ -110,7 +110,7 @@ count_include() { grep -cxF "Include = /etc/pacman.d/$1.conf" /etc/pacman.conf |
 
 setup
 bash install.sh >"$work/out" 2>&1
-check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy" ]
+check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-drive" ]
 check "the repository config is written" grep -qx 'Server = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download' /etc/pacman.d/icloud-for-omarchy.conf
 check "the Include line is added" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "the Omarchy hook is installed" [ -x "$hooks/icloud-for-omarchy" ]
@@ -143,9 +143,9 @@ for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chm
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
-check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy' "$PACMAN_LOG"
+check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-drive' "$PACMAN_LOG"
 
-for app in notes photos findmy; do
+for app in notes photos findmy drive; do
   setup
   bash "$work/dist/install-$app.sh" >"$work/out" 2>&1
   check "install-$app.sh installs only icloud-$app" [ "$(installed)" = "icloud-$app" ]

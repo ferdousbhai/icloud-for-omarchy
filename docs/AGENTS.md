@@ -24,7 +24,7 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
   | 0 | ok | |
   | 1 | other failure | read `error.code` |
   | 2 | usage: bad arguments, an ambiguous name, it already exists, or a destructive command without `--yes` | fix the call |
-  | 3 | sign-in needed or refused, or not set up | `sign_in_required`/`session_rejected`: ask the user to run `icloud-session sign-in`; `find_my_auth_required`: `icloud-session authorize-find-my`; `photos_unavailable`/`find_my_unavailable`/`notes_unavailable`: the service is off for this Apple ID; `not_cloned`: `icloud-notes clone` |
+  | 3 | sign-in needed or refused, or not set up | `sign_in_required`/`session_rejected`: ask the user to run `icloud-session sign-in`; `find_my_auth_required`: `icloud-session authorize-find-my`; `photos_unavailable`/`find_my_unavailable`/`notes_unavailable`/`drive_unavailable`: the service is off for this Apple ID; `not_cloned`: `icloud-notes clone` |
   | 4 | not found | check the name or id |
   | 5 | a service unavailable: no network (`offline`, `network`), icloud-sessiond unreachable (`session_service`), keyring locked, iCloud failing | retry later, or tell the user what `hint` says |
 
@@ -204,6 +204,33 @@ exit 2, lists the candidates in `hint`: use the ID; no match is
 `not_found`, exit 4). Locations are personal: print coordinates only when
 the user asked for them. Lost Mode locks the device; never turn it on
 without an explicit request.
+
+## iCloud Drive: `icloud-drive`
+
+iCloud Drive is a folder, `~/iCloud Drive`, kept in sync both ways by a
+background service. Read and write files there with ordinary tools; the
+command only reports and controls the sync.
+
+```console
+$ icloud-drive --quiet status
+{"files":93,"folder":"/home/me/iCloud Drive","folders":19,"last_sync":"2026-11-11T02:50:06Z",
+ "not_synced":[{"path":"letter.pages","reason":"a package (a Pages document, say), which is not synced"}],
+ "problem":null,"signed_in":true,"starts_at_login":true,"sync":"on"}
+$ icloud-drive --quiet sync --dry-run
+{"done":["upload notes/todo.txt"],"dry_run":true,"pending":[],"problems":[],"skipped":[]}
+```
+
+| Command | Does |
+|---|---|
+| `status` | whether the sync is on, the last sync, a `problem` if it is stuck, what is `not_synced` (exit 3 with data when signed out) |
+| `sync [--dry-run] [--yes]` | one sync now; `--dry-run` lists what it would do. While the service is mid-sync it waits up to two minutes, then `busy` (exit 1) |
+| `start`, `stop` | turn the background service on (now and at login) or off |
+
+The first sync downloads the whole Drive: ask before `start`. A file
+written into the folder reaches iCloud within about a minute. Removals go
+to the trash on the other side, never away for good. A sync that would
+remove many items stops with `too_many_deletions` (exit 2): show the user
+`sync --dry-run` and run `sync --yes` only with their yes.
 
 ## Contacts and tasks
 

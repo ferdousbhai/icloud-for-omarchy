@@ -891,8 +891,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "icloud-drive"
+version = "0.9.6"
+dependencies = [
+ "clap",
+ "icloud-session",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "icloud-findmy"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "async-channel",
  "clap",
@@ -910,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-notes-sync"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "base64",
  "clap",
@@ -931,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-photos"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "async-channel",
  "base64",
@@ -953,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-session"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "clap",
  "flate2",
@@ -970,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "icloud-sessiond"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "base64",
  "blocking",

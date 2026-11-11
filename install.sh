@@ -6,10 +6,10 @@
 #   curl -fsSL .../install.sh | sudo bash -s -- icloud-photos        # just one app
 #
 # With no arguments it installs DEFAULT_PACKAGES below: every app
-# (icloud-notes, icloud-photos, icloud-findmy). Name packages to install only those; icloud-session
+# (icloud-notes, icloud-photos, icloud-findmy, icloud-drive). Name packages to install only those; icloud-session
 # (the Apple sign-in every app shares) can be named too, and comes in as a
 # dependency anyway. Each release also carries install-notes.sh,
-# install-photos.sh and install-findmy.sh: this script with DEFAULT_PACKAGES set to that one
+# install-photos.sh, install-findmy.sh and install-drive.sh: this script with DEFAULT_PACKAGES set to that one
 # app (bin/make-installers writes them).
 #
 # Every step is idempotent, so re-running is safe. It trusts the
@@ -23,10 +23,10 @@ set -euo pipefail
 REPO=icloud-for-omarchy
 RELEASES=${ICLOUD_RELEASES:-https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download}
 SIGNING_KEY_FINGERPRINT=52130299581DAD685226900CA89CA1A6A1E74251
-PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy)
+PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-drive)
 # What a run with no arguments installs. bin/make-installers rewrites this
 # one line for the per-app installers.
-DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy)
+DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy icloud-drive)
 # Repositories of earlier releases: Notes had one of its own.
 OLD_REPOS=(icloud-notes)
 
@@ -235,6 +235,7 @@ main() {
       icloud-notes) echo 'Launch "Notes" from the app launcher (Super + Space).' ;;
       icloud-photos) echo 'Launch "Photos" from the app launcher (Super + Space).' ;;
       icloud-findmy) echo 'Launch "Find My" from the app launcher (Super + Space).' ;;
+      icloud-drive) echo 'Turn on iCloud Drive (it syncs ~/iCloud Drive, downloading your whole Drive first): icloud-drive start' ;;
     esac
   done
   cat <<EOT

@@ -101,6 +101,18 @@ timer's sync). All of it is new, in the app binary: see
 | Find My password banner (Enter Password) | exit 3 (code `find_my_auth_required`), then `icloud-session authorize-find-my` (or `set-password` once) | existed |
 | Old positions dropped after 30 days | `icloud-findmy prune-history` | existed |
 
+### iCloud Drive (`drive/`)
+
+No window: the folder `~/iCloud Drive` is the interface, and files are read
+and written there. The command covers what a tray icon would.
+
+| What a sync client shows | Command |
+|---|---|
+| Syncing or not, last sync, problems, what is left out | `icloud-drive status` |
+| Sync now | `icloud-drive sync` (`--dry-run` to look first) |
+| Turn syncing on or off | `icloud-drive start`, `icloud-drive stop` |
+| Confirm a large removal | `icloud-drive sync --yes` |
+
 ### Sign-in (`sessiond`)
 
 | In the window / daemon | Command | |
@@ -157,8 +169,8 @@ PATH (a development build).
 
 ## Conventions every tool follows
 
-All five tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
-`icloud-photos`, `icloud-findmy`) follow the same output contract
+All six tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
+`icloud-photos`, `icloud-findmy`, `icloud-drive`) follow the same output contract
 (`session/src/output.rs` for the Rust tools; `notes/src/cli.cpp` mirrors it).
 
 ### Output modes
@@ -266,6 +278,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 | icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
 | icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
+| icloud-drive | `sync`: one line per change made (or planned) | `sync`: changes made (or planned) |
 
 ### Exit codes
 
@@ -334,6 +347,16 @@ they exit with the engine's codes, below.
 | 2 | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
 | 3 | `sign_in_required`, `find_my_auth_required` (`icloud-session authorize-find-my`, or `set-password` once), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` |
 | 4 | `not_found` (no device matches; the hint lists them) |
+| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+
+**icloud-drive**
+
+| Exit | Codes |
+|---|---|
+| 1 | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data) |
+| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID) |
+| 3 | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data) |
+| 4 | `folder_missing` (the local folder is gone, so nothing is synced) |
 | 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 In mock mode (`ICLOUD_SESSION_MOCK=1`) there is no daemon to confirm a
@@ -449,6 +472,16 @@ engines: `icloud-md:progress:...`).
 | `play-sound`, `lost-mode` | `{action:"play_sound"\|"lost_mode", device:{id, name}}` |
 | `history` | `{device:{id, name}, since, points:[{time, timestamp, lat, lon, accuracy_m, battery_percent}]}` |
 | `prune-history` | `{deleted, remaining, retention_days}` |
+
+### icloud-drive
+
+| Command | `data` |
+|---|---|
+| `status` | `{sync:"on"\|"off", starts_at_login, signed_in, folder, files, folders, last_sync \| null, problem:{code, message, hint \| null} \| null, not_synced:[{path, reason}]}` |
+| `sync` | `{done:[line], problems:[line], pending:[path], skipped:[line], dry_run}`; `done` is what was carried out (with `--dry-run`: what would be), one line each; exit 1 with data when `problems` is not empty |
+| `start`, `stop` | `{sync:"on"\|"off", folder}` |
+
+Its error codes are in the table under [Error codes](#error-codes).
 
 ### Contacts and tasks
 
