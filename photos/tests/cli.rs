@@ -406,6 +406,21 @@ fn thumb_and_download() {
 }
 
 #[test]
+fn a_png_with_no_preview_keeps_its_name_as_a_medium_download() {
+    let env = Env::synced("medium-png", 4);
+    let shot = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
+    // iCloud makes no preview for a small PNG: the original stands in, and
+    // the copy to --out is named .png, not .jpg.
+    env.server.make_screenshot(&shot, b"\x89PNG screenshot");
+    env.json(&["sync"]);
+    let dir = env.root.join("medium-out");
+    let m = env.json(&["download", &shot, "--medium", "--out", dir.to_str().unwrap()]);
+    let p = PathBuf::from(m[0]["path"].as_str().unwrap());
+    assert_eq!(p, dir.join(format!("{shot}.png")), "{m}");
+    assert_eq!(std::fs::read(&p).unwrap(), b"\x89PNG screenshot");
+}
+
+#[test]
 fn open_downloads_then_hands_the_file_to_the_default_app() {
     let env = Env::synced("open", 4);
     let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);

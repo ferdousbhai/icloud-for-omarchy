@@ -922,7 +922,11 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
             Err(err) => Err(Fail::Err(err)),
             Ok(cached) if medium => (|| {
                 let path = match out {
-                    Some(dir) => copy_to(&cached, &dir.join(format!("{}.jpg", sanitize(&id))))?,
+                    // A PNG original that stands in for a missing preview stays .png.
+                    Some(dir) => {
+                        let ext = cached.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+                        copy_to(&cached, &dir.join(format!("{}.{ext}", sanitize(&id))))?
+                    }
                     None => cached,
                 };
                 Ok(json!({ "id": id, "path": path }))

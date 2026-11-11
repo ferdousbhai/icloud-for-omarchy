@@ -34,6 +34,8 @@ struct FakeAsset {
     tag: u32,
     /// Bytes of an uploaded file, served for every rendition.
     uploaded: Option<Arc<Vec<u8>>>,
+    /// No resJPEGMedRes, as iCloud makes none for a small PNG or JPEG.
+    no_preview: bool,
 }
 
 struct State {
@@ -109,6 +111,24 @@ impl FakeServer {
         }
     }
 
+    /// Turn an asset into a small PNG screenshot, with no preview rendition:
+    /// `bytes` are served for every rendition.
+    pub fn make_screenshot(&self, asset_id: &str, bytes: &[u8]) {
+        let mut s = self.state.lock().unwrap();
+        if let Some(i) = s.assets.iter().position(|a| a.id == asset_id) {
+            let a = &mut s.assets[i];
+            (a.uti, a.no_preview, a.tag) = ("public.png", true, a.tag + 1);
+            a.filename = a
+                .filename
+                .rsplit_once('.')
+                .map_or(a.filename.clone(), |(stem, _)| format!("{stem}.PNG"));
+            a.uploaded = Some(Arc::new(bytes.to_vec()));
+            let (m, rec) = (s.master_record(i), s.asset_record(i));
+            s.log.push(m);
+            s.log.push(rec);
+        }
+    }
+
     /// Simulate a change made on another device: delete an asset.
     pub fn delete_elsewhere(&self, asset_id: &str) {
         let mut s = self.state.lock().unwrap();
@@ -162,6 +182,7 @@ impl State {
                 deleted: false,
                 tag: 1,
                 uploaded: None,
+                no_preview: false,
             });
         }
         let albums = vec![
@@ -234,6 +255,11 @@ impl State {
             "resJPEGMedRes": self.res("med", i, 200_000),
             "resJPEGMedFileType": { "value": "public.jpeg", "type": "STRING" },
         });
+        if a.no_preview {
+            let f = fields.as_object_mut().expect("fields");
+            f.remove("resJPEGMedRes");
+            f.remove("resJPEGMedFileType");
+        }
         if a.live {
             fields["resOriginalVidComplRes"] = self.res("live", i, 400_000);
             fields["resOriginalVidComplFileType"] = json!({ "value": "com.apple.quicktime-movie", "type": "STRING" });
@@ -446,6 +472,7 @@ impl State {
                 deleted: false,
                 tag: 1,
                 uploaded: Some(bytes),
+                no_preview: false,
             });
             let i = self.assets.len() - 1;
             let (a, m) = (self.asset_record(i), self.master_record(i));
