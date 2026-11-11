@@ -1565,7 +1565,7 @@ ApplicationWindow {
         Qt.callLater(root.kbArmStartup);
     }
 
-    Shortcut { sequence: StandardKey.Save; onActivated: root.save() }
+    Shortcut { sequences: [StandardKey.Save]; onActivated: root.save() }
     Shortcut { sequence: "Ctrl+N"; onActivated: newNoteDialog.open() }
     Shortcut { sequence: "Ctrl+B"; onActivated: root.wrapSelection("**", "**") }
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
@@ -1583,7 +1583,7 @@ ApplicationWindow {
         property alias editorZoom: root.editorZoom
     }
     Component.onDestruction: settings.panes = panes.saveState()
-    Shortcut { sequence: StandardKey.Find; onActivated: searchField.forceActiveFocus() }
+    Shortcut { sequences: [StandardKey.Find]; onActivated: searchField.forceActiveFocus() }
 
     Connections {
         target: backend
