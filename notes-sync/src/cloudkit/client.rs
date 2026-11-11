@@ -718,6 +718,16 @@ impl<'a, T: Transport> DownloadQueue<'a, T> {
         Ok(())
     }
 
+    /// How many distinct downloads were queued so far.
+    pub fn len(&self) -> usize {
+        self.queued.len()
+    }
+
+    /// Whether nothing was queued yet.
+    pub fn is_empty(&self) -> bool {
+        self.queued.is_empty()
+    }
+
     /// Waits for every queued download; the earliest failure, if any.
     pub fn finish(mut self) -> Result<(), CkError> {
         match &mut self.pool {

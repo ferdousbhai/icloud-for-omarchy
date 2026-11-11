@@ -14,7 +14,7 @@ use super::{
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
-use crate::cloudkit::{Database, SkippedSharedZone};
+use crate::cloudkit::{Database, SharedNoteRecords, SkippedSharedZone};
 use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
@@ -333,8 +333,16 @@ pub fn run_pull_with(
     let total: usize = sources.iter().map(|s| s.records.len()).sum();
     progress.on_process_start(total);
 
-    for source in &sources {
+    // A failure part way still records what was applied before it (with
+    // the old sync tokens, so the rest is listed again): a new note's file
+    // already carries its id, and untracked it would be pushed as a new
+    // note. `downloading`: the notes this run queued attachment downloads
+    // for, which a failure may have left undone.
+    let mut failure: Option<Error> = None;
+    let mut downloading: Vec<String> = Vec::new();
+    'records: for source in &sources {
         for record in &source.records {
+            let queued_before = downloads.len();
             let result = (|| -> Result<(), Error> {
                 if record.record_type != "Note" {
                     return Ok(());
@@ -743,14 +751,102 @@ pub fn run_pull_with(
                 Ok(())
             })();
             progress.on_record_processed();
-            result?;
+            if downloads.len() > queued_before {
+                downloading.push(record.record_name.clone());
+            }
+            if let Err(e) = result {
+                failure = Some(e);
+                break 'records;
+            }
         }
     }
     progress.on_process_complete();
     // Before anything below moves or removes attachment files.
-    downloads.finish()?;
+    let finished = downloads.finish();
+    if let Err(e) = finished {
+        failure.get_or_insert(e.into());
+    }
+    if failure.is_some() {
+        // Once one download fails the rest are not started: these notes
+        // forget their attachments and their version, so the next pull
+        // applies them again and fetches what is missing.
+        for record_name in &downloading {
+            tracked.attachments.retain(|_, a| a.note_record_name != *record_name);
+            if let Some(entry) = tracked.notes.get_mut(record_name) {
+                entry.record_change_tag.clear();
+            }
+        }
+    }
 
-    for source in &sources {
+    if failure.is_none()
+        && let Err(e) = reconcile_listings(target_dir, &sources, &shared, &mut tracked, &mut summary, title_mode)
+    {
+        failure = Some(e);
+    }
+
+    let relocations = match reconcile_note_placements(target_dir, &layout, &mut tracked.notes, &mut tracked.attachments)
+    {
+        Ok(relocations) => relocations,
+        Err(e) => return Err(failure.unwrap_or(e)),
+    };
+    for relocation in relocations {
+        let mut change = PullChange::new(PullChangeKind::Move, relocation.to);
+        change.previous_file = Some(relocation.from);
+        summary.changes.push(change);
+    }
+    let current: HashSet<String> = layout.all_dirs.iter().cloned().collect();
+    remove_stale_dirs(target_dir, &previous_layout_dirs(PreviousLayout::of(&state)), &current);
+
+    let failed = failure.is_some();
+    let new_state = CloneState {
+        account: state.account.clone(),
+        // Held back, or not all applied: the next pull walks from the old
+        // token and sees them again.
+        sync_token: if held_back.is_empty() && !failed {
+            changes.sync_token.clone()
+        } else {
+            state.sync_token.clone()
+        },
+        shared_zone_sync_tokens: if failed {
+            state.shared_zone_sync_tokens.clone()
+        } else {
+            Some(shared_zone_sync_tokens)
+        },
+        shared_database: if failed {
+            state.shared_database.clone()
+        } else {
+            shared.cursor.clone()
+        },
+        replica_id: state.replica_id.clone(),
+        title_mode: state.title_mode,
+        notes: tracked.notes,
+        folders: Some(layout.state_folders),
+        sharer_homes: Some(layout.state_sharer_homes),
+        attachments: Some(tracked.attachments),
+        table_attachments: Some(tracked.table_attachments),
+        trashed: Some(trashed),
+        extra: state.extra,
+        ..Default::default()
+    };
+    if let Some(e) = failure {
+        let _ = write_clone_state(target_dir, &new_state);
+        return Err(e);
+    }
+    write_clone_state(target_dir, &new_state)?;
+    Ok(summary)
+}
+
+/// After every listed record is applied: reconcile the zones listed from
+/// scratch, and the shared zones that are gone.
+fn reconcile_listings(
+    target_dir: &Path,
+    sources: &[Source],
+    shared: &SharedNoteRecords,
+    tracked: &mut Tracked,
+    summary: &mut PullSummary,
+    title_mode: TitleMode,
+) -> Result<(), Error> {
+    for source in sources {
         if !source.resynced {
             continue;
         }
@@ -759,8 +855,8 @@ pub fn run_pull_with(
             target_dir,
             source.shared_zone_owner.as_deref(),
             &seen,
-            &mut tracked,
-            &mut summary,
+            tracked,
+            summary,
             title_mode,
         )?;
         let zone_label = match &source.shared_zone_owner {
@@ -791,40 +887,8 @@ pub fn run_pull_with(
                 .filter_map(|s| skipped_zone_owner(s).map(str::to_owned)),
         )
         .collect();
-    handle_vanished_shared_zones(target_dir, &live_owners, &mut tracked, &mut summary)?;
-
-    let relocations = reconcile_note_placements(target_dir, &layout, &mut tracked.notes, &mut tracked.attachments)?;
-    for relocation in relocations {
-        let mut change = PullChange::new(PullChangeKind::Move, relocation.to);
-        change.previous_file = Some(relocation.from);
-        summary.changes.push(change);
-    }
-    let current: HashSet<String> = layout.all_dirs.iter().cloned().collect();
-    remove_stale_dirs(target_dir, &previous_layout_dirs(PreviousLayout::of(&state)), &current);
-
-    let new_state = CloneState {
-        account: state.account.clone(),
-        // Held back: the next pull walks from the old token and sees them again.
-        sync_token: if held_back.is_empty() {
-            changes.sync_token.clone()
-        } else {
-            state.sync_token.clone()
-        },
-        shared_zone_sync_tokens: Some(shared_zone_sync_tokens),
-        shared_database: shared.cursor.clone(),
-        replica_id: state.replica_id.clone(),
-        title_mode: state.title_mode,
-        notes: tracked.notes,
-        folders: Some(layout.state_folders),
-        sharer_homes: Some(layout.state_sharer_homes),
-        attachments: Some(tracked.attachments),
-        table_attachments: Some(tracked.table_attachments),
-        trashed: Some(trashed),
-        extra: state.extra,
-        ..Default::default()
-    };
-    write_clone_state(target_dir, &new_state)?;
-    Ok(summary)
+    handle_vanished_shared_zones(target_dir, &live_owners, tracked, summary)?;
+    Ok(())
 }
 
 /// (docs/DESIGN.md §1) A note
