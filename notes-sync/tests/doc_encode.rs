@@ -154,6 +154,34 @@ fn build_note_trash_fields_repoints_the_folder_references_at_trash() {
 }
 
 #[test]
+fn trashing_or_moving_a_note_stored_as_an_asset_leaves_its_text_alone() {
+    // The text of a very large note lives in a TextDataAsset; a reader may
+    // also have inlined it. Emptying the asset would leave the record with
+    // no text, which iCloud refuses, so neither text field is sent.
+    let record = make_record(&[
+        ("TitleEncrypted", json!("dGl0bGU="), "ENCRYPTED_BYTES"),
+        ("CreationDate", json!(100), "TIMESTAMP"),
+        (
+            "TextDataAsset",
+            json!({"downloadURL": "https://example.invalid/asset"}),
+            "ASSETID",
+        ),
+        ("TextDataEncrypted", json!("SU5MSU5FRA=="), "ENCRYPTED_BYTES"),
+    ]);
+    for fields in [
+        build_note_trash_fields(&record, 999),
+        build_note_move_fields(&record, "F1", 999),
+    ] {
+        assert!(!fields.contains_key("TextDataAsset"));
+        assert!(!fields.contains_key("TextDataEncrypted"));
+        assert_eq!(fields["TitleEncrypted"].value, Some(json!("dGl0bGU=")));
+        for name in ["FirstAttachmentThumbnail", "FirstAttachmentUTIEncrypted"] {
+            assert_eq!(serde_json::to_string(&fields[name]).unwrap(), "{}");
+        }
+    }
+}
+
+#[test]
 fn deletion_field_builders_tolerate_a_broken_record() {
     let fields = build_note_trash_fields(&make_record(&[]), 999);
     for name in [

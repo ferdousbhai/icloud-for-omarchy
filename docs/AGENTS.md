@@ -37,7 +37,7 @@ audit, every JSON shape and every error code are in [CLI.md](CLI.md).
   not there are changes.
 - Nothing prompts without a terminal. Destructive commands refuse (exit 2,
   `usage`) unless given `--yes`: `icloud-notes delete | delete-folder |
-  restore` (and a `write` that empties a note), `icloud-photos delete`,
+  restore | renew` (and a `write` that empties a note), `icloud-photos delete`,
   `icloud-findmy play-sound | lost-mode`.
   Pass `--yes` only when the user asked for that exact action.
 - `TOOL COMMAND --help` describes any command and its `data`.
@@ -111,7 +111,14 @@ rules, takes the vault's lock, and reaches every engine command you need.
 - A deleted note goes to the trash and, on push, to Recently Deleted in
   iCloud (recoverable there for about 30 days).
 - Read-only notes (`read_only` set: very large notes, attachments Apple
-  keeps elsewhere) cannot be written, renamed or moved: say so.
+  keeps elsewhere) cannot be written, renamed or moved: say so. One whose
+  `read_only` says Apple "keeps its text in a separate file" is that large
+  from years of edit history, not its text: `icloud-notes renew NOTE --yes`
+  replaces it with a fresh copy that can be edited (it syncs, checks the
+  copy in iCloud, and moves the old note to Recently Deleted). The copy is
+  a new note, so its pin and links to it are lost: ask before running it.
+- A sync or push that exits 1 with `push_rejected` ran, but iCloud refused
+  a change: the message names it. The rest of the sync still happened.
 
 ```console
 $ icloud-notes --quiet list --folder Notes
@@ -136,6 +143,7 @@ Work/Plan.md
 | `new TITLE [--folder F] [--body T \| --file P \| --stdin]` | create (default folder: the account's "Notes"; the body goes below the title line) |
 | `write NOTE (--body T \| --file P \| --stdin) [--append] [--force] [--yes]` | replace the text `read` shows (its first line is the title), or append to it; empty text needs `--yes` (the next push deletes an empty note) |
 | `rename NOTE TITLE`, `move NOTE FOLDER`, `delete NOTE --yes`, `toggle NOTE LINE` | as in the window (LINE counts from 1 in `read`'s body) |
+| `renew NOTE --yes` | replace a note that is read-only because of its size (edit history) with a fresh, editable copy; the old one goes to Recently Deleted |
 | `resolve NOTE --all local\|remote\|both` / `--choices C1,C2,...` | settle conflict blocks (`local` = this computer, `remote` = iCloud) |
 | `recover NOTE --strip \| --synced` | unreadable conflict markers (`conflicts_unreadable`): keep every line, or the last synced text; backs up first |
 | `new-folder NAME [--in F]`, `rename-folder F NAME`, `delete-folder F --yes` | folders (a name starting with a dot, or `attachments`, is never synced, so it is refused with `usage`) |

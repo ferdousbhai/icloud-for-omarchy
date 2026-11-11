@@ -250,6 +250,27 @@ QString failedLog(const QString &name, const QJsonObject &error)
         + (hint.isEmpty() ? QString() : u'\n' + hint);
 }
 
+// The error of a push whose result holds a change that failed (iCloud
+// refused it, or something it depends on failed): `push_rejected`, with the
+// first one's message. Empty when the result has none.
+QJsonObject refusedChange(const QJsonObject &pushResult)
+{
+    QStringList messages;
+    for (const QJsonValue &entry : pushResult.value(QStringLiteral("entries")).toArray()) {
+        const QJsonValue outcome = entry.toObject().value(QStringLiteral("outcome"));
+        if (outcome.isObject() && !outcome.toObject().value(QStringLiteral("succeeded")).toBool())
+            messages << outcome.toObject().value(QStringLiteral("message")).toString();
+    }
+    if (messages.isEmpty())
+        return {};
+    return QJsonObject{ { QStringLiteral("code"), QStringLiteral("push_rejected") },
+                        { QStringLiteral("message"), messages.size() == 1
+                                                         ? messages.first()
+                                                         : QStringLiteral("%1 (and %2 more; see the log)")
+                                                               .arg(messages.first())
+                                                               .arg(messages.size() - 1) } };
+}
+
 QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
 {
     return engineError(output, stderrText).value(QStringLiteral("code")).toString();
@@ -1801,7 +1822,9 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // result, its meta the text report, logged here.
     const bool enveloped = m_mode == Mode::Plain || m_mode == Mode::Diff;
     QString diffText;
-    if (ok && enveloped) {
+    // A push that had a change refused exits 1 with its result all the same.
+    const bool refused = !ok && enveloped && !successEnvelope(output).isEmpty();
+    if ((ok || refused) && enveloped) {
         const QJsonObject envelope = successEnvelope(output);
         const QJsonValue data = envelope.value(QStringLiteral("data"));
         const QJsonObject meta = envelope.value(QStringLiteral("meta")).toObject();
@@ -1827,7 +1850,9 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     else if (ok && m_mode == Mode::History)
         parsed = SyncModel::parseHistoryJson(m_captured);
     // iCloud out of reach is not worth a failure: the next sync tries again.
-    m_lastError = ok ? QJsonObject() : engineError(output, m_capturedErr);
+    m_lastError = ok        ? QJsonObject()
+                  : refused ? refusedChange(QJsonDocument::fromJson(m_captured).object())
+                            : engineError(output, m_capturedErr);
     // A failure's output is its error, as a failed half's is: {"error":{...}}.
     if (!m_lastError.isEmpty())
         m_captured = QJsonDocument(QJsonObject{ { QStringLiteral("error"), m_lastError } }).toJson(QJsonDocument::Compact);
@@ -1941,6 +1966,13 @@ void NotesBackend::finishSyncHalves(int exitCode)
         } else {
             const QJsonObject error = half.value(QStringLiteral("error")).toObject();
             output.insert(QStringLiteral("error"), error);
+            // A push that ran but had a change refused: what it did do is
+            // in its lines, which go to the log ahead of the failure.
+            QStringList lines;
+            for (const QJsonValue &line : half.value(QStringLiteral("lines")).toArray())
+                lines << line.toString();
+            if (!lines.isEmpty())
+                appendLog(name + u":\n" + lines.join(u'\n'));
             const QString code = error.value(QStringLiteral("code")).toString();
             if (isNetworkError(code)) {
                 appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.")

@@ -45,6 +45,7 @@ timer's sync). All of it is new, in the app binary: see
 | New note (Ctrl+N) | `icloud-notes new TITLE [--folder F] [--body ...]` | added |
 | Rename (edit the title line) | `icloud-notes rename NOTE TITLE` | added |
 | Delete note (to the trash) | `icloud-notes delete NOTE --yes` | added |
+| (not in the window) replace a note that is read-only because of its size with a fresh, editable copy | `icloud-notes renew NOTE --yes` | added |
 | (not in the window) move a note to another folder | `icloud-notes move NOTE FOLDER` | added |
 | Export PDF | `icloud-notes export-pdf NOTE` | added |
 | New folder / Rename folder… / Delete folder… | `icloud-notes new-folder`, `rename-folder`, `delete-folder --yes` | added |
@@ -259,7 +260,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
   lists them all, with the output modes and the exit codes.
 - **Nothing asks unless it is in text mode with stdin and stdout on a
   terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
-  `restore`, and a `write` that empties a note, which the next push deletes;
+  `restore`, `renew`, and a `write` that empties a note, which the next push deletes;
   `icloud-photos delete`; `icloud-findmy play-sound`,
   `lost-mode`) ask there; anywhere else they refuse with `usage` (exit 2)
   unless `--yes` is given. (`icloud-session set-password` reads the password
@@ -311,8 +312,8 @@ Every code each tool can emit, by exit.
 
 | Exit | Codes |
 |---|---|
-| 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `cancelled`, `error` |
-| 2 | `usage` (also `delete`, `delete-folder`, `restore`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
+| 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `too_large`, `copy_differs` and `changed` (`renew` stopped with both notes kept; the hint says where they are), `cancelled`, `error` |
+| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `renew`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch`, `not_needed` (`renew` on a note that can be edited already, or is read-only for a reason a fresh copy does not fix) |
 | 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
@@ -405,6 +406,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `write` | `{action:"write", path, changed, sync?}` |
 | `rename`, `move` | `{action, path, from, title?, sync?}` |
 | `delete` | `{action:"delete", path, sync?}` |
+| `renew` | `{action:"renew", path, id, replaced}` (`id` the fresh copy's apple-note-id, `replaced` the old note's; it syncs by itself, several times) |
 | `toggle` | `{action:"toggle", path, line, text, sync?}` |
 | `resolve` | `{action:"resolve", path, choices, sync?}` |
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
@@ -422,7 +424,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | Command | `data` |
 |---|---|
 | `status` | `{entries:[{kind, file, resolution, reason?, ...}], unchanged, notices}` |
-| `push` (and `--dry-run`) | `{dryRun, pushed?, entries:[{kind, file, resolution, outcome?, ...}], unchanged, notices}` |
+| `push` (and `--dry-run`) | `{dryRun, pushed?, entries:[{kind, file, resolution, outcome?:{succeeded, message}, ...}], unchanged, notices}`; a push with an entry whose `outcome.succeeded` is false (iCloud refused the change) prints this all the same and exits 1 |
 | `pull` | `{added, updated, merged, removed, changes:[{kind, file}], conflicts, notices, ...}` |
 | `clone` | `{written, writtenShared, attachmentsDownloaded, notices, ...}` |
 | `history` | `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`; with `--records`, `{mode:"records", records:[...]}` |
@@ -437,8 +439,10 @@ even when a half failed: each half is `{ok, exit_code, result, lines}`
 (`result` the command's own data, `lines` its human report) or `{ok,
 exit_code, error}`; `pull` is null when it did not run (the push found the
 sign-in gone or refused, or iCloud out of reach), and `vault_info` is what
-`vault-info` would print after it. It exits 3 if either half exited 3, else
-with the worse half's code. `stateDir` is the engine's state directory,
+`vault-info` would print after it. A push half that ran but had a change
+refused is `{ok:false, exit_code:1, result, lines, error}` with the error
+`push_rejected`: its result and its error both. It exits 3 if either half
+exited 3, else with the worse half's code. `stateDir` is the engine's state directory,
 `.icloud-notes` (or a layout 3 vault's `.icloud-md`, until a command that
 takes the lock moves it; see notes-sync/docs/DESIGN.md §1). In a machine
 mode progress goes to stderr as `icloud-notes:progress:...` lines (older

@@ -124,8 +124,24 @@ shared lookup backfill; a failed download fails the fetch) and
 `doc::decode::classify_note_record` (the PR's reason string). Always on:
 every scenario records `TextDataAsset` in its `changes/zone` `desiredKeys`.
 
+Such a note can still be moved to the trash or to another folder: those
+updates leave its text alone, sending neither `TextDataAsset` nor the
+inlined `TextDataEncrypted` (`doc::encode::build_note_relocation_fields`).
+Emptying the asset, as the update for an ordinary note does, leaves the
+record with no text, which iCloud refuses ("Note record must have either
+TextDataEncrypted or TextDataAsset"). The size is nearly always edit
+history (the CRDT keeps every deleted run), so a new note with the same
+text is small again: `icloud-notes renew` makes that copy and trashes the
+old note.
+
+A push that ran but had a change refused by iCloud returns its result as
+before and exits 1 (`PushResult::failures`); in `sync` that half is
+`{ok:false, exit_code:1, result, lines, error}` with the error
+`push_rejected`.
+
 Tests: tests/cloudkit_asset_body.rs; the `asset-*` scenarios cover clone, a
-failed download, status, push and pull end to end.
+failed download, status, push and pull end to end; tests/doc_encode.rs the
+trash and move fields; tests/cmd_sync.rs the exit code.
 
 ### Records listed twice by CloudKit
 

@@ -25,6 +25,11 @@
 # engine does for a vault it cannot use (not_cloned_directory,
 # account_mismatch, ...). pull, push and clone print progress lines first,
 # as the real engine does in a machine mode.
+# ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED=1: a push (alone, or as a sync's half)
+# runs but has a change refused by iCloud: its result with the failed entry,
+# exit 1, and in a sync the half's error `push_rejected` beside the result.
+# ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS=1: a sync gives every note file that has
+# no ID block one, as pushing a new note does.
 # ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR=1: such a failure also ends stderr with
 # an older engine's one-line error (sorted keys), which the app must keep
 # out of its log.
@@ -107,6 +112,9 @@ progress() {
 sign_in_message='sign in to iCloud required'
 sign_in_hint='run `icloud-session sign-in` (a person signs in in the window)'
 rejected_message='Apple refused the iCloud session although icloud-sessiond still holds it (HTTP 401)'
+refused_message='Notes/Big.md: server rejected the delete: BAD_REQUEST'
+refused_result='{"dryRun":false,"pushed":0,"entries":[{"kind":"delete","file":"Notes/Big.md","resolution":"ready","outcome":{"succeeded":false,"message":"'"$refused_message"'"}}],"unchanged":1,"notices":[]}'
+refused_lines='["'"$refused_message"'","Pushed 0 note(s)"]'
 
 if [ "$1" = "vault-info" ]; then
   # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG: a file each vault-info appends a line to.
@@ -141,6 +149,11 @@ elif [ "$1" = "sync" ]; then
       printf '{"ok":false,"exit_code":5,"error":{"code":"offline","message":"offline: dns error: no network"}}'
       return
     fi
+    if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED:-}" ]; then
+      printf '{"ok":false,"exit_code":1,"result":%s,"lines":%s,"error":{"code":"push_rejected","message":"%s"}}' \
+        "$refused_result" "$refused_lines" "$refused_message"
+      return
+    fi
     if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
       if [ "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" = rejected ]; then
         printf '{"ok":false,"exit_code":3,"error":{"code":"session_rejected","message":"%s","hint":"%s"}}' "$rejected_message" "$sign_in_hint"
@@ -161,6 +174,13 @@ elif [ "$1" = "sync" ]; then
     [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-notes:progress:fetch:3" >&2 && echo "icloud-md:progress:fetch:3" >&2
     printf '{"ok":true,"exit_code":0,"result":{"stub":"%s","ok":true},"lines":["stub %s ok"]}' "$1" "$1"
   }
+  if [ -n "${ICLOUD_NOTES_SYNC_STUB_ASSIGN_IDS:-}" ]; then
+    while IFS= read -r -d '' f; do
+      [ "$(head -c 3 "$f")" = "---" ] && continue
+      body=$(cat "$f"; printf x)
+      printf -- '---\napple-note-id: stub-%s\n---\n%s' "$(printf %s "$f" | cksum | cut -d' ' -f1)" "${body%x}" > "$f"
+    done < <(find . -name '*.md' -not -path './.icloud-notes/*' -print0)
+  fi
   push_json=$(half push)
   pull_json=null
   case "$push_json" in
@@ -272,6 +292,10 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
       *)
         fail sign_in_required "$sign_in_message" "$sign_in_hint" 3 ;;
     esac
+  fi
+  if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED:-}" ]; then
+    result "$refused_result" "$refused_message" "{\"lines\":$refused_lines}"
+    exit 1
   fi
   result "{\"stub\":\"$1\",\"ok\":true}" "stub $1 ok" "{\"lines\":[\"stub $1 ok\"]}"
 else

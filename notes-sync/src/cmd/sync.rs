@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use super::SyncProgress;
-use super::errors::{EXIT_OK, EXIT_SIGN_IN, Error};
+use super::errors::{EXIT_ERROR, EXIT_OK, EXIT_SIGN_IN, Error};
 use super::pull::{self, PullOptions, PullSummary};
 use super::push::{self, PushOptions, PushResult};
 use super::remote::{Connector, DefaultConnector, SharedConnector};
@@ -28,9 +28,14 @@ impl SyncOutcome {
     /// for this account) if either half exited 3, since nothing else can
     /// work until that is fixed; otherwise the higher of the two halves'
     /// codes, so 5 (unavailable) > 4 (not found) > 2 (usage) > 1 (error) >
-    /// 0: a specific reason beats the generic error.
+    /// 0: a specific reason beats the generic error. A push that had a
+    /// change refused counts as 1.
     pub fn exit_code(&self) -> u8 {
-        let push = half_exit_code(&self.push);
+        let push = match &self.push {
+            // A push that ran but had a change refused is an error too.
+            Ok(result) if !result.failures().is_empty() => EXIT_ERROR,
+            half => half_exit_code(half),
+        };
         let pull = self.pull.as_ref().map_or(EXIT_OK, half_exit_code);
         if push == EXIT_SIGN_IN || pull == EXIT_SIGN_IN {
             EXIT_SIGN_IN

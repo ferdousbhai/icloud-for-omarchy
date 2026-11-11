@@ -122,6 +122,20 @@ pub struct PushResult {
     pub notices: Vec<SyncNotice>,
 }
 
+impl PushResult {
+    /// What each change that was tried and failed said: iCloud rejected it,
+    /// or something it depends on failed. Such a push still reports its
+    /// result, and exits 1.
+    pub fn failures(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.outcome.as_ref())
+            .filter(|o| !o.succeeded)
+            .map(|o| o.message.as_str())
+            .collect()
+    }
+}
+
 impl Serialize for PushResult {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;

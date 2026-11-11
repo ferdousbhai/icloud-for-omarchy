@@ -143,3 +143,37 @@ fn both_halves_share_one_connection() {
     assert!(outcome.pull.as_ref().unwrap().is_ok());
     assert_eq!((outcome.exit_code(), connects.get()), (0, 1));
 }
+
+/// A push that ran but had a change refused (iCloud rejecting a delete, say)
+/// still has its result, and the run exits 1 rather than reading as clean.
+#[test]
+fn a_push_with_a_refused_change_exits_1() {
+    let push = |succeeded: bool| -> icloud_notes_sync::cmd::push::PushResult {
+        serde_json::from_value(serde_json::json!({
+            "dryRun": false,
+            "pushed": if succeeded { 1 } else { 0 },
+            "entries": [{
+                "kind": "delete",
+                "file": "Notes/Big.md",
+                "resolution": "ready",
+                "outcome": {"succeeded": succeeded, "message": "Notes/Big.md: server rejected the delete: BAD_REQUEST"},
+            }],
+            "unchanged": 3,
+            "notices": [],
+        }))
+        .unwrap()
+    };
+    assert_eq!(
+        push(false).failures(),
+        ["Notes/Big.md: server rejected the delete: BAD_REQUEST"]
+    );
+    assert!(push(true).failures().is_empty());
+    let exit = |succeeded: bool| {
+        SyncOutcome {
+            push: Ok(push(succeeded)),
+            pull: None,
+        }
+        .exit_code()
+    };
+    assert_eq!((exit(false), exit(true)), (1, 0));
+}
