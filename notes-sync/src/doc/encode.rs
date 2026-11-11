@@ -118,11 +118,27 @@ fn build_note_relocation_fields(current: &CloudKitRecord, folder_record_name: &s
         UpdateFieldValue::new(folder_reference(folder_record_name, None)),
     );
     echo(&mut fields, current, "SnippetEncrypted");
+    // A note whose text Apple keeps in a `TextDataAsset` has no text but
+    // that: emptying the field leaves the record with none, which iCloud
+    // refuses ("Note record must have either TextDataEncrypted or
+    // TextDataAsset"). Its text is left alone: neither field is sent, the
+    // inline one included, since a reader may have filled it from the asset.
+    let text_as_asset = has_text_data_asset(current);
     for name in DELETION_EMPTY_FIELDS {
+        if text_as_asset && name == "TextDataAsset" {
+            continue;
+        }
         fields.insert(name.into(), UpdateFieldValue::EMPTY);
     }
-    echo(&mut fields, current, "TextDataEncrypted");
+    if !text_as_asset {
+        echo(&mut fields, current, "TextDataEncrypted");
+    }
     fields
+}
+
+/// Whether the note's text is stored as a `TextDataAsset` (a very large note).
+pub fn has_text_data_asset(record: &CloudKitRecord) -> bool {
+    record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null())
 }
 
 /// `buildNoteTrashFields`.

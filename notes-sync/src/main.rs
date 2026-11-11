@@ -21,7 +21,8 @@
 //! Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in / not set up, 4 not
 //! found, 5 a service unavailable (the table every iCloud tool shares;
 //! `cmd::errors`). `status`, `push --dry-run` and `diff` report their
-//! changes in the result and exit 0; `sync` reports both halves in its data
+//! changes in the result and exit 0; a `push` that had a change refused
+//! reports its result and exits 1; `sync` reports both halves in its data
 //! and exits with its worse half, a sign-in above all.
 
 use std::path::{Path, PathBuf};
@@ -111,7 +112,8 @@ enum Command {
                       answer or null}, even when a half failed; HALF is {\"ok\", \"exit_code\", \"result\" (push's or \
                       pull's own data), \"lines\" (its human report)} or {\"ok\", \"exit_code\", \"error\" \
                       ({\"code\",\"message\",\"hint\"?})}. A failed half is reported only there: no separate error \
-                      object. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
+                      object. A push that ran but had a change refused (push_rejected, exit 1) carries its result \
+                      and lines as well as the error. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
                       then). Exit code: 3 if either half exited 3 (sign-in required, or the vault not set up for this \
                       account), else the higher of the two halves' codes (5 unavailable, 4 not found, 2 usage, 1 error)."
     )]
@@ -393,6 +395,18 @@ fn sync_half_json<T: serde::Serialize>(
     }
 }
 
+/// The error of a push that ran but had changes refused (`push_rejected`):
+/// the first one's message, and how many more there were.
+fn push_failure_json(result: &push::PushResult) -> Option<serde_json::Value> {
+    let failures = result.failures();
+    let first = failures.first()?;
+    let message = match failures.len() - 1 {
+        0 => (*first).to_owned(),
+        more => format!("{first} (and {more} more; see the log)"),
+    };
+    Some(serde_json::json!({ "code": "push_rejected", "message": message }))
+}
+
 fn half_summary<T>(name: &str, half: Option<&Result<T, CliError>>) -> String {
     match half {
         Some(Ok(_)) => format!("{name} ok"),
@@ -457,11 +471,18 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let r = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
             let lines = push_lines(&r, &target);
             let report = report_lines(&lines);
+            // A change iCloud refused is in the result; the exit says so too.
+            let exit = if r.failures().is_empty() {
+                cmd::errors::EXIT_OK
+            } else {
+                cmd::errors::EXIT_ERROR
+            };
             Response::new(&r, push_summary(&r, &target))
                 .human(human(mode, lines))
                 .meta("lines", report)
                 .count(r.entries.len())
                 .ids(r.entries.iter().map(|e| e.entry.file.clone()).collect())
+                .exit(exit)
         }
         Command::Sync { directory } => {
             let target = resolve_target_dir(directory)?;
@@ -471,14 +492,25 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             // text report alike.
             let push = outcome.push.as_ref().map_err(CliError::from);
             let pull = outcome.pull.as_ref().map(|p| p.as_ref().map_err(CliError::from));
+            let mut push_half = sync_half_json(&push, |r| push_lines(r, &target));
+            let push_failure = outcome.push.as_ref().ok().and_then(push_failure_json);
+            if let Some(error) = &push_failure {
+                push_half["ok"] = false.into();
+                push_half["exit_code"] = cmd::errors::EXIT_ERROR.into();
+                push_half["error"] = error.clone();
+            }
             let data = serde_json::json!({
-                "push": sync_half_json(&push, |r| push_lines(r, &target)),
+                "push": push_half,
                 "pull": pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
                 "vault_info": vault_info::run_vault_info(&target).ok(),
             });
             let summary = format!(
                 "{}, {}",
-                half_summary("push", Some(&push)),
+                if push_failure.is_some() {
+                    "push failed (push_rejected)".to_owned()
+                } else {
+                    half_summary("push", Some(&push))
+                },
                 half_summary("pull", pull.as_ref())
             );
             // Text mode: each half's report, or its error on stderr, as push
