@@ -166,6 +166,12 @@ fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
+/// Changed so recently that it may still be being written. A date in the
+/// future (another clock, an unpacked archive) is not "recent".
+fn settling(entry: &Entry, now_ns: i64) -> bool {
+    (0..SETTLE_NS).contains(&(now_ns - entry.mtime_ns))
+}
+
 fn remote_changed(row: &Row, node: &Node) -> bool {
     node.size != row.node.size || node.mtime_ms != row.node.mtime_ms
 }
@@ -212,6 +218,30 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
         })
     };
     let here = |row: &Row| local.get(&row.path).filter(|e| e.is_dir == row.local.is_dir);
+    // Where folders are moving to, on each side. An item moved into one of
+    // them waits a round for the folder to get there first, rather than
+    // making a second folder of that name.
+    let mut dests_there: HashSet<&str> = HashSet::new();
+    let mut dests_here: HashSet<&str> = HashSet::new();
+    for row in base.iter().filter(|r| r.local.is_dir) {
+        match remote.paths.get(&row.node.id) {
+            Some(rpath) if rpath != &row.path => {
+                dests_there.insert(rpath);
+            }
+            Some(_) if here(row).is_none() => dests_here.extend(moved_here(row)),
+            _ => {}
+        }
+    }
+    let into = |dests: &HashSet<&str>, path: &str| {
+        let mut dir = parent_of(path);
+        while !dir.is_empty() {
+            if dests.contains(dir) {
+                return true;
+            }
+            dir = parent_of(dir);
+        }
+        false
+    };
 
     let mut ops = Vec::new();
     let mut moving: Vec<&str> = Vec::new();
@@ -228,6 +258,9 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             continue;
         }
         if rpath != &row.path {
+            if into(&dests_there, rpath) {
+                continue;
+            }
             // Moved in iCloud. Find it here: where it was, or where it was moved to.
             let from = if here(row).is_some() {
                 Some(row.path.as_str())
@@ -273,6 +306,9 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             if remote.by_path.contains_key(to) || unseen(to) {
                 // Something else took that name in iCloud: leave it to the
                 // content rules (this one reads as deleted here).
+                continue;
+            }
+            if into(&dests_here, to) {
                 continue;
             }
             // Folders it was moved into that iCloud does not have yet.
@@ -415,7 +451,7 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
                 (false, false) => {}
                 (true, false) => plan.ops.push(Op::Download { id, path }),
                 (false, true) => {
-                    if now_ns - e.mtime_ns < SETTLE_NS {
+                    if settling(e, now_ns) {
                         plan.pending.push(path);
                     } else {
                         plan.ops.push(Op::Replace { id, path });
@@ -525,7 +561,7 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
         if entry.is_dir {
             plan.ops.push(Op::MkdirRemote { path: path.clone() });
             ready.insert(path.clone());
-        } else if now_ns - entry.mtime_ns < SETTLE_NS {
+        } else if settling(entry, now_ns) {
             plan.pending.push(path.clone());
         } else {
             plan.ops.push(Op::Upload { path: path.clone() });

@@ -82,44 +82,47 @@ impl State {
 
     /// Every row, parents before children.
     pub fn rows(&self) -> rusqlite::Result<Vec<Row>> {
-        let mut stmt = self.db.prepare(
-            "SELECT id, docwsid, zone, parent, name, is_dir, etag, size, mtime_ms, path, l_size, l_mtime_ns, l_ino FROM items",
-        )?;
-        let mut rows = stmt
-            .query_map([], |r| {
-                let is_dir = r.get::<_, i64>(5)? != 0;
-                Ok(Row {
-                    node: Node {
-                        id: r.get(0)?,
-                        docwsid: r.get(1)?,
-                        zone: r.get(2)?,
-                        parent: r.get(3)?,
-                        name: r.get(4)?,
-                        kind: if is_dir { Kind::Folder } else { Kind::File },
-                        etag: r.get(6)?,
-                        size: r.get::<_, i64>(7)? as u64,
-                        mtime_ms: r.get(8)?,
-                    },
-                    path: r.get(9)?,
-                    local: Entry {
-                        is_dir,
-                        size: r.get::<_, i64>(10)? as u64,
-                        mtime_ns: r.get(11)?,
-                        ino: r.get::<_, i64>(12)? as u64,
-                    },
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut rows = self.select("", [])?;
         rows.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(rows)
     }
 
     pub fn row_at(&self, path: &str) -> rusqlite::Result<Option<Row>> {
-        Ok(self.rows()?.into_iter().find(|r| r.path == path))
+        Ok(self.select("WHERE path = ?1", [path])?.pop())
     }
 
     pub fn row(&self, id: &str) -> rusqlite::Result<Option<Row>> {
-        Ok(self.rows()?.into_iter().find(|r| r.node.id == id))
+        Ok(self.select("WHERE id = ?1", [id])?.pop())
+    }
+
+    fn select(&self, filter: &str, params: impl rusqlite::Params) -> rusqlite::Result<Vec<Row>> {
+        let mut stmt = self.db.prepare(&format!(
+            "SELECT id, docwsid, zone, parent, name, is_dir, etag, size, mtime_ms, path, l_size, l_mtime_ns, l_ino FROM items {filter}"
+        ))?;
+        stmt.query_map(params, |r| {
+            let is_dir = r.get::<_, i64>(5)? != 0;
+            Ok(Row {
+                node: Node {
+                    id: r.get(0)?,
+                    docwsid: r.get(1)?,
+                    zone: r.get(2)?,
+                    parent: r.get(3)?,
+                    name: r.get(4)?,
+                    kind: if is_dir { Kind::Folder } else { Kind::File },
+                    etag: r.get(6)?,
+                    size: r.get::<_, i64>(7)? as u64,
+                    mtime_ms: r.get(8)?,
+                },
+                path: r.get(9)?,
+                local: Entry {
+                    is_dir,
+                    size: r.get::<_, i64>(10)? as u64,
+                    mtime_ns: r.get(11)?,
+                    ino: r.get::<_, i64>(12)? as u64,
+                },
+            })
+        })?
+        .collect()
     }
 
     /// Records an item as in step. A row that held the path for another id

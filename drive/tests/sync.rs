@@ -145,7 +145,13 @@ impl Fake {
         let resized = node.size != text.len() as u64;
         node.size = text.len() as u64;
         node.mtime_ms = mtime_ms;
-        if resized { c.touch(id) } else { c.touch_item(id) }
+        if resized {
+            c.touch(id)
+        } else {
+            c.touch_item(id)
+        }
+        // A content edit is a documentContent record, which names no parent.
+        c.feed.last_mut().unwrap().2.clear();
     }
     fn rename_item(&self, id: &str, name: &str) {
         let mut c = self.0.borrow_mut();
@@ -243,6 +249,10 @@ impl Remote for Fake {
     fn replace(&self, node: &Node, path: &Path, mtime_ms: i64) -> remote::Result<Node> {
         let bytes = fs::read(path)?;
         let mut c = self.0.borrow_mut();
+        // `allow_conflict: false`: a stale etag is refused, as iCloud does.
+        if c.nodes.get(&node.id).is_some_and(|n| n.etag != node.etag) {
+            return Err(remote::Error::Stale(node.name.clone()));
+        }
         c.uploads += 1;
         c.content.insert(node.id.clone(), bytes.clone());
         let n = c
@@ -410,6 +420,25 @@ fn edits_on_both_sides_keep_both_files() {
 }
 
 #[test]
+fn an_icloud_edit_its_size_and_date_hide_still_keeps_both_files() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    // Same size, same date (a copy that kept its time): only the etag shows it.
+    bed.cloud.edit(&a.id, "ONE", a.mtime_ms);
+    bed.write("a.txt", "mine");
+    bed.settle();
+    assert_eq!(bed.read("a.txt").as_deref(), Some("ONE"));
+    let copy = bed
+        .local_paths()
+        .into_iter()
+        .find(|p| p.contains("conflicted copy desk"))
+        .expect("a conflicted copy");
+    assert_eq!(bed.read(&copy).as_deref(), Some("mine"));
+    assert_eq!(bed.cloud.text(&copy).as_deref(), Some("mine"));
+}
+
+#[test]
 fn a_removal_goes_to_the_other_sides_trash() {
     let bed = Bed::new();
     let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
@@ -464,6 +493,36 @@ fn a_rename_or_move_here_is_not_an_upload() {
     assert_eq!(bed.cloud.id_at("Papers").as_deref(), Some(docs.id.as_str()));
     assert_eq!(bed.cloud.text("Papers/in.txt").as_deref(), Some("inside"));
     assert!(bed.cloud.0.borrow().trashed.is_empty());
+}
+
+#[test]
+fn a_folder_renamed_here_with_a_file_moved_into_it_stays_one_folder() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "zDocs");
+    bed.cloud.file(&docs.id, "in.txt", "inside", bed.time());
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("zDocs"), bed.root().join("Papers")).unwrap();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Papers/a.txt")).unwrap();
+    bed.settle();
+    assert_eq!(bed.cloud.id_at("Papers").as_deref(), Some(docs.id.as_str()));
+    assert_eq!(bed.cloud.id_at("Papers/a.txt").as_deref(), Some(a.id.as_str()));
+    assert_eq!(bed.cloud.paths(), ["Papers", "Papers/a.txt", "Papers/in.txt"]);
+}
+
+#[test]
+fn a_folder_renamed_in_icloud_with_a_file_moved_into_it_stays_one_folder() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    bed.cloud.file(&docs.id, "in.txt", "inside", bed.time());
+    let apple = bed.cloud.file(ROOT_ID, "Apple.txt", "one", bed.time());
+    bed.settle();
+    bed.cloud.rename_item(&docs.id, "Zed");
+    let node = bed.cloud.0.borrow().nodes[&apple.id].clone();
+    bed.cloud.move_to(&node, &docs.id).unwrap();
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["Zed", "Zed/Apple.txt", "Zed/in.txt"]);
+    assert_eq!(bed.read("Zed/Apple.txt").as_deref(), Some("one"));
 }
 
 #[test]
@@ -536,6 +595,35 @@ fn a_missing_folder_is_not_read_as_everything_deleted() {
     fs::remove_dir_all(bed.root()).unwrap();
     assert!(matches!(bed.try_sync(true), Err(Error::FolderMissing(_))));
     assert_eq!(bed.cloud.paths(), ["a.txt"]);
+}
+
+#[test]
+fn an_emptied_folder_is_not_read_as_everything_deleted_unless_allowed() {
+    let bed = Bed::new();
+    bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.cloud.file(ROOT_ID, "b.txt", "two", bed.time());
+    bed.settle();
+    // What an unmounted disk's mount point looks like.
+    fs::remove_file(bed.root().join("a.txt")).unwrap();
+    fs::remove_file(bed.root().join("b.txt")).unwrap();
+    assert!(matches!(bed.try_sync(false), Err(Error::TooManyDeletions { .. })));
+    assert_eq!(bed.cloud.paths(), ["a.txt", "b.txt"]);
+    bed.try_sync(true).unwrap();
+    assert!(bed.cloud.paths().is_empty());
+}
+
+#[test]
+fn a_file_dated_in_the_future_is_still_sent() {
+    let bed = Bed::new();
+    bed.write("a.txt", "from another clock");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let later = now.as_millis() as i64 + 3_600_000;
+    local::set_mtime(&bed.root().join("a.txt"), later).unwrap();
+    let outcome = bed.sync();
+    assert!(outcome.pending.is_empty(), "{:?}", outcome.pending);
+    assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("from another clock"));
 }
 
 #[test]

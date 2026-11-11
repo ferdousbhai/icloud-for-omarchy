@@ -64,6 +64,11 @@ fn walk(dir: &Path, prefix: &str, entries: &mut BTreeMap<String, Entry>, skipped
             continue;
         };
         if name.starts_with('.') {
+            // A download a crash cut short (engine.rs names them so); only
+            // one sync runs at a time, so none is still being written.
+            if name.starts_with(".icloud-drive-") && name.ends_with(".part") {
+                let _ = fs::remove_file(item.path());
+            }
             continue;
         }
         let rel = path(name);
@@ -220,6 +225,7 @@ mod tests {
         fs::write(root.join("a/b/c.txt"), "c").unwrap();
         fs::write(root.join("a/x:y.txt"), "bad").unwrap();
         fs::write(root.join(".hidden"), "h").unwrap();
+        fs::write(root.join("a/.icloud-drive-0123.part"), "cut short").unwrap();
         fs::write(root.join("Case.txt"), "1").unwrap();
         fs::write(root.join("case.txt"), "2").unwrap();
         std::os::unix::fs::symlink("a", root.join("link")).unwrap();
@@ -229,6 +235,8 @@ mod tests {
         assert_eq!(entries["a/b/c.txt"].size, 1);
         let reasons: Vec<_> = skipped.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(reasons, ["Case.txt", "a/x:y.txt", "case.txt", "link"]);
+        assert!(!root.join("a/.icloud-drive-0123.part").exists());
+        assert!(root.join(".hidden").exists());
     }
 
     #[test]

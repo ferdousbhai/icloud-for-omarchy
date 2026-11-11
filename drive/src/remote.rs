@@ -45,6 +45,10 @@ pub enum Error {
     /// A package (a Pages document, an app bundle): not a plain file.
     #[error("{0} is a package, which is not synced")]
     Package(String),
+    /// A replace refused because the file changed in iCloud since it was
+    /// listed (409 on a stale etag).
+    #[error("{0} changed in iCloud meanwhile")]
+    Stale(String),
     /// The change feed cannot continue from the token it was given.
     #[error("iCloud's change feed starts over")]
     FeedReset,
@@ -55,6 +59,18 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// A content host's 401 or 403 means its signed URL expired, not that the
+/// session did (the session crate leaves that call to the tool): a problem
+/// with this one file, tried again next sync.
+fn content_host(e: icloud_session::Error) -> Error {
+    match e {
+        icloud_session::Error::Http { status: 401 | 403, .. } => {
+            Error::Api("iCloud's upload or download link expired".into())
+        }
+        other => Error::Session(other),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -313,7 +329,21 @@ impl DriveApi {
     /// the new document id and the `data` object the last step names.
     fn send_content(&self, zone: &str, name: &str, path: &Path) -> Result<(String, Value)> {
         let docws = self.service("docws")?;
-        let size = std::fs::metadata(path)?.len();
+        // The content host wants a multipart form. The session crate
+        // streams a file as a request body, so the form is written to a
+        // temp file in the cache folder, not held in memory. It is written
+        // before the upload URL is asked for, so a large file's copy does
+        // not use up the signed URL's lifetime.
+        let boundary = format!("----icloud-drive-{}", uuid::Uuid::new_v4().simple());
+        let mut form = tempfile_in_tmp()?;
+        let safe_name = name.replace(['"', '\r', '\n'], "_");
+        write!(
+            form.file,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{safe_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )?;
+        let size = std::io::copy(&mut std::fs::File::open(path)?, &mut form.file)?;
+        write!(form.file, "\r\n--{boundary}--\r\n")?;
+        form.file.flush()?;
         let slot: Value = self
             .session
             .post_json(
@@ -324,22 +354,10 @@ impl DriveApi {
         let (Some(document_id), Some(url)) = (slot[0]["document_id"].as_str(), slot[0]["url"].as_str()) else {
             return Err(Error::Api(format!("no upload URL for {name}")));
         };
-        // The content host wants a multipart form. The session crate
-        // streams a file as a request body, so the form is written to a
-        // temp file in the cache folder, not held in memory.
-        let boundary = format!("----icloud-drive-{}", uuid::Uuid::new_v4().simple());
-        let mut form = tempfile_in_tmp()?;
-        let safe_name = name.replace(['"', '\r', '\n'], "_");
-        write!(
-            form.file,
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{safe_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-        )?;
-        std::io::copy(&mut std::fs::File::open(path)?, &mut form.file)?;
-        write!(form.file, "\r\n--{boundary}--\r\n")?;
-        form.file.flush()?;
         let sent: Value = self
             .session
-            .post_file(url, &format!("multipart/form-data; boundary={boundary}"), &form.path)?
+            .post_file(url, &format!("multipart/form-data; boundary={boundary}"), &form.path)
+            .map_err(content_host)?
             .json()?;
         let file = &sent["singleFile"];
         if file["fileChecksum"].is_null() {
@@ -490,10 +508,7 @@ impl Remote for DriveApi {
                 }),
             )
             .map_err(|e| match e {
-                Error::Session(icloud_session::Error::Http { status: 409, .. }) => Error::Api(format!(
-                    "{} changed in iCloud meanwhile; the next sync keeps both versions",
-                    node.name
-                )),
+                Error::Session(icloud_session::Error::Http { status: 409, .. }) => Error::Stale(node.name.clone()),
                 other => other,
             })?;
         // The answer's parent is the same folder; keep the id we know.
@@ -552,7 +567,7 @@ impl Remote for DriveApi {
         let url = token["data_token"]["url"]
             .as_str()
             .ok_or_else(|| Error::Api(format!("no download URL for {}", node.name)))?;
-        let written = self.session.download(url, dest)?;
+        let written = self.session.download(url, dest).map_err(content_host)?;
         if written != node.size {
             let _ = std::fs::remove_file(dest);
             return Err(Error::Api(format!(

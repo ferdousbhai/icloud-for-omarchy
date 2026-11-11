@@ -123,7 +123,9 @@ fn describe(op: &Op) -> String {
 /// other (no network, signed out, iCloud in trouble) ends the run.
 fn is_item_problem(e: &Error) -> bool {
     match e {
-        Error::Remote(remote::Error::Api(_) | remote::Error::Package(_) | remote::Error::Listing { .. }) => true,
+        Error::Remote(
+            remote::Error::Api(_) | remote::Error::Stale(_) | remote::Error::Package(_) | remote::Error::Listing { .. },
+        ) => true,
         Error::Remote(remote::Error::Session(icloud_session::Error::Http { status, .. })) => {
             (400..500).contains(status) && !matches!(status, 401 | 421 | 423 | 429)
         }
@@ -235,12 +237,15 @@ impl<R: Remote> Engine<'_, R> {
         for _ in 0..MAX_ROUNDS {
             let nodes = self.crawl()?;
             let snapshot = Snapshot::build_below(&self.top.id, &nodes);
+            let base = self.state.rows()?;
             let (entries, skipped) = if self.root.is_dir() {
                 local::scan(&self.root)?
-            } else {
+            } else if base.is_empty() {
                 Default::default()
+            } else {
+                // Gone since the last round (unmounted, renamed).
+                return Err(Error::FolderMissing(self.root.clone()));
             };
-            let base = self.state.rows()?;
             let context = plan::Context {
                 ignored: self.state.ignored()?,
                 unknown: skipped
@@ -266,7 +271,10 @@ impl<R: Remote> Engine<'_, R> {
                 .collect();
 
             let allowed = FREE_DELETIONS.max(base.len() / 4);
-            if plan.deletions > allowed && !allow_deletes {
+            // An emptied folder is never read as removals without being told:
+            // it is as likely an unmounted disk's mount point as a clear-out.
+            let emptied = entries.is_empty() && plan.ops.iter().any(|op| matches!(op, Op::TrashRemote { .. }));
+            if (plan.deletions > allowed || emptied) && !allow_deletes {
                 return Err(Error::TooManyDeletions {
                     deletions: plan.deletions,
                     total: base.len(),
@@ -277,9 +285,9 @@ impl<R: Remote> Engine<'_, R> {
                 return Ok(outcome);
             }
             let before = outcome.done.len();
-            self.apply(&plan, &snapshot, &mut outcome)?;
+            let set_aside = self.apply(&plan, &snapshot, &mut outcome)?;
             // Another round only if this one got somewhere.
-            if !plan.again || outcome.done.len() == before {
+            if !(plan.again || set_aside) || outcome.done.len() == before {
                 break;
             }
         }
@@ -287,18 +295,34 @@ impl<R: Remote> Engine<'_, R> {
         Ok(outcome)
     }
 
-    fn apply(&mut self, plan: &Plan, snapshot: &Snapshot, outcome: &mut Outcome) -> Result<()> {
+    /// True when a file was set aside as a conflicted copy, which another
+    /// round sends up.
+    fn apply(&mut self, plan: &Plan, snapshot: &Snapshot, outcome: &mut Outcome) -> Result<bool> {
+        let mut set_aside = false;
         for op in &plan.ops {
             let line = describe(op);
             (self.progress)(&line);
-            match self.apply_one(op, snapshot) {
-                Ok(true) => outcome.done.push(line),
-                Ok(false) => {}
-                Err(e) if is_item_problem(&e) => outcome.problems.push(format!("{line}: {e}")),
-                Err(e) => return Err(e),
+            match (self.apply_one(op, snapshot), op) {
+                (Ok(true), _) => outcome.done.push(line),
+                (Ok(false), _) => {}
+                // Changed in iCloud in a way its size and date did not show:
+                // both are kept, ours as a conflicted copy, and the next
+                // round downloads iCloud's and uploads the copy.
+                (Err(Error::Remote(remote::Error::Stale(_))), Op::Replace { id, path }) => {
+                    let from = self.abs(path);
+                    let date = &icloud_session::time::rfc3339(now_ms() / 1000)[..10];
+                    fs::rename(&from, local::conflict_path(&from, &self.host, date))?;
+                    self.state.forget(id)?;
+                    outcome.done.push(format!(
+                        "keep {path} as a conflicted copy (it changed in iCloud meanwhile)"
+                    ));
+                    set_aside = true;
+                }
+                (Err(e), _) if is_item_problem(&e) => outcome.problems.push(format!("{line}: {e}")),
+                (Err(e), _) => return Err(e),
             }
         }
-        Ok(())
+        Ok(set_aside)
     }
 
     fn abs(&self, path: &str) -> PathBuf {
@@ -461,7 +485,16 @@ impl<R: Remote> Engine<'_, R> {
                         return Err(e.into());
                     }
                 }
-                fs::rename(&temp, &dest)?;
+                // Looked at again: an edit saved while it came down is kept,
+                // and the next round sees both sides changed.
+                if self.stat(path)? != current {
+                    let _ = fs::remove_file(&temp);
+                    return Ok(false);
+                }
+                if let Err(e) = fs::rename(&temp, &dest) {
+                    let _ = fs::remove_file(&temp);
+                    return Err(e.into());
+                }
                 let local = self.need_stat(path)?;
                 self.state.put(&Row {
                     node,
@@ -562,13 +595,11 @@ impl<R: Remote> Engine<'_, R> {
         let stamp = icloud_session::time::rfc3339(now_ms() / 1000);
         match local::trash(&self.abs(path), &self.trash_dir, &stamp) {
             Ok(_) => Ok(()),
-            // The trash is on another file system: keep it beside the folder.
+            // The trash is on another file system (the folder is a disk of
+            // its own): keep a trash inside the folder, which is on the same
+            // one. Hidden, so it is not synced.
             Err(e) if e.raw_os_error() == Some(18) => {
-                let beside = self.root.with_file_name(format!(
-                    ".{} removed",
-                    self.root.file_name().unwrap_or_default().to_string_lossy()
-                ));
-                local::trash(&self.abs(path), &beside, &stamp)?;
+                local::trash(&self.abs(path), &self.root.join(".icloud-drive-trash"), &stamp)?;
                 Ok(())
             }
             Err(e) => Err(e.into()),
