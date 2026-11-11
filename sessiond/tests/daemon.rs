@@ -1171,6 +1171,8 @@ fn sign_in_closed_or_without_params() {
     watch.window_opened();
     let closed = watch.window_closed();
     assert!(!closed.signed_in, "{closed:?}");
+    // Closed by the person: nothing went wrong to report.
+    assert_eq!(closed.sign_out_reason, None);
     assert_eq!(server.count(VALIDATE), 0);
 
     icloud_session::sign_in_on(&conn).unwrap();
@@ -1181,6 +1183,64 @@ fn sign_in_closed_or_without_params() {
     assert_eq!(q["clientBuildNumber"], "2624Build27");
     assert_eq!(q["clientMasteringNumber"], "2624Build27");
     assert_eq!(q["clientId"].len(), 36, "a fresh UUID");
+}
+
+/// A sign-in the person finished that could not be kept says why, where
+/// they look and across a restart, rather than only in the journal.
+#[test]
+fn a_sign_in_that_cannot_be_kept_says_why() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let capture =
+        json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null}]});
+    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        seed: false,
+        ..Default::default()
+    });
+    // The keyring refuses the session: a directory where its file goes.
+    fs::create_dir(env.secrets_path()).unwrap();
+    let out = env.cli(&["sign-in", "--json"]);
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = machine_error(&out);
+    assert_eq!(err["error"]["code"], "sign_in_not_completed", "{err}");
+    let message = err["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("The last sign-in could not be kept: storing the session's cookies in the keyring failed"),
+        "{message}"
+    );
+    assert_eq!(err["error"]["hint"], icloud_session::output::KEYRING_HINT, "{err}");
+    let reason = env.cli_status()["sign_out_reason"].as_str().unwrap().to_string();
+    assert!(reason.contains("keyring"), "{reason}");
+    assert_eq!(
+        fs::read_to_string(env.root().join("state/icloud-session/sign-out-reason"))
+            .unwrap()
+            .trim(),
+        reason
+    );
+
+    // A window that cannot start says how to get it back.
+    let env = Env::start(Opts {
+        signin: Some("/nonexistent-signin"),
+        seed: false,
+        ..Default::default()
+    });
+    let err = machine_error(&env.cli(&["sign-in", "--json"]));
+    assert_eq!(err["error"]["code"], "sign_in_not_completed", "{err}");
+    let message = err["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("is not installed; reinstall icloud-session"),
+        "{message}"
+    );
+    assert_eq!(
+        err["error"]["hint"], "run `icloud-session sign-in` again and finish in the window",
+        "{err}"
+    );
 }
 
 #[test]

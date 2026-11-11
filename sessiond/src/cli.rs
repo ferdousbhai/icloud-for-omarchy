@@ -292,8 +292,13 @@ fn sign_in() -> Outcome {
         Some(reason) => format!("sign-in did not complete: the window closed and you are still signed out ({reason})"),
         None => "sign-in did not complete: the window closed and you are still signed out".into(),
     };
-    Err(CliError::new("sign_in_not_completed", EXIT_SIGN_IN, message)
-        .hint("run `icloud-session sign-in` again and finish in the window"))
+    // A sign-in kept from being stored by the keyring fails again the
+    // same way until the keyring answers.
+    let hint = match &s.sign_out_reason {
+        Some(reason) if reason.contains("keyring") => output::KEYRING_HINT,
+        _ => "run `icloud-session sign-in` again and finish in the window",
+    };
+    Err(CliError::new("sign_in_not_completed", EXIT_SIGN_IN, message).hint(hint))
 }
 
 fn authorize_find_my() -> Outcome {

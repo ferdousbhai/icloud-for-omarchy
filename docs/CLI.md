@@ -290,7 +290,7 @@ Every code each tool can emit, by exit.
 |---|---|
 | 1 | `error` (icloud-sessiond answered with a failure), `io`, `http` (a 4xx), `skill_unmanaged` (a path `skill install` did not write is in the way) |
 | 2 | `usage` |
-| 3 | `sign_in_required`, `sign_in_not_completed` (the window closed and you are still signed out), `find_my_auth_required`, `find_my_auth_not_completed`, `password_rejected` (Apple refused the password given to `set-password`), `session_rejected` (Apple keeps answering 401/421 although icloud-sessiond still holds the session: sign in again); also `status` while signed out (the status is printed) |
+| 3 | `sign_in_required`, `sign_in_not_completed` (the window closed and you are still signed out; when the sign-in could not be kept, such as a keyring that refused it, the message says why and `sign_out_reason` keeps it), `find_my_auth_required`, `find_my_auth_not_completed`, `password_rejected` (Apple refused the password given to `set-password`), `session_rejected` (Apple keeps answering 401/421 although icloud-sessiond still holds the session: sign in again); also `status` while signed out (the status is printed) |
 | 5 | `session_service` (icloud-sessiond unreachable), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `bad_response` (Apple answered with something unreadable), `http` (a 5xx) |
 
 **icloud-notes**
@@ -356,7 +356,8 @@ success they print only the error):
 ```
 
 `expires_at` is Unix seconds (null for a sign-in without "Keep me signed
-in"); `sign_out_reason` says why the account was last signed out.
+in"); `sign_out_reason` says why the account was last signed out, or why
+the last sign-in could not be kept.
 
 | Command | `data` |
 |---|---|

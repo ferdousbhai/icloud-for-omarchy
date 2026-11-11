@@ -249,8 +249,8 @@ struct State {
     /// that were already waiting share that answer rather than each
     /// asking (and prompting) again.
     keyring_failed: Option<(Instant, String)>,
-    /// Why the account was last signed out (a `SignOutReason`), as
-    /// `sign-out-reason` keeps it; empty once signed in, and before anyone
+    /// Why the account was last signed out, or the last sign-in could not
+    /// be kept (a `SignOutReason`), as `sign-out-reason` keeps it; empty once signed in, and before anyone
     /// ever was.
     sign_out_reason: String,
 }
@@ -1385,17 +1385,41 @@ impl Daemon {
         let me = self.clone();
         thread::spawn(move || {
             let result = me.run_sign_in(seq, find);
-            if let Err(e) = &result {
-                let what = if find { "Find My authorization" } else { "sign-in" };
-                eprintln!("icloud-sessiond: {what}: {e}");
-            }
+            let what = if find { "Find My authorization" } else { "sign-in" };
+            let failed = match &result {
+                Ok(()) => None,
+                Err(NotKept::Closed(e)) => {
+                    eprintln!("icloud-sessiond: {what}: {e}");
+                    None
+                }
+                Err(NotKept::Failed(e)) => {
+                    eprintln!("icloud-sessiond: {what}: {e}");
+                    (!find).then_some(e)
+                }
+            };
+            // A sign-in the person finished that could not be kept says
+            // why where they look (status, the apps' banner, the CLI), not
+            // only in the journal. Lock order: `written`, then `state`.
+            let mut written = failed.map(|_| lock(&me.written));
             let mut st = lock(&me.state);
+            let mut reason = None;
             // A SignOut (and maybe a new SignIn) took over this window.
             if st.signin_seq == seq {
                 st.signing_in = false;
+                if let Some(e) = failed
+                    && st.account.is_none()
+                    && st.unread.is_none()
+                {
+                    st.sign_out_reason = format!("The last sign-in could not be kept: {e}");
+                    reason = Some(st.sign_out_reason.clone());
+                }
             }
             st.last_activity = Instant::now();
             drop(st);
+            if let (Some(reason), Some(written)) = (reason, written.as_mut()) {
+                store_reason(&me.cfg.paths.sign_out_reason, written, &reason);
+            }
+            drop(written);
             me.publish();
             if result.is_ok() && !find {
                 me.refresh_password_stored();
@@ -1500,9 +1524,9 @@ impl Daemon {
     /// Runs the sign-in window, validates what it captured, stores it.
     /// With `find` the window authorizes Find My (`--find`), and what it
     /// captures is kept as the Find My jar instead (see [`FindMyJar`]).
-    fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), String> {
+    fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), NotKept> {
         let bin = &self.cfg.signin_bin;
-        let cancelled = || "cancelled by SignOut".to_string();
+        let cancelled = || NotKept::Closed("cancelled by SignOut".into());
         let cookies = self.window_cookies();
         let (mut stdout, stdin, window) = {
             // Spawned under the slot's lock, so a SignOut either sees the
@@ -1550,7 +1574,10 @@ impl Daemon {
         drop(window);
         read.map_err(|e| format!("reading the sign-in window's output: {e}"))?;
         if !status.success() {
-            return Err(format!("{} exited with {status} (window closed?)", bin.display()));
+            return Err(NotKept::Closed(format!(
+                "{} exited with {status} (window closed?)",
+                bin.display()
+            )));
         }
         if find {
             let capture = find_my_capture(&out)?;
@@ -1560,13 +1587,15 @@ impl Daemon {
                 ServiceError::KeyringUnavailable(why) => format!("the keyring is unavailable: {why}"),
                 e => e.to_string(),
             })?;
-            return self.store_find_my(seq, capture);
+            return Ok(self.store_find_my(seq, capture)?);
         }
         let capture = parse_capture(&out)?;
         let trust = capture.trust();
         let (mut jar, params) = capture.into_parts();
         if jar.is_empty() {
-            return Err("the sign-in window captured no icloud.com cookies".into());
+            return Err(NotKept::Failed(
+                "the sign-in window captured no icloud.com cookies".into(),
+            ));
         }
         let now = time::now_secs();
         let v = apple::validate(
@@ -1930,6 +1959,20 @@ impl Daemon {
     }
 }
 
+/// Why [`Daemon::run_sign_in`] kept nothing.
+enum NotKept {
+    /// The window closed without a sign-in, or a SignOut closed it.
+    Closed(String),
+    /// The window could not start, or what it captured could not be kept.
+    Failed(String),
+}
+
+impl From<String> for NotKept {
+    fn from(e: String) -> NotKept {
+        NotKept::Failed(e)
+    }
+}
+
 /// A running sign-in window ([`Daemon::window_opened`]). When the last one
 /// closes, a WebKit HTTP cache (`WebKitCache`) left on disk goes. The
 /// window's own profile is in memory only, its device trust kept in the
@@ -2100,8 +2143,8 @@ impl Service {
         self.props().signing_in
     }
 
-    /// Why the account was last signed out, worded for a sign-in banner;
-    /// empty while signed in, and before anyone ever signed in.
+    /// Why the account was last signed out (or the last sign-in could not
+    /// be kept), worded for a sign-in banner; empty while signed in, and before anyone ever signed in.
     #[zbus(property, name = "SignOutReason")]
     fn sign_out_reason(&self) -> String {
         self.props().sign_out_reason

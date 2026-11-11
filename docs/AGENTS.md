@@ -71,7 +71,8 @@ Needs a human, always:
   window; the person types the password and the two-factor code there
   (ticking "Keep me signed in", and "Trust", makes it last about 30 days).
   The command waits for the window and exits 0 once signed in, 3
-  (`sign_in_not_completed`) if it was closed without. `--no-wait` returns at
+  (`sign_in_not_completed`) if it was closed without, or the sign-in could
+  not be kept (the message and `sign_out_reason` say why). `--no-wait` returns at
   once; poll `icloud-session --quiet status` until `signing_in` is false.
 - **Find My's password page** (exit 3, `find_my_auth_required`, from
   `icloud-findmy`): `icloud-session authorize-find-my`, the same way. Once
