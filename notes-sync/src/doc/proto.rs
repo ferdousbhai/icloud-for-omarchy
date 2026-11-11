@@ -45,6 +45,16 @@ fn err<T>(message: impl Into<String>) -> ProtoResult<T> {
 
 const RECURSION_LIMIT: u32 = 100;
 
+/// How much one decode may build, in bytes of the structs it allocates: the
+/// `size_of` of each repeated element (message or scalar) and of each kept
+/// unknown field with its data; singular messages live inline in their
+/// parent. A zero-length repeated message is two bytes on the wire but a
+/// whole struct in memory - an `AttributeRun` is hundreds of bytes - so the
+/// inflate cap alone would let a ~64 KB hostile document grow to tens of GiB.
+/// Real notes build about 12 times their inflated size and real tables up to
+/// 30, so this still takes a note of tens of MiB.
+pub const MAX_DECODED_BYTES: usize = 512 << 20;
+
 pub const WIRE_VARINT: u8 = 0;
 pub const WIRE_BIT64: u8 = 1;
 pub const WIRE_LENGTH_DELIMITED: u8 = 2;
@@ -69,11 +79,31 @@ pub struct UnknownField {
 pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
+    /// What is left of the decode budget ([`MAX_DECODED_BYTES`]).
+    budget: usize,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Reader { buf, pos: 0 }
+        Reader {
+            buf,
+            pos: 0,
+            budget: MAX_DECODED_BYTES,
+        }
+    }
+
+    /// Spends `bytes` of the decode budget; past it the decode fails.
+    fn charge(&mut self, bytes: usize) -> ProtoResult<()> {
+        match self.budget.checked_sub(bytes) {
+            Some(left) => {
+                self.budget = left;
+                Ok(())
+            }
+            None => err(format!(
+                "cannot decode from binary: the message builds past {} MiB",
+                MAX_DECODED_BYTES >> 20
+            )),
+        }
     }
 
     fn next_byte(&mut self) -> u8 {
@@ -428,6 +458,7 @@ pub trait Message: Default + Clone + fmt::Debug + PartialEq {
             let (no, wire_type) = r.tag()?;
             if !self.read_field(no, wire_type, r, depth)? {
                 let data = r.skip(wire_type, no, i64::from(RECURSION_LIMIT) - i64::from(depth))?;
+                r.charge(std::mem::size_of::<UnknownField>() + data.len())?;
                 self.unknown_fields_mut().push(UnknownField { no, wire_type, data });
             }
         }
@@ -435,8 +466,15 @@ pub trait Message: Default + Clone + fmt::Debug + PartialEq {
     }
 
     fn decode(bytes: &[u8]) -> ProtoResult<Self> {
+        Self::decode_within(bytes, MAX_DECODED_BYTES)
+    }
+
+    /// [`Message::decode`] building at most `budget` bytes (see
+    /// [`MAX_DECODED_BYTES`]).
+    fn decode_within(bytes: &[u8], budget: usize) -> ProtoResult<Self> {
         let mut message = Self::default();
         let mut r = Reader::new(bytes);
+        r.budget = budget;
         message.merge_from(&mut r, bytes.len(), 0)?;
         Ok(message)
     }
@@ -503,9 +541,11 @@ pub mod kind {
                 let len = r.uint32()? as usize;
                 let end = r.pos + len;
                 while r.pos < end {
+                    r.charge(std::mem::size_of::<S::V>())?;
                     slot.push(S::read(r)?);
                 }
             } else {
+                r.charge(std::mem::size_of::<S::V>())?;
                 slot.push(S::read(r)?);
             }
             Ok(())
@@ -564,6 +604,7 @@ pub mod kind {
         use super::*;
         pub type Ty<M> = Vec<M>;
         pub fn read<M: Message>(slot: &mut Ty<M>, r: &mut Reader, _wt: u8, depth: u32) -> ProtoResult<()> {
+            r.charge(std::mem::size_of::<M>())?;
             let mut m = M::default();
             read_message(&mut m, r, depth)?;
             slot.push(m);
