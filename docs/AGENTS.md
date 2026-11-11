@@ -138,7 +138,7 @@ Work/Plan.md
 | `rename NOTE TITLE`, `move NOTE FOLDER`, `delete NOTE --yes`, `toggle NOTE LINE` | as in the window (LINE counts from 1 in `read`'s body) |
 | `resolve NOTE --all local\|remote\|both` / `--choices C1,C2,...` | settle conflict blocks (`local` = this computer, `remote` = iCloud) |
 | `recover NOTE --strip \| --synced` | unreadable conflict markers (`conflicts_unreadable`): keep every line, or the last synced text; backs up first |
-| `new-folder NAME [--in F]`, `rename-folder F NAME`, `delete-folder F --yes` | folders |
+| `new-folder NAME [--in F]`, `rename-folder F NAME`, `delete-folder F --yes` | folders (a name starting with a dot, or `attachments`, is never synced, so it is refused with `usage`) |
 | `sync`, `pull`, `push [--dry-run]`, `clone` | talk to iCloud (exit 3: sign in (`sign_in_required`, `session_rejected`), or `not_cloned`; an engine error such as `account_mismatch` or `bad_response` keeps its own code and exit) |
 | `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`, `export-pdf NOTE` | versions, discard local edits, PDF next to the note |
 

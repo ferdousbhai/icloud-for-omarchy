@@ -1297,6 +1297,8 @@ Result newNote(NotesBackend &b, const Args &a)
     title.remove(QChar(u'\0'));
     if (title.isEmpty())
         return usageError(QStringLiteral("the title is empty"));
+    if (const QString reason = NotesBackend::unsyncedNameReason(title, false); !reason.isEmpty())
+        return usageError(reason);
     const QString file = title.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive) ? title : title + QStringLiteral(".md");
     b.setCurrentFolder(folder);
     b.refresh();
@@ -1372,6 +1374,8 @@ Result write(NotesBackend &b, const Args &a)
 // A backend error string as a failure with a code a caller can branch on.
 Failure backendFailure(const QString &message)
 {
+    if (message.contains(QStringLiteral("skipped by sync")))
+        return usageError(message);
     QString code = QStringLiteral("error");
     if (message.contains(QStringLiteral("read-only")))
         code = QStringLiteral("read_only");
@@ -1545,6 +1549,8 @@ Result newFolder(NotesBackend &b, const Args &a)
     name.remove(u'/');
     if (name.isEmpty())
         return usageError(QStringLiteral("the folder name is empty"));
+    if (const QString reason = NotesBackend::unsyncedNameReason(name, true); !reason.isEmpty())
+        return usageError(reason);
     const QString folder = parent.isEmpty() ? name : parent + u'/' + name;
     if (b.folders().contains(folder))
         return Failure{ QStringLiteral("exists"), QStringLiteral("folder \"%1\" already exists").arg(folder), kExitUsage, {} };

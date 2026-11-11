@@ -105,7 +105,8 @@ bool isHidden(const QString &relativePath)
 // Attachment bundles are data owned by notes, even when a file ends in .md.
 bool isNotePath(const QString &relativePath)
 {
-    return !isHidden(relativePath) && !relativePath.split(u'/').contains(QStringLiteral("attachments"));
+    return !isHidden(relativePath)
+        && !relativePath.split(u'/').contains(QStringLiteral("attachments"), Qt::CaseInsensitive);
 }
 
 QString sanitized(const QString &name)
@@ -1195,10 +1196,19 @@ QString NotesBackend::saveWarning(const QString &body)
     return warnings.join(QStringLiteral("\n\n"));
 }
 
+QString NotesBackend::unsyncedNameReason(const QString &name, bool folder)
+{
+    if (name.startsWith(u'.'))
+        return QStringLiteral("A name cannot start with a dot: those are skipped by sync.");
+    if (folder && name.compare(QStringLiteral("attachments"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("That folder name holds note attachments: it is skipped by sync.");
+    return {};
+}
+
 void NotesBackend::newNote(const QString &name)
 {
     QString clean = sanitized(name);
-    if (clean.isEmpty())
+    if (clean.isEmpty() || !unsyncedNameReason(clean, false).isEmpty())
         return;
     if (!clean.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive))
         clean += QStringLiteral(".md");
@@ -1240,6 +1250,8 @@ QString NotesBackend::renameCurrentNote(const QString &title)
         const QString target = clean.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive)
             ? clean
             : clean + QStringLiteral(".md");
+        if (const QString reason = unsyncedNameReason(target, false); !reason.isEmpty())
+            return reason;
         if (target == m_currentNote)
             return {};
         const QString path = QDir(folderAbsolutePath(m_currentFolder)).filePath(target);
@@ -1427,7 +1439,7 @@ QString NotesBackend::resolveConflicts(const QStringList &choices)
 void NotesBackend::newFolder(const QString &name)
 {
     const QString clean = sanitized(name);
-    if (clean.isEmpty())
+    if (clean.isEmpty() || !unsyncedNameReason(clean, true).isEmpty())
         return;
     QDir().mkpath(QDir(folderAbsolutePath(m_currentFolder)).filePath(clean));
     rebuildFolders();
@@ -1441,6 +1453,8 @@ QString NotesBackend::renameCurrentFolder(const QString &name)
         return QStringLiteral("All Notes cannot be renamed.");
     if (clean.isEmpty())
         return QStringLiteral("Name is empty.");
+    if (const QString reason = unsyncedNameReason(clean, true); !reason.isEmpty())
+        return reason;
     const QString parent = m_currentFolder.section(u'/', 0, -2);
     const QString target = parent.isEmpty() ? clean : parent + u'/' + clean;
     if (target == m_currentFolder)

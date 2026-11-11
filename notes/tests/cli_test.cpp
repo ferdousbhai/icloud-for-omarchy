@@ -593,6 +593,21 @@ int main(int argc, char *argv[])
         check(rf.code == 0 && QDir(g_vault + QStringLiteral("/Work/Old")).exists()
                   && rf.json().toObject().value(QStringLiteral("folder")).toString() == QStringLiteral("Work/Old"),
               "cli rename-folder");
+        // Names the sync engine skips: a tracked note moved there would be
+        // deleted in iCloud by the next push, so they are refused.
+        for (const QString &hidden : { QStringLiteral(".Old"), QStringLiteral("Attachments") }) {
+            const Run skipped = cliJson({ QStringLiteral("rename-folder"), QStringLiteral("Work/Old"), hidden });
+            check(skipped.code == 2 && skipped.errorCode() == QStringLiteral("usage")
+                      && QDir(g_vault + QStringLiteral("/Work/Old")).exists()
+                      && !QDir(g_vault + QStringLiteral("/Work/") + hidden).exists(),
+                  "cli rename-folder refuses a name sync skips");
+            const Run made = cliJson({ QStringLiteral("new-folder"), hidden });
+            check(made.code == 2 && made.errorCode() == QStringLiteral("usage")
+                      && !QDir(g_vault + u'/' + hidden).exists(),
+                  "cli new-folder refuses a name sync skips");
+        }
+        const Run dotNote = cliJson({ QStringLiteral("new"), QStringLiteral(".hidden") });
+        check(dotNote.code == 2 && dotNote.errorCode() == QStringLiteral("usage"), "cli new refuses a dot name");
         check(cli({ QStringLiteral("delete-folder"), QStringLiteral("Work/Old") }).code == 2, "cli delete-folder asks for --yes");
         check(cli({ QStringLiteral("delete-folder"), QStringLiteral("Work/Old"), QStringLiteral("--yes") }).code == 0
                   && !QDir(g_vault + QStringLiteral("/Work/Old")).exists(),

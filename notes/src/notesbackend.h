@@ -132,6 +132,11 @@ public:
     // /usr/lib/icloud-notes/icloud-notes-sync, else icloud-notes-sync on
     // PATH (a development build). Empty when none is executable.
     static QString syncToolPath();
+    // Why the sync engine would never see a note file or folder of this
+    // (already trimmed) name, or empty when it would: it skips dot-entries
+    // and folders named attachments (any case). A tracked note moved there
+    // reads as missing, so the next push would delete it in iCloud.
+    static QString unsyncedNameReason(const QString &name, bool folder);
     bool syncToolAvailable() const;
     QString vaultTitleMode() const;
     // The account's default folder ("Notes"), vault-relative; empty when

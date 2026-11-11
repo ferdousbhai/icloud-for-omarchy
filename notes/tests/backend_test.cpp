@@ -612,6 +612,8 @@ int main(int argc, char *argv[])
     check(QFile::exists(testVault() + QStringLiteral("/Second.md")), "backend file rename on disk");
     check(b.renameCurrentNote(QStringLiteral("Second")).isEmpty(), "backend same-name noop");
     check(!b.renameCurrentNote(QStringLiteral("")).isEmpty(), "backend empty title refused");
+    check(!b.renameCurrentNote(QStringLiteral(".Second")).isEmpty() && QFile::exists(testVault() + QStringLiteral("/Second.md")),
+          "backend file rename refuses a dot name");
     b.newNote(QStringLiteral("Plain"));
     check(readFile(QStringLiteral("Plain.md")).isEmpty(), "backend filename-mode note starts empty");
 
@@ -645,6 +647,12 @@ int main(int argc, char *argv[])
     check(b.currentFolder() == QStringLiteral("Moved") && QFile::exists(testVault() + QStringLiteral("/Moved/H.md")),
           "backend folder rename moves notes");
     check(!b.renameCurrentFolder(QStringLiteral("")).isEmpty(), "backend folder rename refuses empty");
+    // Sync skips dot-entries and attachments folders: its notes would read
+    // as deleted on the next push.
+    check(!b.renameCurrentFolder(QStringLiteral(".Moved")).isEmpty()
+              && !b.renameCurrentFolder(QStringLiteral("attachments")).isEmpty()
+              && b.currentFolder() == QStringLiteral("Moved") && QFile::exists(testVault() + QStringLiteral("/Moved/H.md")),
+          "backend folder rename refuses names sync skips");
     check(b.deleteCurrentFolder().isEmpty(), "backend folder delete ok");
     check(b.currentFolder().isEmpty() && !QDir(testVault() + QStringLiteral("/Moved")).exists(),
           "backend folder delete");
