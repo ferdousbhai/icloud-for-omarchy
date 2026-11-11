@@ -607,8 +607,8 @@ pub fn render_plan(
     let mut lines: Vec<String> = Vec::new();
     if options.preview {
         lines.push("Changes not yet pushed to iCloud:".into());
-        lines.push("  (use \"icloud-notes-sync push\" to send them)".into());
-        lines.push("  (use \"icloud-notes-sync restore <file>\" to discard a local edit)".into());
+        lines.push("  (use \"icloud-notes push\" to send them)".into());
+        lines.push("  (use \"icloud-notes restore <file>\" to discard a local edit)".into());
         lines.push(String::new());
     } else {
         lines.push(String::new());

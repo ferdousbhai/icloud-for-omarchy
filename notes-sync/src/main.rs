@@ -135,7 +135,7 @@ enum Command {
     /// Diff two snapshots, or one snapshot against the current remote copy
     #[command(
         after_help = "<ref> is a snapshot id (diffed against the current remote copy) or <from>..<to> (two \
-                            snapshot ids) - ids come from \"icloud-notes-sync history <file>\"."
+                            snapshot ids) - ids come from \"icloud-notes history <file>\"."
     )]
     Diff {
         file: String,

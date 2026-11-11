@@ -244,34 +244,34 @@ impl Error {
         }
         match self {
             Error::UntrackedFile { .. } => Some("Check the file name (it's case-sensitive) and try again.".into()),
-            Error::NotClonedDirectory { .. } => Some("Run \"icloud-notes-sync clone <directory>\" first.".into()),
+            Error::NotClonedDirectory { .. } => Some("Run \"icloud-notes clone\" first.".into()),
             Error::AmbiguousTrackedFile { .. } => {
                 Some("Qualify it with its folder (or run the command from inside that folder).".into())
             }
             Error::UnsupportedVaultLayout { .. } => Some(
-                "Re-clone into a fresh directory: \"icloud-notes-sync clone <new-directory>\". (This tool made no changes.)"
+                "Move this folder aside, then run \"icloud-notes clone\". (This tool made no changes.)"
                     .into(),
             ),
             Error::VaultFromNewerTool { .. } => {
-                Some("Upgrade icloud-notes-sync to the latest release. (This tool made no changes.)".into())
+                Some("Upgrade icloud-notes to the latest release. (This tool made no changes.)".into())
             }
             Error::VaultNeedsUpdate { .. } => Some(
-                "Run \"icloud-notes-sync pull\" once to update it, then try again. (This command made no changes.)".into(),
+                "Run \"icloud-notes pull\" once to update it, then try again. (This command made no changes.)".into(),
             ),
             Error::NotesUnavailable => {
                 Some("Check that Notes is enabled for this Apple ID (icloud.com → Notes) and try again.".into())
             }
             Error::CorruptStateFile(_) => Some(
                 "This usually means state.json was hand-edited or written by an incompatible version. If you don't have \
-                 local edits worth preserving, remove .icloud-notes/ and run \"icloud-notes-sync clone\" again into a fresh directory."
+                 local edits worth preserving, move this folder aside and run \"icloud-notes clone\" again."
                     .into(),
             ),
             Error::AlreadyClonedDirectory { .. } => {
-                Some("Run \"icloud-notes-sync pull\" instead to fetch changes into an existing clone.".into())
+                Some("Run \"icloud-notes pull\" instead to fetch changes into an existing clone.".into())
             }
             Error::UnboundAccount { .. } => Some(
                 "This folder may predate per-folder account binding. If you don't have local edits worth preserving, \
-                 remove .icloud-notes/ and run \"icloud-notes-sync clone\" again into a fresh directory."
+                 move this folder aside and run \"icloud-notes clone\" again."
                     .into(),
             ),
             Error::AccountMismatch { expected, .. } => {
@@ -279,10 +279,10 @@ impl Error {
             }
             Error::RequestedAccountMismatch { .. } => None,
             Error::UnknownVersionSnapshot { file, .. } => {
-                Some(format!("Run \"icloud-notes-sync history {file}\" to see available snapshot ids."))
+                Some(format!("Run \"icloud-notes history {file}\" to see available snapshot ids."))
             }
             Error::VersionContentUnavailable(_) => {
-                Some("Run \"icloud-notes-sync pull\" to refresh local state, then try again.".into())
+                Some("Run \"icloud-notes pull\" to refresh local state, then try again.".into())
             }
             Error::SignInRequired => Some(SIGN_IN_HINT.into()),
             Error::VaultBusy { app: true, .. } => Some(

@@ -112,8 +112,8 @@ fn preview_mode_adds_heading_hints_and_unchanged_remark() {
         lines,
         vec![
             "Changes not yet pushed to iCloud:",
-            "  (use \"icloud-notes-sync push\" to send them)",
-            "  (use \"icloud-notes-sync restore <file>\" to discard a local edit)",
+            "  (use \"icloud-notes push\" to send them)",
+            "  (use \"icloud-notes restore <file>\" to discard a local edit)",
             "",
             "        modified: Edited.md",
             "        modified: Refused.md",

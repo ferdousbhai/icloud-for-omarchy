@@ -117,7 +117,7 @@ fn status_outside_a_vault_is_a_known_error() {
     assert!(stdout(&human).is_empty());
     assert!(stderr(&human).starts_with("error: "), "{}", stderr(&human));
     assert!(
-        stderr(&human).contains("\nhint: Run \"icloud-notes-sync clone"),
+        stderr(&human).contains("\nhint: Run \"icloud-notes clone"),
         "{}",
         stderr(&human)
     );

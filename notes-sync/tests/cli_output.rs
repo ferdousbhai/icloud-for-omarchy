@@ -115,8 +115,8 @@ fn the_error_object_is_the_shared_one() {
     let dir = tmp.path().display();
     let expected = format!(
         "{{\n  \"ok\": false,\n  \"error\": {{\n    \"code\": \"not_cloned_directory\",\n    \"message\": \"{dir} doesn't \
-         look like a cloned notes directory (no .icloud-notes/state.json).\",\n    \"hint\": \"Run \\\"icloud-notes-sync \
-         clone <directory>\\\" first.\"\n  }}\n}}\n"
+         look like a cloned notes directory (no .icloud-notes/state.json).\",\n    \"hint\": \"Run \\\"icloud-notes clone\\\" \
+         first.\"\n  }}\n}}\n"
     );
     for flag in ["--json", "--quiet", "--count", "--ids-only"] {
         let o = std::process::Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
@@ -141,7 +141,7 @@ fn the_error_object_is_the_shared_one() {
         String::from_utf8_lossy(&human.stderr),
         format!(
             "error: {dir} doesn't look like a cloned notes directory (no .icloud-notes/state.json).\n\
-             hint: Run \"icloud-notes-sync clone <directory>\" first.\n"
+             hint: Run \"icloud-notes clone\" first.\n"
         )
     );
 }
