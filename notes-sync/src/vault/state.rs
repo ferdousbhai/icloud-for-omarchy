@@ -538,7 +538,10 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                 record_change_tag: opt_str(m, "recordChangeTag").unwrap_or_default(),
                 modification_date: num(m.get("modificationDate")).unwrap_or_default(),
                 shared_zone_owner: opt_str(m, "sharedZoneOwner"),
-                unpublishable_reason: opt_str(m, "unpublishableReason"),
+                // A note kept as a separate file was read-only up to 0.10.1;
+                // it is written back now, so that reason no longer holds.
+                unpublishable_reason: opt_str(m, "unpublishableReason")
+                    .filter(|reason| reason != crate::doc::decode::TEXT_DATA_ASSET_UNPUBLISHABLE_REASON),
                 folder_record_name: opt_str(m, "folderRecordName"),
                 // A file name in the note's directory; anything else is
                 // forgotten, and the next pull works the rename out again.

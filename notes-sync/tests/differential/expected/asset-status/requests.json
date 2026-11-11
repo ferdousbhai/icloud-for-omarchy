@@ -19,6 +19,26 @@
         }
       },
       "matched": 0
+    },
+    {
+      "method": "GET",
+      "service": "other",
+      "path": "https://cvws.icloud-content.com/B/AbigNote1/$%7Bf%7D",
+      "query": {
+        "a": "CAog",
+        "ckc": "com.apple.notes",
+        "ckz": "Notes",
+        "e": "1790003600",
+        "fl": "",
+        "k": "${uk}",
+        "o": "AsBigOne",
+        "p": "43",
+        "r": "r1",
+        "s": "sig1",
+        "v": "1",
+        "x": "3"
+      },
+      "matched": 1
     }
   ]
 }

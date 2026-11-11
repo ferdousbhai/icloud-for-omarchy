@@ -19,6 +19,142 @@
         }
       },
       "matched": 0
+    },
+    {
+      "method": "GET",
+      "service": "other",
+      "path": "https://cvws.icloud-content.com/B/AbigNote1/$%7Bf%7D",
+      "query": {
+        "a": "CAog",
+        "ckc": "com.apple.notes",
+        "ckz": "Notes",
+        "e": "1790003600",
+        "fl": "",
+        "k": "${uk}",
+        "o": "AsBigOne",
+        "p": "43",
+        "r": "r1",
+        "s": "sig1",
+        "v": "1",
+        "x": "3"
+      },
+      "matched": 1
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/assets/upload",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "zoneID": {
+          "zoneName": "Notes"
+        },
+        "tokens": [
+          {
+            "recordType": "Note",
+            "recordName": "7c1e2d3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5",
+            "fieldName": "TextDataAsset"
+          }
+        ]
+      },
+      "matched": 2
+    },
+    {
+      "method": "POST",
+      "service": "other",
+      "path": "https://cvws.icloud-content.com/upload/AbigNote1",
+      "query": {
+        "e": "1790003600",
+        "o": "AsBigOne",
+        "s": "sigup",
+        "v": "1"
+      },
+      "matched": 3
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/modify",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "operations": [
+          {
+            "operationType": "update",
+            "record": {
+              "recordName": "7c1e2d3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5",
+              "recordType": "Note",
+              "recordChangeTag": "30a",
+              "fields": {
+                "ModificationDate": {
+                  "value": 1789999990000
+                },
+                "TitleEncrypted": {
+                  "value": "QmlnIE5vdGU="
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ]
+                },
+                "Deleted": {
+                  "value": 0
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  }
+                },
+                "CreationDate": {
+                  "value": 1752600000000
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBub3RlIGlzIHRvbyBsYXJnZSB0byBrZWVwIGl0cyB0ZXh0IGlubGluZSwgc28gQXBwbGUgc3RvcmVzIGl0IGluIGEgVGV4dERhdGFBc3NldC4="
+                },
+                "FirstAttachmentThumbnail": {
+                  "value": null
+                },
+                "FirstAttachmentUTIEncrypted": {
+                  "value": null
+                },
+                "TextDataAsset": {
+                  "value": {
+                    "fileChecksum": "AW5ld0NoZWNrc3Vt",
+                    "size": 229,
+                    "wrappingKey": "bmV3V3JhcHBpbmdLZXk=",
+                    "referenceChecksum": "AW5ld1JlZmVyZW5jZQ==",
+                    "receipt": "cmVjZWlwdC0x"
+                  }
+                }
+              },
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 4
     }
   ]
 }

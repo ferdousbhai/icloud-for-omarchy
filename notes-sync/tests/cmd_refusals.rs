@@ -357,11 +357,6 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             "remote note has no readable text data".into(),
         ),
         (
-            text(TextUpdateRefusal::TextAsAsset),
-            Refused,
-            "remote note stores its text as an asset - refusing to edit".into(),
-        ),
-        (
             text(TextUpdateRefusal::NotRoundTrip),
             Refused,
             "the note's document doesn't round-trip byte-for-byte through our model - refusing to edit".into(),
@@ -527,7 +522,7 @@ fn every_refusal_variant_is_listed() {
             _ => None,
         })
         .collect();
-    assert_eq!(text.len(), 10, "one row per TextUpdateRefusal variant");
+    assert_eq!(text.len(), 9, "one row per TextUpdateRefusal variant");
     let retitle: std::collections::HashSet<std::mem::Discriminant<RetitleRefusal>> = listed
         .iter()
         .filter_map(|r| match r {

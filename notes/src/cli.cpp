@@ -15,7 +15,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
 #include <QSet>
 #include <QTextStream>
 #include <QThread>
@@ -270,16 +269,15 @@ const QList<Spec> &specs()
           "JSON: {action, path, sync?}",
           { QStringLiteral("--yes"), QStringLiteral("--push") }, 1, 1 },
         { "renew", "renew NOTE [--yes]",
-          "Replace a note that is read-only here because of its size with a fresh copy that can be\n"
-          "edited. Apple keeps every edit ever made to a note; after years of daily edits that history\n"
-          "outgrows what iCloud stores inside the note, its text moves to a separate file, and this\n"
-          "tool cannot write such a file back. A new note with the same text has no history, so it is\n"
-          "small again. renew syncs, creates the copy, checks in iCloud that it matches, moves the old\n"
-          "note to Recently Deleted (recoverable there for about 30 days) and gives the copy the old\n"
-          "file name. The copy is a new note: a pin, links to the old note and its version history do\n"
-          "not carry over. Refused for a note that is not read-only for this reason, has attachments,\n"
-          "or changed in iCloud meanwhile (both notes are kept then). Asks on a terminal; without one,\n"
-          "--yes is required.\n"
+          "Replace a note with a fresh copy that has none of its edit history. Apple keeps every edit\n"
+          "ever made to a note, so one edited daily for years holds megabytes of history around a page\n"
+          "of text, and every change to it uploads all of that. A new note with the same text is small\n"
+          "again. renew syncs, creates the copy, checks in iCloud that it matches, gives it the old\n"
+          "note's pin, creation date and paper style, moves the old note to Recently Deleted\n"
+          "(recoverable there for about 30 days) and gives the copy the old file name. The copy is\n"
+          "still a new note: links to the old one and its version history do not carry over. Refused\n"
+          "for a note that is read-only here, has attachments, or changed in iCloud meanwhile (both\n"
+          "notes are kept then). Asks on a terminal; without one, --yes is required.\n"
           "JSON: {action, path, id, replaced}",
           { QStringLiteral("--yes") }, 1, 1 },
         { "toggle", "toggle NOTE LINE [--push]",
@@ -866,10 +864,11 @@ struct SyncOutcome {
     std::optional<Failure> failure;
 };
 
-// `what`: "sync" (push, then pull, in one engine run), "pull", "push" or
+// `what`: "carry-over" (of the note `notes[0]` to `notes[1]`), or
+// "sync" (push, then pull, in one engine run), "pull", "push" or
 // "clone", through the backend with its lock held, as the window runs them.
 // A sync still reports two runs, one per half.
-SyncOutcome runSync(NotesBackend &b, const QString &what)
+SyncOutcome runSync(NotesBackend &b, const QString &what, const QStringList &notes = {})
 {
     SyncOutcome result;
     if (auto f = needSyncTool(b)) {
@@ -932,6 +931,8 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
         b.runPull();
     else if (what == u"push")
         b.runPush();
+    else if (what == u"carry-over")
+        b.runCarryOver(notes.value(0), notes.value(1));
     else
         b.runClone();
     waitFor([&] { return b.idle() && (what != u"clone" || cloneDone); });
@@ -1301,14 +1302,6 @@ QString relPath(NotesBackend &b)
     return b.currentFolder().isEmpty() ? b.currentNote() : b.currentFolder() + u'/' + b.currentNote();
 }
 
-// Whether a note is read-only because Apple keeps its text in a separate
-// file (a `TextDataAsset`), in the engine's words for it: the one reason a
-// fresh copy of the note fixes.
-bool textKeptApart(const QString &readOnlyReason)
-{
-    return readOnlyReason.contains(QStringLiteral("keeps its text in a separate file"));
-}
-
 Result newNote(NotesBackend &b, const Args &a)
 {
     QString folder = b.defaultFolder();
@@ -1366,11 +1359,7 @@ Result write(NotesBackend &b, const Args &a)
         return *f;
     if (!b.readOnlyReason().isEmpty())
         return Failure{ QStringLiteral("read_only"), QStringLiteral("%1 is read-only here: this note %2").arg(n.path(), b.readOnlyReason()),
-                        kExitError,
-                        textKeptApart(b.readOnlyReason())
-                            ? QStringLiteral("Its size is years of edit history, not its text: `icloud-notes renew NOTE` replaces it "
-                                             "with a fresh copy that can be edited. Or edit it in Apple Notes; the changes still sync here.")
-                            : QStringLiteral("Edit it in Apple Notes; the changes still sync here.") };
+                        kExitError, QStringLiteral("Edit it in Apple Notes; the changes still sync here.") };
     QString body = text;
     if (a.has("--append")) {
         const QString old = b.noteBody();
@@ -1635,17 +1624,15 @@ Result deleteFolder(NotesBackend &b, const Args &a)
 // as a separate file, and nothing would be gained.
 constexpr qsizetype kRenewMaxBytes = 200 * 1024;
 
-// Why `renew` does not apply to the open note `n`, if it doesn't: it can be
-// edited already, is read-only for another reason, or has attachments.
+// Why `renew` does not apply to the open note `n`, if it doesn't: it is
+// read-only here (a copy could not be checked against what it copies), or
+// has attachments (a new note cannot be given them from here).
 std::optional<Failure> renewRefusal(NotesBackend &b, const Note &n)
 {
-    if (!textKeptApart(b.readOnlyReason()))
-        return Failure{ QStringLiteral("not_needed"),
-                        b.readOnlyReason().isEmpty()
-                            ? QStringLiteral("%1 can be edited here already; there is nothing to renew").arg(n.path())
-                            : QStringLiteral("%1 is read-only for another reason (this note %2), which a fresh copy does not fix")
-                                  .arg(n.path(), b.readOnlyReason()),
-                        kExitUsage, {} };
+    if (!b.readOnlyReason().isEmpty())
+        return Failure{ QStringLiteral("read_only"),
+                        QStringLiteral("%1 is read-only here (this note %2), which a fresh copy does not fix").arg(n.path(), b.readOnlyReason()),
+                        kExitError, QStringLiteral("Edit it in Apple Notes; the changes still sync here.") };
     if (!b.noteAttachments().isEmpty())
         return Failure{ QStringLiteral("has_attachments"),
                         QStringLiteral("%1 has attachments, which a fresh copy would not carry over").arg(n.path()), kExitError,
@@ -1653,9 +1640,9 @@ std::optional<Failure> renewRefusal(NotesBackend &b, const Note &n)
     return std::nullopt;
 }
 
-// A fresh copy of the note at `path`, whose text Apple keeps in a separate
-// file, in place of it: what `renew` does once it may, and what a background
-// sync does by itself (`syncFirst` false: it has just synced). Every step
+// A fresh copy of the note at `path`, without its edit history, in place of
+// it: what `renew` does once it may (`syncFirst` false when the caller has
+// just synced). Every step
 // that could lose text is checked against iCloud first, and a check that
 // fails stops with both notes kept.
 Result renewNote(NotesBackend &b, const QString &path, bool syncFirst)
@@ -1713,6 +1700,15 @@ Result renewNote(NotesBackend &b, const QString &path, bool syncFirst)
         return Failure{ QStringLiteral("copy_differs"),
                         QStringLiteral("the copy of %1 did not come back from iCloud as an editable note with the same text").arg(old.path()),
                         kExitError, kept };
+    // The copy stands where the old note stood: pinned if it was, with its
+    // creation date and paper style. Without that it would drop out of the
+    // pinned notes and sort as a note made today.
+    if (const SyncOutcome carried = runSync(b, QStringLiteral("carry-over"), { old.path(), copyPath }); carried.failure) {
+        Failure f = *carried.failure;
+        f.message = QStringLiteral("the copy is in iCloud, but the old note's pin and dates could not be carried over to it: %1").arg(f.message);
+        f.hint = kept;
+        return f;
+    }
     // The old note, unchanged since it was copied.
     Note still;
     if (auto f = resolveAndOpen(b, old.path(), still))
@@ -1745,7 +1741,7 @@ Result renewNote(NotesBackend &b, const QString &path, bool syncFirst)
                             { QStringLiteral("path"), finalPath },
                             { QStringLiteral("id"), copy.id },
                             { QStringLiteral("replaced"), old.id } },
-               QStringLiteral("Replaced %1 with a fresh copy that can be edited; the old note is in Recently Deleted").arg(finalPath) };
+               QStringLiteral("Replaced %1 with a fresh copy; the old note is in Recently Deleted").arg(finalPath) };
     if (lastSync) {
         done.text += QStringLiteral("\nThe last sync failed, so run `icloud-notes sync`: %1").arg(lastSync->message);
         done.exit = lastSync->exit;
@@ -1765,8 +1761,9 @@ Result renew(NotesBackend &b, const Args &a)
         return *f;
     if (auto f = needSignIn(b))
         return *f;
-    if (auto f = confirm(a, QStringLiteral("Replace \"%1\" with a fresh copy that can be edited here? The old note goes to Recently "
-                                           "Deleted; its pin, links to it and its version history do not carry over.")
+    if (auto f = confirm(a, QStringLiteral("Replace \"%1\" with a fresh copy that has none of its edit history? The old note goes to Recently "
+                                           "Deleted; the copy keeps its pin and creation date, but links to the old note and its "
+                                           "version history do not carry over.")
                                 .arg(old.path())))
         return *f;
     return renewNote(b, old.path(), true);
@@ -1956,56 +1953,6 @@ int cliMain(int argc, char *argv[])
     return runCommand(a, *spec);
 }
 
-// How long a note must have gone unchanged before a background sync
-// replaces it by itself: an edit made on a phone that has not synced yet
-// would otherwise land in the note that was just moved to Recently Deleted.
-constexpr qint64 kRenewQuietMs = 60 * 60 * 1000;
-
-// After a clean background sync: every note that is read-only only because
-// Apple keeps its text in a separate file (years of edit history) is
-// replaced with a fresh copy that can be edited, as `renew` does when asked.
-// A note with attachments, one that changed within the last hour, or one
-// whose replacement stops at a check is left as it is, and the log says why.
-void renewLargeNotes(NotesBackend &b, QTextStream &log)
-{
-    QStringList paths;
-    QHash<QString, qint64> modified;
-    for (const Note &n : scanNotes(b))
-        if (n.flags.contains(QStringLiteral("read-only"))) {
-            paths << n.path();
-            modified.insert(n.path(), n.modifiedMs);
-        }
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    for (const QString &path : paths) {
-        Note n;
-        if (resolveAndOpen(b, path, n) || !textKeptApart(b.readOnlyReason()))
-            continue;
-        const QString why = QStringLiteral("%1 is read-only here because of its edit history").arg(path);
-        if (const auto refusal = renewRefusal(b, n)) {
-            log << why << ", and is left as it is: " << refusal->message << ".\n";
-            continue;
-        }
-        if (now - modified.value(path) < kRenewQuietMs) {
-            log << why << "; it is replaced with a fresh copy once it has gone an hour without a change.\n";
-            continue;
-        }
-        const Result result = renewNote(b, path, false);
-        if (const Failure *f = std::get_if<Failure>(&result)) {
-            log << why << ", but could not be replaced with a fresh copy: " << f->message << '.'
-                << (f->hint.isEmpty() ? QString() : u' ' + f->hint) << '\n';
-            continue;
-        }
-        const QString done = std::get<Done>(result).text;
-        log << done << '\n';
-        // The copy is a new note (no pin, no links to it): worth a word.
-        QProcess::startDetached(QStringLiteral("notify-send"),
-                                { QStringLiteral("--app-name=Notes"), QStringLiteral("Notes made a fresh copy of a note"),
-                                  QStringLiteral("%1 had grown too large to edit here, from years of edit history. It was replaced with "
-                                                 "a fresh copy; the old one is in Recently Deleted, and a pin on it did not carry over.")
-                                      .arg(path) });
-    }
-}
-
 int runBackgroundSync(QTextStream &log)
 {
     const QString vault = NotesBackend::rootPath();
@@ -2049,7 +1996,5 @@ int runBackgroundSync(QTextStream &log)
         return kExitError;
     }
     log << (sync.failure ? "Sync failed for " : "Synced ") << vault << ".\n";
-    if (!sync.failure)
-        renewLargeNotes(b, log);
     return sync.failure ? kExitError : kExitOk;
 }

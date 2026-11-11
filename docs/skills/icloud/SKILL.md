@@ -93,11 +93,10 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 - `vault_busy` (exit 1) = the Notes window is open and owns the vault: ask
   the user to make the change there or quit Notes. Reads always work.
 - `read_only` notes cannot be changed here; `guardrail` = the text would add
-  conflict markers (don't `--force`; use `resolve`). If `read_only` says
-  Apple "keeps its text in a separate file", the note is large only from
-  edit history: the background sync swaps it for a fresh editable copy
-  within hours, and `renew NOTE --yes` does it now (old one to Recently
-  Deleted; pin and links are lost, so ask first).
+  conflict markers (don't `--force`; use `resolve`).
+- `renew NOTE --yes`: swaps a note for a fresh copy without its years of
+  edit history (same text, pin and creation date; old one to Recently
+  Deleted; links to it break). Only when the user asks.
 - `push_rejected` (exit 1): the sync ran but iCloud refused a change; the
   message names it.
 

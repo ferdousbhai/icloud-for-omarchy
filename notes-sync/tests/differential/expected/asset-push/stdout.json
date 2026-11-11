@@ -1,12 +1,15 @@
 {
   "dryRun": false,
-  "pushed": 0,
+  "pushed": 1,
   "entries": [
     {
       "kind": "update",
       "file": "Notes/Big Note.md",
-      "resolution": "refused",
-      "reason": "remote note is no longer safely editable (missing-body)"
+      "resolution": "ready",
+      "outcome": {
+        "succeeded": true,
+        "message": "Pushed Notes/Big Note.md"
+      }
     }
   ],
   "unchanged": 2,

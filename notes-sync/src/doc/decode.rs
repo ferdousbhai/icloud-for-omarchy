@@ -77,8 +77,10 @@ pub enum NoteDecodeResult {
     Ok(Box<DecodedNote>),
 }
 
-/// Why a note whose text lives in a `TextDataAsset` is read-only (upstream
-/// icloud-md PR #29, verbatim).
+/// The reason engines up to 0.10.1 gave a note whose text lives in a
+/// `TextDataAsset` (upstream icloud-md PR #29, verbatim), which they could
+/// read but not write. Such a note is written back now; a vault's state may
+/// still carry the reason, which is dropped when the state is read.
 pub const TEXT_DATA_ASSET_UNPUBLISHABLE_REASON: &str =
     "is so large that Apple keeps its text in a separate file, which can't be written back yet";
 
@@ -90,21 +92,11 @@ pub const MAX_TEXT_DATA_BASE64: usize = 16 << 20;
 /// `classifyNoteRecord`.
 ///
 /// A note whose text Apple moved into a `TextDataAsset` (upstream PR #29)
-/// reads like any other once `inline_asset_bodies` has fetched it, but
-/// writing it back would mean uploading a new asset - a path never captured -
-/// so it arrives read-only.
+/// reads like any other once `Database::inline_asset_bodies` has fetched
+/// it, and is written back like any other: `Database::update_records`
+/// uploads its new text as an asset.
 pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {
-    let result = classify_note_body(record, options);
-    match result {
-        NoteDecodeResult::Ok(mut note)
-            if note.publishable && record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) =>
-        {
-            note.publishable = false;
-            note.unpublishable_reason = Some(TEXT_DATA_ASSET_UNPUBLISHABLE_REASON.into());
-            NoteDecodeResult::Ok(note)
-        }
-        other => other,
-    }
+    classify_note_body(record, options)
 }
 
 fn classify_note_body(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {

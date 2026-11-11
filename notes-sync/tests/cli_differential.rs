@@ -944,3 +944,30 @@ fn failing_scenarios_record_the_error_object() {
         );
     }
 }
+
+/// `asset-push`: an edit to a note whose text Apple keeps as an asset goes
+/// up as a new asset. The text is read from the old asset, an upload URL is
+/// asked for and used, and the update names the uploaded file (receipt and
+/// all) instead of carrying the text inline.
+#[test]
+fn asset_push_uploads_the_text_and_names_the_new_asset() {
+    let requests = read_json(&expected("asset-push/requests.json"));
+    let all = requests["requests"].as_array().unwrap();
+    let paths: Vec<&str> = all
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(paths, ["lookup", "$%7Bf%7D", "upload", "AbigNote1", "modify"]);
+    assert!(all.iter().all(|r| r["matched"].is_number()));
+    let fields = &all[4]["body"]["operations"][0]["record"]["fields"];
+    assert_eq!(fields["TextDataAsset"]["value"]["receipt"], "cmVjZWlwdC0x");
+    assert!(fields["TextDataAsset"]["value"].get("downloadURL").is_none());
+    assert!(fields.get("TextDataEncrypted").is_none());
+    let stdout = read_json(&expected("asset-push/stdout.json"));
+    assert_eq!(stdout["pushed"], 1);
+    assert_eq!(stdout["entries"][0]["outcome"]["succeeded"], true);
+    assert_eq!(
+        std::fs::read_to_string(expected("asset-push/exit")).unwrap().trim(),
+        "0"
+    );
+}

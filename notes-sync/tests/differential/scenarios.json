@@ -214,7 +214,7 @@
     },
     {
       "name": "asset-push",
-      "cassette": "asset-lookup.json",
+      "cassette": "asset-push.json",
       "vaultFrom": "asset-clone",
       "edits": [{ "file": "Notes/Big Note.md", "append": "\nA line added locally." }],
       "args": ["--quiet", "push", "@VAULT@"]

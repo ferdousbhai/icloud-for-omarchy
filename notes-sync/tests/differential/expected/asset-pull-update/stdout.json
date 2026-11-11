@@ -4,20 +4,14 @@
   "merged": 0,
   "removed": 0,
   "attachmentsDownloaded": 0,
-  "unpublishable": 1,
+  "unpublishable": 0,
   "skippedNewUnsyncable": 0,
   "droppedUnsyncable": 0,
   "unsharedUntracked": 0,
   "changes": [
     {
       "kind": "update",
-      "file": "Notes/Big Note.md",
-      "remarks": [
-        {
-          "tone": "unsyncable",
-          "message": "read-only: contains content this tool couldn't fully parse"
-        }
-      ]
+      "file": "Notes/Big Note.md"
     }
   ],
   "conflicts": [],

@@ -46,6 +46,13 @@ pub trait Transport {
         result
     }
 
+    /// POST `bytes` to an absolute upload URL that `assets/upload` handed
+    /// out and return the parsed JSON answer (`{"singleFile": {...}}`).
+    /// The default refuses: a transport that cannot upload writes no asset.
+    fn upload(&self, url: &str, _bytes: &[u8]) -> Result<Value, CkError> {
+        Err(CkError::Other(format!("this transport cannot upload to {url}")))
+    }
+
     /// A [`Transport::download`] other threads can run, when downloads may
     /// overlap. `None` (the default) keeps every download on the caller's
     /// thread, one at a time and in order, so a recording transport logs
@@ -69,6 +76,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         (**self).download_bytes(url)
+    }
+
+    fn upload(&self, url: &str, bytes: &[u8]) -> Result<Value, CkError> {
+        (**self).upload(url, bytes)
     }
 
     fn shared_downloader(&self) -> Option<SharedDownloader> {
@@ -129,6 +140,12 @@ impl Transport for LiveTransport {
     /// Straight into memory: no temp file, no fsync.
     fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         Ok(self.session.get_bytes(url)?)
+    }
+
+    fn upload(&self, url: &str, bytes: &[u8]) -> Result<Value, CkError> {
+        let response = self.session.upload_bytes(url, "application/octet-stream", bytes)?;
+        serde_json::from_slice(&response.body)
+            .map_err(|e| CkError::UnexpectedResponse(format!("invalid JSON from the asset upload: {e}")))
     }
 
     /// The session (one shared ureq agent behind an `Arc`) is safe to use
@@ -340,6 +357,17 @@ impl Transport for ReplayTransport {
             Answer::Bytes(b) => b,
             Answer::Json(v) => v.to_string().into_bytes(),
         })
+    }
+
+    /// The upload is logged without its bytes (as a download's answer is),
+    /// and answered by the cassette's POST for that URL.
+    fn upload(&self, url: &str, _bytes: &[u8]) -> Result<Value, CkError> {
+        let parsed = Url::parse(url).map_err(|e| CkError::Other(format!("bad upload URL {url}: {e}")))?;
+        match self.serve("POST", &parsed, None)? {
+            Answer::Json(v) => Ok(v),
+            Answer::Bytes(b) => serde_json::from_slice(&b)
+                .map_err(|e| CkError::UnexpectedResponse(format!("invalid JSON from the asset upload: {e}"))),
+        }
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {

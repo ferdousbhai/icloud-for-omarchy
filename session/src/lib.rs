@@ -892,6 +892,20 @@ impl Session {
         })
     }
 
+    /// POST bytes to an upload URL a service handed out (a CloudKit asset
+    /// upload): cookies attached, no client params appended, as
+    /// [`Session::download`] fetches such a URL. Non-2xx → `Http`.
+    pub fn upload_bytes(&self, url: &str, content_type: &str, bytes: &[u8]) -> Result<Response> {
+        self.request(Request {
+            method: "POST",
+            url,
+            content_type: Some(content_type),
+            body: Body::Bytes(bytes),
+            client_params: false,
+            accept: "application/json",
+        })
+    }
+
     fn request(&self, request: Request<'_>) -> Result<Response> {
         let response = self.send(&request)?;
         let status = response.status();

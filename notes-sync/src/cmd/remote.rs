@@ -121,6 +121,10 @@ impl Transport for SharedTransport {
     fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         self.0.download_bytes(url)
     }
+
+    fn upload(&self, url: &str, bytes: &[u8]) -> Result<Value, CkError> {
+        self.0.upload(url, bytes)
+    }
 }
 
 /// `resolveFolderAccount`: the vault must be bound to an account, and it

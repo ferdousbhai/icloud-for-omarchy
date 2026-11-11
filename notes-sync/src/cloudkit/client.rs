@@ -9,6 +9,7 @@
 //! the per-session `clientId`/`clientBuildNumber`/`clientMasteringNumber`/
 //! `dsid` parameters itself.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
@@ -436,6 +437,9 @@ impl<T: Transport> Database<T> {
                 }
             }
         }
+        // A note whose text is a `TextDataAsset` reads like any other, as it
+        // does out of a zone walk: push edits what it looks up.
+        self.inline_asset_bodies(&mut records)?;
         Ok(records)
     }
 
@@ -446,9 +450,12 @@ impl<T: Transport> Database<T> {
         zone: &NoteZone,
         updates: &[RecordUpdate],
     ) -> Result<Vec<RecordUpdateResult>, CkError> {
-        let ops: Vec<RecordOp> = updates.iter().cloned().map(RecordOp::Update).collect();
+        let (updates, uploaded) = self.upload_text_assets(zone, updates)?;
+        let ops: Vec<RecordOp> = updates.into_iter().map(RecordOp::Update).collect();
         let body = self.post_database(zone.database, "records/modify", &modify_body(&ops, &zone.zone_id))?;
-        parse_record_update_response(&body)
+        let mut results = parse_record_update_response(&body)?;
+        inline_uploaded_text(&mut results, &uploaded);
+        Ok(results)
     }
 
     /// Many unrelated updates in as few `records/modify` requests as fit
@@ -461,17 +468,109 @@ impl<T: Transport> Database<T> {
     ) -> Result<Vec<RecordUpdateResult>, CkError> {
         let mut results = Vec::with_capacity(updates.len());
         for batch in updates.chunks(LOOKUP_BATCH_SIZE) {
-            let ops: Vec<RecordOp> = batch.iter().cloned().map(RecordOp::Update).collect();
+            let (batch, uploaded) = self.upload_text_assets(zone, batch)?;
+            let count = batch.len();
+            let ops: Vec<RecordOp> = batch.into_iter().map(RecordOp::Update).collect();
             let mut body = modify_body(&ops, &zone.zone_id);
             body["atomic"] = Value::Bool(false);
             let response = self.post_database(zone.database, "records/modify", &body)?;
-            let parsed = parse_record_update_response(&response)?;
-            if parsed.len() != batch.len() {
+            let mut parsed = parse_record_update_response(&response)?;
+            if parsed.len() != count {
                 return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
             }
+            inline_uploaded_text(&mut parsed, &uploaded);
             results.extend(parsed);
         }
         Ok(results)
+    }
+
+    /// The updates as they are sent: a Note update that carries new text
+    /// (`TextDataEncrypted`) for a note whose text Apple keeps in a
+    /// `TextDataAsset` (the update echoes that field) has its text uploaded
+    /// as a new asset, and names that asset instead of carrying the text
+    /// inline, which iCloud has no room for. Also returns each such note's
+    /// text by record name, for [`inline_uploaded_text`].
+    ///
+    /// The upload is CloudKit's own: `assets/upload` hands out a URL for
+    /// the record's field, the bytes are POSTed there, and the answer's
+    /// `singleFile` (checksums, wrapping key, receipt) is the field's value.
+    fn upload_text_assets(
+        &self,
+        zone: &NoteZone,
+        updates: &[RecordUpdate],
+    ) -> Result<(Vec<RecordUpdate>, HashMap<String, String>), CkError> {
+        let mut uploaded = HashMap::new();
+        let mut sent = Vec::with_capacity(updates.len());
+        for update in updates {
+            let mut update = update.clone();
+            let text = update
+                .fields
+                .get("TextDataEncrypted")
+                .and_then(|f| f.value.as_ref())
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let as_asset = update.record_type == "Note"
+                && update
+                    .fields
+                    .get(TEXT_DATA_ASSET_KEY)
+                    .and_then(|f| f.value.as_ref())
+                    .is_some_and(is_record);
+            if let (Some(text), true) = (text, as_asset) {
+                let asset = self.upload_asset(
+                    zone,
+                    "Note",
+                    &update.record_name,
+                    TEXT_DATA_ASSET_KEY,
+                    &crate::js::base64_decode(&text),
+                )?;
+                update
+                    .fields
+                    .insert(TEXT_DATA_ASSET_KEY.into(), UpdateFieldValue::new(asset));
+                update.fields.shift_remove("TextDataEncrypted");
+                uploaded.insert(update.record_name.clone(), text);
+            }
+            sent.push(update);
+        }
+        Ok((sent, uploaded))
+    }
+
+    /// Uploads `bytes` as the asset of `field_name` on a record: the value
+    /// to give that field in a `records/modify`.
+    pub fn upload_asset(
+        &self,
+        zone: &NoteZone,
+        record_type: &str,
+        record_name: &str,
+        field_name: &str,
+        bytes: &[u8],
+    ) -> Result<Value, CkError> {
+        let answer = self.post_database(
+            zone.database,
+            "assets/upload",
+            &json!({
+                "zoneID": zone_id_json(&zone.zone_id),
+                "tokens": [{ "recordType": record_type, "recordName": record_name, "fieldName": field_name }],
+            }),
+        )?;
+        let url = get(&answer, "tokens")
+            .and_then(Value::as_array)
+            .and_then(|tokens| tokens.first())
+            .and_then(|token| get_str(token, "url"))
+            .ok_or_else(|| CkError::UnexpectedResponse("assets/upload gave no upload URL".into()))?;
+        let stored = self.transport.upload(url, bytes).map_err(asset_upload_error)?;
+        let file = get(&stored, "singleFile")
+            .filter(|file| is_record(file) && get_str(file, "receipt").is_some())
+            .ok_or_else(|| CkError::UnexpectedResponse("the asset upload gave no receipt".into()))?;
+        // The size iCloud stored is the size sent, or the upload was cut short.
+        let stored_size = get(file, "size").and_then(Value::as_u64);
+        if stored_size != Some(bytes.len() as u64) {
+            return Err(CkError::UnexpectedResponse(format!(
+                "the asset upload stored {} bytes of the {} sent",
+                stored_size.map_or_else(|| "an unknown number of".to_owned(), |n| n.to_string()),
+                bytes.len()
+            )));
+        }
+        Ok(file.clone())
     }
 
     /// `updateNoteRecord`: `update_records` with one `Note` update.
@@ -598,6 +697,36 @@ impl<T: Transport> Database<T> {
             );
         }
         Ok(())
+    }
+}
+
+/// A failed asset upload, in the words a failed download has.
+fn asset_upload_error(e: CkError) -> CkError {
+    match e {
+        CkError::Http { status, .. } => CkError::RequestFailed {
+            message: format!("Asset upload failed: HTTP {status}"),
+            status: Some(status),
+        },
+        other => other,
+    }
+}
+
+/// Gives each updated note whose text went up as an asset (see
+/// `Database::upload_text_assets`) that text inline in its result, where
+/// every reader expects it: the server's answer names only the asset.
+fn inline_uploaded_text(results: &mut [RecordUpdateResult], uploaded: &HashMap<String, String>) {
+    for result in results {
+        if let RecordUpdateResult::Ok(record) = result
+            && let Some(text) = uploaded.get(&record.record_name)
+        {
+            record.fields.insert(
+                "TextDataEncrypted".into(),
+                FieldValue {
+                    value: Value::String(text.clone()),
+                    type_: "ENCRYPTED_BYTES".into(),
+                },
+            );
+        }
     }
 }
 

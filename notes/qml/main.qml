@@ -1116,13 +1116,8 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         color: root.colYellow
                         font.pixelSize: root.pt(11)
-                        // A note Apple stores apart is that large from years
-                        // of edit history, which a fresh copy does not have.
                         text: "Read-only here: this note " + backend.readOnlyReason
                             + ". Edit it in Apple Notes, and the changes still sync here."
-                            + (backend.readOnlyReason.indexOf("keeps its text in a separate file") >= 0
-                               ? " Its size is edit history, not its text: once this window is closed and the note has gone an hour without a change, Notes replaces it with a fresh copy you can edit here."
-                               : "")
                     }
 
                     Rectangle {

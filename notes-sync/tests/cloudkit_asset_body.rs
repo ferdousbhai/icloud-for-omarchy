@@ -11,9 +11,7 @@ use std::rc::Rc;
 use cloudkit_common::{MockTransport, no_pages};
 use icloud_notes_sync::cloudkit::client::TEXT_DATA_ASSET_KEY;
 use icloud_notes_sync::cloudkit::{CkError, Database};
-use icloud_notes_sync::doc::decode::{
-    ClassifyOptions, NoteDecodeResult, TEXT_DATA_ASSET_UNPUBLISHABLE_REASON, classify_note_record,
-};
+use icloud_notes_sync::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use icloud_notes_sync::doc::document::{build_initial_note_document, encode_note_document};
 use icloud_notes_sync::doc::text::compress_note_document;
 use indexmap::IndexMap;
@@ -91,13 +89,9 @@ fn fetch_all_note_records_asks_for_text_data_asset_and_inlines_a_large_notes_tex
         panic!("expected ok");
     };
     assert_eq!(decoded.title_line, "Today");
-    // Readable, but never pushed: writing it back would mean uploading an asset.
-    assert!(!decoded.publishable);
-    assert_eq!(
-        decoded.unpublishable_reason.as_deref(),
-        Some(TEXT_DATA_ASSET_UNPUBLISHABLE_REASON)
-    );
-    assert!(TEXT_DATA_ASSET_UNPUBLISHABLE_REASON.contains("separate file"));
+    // Readable and writable: an edit uploads its text as a new asset.
+    assert!(decoded.publishable);
+    assert_eq!(decoded.unpublishable_reason, None);
 }
 
 #[test]
@@ -180,4 +174,166 @@ fn a_record_still_holding_its_asset_but_no_inline_text_stays_missing_body() {
         classify_note_record(&record, &ClassifyOptions::default()),
         NoteDecodeResult::Unsyncable(icloud_notes_sync::doc::decode::UnsyncableReason::MissingBody)
     );
+}
+
+// --- writing such a note back ---------------------------------------------
+
+use icloud_notes_sync::cloudkit::{RecordUpdate, RecordUpdateResult, UpdateFieldValue, note_zone};
+
+const UPLOAD_URL: &str = "https://cvws.icloud-content.example/upload/1";
+
+/// An update as `build_note_update_fields` makes it for a note stored as an
+/// asset: the new text inline, the asset the record has echoed beside it.
+fn text_update(text_b64: &str, asset: Value) -> RecordUpdate {
+    let mut fields = IndexMap::new();
+    fields.insert("ModificationDate".to_owned(), UpdateFieldValue::new(json!(222)));
+    fields.insert("TextDataAsset".to_owned(), UpdateFieldValue::new(asset));
+    fields.insert("TextDataEncrypted".to_owned(), UpdateFieldValue::new(json!(text_b64)));
+    RecordUpdate {
+        record_name: "big-note".into(),
+        record_type: "Note".into(),
+        record_change_tag: "tag-big".into(),
+        fields,
+        parent_record_name: None,
+    }
+}
+
+/// A database that hands out [`UPLOAD_URL`] and answers the upload with
+/// `stored(bytes)`; `records/modify` echoes the record with a new tag.
+fn uploading(stored: impl Fn(&[u8]) -> Result<Value, CkError> + 'static) -> Database<MockTransport> {
+    let transport = MockTransport::new(|path, body| {
+        if path.contains("/private/assets/upload") {
+            assert_eq!(
+                body["tokens"],
+                json!([{ "recordType": "Note", "recordName": "big-note", "fieldName": "TextDataAsset" }])
+            );
+            assert_eq!(body["zoneID"]["zoneName"], "Notes");
+            return Ok(
+                json!({ "tokens": [{ "recordName": "big-note", "fieldName": "TextDataAsset", "url": UPLOAD_URL }] }),
+            );
+        }
+        if path.contains("/private/records/modify") {
+            let mut record = body["operations"][0]["record"].clone();
+            record["recordChangeTag"] = json!("tag-next");
+            for field in record["fields"].as_object_mut().unwrap().values_mut() {
+                field["type"] = json!("X");
+            }
+            return Ok(json!({ "records": [record] }));
+        }
+        panic!("unexpected request in test: {path}")
+    })
+    .with_uploads(move |url, bytes| {
+        assert_eq!(url, UPLOAD_URL);
+        stored(bytes)
+    });
+    Database::new(transport)
+}
+
+fn stored_file(bytes: &[u8]) -> Value {
+    json!({ "singleFile": {
+        "fileChecksum": "new-sum", "size": bytes.len(), "wrappingKey": "new-key",
+        "referenceChecksum": "new-ref", "receipt": "receipt-1",
+    } })
+}
+
+#[test]
+fn an_edit_to_a_note_stored_as_an_asset_uploads_its_text_and_names_the_new_asset() {
+    let bytes = note_document_bytes("Today\n~~~\n\n9am\nnew line");
+    let text_b64 = icloud_notes_sync::js::base64_encode(bytes.as_ref());
+    let database = uploading(|bytes| Ok(stored_file(bytes)));
+    let old_asset = json!({ "fileChecksum": "sum", "size": 123, "wrappingKey": "key", "downloadURL": ASSET_URL });
+    let results = database
+        .update_records(&note_zone(None), &[text_update(&text_b64, old_asset)])
+        .unwrap();
+
+    // The bytes that went up are the document, not its base64.
+    assert_eq!(
+        *database.transport.uploads.borrow(),
+        [(UPLOAD_URL.to_owned(), bytes.clone())]
+    );
+    // The update names the uploaded file and carries no inline text.
+    let sent = &database.transport.bodies("records/modify")[0]["operations"][0]["record"];
+    assert_eq!(
+        sent["fields"]["TextDataAsset"]["value"],
+        stored_file(&bytes)["singleFile"]
+    );
+    assert!(sent["fields"].get("TextDataEncrypted").is_none());
+    assert_eq!(sent["fields"]["ModificationDate"]["value"], 222);
+    // The caller reads the result as it reads any note: its text inline.
+    let RecordUpdateResult::Ok(record) = &results[0] else {
+        panic!("expected ok")
+    };
+    assert_eq!(record.record_change_tag.as_deref(), Some("tag-next"));
+    assert_eq!(record.fields["TextDataEncrypted"].value, json!(text_b64));
+}
+
+#[test]
+fn an_edit_to_an_ordinary_note_uploads_nothing() {
+    let database = uploading(|_| panic!("no upload expected"));
+    database
+        .update_records(&note_zone(None), &[text_update("RE9D", Value::Null)])
+        .unwrap();
+    let sent = &database.transport.bodies("records/modify")[0]["operations"][0]["record"];
+    assert_eq!(sent["fields"]["TextDataEncrypted"]["value"], "RE9D");
+    assert_eq!(sent["fields"]["TextDataAsset"], json!({ "value": null }));
+    assert!(database.transport.bodies("assets/upload").is_empty());
+}
+
+#[test]
+fn a_failed_or_short_upload_sends_no_update() {
+    let asset = || json!({ "fileChecksum": "sum", "size": 123, "downloadURL": ASSET_URL });
+    let failing = uploading(|_| {
+        Err(CkError::Http {
+            status: 503,
+            body: "busy".into(),
+        })
+    });
+    let err = failing
+        .update_records(&note_zone(None), &[text_update("RE9D", asset())])
+        .unwrap_err();
+    assert!(
+        matches!(&err, CkError::RequestFailed { message, status: Some(503) } if message == "Asset upload failed: HTTP 503"),
+        "{err:?}"
+    );
+    assert!(failing.transport.bodies("records/modify").is_empty());
+
+    let short = uploading(|bytes| {
+        let mut file = stored_file(bytes);
+        file["singleFile"]["size"] = json!(bytes.len() - 1);
+        Ok(file)
+    });
+    let err = short
+        .update_records(&note_zone(None), &[text_update("RE9D", asset())])
+        .unwrap_err();
+    assert!(matches!(err, CkError::UnexpectedResponse(_)), "{err:?}");
+    assert!(short.transport.bodies("records/modify").is_empty());
+
+    let no_receipt = uploading(|bytes| Ok(json!({ "singleFile": { "size": bytes.len() } })));
+    assert!(
+        no_receipt
+            .update_records(&note_zone(None), &[text_update("RE9D", asset())])
+            .is_err()
+    );
+}
+
+#[test]
+fn looking_a_note_up_inlines_its_text_from_the_asset_too() {
+    let bytes = note_document_bytes("Today\n~~~");
+    let served = bytes.clone();
+    let transport = MockTransport::new(|path, _| {
+        assert!(path.contains("/private/records/lookup"), "{path}");
+        Ok(json!({ "records": [asset_body_record()] }))
+    })
+    .with_assets(move |_| Ok(served.clone()));
+    let database = Database::new(transport);
+    let records = database
+        .lookup_records(&note_zone(None), &["big-note".to_owned()])
+        .unwrap();
+    assert_eq!(
+        records[0].fields["TextDataEncrypted"].value,
+        json!(icloud_notes_sync::js::base64_encode(bytes.as_ref()))
+    );
+    // The asset stays on the record: an update echoes it, which is how the
+    // write knows to upload.
+    assert!(records[0].fields["TextDataAsset"].value.is_object());
 }

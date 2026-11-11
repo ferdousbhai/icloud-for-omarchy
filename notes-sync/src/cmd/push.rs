@@ -1855,9 +1855,6 @@ fn prepare_note_text_update(
     let Some(text_b64) = record.fields.get("TextDataEncrypted").and_then(|f| f.value.as_str()) else {
         return Ok(Err(TextUpdateRefusal::NoTextData));
     };
-    if record.fields.get("TextDataAsset").is_some_and(|f| !f.value.is_null()) {
-        return Ok(Err(TextUpdateRefusal::TextAsAsset));
-    }
     let Ok(raw) = decompress_note_document(&js::base64_decode(text_b64)) else {
         return Ok(Err(TextUpdateRefusal::NoTextData));
     };

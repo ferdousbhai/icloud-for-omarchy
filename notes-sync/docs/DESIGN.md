@@ -114,34 +114,58 @@ before layout 4 said `icloud-md:progress:...`; the app accepts both.
 ### Notes whose text is a separate asset
 
 icloud-md 0.6.2 skips notes whose body lives in `TextDataAsset` (one user
-note is ~833 KB). The engine requests `TextDataAsset`, inlines the
-downloaded bytes and marks such notes read-only ("is so large that Apple
-keeps its text in a separate file, which can't be written back yet"). This
-is upstream PR #29 (ferdousbhai, "Fetch the text of notes too large to store
-it inline"): `cloudkit::client` (`note_desired_keys`,
-`Database::inline_asset_bodies` at the end of every zone walk and after the
-shared lookup backfill; a failed download fails the fetch) and
-`doc::decode::classify_note_record` (the PR's reason string). Always on:
-every scenario records `TextDataAsset` in its `changes/zone` `desiredKeys`.
+note was ~844 KB: a page of text and years of edit history, which the CRDT
+never drops). The engine reads and writes them.
 
-Such a note can still be moved to the trash or to another folder: those
-updates leave its text alone, sending neither `TextDataAsset` nor the
-inlined `TextDataEncrypted` (`doc::encode::build_note_relocation_fields`).
-Emptying the asset, as the update for an ordinary note does, leaves the
-record with no text, which iCloud refuses ("Note record must have either
-TextDataEncrypted or TextDataAsset"). The size is nearly always edit
-history (the CRDT keeps every deleted run), so a new note with the same
-text is small again: `icloud-notes renew` makes that copy and trashes the
-old note, and so does the app's background sync, unasked.
+Reading is upstream PR #29 (ferdousbhai, "Fetch the text of notes too large
+to store it inline"): `cloudkit::client` requests `TextDataAsset`
+(`note_desired_keys`) and `Database::inline_asset_bodies` puts the
+downloaded bytes where every reader expects them, in `TextDataEncrypted`,
+at the end of every zone walk, after the shared lookup backfill and in
+`lookup_records` (what push edits). A failed download fails the fetch.
+Always on: every scenario records `TextDataAsset` in its `changes/zone`
+`desiredKeys`.
+
+Writing is CloudKit's own asset upload, measured against a real account on
+2026-11-11 (`Database::upload_asset`): `assets/upload` with
+`{zoneID, tokens:[{recordType, recordName, fieldName}]}` answers an upload
+URL; the bytes POSTed there (no cookies needed, `application/octet-stream`)
+answer `{singleFile:{fileChecksum, size, wrappingKey, referenceChecksum,
+receipt}}`; that object is the field's value in `records/modify`. An update
+built by `build_note_update_fields` for such a note echoes its
+`TextDataAsset` beside the new inline text, which is how
+`Database::update_records` (and `update_records_independently`) knows to
+upload the text and send the new asset in its place; the result gets the
+text back inline. An upload that fails, stores a different size or gives no
+receipt sends no update. A note stays in the form iCloud keeps it in: one
+stored inline is never moved to an asset from here.
+
+Up to 0.10.1 such a note was read-only ("is so large that Apple keeps its
+text in a separate file, which can't be written back yet"); a vault's state
+may still carry that reason, which `read_clone_state` drops.
+
+Moving such a note to the trash or to another folder leaves its text alone,
+sending neither `TextDataAsset` nor the inlined `TextDataEncrypted`
+(`doc::encode::build_note_relocation_fields`). Emptying the asset, as the
+update for an ordinary note does, leaves the record with no text, which
+iCloud refuses ("Note record must have either TextDataEncrypted or
+TextDataAsset").
+
+`icloud-notes renew` replaces a note with a fresh copy that has none of its
+history: it pushes the copy, runs `carry-over` (`cmd::carry_over`: the old
+record's `IsPinned`, `CreationDate`, `PaperStyleType` and
+`AttachmentViewType` written on the new one, so the copy stays pinned and
+keeps its date) and trashes the old note.
 
 A push that ran but had a change refused by iCloud returns its result as
 before and exits 1 (`PushResult::failures`); in `sync` that half is
 `{ok:false, exit_code:1, result, lines, error}` with the error
 `push_rejected`.
 
-Tests: tests/cloudkit_asset_body.rs; the `asset-*` scenarios cover clone, a
-failed download, status, push and pull end to end; tests/doc_encode.rs the
-trash and move fields; tests/cmd_sync.rs the exit code.
+Tests: tests/cloudkit_asset_body.rs (reading, and the upload on update);
+the `asset-*` scenarios cover clone, a failed download, status, push (with
+its upload) and pull end to end; tests/doc_encode.rs the trash and move
+fields; tests/cmd_carry_over.rs; tests/cmd_sync.rs the exit code.
 
 ### Records listed twice by CloudKit
 

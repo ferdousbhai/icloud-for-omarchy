@@ -1311,8 +1311,8 @@ QString NotesBackend::moveCurrentNote(const QString &folder)
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
         return QStringLiteral("This note is read-only here. Move it in Apple Notes.");
-    if (!m_noteAttachments.isEmpty())
-        return QStringLiteral("This note has attachments, whose links are relative to its folder. Move it in Apple Notes.");
+    // A note's attachments are files in its folder's attachments/: the next
+    // push moves them after the note and rewrites its links.
     if (!m_folders.contains(folder))
         return QStringLiteral("No folder \"%1\".").arg(folder);
     if (folder == m_currentFolder)
@@ -1725,6 +1725,11 @@ void NotesBackend::runPull()
 void NotesBackend::runPush()
 {
     startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("push") }, QStringLiteral("Push"));
+}
+
+void NotesBackend::runCarryOver(const QString &from, const QString &to)
+{
+    startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("carry-over"), from, to }, QStringLiteral("Carry-over"));
 }
 
 void NotesBackend::runSync()

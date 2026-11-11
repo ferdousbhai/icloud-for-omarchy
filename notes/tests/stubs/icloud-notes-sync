@@ -220,6 +220,13 @@ elif [ "$1" = "history" ]; then
     result '{"mode":"epochs","epochs":[{"id":"e9","timestamp":"2026-09-01T00:00:00Z","changed":["A"],"carriedOver":[]}]}' \
       "e9  2026-09-01T00:00:00Z  changed: $2"
   fi
+elif [ "$1" = "carry-over" ]; then
+  # ICLOUD_NOTES_SYNC_STUB_LOG gets "carry-over FROM TO".
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "carry-over $2 $3" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
+  # ICLOUD_NOTES_SYNC_STUB_CARRY_FAIL=1: iCloud refuses it.
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_CARRY_FAIL:-}" ] && fail internal "iCloud refused to carry it over: CONFLICT" "" 1
+  stub_fail
+  result "{\"from\":\"$2\",\"to\":\"$3\",\"carried\":[\"IsPinned\"]}" "Carried IsPinned over" '{"lines":["Carried IsPinned over"]}'
 elif [ "$1" = "restore" ]; then
   # Stands for "back to the last synced copy": the file gets a marker line.
   printf 'restored\n' >> "$2"

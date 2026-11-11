@@ -45,7 +45,7 @@ timer's sync). All of it is new, in the app binary: see
 | New note (Ctrl+N) | `icloud-notes new TITLE [--folder F] [--body ...]` | added |
 | Rename (edit the title line) | `icloud-notes rename NOTE TITLE` | added |
 | Delete note (to the trash) | `icloud-notes delete NOTE --yes` | added |
-| (not in the window; the background sync does it by itself once the note has gone an hour without a change) replace a note that is read-only because of its size with a fresh, editable copy | `icloud-notes renew NOTE --yes` | added |
+| (not in the window) replace a note with a fresh copy that has none of its edit history | `icloud-notes renew NOTE --yes` | added |
 | (not in the window) move a note to another folder | `icloud-notes move NOTE FOLDER` | added |
 | Export PDF | `icloud-notes export-pdf NOTE` | added |
 | New folder / Rename folder… / Delete folder… | `icloud-notes new-folder`, `rename-folder`, `delete-folder --yes` | added |
@@ -313,7 +313,7 @@ Every code each tool can emit, by exit.
 | Exit | Codes |
 |---|---|
 | 1 | `read_only`, `has_attachments`, `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `too_large`, `copy_differs` and `changed` (`renew` stopped with both notes kept; the hint says where they are), `cancelled`, `error` |
-| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `renew`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch`, `not_needed` (`renew` on a note that can be edited already, or is read-only for a reason a fresh copy does not fix) |
+| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `renew`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
 | 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
@@ -430,6 +430,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `history` | `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`; with `--records`, `{mode:"records", records:[...]}` |
 | `diff` | a snapshot ref: `{kind:"snapshot", from, to, hasDifferences, text}`; an epoch ref: `{kind:"epoch", epochId, hasDifferences, sections:[{label, skipped, hasDifferences?, text}]}` (no top-level `text`). The whole diff's text is always in `meta.text` |
 | `restore` | `{file}` |
+| `carry-over FROM TO` | `{from, to, carried:[field]}`: gives note TO what Notes shows of note FROM besides its text (`IsPinned`, `CreationDate`, `PaperStyleType`, `AttachmentViewType`); `icloud-notes renew` runs it |
 | `sync` | `{push, pull, vault_info}` (below) |
 | `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}` |
 

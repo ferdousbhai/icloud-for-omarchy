@@ -10,13 +10,18 @@ use serde_json::Value;
 
 type Handler = Box<dyn FnMut(&str, &Value) -> Result<Value, CkError>>;
 type AssetHandler = Box<dyn FnMut(&str) -> Result<Vec<u8>, CkError>>;
+type UploadHandler = Box<dyn FnMut(&str, &[u8]) -> Result<Value, CkError>>;
 
 pub struct MockTransport {
     handler: RefCell<Handler>,
     /// Answers asset GETs (`download_bytes`); `None` panics on one.
     assets: RefCell<Option<AssetHandler>>,
+    /// Answers asset uploads (`upload`); `None` panics on one.
+    uploader: RefCell<Option<UploadHandler>>,
     /// Every asset GET's URL.
     pub downloads: RefCell<Vec<String>>,
+    /// Every asset upload as (URL, bytes).
+    pub uploads: RefCell<Vec<(String, Vec<u8>)>>,
     /// Every POST as (path with query, body).
     pub requests: RefCell<Vec<(String, Value)>>,
 }
@@ -26,7 +31,9 @@ impl MockTransport {
         MockTransport {
             handler: RefCell::new(Box::new(handler)),
             assets: RefCell::new(None),
+            uploader: RefCell::new(None),
             downloads: RefCell::new(Vec::new()),
+            uploads: RefCell::new(Vec::new()),
             requests: RefCell::new(Vec::new()),
         }
     }
@@ -34,6 +41,12 @@ impl MockTransport {
     /// Serves asset downloads from `assets`.
     pub fn with_assets(self, assets: impl FnMut(&str) -> Result<Vec<u8>, CkError> + 'static) -> Self {
         *self.assets.borrow_mut() = Some(Box::new(assets));
+        self
+    }
+
+    /// Answers asset uploads with `uploader`.
+    pub fn with_uploads(self, uploader: impl FnMut(&str, &[u8]) -> Result<Value, CkError> + 'static) -> Self {
+        *self.uploader.borrow_mut() = Some(Box::new(uploader));
         self
     }
 
@@ -56,6 +69,14 @@ impl Transport for MockTransport {
 
     fn download(&self, url: &str, _dest: &Path) -> Result<u64, CkError> {
         panic!("unexpected download in test: {url}")
+    }
+
+    fn upload(&self, url: &str, bytes: &[u8]) -> Result<Value, CkError> {
+        self.uploads.borrow_mut().push((url.to_owned(), bytes.to_vec()));
+        match self.uploader.borrow_mut().as_mut() {
+            Some(uploader) => uploader(url, bytes),
+            None => panic!("unexpected upload in test: {url}"),
+        }
     }
 
     fn download_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {

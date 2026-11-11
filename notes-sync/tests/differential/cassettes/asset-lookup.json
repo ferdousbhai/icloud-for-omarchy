@@ -165,6 +165,18 @@
         }
       },
       "repeat": true
+    },
+    {
+      "note": "the big note's TextDataAsset: a gzipped NoteStoreProto document",
+      "request": {
+        "method": "GET",
+        "url": "https://cvws.icloud-content.com/B/AbigNote1/${f}?o=AsBigOne&v=1&x=3&a=CAog&e=1790003600&fl=&r=r1&k=${uk}&ckc=com.apple.notes&ckz=Notes&p=43&s=sig1"
+      },
+      "response": {
+        "status": 200,
+        "bodyBase64": "H4sIAAAAAAAAA12OsQrCMBRFk+IQsxg6OASHi1MR6T9UnJ36A0EfNVia0PeGfqibH1NpBwfvci7nLteo8qONcsq/dSmX2OGWhGz7jIwhCSEyJCX0YewIkvAiyojCEJoEcejjQGdwQpNzT2BJIzHiMiGgpUmuQULDTFJb24DpnoYHchhDN4b8rL2zm+WAU35lpVejnXLiV1aF31tjlJvned455X/9eLDeuu1fysJIWRh9Kox8AU8JbfDgAAAA"
+      },
+      "repeat": true
     }
   ]
 }

@@ -141,8 +141,6 @@ fn restore_advice(file: &str) -> String {
 pub enum TextUpdateRefusal {
     /// 1926
     NoTextData,
-    /// 1932
-    TextAsAsset,
     /// 1939
     NotRoundTrip,
     /// 1955
@@ -165,7 +163,6 @@ impl TextUpdateRefusal {
     pub fn message(&self) -> String {
         match self {
             TextUpdateRefusal::NoTextData => "remote note has no readable text data".into(),
-            TextUpdateRefusal::TextAsAsset => "remote note stores its text as an asset - refusing to edit".into(),
             TextUpdateRefusal::NotRoundTrip => {
                 "the note's document doesn't round-trip byte-for-byte through our model - refusing to edit".into()
             }
