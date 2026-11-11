@@ -367,6 +367,113 @@ ApplicationWindow {
         if (folder !== backend.currentFolder && flushEdits())
             backend.currentFolder = folder;
     }
+
+    // ----- Arrow-key navigation (STRATA-style) -----
+    // kbPane tracks which pane owns the arrow keys: the folder list, the
+    // note list or the editor. "" means mouse mode. Up/Down walk the
+    // active list (opening rows as they pass), Right/Enter walk deeper
+    // (folders -> notes -> editor) and Left/Escape walk back out.
+    property string kbPane: ""
+
+    function kbSyncIndex(view) {
+        if (view.count === 0)
+            return;
+        if (view.currentIndex < 0 || view.currentIndex >= view.count)
+            view.currentIndex = 0;
+        view.positionViewAtIndex(view.currentIndex, ListView.Contain);
+    }
+
+    // Enter a pane: land on the row that is already open (current folder /
+    // current note), else the first row, then move focus there.
+    function kbFocus(pane) {
+        var view = pane === "folders" ? folderView : noteView;
+        if (view.count > 0 && (view.currentIndex < 0 || view.currentIndex >= view.count)) {
+            var want = pane === "folders" ? backend.currentFolder
+                     : (root.searching ? "" : backend.currentNote);
+            if (want.length > 0) {
+                for (var i = 0; i < view.count; i++) {
+                    var md = view.model[i];
+                    if ((pane === "folders" ? md : (typeof md === "string" ? md : md.file)) === want) {
+                        view.currentIndex = i;
+                        break;
+                    }
+                }
+            }
+            if (view.currentIndex < 0)
+                view.currentIndex = 0;
+        }
+        root.kbSyncIndex(view);
+        kbPane = pane;
+        view.forceActiveFocus();
+    }
+
+    function kbEnterEditor() {
+        kbPane = "editor";
+        editor.forceActiveFocus();
+    }
+
+    function kbOpenFolderAt(index) {
+        if (index >= 0 && index < folderView.count)
+            root.openFolder(backend.folders[index]);
+    }
+    function kbOpenNoteAt(index) {
+        if (index < 0 || index >= noteView.count)
+            return;
+        var md = noteView.model[index];
+        if (typeof md === "string")
+            root.openNote(backend.currentFolder, md);
+        else
+            root.openNote(md.folder || backend.currentFolder, md.file);
+    }
+
+    function kbKey(event, pane) {
+        var key = event.key;
+        var view = pane === "folders" ? folderView : noteView;
+        var last = view.count - 1;
+        if (key === Qt.Key_Up || key === Qt.Key_Down || key === Qt.Key_Home
+                || key === Qt.Key_End || key === Qt.Key_PageUp || key === Qt.Key_PageDown) {
+            if (view.count > 0) {
+                var i = view.currentIndex < 0 ? 0 : view.currentIndex;
+                if (key === Qt.Key_Up)
+                    i = Math.max(0, i - 1);
+                else if (key === Qt.Key_Down)
+                    i = Math.min(last, i + 1);
+                else if (key === Qt.Key_Home)
+                    i = 0;
+                else if (key === Qt.Key_End)
+                    i = last;
+                else if (key === Qt.Key_PageUp)
+                    i = Math.max(0, i - 10);
+                else
+                    i = Math.min(last, i + 10);
+                view.currentIndex = i;
+                view.positionViewAtIndex(i, ListView.Contain);
+                if (pane === "folders")
+                    root.kbOpenFolderAt(i);
+                else
+                    root.kbOpenNoteAt(i);
+            }
+            event.accepted = true;
+        } else if (key === Qt.Key_Right || key === Qt.Key_Return || key === Qt.Key_Enter) {
+            if (pane === "folders") {
+                root.kbOpenFolderAt(view.currentIndex);
+                root.kbFocus("notes");
+            } else if (view.count > 0) {
+                var md = view.model[Math.max(0, view.currentIndex)];
+                var folder = typeof md === "string" ? backend.currentFolder : (md.folder || backend.currentFolder);
+                var file = typeof md === "string" ? md : md.file;
+                if (!(file === backend.currentNote && folder === backend.currentFolder))
+                    root.kbOpenNoteAt(view.currentIndex);
+                root.kbEnterEditor();
+            }
+            event.accepted = true;
+        } else if (key === Qt.Key_Left || key === Qt.Key_Escape) {
+            if (pane === "notes")
+                root.kbFocus("folders"); // already at the root: keep the current pane
+            event.accepted = true;
+        }
+    }
+    // ----- end arrow-key navigation -----
     function commitTitle(title) {
         title = title.trim();
         if (title.length === 0 || title === titleField.current || !flushEdits()) {
@@ -443,7 +550,9 @@ ApplicationWindow {
         editor.forceActiveFocus();
     }
 
-    function zoomIn() { editorZoom = Math.min(4.0, editorZoom * 1.2); }
+    // Editor zoom helpers (used by the four new shortcuts below). Bounded and live.
+    // 20% steps for clean increments (inspired by common editor/reader zoom).
+    function zoomIn()  { editorZoom = Math.min(4.0, editorZoom * 1.2); }
     function zoomOut() { editorZoom = Math.max(0.5, editorZoom / 1.2); }
     function zoomReset() { editorZoom = 1.0; }
 
@@ -692,6 +801,9 @@ ApplicationWindow {
                         model: backend.folders
                         clip: true
                         spacing: 1
+                        keyNavigationEnabled: false // arrows are handled by root.kbKey
+                        property bool kbActive: root.kbPane === "folders"
+                        Keys.onPressed: function (event) { root.kbKey(event, "folders"); }
                         delegate: Item {
                             id: folderRow
                             width: folderView.width
@@ -706,6 +818,7 @@ ApplicationWindow {
                                 radius: 6
                                 color: folderRow.selected ? root.colSelection
                                      : folderHover.hovered ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.5)
+                                     : folderView.kbActive && folderView.currentIndex === index ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.35)
                                      : "transparent"
                             }
                             RowLayout {
@@ -729,7 +842,7 @@ ApplicationWindow {
                                     font.pixelSize: 11
                                 }
                             }
-                            TapHandler { acceptedButtons: Qt.LeftButton; onTapped: root.openFolder(modelData) }
+                            TapHandler { acceptedButtons: Qt.LeftButton; onTapped: { root.kbPane = "folders"; folderView.currentIndex = index; folderView.forceActiveFocus(); root.openFolder(modelData); } }
                             TapHandler {
                                 acceptedButtons: Qt.RightButton
                                 enabled: modelData.length > 0
@@ -821,6 +934,9 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         model: root.searching ? root.searchResults : backend.notes
                         clip: true
+                        keyNavigationEnabled: false // arrows are handled by root.kbKey
+                        property bool kbActive: root.kbPane === "notes"
+                        Keys.onPressed: function (event) { root.kbKey(event, "notes"); }
                         delegate: Item {
                             id: noteRow
                             width: noteView.width
@@ -840,6 +956,7 @@ ApplicationWindow {
                                 radius: 8
                                 color: noteRow.selected ? root.colSelection
                                      : noteHover.hovered ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.5)
+                                     : noteView.kbActive && noteView.currentIndex === index ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.35)
                                      : "transparent"
                             }
                             Rectangle {
@@ -908,7 +1025,15 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            TapHandler { onTapped: { if (!noteRow.selected) root.openNote(noteRow.folder, noteRow.fileName); } }
+                            TapHandler {
+                                onTapped: {
+                                    root.kbPane = "notes";
+                                    noteView.currentIndex = index;
+                                    noteView.forceActiveFocus();
+                                    if (!noteRow.selected)
+                                        root.openNote(noteRow.folder, noteRow.fileName);
+                                }
+                            }
                         }
                     }
                 }
@@ -1271,6 +1396,12 @@ ApplicationWindow {
                                 if (edits && !root.dirty && root.pullIfStale())
                                     event.accepted = true;
                             }
+                            // Arrow keys move the caret here (TextArea default);
+                            // Escape walks back out to the note list.
+                            Keys.onEscapePressed: {
+                                event.accepted = true;
+                                root.kbFocus("notes");
+                            }
                             wrapMode: TextArea.Wrap
                             selectByMouse: true
                             readOnly: root.noteLocked || root.freshening || root.unreadableConflict
@@ -1288,8 +1419,10 @@ ApplicationWindow {
                             onCursorPositionChanged: root.trackCursor()
                             onActiveFocusChanged: {
                                 root.trackCursor();
-                                if (activeFocus)
+                                if (activeFocus) {
+                                    root.kbPane = "editor";
                                     root.pullIfStale();
+                                }
                             }
                             Component.onCompleted: backend.attachEditor(editor.textDocument)
                         }
@@ -1427,7 +1560,17 @@ ApplicationWindow {
             onboardDialog.open();
         }
     }
-    Component.onCompleted: start()
+    // Arm the arrow-key navigation from a cold start: the first Up/Down
+    // lands on the folder list unless something (an onboarding dialog, a
+    // search) already holds the focus.
+    function kbArmStartup() {
+        if (!activeFocusItem || activeFocusItem === contentItem)
+            root.kbFocus(backend.folders.length > 0 ? "folders" : "notes");
+    }
+    Component.onCompleted: {
+        start();
+        Qt.callLater(root.kbArmStartup);
+    }
 
     Shortcut { sequence: StandardKey.Save; onActivated: root.save() }
     Shortcut { sequence: "Ctrl+N"; onActivated: newNoteDialog.open() }
@@ -1435,9 +1578,11 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }
     Shortcut { sequence: "Ctrl+Return"; enabled: editor.activeFocus; onActivated: root.toggleTask() }
-    Shortcut { sequences: [StandardKey.ZoomIn, "Ctrl+="]; onActivated: root.zoomIn() }
-    Shortcut { sequences: [StandardKey.ZoomOut]; onActivated: root.zoomOut() }
-    Shortcut { sequence: "Ctrl+0"; onActivated: root.zoomReset() }
+    // Editor font zoom shortcuts (standard on many text editors and browsers).
+    Shortcut { sequence: "Ctrl++"; onActivated: root.zoomIn() }
+    Shortcut { sequence: "Ctrl+="; onActivated: root.zoomIn() }
+    Shortcut { sequence: "Ctrl+-"; onActivated: root.zoomOut() }
+    Shortcut { sequence: "Ctrl+0";  onActivated: root.zoomReset() }
 
     Settings {
         id: settings

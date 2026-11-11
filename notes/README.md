@@ -120,7 +120,11 @@ without asking.
   the line you are editing, and the file stays plain Markdown on disk. Bold/italic/link buttons (`Ctrl+B`/`Ctrl+I`/`Ctrl+K`),
   a checklist toggle (`Ctrl+Enter`), and PDF export (saved next to the
   note) are in the toolbar. `Ctrl++` and `Ctrl+-` zoom the note's text
-  (remembered), `Ctrl+0` resets it. The window follows the active Omarchy theme.
+  (remembered), `Ctrl+0` resets it. The arrow keys walk the panes like
+  a file browser: Up/Down pick a folder or note (opening it as they
+  go), Right/Enter step deeper into the note list and then the editor,
+  Left/Escape step back out, and Home/End/PageUp/PageDown jump inside
+  a list. The window follows the active Omarchy theme.
 - **History** shows past versions of the current note with diffs,
   read-only. It keeps a note's newest 20 versions, plus one a day for
   the last 30 days; older ones are dropped as new ones arrive. Throwing away a note's local edits is a deliberate terminal
