@@ -306,17 +306,21 @@ pub fn to_js_json(value: &Value) -> String {
     text
 }
 
-/// Write `contents` to `path` atomically: a temp file beside it, then a
-/// rename.
+/// Write `contents` to `path` atomically: a temp file beside it, synced,
+/// then a rename, so a crash leaves the old file or the new one.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, contents)?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
+    let written = std::fs::File::create(&tmp).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()
+    });
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, path)) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
@@ -378,7 +382,10 @@ pub fn write_raw_state_file(target_dir: &Path, state: &RawStateFile) -> Result<(
     Ok(())
 }
 
-pub(crate) fn read_json(path: &Path) -> Result<Option<Value>, Error> {
+/// The state file at `path` parsed as JSON; `None` when there is none. Text
+/// that doesn't parse (hand-edited, or truncated) is `CorruptStateFile`, so
+/// it carries the recovery hint the structural checks do.
+fn read_json(path: &Path) -> Result<Option<Value>, Error> {
     let raw = match std::fs::read(path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -388,7 +395,7 @@ pub(crate) fn read_json(path: &Path) -> Result<Option<Value>, Error> {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
     serde_json::from_str(text)
         .map(Some)
-        .map_err(|e| Error::Internal(format!("{}: {e}", path.display())))
+        .map_err(|e| Error::CorruptStateFile(format!("{} isn't valid JSON: {e}", node_display(path))))
 }
 
 /// Read and validate the vault's state without migrating it: `Ok(None)`

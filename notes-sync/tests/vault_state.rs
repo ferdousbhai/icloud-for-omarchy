@@ -8,7 +8,7 @@ use icloud_notes_sync::cloudkit::{SharedDatabaseCursor, ZoneId};
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::vault::state::{
     Account, AttachmentEntry, CURRENT_LAYOUT_VERSION, CloneState, FolderEntry, NoteEntry, SharerHomeEntry,
-    TableAttachmentEntry, TitleMode, TrashedEntry, read_clone_state, write_clone_state,
+    TableAttachmentEntry, TitleMode, TrashedEntry, read_clone_state, read_raw_state_file, write_clone_state,
 };
 use indexmap::IndexMap;
 
@@ -183,6 +183,24 @@ fn refuses_a_pre_folder_layout_vault() {
         read_clone_state(dir.path()),
         Err(Error::UnsupportedVaultLayout { .. })
     ));
+}
+
+/// A state file that isn't JSON at all, hand-edited with a trailing comma
+/// or left empty, is a corrupt state file with its recovery hint, not a bug.
+#[test]
+fn corrupt_for_a_state_file_that_is_not_json() {
+    for text in ["", "{", r#"{"notes":{},}"#] {
+        let dir = tempfile::tempdir().unwrap();
+        write_raw(dir.path(), text);
+        assert!(
+            matches!(read_clone_state(dir.path()), Err(Error::CorruptStateFile(_))),
+            "{text:?}"
+        );
+        assert!(
+            matches!(read_raw_state_file(dir.path()), Err(Error::CorruptStateFile(_))),
+            "{text:?}"
+        );
+    }
 }
 
 #[test]
