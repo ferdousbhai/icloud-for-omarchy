@@ -85,6 +85,17 @@ class Packaging(unittest.TestCase):
             versions.append(subprocess.check_output(["bash", "-ec", 'source packaging/PKGBUILD; echo "$pkgver"'], cwd=root, text=True))
         self.assertEqual(versions[0], versions[1])
 
+    def test_every_app_needs_the_sign_in_service_of_its_own_suite(self):
+        # Installing or upgrading one app must bring icloud-session up with
+        # it: Omarchy's package command upgrades only what it is asked for.
+        recipe = (ROOT / "packaging/PKGBUILD").read_text()
+        for package in PACKAGES:
+            if package == "icloud-session":
+                continue
+            body = recipe.split(f"package_{package}() {{", 1)[1].split("\n}", 1)[0]
+            depends = next(line for line in body.splitlines() if line.strip().startswith("depends="))
+            self.assertIn('"icloud-session>=$pkgver"', depends, package)
+
     def test_all_rust_crates_inherit_one_locked_suite_version(self):
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]
         expected = workspace["package"]["version"]

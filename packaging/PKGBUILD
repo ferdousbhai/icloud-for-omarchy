@@ -92,7 +92,7 @@ package_icloud-session() {
 
 package_icloud-photos() {
   pkgdesc='iCloud Photos on Omarchy: browse, download, upload and delete'
-  depends=('gtk4' 'libadwaita' 'icloud-session' 'hicolor-icon-theme' 'sqlite')
+  depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
   optdepends=('wl-clipboard: icloud-photos copy (clipboard)'
               'xdg-utils: icloud-photos open (default app)')
   _package_gtk_app IcloudPhotos
@@ -100,13 +100,13 @@ package_icloud-photos() {
 
 package_icloud-findmy() {
   pkgdesc='Find My devices on Omarchy: locate, play a sound, Lost Mode, history trail'
-  depends=('gtk4' 'libadwaita' 'libshumate' 'icloud-session' 'hicolor-icon-theme' 'sqlite')
+  depends=('gtk4' 'libadwaita' 'libshumate' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
   _package_gtk_app IcloudFindMy
 }
 
 package_icloud-notes() {
   pkgdesc='Apple Notes on Omarchy, synced with iCloud'
-  depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'icloud-session' 'qt6-base' 'qt6-declarative')
+  depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' "icloud-session>=$pkgver" 'qt6-base' 'qt6-declarative')
   provides=('icloud-notes-sync')
   replaces=('icloud-notes-sync')
   conflicts=('icloud-notes-sync')
@@ -131,7 +131,7 @@ package_icloud-notes() {
 
 package_icloud-drive() {
   pkgdesc='iCloud Drive on Omarchy: ~/iCloud Drive kept in sync both ways'
-  depends=('icloud-session' 'sqlite' 'gcc-libs' 'glibc')
+  depends=("icloud-session>=$pkgver" 'sqlite' 'gcc-libs' 'glibc')
   cd "$srcdir/icloud-for-omarchy"
   _release_bin icloud-drive usr/bin/icloud-drive
   # Off until `icloud-drive start`: a first sync downloads the whole Drive,
