@@ -140,6 +140,13 @@ fn read_string(frontmatter: &str, key: &str) -> Option<String> {
     }
 }
 
+/// Whether the readers above can see into `frontmatter`: none at all, or an
+/// envelope that parses. Broken YAML reads every key as `None`, the same as a
+/// missing one, so a caller that acts on a key's absence checks this first.
+pub fn frontmatter_readable(frontmatter: &str) -> bool {
+    js::trim(frontmatter).is_empty() || parse_frontmatter(frontmatter).is_some()
+}
+
 /// `readNoteId`: total - broken YAML, missing key, non-UUID all read `None`.
 pub fn read_note_id(frontmatter: &str) -> Option<String> {
     read_string(frontmatter, NOTE_ID_KEY).filter(|v| is_note_id(v))

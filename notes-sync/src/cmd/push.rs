@@ -40,7 +40,8 @@ use crate::doc::table_edit::prepare_table_attachment_update;
 use crate::doc::text::{compress_note_document, decode_note_body_text, decode_note_string, decompress_note_document};
 use crate::js::{self, posix};
 use crate::md::frontmatter::{
-    NOTE_TITLE_KEY, join_frontmatter, read_note_id, read_note_title, set_note_id, split_frontmatter,
+    NOTE_TITLE_KEY, frontmatter_readable, join_frontmatter, read_note_id, read_note_title, set_note_id,
+    split_frontmatter,
 };
 use crate::md::parse::{ParsedNoteMarkdown, parse_note_markdown};
 use crate::md::title::{
@@ -624,12 +625,21 @@ pub fn build_push_plan(
             } => (state, frontmatter, body),
         };
         let requested_title = if filename_as_title {
-            // Removing the title key asks for the title the file name spells.
+            // Removing the title key asks for the title the file name spells;
+            // YAML too broken to read says nothing about the key either way.
+            let readable = frontmatter_readable(&frontmatter);
+            if !readable && entry.frontmatter_title.is_some() {
+                notices.push(SyncNotice {
+                    level: NoticeLevel::Warn,
+                    message: format!(
+                        "{}: the frontmatter isn't valid YAML, so {NOTE_TITLE_KEY} can't be read - the note's \
+                         title is left as it is",
+                        entry.file
+                    ),
+                });
+            }
             read_note_title(&frontmatter).or_else(|| {
-                entry
-                    .frontmatter_title
-                    .is_some()
-                    .then(|| title_from_note_file_name(&entry.file))
+                (readable && entry.frontmatter_title.is_some()).then(|| title_from_note_file_name(&entry.file))
             })
         } else {
             None

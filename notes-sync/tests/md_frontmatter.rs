@@ -154,6 +154,15 @@ fn read_note_id_cases() {
 }
 
 #[test]
+fn broken_yaml_is_unreadable_not_keyless() {
+    assert!(frontmatter_readable(""));
+    assert!(frontmatter_readable("---\ntags: [recipes]\n---\n\n"));
+    let broken = "---\ntags: [x\napple-note-title: T\n---\n\n";
+    assert!(!frontmatter_readable(broken));
+    assert_eq!(read_note_title(broken), None);
+}
+
+#[test]
 fn set_note_id_cases() {
     assert_eq!(set_note_id("", ID), format!("---\napple-note-id: {ID}\n---\n\n"));
 

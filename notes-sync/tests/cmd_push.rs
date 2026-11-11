@@ -967,6 +967,35 @@ fn removing_the_title_key_retitles_to_the_file_name() {
     assert_unbound(dir.path());
 }
 
+/// A title no file name can hold lives only in the key; YAML broken around
+/// it doesn't read as the key removed, so nothing retitles to "Untitled".
+#[test]
+fn unreadable_frontmatter_is_not_a_request_for_the_file_name_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "A title far too long for any file name to hold, ".repeat(3);
+    let mut s = state();
+    s.title_mode = Some(TitleMode::Filename);
+    let entry = s.notes.get_mut("REC1").unwrap();
+    entry.file = "Notes/Untitled.md".into();
+    entry.frontmatter_title = Some(long.clone());
+    write_clone_state(dir.path(), &s).unwrap();
+    write_base_copy(dir.path(), "REC1", "Synced text").unwrap();
+    write_vault_file(
+        dir.path(),
+        "Notes/Untitled.md",
+        &format!("---\napple-note-id: REC1\napple-note-title: {long:?}\ntags: [reading\n---\n\nSynced text"),
+    );
+    let result = plan(dir.path());
+    assert!(result.entries.is_empty());
+    assert!(
+        result.notices.iter().any(|n| n
+            .message
+            .starts_with("Notes/Untitled.md: the frontmatter isn't valid YAML")),
+        "{:?}",
+        result.notices
+    );
+}
+
 #[test]
 fn notes_put_in_an_attachments_directory_are_reported() {
     let dir = tempfile::tempdir().unwrap();
