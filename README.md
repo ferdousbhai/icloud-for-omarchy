@@ -93,6 +93,14 @@ shared dependency. The old apps and per-app installers are no longer built here.
 
 ## Install
 
+Coming from a Mac? One command installs these together with Mail, Calendar, Contacts and Reminders (the [Cloud apps](#calendar-mail-and-the-rest-of-icloud)) and signs you in to iCloud once for all of them ([what it does](https://ferdousbhai.com/icloud)):
+
+```bash
+curl -fsSL https://ferdousbhai.com/icloud/install.sh | sudo bash
+```
+
+To install only the apps in this repository:
+
 ```bash
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
 ```
