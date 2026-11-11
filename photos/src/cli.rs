@@ -44,17 +44,18 @@ const AFTER_HELP: &str = "\
 Output: human-readable text on a terminal, a JSON envelope
 {\"ok\":true,\"data\",\"summary\"} when piped. --json forces the envelope,
 --styled text, --quiet prints only the data, --ids-only one id per line
-(albums: album ids; list, info, thumb, open: item ids; download, delete: the
-items that succeeded; upload: the new asset ids), --count the number of
-results (list, albums; the ids above; prune-cache: files removed). Flags
+(albums: album ids; list, info, thumb, open, copy, wallpaper: item ids;
+download, delete, restore: the items that succeeded; upload: the new asset
+ids), --count the number of results (list, albums; the ids above;
+prune-cache: files removed). Flags
 combine: ids-only > count > quiet > json > styled. A failure is
 {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
 error:/hint: lines on stderr in text mode. Progress goes to stderr.
 
 Exit codes:
   0 ok
-  1 error (cancelled, error, io, http 4xx), or some items of download, upload or
-    delete failed (the data lists each item with its error)
+  1 error (cancelled, error, io, http 4xx), or some items of download, upload,
+    delete or restore failed (the data lists each item with its error)
   2 usage, or delete without --yes when nobody can be asked
   3 sign_in_required (icloud-session sign-in; status also exits 3 when
     signed out), photos_unavailable (iCloud Photos is not on for this

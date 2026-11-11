@@ -151,7 +151,10 @@ fn usage_help_and_exit_codes() {
         "download",
         "upload",
         "delete",
+        "restore",
         "open",
+        "copy",
+        "wallpaper",
         "prune-cache",
         "sign-in",
         "config",
@@ -160,6 +163,13 @@ fn usage_help_and_exit_codes() {
         let own = env.bare(&[cmd, "--help"]);
         assert_eq!(own.code, 0, "{cmd} --help");
         assert!(own.stdout.contains("Exit codes"), "{cmd} --help names the exit codes");
+    }
+    // The --ids-only line names every command that sets ids, as docs/CLI.md does.
+    for part in [
+        "open, copy, wallpaper: item ids",
+        "download, delete, restore: the items that succeeded",
+    ] {
+        assert!(help.stdout.contains(part), "--help says {part}");
     }
     assert_eq!(env.bare(&["--version"]).code, 0);
     assert_eq!(env.bare(&["frobnicate"]).code, 2);
