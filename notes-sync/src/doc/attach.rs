@@ -31,11 +31,12 @@ pub fn uti_for_file_name(name: &str) -> &'static str {
     }
 }
 
-/// The pixel size (width, height) a PNG, JPEG or GIF file states in its
-/// header; `None` for anything else, or a header cut short.
+/// The pixel size (width, height) a PNG, JPEG, GIF or WebP file states in
+/// its header; `None` for anything else, or a header cut short.
 pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let size = png_dimensions(bytes)
         .or_else(|| gif_dimensions(bytes))
+        .or_else(|| webp_dimensions(bytes))
         .or_else(|| jpeg_dimensions(bytes))?;
     (size.0 > 0 && size.1 > 0).then_some(size)
 }
@@ -66,6 +67,27 @@ fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         return None;
     }
     Some((le16(bytes, 6)?, le16(bytes, 8)?))
+}
+
+/// "RIFF", a length, "WEBP", then the first chunk: the canvas of an
+/// extended file (`VP8X`), or the frame of a lossy (`VP8 `) or lossless
+/// (`VP8L`) one.
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(b"RIFF") || bytes.get(8..12)? != b"WEBP" {
+        return None;
+    }
+    let le24 = |at: usize| Some(u32::from(*bytes.get(at)?) | le16(bytes, at + 1)? << 8);
+    match bytes.get(12..16)? {
+        b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+        b"VP8 " if bytes.get(23..26)? == [0x9d, 0x01, 0x2a] => {
+            Some((le16(bytes, 26)? & 0x3fff, le16(bytes, 28)? & 0x3fff))
+        }
+        b"VP8L" if *bytes.get(20)? == 0x2f => {
+            let bits = le16(bytes, 21)? | le16(bytes, 23)? << 16;
+            Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+        }
+        _ => None,
+    }
 }
 
 /// The first start-of-frame segment: length, precision, height, width.

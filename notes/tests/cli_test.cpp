@@ -569,7 +569,7 @@ int main(int argc, char *argv[])
             const QString gif = source(QStringLiteral("anim.gif"), "GIF89a");
             const Run pushed = cliJson({ QStringLiteral("attach"), QStringLiteral("alpha"), gif, QStringLiteral("--push") });
             check(pushed.code == 0
-                      && pushed.json().toObject().value(QStringLiteral("link")).toString() == QStringLiteral("[anim.gif](attachments/anim.gif)")
+                      && pushed.json().toObject().value(QStringLiteral("link")).toString() == QStringLiteral("![anim.gif](attachments/anim.gif)")
                       && pushed.json().toObject().value(QStringLiteral("sync")).toObject().value(QStringLiteral("ok")).toBool()
                       && stubLog() == QStringList{ QStringLiteral("sync") },
                   "cli attach --push syncs afterwards");

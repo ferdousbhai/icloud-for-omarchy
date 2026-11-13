@@ -325,22 +325,23 @@ will treat the note as a brand-new one. Extra notes you add there
 (tags, aliases) stay on your machine and never upload. Downloaded
 images and files live in `attachments/` folders next to their notes. A note
 with attachments can be edited and moved like any other, as long as the
-links to its attachments stay as they are. To add an attachment, run
+links to its attachments stay as they are. To add an attachment in the
+window, click the paperclip, drop a file on the note, or paste a copied
+file or picture (a screenshot) into it. From a terminal, run
 `icloud-notes attach NOTE FILE`, or do what it does by hand: put the file
 in the `attachments/` folder next to the note and link it from the note the
 way the others are linked, `![photo.png](attachments/photo.png)` for a
-PNG, JPEG, HEIC or TIFF and `[plan.pdf](attachments/plan.pdf)` for any
-other file. The next sync uploads it.
+PNG, JPEG, HEIC, TIFF, GIF or WebP and `[plan.pdf](attachments/plan.pdf)`
+for any other file. The next sync uploads it.
 
 ## Limitations
 
 - Packages are built for x86_64 only. The app itself would build on
   Apple Silicon Omarchy; the release script just doesn't cross-build yet.
 
-- You can add an attachment to a note from here (`icloud-notes attach`,
-  above; files up to 100 MB, and not to a note someone else shared with
-  you), but not from the window yet, and you can't remove one: do that in
-  Apple Notes. The text around it can be edited here. A file added here
+- You can add an attachment to a note from here (files up to 100 MB, and
+  not to a note someone else shared with you), but you can't remove one: do
+  that in Apple Notes. The text around it can be edited here. A file added here
   goes up without the preview and text recognition Apple's own devices
   make for the attachments they add.
 - A note icloud-notes-sync can read but not safely write back opens

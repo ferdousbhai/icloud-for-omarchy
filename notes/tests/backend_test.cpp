@@ -1,6 +1,9 @@
 // Backend tests: note classification, save warnings, mode-aware rename and
 // the icloud-notes-sync CLI seam — against a scratch vault under a temporary
 // directory, never the real one. Run with bin/test.
+#include <QMimeData>
+#include <QImage>
+#include <QClipboard>
 #include "../src/cli.h"
 #include "../src/notesbackend.h"
 #include "../src/singleinstance.h"
@@ -1404,6 +1407,53 @@ int main(int argc, char *argv[])
               "background: the app syncs once the lock is free");
         check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync")),
               "background: the app keeps the lock it waited for");
+    }
+    {
+        // Attaching from the window (the button, a drop, a paste): the file
+        // is copied beside the note under a free name and its link handed
+        // back for the editor, which owns the note's text.
+        const QString note = QStringLiteral("---\napple-note-id: id-att\n---\n# Att\nbody\n");
+        writeFile(QStringLiteral("Att.md"), note);
+        const QString source = scratch.path() + QStringLiteral("/shot.gif");
+        {
+            QFile f(source);
+            check(f.open(QIODevice::WriteOnly) && f.write("GIF89a\x02\x00\x03\x00", 10) == 10, "attach: a file to attach");
+        }
+        NotesBackend app;
+        check(!app.addAttachment(source).value(QStringLiteral("ok")).toBool(), "attach: nothing is attached with no note open");
+        app.openNote(QStringLiteral("Att.md"));
+        const QVariantMap first = app.addAttachment(source);
+        const QVariantMap second = app.addAttachment(source);
+        check(first.value(QStringLiteral("ok")).toBool() && first.value(QStringLiteral("name")).toString() == QStringLiteral("shot.gif")
+                  && first.value(QStringLiteral("link")).toString() == QStringLiteral("![shot.gif](attachments/shot.gif)")
+                  && first.value(QStringLiteral("path")).toString() == testVault() + QStringLiteral("/attachments/shot.gif")
+                  && QFileInfo(testVault() + QStringLiteral("/attachments/shot.gif")).size() == 10,
+              "attach: the file is copied into the note's attachments and linked as an image");
+        check(second.value(QStringLiteral("link")).toString() == QStringLiteral("![shot 2.gif](attachments/shot%202.gif)"),
+              "attach: a second file of the same name gets a free one");
+        check(readFile(QStringLiteral("Att.md")) == note, "attach: the note's text is left to the editor");
+        check(app.addAttachment(scratch.path() + QStringLiteral("/none.pdf")).value(QStringLiteral("code")).toString() == QStringLiteral("not_found"),
+              "attach: a missing file is refused");
+        check(app.localFile(QUrl::fromLocalFile(source)) == source && app.localFile(QUrl(QStringLiteral("https://example.com/a.png"))).isEmpty(),
+              "attach: only local files are taken from a drop");
+
+        // What a paste attaches: copied files, or a copied picture as a PNG; text stays text.
+        QClipboard *clipboard = QGuiApplication::clipboard();
+        clipboard->setText(QStringLiteral("just text"));
+        check(app.clipboardFiles().isEmpty(), "attach: pasted text is not an attachment");
+        QImage picture(4, 3, QImage::Format_ARGB32);
+        picture.fill(Qt::red);
+        clipboard->setImage(picture);
+        const QStringList pasted = app.clipboardFiles();
+        check(pasted.size() == 1 && pasted.at(0).endsWith(QStringLiteral("/Pasted image.png")) && QImage(pasted.at(0)).size() == QSize(4, 3),
+              "attach: a copied picture is pasted as a PNG file");
+        auto *files = new QMimeData;
+        files->setUrls({ QUrl::fromLocalFile(source), QUrl(QStringLiteral("https://example.com/a.png")) });
+        clipboard->setMimeData(files);
+        check(app.clipboardFiles() == QStringList{ source }, "attach: copied files are pasted as attachments");
+        clipboard->clear();
+        QDir(testVault() + QStringLiteral("/attachments")).removeRecursively();
+        QFile::remove(testVault() + QStringLiteral("/Att.md"));
     }
     {
         // Notes closing while icloud-notes-sync runs: the engine is stopped

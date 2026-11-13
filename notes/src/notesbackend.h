@@ -9,12 +9,15 @@
 #include <QProcess>
 #include <QQuickTextDocument>
 #include <QSet>
+#include <QTemporaryDir>
 #include <QTimer>
+#include <QUrl>
 
 #include "markdownhighlighter.h"
 #include "vaultlock.h"
 #include <QStringList>
 #include <QVariant>
+#include <memory>
 
 class QDBusMessage;
 class QDBusServiceWatcher;
@@ -197,6 +200,21 @@ public:
     // rewriting the note: the edits are written once it is done (merged
     // with whatever it changed), and queuedSaveWritten says so.
     Q_INVOKABLE bool saveCurrentNote(const QString &body);
+    // Copies the file `source` into the open note's attachments/ folder,
+    // under a free name, and returns {ok, name, path, link}: `link` is what
+    // the sync engine takes for a new attachment once the note's text holds
+    // it. The note itself is not touched. A refusal is {ok: false, code,
+    // message, hint?} (code: read_only, not_found, usage or error).
+    Q_INVOKABLE QVariantMap addAttachment(const QString &source);
+    // The files a paste would attach: the local files the clipboard names,
+    // or its picture, written out as a PNG. Empty when it holds text, which
+    // is pasted as text.
+    Q_INVOKABLE QStringList clipboardFiles();
+    // The path of a local file's URL (a drop's, a file dialog's); empty for
+    // any other URL.
+    Q_INVOKABLE QString localFile(const QUrl &url) const { return url.isLocalFile() ? url.toLocalFile() : QString(); }
+    // The link the sync engine writes for the attachment file `name`.
+    static QString attachmentLink(const QString &name);
     // The note changed on disk under unsaved editor text: rather than let
     // a save overwrite that change, merge the two (base is what the editor
     // loaded, mine what it holds now). Edits to different lines merge into
@@ -439,6 +457,8 @@ private:
         QString body;
         bool valid = false;
     } m_queuedSave;
+    // Where a pasted picture is written before it is attached.
+    std::unique_ptr<QTemporaryDir> m_pasteDir;
     QVariantList m_noteAttachments;
     QString m_readOnlyReason;
     QVariantList m_statusEntries;

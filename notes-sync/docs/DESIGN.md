@@ -501,8 +501,9 @@ Apple's apps show a record without the previews they add themselves.
 Still refused: removing, changing or moving the link of an attachment the
 note has; a link to a file that isn't there, or outside the folder's
 `attachments/`; a file over 100 MB; a shared note. GIF and WebP files are
-linked as files, not embeds, as pull links the ones Notes makes
-(`is_image_uti` doesn't list their types).
+images like the rest (`com.compuserve.gif`, `org.webmproject.webp`), as
+Apple Notes shows them; a link pulled before they were, written as a file's,
+is still taken for its attachment.
 
 Tests: tests/doc_attach.rs (types, image sizes, the records' exact JSON,
 links, placeholders through the decoders), tests/cmd_push_attach.rs (the

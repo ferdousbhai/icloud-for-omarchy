@@ -42,7 +42,7 @@ timer's sync). All of it is new, in the app binary: see
 | Ctrl+S past a save warning (conflict markers, duplicate id) | `icloud-notes write ... --force` | added |
 | Bold, italic, link buttons | `write` (they only insert Markdown) | added |
 | Checklist toggle (Ctrl+Enter) | `icloud-notes toggle NOTE LINE` | added |
-| (not in the window) add a file to a note as an attachment | `icloud-notes attach NOTE FILE` | added |
+| Attach a file to the open note (the paperclip button, a file dropped on the note, or a copied file or picture pasted into it) | `icloud-notes attach NOTE FILE` | added |
 | New note (Ctrl+N) | `icloud-notes new TITLE [--folder F] [--body ...]` | added |
 | Rename (edit the title line) | `icloud-notes rename NOTE TITLE` | added |
 | Delete note (to the trash) | `icloud-notes delete NOTE --yes` | added |
@@ -407,7 +407,7 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `rename`, `move` | `{action, path, from, title?, sync?}` |
 | `delete` | `{action:"delete", path, sync?}` |
 | `toggle` | `{action:"toggle", path, line, text, sync?}` |
-| `attach` | `{action:"attach", path, file, link, sync?}` (`file`: the copy, a vault path under the note folder's `attachments/`, renamed `name 2.ext` when the name was taken; `link`: the line added at the end of the note, `![name](attachments/name)` for a PNG, JPEG, HEIC or TIFF and `[name](attachments/name)` for anything else. The next push uploads the file; `status` and `push --dry-run` show the note as `update` with `remark: "adds the attachment NAME"`. FILE is a regular, non-empty file of at most 100 MB) |
+| `attach` | `{action:"attach", path, file, link, sync?}` (`file`: the copy, a vault path under the note folder's `attachments/`, renamed `name 2.ext` when the name was taken; `link`: the line added at the end of the note, `![name](attachments/name)` for a PNG, JPEG, HEIC, TIFF, GIF or WebP and `[name](attachments/name)` for anything else. The next push uploads the file; `status` and `push --dry-run` show the note as `update` with `remark: "adds the attachment NAME"`. FILE is a regular, non-empty file of at most 100 MB) |
 | `resolve` | `{action:"resolve", path, choices, sync?}` |
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |

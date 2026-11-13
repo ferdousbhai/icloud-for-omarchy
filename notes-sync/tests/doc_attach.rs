@@ -97,9 +97,9 @@ fn the_type_agrees_with_the_extension_pull_gives_it() {
         ("p.jpg", "![p.jpg](attachments/p.jpg)"),
         ("p.heic", "![p.heic](attachments/p.heic)"),
         ("p.tif", "![p.tif](attachments/p.tif)"),
-        // As pull links the GIFs and WebPs Notes makes: files, not embeds.
-        ("p.gif", "[p.gif](attachments/p.gif)"),
-        ("p.webp", "[p.webp](attachments/p.webp)"),
+        // Images in Apple Notes too, under the names Apple gives them.
+        ("p.gif", "![p.gif](attachments/p.gif)"),
+        ("p.webp", "![p.webp](attachments/p.webp)"),
         ("p.pdf", "[p.pdf](attachments/p.pdf)"),
         ("a b [1].txt", "[a b \\[1\\].txt](attachments/a%20b%20%5B1%5D.txt)"),
         // The links `icloud-notes attach` writes (notes/tests/cli_test.cpp).
@@ -142,6 +142,20 @@ fn image_headers_give_their_pixel_size() {
     );
     assert_eq!(image_dimensions(b"GIF87a\x02\x00\x03\x00"), Some((2, 3)));
     assert_eq!(image_dimensions(b"GIF89a\x40"), None);
+    // WebP: the extended canvas, a lossy frame, a lossless frame.
+    assert_eq!(
+        image_dimensions(b"RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00\x3f\x01\x00\xef\x00\x00"),
+        Some((320, 240))
+    );
+    assert_eq!(
+        image_dimensions(b"RIFF\x00\x00\x00\x00WEBPVP8 \x00\x00\x00\x00\x00\x00\x00\x9d\x01\x2a\x40\x01\xf0\x00"),
+        Some((320, 240))
+    );
+    assert_eq!(
+        image_dimensions(b"RIFF\x00\x00\x00\x00WEBPVP8L\x00\x00\x00\x00\x2f\x3f\xc1\x3b\x00"),
+        Some((320, 240))
+    );
+    assert_eq!(image_dimensions(b"RIFF\x00\x00\x00\x00WEBPVP8X\x0a"), None);
 
     // SOI, an APP0 segment to skip, a fill byte, then SOF0: 16x32.
     let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x4a, 0x46];

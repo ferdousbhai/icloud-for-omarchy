@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtCore
 
@@ -551,6 +552,42 @@ ApplicationWindow {
         editor.forceActiveFocus();
     }
 
+    // Files become attachments of the open note: each is copied beside it
+    // and linked on a line of its own, at `at` (a drop's place in the text)
+    // or the caret, and the next sync uploads it.
+    readonly property bool canAttach: canFormat && !editor.readOnly
+    function attachFiles(paths, at) {
+        if (!canAttach || paths.length === 0)
+            return;
+        var links = [], errors = [];
+        paths.forEach(function (path) {
+            var added = backend.addAttachment(path);
+            if (added.ok)
+                links.push(added.link);
+            else
+                errors.push(added.message);
+        });
+        if (links.length > 0) {
+            var text = editor.text;
+            // An editor never clicked into has its caret at the top: the
+            // end of the note is the better place.
+            var pos = at !== undefined ? at : editor.activeFocus || editor.cursorPosition > 0 ? editor.selectionEnd : text.length;
+            if (at !== undefined) {
+                var lineEnd = text.indexOf("\n", pos);
+                pos = lineEnd < 0 ? text.length : lineEnd;
+            }
+            var block = (pos > 0 && text.charAt(pos - 1) !== "\n" ? "\n" : "") + links.join("\n")
+                + (text.charAt(pos) === "\n" ? "" : "\n");
+            editor.insert(pos, block);
+            editor.cursorPosition = pos + block.length;
+        }
+        notice = errors.join(" ");
+        editor.forceActiveFocus();
+    }
+    function localPaths(urls) {
+        return urls.map(function (url) { return backend.localFile(url); }).filter(function (path) { return path.length > 0; });
+    }
+
     function zoomIn() { editorZoom = Math.min(4.0, editorZoom * 1.2); }
     function zoomOut() { editorZoom = Math.max(0.5, editorZoom / 1.2); }
     function zoomReset() { editorZoom = 1.0; }
@@ -583,6 +620,7 @@ ApplicationWindow {
             IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: root.canFormat; onClicked: root.wrapSelection("**", "**") }
             IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: root.canFormat; onClicked: root.wrapSelection("*", "*") }
             IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: root.canFormat; onClicked: root.insertLink() }
+            IconButton { glyph: "\uf0c6"; tip: "Attach a file (or drop or paste one)"; enabled: root.canAttach; onClicked: attachDialog.open() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton {
                 // Sync is automatic; this only shows what is pending or refused.
@@ -1385,6 +1423,15 @@ ApplicationWindow {
                         TextArea {
                             id: editor
                             Keys.onPressed: function (event) {
+                                // A copied file or picture is pasted as an attachment.
+                                if (event.matches(StandardKey.Paste) && root.canAttach) {
+                                    var files = backend.clipboardFiles();
+                                    if (files.length > 0) {
+                                        event.accepted = true;
+                                        root.attachFiles(files);
+                                        return;
+                                    }
+                                }
                                 // The first edit after a while waits for the pull; the
                                 // key that triggered it is dropped rather than typed
                                 // into a copy about to change.
@@ -1422,11 +1469,33 @@ ApplicationWindow {
                                 }
                             }
                             Component.onCompleted: backend.attachEditor(editor.textDocument)
+
+                            // Files dropped on the note are attached where they land.
+                            DropArea {
+                                anchors.fill: parent
+                                keys: ["text/uri-list"]
+                                onEntered: function (drag) { drag.accepted = root.canAttach && drag.hasUrls; }
+                                onDropped: function (drop) {
+                                    var paths = root.localPaths(drop.urls);
+                                    if (paths.length === 0)
+                                        return;
+                                    drop.accept(Qt.CopyAction);
+                                    root.attachFiles(paths, editor.positionAt(drop.x, drop.y));
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    FileDialog {
+        id: attachDialog
+        title: "Attach files"
+        fileMode: FileDialog.OpenFiles
+        currentFolder: StandardPaths.writableLocation(StandardPaths.HomeLocation)
+        onAccepted: root.attachFiles(root.localPaths(selectedFiles))
     }
 
     // Notes has no Save button: edits land on disk once typing pauses. Edits

@@ -5,11 +5,16 @@
 // NOTES_SHOT=readonly shows the open note as one the sync tool will not push.
 // NOTES_SHOT=conflict opens it on a merge conflict, for the version picker.
 // NOTES_SHOT=unreadable opens it on nested markers the picker can't read.
+// NOTES_SHOT=attach attaches a file through the window's own function, then
+// pastes a copied picture with Ctrl+V, and prints the note as autosaved.
 #include "../check.h"
 #include "../src/notesbackend.h"
 
+#include <QClipboard>
 #include <QDateTime>
 #include <QGuiApplication>
+#include <QImage>
+#include <QKeyEvent>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -103,7 +108,26 @@ int main(int argc, char *argv[])
         backend.openNote(QStringLiteral("Groceries.md"));
     }
 
-    QTimer::singleShot(1500, [&] {
+    const bool attach = qgetenv("NOTES_SHOT") == "attach";
+    if (attach) {
+        QTimer::singleShot(300, [&] {
+            writeFile(QStringLiteral("receipt.pdf"), QStringLiteral("%PDF-1.4\n"), scratch.path());
+            QMetaObject::invokeMethod(window, "attachFiles", Q_ARG(QVariant, QStringList{ scratch.path() + QStringLiteral("/receipt.pdf") }),
+                                      Q_ARG(QVariant, QVariant()));
+            QImage picture(40, 30, QImage::Format_ARGB32);
+            picture.fill(Qt::darkCyan);
+            QGuiApplication::clipboard()->setImage(picture);
+            window->requestActivate();
+        });
+        QTimer::singleShot(600, [&] {
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+            QCoreApplication::sendEvent(window, &press);
+        });
+    }
+    QTimer::singleShot(attach ? 3000 : 1500, [&] {
+        if (attach)
+            QTextStream(stdout) << readFile(QStringLiteral("Notes/Groceries.md"), root) << "--\n"
+                                << QDir(root + QStringLiteral("/Notes/attachments")).entryList(QDir::Files).join(u'\n') << "\n";
         const QString out = QString::fromLocal8Bit(argv[1]);
         QTextStream(stdout) << (window->grabWindow().save(out) ? "saved " + out : QStringLiteral("grab failed")) << "\n";
         QCoreApplication::quit();

@@ -1,6 +1,7 @@
 #include "notesbackend.h"
 #include "syncmodel.h"
 
+#include <QClipboard>
 #include <QCryptographicHash>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -15,9 +16,11 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMimeData>
 #include <QPrinter>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -1160,6 +1163,115 @@ bool NotesBackend::saveCurrentNote(const QString &body)
     rebuildNotes(); // a save bumps mtime, which reorders the list
     emit vaultChanged();
     return true;
+}
+
+// The link the sync engine writes for an attachment file, and so the one
+// it takes for a file to add (notes-sync `format_attachment_markdown`): an
+// embed for the image types it knows, the file's name as the link text with
+// its brackets and backslashes escaped, and the path percent-encoded as
+// JavaScript's encodeURIComponent does.
+QString NotesBackend::attachmentLink(const QString &name)
+{
+    static const QStringList embedded{ QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"), QStringLiteral("heic"),
+                                       QStringLiteral("tiff"), QStringLiteral("tif"),  QStringLiteral("gif"),  QStringLiteral("webp") };
+    QString text;
+    for (const QChar c : name) {
+        if (c == u'[' || c == u']' || c == u'\\')
+            text += u'\\';
+        text += c;
+    }
+    const int dot = name.lastIndexOf(u'.');
+    const bool image = dot > 0 && embedded.contains(name.mid(dot + 1).toLower());
+    return QStringLiteral("%1[%2](attachments/%3)")
+        .arg(image ? QStringLiteral("!") : QString(), text,
+             QString::fromLatin1(QUrl::toPercentEncoding(name, QByteArrayLiteral("!*'()"))));
+}
+
+QVariantMap NotesBackend::addAttachment(const QString &source)
+{
+    // The most the sync engine uploads as one attachment (notes-sync
+    // MAX_NEW_ATTACHMENT_BYTES).
+    constexpr qint64 kMaxAttachmentBytes = 100LL * 1024 * 1024;
+    const auto refuse = [](const char *code, const QString &message, const QString &hint = {}) {
+        QVariantMap out{ { QStringLiteral("ok"), false }, { QStringLiteral("code"), QLatin1String(code) }, { QStringLiteral("message"), message } };
+        if (!hint.isEmpty())
+            out.insert(QStringLiteral("hint"), hint);
+        return out;
+    };
+    const QString notePath = noteAbsolutePath();
+    if (notePath.isEmpty())
+        return refuse("error", QStringLiteral("no note is open"));
+    if (!m_readOnlyReason.isEmpty())
+        return refuse("read_only",
+                      QStringLiteral("%1 is read-only here: this note %2").arg(QDir(rootPath()).relativeFilePath(notePath), m_readOnlyReason),
+                      QStringLiteral("Add the attachment in Apple Notes; it still syncs here."));
+    const QFileInfo info(source);
+    if (!info.exists())
+        return refuse("not_found", QStringLiteral("no file \"%1\"").arg(source));
+    QFile in(info.absoluteFilePath());
+    if (!info.isFile() || !in.open(QIODevice::ReadOnly))
+        return refuse("error", QStringLiteral("cannot read %1: %2").arg(source, info.isFile() ? in.errorString() : QStringLiteral("not a regular file")));
+    in.close();
+    if (info.size() == 0)
+        return refuse("error", QStringLiteral("%1 is empty: there is nothing to attach").arg(source));
+    if (info.size() > kMaxAttachmentBytes)
+        return refuse("error", QStringLiteral("%1 is larger than 100 MB, the most that can be added as an attachment").arg(source),
+                      QStringLiteral("Add it in Apple Notes instead."));
+    // One plain file name, as the engine wants an attachment's.
+    const QString name = info.fileName();
+    bool plain = !name.isEmpty() && name.toUtf8().size() <= 190;
+    for (const QChar c : name)
+        plain = plain && c.unicode() >= 0x20 && c.unicode() != 0x7f;
+    if (!plain)
+        return refuse("usage", QStringLiteral("\"%1\" cannot be an attachment's name: rename the file first (no control "
+                                              "characters, at most 190 bytes)")
+                                   .arg(name));
+
+    const QDir folder = QFileInfo(notePath).dir();
+    if (!folder.mkpath(QStringLiteral("attachments")))
+        return refuse("error", QStringLiteral("could not create %1").arg(folder.filePath(QStringLiteral("attachments"))));
+    const QDir dir(folder.filePath(QStringLiteral("attachments")));
+    // Never over a file that is there: "name 2.ext", as a pull names a
+    // second attachment of the same name.
+    const int dot = name.lastIndexOf(u'.');
+    const QString stem = dot > 0 ? name.left(dot) : name;
+    const QString ext = dot > 0 ? name.mid(dot) : QString();
+    QString stored = name;
+    for (int i = 2; QFileInfo::exists(dir.filePath(stored)) || QFileInfo(dir.filePath(stored)).isSymLink(); ++i)
+        stored = QStringLiteral("%1 %2%3").arg(stem).arg(i).arg(ext);
+    // QFile::copy refuses to replace a file, should one appear meanwhile.
+    QFile copy(info.absoluteFilePath());
+    if (!copy.copy(dir.filePath(stored)))
+        return refuse("error", QStringLiteral("could not copy %1 to %2: %3").arg(source, dir.filePath(stored), copy.errorString()));
+    QFile::setPermissions(dir.filePath(stored), QFile::permissions(dir.filePath(stored)) | QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    return { { QStringLiteral("ok"), true },
+             { QStringLiteral("name"), stored },
+             { QStringLiteral("path"), dir.filePath(stored) },
+             { QStringLiteral("link"), attachmentLink(stored) } };
+}
+
+QStringList NotesBackend::clipboardFiles()
+{
+    const QMimeData *mime = QGuiApplication::clipboard()->mimeData();
+    if (!mime)
+        return {};
+    QStringList files;
+    for (const QUrl &url : mime->urls()) {
+        if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isFile())
+            files.append(url.toLocalFile());
+    }
+    if (!files.isEmpty() || !mime->hasImage() || mime->hasText())
+        return files;
+    // A copied picture (a screenshot): attached as a PNG file.
+    const QImage image = qvariant_cast<QImage>(mime->imageData());
+    if (image.isNull())
+        return {};
+    if (!m_pasteDir)
+        m_pasteDir = std::make_unique<QTemporaryDir>();
+    const QString path = m_pasteDir->filePath(QStringLiteral("Pasted image.png"));
+    if (!m_pasteDir->isValid() || !image.save(path, "PNG"))
+        return {};
+    return { path };
 }
 
 bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)

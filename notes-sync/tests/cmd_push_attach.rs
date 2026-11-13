@@ -577,7 +577,7 @@ fn a_second_attachment_goes_in_after_the_first_which_keeps_its_place() {
     append(
         &vault,
         NOTE_FILE,
-        "\n[two.pdf](attachments/two.pdf)\n[three.gif](attachments/three.gif)\n",
+        "\n[two.pdf](attachments/two.pdf)\n![three.gif](attachments/three.gif)\n",
     );
     let planned = preview(&server, &vault);
     assert_eq!(

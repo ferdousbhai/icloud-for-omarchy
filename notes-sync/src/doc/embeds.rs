@@ -187,13 +187,17 @@ pub fn embed_slots_of(s: &topotext::String) -> Option<Vec<EmbedSlot>> {
     Some(slots)
 }
 
-const IMAGE_UTIS: [&str; 6] = [
+/// icloud-md's list, and the names Apple gives GIF and WebP files, which
+/// Apple Notes shows in the note as it does any other image.
+const IMAGE_UTIS: [&str; 8] = [
     "public.jpeg",
     "public.png",
     "public.heic",
     "public.tiff",
     "public.gif",
     "public.webp",
+    "com.compuserve.gif",
+    "org.webmproject.webp",
 ];
 
 /// `isImageUti`.
@@ -556,8 +560,15 @@ pub fn plan_embed_representations(
                         .find(|&i| units.len() >= link.len() && units[i..i + link.len()] == link[..])
                         .map(|start| (start, link.len()))
                 };
-                let Some((start, length)) = find(utf16(&format_attachment_markdown(reference, link_path)))
-                    .or_else(|| find(utf16(&unescaped_attachment_markdown(reference, link_path))))
+                let written = format_attachment_markdown(reference, link_path);
+                let unescaped = unescaped_attachment_markdown(reference, link_path);
+                // A GIF or WebP pulled before those counted as images is
+                // still linked as a file, without the `!`.
+                let as_file = |link: &str| link.strip_prefix('!').and_then(|link| find(utf16(link)));
+                let Some((start, length)) = find(utf16(&written))
+                    .or_else(|| find(utf16(&unescaped)))
+                    .or_else(|| as_file(&written))
+                    .or_else(|| as_file(&unescaped))
                 else {
                     return Err(format!(
                         "the link to the attachment \"{}\" was removed, changed or moved - attachments can only be \
