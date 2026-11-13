@@ -1,0 +1,12 @@
+[Unit]
+Description=Check iCloud Reminders for due ones every minute
+Documentation=https://github.com/ferdousbhai/icloud-for-omarchy/tree/main/reminders#notifications
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*:*:00
+# Due times are to the minute; systemd's default accuracy is a minute.
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

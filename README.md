@@ -14,6 +14,10 @@ one Apple sign-in, published as one signed pacman repository.
   Photos, copy one or make it your wallpaper.
 - **Find My**: your devices on a map, with play sound, Lost Mode and a
   location trail.
+- **Reminders**: your lists and reminders, completed with a click, and a
+  desktop notification when one falls due, window open or not.
+- **Contacts**: search your address book, copy a number or start an email
+  in a click, add and edit contacts, and export them as vCards.
 - **iCloud Drive**: `~/iCloud Drive`, a folder kept in sync both ways. No
   app: use your file manager.
 - Every window action also works from the terminal, with JSON output
@@ -28,6 +32,8 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 | [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app and the `icloud-notes` command, synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
 | [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4/libadwaita: browse, download, upload and delete. |
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4/libadwaita: locate, play a sound, Lost Mode, history trail. |
+| [reminders/](reminders/README.md) | `icloud-reminders` | iCloud Reminders in GTK4/libadwaita, and a systemd timer that notifies through Omarchy's notifications when a reminder falls due. |
+| [contacts/](contacts/README.md) | `icloud-contacts` | iCloud Contacts in GTK4/libadwaita: search, add, edit, delete, vCard export. |
 | [drive/](drive/README.md) | `icloud-drive` | iCloud Drive as the folder `~/iCloud Drive`, synced both ways by a background service; `icloud-drive start` turns it on. |
 | [session/](session/README.md), [sessiond/](sessiond/) | `icloud-session` | The shared sign-in: a D-Bus daemon, a sign-in window and a CLI (sessiond/), plus the Rust client crate every app links (session/). |
 
@@ -53,7 +59,7 @@ aren't available from iCloud on the web either.
 
 ## Command line and agents
 
-Notes, Photos, Find My, iCloud Drive and the shared sign-in have scriptable CLIs with one
+Notes, Photos, Find My, Reminders, Contacts, iCloud Drive and the shared sign-in have scriptable CLIs with one
 output contract: text on a terminal, a JSON envelope when piped (`--quiet`
 for the bare result), JSON errors with stable codes, and shared exit codes;
 see [docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
@@ -62,14 +68,15 @@ see [docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
 into `~/.claude/skills` for Claude Code; `icloud-session skill remove` removes it, and a new
 release refreshes it.
 
-## Contacts and tasks moved
+- [docs/AGENTS.md](docs/AGENTS.md): the reference to give an agent (auth,
+  commands with example JSON, safety rules, recipes).
+- [docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md): the same as a
+  Claude Code skill; copy `docs/skills/icloud` into `~/.claude/skills/`.
+- [docs/CLI.md](docs/CLI.md): every GUI feature mapped to its command, the
+  exit and error codes, the JSON shapes.
 
-The standalone icloud-contacts and icloud-reminders apps/packages are retired.
-Use [Cloud Contacts](https://github.com/ferdousbhai/cloud-contacts) and
-[Cloud Tasks](https://github.com/ferdousbhai/cloud-tasks), which combine Apple and
-Google and own the extracted iCloud backends. Their migration instructions
-preserve existing cache and notification history; only icloud-session remains a
-shared dependency. The old apps and per-app installers are no longer built here.
+Signing in is the one thing a person must do: Apple's page (password, 2FA)
+opens in a window from `icloud-session sign-in`.
 
 ## Is this safe?
 
@@ -88,6 +95,10 @@ shared dependency. The old apps and per-app installers are no longer built here.
   tiles.
 - **Notes and Photos deletes are recoverable**: a note or photo you
   delete goes to Recently Deleted in iCloud (about 30 days).
+- **Contacts deletes are not**: iCloud has no Recently Deleted for
+  contacts, so the app and `icloud-contacts delete` ask first. Only
+  icloud.com's Data Recovery (Restore Contacts, a whole earlier version of
+  your address book) brings one back.
 - **It's all open source**, and the packages are signed with a key whose
   fingerprint is pinned in [install.sh](install.sh).
 
@@ -105,7 +116,7 @@ To install only the apps in this repository:
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
 ```
 
-installs Notes, Photos, Find My and iCloud Drive (icloud-notes, icloud-photos, icloud-findmy, icloud-drive), which pull in icloud-session. iCloud Drive syncs nothing until you run `icloud-drive start`. To install only some, name them:
+installs Notes, Photos, Find My, Reminders, Contacts and iCloud Drive (icloud-notes, icloud-photos, icloud-findmy, icloud-reminders, icloud-contacts, icloud-drive), which pull in icloud-session. iCloud Drive syncs nothing until you run `icloud-drive start`. To install only some, name them:
 
 ```bash
 curl -fsSL .../install.sh | sudo bash -s -- icloud-photos icloud-findmy
@@ -121,7 +132,8 @@ with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 on Omarchy, otherwise in one `pacman -Syu`).
 Re-running it is safe. Updates then arrive with `omarchy update`.
 
-In the app launcher they are Notes, Photos, and Find My; searching "iCloud" finds them all. Photos saves originals straight into
+In the app launcher they are Notes, Photos, Find My, Reminders and
+Contacts; searching "iCloud" finds them all. Photos saves originals straight into
 `~/Pictures/<year>/<month>/`; after updating from a version that used
 `~/Pictures/icloud-photos/`, its first start moves that folder's contents
 up into `~/Pictures/` ([details](photos/README.md#your-files)).
@@ -148,8 +160,8 @@ printf '[icloud-for-omarchy]\nSigLevel = Required DatabaseRequired\nServer = htt
   | sudo tee /etc/pacman.d/icloud-for-omarchy.conf
 echo 'Include = /etc/pacman.d/icloud-for-omarchy.conf' | sudo tee -a /etc/pacman.conf
 
-# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy icloud-drive)
-sudo pacman -Syu icloud-notes icloud-photos icloud-findmy icloud-drive
+# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts)
+sudo pacman -Syu icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts
 ```
 
 On Omarchy, `omarchy refresh pacman` rewrites `/etc/pacman.conf`; the
@@ -169,7 +181,7 @@ script: icloud-notes now carries the engine and `replaces` it, so the next
 `omarchy update` swaps it out.
 
 Every release also carries one installer per app, `install-notes.sh`,
-`install-photos.sh`, `install-findmy.sh` and `install-drive.sh`: install.sh with its default
+`install-photos.sh`, `install-findmy.sh`, `install-drive.sh`, `install-reminders.sh` and `install-contacts.sh`: install.sh with its default
 set to that one app, generated by `bin/make-installers`. The website (not
 in this repository) redirects its one-liners to these assets:
 `https://ferdousbhai.com/icloud/install.sh` to `install.sh`, and
@@ -187,13 +199,15 @@ on aarch64), its `Include` line in `/etc/pacman.conf`, and
 ## Layout
 
 ```
-Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, photos, findmy, drive
+Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, photos, findmy, drive, reminders, contacts
 session/  sessiond/      icloud-session: client crate / daemon, sign-in window, CLI
 notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
 notes-sync/              icloud-notes-sync, the sync engine the icloud-notes package ships
 photos/  findmy/         icloud-photos, icloud-findmy
 drive/                   icloud-drive: the sync of ~/iCloud Drive and its service
-packaging/PKGBUILD       one split recipe builds all five packages
+reminders/               icloud-reminders (its systemd timer in reminders/data/)
+contacts/                icloud-contacts
+packaging/PKGBUILD       one split recipe builds all seven packages
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, check, build-packages, arch-run, collect-packages, make-installers, release, verify-release; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh (installers against stubbed pacman); packaging_test.py
@@ -241,7 +255,7 @@ bin/release 0.9.1
 ```
 
 One suite version in `[workspace.package]` of `Cargo.toml` is inherited by
-all Rust crates and the five packages. Releases use `v<version>` tags;
+all Rust crates and the seven packages. Releases use `v<version>` tags;
 older per-app tags remain historical. Development packages add
 `.r<count>.<commit>` to the suite version. `bin/release` refuses a version
 that is not newer than the current one, so installations always upgrade.

@@ -1,6 +1,6 @@
 # icloud-for-omarchy
 
-Native iCloud apps for Omarchy/Arch — Notes, Photos, Find My, iCloud Drive — sharing one
+Native iCloud apps for Omarchy/Arch — Notes, Photos, Find My, Reminders, Contacts, iCloud Drive — sharing one
 Apple web sign-in held by the `icloud-session` D-Bus daemon. Each app is a GUI plus a
 scriptable `--json` CLI; iCloud Drive is a synced folder with a small control command.
 
@@ -24,18 +24,27 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   icloud-notes-sync`. Ships inside the icloud-notes package, not on its own.
 - `notes/` — `icloud-notes`, the Qt6/QML app and CLI (C++ in `src/`, QML in `qml/`,
   `notes/bin/build`, `notes/bin/test`).
-- `photos/`, `findmy/` — one crate per app: a library, a GTK-free CLI
+- `photos/`, `findmy/`, `reminders/`, `contacts/` — one crate per app: a library, a GTK-free CLI
   binary (`src/main.rs` + `cli.rs`), and the GTK/libadwaita window as a separate `*-app` binary
   (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`). Each has a fake Apple server
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
+- `reminders/`, `contacts/` — `icloud-reminders` and `icloud-contacts`, built like Photos and
+  Find My: a library, a GTK-free CLI (`src/main.rs` + `cli.rs`) and the window as `*-app`
+  (`src/bin/app/`), each with a fake Apple server in `examples/`. Reminders speaks CloudKit
+  (`cloudkit.rs`, container `com.apple.reminders`) and has the systemd timer that syncs and sends
+  due-time notifications (`data/`, `notify.rs`); Contacts speaks icloud.com's contacts service
+  (`api.rs`, `vcard.rs`). They were away from 2026-10-13 to 2026-11-13 as the iCloud halves of
+  Cloud Tasks and Cloud Contacts, which also showed Google; the owner brought them back so that
+  iCloud is the one source of truth. Do not add a second provider beside iCloud here; another
+  service may only be imported from.
 - `drive/` — `icloud-drive`: keeps `~/iCloud Drive` in sync both ways. No window: a library
   (`remote.rs` the Drive web API behind a trait, `plan.rs` the pure sync rules, `engine.rs`,
   `state.rs`, `local.rs`), the `icloud-drive` command (`status`, `sync`, `start`, `stop`) and a
   systemd user service in `data/`, off until `icloud-drive start`. `tests/sync.rs` runs the engine
   against an in-memory Drive that mirrors what was measured of the real one; read the notes at the
   top of `remote.rs` before changing how changes are detected.
-- `packaging/PKGBUILD` — one split recipe for all five packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
+- `packaging/PKGBUILD` — one split recipe for all seven packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
 - `bin/` — `build`, `check`, `check-shared-support` (vendored copies shared with sibling repos; see `SHARED_SUPPORT.md`), `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
   `make-installers`, `release`, `verify-release`, `dev-install`/`dev-uninstall` (puts a release
   sessiond in `~/.local/bin` with a user D-Bus activation file).
@@ -84,7 +93,3 @@ packaging tests, then native x86_64/aarch64 package builds.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.
-
-Contacts and Reminders are retired standalone products. Their backends and tests
-now belong to cloud-contacts and cloud-tasks respectively; never restore their
-old packages, installers, desktop entries, or notification timer here.

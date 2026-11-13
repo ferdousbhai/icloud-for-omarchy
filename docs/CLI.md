@@ -12,12 +12,16 @@ to the command that does it, then fixes the conventions all the tools share.
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
+| `icloud-reminders <command>` | icloud-reminders | the Reminders app: lists, reminders, due dates; `background` is its notification timer |
+| `icloud-contacts <command>` | icloud-contacts | the Contacts app: search, show, add, edit, delete, vCard export |
 | `icloud-drive <command>` | icloud-drive | the sync of the folder `~/iCloud Drive`: status, a sync now, on and off (no window) |
 
-`icloud-notes`, `icloud-photos`, and `icloud-findmy` open their window without
-arguments and run their CLI without GUI initialization when given a command.
-Photos and Find My use GTK-free CLI binaries and separate native windows.
-Contacts and tasks are now separate unified products; see [Contacts and tasks](#contacts-and-tasks).
+`icloud-notes`, `icloud-photos`, `icloud-findmy`, `icloud-reminders` and
+`icloud-contacts` open their window without arguments and run their CLI
+without GUI initialization when given a command. Photos, Find My, Reminders
+and Contacts use GTK-free CLI binaries and separate native windows
+(`icloud-photos-app`, `icloud-findmy-app`, `icloud-reminders-app`,
+`icloud-contacts-app`).
 
 ## The audit: GUI feature → command
 
@@ -102,6 +106,42 @@ timer's sync). All of it is new, in the app binary: see
 | Sign-in banner | exit 3, then `icloud-session sign-in` | existed |
 | Find My password banner (Enter Password) | exit 3 (code `find_my_auth_required`), then `icloud-session authorize-find-my` (or `set-password` once) | existed |
 | Old positions dropped after 30 days | `icloud-findmy prune-history` | existed |
+
+### Reminders (`reminders/src/bin/app`)
+
+The app and its command line were written together; every window action
+has its command.
+
+| In the window | Command |
+|---|---|
+| Sidebar: lists with open counts | `icloud-reminders lists` |
+| Upcoming, a list's reminders, Show Completed | `icloud-reminders list [LIST] [--completed \| --all]` |
+| Click a reminder (its notes, due date) | `icloud-reminders show REMINDER` |
+| New reminder line (title, due) | `icloud-reminders add TITLE --list L [--due WHEN] [--notes T]` |
+| Edit dialog: title, due date, notes | `icloud-reminders edit REMINDER [--title T] [--due WHEN \| --no-due] [--notes T]` |
+| Check box | `icloud-reminders complete REMINDER`, `uncomplete REMINDER` |
+| Edit dialog: Delete | `icloud-reminders delete REMINDER --yes` |
+| Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` |
+| Notifications (the timer, window open or not) | `icloud-reminders background` (the timer runs it with `--styled`, which prints nothing when nothing fell due) |
+| Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
+
+### Contacts (`contacts/src/bin/app`)
+
+The app and its command line were written together; every window action
+has its command.
+
+| In the window | Command |
+|---|---|
+| Sidebar: every contact, by last name | `icloud-contacts list` |
+| Search box (names, companies, emails, phone digits) | `icloud-contacts list QUERY` |
+| Click a contact (its card) | `icloud-contacts show CONTACT` (`me`: My Card) |
+| Click a number, address or note (copy) | `icloud-contacts --quiet show CONTACT` and read the field |
+| + (New Contact) | `icloud-contacts add [--first N] [--last N] [--company C] [--phone [LABEL=]P]... [--email [LABEL=]E]... [--url [LABEL=]U]... [--birthday D] [--notes T]` |
+| Pencil (Edit): fields, add or empty a row | `icloud-contacts edit CONTACT [--FIELD V]... [--phone/--email/--url V]... [--remove-phone/--remove-email/--remove-url V]...` |
+| Trash (Delete) | `icloud-contacts delete CONTACT --yes` |
+| (no window equivalent) | `icloud-contacts export [CONTACT]... [--output FILE]` (vCard 3.0; piped output is the JSON envelope, so write the file with `--output`); added for moving an address book elsewhere |
+| Sync (Ctrl+R; every 5 min while shown) | `icloud-contacts sync` |
+| Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
 
 ### iCloud Drive (`drive/`)
 
@@ -262,13 +302,13 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
   terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
   `restore`, and a `write` that empties a note, which the next push deletes;
   `icloud-photos delete`; `icloud-findmy play-sound`,
-  `lost-mode`) ask there; anywhere else they refuse with `usage` (exit 2)
+  `lost-mode`; `icloud-reminders delete`; `icloud-contacts delete`) ask there; anywhere else they refuse with `usage` (exit 2)
   unless `--yes` is given. (`icloud-session set-password` reads the password
   from a terminal without echo, or from stdin.)
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
-  `ICLOUD_SESSION_MOCK_URL` (no D-Bus; photos and findmy talk to a fake
-  Apple server, `examples/` in each crate), `icloud-photos --data-dir DIR`,
-  `icloud-findmy --data-dir DIR`, `icloud-notes --vault DIR` (or
+  `ICLOUD_SESSION_MOCK_URL` (no D-Bus; photos, findmy, reminders and
+  contacts talk to a fake Apple server, `examples/` in each crate),
+  `--data-dir DIR` on each of those four, `icloud-notes --vault DIR` (or
   `ICLOUD_NOTES_VAULT`).
 
 ### `--ids-only` and `--count` per command
@@ -280,6 +320,8 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 | icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
 | icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
+| icloud-reminders | `lists`: list ids; `list`, `show`, `add`, `edit`, `complete`, `uncomplete`, `delete`: reminder ids; `background`: the reminders it notified about | `lists`: lists; `list`: reminders; a change: 1; `sync`: records changed; `background`: notifications sent |
+| icloud-contacts | `list`, `show`, `add`, `edit`, `delete`, `export`: contact ids | `list`, `export`: contacts; a change: 1; `sync`: cards changed |
 | icloud-drive | `sync`: one line per change made (or planned) | `sync`: changes made (or planned) |
 
 ### Exit codes
@@ -350,6 +392,29 @@ they exit with the engine's codes, below.
 | 3 | `sign_in_required`, `find_my_auth_required` (`icloud-session authorize-find-my`, or `set-password` once), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` |
 | 4 | `not_found` (no device matches; the hint lists them) |
 | 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+
+**icloud-reminders**
+
+| Exit | Codes |
+|---|---|
+| 1 | `cancelled`, `error` (also a record or zone CloudKit refused), `http` (a 4xx) |
+| 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
+| 3 | `sign_in_required`, `session_rejected` |
+| 4 | `not_found` (no such reminder or list; for a list the hint names the lists) |
+| 5 | `offline` (no network; `--cached` reads the last sync), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+
+`background` exits 0 when its sync fails and says so in `sync_error`: a
+timer that fails every minute while signed out would only fill the journal.
+
+**icloud-contacts**
+
+| Exit | Codes |
+|---|---|
+| 1 | `cancelled`, `error` (also a card iCloud refused, or removing a value the contact does not have), `http` (a 4xx) |
+| 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists up to 20 matches with their IDs) |
+| 3 | `sign_in_required`, `session_rejected` |
+| 4 | `not_found` (no contact matches, or there is no My Card for `me`) |
+| 5 | `offline` (no network; `--cached` reads the last sync), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 **icloud-drive**
 
@@ -488,9 +553,35 @@ engines: `icloud-md:progress:...`).
 
 Its error codes are in the table under [Error codes](#error-codes).
 
-### Contacts and tasks
+### icloud-reminders
 
-These APIs moved to [Cloud Contacts](https://github.com/ferdousbhai/cloud-contacts)
-and [Cloud Tasks](https://github.com/ferdousbhai/cloud-tasks). The standalone
-apps/CLIs are retired; see those products for CLI contracts and cache-preserving
-migration.
+REMINDER is an ID, a title (ignoring case) or a unique part of one, open
+reminders first; LIST an ID or a name. IDs are the records' UUIDs.
+
+| Command | `data` |
+|---|---|
+| `lists` | `[{id, name, color, open}]` (`color` `#rrggbb` or null) |
+| `list`, `show` | `[{id, list:{id, name}, title, notes, completed, completed_at, due:{date, time, all_day, time_zone, at} \| null, flagged, priority, alerts}]` (`show`: one object). `due.date`/`time` are the wall clock as stored, `time` null when all day; `time_zone` the zone it is anchored to (null: floating, the local zone); `at` the UTC moment it is due (an all-day one at 09:00 local); `alerts` counts alarms set on an Apple device |
+| `add`, `edit` | `{action, reminder}` |
+| `complete`, `uncomplete` | `{action, changed, reminder}`; `changed` is false when it already was |
+| `delete` | `{action:"delete", reminder:{id, title}}` |
+| (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
+| `sync` | `{lists, reminders, changed, full}` |
+| `background` | `{synced, sync_error, notified:[{id, title}]}`; exit 0 also when the sync failed (`sync_error` says why) |
+| (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; still exit 0 |
+
+### icloud-contacts
+
+CONTACT is an ID, `me`, a name (ignoring case), an email address, a phone
+number (by its digits) or a unique part of a name. IDs are iCloud's
+`contactId`s. Labels come as Contacts shows them (`mobile`, `iPhone`,
+`work`, or a custom one as typed); absent fields are null.
+
+| Command | `data` |
+|---|---|
+| `list`, `show` | `[{id, name, first, middle, last, nickname, company, job_title, department, is_company, me, phones:[{label, value}], emails:[...], urls:[...], addresses:[{label, street, city, state, postal_code, country, country_code}], birthday, notes, has_photo}]` (`show`: one object). `name` is what the list shows; `birthday` is `YYYY-MM-DD`, or `MM-DD` without a year |
+| `add`, `edit` | `{action, contact}` |
+| `delete` | `{action:"delete", contact:{id, name}}` |
+| `export` | `{action:"export", count, file}` with `--output`, else `{action:"export", count, vcard}`. Only text mode prints bare vCards: `export > FILE` writes the envelope, so use `--output FILE` |
+| (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
+| `sync` | `{contacts, changed}` (`changed`: cards added, changed or gone since the last sync) |

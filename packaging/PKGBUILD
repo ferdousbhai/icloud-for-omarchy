@@ -1,7 +1,7 @@
 # Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
-# One committed workspace build emits the five independently installable packages.
+# One committed workspace build emits the seven independently installable packages.
 pkgbase=icloud-for-omarchy
-pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-drive)
+pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-drive icloud-reminders icloud-contacts)
 _root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 _suite_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_root/Cargo.toml")
 _rustflags=${RUSTFLAGS:-}
@@ -139,4 +139,30 @@ package_icloud-drive() {
   install -Dm644 drive/data/icloud-drive.service "$pkgdir/usr/lib/systemd/user/icloud-drive.service"
   install -Dm644 drive/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   _install_licenses
+}
+
+package_icloud-reminders() {
+  pkgdesc='iCloud Reminders on Omarchy: lists, due dates and desktop notifications'
+  depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme')
+  # Cloud Tasks was this app with Google Tasks beside it. Both would notify
+  # for the same reminder, so only one can be installed.
+  replaces=('cloud-tasks')
+  conflicts=('cloud-tasks')
+  _package_gtk_app IcloudReminders
+  # Sync and due-time notifications every minute, window open or not.
+  install -Dm644 reminders/data/icloud-reminders-background.service "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.service"
+  install -Dm644 reminders/data/icloud-reminders-background.timer "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.timer"
+  # Enabled for every user by the package itself, like Notes' background
+  # sync; install.sh only starts it at once instead of at the next login.
+  install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
+  ln -s ../icloud-reminders-background.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-reminders-background.timer"
+}
+
+package_icloud-contacts() {
+  pkgdesc='iCloud Contacts on Omarchy: browse, search, add, edit and delete contacts'
+  depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme')
+  # Cloud Contacts was this app with Google Contacts beside it.
+  replaces=('cloud-contacts')
+  conflicts=('cloud-contacts')
+  _package_gtk_app IcloudContacts
 }

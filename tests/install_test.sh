@@ -110,12 +110,12 @@ count_include() { grep -cxF "Include = /etc/pacman.d/$1.conf" /etc/pacman.conf |
 
 setup
 bash install.sh >"$work/out" 2>&1
-check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-drive" ]
+check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts" ]
 check "the repository config is written" grep -qx 'Server = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download' /etc/pacman.d/icloud-for-omarchy.conf
 check "the Include line is added" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "the Omarchy hook is installed" [ -x "$hooks/icloud-for-omarchy" ]
 check "Notes' background sync is mentioned" grep -q 'Background sync' "$work/out"
-check "Legacy reminder notifications are absent" not grep -q 'Reminder notifications' "$work/out"
+check "Reminders' notifications are mentioned" grep -q 'Reminder notifications' "$work/out"
 bash install.sh >/dev/null 2>&1
 check "re-running keeps one Include line" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "on Omarchy it installs with omarchy-pkg-add" grep -q '^omarchy-pkg-add icloud-notes' "$PACMAN_LOG"
@@ -143,13 +143,16 @@ for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chm
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
-check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-drive' "$PACMAN_LOG"
+check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts' "$PACMAN_LOG"
 
-for app in notes photos findmy drive; do
+# Reminders last: the checks after the loop read its output.
+for app in notes photos findmy drive contacts reminders; do
   setup
   bash "$work/dist/install-$app.sh" >"$work/out" 2>&1
   check "install-$app.sh installs only icloud-$app" [ "$(installed)" = "icloud-$app" ]
 done
+check "install-reminders.sh does not start Notes' sync" not grep -q 'Background sync' "$work/out"
+check "install-reminders.sh starts its notifications" grep -q 'Reminder notifications' "$work/out"
 setup
 bash "$work/dist/install-findmy.sh" >"$work/out" 2>&1
 check "install-findmy.sh starts neither timer" not grep -qE 'Background sync|Reminder notifications' "$work/out"
@@ -264,12 +267,19 @@ bash "$work/truncated.sh" >/dev/null 2>&1 || true
 check "a truncated installer changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
 check "a truncated installer runs no pacman" [ ! -e "$PACMAN_LOG" ]
 
-for retired in contacts reminders; do
+# Reminders and Contacts take over from Cloud Tasks and Cloud Contacts, whose
+# packages replace them in turn: their repositories go, or the two would
+# swap places at every update. Another app leaves those repositories alone.
+for pair in reminders:cloud-tasks contacts:cloud-contacts; do
+  app=${pair%%:*} old=${pair##*:}
   setup
-  status=0
-  bash install.sh "icloud-$retired" >/dev/null 2>&1 || status=$?
-  check "retired icloud-$retired is refused" [ "$status" = 64 ]
-  check "retired $retired installer is not generated" [ ! -e "$work/dist/install-$retired.sh" ]
+  printf 'Include = /etc/pacman.d/%s.conf\n' "$old" >> /etc/pacman.conf
+  printf '[%s]\nServer = https://example.invalid\n' "$old" > "/etc/pacman.d/$old.conf"
+  bash install.sh icloud-photos >/dev/null 2>&1
+  check "installing Photos keeps the [$old] repository" [ -e "/etc/pacman.d/$old.conf" ]
+  bash install.sh "icloud-$app" >"$work/out" 2>&1
+  check "installing icloud-$app removes the [$old] repository" [ ! -e "/etc/pacman.d/$old.conf" ]
+  check "installing icloud-$app drops the [$old] Include" [ "$(count_include "$old")" = 0 ]
 done
 
 umount -q /etc/pacman.conf /etc/pacman.d /root 2>/dev/null || true

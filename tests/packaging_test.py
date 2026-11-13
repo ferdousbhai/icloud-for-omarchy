@@ -13,7 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
-PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes", "icloud-drive")
+PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes", "icloud-drive", "icloud-reminders", "icloud-contacts")
 
 
 class Packaging(unittest.TestCase):
@@ -172,7 +172,7 @@ for arch in ("x86_64", "aarch64"):
         log = Path(self.env["LOG"]).read_text()
         self.assertIn("git push -q origin v1.2.3", log)
         self.assertIn("gh workflow run packages.yml", log)
-        self.assertEqual(log.count("--detach-sign"), 2 * len(PACKAGES))
+        self.assertEqual(log.count("--detach-sign"), 14)
         self.assertIn("gh release create v1.2.3", log)
         self.assertNotIn("verify-release", log)
         self.assertNotIn("cargo publish", log)
@@ -430,15 +430,15 @@ for arch in ("x86_64", "aarch64"):
         self.env.update(LOG=str(self.work / "verify.log"), ICLOUD_ARCH_ROOT="1", FIXTURE=str(root))
         return root
 
-    def test_verification_checks_exact_installer_bytes_and_all_maintained_packages(self):
+    def test_verification_checks_exact_installer_bytes_and_every_package(self):
         root = self.verification_fixture()
         result = subprocess.run([str(root / "bin/verify-release"), "v1.2.3"], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         log = Path(self.env["LOG"]).read_text()
-        self.assertEqual(log.count("-fsSL"), len(PACKAGES))
+        self.assertEqual(log.count("-fsSL"), 7)
         self.assertIn("https://github.com/ferdousbhai/icloud-for-omarchy/releases/download/v1.2.3/install-notes.sh", log)
         self.assertNotIn("/latest/", log)
-        self.assertEqual(result.stdout.count("Verified:"), len(PACKAGES))
+        self.assertEqual(result.stdout.count("Verified:"), 7)
         for pkg in PACKAGES:
             self.assertIn(f"Verified: {pkg} 1.2.3", result.stdout)
 
