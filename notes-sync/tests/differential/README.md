@@ -23,7 +23,7 @@ ICLOUD_NOTES_SYNC_DIFF_ONLY=tiny-clone,tiny-push cargo test -p icloud-notes-sync
 
 A few scenarios also have named checks on what their recording must show
 (`dup_clone_*`, `bodyless_pull_*`, `bodyless_clone_*`, `attach_*`,
-`attach_push_*`,
+`attach_push_*`, `detach_push_*`,
 `shared_pull_*`, and the vault-layout ones below). These catch a
 re-recording that quietly accepts a regression.
 
@@ -207,6 +207,8 @@ null when none did. Rust: `cloudkit::transport::{RequestLog, LoggedRequest}`.
 | `asset-lookup.json` | lookup for status/push of the read-only asset note (both refuse it) |
 | `asset-pull-update.json` | a pull delivering a changed asset note |
 | `attach-push.json` | lookup of the tiny note, an `assets/upload` URL for a new Media record's `Asset`, the upload's answer, and the answer to the atomic `records/modify` (note update, Media create, Attachment create); scenario `attach-push` adds `Notes/attachments/hello.txt` to the note, and `attach-push-status` (on `tiny-lookup.json`, which it never asks) finds nothing left to push |
+| `detach-push.json` | the note as `attach-push` left it, a lookup answering its Attachment and Media records, and the answer to the atomic `records/modify` (note update, both records `Deleted: 1`); scenario `detach-push` removes the link from the `attach-push` vault, `detach-push-status` only plans it, and `detach-push-clean` (on `tiny-lookup.json`, which it never asks) finds nothing left to push |
+| `detach-pull.json` | a pull after `detach-push`: the note at the tag the push wrote, and its Attachment and Media records `Deleted: 1`; scenario `detach-pull` changes nothing |
 | `attach-clone.json` | `tiny-clone` plus two notes with one file attachment each (a recording, a photo); one repeatable `records/lookup` answering all their Attachment and Media records, and the two asset GETs |
 | `attach-pull.json` | a pull delivering those two notes, with the same lookup and assets; scenarios `attach-clone` and `attach-pull` look the attachments up in one lookup per record type, not two per note |
 | `shared-pull-unchanged.json` | a pull of the `asset-clone` vault: the shared `changes/database` resumed from its stored token (pinned) reports no zone changed, so no shared zone is walked |

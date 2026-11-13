@@ -44,6 +44,7 @@ timer's sync). All of it is new, in the app binary: see
 | Open a note: text, attachments, read-only reason | `icloud-notes read NOTE [--raw]` | added |
 | Edit (saves on its own) | `icloud-notes write NOTE --body/--file/--stdin [--append]` | added |
 | Ctrl+S past a save warning (conflict markers, duplicate id) | `icloud-notes write ... --force` | added |
+| Ctrl+S past "This removes the attachment NAME from this note on all your devices." (an attachment's link deleted from the text; autosave never writes that) | `icloud-notes write ... --yes`, `icloud-notes detach NOTE FILE --yes` | added |
 | Bold, italic, link buttons | `write` (they only insert Markdown) | added |
 | Checklist toggle (Ctrl+Enter) | `icloud-notes toggle NOTE LINE` | added |
 | Attach a file to the open note (the paperclip button, a file dropped on the note, or a copied file or picture pasted into it) | `icloud-notes attach NOTE FILE` | added |
@@ -355,9 +356,9 @@ Every code each tool can emit, by exit.
 | Exit | Codes |
 |---|---|
 | 1 | `read_only`, `error` (also an `attach` FILE that cannot be read, is not a regular file, is empty or is larger than 100 MB), `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
-| 2 | `usage` (also `delete`, `delete-folder`, `restore`, or a `write` that would leave the note empty, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
+| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `detach`, or a `write` that would leave the note empty or drop the link of one of its attachments, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
 | 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
-| 4 | `not_found` (no such note or folder, or no such FILE for `attach`) |
+| 4 | `not_found` (no such note or folder, no such FILE for `attach`, or no attachment of the note named FILE for `detach`) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
 
 `push --dry-run`, `history`, `diff` and `restore` are the engine itself, so
@@ -468,11 +469,12 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `read` | `{path, folder, file, title, id, modified, modified_ms, flags, read_only, body, text?, attachments:[{name, path, image}], conflicts:[{local:[line], remote:[line], before:[line], after:[line]}], conflicts_unreadable, has_synced_copy}` |
 | `search` | `[{path, folder, file, title, snippet}]` |
 | `new` | `{action:"new", path, folder, file, title, sync?}` |
-| `write` | `{action:"write", path, changed, sync?}` |
+| `write` | `{action:"write", path, changed, sync?}` (text that no longer holds the link of one of the note's attachments removes that attachment at the next push, on every device: `usage`, exit 2, without `--yes`; `--force` does not stand in for it) |
 | `rename`, `move` | `{action, path, from, title?, sync?}` |
 | `delete` | `{action:"delete", path, sync?}` |
 | `toggle` | `{action:"toggle", path, line, text, sync?}` |
 | `attach` | `{action:"attach", path, file, link, sync?}` (`file`: the copy, a vault path under the note folder's `attachments/`, renamed `name 2.ext` when the name was taken; `link`: the line added at the end of the note, `![name](attachments/name)` for a PNG, JPEG, HEIC, TIFF, GIF or WebP and `[name](attachments/name)` for anything else. The next push uploads the file; `status` and `push --dry-run` show the note as `update` with `remark: "adds the attachment NAME"`. FILE is a regular, non-empty file of at most 100 MB) |
+| `detach` | `{action:"detach", path, file, sync?}` (FILE is the attachment's file name, `name` in `read`'s `attachments`; `file`: its vault path under the note folder's `attachments/`. The link is taken out of the note's text, with its line when nothing else is on it; the next push removes the attachment in iCloud, on every device, and deletes the file here. `status` and `push --dry-run` show the note as `update` with `remark: "removes the attachment NAME"`. Needs `--yes` when nobody can be asked: `usage`, exit 2. No attachment of that name: `not_found`, exit 4. A read-only note: `read_only`. A file added by `attach` and never pushed is only unlinked: its copy stays in `attachments/`) |
 | `resolve` | `{action:"resolve", path, choices, sync?}` |
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |

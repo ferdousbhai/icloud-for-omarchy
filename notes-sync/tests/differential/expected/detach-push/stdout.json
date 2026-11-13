@@ -1,0 +1,18 @@
+{
+  "dryRun": false,
+  "pushed": 1,
+  "entries": [
+    {
+      "kind": "update",
+      "file": "Notes/Test Note.md",
+      "resolution": "ready",
+      "remark": "removes the attachment hello.txt",
+      "outcome": {
+        "succeeded": true,
+        "message": "Pushed Notes/Test Note.md, without its attachment hello.txt"
+      }
+    }
+  ],
+  "unchanged": 0,
+  "notices": []
+}

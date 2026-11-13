@@ -1,6 +1,8 @@
 //! Adding an attachment to a note from this computer: a link to a file in
 //! the note folder's `attachments/` is uploaded and created with the note's
-//! edit in one atomic request, or nothing is.
+//! edit in one atomic request, or nothing is. And removing one (the second
+//! half of this file): a link gone from the note takes the attachment out of
+//! it, its records marked deleted in one atomic request with the edit.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,6 +12,7 @@ use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cloudkit::{CkError, Database, Transport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution};
+use icloud_notes_sync::cmd::pull::{PullOptions, run_pull_with};
 use icloud_notes_sync::cmd::push::{PushOptions, PushResult, run_push_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
@@ -52,6 +55,8 @@ struct Server {
     fail_upload: Option<u16>,
     /// `records/modify` refuses the record of this type with this code.
     reject: Option<(&'static str, &'static str)>,
+    /// `records/modify` fails with this HTTP status.
+    fail_modify: Option<u16>,
     changes: Mutex<u32>,
 }
 
@@ -204,7 +209,23 @@ impl Transport for Server {
                     "url": format!("https://upload.test/{}", token["recordName"].as_str().unwrap()),
                 }] })
             }
-            "/records/modify" => self.modify(body),
+            "/records/modify" => match self.fail_modify {
+                Some(status) => {
+                    return Err(CkError::Http {
+                        status,
+                        body: "modify refused".into(),
+                    });
+                }
+                None => self.modify(body),
+            },
+            // A pull: everything the zone holds, and nobody sharing.
+            "/changes/zone" => json!({ "zones": [{
+                "zoneID": { "zoneName": "Notes", "ownerRecordName": "_defaultOwner", "zoneType": "REGULAR_CUSTOM_ZONE" },
+                "moreComing": false,
+                "syncToken": "after-the-push",
+                "records": *self.records.lock().unwrap(),
+            }] }),
+            "/changes/database" => json!({ "zones": [], "moreComing": false, "syncToken": "shared" }),
             _ => panic!("unexpected request to {path}"),
         })
     }
@@ -548,15 +569,6 @@ fn a_linked_file_is_uploaded_and_created_with_the_edit_in_one_atomic_request() {
     let (text, slots) = server.note_text(NOTE);
     assert!(text.ends_with(&format!("\nSee:\n{O}\nA line after it.\n")), "{text:?}");
     assert_eq!(slots, [slot(&attachment, "public.png")]);
-
-    // Removing the link of what is now an attachment is refused, as ever.
-    let path = vault.join(NOTE_FILE);
-    let without = std::fs::read_to_string(&path)
-        .unwrap()
-        .replace("![pic.png](attachments/pic.png)\n", "");
-    std::fs::write(&path, without).unwrap();
-    let reason = refusal(&preview(&server, &vault)).to_owned();
-    assert!(reason.contains("was removed, changed or moved"), "{reason}");
 }
 
 /// What `attach` does twice: the second link goes after the first. The
@@ -963,4 +975,644 @@ fn a_new_note_is_created_with_its_attachments() {
          directory, or remove the link"
     );
     assert_eq!(server.posts.lock().unwrap().len(), requests);
+}
+
+// --- removing an attachment -----------------------------------------------------------
+
+/// Pushes `files` as new attachments of the note (one line each, after
+/// "Files:"), and returns each one's (Attachment, Media) record names.
+fn attached(server: &Arc<Server>, vault: &Path, files: &[(&str, &[u8])]) -> Vec<(String, String)> {
+    let mut text = String::from("\nFiles:\n");
+    for (name, bytes) in files {
+        attach(vault, name, bytes);
+        text.push_str(&link_of(name));
+        text.push('\n');
+    }
+    text.push_str("The end.\n");
+    append(vault, NOTE_FILE, &text);
+    let result = push(server, vault);
+    assert_eq!(result.pushed, Some(1), "{result:?}");
+    let tracked = state(vault).attachments.unwrap();
+    files
+        .iter()
+        .map(|(name, _)| {
+            let file = format!("Notes/attachments/{name}");
+            let (attachment, entry) = tracked.iter().find(|(_, entry)| entry.file == file).unwrap();
+            (attachment.clone(), entry.media_record_name.clone())
+        })
+        .collect()
+}
+
+/// The link pull writes for `name` (as `icloud-notes attach` writes it).
+fn link_of(name: &str) -> String {
+    let image = [".png", ".gif", ".jpeg"].iter().any(|e| name.ends_with(e));
+    format!("{}[{name}](attachments/{name})", if image { "!" } else { "" })
+}
+
+fn edit_note(vault: &Path, edit: impl FnOnce(String) -> String) {
+    let path = vault.join(NOTE_FILE);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let edited = edit(text.clone());
+    assert_ne!(edited, text, "the edit changes the note");
+    std::fs::write(path, edited).unwrap();
+}
+
+/// What the removal of one record sends: `Deleted` set, nothing else.
+fn marked_deleted(record_type: &str, name: &str, tag: &str) -> Value {
+    json!({
+        "operationType": "update",
+        "record": {
+            "recordName": name,
+            "recordType": record_type,
+            "recordChangeTag": tag,
+            "fields": { "Deleted": { "value": 1 } },
+            "parent": { "recordName": NOTE },
+        },
+    })
+}
+
+fn deleted_field(server: &Server, name: &str) -> Value {
+    server.record(name).unwrap()["fields"]["Deleted"]["value"].clone()
+}
+
+fn exists(vault: &Path, file: &str) -> bool {
+    vault.join(file).exists()
+}
+
+#[test]
+fn a_link_gone_from_the_note_removes_the_attachment_in_one_atomic_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let image = png(4, 3);
+    let ids = attached(&server, &vault, &[("pic.png", &image)]);
+    let (attachment, media) = (&ids[0].0, &ids[0].1);
+    let note_tag = state(&vault).notes[NOTE].record_change_tag.clone();
+    let attachment_tag = server.record(attachment).unwrap()["recordChangeTag"].clone();
+    let media_tag = server.record(media).unwrap()["recordChangeTag"].clone();
+    let (text_before, _) = server.note_text(NOTE);
+    assert!(
+        text_before.ends_with(&format!("\nFiles:\n{O}\nThe end.\n")),
+        "{text_before:?}"
+    );
+
+    edit_note(&vault, |text| text.replace("![pic.png](attachments/pic.png)\n", ""));
+    let note_text = std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap();
+    let state_before = std::fs::read(vault.join(".icloud-notes/state.json")).unwrap();
+    let modifies_before = server.posts_to("/records/modify").len();
+
+    // A preview plans it and says so; it changes nothing anywhere.
+    let planned = preview(&server, &vault);
+    assert_eq!(planned.entries.len(), 1);
+    let entry = &planned.entries[0].entry;
+    assert_eq!(
+        (entry.kind, entry.resolution),
+        (PlanEntryKind::Update, PlanResolution::Ready)
+    );
+    assert_eq!(entry.remark.as_deref(), Some("removes the attachment pic.png"));
+    assert_eq!(server.posts_to("/records/modify").len(), modifies_before);
+    assert_eq!(
+        std::fs::read(vault.join(".icloud-notes/state.json")).unwrap(),
+        state_before
+    );
+    assert!(exists(&vault, "Notes/attachments/pic.png"));
+
+    let lookups_before = server.posts_to("/records/lookup").len();
+    let result = push(&server, &vault);
+    assert_eq!(result.pushed, Some(1));
+    let outcome = result.entries[0].outcome.as_ref().unwrap();
+    assert!(outcome.succeeded, "{outcome:?}");
+    assert_eq!(
+        outcome.message,
+        "Pushed Notes/Test Note.md, without its attachment pic.png"
+    );
+
+    // Looked up: the note, then the attachment's two records in one lookup.
+    let lookups = server.posts_to("/records/lookup");
+    assert_eq!(lookups.len(), lookups_before + 2);
+    assert_eq!(
+        lookups[lookups_before + 1]["records"],
+        json!([{ "recordName": attachment }, { "recordName": media }])
+    );
+
+    // The request: atomic; the note's text without the placeholder, then
+    // the Attachment and the Media record marked deleted, each at its tag.
+    let modify = server.posts_to("/records/modify");
+    assert_eq!(modify.len(), modifies_before + 1, "one request carries everything");
+    let request = modify.last().unwrap();
+    assert_eq!(request["atomic"], true);
+    assert_eq!(request["zoneID"], json!({ "zoneName": "Notes" }));
+    let operations = request["operations"].as_array().unwrap();
+    assert_eq!(operations.len(), 3);
+    assert_eq!(operations[0]["operationType"], "update");
+    assert_eq!(operations[0]["record"]["recordName"], NOTE);
+    assert_eq!(operations[0]["record"]["recordType"], "Note");
+    assert_eq!(operations[0]["record"]["recordChangeTag"], json!(note_tag));
+    assert_eq!(
+        operations[1],
+        marked_deleted("Attachment", attachment, attachment_tag.as_str().unwrap())
+    );
+    assert_eq!(
+        operations[2],
+        marked_deleted("Media", media, media_tag.as_str().unwrap())
+    );
+
+    // In iCloud: no placeholder and no embed in the text; both records
+    // deleted, and otherwise as they were.
+    let (text, slots) = server.note_text(NOTE);
+    assert!(text.ends_with("\nFiles:\nThe end.\n"), "{text:?}");
+    assert!(!text.contains(O));
+    assert_eq!(slots, []);
+    assert_eq!(deleted_field(&server, attachment), 1);
+    assert_eq!(deleted_field(&server, media), 1);
+    assert_eq!(
+        server.record(attachment).unwrap()["fields"]["UTI"]["value"],
+        "public.png"
+    );
+    assert!(server.record(media).unwrap()["fields"]["Asset"]["value"]["receipt"].is_string());
+
+    // Here: untracked, its file gone, the note's file as the user left it.
+    let after = state(&vault);
+    assert!(after.attachments.unwrap_or_default().is_empty());
+    assert_ne!(after.notes[NOTE].record_change_tag, note_tag);
+    assert!(!exists(&vault, "Notes/attachments/pic.png"));
+    assert_eq!(std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap(), note_text);
+    let base = read_base_copy(&vault, NOTE).unwrap().unwrap();
+    assert!(base.ends_with("\nFiles:\nThe end.\n"), "{base:?}");
+
+    // Nothing is left to push, and nothing more is asked of iCloud.
+    let requests = server.posts.lock().unwrap().len();
+    let clean = preview(&server, &vault);
+    assert!(clean.entries.is_empty(), "{clean:?}");
+    assert_eq!(server.posts.lock().unwrap().len(), requests);
+
+    // A pull of the same change (the note at the tag just written, the
+    // Attachment and Media records now `Deleted: 1`) does nothing: no file
+    // comes back, nothing is tracked again, nothing is reported.
+    let notes_after_push = state(&vault).notes;
+    let summary = run_pull_with(
+        &serve(&server),
+        &vault,
+        &mut NoProgress,
+        &mut |_| {},
+        &PullOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        (summary.added, summary.updated, summary.merged, summary.removed),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(summary.attachments_downloaded, 0);
+    assert!(summary.changes.is_empty(), "{:?}", summary.changes);
+    assert!(summary.conflicts.is_empty() && summary.notices.is_empty());
+    assert_eq!(std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap(), note_text);
+    assert!(!exists(&vault, "Notes/attachments/pic.png"));
+    let pulled = state(&vault);
+    assert!(pulled.attachments.clone().unwrap_or_default().is_empty());
+    assert_eq!(pulled.sync_token.as_deref(), Some("after-the-push"));
+    assert_eq!(pulled.notes, notes_after_push);
+    assert!(preview(&server, &vault).entries.is_empty());
+}
+
+/// A pull that has to apply the note again (as another device's pull does:
+/// it sees the new text and the records marked deleted) writes it without
+/// the attachment, and drops the file it had.
+#[test]
+fn a_device_that_pulls_the_removal_loses_the_link_and_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    attached(&server, &vault, &[("plan.pdf", b"%PDF-1.7")]);
+    // The other device: this vault as it was before the removal.
+    let other = dir.path().join("other");
+    copy_dir(&vault, &other);
+
+    edit_note(&vault, |text| text.replace("[plan.pdf](attachments/plan.pdf)\n", ""));
+    assert_eq!(push(&server, &vault).pushed, Some(1));
+
+    let summary = run_pull_with(
+        &serve(&server),
+        &other,
+        &mut NoProgress,
+        &mut |_| {},
+        &PullOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(summary.updated, 1, "{:?}", summary.changes);
+    assert!(summary.notices.is_empty(), "{:?}", summary.notices);
+    let text = std::fs::read_to_string(other.join(NOTE_FILE)).unwrap();
+    assert!(!text.contains("plan.pdf"), "{text}");
+    assert_eq!(text, std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap());
+    assert!(!exists(&other, "Notes/attachments/plan.pdf"));
+    assert!(state(&other).attachments.unwrap_or_default().is_empty());
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// One push: two of three attachments removed, another file added, and the
+/// text around them edited. The attachment that stays keeps its character.
+#[test]
+fn removals_go_up_with_edits_and_additions_and_leave_the_others_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(
+        &server,
+        &vault,
+        &[
+            ("one.txt", b"first"),
+            ("two.pdf", b"%PDF second"),
+            ("three.png", &png(2, 2)),
+        ],
+    );
+    let (_, slots_before) = server.note_text(NOTE);
+    assert_eq!(slots_before.len(), 3);
+    let uploads_before = server.uploads.lock().unwrap().len();
+
+    attach(&vault, "four.txt", b"fourth");
+    edit_note(&vault, |text| {
+        text.replace("[one.txt](attachments/one.txt)\n", "")
+            .replace(
+                "![three.png](attachments/three.png)\n",
+                "[four.txt](attachments/four.txt)\n",
+            )
+            .replace("Files:", "Files, edited:")
+            .replace("The end.", "The very end.")
+    });
+
+    let planned = preview(&server, &vault);
+    assert_eq!(
+        planned.entries[0].entry.remark.as_deref(),
+        Some("adds the attachment four.txt; removes the attachments one.txt, three.png")
+    );
+    let result = push(&server, &vault);
+    assert_eq!(
+        result.entries[0].outcome.as_ref().unwrap().message,
+        "Pushed Notes/Test Note.md, with its new attachment, without its attachments one.txt, three.png"
+    );
+
+    let modify = server.posts_to("/records/modify");
+    let request = modify.last().unwrap();
+    assert_eq!(request["atomic"], true);
+    let operations = request["operations"].as_array().unwrap();
+    let sent: Vec<(&str, &str, &str)> = operations
+        .iter()
+        .map(|op| {
+            (
+                op["operationType"].as_str().unwrap(),
+                op["record"]["recordType"].as_str().unwrap(),
+                op["record"]["recordName"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    let new_media = sent[5].2.to_owned();
+    let new_attachment = sent[6].2.to_owned();
+    assert_eq!(
+        sent,
+        [
+            ("update", "Note", NOTE),
+            ("update", "Attachment", ids[0].0.as_str()),
+            ("update", "Media", ids[0].1.as_str()),
+            ("update", "Attachment", ids[2].0.as_str()),
+            ("update", "Media", ids[2].1.as_str()),
+            ("create", "Media", new_media.as_str()),
+            ("create", "Attachment", new_attachment.as_str()),
+        ]
+    );
+    for op in &operations[1..5] {
+        assert_eq!(op["record"]["fields"], json!({ "Deleted": { "value": 1 } }));
+    }
+    assert_eq!(server.uploads.lock().unwrap().len(), uploads_before + 1);
+
+    let (text, slots) = server.note_text(NOTE);
+    assert!(
+        text.ends_with(&format!("\nFiles, edited:\n{O}\n{O}\nThe very end.\n")),
+        "{text:?}"
+    );
+    assert_eq!(
+        slots,
+        [slots_before[1].clone(), slot(&new_attachment, "public.plain-text")]
+    );
+
+    let tracked = state(&vault).attachments.unwrap();
+    let mut files: Vec<&str> = tracked.values().map(|a| a.file.as_str()).collect();
+    files.sort();
+    assert_eq!(files, ["Notes/attachments/four.txt", "Notes/attachments/two.pdf"]);
+    assert!(tracked.contains_key(&ids[1].0) && tracked.contains_key(&new_attachment));
+    assert!(!exists(&vault, "Notes/attachments/one.txt"));
+    assert!(!exists(&vault, "Notes/attachments/three.png"));
+    assert!(exists(&vault, "Notes/attachments/two.pdf"));
+    assert!(exists(&vault, "Notes/attachments/four.txt"));
+    for (attachment, media) in [&ids[0], &ids[2]] {
+        assert_eq!(deleted_field(&server, attachment), 1);
+        assert_eq!(deleted_field(&server, media), 1);
+    }
+    assert_eq!(deleted_field(&server, &ids[1].0), 0);
+    assert_eq!(deleted_field(&server, &ids[1].1), 0);
+    assert!(preview(&server, &vault).entries.is_empty());
+
+    // The last attachments removed too, with nothing else changed.
+    edit_note(&vault, |text| {
+        text.replace("[two.pdf](attachments/two.pdf)\n", "")
+            .replace("[four.txt](attachments/four.txt)\n", "")
+    });
+    assert_eq!(
+        preview(&server, &vault).entries[0].entry.remark.as_deref(),
+        Some("removes the attachments two.pdf, four.txt")
+    );
+    assert_eq!(push(&server, &vault).pushed, Some(1));
+    let (text, slots) = server.note_text(NOTE);
+    assert!(text.ends_with("\nFiles, edited:\nThe very end.\n"), "{text:?}");
+    assert_eq!(slots, []);
+    assert!(state(&vault).attachments.unwrap_or_default().is_empty());
+    assert!(
+        std::fs::read_dir(vault.join("Notes/attachments"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+/// A link to the attachment's file that is still in the note, changed or
+/// somewhere else, is no removal: refused, with nothing sent or deleted.
+#[test]
+fn a_link_changed_or_moved_is_still_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    attached(&server, &vault, &[("one.txt", b"first"), ("two.pdf", b"%PDF second")]);
+    let original = std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap();
+    let modifies = server.posts_to("/records/modify").len();
+    let (one, two) = ("[one.txt](attachments/one.txt)\n", "[two.pdf](attachments/two.pdf)\n");
+    let edits: [&dyn Fn(String) -> String; 3] = [
+        // Another link text.
+        &|text| text.replace(one, "[the first file](attachments/one.txt)\n"),
+        // Moved after the other one.
+        &|text| text.replace(&format!("{one}{two}"), &format!("{two}{one}")),
+        // One removed for real, the other one's link changed.
+        &|text| text.replace(one, "").replace(two, "[second](attachments/two.pdf)\n"),
+    ];
+    for edit in edits {
+        std::fs::write(vault.join(NOTE_FILE), edit(original.clone())).unwrap();
+        let result = push(&server, &vault);
+        let reason = refusal(&result).to_owned();
+        assert!(reason.contains("was changed or moved"), "{reason}");
+        assert!(reason.contains("put the link back as it was"), "{reason}");
+        assert_eq!(server.posts_to("/records/modify").len(), modifies);
+        assert_eq!(state(&vault).attachments.unwrap().len(), 2);
+        assert!(exists(&vault, "Notes/attachments/one.txt") && exists(&vault, "Notes/attachments/two.pdf"));
+    }
+}
+
+/// A note in someone else's shared folder: its attachments live in the
+/// owner's zone, and are not removed from here.
+#[test]
+fn a_shared_note_loses_no_attachment_from_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(&server, &vault, &[("plan.pdf", b"%PDF-1.7")]);
+    let modifies = server.posts_to("/records/modify").len();
+    let mut shared = state(&vault);
+    let mut folder = shared.folders.as_ref().unwrap()["DefaultFolder-CloudKit"].clone();
+    folder.shared_zone_owner = Some("_sharer".into());
+    folder.permission = Some("READ_WRITE".into());
+    shared.folders.as_mut().unwrap().insert("F-SHARED".into(), folder);
+    let note = shared.notes.get_mut(NOTE).unwrap();
+    note.shared_zone_owner = Some("_sharer".into());
+    note.folder_record_name = Some("F-SHARED".into());
+    write_clone_state(&vault, &shared).unwrap();
+    edit_note(&vault, |text| text.replace("[plan.pdf](attachments/plan.pdf)\n", ""));
+
+    let reason = refusal(&push(&server, &vault)).to_owned();
+    assert!(
+        reason.starts_with(
+            "attachments can't be removed from a shared note from here - remove them in Notes itself. Run \
+             \"icloud-notes restore Notes/Test Note.md\""
+        ),
+        "{reason}"
+    );
+    assert_eq!(server.posts_to("/records/modify").len(), modifies);
+    assert_eq!(deleted_field(&server, &ids[0].0), 0);
+    assert!(state(&vault).attachments.unwrap().contains_key(&ids[0].0));
+    assert!(exists(&vault, "Notes/attachments/plan.pdf"));
+}
+
+/// `attachments/` is one directory for all the notes of a folder. The
+/// removed attachment's file stays when another note of the folder links
+/// to it, or when it is tracked for another attachment.
+#[test]
+fn a_file_another_note_still_uses_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(
+        &server,
+        &vault,
+        &[("linked.txt", b"one"), ("tracked.txt", b"two"), ("mine.txt", b"three")],
+    );
+    // Another note of the folder links to the first file; the second is
+    // tracked as another note's attachment as well.
+    std::fs::write(
+        vault.join("Notes/Other.md"),
+        "Other\n\n[see it](attachments/linked.txt)\n",
+    )
+    .unwrap();
+    let mut tracked = state(&vault);
+    tracked.attachments.as_mut().unwrap().insert(
+        "ATT-OTHER".into(),
+        AttachmentEntry {
+            file: "Notes/attachments/tracked.txt".into(),
+            media_record_name: "MEDIA-OTHER".into(),
+            media_file_checksum: "x".into(),
+            note_record_name: "another-note".into(),
+        },
+    );
+    write_clone_state(&vault, &tracked).unwrap();
+    edit_note(&vault, |text| {
+        text.replace("[linked.txt](attachments/linked.txt)\n", "")
+            .replace("[tracked.txt](attachments/tracked.txt)\n", "")
+            .replace("[mine.txt](attachments/mine.txt)\n", "")
+    });
+
+    let result = push(&server, &vault);
+    let outcome = result
+        .entries
+        .iter()
+        .find(|e| e.entry.file == NOTE_FILE)
+        .and_then(|e| e.outcome.as_ref())
+        .unwrap();
+    assert!(outcome.succeeded, "{outcome:?}");
+    for (attachment, media) in &ids {
+        assert_eq!(deleted_field(&server, attachment), 1);
+        assert_eq!(deleted_field(&server, media), 1);
+    }
+    let after = state(&vault).attachments.unwrap();
+    assert_eq!(after.keys().collect::<Vec<_>>(), ["ATT-OTHER"]);
+    assert!(exists(&vault, "Notes/attachments/linked.txt"), "linked from Other.md");
+    assert!(exists(&vault, "Notes/attachments/tracked.txt"), "another attachment's");
+    assert!(!exists(&vault, "Notes/attachments/mine.txt"));
+}
+
+/// iCloud refusing any record of the request, or the request failing,
+/// leaves everything as it was: the next push tries again.
+#[test]
+fn a_removal_that_fails_leaves_state_and_file_alone() {
+    for failure in ["rejected", "http"] {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = cloned_vault(dir.path());
+        let good = Arc::new(Server::with_note());
+        let ids = attached(&good, &vault, &[("plan.pdf", b"%PDF-1.7")]);
+        let server = Arc::new(Server {
+            records: Mutex::new(good.records.lock().unwrap().clone()),
+            reject: (failure == "rejected").then_some(("Attachment", "CONFLICT")),
+            fail_modify: (failure == "http").then_some(503),
+            ..Default::default()
+        });
+        edit_note(&vault, |text| text.replace("[plan.pdf](attachments/plan.pdf)\n", ""));
+        let note_text = std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap();
+        let base = read_base_copy(&vault, NOTE).unwrap();
+        let before = state(&vault);
+
+        let pushed = run_push_with(&serve(&server), &vault, &mut |_| {}, &PushOptions::default());
+        match failure {
+            "rejected" => {
+                let result = pushed.unwrap();
+                assert_eq!(result.pushed, Some(0));
+                let outcome = result.entries[0].outcome.as_ref().unwrap();
+                assert!(!outcome.succeeded);
+                assert_eq!(
+                    outcome.message,
+                    "Notes/Test Note.md: rejected by the server as a conflicting change (refused by the test \
+                     server) - run \"pull\" first"
+                );
+            }
+            _ => assert!(pushed.is_err()),
+        }
+        assert_eq!(server.posts_to("/records/modify").len(), 1);
+        let after = state(&vault);
+        assert_eq!(after.attachments, before.attachments);
+        assert_eq!(after.notes, before.notes);
+        assert_eq!(server.note_text(NOTE).1.len(), 1, "the note keeps its attachment");
+        assert_eq!(deleted_field(&server, &ids[0].0), 0);
+        assert_eq!(deleted_field(&server, &ids[0].1), 0);
+        assert_eq!(
+            std::fs::read(vault.join("Notes/attachments/plan.pdf")).unwrap(),
+            b"%PDF-1.7"
+        );
+        assert_eq!(std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap(), note_text);
+        assert_eq!(read_base_copy(&vault, NOTE).unwrap(), base);
+        let again = preview(&good, &vault);
+        assert_eq!(again.entries[0].entry.resolution, PlanResolution::Ready);
+        assert_eq!(
+            again.entries[0].entry.remark.as_deref(),
+            Some("removes the attachment plan.pdf")
+        );
+    }
+}
+
+/// Records another device deleted already (or that are gone) get no
+/// operation: the note's text still loses the placeholder.
+#[test]
+fn records_that_are_deleted_already_are_not_sent_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(&server, &vault, &[("one.txt", b"first"), ("two.txt", b"second")]);
+    {
+        let mut records = server.records.lock().unwrap();
+        // The first one's Attachment record is marked deleted, its Media
+        // record is gone; the second one's are as they were.
+        records.retain(|r| r["recordName"] != ids[0].1.as_str());
+        let attachment = records
+            .iter_mut()
+            .find(|r| r["recordName"] == ids[0].0.as_str())
+            .unwrap();
+        attachment["fields"]["Deleted"]["value"] = json!(1);
+    }
+    edit_note(&vault, |text| {
+        text.replace("[one.txt](attachments/one.txt)\n", "")
+            .replace("[two.txt](attachments/two.txt)\n", "")
+    });
+    assert_eq!(push(&server, &vault).pushed, Some(1));
+
+    let modify = server.posts_to("/records/modify");
+    let request = modify.last().unwrap();
+    assert_eq!(request["atomic"], true);
+    let names: Vec<&str> = request["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|op| op["record"]["recordName"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, [NOTE, ids[1].0.as_str(), ids[1].1.as_str()]);
+    assert_eq!(server.note_text(NOTE).1, []);
+    assert!(state(&vault).attachments.unwrap_or_default().is_empty());
+    assert!(!exists(&vault, "Notes/attachments/one.txt") && !exists(&vault, "Notes/attachments/two.txt"));
+}
+
+/// The record the vault tracks as the attachment has to be this note's
+/// file attachment in iCloud: anything else is not marked deleted.
+#[test]
+fn a_record_that_is_not_this_notes_attachment_is_not_touched() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(&server, &vault, &[("one.txt", b"first")]);
+    let modifies = server.posts_to("/records/modify").len();
+    {
+        let mut records = server.records.lock().unwrap();
+        let attachment = records
+            .iter_mut()
+            .find(|r| r["recordName"] == ids[0].0.as_str())
+            .unwrap();
+        attachment["fields"]["Note"]["value"]["recordName"] = json!("another-note");
+    }
+    edit_note(&vault, |text| text.replace("[one.txt](attachments/one.txt)\n", ""));
+    let reason = refusal(&push(&server, &vault)).to_owned();
+    assert!(
+        reason.starts_with("the attachment \"one.txt\" can't be removed from here: its record in iCloud is not"),
+        "{reason}"
+    );
+    assert_eq!(server.posts_to("/records/modify").len(), modifies);
+    assert!(exists(&vault, "Notes/attachments/one.txt"));
+    assert_eq!(state(&vault).attachments.unwrap().len(), 1);
+}
+
+/// A note renamed and edited in one go: the removal goes up with the edit
+/// that follows the move, as an addition does.
+#[test]
+fn a_renamed_notes_removal_goes_up_with_its_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(&server, &vault, &[("one.txt", b"first")]);
+    edit_note(&vault, |text| text.replace("[one.txt](attachments/one.txt)\n", ""));
+    std::fs::rename(vault.join(NOTE_FILE), vault.join("Notes/Renamed.md")).unwrap();
+
+    let result = push(&server, &vault);
+    let outcome = result.entries[0].outcome.as_ref().unwrap();
+    assert!(outcome.succeeded, "{outcome:?}");
+    assert!(outcome.message.ends_with(", with its edits"), "{}", outcome.message);
+    let modify = server.posts_to("/records/modify");
+    let request = modify.last().unwrap();
+    assert_eq!(request["atomic"], true);
+    assert_eq!(request["operations"].as_array().unwrap().len(), 3);
+    assert_eq!(server.note_text(NOTE).1, []);
+    assert_eq!(deleted_field(&server, &ids[0].0), 1);
+    assert_eq!(deleted_field(&server, &ids[0].1), 1);
+    assert!(state(&vault).attachments.unwrap_or_default().is_empty());
+    assert!(!exists(&vault, "Notes/attachments/one.txt"));
+    assert!(preview(&server, &vault).entries.is_empty());
 }

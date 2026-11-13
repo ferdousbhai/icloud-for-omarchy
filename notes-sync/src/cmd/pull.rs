@@ -455,7 +455,17 @@ pub fn run_pull_with(
 
                 let mut body_text = decoded.markdown_text.clone();
                 let unpublishable_reason = decoded.unpublishable_reason.clone();
-                if !decoded.embed_slots.is_empty() {
+                // A note that lost its last embed (an attachment removed on
+                // another device) still has what it tracked to let go of.
+                let tracks_embeds = tracked
+                    .attachments
+                    .values()
+                    .any(|a| a.note_record_name == record.record_name)
+                    || tracked
+                        .table_attachments
+                        .values()
+                        .any(|t| t.note_record_name == record.record_name);
+                if !decoded.embed_slots.is_empty() || tracks_embeds {
                     let resolved = resolve_note_attachments(
                         db,
                         &mut attachment_records,

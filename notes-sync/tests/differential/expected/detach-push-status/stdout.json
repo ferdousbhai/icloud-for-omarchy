@@ -1,0 +1,12 @@
+{
+  "entries": [
+    {
+      "kind": "update",
+      "file": "Notes/Test Note.md",
+      "resolution": "ready",
+      "remark": "removes the attachment hello.txt"
+    }
+  ],
+  "unchanged": 0,
+  "notices": []
+}

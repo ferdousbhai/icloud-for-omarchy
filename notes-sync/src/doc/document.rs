@@ -231,6 +231,45 @@ pub fn insert_attachment_placeholder(
     mark_attachment_placeholder(doc, offset, info)
 }
 
+/// Takes an embed out of the note: the U+FFFC at `offset` (UTF-16 units),
+/// which must carry the attachment `attachment_identifier`, is deleted as
+/// this replica's edit, the way [`apply_text_edit`] deletes any character.
+/// Nothing else in the text changes, so the other placeholders keep their
+/// characters and their attachments.
+pub fn delete_attachment_placeholder(
+    doc: &mut NoteDocument,
+    offset: usize,
+    attachment_identifier: &str,
+    options: &ApplyTextEditOptions,
+) -> Result<()> {
+    validate_document_invariants(doc)?;
+    let mut units = utf16(&doc.text);
+    if units.get(offset) != Some(&PLACEHOLDER) {
+        return Err(invalid("There is no attachment placeholder where one is expected"));
+    }
+    let mut run_start = 0usize;
+    let run = doc.attribute_runs.iter().find(|run| {
+        let found = offset < run_start + run.len() as usize;
+        if !found {
+            run_start += run.len() as usize;
+        }
+        found
+    });
+    let holds = run
+        .and_then(|run| run.attachment_info.as_ref())
+        .and_then(|info| info.attachment_identifier.as_deref());
+    if holds != Some(attachment_identifier) {
+        return Err(invalid("The attachment placeholder holds another attachment"));
+    }
+    units.remove(offset);
+    let splice = Splice {
+        start: offset,
+        delete_length: 1,
+        insert_text: String::new(),
+    };
+    apply_splices(doc, &[splice], &from_utf16(&units), options)
+}
+
 /// Gives the U+FFFC at `offset` (UTF-16 units) its embed: the character
 /// gets an attribute run of its own carrying `info`, with the paragraph
 /// style of the run it was part of.

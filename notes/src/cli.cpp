@@ -186,8 +186,8 @@ const char *const kFooter =
     "`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.\n"
     "Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to\n"
     "wait for the vault's lock; 30 when a background sync holds it, none while the Notes window\n"
-    "holds it). Nothing asks without a terminal: delete, delete-folder, restore and a write that\n"
-    "empties a note need --yes.\n"
+    "holds it). Nothing asks without a terminal: delete, delete-folder, restore, detach and a write\n"
+    "that empties a note or drops an attachment's link need --yes.\n"
     "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,\n"
     "session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),\n"
     "4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,\n"
@@ -250,6 +250,8 @@ const QList<Spec> &specs()
           "read-only note, and (unless --force) when the text would add conflict markers or another\n"
           "note's id, the checks the window warns about. Empty text (blank lines only) empties the note,\n"
           "which the next push deletes in iCloud: it asks first, or needs --yes (use `delete` to delete).\n"
+          "Text that no longer holds the link of one of the note's attachments (`read` lists them)\n"
+          "removes that attachment at the next push, on every device: that asks first too, or needs --yes.\n"
           "JSON: {action, path, changed, sync?}",
           { QStringLiteral("--body"), QStringLiteral("--file"), QStringLiteral("--stdin"), QStringLiteral("--append"),
             QStringLiteral("--force"), QStringLiteral("--yes"), QStringLiteral("--push") },
@@ -280,6 +282,14 @@ const QList<Spec> &specs()
           "undoes it. FILE is a regular file of at most 100 MB. Refused for a read-only note.\n"
           "JSON: {action, path, file, link, sync?}",
           { QStringLiteral("--push") }, 2, 2 },
+        { "detach", "detach NOTE FILE [--yes] [--push]",
+          "Remove an attachment from the note: FILE is its file name, as `read` lists it (attachments:\n"
+          "name). Its link is taken out of the note's text; the next push removes the attachment in\n"
+          "iCloud, on every device, and deletes the file from attachments/ here. Asks on a terminal;\n"
+          "without one, --yes is required. Refused for a read-only note. (A file added with `attach`\n"
+          "and never pushed is only unlinked: its copy stays in attachments/.)\n"
+          "JSON: {action, path, file, sync?}",
+          { QStringLiteral("--yes"), QStringLiteral("--push") }, 2, 2 },
         { "resolve", "resolve NOTE (--all local|remote|both | --choices C1,C2,...) [--push]",
           "Settle a note's conflict blocks as the window's version picker does: keep this computer's\n"
           "version (local), iCloud's (remote) or both (local first), for every block (--all) or block by\n"
@@ -1371,7 +1381,24 @@ Result write(NotesBackend &b, const Args &a)
             return *f;
         }
     }
-    const QString warning = b.saveWarning(body);
+    // A link gone from the text removes its attachment in iCloud at the
+    // next push: never without --yes (or a yes on a terminal).
+    if (const QStringList removed = b.removedAttachments(body); !removed.isEmpty()) {
+        const QString names = removed.join(QStringLiteral(", "));
+        const QString what = removed.size() == 1 ? QStringLiteral("attachment") : QStringLiteral("attachments");
+        const QString it = removed.size() == 1 ? QStringLiteral("it") : QStringLiteral("them");
+        if (auto f = confirm(a, QStringLiteral("Remove the %1 %2 from %3? The next push removes %4 on all your devices.")
+                                    .arg(what, names, n.path(), it))) {
+            if (f->code == u"usage") {
+                f->message = QStringLiteral("the text no longer links the %1 %2 of %3, and the next push would remove %4 on "
+                                            "all your devices")
+                                 .arg(what, names, n.path(), it);
+                f->hint = QStringLiteral("Keep the link(s) as `icloud-notes read` shows them, or pass --yes to remove the %1.").arg(what);
+            }
+            return *f;
+        }
+    }
+    const QString warning = b.guardrailWarning(body);
     if (!warning.isEmpty() && !a.has("--force"))
         return Failure{ QStringLiteral("guardrail"), warning, kExitError,
                         QStringLiteral("Nothing was written. Pass --force to write it anyway (as Ctrl+S does in Notes).") };
@@ -1500,6 +1527,35 @@ Result attach(NotesBackend &b, const Args &a)
                               { QStringLiteral("file"), file },
                               { QStringLiteral("link"), link } },
                  QStringLiteral("Attached %1 to %2").arg(stored, relPath(b)) };
+}
+
+Result detach(NotesBackend &b, const Args &a)
+{
+    Note n;
+    if (auto f = resolveAndOpen(b, a.positional.at(0), n))
+        return *f;
+    if (!b.readOnlyReason().isEmpty())
+        return Failure{ QStringLiteral("read_only"), QStringLiteral("%1 is read-only here: this note %2").arg(n.path(), b.readOnlyReason()),
+                        kExitError, QStringLiteral("Remove the attachment in Apple Notes; the change still syncs here.") };
+    const QString name = a.positional.at(1);
+    QStringList names;
+    for (const QVariant &v : b.noteAttachments())
+        names << v.toMap().value(QStringLiteral("name")).toString();
+    const QString old = b.noteBody();
+    const QString body = NotesBackend::withoutAttachmentLink(old, name);
+    if (!names.contains(name) || body == old || b.removedAttachments(body) != QStringList{ name })
+        return Failure{ QStringLiteral("not_found"), QStringLiteral("%1 has no attachment named \"%2\"").arg(n.path(), name), kExitNotFound,
+                        names.isEmpty() ? QStringLiteral("The note has no attachments.")
+                                        : QStringLiteral("Its attachments: %1.").arg(names.join(QStringLiteral(", "))) };
+    if (auto f = confirm(a, QStringLiteral("Remove the attachment %1 from %2? The next push removes it on all your devices.").arg(name, n.path())))
+        return *f;
+    if (!b.saveCurrentNote(body))
+        return Failure{ QStringLiteral("error"), QStringLiteral("could not write %1").arg(n.path()), kExitError, {} };
+    const QString file = (b.currentFolder().isEmpty() ? QString() : b.currentFolder() + u'/') + QStringLiteral("attachments/") + name;
+    return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("detach") },
+                              { QStringLiteral("path"), relPath(b) },
+                              { QStringLiteral("file"), file } },
+                 QStringLiteral("Removed the attachment %1 from %2").arg(name, relPath(b)) };
 }
 
 Result resolve(NotesBackend &b, const Args &a)
@@ -1742,6 +1798,8 @@ int runCommand(const Args &a, const Spec &spec)
         return finish(b, a, toggle(b, a));
     if (cmd == u"attach")
         return finish(b, a, attach(b, a));
+    if (cmd == u"detach")
+        return finish(b, a, detach(b, a));
     if (cmd == u"resolve")
         return finish(b, a, resolve(b, a));
     if (cmd == u"recover")

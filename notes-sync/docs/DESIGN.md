@@ -281,12 +281,14 @@ Notes (icloud-md 0.6.2 refuses most of these, some forever):
   same push (no "re-run push"); a move's edits go up right after the move;
   a rename within a folder sends nothing to iCloud.
 - A note with attachments can be edited: the link pull wrote for each file
-  attachment stands for it, as an embed marker does. Removing, changing or
-  moving the link is still refused. Moving such a note to another folder
-  takes its attachment files along.
+  attachment stands for it, as an embed marker does. Changing or moving
+  the link is still refused. Moving such a note to another folder takes
+  its attachment files along.
 - A link of that kind to a file in the note folder's `attachments/` that
   is no attachment yet adds the file to the note ("Adding an attachment",
   below).
+- A file attachment's link gone from the note entirely removes the
+  attachment from the note ("Removing an attachment", below).
 - Folder directories: a new directory (even empty) becomes a folder; a
   folder directory renamed in place (its notes all turn up in one new
   directory beside it, or both are empty) retitles the folder record; a
@@ -476,7 +478,7 @@ nothing of the file but its metadata and sends nothing for it:
   new ones in order. A new note's document marks its placeholders with
   `mark_attachment_placeholder` and is checked the same way.
 
-Executing (`send_with_new_attachments`): each file is read and uploaded
+Executing (`send_with_attachment_changes`): each file is read and uploaded
 with `Database::upload_asset` for the `Asset` field of the `Media` record
 it is about to become, and one `records/modify` with `atomic: true`
 (`Database::modify_records_atomically`) carries the note's update (or
@@ -498,8 +500,8 @@ the same push is about to create; that the untyped doubles are accepted;
 that the cropping quad is wanted on a file that is no image; and that
 Apple's apps show a record without the previews they add themselves.
 
-Still refused: removing, changing or moving the link of an attachment the
-note has; a link to a file that isn't there, or outside the folder's
+Still refused: changing or moving the link of an attachment the note has
+(removing it removes the attachment, next section); a link to a file that isn't there, or outside the folder's
 `attachments/`; a file over 100 MB; a shared note. GIF and WebP files are
 images like the rest (`com.compuserve.gif`, `org.webmproject.webp`), as
 Apple Notes shows them; a link pulled before they were, written as a file's,
@@ -511,6 +513,120 @@ upload and the exact atomic request over a fake server, a second
 attachment, a failed upload, a refused request, every refusal, a new
 note), and the scenarios `attach-push` and `attach-push-status`
 (`attach_push_*`).
+
+### Removing an attachment
+
+The mirror image of adding one. A file attachment the vault tracks for a
+note (`state.attachments`, `noteRecordName` the note) whose link is gone
+from the note's text entirely is removed from the note by the next push.
+`icloud-notes detach NOTE FILE --yes` writes exactly that: the note without
+the link.
+
+What Apple's apps do when an attachment is removed (measured on a real
+account, 2026-11-13, removing one on an iPhone): the `Attachment` record
+and its `Media` record both get `Deleted` set to 1 and keep every other
+field (the `Media` record still has `Asset`, `FilenameEncrypted`,
+`MinimumSupportedNotesVersion`; the `Attachment` record its `UTI`, `Media`,
+`Note`, sizes, previews and the rest). Neither record is deleted outright.
+The `Note` record stays `Deleted: 0`, with a new `ModificationDate` and
+its text without the attachment's U+FFFC.
+
+"Gone entirely" (`doc::embeds::plan_embed_representations`): the link pull
+wrote is not found where it belongs, and no attachment link anywhere in the
+text points at the file (`has_attachment_link_to`: with or without the
+`!`, with any link text, so also the link of a GIF or WebP pulled before
+those counted as images). The slot is then listed in
+`EmbedRepresentation::removed_slots` and gets no placeholder in the
+reconstructed text. A link to the file that is still somewhere, with
+another text or in another place, is refused as before ("was changed or
+moved ... put the link back as it was, or remove it entirely"): moving an
+attachment is not something a delete and an insert of its character would
+do faithfully. Only a tracked file attachment is removed this way; a table
+whose block is gone, or any other embed whose marker is gone, is refused
+as before.
+
+Planning (`cmd::push::prepare_embed_candidate`), for `status`, `push
+--dry-run` and the first half of `push`:
+
+- A note in someone else's shared zone is refused
+  (`PrepareRefusal::RemovedAttachment`): its attachments are the owner's.
+- One `records/lookup` fetches the removed attachments' `Attachment`
+  records and their `Media` records (the names state tracks), together
+  with the tables the edit touches, for their change tags. A record that
+  is gone, or deleted already (another device removed the attachment too),
+  gets no operation. A record that is not an `Attachment`/`Media` record,
+  or an `Attachment` whose `Note` names another note, refuses the push:
+  nothing this vault only believes to be the note's attachment is marked
+  deleted.
+- The document is built by `prepare_note_text_update`. Each removed
+  placeholder is deleted first, by itself, last one first
+  (`doc::document::delete_attachment_placeholder`: the character at that
+  offset must be a U+FFFC whose run carries that attachment's identifier;
+  it is tombstoned by this replica the way `apply_text_edit` deletes any
+  character, and its attribute run goes with it). The text edit is then
+  applied against what is left, under the unchanged rule that an edit may
+  neither add nor remove a placeholder, and the new attachments' are
+  inserted last. Diffing the whole text instead could take the
+  placeholder beside the removed one for it. The rebuilt document must
+  decode to the embeds that stay plus the new ones, in order.
+- The plan entry is an `update` with the remark "removes the attachment
+  NAME" ("removes the attachments A, B"; after "adds the attachment ..."
+  and a retitle's remark, joined with "; ").
+
+Executing (`send_with_attachment_changes`): one `records/modify` with
+`atomic: true` carries the note's update first, any table updates, then
+per removed attachment an update of its `Attachment` record and of its
+`Media` record setting `Deleted` to 1 and nothing else, each with the
+change tag just looked up and its `parent` (`attachment_removal_ops`, the
+one place that builds them), then the creates of any new attachments.
+Such a note is left out of the batched non-atomic write. If iCloud refuses
+any record nothing is applied, and state, base copy and files are as they
+were: the next push tries again. On success
+(`forget_removed_attachments`) the attachment leaves `state.attachments`
+and its file is deleted from the folder's `attachments/` with
+`safe_unlink`, as pull deletes the file of an attachment that disappeared
+remotely (there is no trash for attachment files). The file stays when it
+is still someone's: `attachments/` is shared by the notes of a folder, so
+a file tracked for another attachment, or linked from another note file in
+the same directory, is kept. A removal made along with a rename or move of
+the note goes up with the edit that follows the move.
+
+Pull: a later pull of the same change is a no-op. The note comes back at
+the change tag the push stored, so it is skipped, and `Attachment` and
+`Media` records are not among the record types a zone walk asks for. A
+vault that pulls the change made elsewhere (another computer's push, or
+Apple Notes) applies the note's new text, which has no slot for the
+attachment, so its entry is stale: untracked, file deleted. Pull used to
+skip attachment handling for a note with no embeds at all, which left the
+file and the entry of a note's last attachment behind; it now runs
+whenever the note still tracks an attachment or a table.
+
+The Notes app guards the other end (`notes/src/notesbackend.cpp`
+`removedAttachments`, `saveWarning`): text that drops the link of an
+attachment the note lists is never autosaved; Ctrl+S asks "Save anyway?"
+with "This removes the attachment NAME from this note on all your
+devices.". `icloud-notes write` refuses such text without `--yes`
+(`usage`, exit 2), as does `detach`.
+
+Not measured against a real account: that an update carrying only
+`Deleted` (no other field) is accepted for these two record types (Apple's
+own client may send more fields along); and whether Apple's client also
+changes the note's `FirstAttachmentThumbnail`/`FirstAttachmentUTIEncrypted`
+beyond what `build_note_update_fields` already sends for every note update
+(both `null`).
+
+Still refused: changing or moving an attachment's link; removing from a
+shared note; removing a table or any other embed.
+
+Tests: tests/doc_embed_push.rs (gone entirely against changed or moved,
+several at once, with an addition, other embeds), tests/doc_attach.rs (the
+placeholder's delete through the decoders), tests/cmd_push_attach.rs (the
+exact atomic request over a fake server, the pull after it and another
+vault's pull, removals with edits and an addition, a changed link, a
+shared note, a file another note still uses, a refused and a failed
+request, records deleted already, a record that is not the note's, a
+renamed note), and the scenarios `detach-push-status`, `detach-push`,
+`detach-push-clean` and `detach-pull` (`detach_push_*`).
 
 ### Shared zones: the shared-database listing resumes
 

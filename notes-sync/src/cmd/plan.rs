@@ -208,6 +208,8 @@ pub enum PrepareRefusal {
     EmbedMarkdown { reason: String, file: String },
     /// Why a linked file can't be added as a new attachment.
     NewAttachment { reason: String, file: String },
+    /// Why an attachment whose link is gone can't be removed.
+    RemovedAttachment { reason: String, file: String },
     /// (conflict)
     TableGoneRemotely,
     /// `prepareTableAttachmentUpdate`'s reason.
@@ -244,6 +246,7 @@ impl PrepareRefusal {
             | PrepareRefusal::EmbedPlan { reason, file }
             | PrepareRefusal::EmbedMarkdown { reason, file }
             | PrepareRefusal::NewAttachment { reason, file }
+            | PrepareRefusal::RemovedAttachment { reason, file }
             | PrepareRefusal::TableUpdate { reason, file } => format!("{reason}. {}", restore_advice(file)),
             PrepareRefusal::TableGoneRemotely => {
                 "a table in this note no longer exists remotely - run \"pull\" to reconcile".into()

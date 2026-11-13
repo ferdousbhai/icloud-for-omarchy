@@ -1200,7 +1200,12 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            Label { text: "read-only in iCloud"; color: root.colTextMuted; font.pixelSize: 10 }
+                            Label {
+                                visible: !editor.readOnly
+                                text: "Delete a link to remove its attachment"
+                                color: root.colTextMuted
+                                font.pixelSize: 10
+                            }
                         }
                     }
 

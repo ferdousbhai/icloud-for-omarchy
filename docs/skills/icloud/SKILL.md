@@ -84,7 +84,10 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 - Change: `new TITLE [--folder F] [--body T|--file P|--stdin]`,
   `write NOTE --body T [--append] [--yes]`, `rename NOTE TITLE`, `move NOTE FOLDER`,
   `delete NOTE --yes`, `toggle NOTE LINE`, `attach NOTE FILE` (adds FILE to
-  the note as an attachment, uploaded by the next push), `new-folder`,
+  the note as an attachment, uploaded by the next push), `detach NOTE FILE
+  --yes` (removes the attachment `read` lists as FILE, on every device at
+  the next push; `write` text that drops an attachment's link needs `--yes`
+  for the same reason: only when the user asked), `new-folder`,
   `rename-folder`, `delete-folder --yes`, `export-pdf NOTE`. Names starting with a dot (and
   folders named `attachments`) are never synced, so they are refused.
 - Conflicts: `read` → `.conflicts[i].local|remote`; `resolve NOTE --choices

@@ -215,6 +215,17 @@ public:
     Q_INVOKABLE QString localFile(const QUrl &url) const { return url.isLocalFile() ? url.toLocalFile() : QString(); }
     // The link the sync engine writes for the attachment file `name`.
     static QString attachmentLink(const QString &name);
+    // The attachments of the open note (the file names noteAttachments
+    // lists for the note as it is on disk) that `body` no longer links to.
+    // The sync engine takes a link gone entirely for the attachment's
+    // removal, and the next push deletes it in iCloud, on every device:
+    // nothing writes such a body without asking first (saveWarning in the
+    // window, --yes on the command line).
+    Q_INVOKABLE QStringList removedAttachments(const QString &body) const;
+    // `body` without the link(s) to the attachment file `name` of its
+    // folder's attachments/; a line left empty goes with its link. `body`
+    // itself when it holds no such link.
+    static QString withoutAttachmentLink(const QString &body, const QString &name);
     // The note changed on disk under unsaved editor text: rather than let
     // a save overwrite that change, merge the two (base is what the editor
     // loaded, mine what it holds now). Edits to different lines merge into
@@ -226,7 +237,13 @@ public:
     // deleted outright gets the edits as a new note, "<title> (unsaved
     // edits)", opened in its place (editsKeptAsNote says so).
     Q_INVOKABLE bool keepEditsAsConflict(const QString &base, const QString &mine);
+    // Why saving `body` wants a confirmation first ("" when nothing does):
+    // the sync guardrails (guardrailWarning), and attachments it removes.
+    // Autosave leaves such text in the editor; Ctrl+S asks "Save anyway?".
     Q_INVOKABLE QString saveWarning(const QString &body);
+    // The sync guardrails alone: text that adds conflict markers, or an
+    // apple-note-id another note of the folder carries.
+    QString guardrailWarning(const QString &body);
     Q_INVOKABLE void newNote(const QString &name);
     Q_INVOKABLE QString deleteCurrentNote();
     Q_INVOKABLE QString renameCurrentNote(const QString &title);

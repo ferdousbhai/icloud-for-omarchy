@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "account": {
+    "dsid": "10000000001",
+    "appleId": "harness@example.com"
+  },
+  "interactions": [
+    {
+      "note": "the private zone after detach-push: the note at the tag the push wrote, its Attachment and Media records Deleted: 1",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/private/changes/zone"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [
+            {
+              "zoneID": {
+                "zoneName": "Notes",
+                "ownerRecordName": "_defaultOwner",
+                "zoneType": "REGULAR_CUSTOM_ZONE"
+              },
+              "moreComing": false,
+              "syncToken": "AQAAAAAAAAAD",
+              "records": [
+                {
+                  "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+                  "recordType": "Note",
+                  "fields": {
+                    "TitleEncrypted": {
+                      "value": "VGVzdCBOb3Rl",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "SnippetEncrypted": {
+                      "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "CreationDate": {
+                      "value": 1752563940000,
+                      "type": "TIMESTAMP"
+                    },
+                    "ModificationDate": {
+                      "value": 1789999990000,
+                      "type": "TIMESTAMP"
+                    },
+                    "Deleted": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Folder": {
+                      "value": {
+                        "recordName": "DefaultFolder-CloudKit",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes",
+                          "ownerRecordName": "_defaultOwner"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "Folders": {
+                      "value": [
+                        {
+                          "recordName": "DefaultFolder-CloudKit",
+                          "action": "VALIDATE",
+                          "zoneID": {
+                            "zoneName": "Notes",
+                            "ownerRecordName": "_defaultOwner"
+                          }
+                        }
+                      ],
+                      "type": "REFERENCE_LIST"
+                    },
+                    "TextDataEncrypted": {
+                      "value": "eJxN0LFOwzAQBmDbcdKLU+jJQ5E8WbBYFd2REFOFEANIiEDXojZApCqR6mTgMdj6LLwJCzMjE2tQzFExnfX5vzvpgOltBAyZeY30RV74xl7XTaHy59Lb0tsH2/RW1U1hW1+s7GO9CVRWT7ZuG7sol+u6XU37hJ/6l2q5UAaV7GciM6E6HoQjw8yE6gTJAR6TRCTnCCSS5BY5SUxyhQlJYnSQGYpfsdwNyLK/bZY7oM7xblYaUgLzIAJTy50iuycDy11GdvcvNzRjBcCw67puhMzs3ocnyih8uzmKv7fz08t8/fH+9bnRAnItgPd/XEQyTgaQqmy4tz9CLWCuBagJgNL9teQE4ExLiFD+AGUuPQY=",
+                      "type": "ENCRYPTED_BYTES"
+                    }
+                  },
+                  "pluginFields": {},
+                  "recordChangeTag": "27a",
+                  "created": {
+                    "timestamp": 1752563940000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "modified": {
+                    "timestamp": 1790000000000,
+                    "userRecordName": "_defaultOwner",
+                    "deviceID": "2"
+                  },
+                  "deleted": false,
+                  "parent": {
+                    "recordName": "DefaultFolder-CloudKit"
+                  }
+                },
+                {
+                  "recordName": "00000000-0000-4000-8000-000000000002",
+                  "recordType": "Attachment",
+                  "fields": {
+                    "UTI": {
+                      "value": "public.plain-text",
+                      "type": "STRING"
+                    },
+                    "UTIEncrypted": {
+                      "value": "cHVibGljLnBsYWluLXRleHQ=",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "TitleEncrypted": {
+                      "value": "aGVsbG8udHh0",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "Media": {
+                      "value": {
+                        "recordName": "00000000-0000-4000-8000-000000000003",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "Note": {
+                      "value": {
+                        "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+                        "action": "VALIDATE",
+                        "zoneID": {
+                          "zoneName": "Notes"
+                        }
+                      },
+                      "type": "REFERENCE"
+                    },
+                    "FileSize": {
+                      "value": 17,
+                      "type": "INT64"
+                    },
+                    "CreationDate": {
+                      "value": 1790000000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "LastModificationDate": {
+                      "value": 1790000000000,
+                      "type": "TIMESTAMP"
+                    },
+                    "MinimumSupportedNotesVersion": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Deleted": {
+                      "value": 1,
+                      "type": "INT64"
+                    },
+                    "Orientation": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "ImageFilterType": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "CroppingQuadTopLeftX": {
+                      "value": 0.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadTopLeftY": {
+                      "value": 1.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadTopRightX": {
+                      "value": 1.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadTopRightY": {
+                      "value": 1.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadBottomRightX": {
+                      "value": 1.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadBottomRightY": {
+                      "value": 0.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadBottomLeftX": {
+                      "value": 0.0,
+                      "type": "DOUBLE"
+                    },
+                    "CroppingQuadBottomLeftY": {
+                      "value": 0.0,
+                      "type": "DOUBLE"
+                    }
+                  },
+                  "parent": {
+                    "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+                  },
+                  "recordChangeTag": "27b",
+                  "deleted": false
+                },
+                {
+                  "recordName": "00000000-0000-4000-8000-000000000003",
+                  "recordType": "Media",
+                  "fields": {
+                    "Asset": {
+                      "value": {
+                        "fileChecksum": "AWhlbGxvQ2hlY2tzdW0=",
+                        "size": 17,
+                        "wrappingKey": "aGVsbG9XcmFwcGluZ0tleQ==",
+                        "referenceChecksum": "AWhlbGxvUmVmZXJlbmNl",
+                        "receipt": "aGVsbG8tcmVjZWlwdA=="
+                      },
+                      "type": "ASSETID"
+                    },
+                    "FilenameEncrypted": {
+                      "value": "aGVsbG8udHh0",
+                      "type": "ENCRYPTED_BYTES"
+                    },
+                    "MinimumSupportedNotesVersion": {
+                      "value": 0,
+                      "type": "INT64"
+                    },
+                    "Deleted": {
+                      "value": 1,
+                      "type": "INT64"
+                    }
+                  },
+                  "parent": {
+                    "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+                  },
+                  "recordChangeTag": "27c",
+                  "deleted": false
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "note": "no zones shared with this account",
+      "request": {
+        "method": "POST",
+        "path": "/database/1/com.apple.notes/production/shared/changes/database"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "zones": [],
+          "moreComing": false,
+          "syncToken": "AQAAAAAAAAAC"
+        }
+      }
+    }
+  ]
+}

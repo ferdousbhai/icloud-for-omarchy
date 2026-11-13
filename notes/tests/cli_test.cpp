@@ -222,7 +222,7 @@ int main(int argc, char *argv[])
         // help and --help print text, piped or not.
         check(help.code == 0 && help.out.contains("Exit codes"), "cli help");
         const QStringList commands{ "status", "folders", "list", "read", "search", "new", "write", "rename", "move",
-                                    "delete", "toggle", "attach", "resolve", "recover", "export-pdf", "new-folder",
+                                    "delete", "toggle", "attach", "detach", "resolve", "recover", "export-pdf", "new-folder",
                                     "rename-folder", "delete-folder", "sync", "pull", "push", "clone", "history",
                                     "diff", "restore" };
         bool all = true;
@@ -597,6 +597,80 @@ int main(int argc, char *argv[])
             check(readFile(QStringLiteral("Notes/Alpha.md")) == before
                       && QDir(g_vault + QStringLiteral("/Notes/attachments")).entryList(QDir::Files).size() == 4,
                   "cli attach: a refusal changes nothing");
+
+            // detach: the attachment's link is taken out, never unasked;
+            // the next push removes the attachment (and its file here).
+            const auto names = [] {
+                QStringList out;
+                const QJsonArray listed = cliJson({ QStringLiteral("read"), QStringLiteral("alpha") }).json().toObject()
+                                              .value(QStringLiteral("attachments")).toArray();
+                for (const QJsonValue &v : listed)
+                    out << v.toObject().value(QStringLiteral("name")).toString();
+                return out;
+            };
+            check(names() == QStringList{ QStringLiteral("photo.PNG"), QStringLiteral("photo 2.PNG"), QStringLiteral("anim.gif") },
+                  "cli read lists the attachments detach takes by name");
+            const Run unasked = cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("photo 2.PNG") });
+            check(unasked.code == 2 && unasked.errorCode() == QStringLiteral("usage")
+                      && unasked.error().value(QStringLiteral("hint")).toString().contains(QStringLiteral("--yes"))
+                      && readFile(QStringLiteral("Notes/Alpha.md")) == before,
+                  "cli detach without --yes is a usage error, exit 2, and changes nothing");
+            const Run noSuch = cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("nope.png"), QStringLiteral("--yes") });
+            check(noSuch.code == 4 && noSuch.errorCode() == QStringLiteral("not_found")
+                      && noSuch.error().value(QStringLiteral("hint")).toString().contains(QStringLiteral("photo 2.PNG")),
+                  "cli detach: no such attachment is not_found, exit 4, and lists the note's");
+            const Run roDetach = cliJson({ QStringLiteral("detach"), QStringLiteral("grid"), QStringLiteral("x.png"), QStringLiteral("--yes") });
+            check(roDetach.code == 1 && roDetach.errorCode() == QStringLiteral("read_only"), "cli detach refuses a read-only note");
+            check(cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("--yes") }).code == 2
+                      && cliJson({ QStringLiteral("detach"), QStringLiteral("no such note"), QStringLiteral("x"), QStringLiteral("--yes") }).code == 4
+                      && readFile(QStringLiteral("Notes/Alpha.md")) == before,
+                  "cli detach needs NOTE and FILE, and a note that exists");
+            const Run det = cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("photo 2.PNG"), QStringLiteral("--yes") });
+            const QJsonObject detJson = det.json().toObject();
+            check(det.code == 0 && detJson.value(QStringLiteral("action")).toString() == QStringLiteral("detach")
+                      && detJson.value(QStringLiteral("path")).toString() == QStringLiteral("Notes/Alpha.md")
+                      && detJson.value(QStringLiteral("file")).toString() == QStringLiteral("Notes/attachments/photo 2.PNG")
+                      && detJson.keys() == QStringList{ QStringLiteral("action"), QStringLiteral("file"), QStringLiteral("path") },
+                  "cli detach reports the note and the attachment's file");
+            check(readFile(QStringLiteral("Notes/Alpha.md"))
+                      == QString(before).remove(QStringLiteral("![photo 2.PNG](attachments/photo%202.PNG)\n"))
+                      && exists(QStringLiteral("Notes/attachments/photo 2.PNG"))
+                      && names() == QStringList{ QStringLiteral("photo.PNG"), QStringLiteral("anim.gif") },
+                  "cli detach removes the link's line only; the file is the push's to remove");
+            QFile::remove(g_scratch + QStringLiteral("/stub.log"));
+            const Run detPushed = cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("anim.gif"), QStringLiteral("--yes"),
+                                            QStringLiteral("--push") });
+            check(detPushed.code == 0
+                      && detPushed.json().toObject().value(QStringLiteral("sync")).toObject().value(QStringLiteral("ok")).toBool()
+                      && stubLog() == QStringList{ QStringLiteral("sync") }
+                      && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("anim.gif")),
+                  "cli detach --push syncs afterwards");
+
+            // write: text that drops an attachment's link needs --yes too.
+            const QString linked = readFile(QStringLiteral("Notes/Alpha.md"));
+            const QString bodyNow = cliJson({ QStringLiteral("read"), QStringLiteral("alpha") }).json().toObject()
+                                        .value(QStringLiteral("body")).toString();
+            const QString bodyWithout = QString(bodyNow).remove(QStringLiteral("![photo.PNG](attachments/photo.PNG)\n"));
+            check(bodyWithout != bodyNow, "cli read shows the attachment's link");
+            const Run dropped = cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--body"), bodyWithout });
+            check(dropped.code == 2 && dropped.errorCode() == QStringLiteral("usage")
+                      && dropped.error().value(QStringLiteral("message")).toString().contains(QStringLiteral("photo.PNG"))
+                      && dropped.error().value(QStringLiteral("hint")).toString().contains(QStringLiteral("--yes"))
+                      && readFile(QStringLiteral("Notes/Alpha.md")) == linked,
+                  "cli write that drops an attachment's link is a usage error without --yes, exit 2");
+            check(cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--force"), QStringLiteral("--body"), bodyWithout }).code == 2
+                      && readFile(QStringLiteral("Notes/Alpha.md")) == linked,
+                  "cli write --force is no --yes: the attachment stays");
+            const Run kept = cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--body"),
+                                       bodyNow + QStringLiteral("one more line\n") });
+            check(kept.code == 0 && readFile(QStringLiteral("Notes/Alpha.md")).endsWith(QStringLiteral("one more line\n"))
+                      && cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--append"), QStringLiteral("--body"),
+                                   QStringLiteral("appended") }).code == 0,
+                  "cli write that keeps the links, and --append, need no --yes");
+            const Run confirmed = cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--yes"), QStringLiteral("--body"), bodyWithout });
+            check(confirmed.code == 0 && confirmed.json().toObject().value(QStringLiteral("changed")).toBool()
+                      && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("photo.PNG")) && names().isEmpty(),
+                  "cli write --yes removes the attachment's link");
 
             QDir(g_vault + QStringLiteral("/Notes/attachments")).removeRecursively();
             writeFile(QStringLiteral("Notes/Alpha.md"), alpha);

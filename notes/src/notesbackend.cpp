@@ -148,20 +148,27 @@ double readUiScale()
 // attachments/ directory per folder, shared by every note in it and named
 // after the attachment, and always rewrites each attachment into the note
 // text as a link (an embed for images), so the links are the full list.
-// The links themselves must stay as written: each stands for its attachment.
+// The links themselves must stay as written: each stands for its attachment,
+// and one gone from the text removes the attachment at the next push.
+// A link: its text (brackets in it escaped), then (attachments/...).
+const QRegularExpression &attachmentLinkRe()
+{
+    static const QRegularExpression re(QStringLiteral(R"(!?\[(?:\\.|[^\]\\\n])*\]\((attachments/[^)\s]+)\))"));
+    return re;
+}
+
 QVariantList attachmentsFor(const QString &notePath, const QString &text)
 {
     static const QStringList imageSuffixes{ QStringLiteral("png"), QStringLiteral("jpg"),
                                             QStringLiteral("jpeg"), QStringLiteral("gif"),
                                             QStringLiteral("webp"), QStringLiteral("svg") };
-    static const QRegularExpression linkRe(QStringLiteral(R"(\[[^\]]*\]\((attachments/[^)\s]+)\))"));
     const QDir dir = QFileInfo(notePath).dir();
     // Only files really inside that directory: a link's `..` or a symlink
     // there could otherwise point the preview (and `read`) anywhere.
     const QString inside = QFileInfo(dir.filePath(QStringLiteral("attachments"))).canonicalFilePath() + u'/';
     QVariantList found;
     QSet<QString> seen;
-    for (const QRegularExpressionMatch &match : linkRe.globalMatch(text)) {
+    for (const QRegularExpressionMatch &match : attachmentLinkRe().globalMatch(text)) {
         // Links are URL-encoded.
         const QString abs = QDir::cleanPath(dir.absoluteFilePath(QUrl(match.captured(1)).path()));
         const QString real = QFileInfo(abs).canonicalFilePath(); // empty when it does not exist
@@ -1250,6 +1257,50 @@ QVariantMap NotesBackend::addAttachment(const QString &source)
              { QStringLiteral("link"), attachmentLink(stored) } };
 }
 
+QStringList NotesBackend::removedAttachments(const QString &body) const
+{
+    const QString path = noteAbsolutePath();
+    if (path.isEmpty() || !m_readOnlyReason.isEmpty() || m_noteAttachments.isEmpty())
+        return {};
+    QSet<QString> kept;
+    for (const QVariant &v : attachmentsFor(path, body))
+        kept.insert(v.toMap().value(QStringLiteral("name")).toString());
+    QStringList removed;
+    for (const QVariant &v : m_noteAttachments) {
+        const QString name = v.toMap().value(QStringLiteral("name")).toString();
+        if (!kept.contains(name))
+            removed << name;
+    }
+    return removed;
+}
+
+QString NotesBackend::withoutAttachmentLink(const QString &body, const QString &name)
+{
+    const QString target = QStringLiteral("attachments/") + name;
+    QString out;
+    qsizetype from = 0;
+    for (const QRegularExpressionMatch &match : attachmentLinkRe().globalMatch(body)) {
+        // Links are URL-encoded.
+        if (QUrl(match.captured(1)).path() != target && QUrl::fromPercentEncoding(match.captured(1).toUtf8()) != target)
+            continue;
+        qsizetype start = match.capturedStart(), end = match.capturedEnd();
+        // Alone on its line: the line goes too.
+        const qsizetype lineStart = start == 0 ? 0 : body.lastIndexOf(u'\n', start - 1) + 1;
+        qsizetype lineEnd = body.indexOf(u'\n', end);
+        if (lineEnd < 0)
+            lineEnd = body.size();
+        if (body.mid(lineStart, start - lineStart).trimmed().isEmpty() && body.mid(end, lineEnd - end).trimmed().isEmpty()) {
+            start = lineStart;
+            end = qMin(lineEnd + 1, body.size());
+        }
+        if (start < from)
+            continue;
+        out += body.mid(from, start - from);
+        from = end;
+    }
+    return from == 0 ? body : out + body.mid(from);
+}
+
 QStringList NotesBackend::clipboardFiles()
 {
     const QMimeData *mime = QGuiApplication::clipboard()->mimeData();
@@ -1321,6 +1372,20 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
 }
 
 QString NotesBackend::saveWarning(const QString &body)
+{
+    QStringList warnings;
+    if (const QString guardrails = guardrailWarning(body); !guardrails.isEmpty())
+        warnings << guardrails;
+    const QStringList removed = removedAttachments(body);
+    if (removed.size() == 1)
+        warnings << QStringLiteral("This removes the attachment %1 from this note on all your devices.").arg(removed.first());
+    else if (!removed.isEmpty())
+        warnings << QStringLiteral("This removes the attachments %1 from this note on all your devices.")
+                        .arg(removed.join(QStringLiteral(", ")));
+    return warnings.join(QStringLiteral("\n\n"));
+}
+
+QString NotesBackend::guardrailWarning(const QString &body)
 {
     // Checks run against the full file as it would be written.
     const QString text = assembleNote(body);
@@ -1409,6 +1474,10 @@ QString NotesBackend::renameCurrentNote(const QString &title)
     } else {
         // In-body vaults carry the title in the first line: retitle that line.
         const QString updated = SyncModel::retitleInBody(m_noteContent, clean);
+        // A title line that holds an attachment's link: replacing it would
+        // remove the attachment in iCloud, which nothing does unasked.
+        if (!removedAttachments(SyncModel::editorForm(SyncModel::splitEnvelope(updated).body)).isEmpty())
+            return QStringLiteral("The title line holds an attachment. Edit the note's text instead.");
         if (updated != m_noteContent && !writeText(noteAbsolutePath(), updated))
             return QStringLiteral("Could not write the note.");
     }

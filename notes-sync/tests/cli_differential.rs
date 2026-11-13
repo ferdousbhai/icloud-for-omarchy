@@ -1041,3 +1041,91 @@ fn attach_push_uploads_the_file_and_creates_its_records_atomically() {
     assert_eq!(status["entries"], serde_json::json!([]));
     assert_eq!(status["unchanged"], 1);
 }
+
+/// `detach-push`: the link of `attach-push`'s attachment is gone from the
+/// note. After the note's lookup, one lookup fetches the Attachment and
+/// Media records, and one atomic `records/modify` updates the note and sets
+/// `Deleted` to 1 on both; the vault then tracks no attachment and the file
+/// is gone. `detach-push-status` only plans it, `detach-push-clean` finds
+/// nothing left, and `detach-pull` (the same change coming back) is a no-op.
+#[test]
+fn detach_push_marks_the_attachment_records_deleted_atomically() {
+    let note = "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1";
+    let (media, attachment) = (
+        "00000000-0000-4000-8000-000000000003",
+        "00000000-0000-4000-8000-000000000002",
+    );
+    let all = requests("detach-push");
+    let paths: Vec<&str> = all
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(paths, ["lookup", "lookup", "modify"]);
+    assert!(all.iter().all(|r| r["matched"].is_number()));
+    assert_eq!(
+        all[1]["body"]["records"],
+        serde_json::json!([{ "recordName": attachment }, { "recordName": media }])
+    );
+    let body = &all[2]["body"];
+    assert_eq!(body["atomic"], true);
+    let operations = body["operations"].as_array().unwrap();
+    assert_eq!(operations.len(), 3);
+    assert_eq!(operations[0]["operationType"], "update");
+    assert_eq!(operations[0]["record"]["recordName"], note);
+    let marked = |record_type: &str, name: &str, tag: &str| {
+        serde_json::json!({
+            "operationType": "update",
+            "record": {
+                "recordName": name,
+                "recordType": record_type,
+                "recordChangeTag": tag,
+                "fields": { "Deleted": { "value": 1 } },
+                "parent": { "recordName": note },
+            },
+        })
+    };
+    assert_eq!(operations[1], marked("Attachment", attachment, "26e"));
+    assert_eq!(operations[2], marked("Media", media, "26d"));
+
+    let state = state_of("detach-push");
+    assert_eq!(state["attachments"], serde_json::json!({}));
+    assert_eq!(state["notes"][note]["recordChangeTag"], "27a");
+    assert!(!expected("detach-push/vault/Notes/attachments/hello.txt").exists());
+    assert!(expected("attach-push/vault/Notes/attachments/hello.txt").exists());
+    let stdout = read_json(&expected("detach-push/stdout.json"));
+    assert_eq!(stdout["pushed"], 1);
+    assert_eq!(stdout["entries"][0]["remark"], "removes the attachment hello.txt");
+
+    // The preview: the same two lookups, nothing written anywhere.
+    let planned = requests("detach-push-status");
+    assert_eq!(planned.len(), 2);
+    assert!(
+        planned
+            .iter()
+            .all(|r| r["path"].as_str().unwrap().ends_with("records/lookup"))
+    );
+    let status = read_json(&expected("detach-push-status/stdout.json"));
+    assert_eq!(status["entries"][0]["remark"], "removes the attachment hello.txt");
+    assert!(expected("detach-push-status/vault/Notes/attachments/hello.txt").exists());
+    assert_eq!(
+        state_of("detach-push-status")["attachments"],
+        state_of("attach-push")["attachments"]
+    );
+
+    assert!(requests("detach-push-clean").is_empty());
+    assert_eq!(
+        read_json(&expected("detach-push-clean/stdout.json"))["entries"],
+        serde_json::json!([])
+    );
+
+    // The pull that follows: the note at the tag just written and both
+    // records `Deleted: 1` change nothing here.
+    let pulled = read_json(&expected("detach-pull/stdout.json"));
+    assert_eq!(pulled["changes"], serde_json::json!([]));
+    assert_eq!(pulled["notices"], serde_json::json!([]));
+    assert_eq!(pulled["updated"], 0);
+    let after = state_of("detach-pull");
+    assert_eq!(after["attachments"], serde_json::json!({}));
+    assert_eq!(after["notes"], state["notes"]);
+    assert!(!expected("detach-pull/vault/Notes/attachments").exists());
+}

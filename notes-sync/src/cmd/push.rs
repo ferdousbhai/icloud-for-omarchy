@@ -22,16 +22,16 @@ use crate::cloudkit::{
 };
 use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::attach::{MAX_NEW_ATTACHMENT_BYTES, image_dimensions};
-use crate::doc::decode::{ClassifyOptions, DecodedNote, NoteDecodeResult, classify_note_record};
+use crate::doc::decode::{ClassifyOptions, DecodedNote, NoteDecodeResult, classify_note_record, is_deleted};
 use crate::doc::document::{
-    ApplyTextEditOptions, apply_text_edit, build_initial_note_document, compute_splices, encode_note_document,
-    insert_attachment_placeholder, mark_attachment_placeholder, note_document_round_trips, parse_note_document,
-    validate_document_invariants,
+    ApplyTextEditOptions, apply_text_edit, build_initial_note_document, compute_splices, delete_attachment_placeholder,
+    encode_note_document, insert_attachment_placeholder, mark_attachment_placeholder, note_document_round_trips,
+    parse_note_document, validate_document_invariants,
 };
 use crate::doc::embeds::{
     AttachmentReference, EmbedSlot, NewAttachmentLink, OBJECT_REPLACEMENT_CHARACTER, attachment_link_spellings,
-    decode_note_embed_slots, has_attachment_reference, has_embed_marker, has_unknown_content_marker,
-    plan_embed_representations, plan_new_attachment_links,
+    decode_note_embed_slots, has_attachment_link_to, has_attachment_reference, has_embed_marker,
+    has_unknown_content_marker, plan_embed_representations, plan_new_attachment_links,
 };
 use crate::doc::encode::{
     DEFAULT_FOLDER_RECORD_NAME, NewAttachmentFields, TRASH_FOLDER_RECORD_NAME, build_attachment_create_fields,
@@ -268,7 +268,59 @@ pub enum Action {
         /// Files newly linked from the note: uploaded and created as its
         /// attachments in the same request as `updates`.
         new_attachments: Vec<NewAttachment>,
+        /// Attachments whose link is gone from the note: their records are
+        /// marked deleted in the same request as `updates`.
+        removed_attachments: Vec<RemovedAttachment>,
     },
+}
+
+/// A file attachment a push takes out of a note: its link is gone from the
+/// note's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedAttachment {
+    /// The attachment identifier the note's text named: the `Attachment`
+    /// record's name, and its key in `state.attachments`.
+    pub attachment_record_name: String,
+    /// Vault-root-relative.
+    pub file: String,
+    pub name: String,
+    /// Its `Attachment` and `Media` records as iCloud has them now (one
+    /// that is gone or deleted already is left out).
+    pub records: Vec<RemovedRecord>,
+}
+
+/// A record of a removed attachment, as looked up while planning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedRecord {
+    pub record_name: String,
+    pub record_type: String,
+    pub record_change_tag: String,
+    pub parent_record_name: Option<String>,
+}
+
+/// What a push sends to iCloud to remove attachments from a note, beside
+/// the note's own update (whose text no longer holds their placeholders):
+/// an update of each attachment's `Attachment` record and of its `Media`
+/// record that sets `Deleted` to 1 and touches no other field. That is what
+/// Apple's own apps do (measured on a real account, 2026-11-13: neither
+/// record is deleted outright, and both keep every other field;
+/// docs/DESIGN.md, "Removing an attachment").
+fn attachment_removal_ops(removed_attachments: &[RemovedAttachment]) -> Vec<RecordOp> {
+    removed_attachments
+        .iter()
+        .flat_map(|removed| &removed.records)
+        .map(|record| {
+            let mut fields = UpdateFields::new();
+            fields.insert("Deleted".into(), UpdateFieldValue::new(serde_json::json!(1)));
+            RecordOp::Update(RecordUpdate {
+                record_name: record.record_name.clone(),
+                record_type: record.record_type.clone(),
+                record_change_tag: record.record_change_tag.clone(),
+                fields,
+                parent_record_name: record.parent_record_name.clone(),
+            })
+        })
+        .collect()
 }
 
 /// A file a push adds to a note as an attachment: what is planned of the
@@ -305,7 +357,34 @@ fn new_attachments_remark(new_attachments: &[NewAttachment]) -> Option<String> {
     }
 }
 
-fn join_remarks(remarks: [Option<String>; 2]) -> Option<String> {
+/// What the plan entry of a note that loses attachments says of them.
+fn removed_attachments_remark(removed_attachments: &[RemovedAttachment]) -> Option<String> {
+    let names: Vec<&str> = removed_attachments.iter().map(|a| a.name.as_str()).collect();
+    match names.as_slice() {
+        [] => None,
+        [name] => Some(format!("removes the attachment {name}")),
+        names => Some(format!("removes the attachments {}", names.join(", "))),
+    }
+}
+
+/// What a pushed entry's message says of the attachments it added and
+/// removed (nothing when there were none).
+fn attachment_changes_suffix(added: usize, removed: &[RemovedAttachment]) -> String {
+    let mut suffix = match added {
+        0 => String::new(),
+        1 => ", with its new attachment".to_owned(),
+        n => format!(", with its {n} new attachments"),
+    };
+    let names: Vec<&str> = removed.iter().map(|a| a.name.as_str()).collect();
+    match names.as_slice() {
+        [] => {}
+        [name] => suffix.push_str(&format!(", without its attachment {name}")),
+        names => suffix.push_str(&format!(", without its attachments {}", names.join(", "))),
+    }
+    suffix
+}
+
+fn join_remarks<const N: usize>(remarks: [Option<String>; N]) -> Option<String> {
     let remarks: Vec<String> = remarks.into_iter().flatten().collect();
     (!remarks.is_empty()).then(|| remarks.join("; "))
 }
@@ -1419,6 +1498,7 @@ pub fn build_push_plan(
         e.remark = join_remarks([
             prepared.retitled_to.as_deref().map(retitle_remark),
             new_attachments_remark(&prepared.new_attachments),
+            removed_attachments_remark(&prepared.removed_attachments),
         ]);
         entries.push(ExecutablePlanEntry::with(
             e,
@@ -1433,6 +1513,7 @@ pub fn build_push_plan(
                 modification_date_ms,
                 merged,
                 new_attachments: prepared.new_attachments,
+                removed_attachments: prepared.removed_attachments,
             },
         ));
     }
@@ -1636,6 +1717,8 @@ struct PreparedCandidate {
     retitled_to: Option<String>,
     /// Files to add as attachments along with `updates`.
     new_attachments: Vec<NewAttachment>,
+    /// Attachments to remove along with `updates`.
+    removed_attachments: Vec<RemovedAttachment>,
 }
 
 impl PreparedCandidate {
@@ -1645,6 +1728,7 @@ impl PreparedCandidate {
             note_text_updated: false,
             retitled_to: None,
             new_attachments: Vec::new(),
+            removed_attachments: Vec::new(),
         }
     }
 }
@@ -1655,6 +1739,8 @@ struct TrackedAttachments {
     /// The note's own file attachments, each with its link path from the
     /// note's directory (what pull wrote into the note for it).
     links: HashMap<String, String>,
+    /// The note's own file attachments as state tracks them.
+    own: HashMap<String, AttachmentEntry>,
     /// Every tracked attachment file, of any note (vault-root-relative).
     files: HashSet<String>,
 }
@@ -1668,6 +1754,10 @@ impl TrackedAttachments {
                 .filter(|(_, att)| att.note_record_name == record_name)
                 .map(|(k, att)| (k.clone(), posix::relative(&note_dir, &att.file)))
                 .collect(),
+            own: all()
+                .filter(|(_, att)| att.note_record_name == record_name)
+                .map(|(k, att)| (k.clone(), att.clone()))
+                .collect(),
             files: all().map(|(_, att)| att.file.clone()).collect(),
         }
     }
@@ -1680,6 +1770,14 @@ fn placeholder_offsets(text: &str) -> Vec<usize> {
         .filter(|(_, unit)| *unit == OBJECT_REPLACEMENT_CHARACTER as u16)
         .map(|(offset, _)| offset)
         .collect()
+}
+
+/// The placeholder of an attachment an edit removes from a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemovedPlaceholder {
+    /// UTF-16 offset in the note's text as it is before the edit.
+    offset: usize,
+    attachment_identifier: String,
 }
 
 /// What a new attachment's placeholder carries in the note's text.
@@ -1822,6 +1920,7 @@ fn prepare_update<T: Transport>(
         &desired,
         &classified.embed_slots,
         &[],
+        &[],
         replica,
         &file,
     )? {
@@ -1837,6 +1936,7 @@ fn prepare_update<T: Transport>(
         note_text_updated: true,
         retitled_to: requested_retitle(&classified, requested_title),
         new_attachments: Vec::new(),
+        removed_attachments: Vec::new(),
     }))
 }
 
@@ -1870,9 +1970,47 @@ fn prepare_embed_candidate<T: Transport>(
         Ok(new_attachments) => new_attachments,
         Err(reason) => return Ok(Err(PrepareRefusal::NewAttachment { reason, file })),
     };
+    // The attachments whose link is gone: each one's placeholder in the
+    // note's text as it is now, and what state tracks of it.
+    let current_placeholders = placeholder_offsets(&classified.body_text);
+    let mut removed_placeholders: Vec<RemovedPlaceholder> = Vec::new();
+    let mut removed_attachments: Vec<RemovedAttachment> = Vec::new();
+    for &slot in &plan.removed_slots {
+        let (Some(EmbedSlot::Attachment(reference)), Some(&offset)) =
+            (classified.embed_slots.get(slot), current_placeholders.get(slot))
+        else {
+            return Ok(Err(PrepareRefusal::TextUpdate(TextUpdateRefusal::RebuiltEmbedFailed)));
+        };
+        let Some(tracked_entry) = tracked.own.get(&reference.attachment_identifier) else {
+            return Ok(Err(PrepareRefusal::TextUpdate(TextUpdateRefusal::RebuiltEmbedFailed)));
+        };
+        removed_placeholders.push(RemovedPlaceholder {
+            offset,
+            attachment_identifier: reference.attachment_identifier.clone(),
+        });
+        removed_attachments.push(RemovedAttachment {
+            attachment_record_name: reference.attachment_identifier.clone(),
+            file: tracked_entry.file.clone(),
+            name: posix::basename(&tracked_entry.file).to_owned(),
+            records: Vec::new(),
+        });
+    }
+    if !removed_attachments.is_empty() && entry.shared_zone_owner.is_some() {
+        return Ok(Err(PrepareRefusal::RemovedAttachment {
+            reason: "attachments can't be removed from a shared note from here - remove them in Notes itself".into(),
+            file,
+        }));
+    }
     // The placeholders the pushed text has to hold, in order: the note's
-    // embeds as they are, and each new attachment where its link is.
-    let mut expected_slots: Vec<EmbedSlot> = classified.embed_slots.clone();
+    // embeds that stay, as they are, and each new attachment where its link
+    // is.
+    let mut expected_slots: Vec<EmbedSlot> = classified
+        .embed_slots
+        .iter()
+        .enumerate()
+        .filter(|(slot, _)| !plan.removed_slots.contains(slot))
+        .map(|(_, slot)| slot.clone())
+        .collect();
     let mut new_slots: Vec<usize> = Vec::new();
     for (link, attachment) in plan.new_links.iter().zip(&new_attachments) {
         let at = link.slot_index.min(expected_slots.len());
@@ -1888,16 +2026,71 @@ fn prepare_embed_candidate<T: Transport>(
         Err(r) => return Ok(Err(r)),
     };
 
-    let attachment_records = if plan.tables.is_empty() {
+    // One lookup: the tables to edit, and the records of the attachments to
+    // remove (their change tags go with the removal).
+    let mut names: Vec<String> = plan
+        .tables
+        .iter()
+        .map(|t| t.reference.attachment_identifier.clone())
+        .collect();
+    for removed in &removed_attachments {
+        names.push(removed.attachment_record_name.clone());
+        if let Some(tracked_entry) = tracked.own.get(&removed.attachment_record_name)
+            && !tracked_entry.media_record_name.is_empty()
+        {
+            names.push(tracked_entry.media_record_name.clone());
+        }
+    }
+    let attachment_records = if names.is_empty() {
         Vec::new()
     } else {
-        let names: Vec<String> = plan
-            .tables
-            .iter()
-            .map(|t| t.reference.attachment_identifier.clone())
-            .collect();
         db.lookup_records(zone, &names)?
     };
+    for removed in &mut removed_attachments {
+        let media = tracked
+            .own
+            .get(&removed.attachment_record_name)
+            .map(|tracked_entry| tracked_entry.media_record_name.as_str())
+            .unwrap_or_default();
+        for (record_name, record_type) in [
+            (removed.attachment_record_name.as_str(), "Attachment"),
+            (media, "Media"),
+        ] {
+            // Gone or deleted already (another device removed it too):
+            // nothing to send for it.
+            let Some(found) = attachment_records
+                .iter()
+                .rev()
+                .find(|r| r.record_name == record_name)
+                .filter(|r| !is_deleted(r))
+            else {
+                continue;
+            };
+            let names_another_note = record_type == "Attachment"
+                && found
+                    .fields
+                    .get("Note")
+                    .and_then(|f| f.value.get("recordName"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|note| note != record.record_name);
+            if found.record_type != record_type || names_another_note {
+                return Ok(Err(PrepareRefusal::RemovedAttachment {
+                    reason: format!(
+                        "the attachment \"{}\" can't be removed from here: its record in iCloud is not this note's \
+                         file attachment - run \"pull\" first, or put the link back as it was",
+                        removed.name
+                    ),
+                    file,
+                }));
+            }
+            removed.records.push(RemovedRecord {
+                record_name: found.record_name.clone(),
+                record_type: record_type.to_owned(),
+                record_change_tag: found.record_change_tag.clone().unwrap_or_default(),
+                parent_record_name: found.parent_record_name.clone(),
+            });
+        }
+    }
     for attachment in &attachment_records {
         if attachment.is_deleted() {
             continue;
@@ -1958,6 +2151,7 @@ fn prepare_embed_candidate<T: Transport>(
             &desired,
             &expected_slots,
             &new_slots,
+            &removed_placeholders,
             replica,
             &file,
         )? {
@@ -1970,8 +2164,8 @@ fn prepare_embed_candidate<T: Transport>(
             note_text_updated = true;
         }
     }
-    if !new_attachments.is_empty() && !note_text_updated {
-        // The new placeholders always change the text.
+    if !(new_attachments.is_empty() && removed_attachments.is_empty()) && !note_text_updated {
+        // A placeholder added or removed always changes the text.
         return Ok(Err(PrepareRefusal::TextUpdate(TextUpdateRefusal::RebuiltEmbedFailed)));
     }
     if updates.is_empty() {
@@ -1982,6 +2176,7 @@ fn prepare_embed_candidate<T: Transport>(
         note_text_updated,
         retitled_to,
         new_attachments,
+        removed_attachments,
     }))
 }
 
@@ -2021,6 +2216,7 @@ pub fn prepare_retitle(
         &classified.body_text,
         &desired,
         &classified.embed_slots,
+        &[],
         &[],
         replica,
         to_file,
@@ -2087,12 +2283,19 @@ fn note_record_update(record: &CloudKitRecord, entry: &NoteEntry, fields: Update
 /// a placeholder, and each is then inserted at its place carrying its
 /// attachment: the placeholders the note has keep their characters, and
 /// the rebuilt document must decode to exactly `expected_slots`.
+///
+/// `removed` are the placeholders of the attachments the edit removes
+/// (ascending offsets in `current_body_text`). Each is deleted first, by
+/// itself, and the text edit is then made against what is left under the
+/// same rule, so no other placeholder can be taken for a removed one.
+#[allow(clippy::too_many_arguments)]
 fn prepare_note_text_update(
     record: &CloudKitRecord,
     current_body_text: &str,
     desired: &NoteText,
     expected_slots: &[EmbedSlot],
     new_slots: &[usize],
+    removed: &[RemovedPlaceholder],
     replica: &[u8; 16],
     file: &str,
 ) -> Result<Result<Option<String>, TextUpdateRefusal>, Error> {
@@ -2126,8 +2329,20 @@ fn prepare_note_text_update(
             .collect();
         js::from_utf16(&units)
     };
-    let touches_placeholder = compute_splices(current_body_text, &edited_text).iter().any(|splice| {
-        js::slice16(current_body_text, splice.start, splice.start + splice.delete_length)
+    // The note's text once the removed attachments' placeholders are out.
+    let remaining_text: String = if removed.is_empty() {
+        current_body_text.to_owned()
+    } else {
+        let units: Vec<u16> = current_body_text
+            .encode_utf16()
+            .enumerate()
+            .filter(|(offset, _)| !removed.iter().any(|r| r.offset == *offset))
+            .map(|(_, unit)| unit)
+            .collect();
+        js::from_utf16(&units)
+    };
+    let touches_placeholder = compute_splices(&remaining_text, &edited_text).iter().any(|splice| {
+        js::slice16(&remaining_text, splice.start, splice.start + splice.delete_length)
             .contains(OBJECT_REPLACEMENT_CHARACTER)
             || splice.insert_text.contains(OBJECT_REPLACEMENT_CHARACTER)
     });
@@ -2144,8 +2359,22 @@ fn prepare_note_text_update(
         return Ok(Err(TextUpdateRefusal::DecoderDisagreement));
     }
     let edit_options = ApplyTextEditOptions { replica_id: *replica };
+    // Last first: the offsets before a deleted one stay as they are.
+    for placeholder in removed.iter().rev() {
+        if let Err(e) = delete_attachment_placeholder(
+            &mut doc,
+            placeholder.offset,
+            &placeholder.attachment_identifier,
+            &edit_options,
+        ) {
+            return Ok(Err(exception(e)));
+        }
+    }
+    if doc.text != remaining_text {
+        return Ok(Err(TextUpdateRefusal::RebuiltDecodeFailed));
+    }
     let mut text_changed = match apply_text_edit(&mut doc, &edited_text, &edit_options) {
-        Ok(changed) => changed,
+        Ok(changed) => changed || !removed.is_empty(),
         Err(e) => return Ok(Err(exception(e))),
     };
     for &slot in new_slots {
@@ -2280,24 +2509,28 @@ struct SentWrite {
 }
 
 /// Sends a note's write (`note_ops`: its update or create first, then any
-/// table updates) together with its new attachments. Each file is read and
+/// table updates) together with the attachments it removes
+/// ([`attachment_removal_ops`]) and its new attachments. Each new file is read and
 /// uploaded for the `Asset` field of the `Media` record it will be
 /// (CloudKit's asset upload, which names the record the asset is for), and
 /// then one atomic `records/modify` carries the note, and a `Media` and an
-/// `Attachment` record per file: all of it is applied, or none.
+/// `Attachment` record per file, after the removals: all of it is applied,
+/// or none.
 ///
 /// `Ok(Err(why))` when a file can no longer be read as planned: nothing was
 /// sent for the note. An upload that fails is an error like any other
 /// request's; iCloud keeps nothing of an upload no record names.
-fn send_with_new_attachments<T: Transport>(
+fn send_with_attachment_changes<T: Transport>(
     db: &Database<T>,
     zone: &NoteZone,
     target_dir: &Path,
     note_record_name: &str,
     note_ops: Vec<RecordOp>,
     new_attachments: &[NewAttachment],
+    removed_attachments: &[RemovedAttachment],
 ) -> Result<Result<SentWrite, String>, Error> {
     let mut ops = note_ops;
+    ops.extend(attachment_removal_ops(removed_attachments));
     let mut attachments = Vec::with_capacity(new_attachments.len());
     let now_ms = rt::now_ms();
     for attachment in new_attachments {
@@ -2362,6 +2595,58 @@ fn track_new_attachments(state: &mut CloneState, attachments: Vec<(String, Attac
     }
 }
 
+/// After a write that removed attachments went through: stops tracking
+/// each, and deletes its file as pull does when an attachment disappears
+/// remotely (`safe_unlink`), unless the file is still someone's: tracked
+/// for another attachment, or linked from another note of the folder
+/// (`attachments/` is shared by the notes of a folder).
+fn forget_removed_attachments(
+    target_dir: &Path,
+    state: &mut CloneState,
+    note_file: &str,
+    removed_attachments: &[RemovedAttachment],
+) -> Result<(), Error> {
+    for removed in removed_attachments {
+        let Some(attachments) = state.attachments.as_mut() else {
+            return Ok(());
+        };
+        attachments.shift_remove(&removed.attachment_record_name);
+        if attachments.values().any(|other| other.file == removed.file) {
+            continue;
+        }
+        if !linked_from_another_note(target_dir, note_file, &removed.file)? {
+            safe_unlink(&target_dir.join(&removed.file))?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether a note file beside `note_file` (in its directory) links to the
+/// attachment file `file` (vault-root-relative).
+fn linked_from_another_note(target_dir: &Path, note_file: &str, file: &str) -> Result<bool, Error> {
+    let note_dir = note_dir_of(note_file);
+    let link_path = posix::relative(&note_dir, file);
+    let entries = match std::fs::read_dir(target_dir.join(&note_dir)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.to_lowercase().ends_with(".md") || name == posix::basename(note_file) || !entry.path().is_file() {
+            continue;
+        }
+        // A file that can't be read as text links to nothing.
+        if let Ok(text) = std::fs::read_to_string(entry.path())
+            && has_attachment_link_to(&text, &link_path)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Sends every trash and every single-record update of the plan together,
 /// one `records/modify` per zone (non-atomic, so each note stands alone),
 /// when there are several: their results, by record name, for `execute`.
@@ -2384,8 +2669,9 @@ fn batch_writes<T: Transport>(
                 zone,
                 updates,
                 new_attachments,
+                removed_attachments,
                 ..
-            } if updates.len() == 1 && new_attachments.is_empty() => {
+            } if updates.len() == 1 && new_attachments.is_empty() && removed_attachments.is_empty() => {
                 by_zone.entry(zone.clone()).or_default().push(updates[0].clone());
             }
             _ => {}
@@ -2637,20 +2923,21 @@ fn execute<T: Transport>(
                 }
             };
             if !prepared.updates.is_empty() {
-                let sent = if prepared.new_attachments.is_empty() {
+                let sent = if prepared.new_attachments.is_empty() && prepared.removed_attachments.is_empty() {
                     SentWrite {
                         results: db.update_records(&private, &prepared.updates)?,
                         attachments: Vec::new(),
                     }
                 } else {
                     let ops = prepared.updates.iter().cloned().map(RecordOp::Update).collect();
-                    match send_with_new_attachments(
+                    match send_with_attachment_changes(
                         db,
                         &private,
                         target_dir,
                         record_name,
                         ops,
                         &prepared.new_attachments,
+                        &prepared.removed_attachments,
                     )? {
                         Ok(sent) => sent,
                         Err(failure) => {
@@ -2667,6 +2954,7 @@ fn execute<T: Transport>(
                     )));
                 }
                 track_new_attachments(state, sent.attachments);
+                forget_removed_attachments(target_dir, state, to_file, &prepared.removed_attachments)?;
                 if let Some(RecordUpdateResult::Ok(note)) = results.first()
                     && note.record_name == *record_name
                 {
@@ -2765,13 +3053,14 @@ fn execute<T: Transport>(
                     fields,
                     extras,
                 };
-                let sent = match send_with_new_attachments(
+                let sent = match send_with_attachment_changes(
                     db,
                     &zone,
                     target_dir,
                     &record_name,
                     vec![create],
                     new_attachments,
+                    &[],
                 )? {
                     Ok(sent) => sent,
                     Err(failure) => return Ok(ExecuteOutcome::failed(format!("{file}: {failure}"))),
@@ -2871,19 +3160,28 @@ fn execute<T: Transport>(
             modification_date_ms,
             merged,
             new_attachments,
+            removed_attachments,
         } => {
             let sent = match batched.remove(record_name) {
                 Some(results) => SentWrite {
                     results,
                     attachments: Vec::new(),
                 },
-                None if new_attachments.is_empty() => SentWrite {
+                None if new_attachments.is_empty() && removed_attachments.is_empty() => SentWrite {
                     results: db.update_records(zone, updates)?,
                     attachments: Vec::new(),
                 },
                 None => {
                     let ops = updates.iter().cloned().map(RecordOp::Update).collect();
-                    match send_with_new_attachments(db, zone, target_dir, record_name, ops, new_attachments)? {
+                    match send_with_attachment_changes(
+                        db,
+                        zone,
+                        target_dir,
+                        record_name,
+                        ops,
+                        new_attachments,
+                        removed_attachments,
+                    )? {
                         Ok(sent) => sent,
                         Err(failure) => return Ok(ExecuteOutcome::failed(format!("{}: {failure}", entry.file))),
                     }
@@ -2915,6 +3213,7 @@ fn execute<T: Transport>(
                 return Ok(ExecuteOutcome::failed(message));
             }
             track_new_attachments(state, sent.attachments);
+            forget_removed_attachments(target_dir, state, &entry.file, removed_attachments)?;
             if let Some(merged) = merged {
                 write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
                 if let Some(tracked) = state.notes.get_mut(record_name) {
@@ -2939,11 +3238,11 @@ fn execute<T: Transport>(
             }
             write_base_copy(target_dir, record_name, local_text)?;
             record_epoch(target_dir, record_name, &history_record_names(state, record_name))?;
-            Ok(ExecuteOutcome::ok(match new_attachments.len() {
-                0 => format!("Pushed {}", entry.file),
-                1 => format!("Pushed {}, with its new attachment", entry.file),
-                n => format!("Pushed {}, with its {n} new attachments", entry.file),
-            }))
+            Ok(ExecuteOutcome::ok(format!(
+                "Pushed {}{}",
+                entry.file,
+                attachment_changes_suffix(new_attachments.len(), removed_attachments)
+            )))
         }
     }
 }

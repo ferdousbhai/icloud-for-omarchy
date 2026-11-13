@@ -300,6 +300,73 @@ int main(int argc, char *argv[])
                   && at.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("my notes.pdf"),
               "backend file attachment decoded");
     }
+    // Removing an attachment's link removes the attachment in iCloud at the
+    // next push, on every device: text that drops one carries a warning
+    // (autosave leaves it in the editor, Ctrl+S asks), and saving it once
+    // confirmed writes it.
+    {
+        const QString g = readFile(QStringLiteral("G.md"));
+        const QString pic = QStringLiteral("![pic.png](attachments/pic.png)\n");
+        const QString pdf = QStringLiteral("[my%20notes.pdf](attachments/my%20notes.pdf)\n");
+        const QString body = b.noteBody();
+        check(body == QStringLiteral("# Pics\n") + pic + pdf, "backend attachment test starts from G's two links");
+        check(b.saveWarning(body).isEmpty() && b.removedAttachments(body).isEmpty()
+                  && b.saveWarning(QStringLiteral("# Pics, edited\n") + pic + QStringLiteral("a line between\n") + pdf).isEmpty()
+                  // Still linked, however the link is written: the engine refuses
+                  // a changed link itself, and no attachment is removed.
+                  && b.saveWarning(QStringLiteral("# Pics\n[the picture](attachments/pic.png) ") + pdf).isEmpty(),
+              "backend edits that keep every attachment link save silently");
+        check(b.saveWarning(QStringLiteral("# Pics\n") + pdf)
+                  == QStringLiteral("This removes the attachment pic.png from this note on all your devices.")
+                  && b.removedAttachments(QStringLiteral("# Pics\n") + pdf) == QStringList{ QStringLiteral("pic.png") },
+              "backend a dropped attachment link warns, naming the attachment");
+        check(b.saveWarning(QStringLiteral("# Pics\n"))
+                  == QStringLiteral("This removes the attachments pic.png, my notes.pdf from this note on all your devices."),
+              "backend several dropped links warn together");
+        check(b.saveWarning(QStringLiteral("# Pics\n<<<<<<< x\n") + pic)
+                  .endsWith(QStringLiteral("\n\nThis removes the attachment my notes.pdf from this note on all your devices."))
+                  && b.saveWarning(QStringLiteral("# Pics\n<<<<<<< x\n") + pic).contains(QStringLiteral("conflict"))
+                  && !b.guardrailWarning(QStringLiteral("# Pics\n") + pdf).contains(QStringLiteral("attachment")),
+              "backend the removal warning joins the guardrails'; the guardrails alone leave it out");
+        check(readFile(QStringLiteral("G.md")) == g, "backend asking for a warning writes nothing");
+
+        // The link's removal as `detach` makes it.
+        check(NotesBackend::withoutAttachmentLink(body, QStringLiteral("pic.png")) == QStringLiteral("# Pics\n") + pdf
+                  && NotesBackend::withoutAttachmentLink(body, QStringLiteral("my notes.pdf")) == QStringLiteral("# Pics\n") + pic
+                  && NotesBackend::withoutAttachmentLink(body, QStringLiteral("other-note.png")) == body
+                  && NotesBackend::withoutAttachmentLink(QStringLiteral("![pic.png](attachments/pic.png)"), QStringLiteral("pic.png")).isEmpty()
+                  && NotesBackend::withoutAttachmentLink(QStringLiteral("see ![pic.png](attachments/pic.png) here\nend"),
+                                                         QStringLiteral("pic.png"))
+                         == QStringLiteral("see  here\nend")
+                  && NotesBackend::withoutAttachmentLink(QStringLiteral("a\n[x \\[1\\].txt](attachments/x%20%5B1%5D.txt)\nb\n"),
+                                                         QStringLiteral("x [1].txt"))
+                         == QStringLiteral("a\nb\n")
+                  && NotesBackend::withoutAttachmentLink(QStringLiteral("[pic.png](attachments/pic.png)\n![pic.png](attachments/pic.png)\nz"),
+                                                         QStringLiteral("pic.png"))
+                         == QStringLiteral("z"),
+              "backend an attachment's link is taken out of the text, with a line it leaves empty");
+
+        // Confirmed ("Save anyway?" -> Yes saves the text as it is).
+        const QString without = QStringLiteral("# Pics\n") + pdf;
+        check(b.saveCurrentNote(without) && readFile(QStringLiteral("G.md")) == QStringLiteral("---\napple-note-id: id-g\n---\n") + without
+                  && b.noteAttachments().size() == 1 && b.saveWarning(without).isEmpty()
+                  && QFile::exists(testVault() + QStringLiteral("/attachments/pic.png")),
+              "backend a confirmed removal is saved; the file is the next push's to remove");
+        writeFile(QStringLiteral("G.md"), g);
+        b.refresh();
+        check(b.noteAttachments().size() == 2, "backend attachment test leaves G as it was");
+
+        // A title line that is an attachment's link is not retitled away.
+        if (b.vaultTitleMode() != QStringLiteral("filename")) {
+            writeFile(QStringLiteral("G.md"), QStringLiteral("---\napple-note-id: id-g\n---\n") + pic + pdf);
+            b.refresh();
+            const QString titled = readFile(QStringLiteral("G.md"));
+            check(!b.renameCurrentNote(QStringLiteral("New title")).isEmpty() && readFile(QStringLiteral("G.md")) == titled,
+                  "backend rename never replaces a title line that holds an attachment");
+            writeFile(QStringLiteral("G.md"), g);
+            b.refresh();
+        }
+    }
     // A link never reaches outside the folder's attachments/ directory: not
     // through `..` (plain or URL-encoded), nor through a symlink placed there.
     {

@@ -176,7 +176,7 @@ Sync is automatic, like Notes:
   stop making them, so a burst of typing becomes one push. Nothing waits
   for a click.
 - What keeps this safe is icloud-notes-sync itself: a note it cannot push safely
-  (a removed attachment, a reordered table, an unresolved conflict) is refused,
+  (an attachment link changed or moved, a reordered table, an unresolved conflict) is refused,
   not mangled, and a deleted note moves to Recently Deleted in iCloud
   (recoverable for ~30 days). Small badges in the note list warn you:
   brand-new notes, unresolved conflicts, notes the push refused, and notes
@@ -243,6 +243,7 @@ icloud-notes new "Groceries" --body "bread" [--folder Notes] [--push]
 icloud-notes write Groceries --append --body "- [ ] jam" [--push]
 icloud-notes rename|move|delete|toggle ...
 icloud-notes attach Groceries receipt.png [--push]  # add a file to a note
+icloud-notes detach Groceries receipt.png --yes [--push]  # remove an attachment
 icloud-notes resolve NOTE --all local|remote|both   # or --choices local,both,...
 icloud-notes recover NOTE --strip|--synced          # unreadable conflict markers
 icloud-notes new-folder|rename-folder|delete-folder ...
@@ -334,14 +335,25 @@ way the others are linked, `![photo.png](attachments/photo.png)` for a
 PNG, JPEG, HEIC, TIFF, GIF or WebP and `[plan.pdf](attachments/plan.pdf)`
 for any other file. The next sync uploads it.
 
+To remove an attachment, delete its link from the note: the next sync
+removes it from the note in iCloud, on all your devices, and deletes the
+file from `attachments/`. Because that cannot be undone from here, the
+window never saves such an edit on its own: it stays in the editor until
+you press Ctrl+S and confirm "Save anyway?". From a terminal, run
+`icloud-notes detach NOTE FILE --yes` (FILE is the attachment's name as
+`icloud-notes read NOTE` lists it); `icloud-notes write` refuses text that
+drops an attachment's link unless you pass `--yes`. A link that is still
+there but changed or moved is refused by the push, as before.
+
 ## Limitations
 
 - Packages are built for x86_64 only. The app itself would build on
   Apple Silicon Omarchy; the release script just doesn't cross-build yet.
 
-- You can add an attachment to a note from here (files up to 100 MB, and
-  not to a note someone else shared with you), but you can't remove one: do
-  that in Apple Notes. The text around it can be edited here. A file added here
+- You can add an attachment to a note from here (files up to 100 MB), and
+  remove one, but neither on a note someone else shared with you: do that
+  in Apple Notes. An attachment can't be moved to another place in its
+  note from here. The text around it can be edited. A file added here
   goes up without the preview and text recognition Apple's own devices
   make for the attachments they add.
 - A note icloud-notes-sync can read but not safely write back opens

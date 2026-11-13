@@ -236,6 +236,32 @@
       "args": ["--quiet", "status", "@VAULT@"]
     },
     {
+      "name": "detach-push-status",
+      "cassette": "detach-push.json",
+      "vaultFrom": "attach-push",
+      "edits": [{ "file": "Notes/Test Note.md", "replace": ["\n[hello.txt](attachments/hello.txt)\n", ""] }],
+      "args": ["--quiet", "status", "@VAULT@"]
+    },
+    {
+      "name": "detach-push",
+      "cassette": "detach-push.json",
+      "vaultFrom": "attach-push",
+      "edits": [{ "file": "Notes/Test Note.md", "replace": ["\n[hello.txt](attachments/hello.txt)\n", ""] }],
+      "args": ["--quiet", "push", "@VAULT@"]
+    },
+    {
+      "name": "detach-push-clean",
+      "cassette": "tiny-lookup.json",
+      "vaultFrom": "detach-push",
+      "args": ["--quiet", "status", "@VAULT@"]
+    },
+    {
+      "name": "detach-pull",
+      "cassette": "detach-pull.json",
+      "vaultFrom": "detach-push",
+      "args": ["--quiet", "pull", "@VAULT@"]
+    },
+    {
       "name": "asset-pull-update",
       "cassette": "asset-pull-update.json",
       "vaultFrom": "asset-clone",

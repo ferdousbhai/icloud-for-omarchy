@@ -120,8 +120,13 @@ rules, takes the vault's lock, and reaches every engine command you need.
   attachment files along); its attachment links must stay as they are.
   `attach NOTE FILE` adds one: the file is copied into the note folder's
   `attachments/` and linked at the end of the note, and the next push
-  uploads it (not to a note someone else shared; at most 100 MB). An
-  attachment cannot be removed from here.
+  uploads it (not to a note someone else shared; at most 100 MB).
+- A link to an attachment gone from the note's text removes the
+  attachment: the next push deletes it in iCloud, on every device, and
+  the file here. So never drop one by accident: `write` refuses text that
+  does (`usage`, exit 2) unless `--yes` is given, and `detach NOTE FILE
+  --yes` removes one on purpose (FILE: `name` in `read`'s `attachments`).
+  Only do either when the user asked for the attachment to be removed.
 - A sync or push that exits 1 with `push_rejected` ran, but iCloud refused
   a change: the message names it. The rest of the sync still happened.
 
@@ -146,9 +151,10 @@ Work/Plan.md
 | `status` | vault, sign-in, lock holder, notes flagged `conflict`/`new`/`read-only`/... (exit 3 signed out) |
 | `folders`, `list [--folder F] [--flag FLAG]`, `read NOTE [--raw]`, `search QUERY` | read |
 | `new TITLE [--folder F] [--body T \| --file P \| --stdin]` | create (default folder: the account's "Notes"; the body goes below the title line) |
-| `write NOTE (--body T \| --file P \| --stdin) [--append] [--force] [--yes]` | replace the text `read` shows (its first line is the title), or append to it; empty text needs `--yes` (the next push deletes an empty note) |
+| `write NOTE (--body T \| --file P \| --stdin) [--append] [--force] [--yes]` | replace the text `read` shows (its first line is the title), or append to it; empty text needs `--yes` (the next push deletes an empty note), and so does text without the link of one of the note's attachments (the next push removes that attachment everywhere) |
 | `rename NOTE TITLE`, `move NOTE FOLDER`, `delete NOTE --yes`, `toggle NOTE LINE` | as in the window (LINE counts from 1 in `read`'s body) |
 | `attach NOTE FILE` | copy FILE into the note folder's `attachments/` (never over a file) and link it at the end of the note; the next push uploads it. `{action, path, file, link}`; a missing FILE is `not_found` (4), an unreadable, empty or over-100 MB one `error` (1) |
+| `detach NOTE FILE --yes` | remove the attachment named FILE (`read` → `.attachments[].name`): its link is taken out of the note, and the next push removes it in iCloud on every device and deletes the file. `{action, path, file}`; without `--yes` `usage` (2), no such attachment `not_found` (4) |
 | `resolve NOTE --all local\|remote\|both` / `--choices C1,C2,...` | settle conflict blocks (`local` = this computer, `remote` = iCloud) |
 | `recover NOTE --strip \| --synced` | unreadable conflict markers (`conflicts_unreadable`): keep every line, or the last synced text; backs up first |
 | `new-folder NAME [--in F]`, `rename-folder F NAME`, `delete-folder F --yes` | folders (a name starting with a dot, or `attachments`, is never synced, so it is refused with `usage`) |
@@ -343,6 +349,13 @@ icloud-notes --quiet toggle Groceries 3 --push
 
 ```bash
 icloud-notes --quiet attach Groceries ~/Pictures/receipt.png --push
+```
+
+**Remove an attachment from a note** (only when asked to: it is deleted on every device)
+
+```bash
+icloud-notes --quiet read Groceries | jq -r '.attachments[].name'
+icloud-notes --quiet detach Groceries receipt.png --yes --push
 ```
 
 **Resolve a conflict**

@@ -176,20 +176,119 @@ fn an_attachment_link_with_brackets_maps_back_escaped_or_as_written_before() {
     }
 }
 
+/// A link to the attachment's file that is still there, but not as pull
+/// wrote it or not where it was, is refused: only a link gone entirely
+/// removes the attachment.
 #[test]
-fn a_removed_or_changed_attachment_link_refuses_the_push() {
-    let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();
-    for text in ["prose only", "![photo.jpeg](attachments/other.jpeg)"] {
-        let reason = refusal(plan_embed_representations(
-            text,
-            &[slot("FILE-1", "public.jpeg")],
-            &tracked,
-        ));
-        assert!(
-            reason.contains("attachments can only be removed or moved in Notes"),
-            "{reason}"
-        );
+fn a_changed_or_moved_attachment_link_refuses_the_push() {
+    let tracked: HashMap<String, String> = [
+        ("FILE-1".to_string(), "attachments/photo.jpeg".to_string()),
+        ("FILE-2".to_string(), "attachments/b c.gif".to_string()),
+    ]
+    .into();
+    let slots = [slot("FILE-1", "public.jpeg"), slot("FILE-2", "com.compuserve.gif")];
+    let second = "![b c.gif](attachments/b%20c.gif)";
+    for text in [
+        // Another link text, and the two out of order.
+        format!("![my photo](attachments/photo.jpeg)\n{second}"),
+        format!("{second}\n![photo.jpeg](attachments/photo.jpeg)"),
+        // The second one's link text changed.
+        "![photo.jpeg](attachments/photo.jpeg)\n![a gif](attachments/b%20c.gif)".to_string(),
+    ] {
+        let reason = refusal(plan_embed_representations(&text, &slots, &tracked));
+        assert!(reason.contains("was changed or moved"), "{text}: {reason}");
+        assert!(reason.contains("put the link back as it was"), "{reason}");
     }
+}
+
+/// No link to the attachment's file anywhere: the attachment is removed.
+/// Its slot gets no placeholder; the others keep theirs.
+#[test]
+fn an_attachment_link_gone_entirely_is_a_removal() {
+    let tracked: HashMap<String, String> = [
+        ("FILE-1".to_string(), "attachments/photo.jpeg".to_string()),
+        ("FILE-2".to_string(), "attachments/b c.gif".to_string()),
+        ("FILE-3".to_string(), "attachments/plan.pdf".to_string()),
+    ]
+    .into();
+    let slots = [
+        slot("FILE-1", "public.jpeg"),
+        slot("FILE-2", "com.compuserve.gif"),
+        slot("FILE-3", "com.adobe.pdf"),
+    ];
+    let (first, second, third) = (
+        "![photo.jpeg](attachments/photo.jpeg)",
+        "![b c.gif](attachments/b%20c.gif)",
+        "[plan.pdf](attachments/plan.pdf)",
+    );
+
+    let plan = ok(plan_embed_representations(
+        &format!("A\n{first}\n{second}\n{third}"),
+        &slots,
+        &tracked,
+    ));
+    assert!(plan.removed_slots.is_empty());
+
+    // The middle one, the first and last, and all of them.
+    let plan = ok(plan_embed_representations(
+        &format!("A\n{first}\n\n{third}"),
+        &slots,
+        &tracked,
+    ));
+    assert_eq!(plan.removed_slots, [1]);
+    assert_eq!(plan.reconstructed_body_text, format!("A\n{O}\n\n{O}"));
+    let plan = ok(plan_embed_representations(&format!("A\n{second} b"), &slots, &tracked));
+    assert_eq!(plan.removed_slots, [0, 2]);
+    assert_eq!(plan.reconstructed_body_text, format!("A\n{O} b"));
+    let plan = ok(plan_embed_representations("prose only", &slots, &tracked));
+    assert_eq!(plan.removed_slots, [0, 1, 2]);
+    assert_eq!(plan.reconstructed_body_text, "prose only");
+
+    // A link to another file is that file's (a new attachment), and takes
+    // nothing from the removal.
+    let plan = ok(plan_embed_representations(
+        &format!("{first}\n{second}\n[new.pdf](attachments/new.pdf)"),
+        &slots,
+        &tracked,
+    ));
+    assert_eq!(plan.removed_slots, [2]);
+    assert_eq!(plan.new_links.len(), 1);
+    assert_eq!(plan.new_links[0].slot_index, 2);
+
+    // The GIF's link as it was written before GIFs counted as images still
+    // stands for it; a link to it left anywhere, in any spelling, means it
+    // was not removed.
+    let plan = ok(plan_embed_representations(
+        &format!("{first}\n[b c.gif](attachments/b%20c.gif)\n{third}"),
+        &slots,
+        &tracked,
+    ));
+    assert!(plan.removed_slots.is_empty());
+    for kept in ["[see this](attachments/b%20c.gif)", "![b c.gif](attachments/b%20c.gif)"] {
+        let text = format!("{kept}\n{first}\n{third}");
+        let reason = refusal(plan_embed_representations(&text, &slots, &tracked));
+        assert!(reason.contains("\"b c.gif\" was changed or moved"), "{reason}");
+    }
+}
+
+/// Only a tracked file attachment can be removed: any other embed whose
+/// marker is gone is refused as before.
+#[test]
+fn only_a_file_attachment_is_removed_by_deleting_its_link() {
+    let (g, _) = gallery();
+    let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();
+    let reason = refusal(plan_embed_representations(
+        "prose only",
+        &[slot("FILE-1", "public.jpeg"), g],
+        &tracked,
+    ));
+    assert!(reason.contains("(GALLERY-1) is missing"), "{reason}");
+    let reason = refusal(plan_embed_representations(
+        "prose only",
+        &[slot("FILE-1", "public.jpeg"), table_slot()],
+        &tracked,
+    ));
+    assert!(reason.contains("can't tell which table(s) changed"), "{reason}");
 }
 
 #[test]

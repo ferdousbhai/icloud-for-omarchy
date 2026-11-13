@@ -8,8 +8,9 @@ use std::collections::HashMap;
 
 use icloud_notes_sync::doc::attach::{MAX_NEW_ATTACHMENT_BYTES, image_dimensions, uti_for_file_name};
 use icloud_notes_sync::doc::document::{
-    ApplyTextEditOptions, apply_text_edit, build_initial_note_document, encode_note_document,
-    insert_attachment_placeholder, mark_attachment_placeholder, parse_note_document, validate_document_invariants,
+    ApplyTextEditOptions, apply_text_edit, build_initial_note_document, delete_attachment_placeholder,
+    encode_note_document, insert_attachment_placeholder, mark_attachment_placeholder, parse_note_document,
+    validate_document_invariants,
 };
 use icloud_notes_sync::doc::embeds::{
     AttachmentReference, EmbedSlot, attachment_link_spellings, decode_note_embed_slots, find_attachment_links,
@@ -340,9 +341,13 @@ fn a_link_to_no_embed_of_the_note_is_a_file_to_add() {
     assert_eq!(plan.new_links.len(), 1);
     assert_eq!(plan.new_links[0].slot_index, 1);
 
-    // Removing the note's own link is still refused.
-    let reason = plan_embed_representations("[new.pdf](attachments/new.pdf)", &[existing], &tracked).unwrap_err();
-    assert!(reason.contains("was removed, changed or moved"), "{reason}");
+    // The note's own link gone, another file's in its place: one removed,
+    // one added (docs/DESIGN.md, "Removing an attachment").
+    let plan = plan_embed_representations("[new.pdf](attachments/new.pdf)", &[existing], &tracked).unwrap();
+    assert_eq!(plan.removed_slots, [0]);
+    assert_eq!(plan.new_links.len(), 1);
+    assert_eq!(plan.new_links[0].slot_index, 0);
+    assert_eq!(plan.reconstructed_body_text, O);
 
     // A new note: every link is a file to add.
     let plan = plan_new_attachment_links("Hi\n\n[a.txt](attachments/a.txt)\n").unwrap();
@@ -459,4 +464,101 @@ fn a_placeholder_needs_its_place() {
     mark_attachment_placeholder(&mut doc, 1, info("A", "public.png")).unwrap();
     let twice = mark_attachment_placeholder(&mut doc, 1, info("B", "public.png"));
     assert!(twice.unwrap_err().to_string().contains("already holds"));
+}
+
+// --- removing a placeholder -----------------------------------------------------------
+
+/// The removed attachment's character is deleted as any character is (a
+/// tombstone of the run it was, by this replica's edit); the other
+/// placeholders keep their characters and their attachments.
+#[test]
+fn a_deleted_placeholder_takes_only_its_own_attachment() {
+    let mut doc = build_initial_note_document(&format!("Title\n{O}\n{O} x {O}"), &[1; 16]).unwrap();
+    mark_attachment_placeholder(&mut doc, 6, info("ONE", "public.jpeg")).unwrap();
+    mark_attachment_placeholder(&mut doc, 8, info("TWO", "com.adobe.pdf")).unwrap();
+    mark_attachment_placeholder(&mut doc, 12, info("THREE", "public.png")).unwrap();
+    assert_eq!(decoded(&doc).1.len(), 3);
+
+    let mut middle = doc.clone();
+    delete_attachment_placeholder(&mut middle, 8, "TWO", &options()).unwrap();
+    let (text, slots) = decoded(&middle);
+    assert_eq!(text, format!("Title\n{O}\n x {O}"));
+    assert_eq!(slots, [slot("ONE", "public.jpeg"), slot("THREE", "public.png")]);
+    // Its run is gone with it; no other run carries its attachment.
+    assert!(
+        middle
+            .attribute_runs
+            .iter()
+            .all(|run| run.attachment_info != Some(info("TWO", "com.adobe.pdf")))
+    );
+    assert_eq!(
+        middle.attribute_runs.iter().map(|r| r.len()).sum::<u32>() as usize,
+        text.encode_utf16().count()
+    );
+    // The same document as deleting that one character as a text edit.
+    let mut edited = doc.clone();
+    apply_text_edit(&mut edited, &format!("Title\n{O}\n x {O}"), &options()).unwrap();
+    assert_eq!(middle, edited);
+
+    // First and last, last first as push does it.
+    let mut ends = doc.clone();
+    delete_attachment_placeholder(&mut ends, 12, "THREE", &options()).unwrap();
+    delete_attachment_placeholder(&mut ends, 6, "ONE", &options()).unwrap();
+    let (text, slots) = decoded(&ends);
+    assert_eq!(text, format!("Title\n\n{O} x "));
+    assert_eq!(slots, [slot("TWO", "com.adobe.pdf")]);
+
+    // Text edits and a new attachment after a removal still decode.
+    apply_text_edit(&mut ends, &format!("Title\n\n{O} x\n"), &options()).unwrap();
+    insert_attachment_placeholder(&mut ends, 11, info("NEW", "public.png"), &options()).unwrap();
+    let (text, slots) = decoded(&ends);
+    assert_eq!(text, format!("Title\n\n{O} x\n{O}"));
+    assert_eq!(slots, [slot("TWO", "com.adobe.pdf"), slot("NEW", "public.png")]);
+}
+
+/// A placeholder put in a real note and taken out again leaves the text it
+/// had.
+#[test]
+fn a_placeholder_deleted_from_a_real_note_leaves_its_text() {
+    let raw = decompress_note_document(&common::payload("real_plain_note.json")).unwrap();
+    let mut doc = parse_note_document(&raw).unwrap();
+    let before = doc.text.clone();
+    let end = before.encode_utf16().count();
+    apply_text_edit(&mut doc, &format!("{before}\n"), &options()).unwrap();
+    insert_attachment_placeholder(&mut doc, end + 1, info("ATT-NEW", "public.png"), &options()).unwrap();
+
+    delete_attachment_placeholder(
+        &mut doc,
+        end + 1,
+        "ATT-NEW",
+        &ApplyTextEditOptions { replica_id: [9; 16] },
+    )
+    .unwrap();
+    let (text, slots) = decoded(&doc);
+    assert_eq!(text, format!("{before}\n"));
+    assert_eq!(slots, []);
+    assert!(doc.attribute_runs.iter().all(|r| r.attachment_info.is_none()));
+}
+
+#[test]
+fn only_the_named_attachments_placeholder_is_deleted() {
+    let mut doc = build_initial_note_document(&format!("A{O}{O}"), &[1; 16]).unwrap();
+    mark_attachment_placeholder(&mut doc, 1, info("ONE", "public.png")).unwrap();
+    let untouched = doc.clone();
+
+    let no_placeholder = delete_attachment_placeholder(&mut doc, 0, "ONE", &options());
+    assert!(
+        no_placeholder
+            .unwrap_err()
+            .to_string()
+            .contains("no attachment placeholder")
+    );
+    let past = delete_attachment_placeholder(&mut doc, 99, "ONE", &options());
+    assert!(past.unwrap_err().to_string().contains("no attachment placeholder"));
+    let another = delete_attachment_placeholder(&mut doc, 1, "TWO", &options());
+    assert!(another.unwrap_err().to_string().contains("holds another attachment"));
+    // A placeholder that carries no attachment is nobody's to remove.
+    let bare = delete_attachment_placeholder(&mut doc, 2, "ONE", &options());
+    assert!(bare.unwrap_err().to_string().contains("holds another attachment"));
+    assert_eq!(doc, untouched);
 }

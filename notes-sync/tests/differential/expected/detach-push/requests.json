@@ -1,0 +1,159 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/lookup",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "records": [
+          {
+            "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 0
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/lookup",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "records": [
+          {
+            "recordName": "00000000-0000-4000-8000-000000000002"
+          },
+          {
+            "recordName": "00000000-0000-4000-8000-000000000003"
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        }
+      },
+      "matched": 1
+    },
+    {
+      "method": "POST",
+      "service": "ckdatabasews",
+      "path": "/database/1/com.apple.notes/production/private/records/modify",
+      "query": {
+        "ckjsBuildVersion": "2310ProjectDev27",
+        "ckjsVersion": "2.6.4"
+      },
+      "body": {
+        "operations": [
+          {
+            "operationType": "update",
+            "record": {
+              "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1",
+              "recordType": "Note",
+              "recordChangeTag": "26c",
+              "fields": {
+                "ModificationDate": {
+                  "value": 1789999990000
+                },
+                "TitleEncrypted": {
+                  "value": "VGVzdCBOb3Rl"
+                },
+                "Folders": {
+                  "value": [
+                    {
+                      "recordName": "DefaultFolder-CloudKit",
+                      "action": "VALIDATE",
+                      "zoneID": {
+                        "zoneName": "Notes",
+                        "ownerRecordName": "_defaultOwner"
+                      }
+                    }
+                  ]
+                },
+                "Deleted": {
+                  "value": 0
+                },
+                "Folder": {
+                  "value": {
+                    "recordName": "DefaultFolder-CloudKit",
+                    "action": "VALIDATE",
+                    "zoneID": {
+                      "zoneName": "Notes",
+                      "ownerRecordName": "_defaultOwner"
+                    }
+                  }
+                },
+                "CreationDate": {
+                  "value": 1752563940000
+                },
+                "SnippetEncrypted": {
+                  "value": "VGhpcyBpcyBhIHRlc3Qgbm90ZSB1c2VkIGZvciB0ZXN0aW5nIG91dCBgaWNsb3VkLW5vdGVzLXN5bmNg"
+                },
+                "FirstAttachmentThumbnail": {
+                  "value": null
+                },
+                "FirstAttachmentUTIEncrypted": {
+                  "value": null
+                },
+                "TextDataAsset": {
+                  "value": null
+                },
+                "TextDataEncrypted": {
+                  "value": "eJxN0LFOwzAQBmDbcdKLU+jJQ5E8WbBYFd2REFOFEANIiEDXojZApCqR6mTgMdj6LLwJCzMjE2tQzFExnfX5vzvpgOltBAyZeY30RV74xl7XTaHy59Lb0tsH2/RW1U1hW1+s7GO9CVRWT7ZuG7sol+u6XU37hJ/6l2q5UAaV7GciM6E6HoQjw8yE6gTJAR6TRCTnCCSS5BY5SUxyhQlJYnSQGYpfsdwNyLK/bZY7oM7xblYaUgLzIAJTy50iuycDy11GdvcvNzRjBcCw67puhMzs3ocnyih8uzmKv7fz08t8/fH+9bnRAnItgPd/XEQyTgaQqmy4tz9CLWCuBagJgNL9teQE4ExLiFD+AGUuPQY="
+                }
+              },
+              "parent": {
+                "recordName": "DefaultFolder-CloudKit"
+              }
+            }
+          },
+          {
+            "operationType": "update",
+            "record": {
+              "recordName": "00000000-0000-4000-8000-000000000002",
+              "recordType": "Attachment",
+              "recordChangeTag": "26e",
+              "fields": {
+                "Deleted": {
+                  "value": 1
+                }
+              },
+              "parent": {
+                "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+              }
+            }
+          },
+          {
+            "operationType": "update",
+            "record": {
+              "recordName": "00000000-0000-4000-8000-000000000003",
+              "recordType": "Media",
+              "recordChangeTag": "26d",
+              "fields": {
+                "Deleted": {
+                  "value": 1
+                }
+              },
+              "parent": {
+                "recordName": "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1"
+              }
+            }
+          }
+        ],
+        "zoneID": {
+          "zoneName": "Notes"
+        },
+        "atomic": true
+      },
+      "matched": 2
+    }
+  ]
+}

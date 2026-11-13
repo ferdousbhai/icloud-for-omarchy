@@ -10,7 +10,9 @@ use super::Result;
 use super::attach::uti_for_file_name;
 use super::proto::topotext;
 use super::text::decode_note_string;
-use crate::js::{encode_uri_component, from_utf16, is_whitespace16, posix, starts_with_at, utf16};
+use crate::js::{
+    decode_uri_component, encode_uri_component, from_utf16, is_whitespace16, posix, starts_with_at, utf16,
+};
 use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
 /// U+FFFC, one per embed in a note's visible text.
@@ -108,6 +110,10 @@ pub struct EmbedRepresentation {
     /// Attachment links that stand for no embed the note has: files to add
     /// as new attachments. Each one's U+FFFC is in the text too.
     pub new_links: Vec<NewAttachmentLink>,
+    /// The note's file attachments whose link is gone from the text
+    /// entirely, as indexes into the note's embed slots (ascending): the
+    /// attachments to remove. None has a U+FFFC in the text.
+    pub removed_slots: Vec<usize>,
 }
 
 /// A link of the kind pull writes for a file attachment,
@@ -291,6 +297,20 @@ fn scan_attachment_links(units: &[u16]) -> AttachmentLinkScan {
         i = end;
     }
     scan
+}
+
+/// Whether an attachment link to `link_path` (a path from the note's
+/// directory, `attachments/...`) is anywhere in the text, however it is
+/// spelled: with or without the `!`, with any link text.
+pub fn has_attachment_link_to(text: &str, link_path: &str) -> bool {
+    links_to(&utf16(text), link_path)
+}
+
+fn links_to(units: &[u16], link_path: &str) -> bool {
+    scan_attachment_links(units)
+        .links
+        .iter()
+        .any(|link| link.href == link_path || decode_uri_component(&link.href).as_deref() == Some(link_path))
 }
 
 /// The two ways the link pull writes for `relative_file` may be spelled:
@@ -482,7 +502,9 @@ struct LocalRepresentation {
 /// attachment this note tracks to its link path from the note's directory:
 /// the link pull wrote for it stands for the attachment, as a marker does.
 /// Any other attachment link (outside a table or marker) is a file to add:
-/// it becomes a placeholder too, and is listed in `new_links`.
+/// it becomes a placeholder too, and is listed in `new_links`. A tracked
+/// file attachment no link names any more is one to remove
+/// (`removed_slots`); its link changed or moved is refused.
 pub fn plan_embed_representations(
     local_text: &str,
     slots: &[EmbedSlot],
@@ -503,10 +525,11 @@ pub fn plan_embed_representations(
     }
 
     let mut representations: Vec<LocalRepresentation> = Vec::new();
+    let mut removed_slots: Vec<usize> = Vec::new();
     let mut marker_cursor = 0usize;
     let mut table_cursor = 0usize;
 
-    for slot in slots {
+    for (slot_index, slot) in slots.iter().enumerate() {
         let marker_content = match slot {
             EmbedSlot::Unknown { type_uti } => Some(EmbedMarkerContent {
                 type_uti: type_uti.clone(),
@@ -570,9 +593,16 @@ pub fn plan_embed_representations(
                     .or_else(|| as_file(&written))
                     .or_else(|| as_file(&unescaped))
                 else {
+                    if !links_to(&units, link_path) {
+                        // No link to the file is left: the attachment is
+                        // taken out of the note.
+                        removed_slots.push(slot_index);
+                        continue;
+                    }
                     return Err(format!(
-                        "the link to the attachment \"{}\" was removed, changed or moved - attachments can only be \
-                         removed or moved in Notes itself; put the link back as it was",
+                        "the link to the attachment \"{}\" was changed or moved - attachments can only be moved in \
+                         Notes itself; put the link back as it was, or remove it entirely to remove the attachment \
+                         from the note",
                         posix::basename(link_path)
                     ));
                 };
@@ -633,13 +663,13 @@ pub fn plan_embed_representations(
         previous_end = representation.end as i64;
     }
 
-    finish_embed_plan(units, representations)
+    finish_embed_plan(units, representations, removed_slots)
 }
 
 /// The plan of a note that has no embeds yet (a new note's file): its
 /// attachment links are the files to add.
 pub fn plan_new_attachment_links(local_text: &str) -> std::result::Result<EmbedRepresentation, String> {
-    finish_embed_plan(utf16(local_text), Vec::new())
+    finish_embed_plan(utf16(local_text), Vec::new(), Vec::new())
 }
 
 /// Adds the attachment links that stand for no existing embed to
@@ -648,6 +678,7 @@ pub fn plan_new_attachment_links(local_text: &str) -> std::result::Result<EmbedR
 fn finish_embed_plan(
     units: Vec<u16>,
     representations: Vec<LocalRepresentation>,
+    removed_slots: Vec<usize>,
 ) -> std::result::Result<EmbedRepresentation, String> {
     let existing = representations.len();
     let scan = scan_attachment_links(&units);
@@ -717,5 +748,6 @@ fn finish_embed_plan(
         reconstructed_body_text: from_utf16(&reconstructed),
         tables: representations.into_iter().filter_map(|r| r.table).collect(),
         new_links,
+        removed_slots,
     })
 }
