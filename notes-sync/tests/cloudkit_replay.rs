@@ -302,6 +302,19 @@ fn a_delete_answer_that_is_no_result_for_the_record_is_not_a_delete() {
 }
 
 #[test]
+fn a_create_answer_that_names_another_record_is_refused() {
+    let transport = ReplayTransport::from_cassette(
+        cassette(vec![post("private/records/modify", 200, modify_ok("other", "t"))]),
+        None,
+    )
+    .unwrap();
+    let err = Database::new(transport)
+        .create_note_record(&note_zone(None), "n1", &UpdateFields::new(), &CreateExtras::default())
+        .unwrap_err();
+    assert!(matches!(err, CkError::UnexpectedResponse(_)), "{err:?}");
+}
+
+#[test]
 fn folder_create_without_extras_sends_the_bare_shape() {
     let transport = ReplayTransport::from_cassette(
         cassette(vec![post("private/records/modify", 200, modify_ok("f1", "t"))]),

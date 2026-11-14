@@ -6,7 +6,7 @@
   },
   "interactions": [
     {
-      "note": "the create accepted (tag 1); the record echoes the first deterministic uuid",
+      "note": "the create accepted (tag 1); the record echoes the name the create asked for (the second deterministic uuid)",
       "request": {
         "method": "POST",
         "path": "/database/1/com.apple.notes/production/private/records/modify"
@@ -16,7 +16,7 @@
         "body": {
           "records": [
             {
-              "recordName": "00000000-0000-4000-8000-000000000001",
+              "recordName": "00000000-0000-4000-8000-000000000002",
               "recordType": "Note",
               "fields": {
                 "TitleEncrypted": {

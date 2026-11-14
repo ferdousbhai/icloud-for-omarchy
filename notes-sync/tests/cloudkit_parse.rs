@@ -6,8 +6,7 @@ mod common;
 use common::zone;
 
 use icloud_notes_sync::cloudkit::client::{
-    first_zone, merge_looked_up_records, parse_note_update_response, parse_record_update_response,
-    parse_shared_zone_list,
+    first_zone, merge_looked_up_records, parse_record_update_response, parse_shared_zone_list,
 };
 use icloud_notes_sync::cloudkit::{CkError, CloudKitRecord, FieldValue, RecordUpdateResult, SharedZoneListPage};
 use indexmap::IndexMap;
@@ -225,7 +224,7 @@ fn merge_looked_up_records_keeps_listing_change_tag_when_lookup_lacks_one() {
 }
 
 #[test]
-fn parse_note_update_response_returns_the_updated_record() {
+fn parse_record_update_response_returns_the_updated_record() {
     let body = json!({
         "records": [{
             "recordName": "F90C80BA-2D47-4CB1-B000-000000000000",
@@ -238,7 +237,7 @@ fn parse_note_update_response_returns_the_updated_record() {
             "parent": { "recordName": "DefaultFolder-CloudKit" },
         }],
     });
-    let RecordUpdateResult::Ok(record) = parse_note_update_response(&body).unwrap() else {
+    let RecordUpdateResult::Ok(record) = parse_record_update_response(&body).unwrap().remove(0) else {
         panic!("expected ok")
     };
     assert_eq!(record.record_change_tag.as_deref(), Some("25d"));
@@ -257,22 +256,16 @@ fn conflict_body() -> serde_json::Value {
 }
 
 #[test]
-fn parse_note_update_response_surfaces_per_record_errors_as_refusals() {
+fn parse_record_update_response_surfaces_per_record_errors_as_refusals() {
     let RecordUpdateResult::Rejected {
         server_error_code,
         reason,
-    } = parse_note_update_response(&conflict_body()).unwrap()
+    } = parse_record_update_response(&conflict_body()).unwrap().remove(0)
     else {
         panic!("expected a refusal")
     };
     assert_eq!(server_error_code, "CONFLICT");
     assert!(reason.unwrap_or_default().contains("change tag"));
-}
-
-#[test]
-fn parse_note_update_response_rejects_bodies_without_records() {
-    let err = unexpected(parse_note_update_response(&json!({})).unwrap_err());
-    assert!(err.contains("missing records array"), "{err}");
 }
 
 #[test]

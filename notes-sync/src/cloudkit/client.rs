@@ -669,8 +669,7 @@ impl<T: Transport> Database<T> {
             fields: fields.clone(),
             extras: extras.clone(),
         };
-        let body = self.post_database(zone.database, "records/modify", &modify_body(&[op], &zone.zone_id))?;
-        parse_note_update_response(&body)
+        Ok(self.modify(zone, &[op], None, &HashMap::new())?.remove(0))
     }
 
     /// `createNoteRecord`.
@@ -1243,11 +1242,6 @@ fn parse_update_entry(entry: &Value) -> Result<RecordUpdateResult, CkError> {
         });
     }
     Ok(RecordUpdateResult::Ok(Box::new(parse_record(entry)?)))
-}
-
-/// `parseNoteUpdateResponse`: the first entry only.
-pub fn parse_note_update_response(body: &Value) -> Result<RecordUpdateResult, CkError> {
-    parse_update_entry(first_modify_entry(body)?)
 }
 
 /// `parseRecordUpdateResponse`.

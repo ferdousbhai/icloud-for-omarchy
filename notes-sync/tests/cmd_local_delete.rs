@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const RECORD: &str = "03667d1d-eee8-4e98-82fb-8c5cd02fd9d1";
 const FILE: &str = "Notes/Test Note.md";
@@ -529,14 +529,27 @@ fn the_push_summary_counts_folder_changes_apart_from_notes() {
     copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
     std::fs::create_dir(vault.join("Ideas")).unwrap();
     std::fs::create_dir_all(out.join("home")).unwrap();
+    // The folder create, answered for the name it asks for (the first
+    // deterministic uuid).
+    let cassette = out.join("folder-create.json");
+    let answer = json!({ "records": [{
+        "recordName": "00000000-0000-4000-8000-000000000001", "recordType": "Folder", "recordChangeTag": "1", "fields": {},
+    }] });
+    let interaction = json!({
+        "request": { "method": "POST", "path": "/database/1/com.apple.notes/production/private/records/modify" },
+        "response": { "status": 200, "body": answer },
+    });
+    let account = json!({ "dsid": "10000000001", "appleId": "harness@example.com" });
+    std::fs::write(
+        &cassette,
+        json!({ "version": 1, "account": account, "interactions": [interaction] }).to_string(),
+    )
+    .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"))
         .args(["--styled", "push", vault.to_str().unwrap()])
         .env("HOME", out.join("home"))
         .env("XDG_RUNTIME_DIR", out.join("home"))
-        .env(
-            "ICLOUD_NOTES_SYNC_CASSETTE",
-            differential().join("cassettes/tiny-push-create.json"),
-        )
+        .env("ICLOUD_NOTES_SYNC_CASSETTE", &cassette)
         .env("ICLOUD_NOTES_SYNC_REQUEST_LOG", out.join("requests.json"))
         .env("ICLOUD_NOTES_SYNC_NOW", "1790000000000")
         .env("ICLOUD_NOTES_SYNC_DETERMINISTIC", "1")
