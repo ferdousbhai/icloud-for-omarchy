@@ -1932,7 +1932,10 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
     server.set_field(NOTE, "TextDataEncrypted", json!(document_base64(&remote)));
     run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).map_err(|e| format!("pull failed: {e}"))?;
     let pulled = vault_note(&vault, NOTE, fm).unwrap();
-    if pulled.frontmatter != frontmatter {
+    // The YAML, up to its closing fence: in an in-body vault the envelope
+    // also takes the blank lines after it, the note's own empty first lines.
+    let yaml = |envelope: &str| envelope.trim_end_matches('\n').to_string();
+    if yaml(&pulled.frontmatter) != yaml(&frontmatter) {
         return Err(format!(
             "a pull rewrote the frontmatter:\n  before {frontmatter:?}\n  after  {:?}",
             pulled.frontmatter
