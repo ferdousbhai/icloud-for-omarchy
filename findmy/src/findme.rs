@@ -52,6 +52,27 @@ impl Error {
     }
 }
 
+impl Device {
+    /// Refuses a device that cannot play a sound, before anything is asked
+    /// or sent.
+    pub fn check_play_sound(&self) -> Result<()> {
+        if self.can_play_sound {
+            Ok(())
+        } else {
+            Err(Error::Unsupported("This device cannot play a sound."))
+        }
+    }
+
+    /// Refuses a device that has no Lost Mode.
+    pub fn check_lost_mode(&self) -> Result<()> {
+        if self.can_lost_mode {
+            Ok(())
+        } else {
+            Err(Error::Unsupported("This device does not support Lost Mode."))
+        }
+    }
+}
+
 /// The two things Find My needs from a session: where the service lives,
 /// and a way to POST JSON to it.
 pub trait Transport: Send {
@@ -256,9 +277,7 @@ impl<T: Transport> FindMe<T> {
     }
 
     pub fn play_sound(&mut self, device: &Device) -> Result<()> {
-        if !device.can_play_sound {
-            return Err(Error::Unsupported("This device cannot play a sound."));
-        }
+        device.check_play_sound()?;
         let url = self.url("playSound")?;
         check_status(&self.transport.post_json(&url, &play_sound_body(&device.id))?)
     }
@@ -266,9 +285,7 @@ impl<T: Transport> FindMe<T> {
     /// Turns on Lost Mode: the device locks and shows `message`, with a
     /// button to call `phone`.
     pub fn lost_mode(&mut self, device: &Device, phone: &str, message: &str) -> Result<()> {
-        if !device.can_lost_mode {
-            return Err(Error::Unsupported("This device does not support Lost Mode."));
-        }
+        device.check_lost_mode()?;
         let url = self.url("lostDevice")?;
         check_status(
             &self

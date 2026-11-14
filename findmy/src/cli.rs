@@ -382,11 +382,8 @@ impl<T: Transport> Cli<T> {
     fn play_sound(&mut self, query: &str, yes: bool) -> Outcome {
         let devices = self.fetch(false)?;
         let device = resolve(&devices, query)?.clone();
-        if !device.can_play_sound {
-            return Err(find_error(findme::Error::Unsupported(
-                "This device cannot play a sound.",
-            )));
-        }
+        // Before asking: there is nothing to confirm on a device that cannot.
+        device.check_play_sound().map_err(find_error)?;
         confirm(
             self.mode,
             "play-sound",
@@ -403,11 +400,7 @@ impl<T: Transport> Cli<T> {
         }
         let devices = self.fetch(false)?;
         let device = resolve(&devices, query)?.clone();
-        if !device.can_lost_mode {
-            return Err(find_error(findme::Error::Unsupported(
-                "This device does not support Lost Mode.",
-            )));
-        }
+        device.check_lost_mode().map_err(find_error)?;
         if device.lost_mode_enabled {
             return Err(other(format!("Lost Mode is already on for {}", device.name)));
         }
