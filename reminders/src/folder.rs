@@ -500,8 +500,23 @@ pub fn risky(delta: &Delta, base_len: usize) -> bool {
 /// a reminder still open, and lines unlike any there is, are taken.
 fn from_conflict_copy(base: &[Known], copy: &[Item]) -> Delta {
     let mut delta = Delta::default();
+    let mut taken = vec![false; base.len()];
     for it in copy {
-        match base.iter().find(|k| k.item.title == it.title) {
+        // Of the items of its title not yet taken, the one it reads as:
+        // its twin's tick is not its own.
+        let same: Vec<usize> = (0..base.len())
+            .filter(|&b| !taken[b] && base[b].item.title == it.title)
+            .collect();
+        let found = same
+            .iter()
+            .find(|&&b| base[b].item == *it)
+            .or_else(|| same.iter().find(|&&b| base[b].item.done == it.done))
+            .or(same.first())
+            .map(|&b| {
+                taken[b] = true;
+                &base[b]
+            });
+        match found {
             Some(k) if it.done && !k.item.done => {
                 let mut now_done = k.item.clone();
                 now_done.done = true;
@@ -1113,6 +1128,22 @@ mod tests {
         assert_eq!(delta.updates.len(), 1);
         assert_eq!(delta.updates[0].0, "Reminder/0");
         assert_eq!(delta.updates[0].2, vec![Change::Completed(true)]);
+    }
+
+    #[test]
+    fn a_conflict_copy_s_line_of_a_shared_title_is_the_reminder_it_reads_as() {
+        let mut twins = base(&["Milk", "Milk"]);
+        twins[1].item.done = true;
+        // As the file has them: nothing to tick.
+        assert_eq!(
+            from_conflict_copy(&twins, &items("- [ ] Milk\n- [x] Milk\n")),
+            Delta::default()
+        );
+        assert_eq!(from_conflict_copy(&twins, &items("- [x] Milk\n")), Delta::default());
+        // Both ticked: the open one is.
+        let delta = from_conflict_copy(&twins, &items("- [x] Milk\n- [x] Milk\n"));
+        assert_eq!(delta.updates.len(), 1);
+        assert_eq!(delta.updates[0].0, "Reminder/0");
     }
 
     #[test]
