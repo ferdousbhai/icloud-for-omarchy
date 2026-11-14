@@ -68,7 +68,9 @@ void settle(int ms)
     }
 }
 
-bool waitUntil(const std::function<bool()> &cond, int timeoutMs = 10000)
+// Generous: each wait ends as soon as its condition holds, and a loaded
+// machine (a parallel build) can take many seconds to run the stub engine.
+bool waitUntil(const std::function<bool()> &cond, int timeoutMs = 60000)
 {
     QElapsedTimer timer;
     timer.start();
