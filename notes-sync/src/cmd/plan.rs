@@ -476,13 +476,6 @@ impl Refusal {
     }
 }
 
-/// `renderPlan` options.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RenderPlanOptions {
-    pub preview: bool,
-    pub unchanged: Option<usize>,
-}
-
 /// `PlanEntry`: what `buildPushPlan` produces (push's `execute` half lives
 /// in `push.rs`), and the JSON shape of `status` / `push --dry-run` entries,
 /// keys in this order.
@@ -543,11 +536,13 @@ fn label_of(kind: PlanEntryKind) -> &'static str {
 /// `LABEL_WIDTH`: the longest label.
 const LABEL_WIDTH: usize = 9;
 
-/// The status-style listing of the plan (human text).
+/// The status-style listing of the plan (human text): of what a push did,
+/// or, with the count of `unchanged` notes, the preview of what one would do
+/// (`status`, `push --dry-run`).
 pub fn render_plan(
     entries: &[PlanEntry],
     format_path: &dyn Fn(&str) -> String,
-    options: RenderPlanOptions,
+    unchanged: Option<usize>,
 ) -> Vec<String> {
     use super::report::{LISTING_INDENT, labelled_line, remark_line};
     let visible: Vec<&PlanEntry> = entries
@@ -555,7 +550,7 @@ pub fn render_plan(
         .filter(|e| e.resolution != PlanResolution::Noop)
         .collect();
     if visible.is_empty() {
-        return vec![match options.unchanged {
+        return vec![match unchanged {
             Some(n) if n > 0 => format!(
                 "Nothing to push; all {n} {} the last pull.",
                 if n == 1 { "note matches" } else { "notes match" }
@@ -565,7 +560,7 @@ pub fn render_plan(
     }
 
     let mut lines: Vec<String> = Vec::new();
-    if options.preview {
+    if unchanged.is_some() {
         lines.push("Changes not yet pushed to iCloud:".into());
         lines.push("  (use \"icloud-notes push\" to send them)".into());
         lines.push("  (use \"icloud-notes restore <file>\" to discard a local edit)".into());
@@ -662,7 +657,7 @@ pub fn render_plan(
     }
     lines.push(String::new());
     lines.push(summary);
-    if let Some(n) = options.unchanged.filter(|n| *n > 0) {
+    if let Some(n) = unchanged.filter(|n| *n > 0) {
         lines.push(if n == 1 {
             "1 other note matches the last pull.".into()
         } else {

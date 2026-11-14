@@ -2,7 +2,7 @@
 //! and names `icloud-notes-sync`. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cmd::plan::{
-    PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, count_unchanged_notes, render_plan,
+    PlanEntry, PlanEntryKind as K, PlanResolution as R, count_unchanged_notes, render_plan,
 };
 
 fn e(kind: K, file: &str, resolution: R) -> PlanEntry {
@@ -20,7 +20,7 @@ fn id(f: &str) -> String {
 }
 
 fn render(entries: &[PlanEntry]) -> Vec<String> {
-    render_plan(entries, &id, RenderPlanOptions::default())
+    render_plan(entries, &id, None)
 }
 
 #[test]
@@ -99,14 +99,7 @@ fn preview_mode_adds_heading_hints_and_unchanged_remark() {
         e(K::Update, "Edited.md", R::Ready),
         er(K::Update, "Refused.md", R::Refused, "this note has an attachment"),
     ];
-    let lines = render_plan(
-        &entries,
-        &id,
-        RenderPlanOptions {
-            preview: true,
-            unchanged: Some(41),
-        },
-    );
+    let lines = render_plan(&entries, &id, Some(41));
     assert_eq!(
         lines,
         vec![
@@ -127,37 +120,20 @@ fn preview_mode_adds_heading_hints_and_unchanged_remark() {
 #[test]
 fn single_unchanged_note_is_grammatical() {
     let entries = [e(K::Update, "Edited.md", R::Ready)];
-    let lines = render_plan(
-        &entries,
-        &id,
-        RenderPlanOptions {
-            preview: false,
-            unchanged: Some(1),
-        },
-    );
+    let lines = render_plan(&entries, &id, Some(1));
     assert_eq!(lines.last().unwrap(), "1 other note matches the last pull.");
 }
 
 #[test]
 fn unchanged_remark_omitted_when_zero() {
     let entries = [e(K::Update, "Edited.md", R::Ready)];
-    let lines = render_plan(
-        &entries,
-        &id,
-        RenderPlanOptions {
-            preview: true,
-            unchanged: Some(0),
-        },
-    );
+    let lines = render_plan(&entries, &id, Some(0));
     assert_eq!(lines.last().unwrap(), "0 to create, 1 changed, 0 to delete.");
 }
 
 #[test]
 fn nothing_to_push_folds_in_the_unchanged_count() {
-    let opts = |n| RenderPlanOptions {
-        preview: true,
-        unchanged: Some(n),
-    };
+    let opts = |n| Some(n);
     assert_eq!(
         render_plan(&[], &id, opts(42)),
         vec!["Nothing to push; all 42 notes match the last pull."]
@@ -189,7 +165,7 @@ fn format_path_applies_inside_reason_lines() {
         R::Refused,
         "this note has an attachment - run \"icloud-notes restore Recipes/Pie.md\" to discard your local edit",
     )];
-    let lines = render_plan(&entries, &|f| format!("../{f}"), RenderPlanOptions::default());
+    let lines = render_plan(&entries, &|f| format!("../{f}"), None);
     assert!(lines[1].contains("modified: ../Recipes/Pie.md"), "{lines:?}");
     assert!(lines[2].contains("restore ../Recipes/Pie.md"), "{lines:?}");
 }

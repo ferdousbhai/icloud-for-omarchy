@@ -31,7 +31,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{error_json, usage_error};
-use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
+use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution, render_plan};
 use icloud_notes_sync::cmd::{
     self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
     vault_info,
@@ -341,11 +341,7 @@ fn push_lines(r: &push::PushResult, target: &Path) -> Vec<Line> {
 /// The plan's listing: of what a push did, or (with the `unchanged` count)
 /// the preview `status` and `push --dry-run` share.
 fn plan_lines(entries: &[PlanEntry], unchanged: Option<usize>, target: &Path) -> Vec<Line> {
-    let options = RenderPlanOptions {
-        preview: unchanged.is_some(),
-        unchanged,
-    };
-    render_plan(entries, &|file| display_path(target, file), options)
+    render_plan(entries, &|file| display_path(target, file), unchanged)
         .into_iter()
         .map(|line| (false, line))
         .collect()
