@@ -3204,8 +3204,6 @@ fn apply_local_note_deletion(
     entry: &NoteEntry,
     state: &mut CloneState,
 ) -> Result<LocalFileState, Error> {
-    let mut attachments = state.attachments.take().unwrap_or_default();
-    let mut table_attachments = state.table_attachments.take().unwrap_or_default();
     let local = local_file_state(target_dir, entry, record_name, state.mode())?;
     let path = target_dir.join(&entry.file);
     let emptied = || -> Result<bool, Error> {
@@ -3216,14 +3214,16 @@ fn apply_local_note_deletion(
     }
     state.notes.shift_remove(record_name);
     remove_base_copy(target_dir, record_name)?;
-    for removed in remove_attachments_for_note(target_dir, record_name, &attachments)? {
+    // Left in the state as they are until each is gone: a failure part way
+    // still gets the state written, every other note's entries in it.
+    let attachments = state.attachments.get_or_insert_with(IndexMap::new);
+    for removed in remove_attachments_for_note(target_dir, record_name, attachments)? {
         attachments.shift_remove(&removed);
     }
-    for removed in remove_table_attachments_for_note(record_name, &table_attachments) {
+    let table_attachments = state.table_attachments.get_or_insert_with(IndexMap::new);
+    for removed in remove_table_attachments_for_note(record_name, table_attachments) {
         table_attachments.shift_remove(&removed);
     }
-    state.attachments = Some(attachments);
-    state.table_attachments = Some(table_attachments);
     Ok(local)
 }
 

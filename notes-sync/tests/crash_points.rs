@@ -1633,6 +1633,51 @@ fn a_pull_moving_a_photo_to_a_free_name_cut_short_anywhere_is_finished_by_the_ne
     }
 }
 
+/// A push whose delete of a note iCloud took fails here removing the note's
+/// attachment file: the state it saves still tracks every other note's
+/// attachments, and the next sync finishes the delete.
+#[test]
+fn a_delete_that_fails_removing_its_attachment_keeps_the_other_attachments_tracked() {
+    use std::os::unix::fs::PermissionsExt;
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    let mut start = cloned(3);
+    let file = tracked_file(&start.place, PHOTO_NOTE);
+    let vault = start.place.vault.clone();
+    std::fs::remove_file(vault.join(&file)).unwrap();
+    start.expect.deleted = vec![PHOTO_NOTE.into()];
+    let before = read_clone_state(&vault)
+        .unwrap()
+        .unwrap()
+        .attachments
+        .unwrap_or_default();
+    let others: Vec<String> = before
+        .iter()
+        .filter(|(_, a)| a.note_record_name != PHOTO_NOTE)
+        .map(|(k, _)| k.clone())
+        .collect();
+    assert!(!others.is_empty());
+    let photo_dir = before
+        .values()
+        .find(|a| a.note_record_name == PHOTO_NOTE)
+        .map(|a| vault.join(&a.file).parent().unwrap().to_owned())
+        .unwrap();
+    let fake = Fake::start(start.zone.clone());
+    std::fs::set_permissions(&photo_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let push = run(&fake, &start.place, "push", &Crash::default());
+    std::fs::set_permissions(&photo_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!push.status.success(), "{}", says(&push));
+    let after = read_clone_state(&vault)
+        .unwrap()
+        .unwrap()
+        .attachments
+        .unwrap_or_default();
+    for name in &others {
+        assert!(after.contains_key(name), "{name} is no longer tracked: {}", says(&push));
+    }
+    succeeded(&run(&fake, &start.place, "sync", &Crash::default()), "sync");
+    check(&fake, &start.place, &start.expect, "after the failed push");
+}
+
 /// A folder directory deleted here with a note whose photo was replaced on
 /// the phone before the pull: the new photo is not downloaded into the
 /// deleted directory, which would bring it back for the push to keep the
