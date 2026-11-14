@@ -111,6 +111,31 @@ pub(crate) const UNSAFE_RECORD_NAME: &str = "its record name isn't one plain fil
 /// already has here.
 pub(crate) const OTHER_ZONES_RECORD_NAME: &str = "a note from another zone is already tracked under its record name";
 
+/// The warning for a shared zone the fetch skipped. What that meant for the
+/// run is the caller's to say: `revoked` ends the sentence for a zone the
+/// server no longer has, `untouched` the one for a zone whose notes came
+/// without their text (`when`: " this run", or nothing).
+pub(crate) fn skipped_zone_notice(skipped: &SkippedSharedZone, revoked: &str, when: &str, untouched: &str) -> SyncNotice {
+    let owner = skipped_zone_owner(skipped).unwrap_or("unknown");
+    let message = match skipped {
+        SkippedSharedZone::ZoneNotFound { server_error_code, .. } => format!(
+            "Skipped a shared zone the server no longer has (owner {owner}, {server_error_code}) - its share was \
+             likely revoked or deleted; {revoked}"
+        ),
+        SkippedSharedZone::MissingNoteBodies {
+            missing_record_names, ..
+        } => format!(
+            "Skipped the shared zone owned by {owner}{when}: {} note(s) came through without their text and looking \
+             them up didn't fill it in - {untouched}",
+            missing_record_names.len()
+        ),
+    };
+    SyncNotice {
+        level: NoticeLevel::Warn,
+        message,
+    }
+}
+
 /// A skipped shared zone's owner.
 pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     match skipped {

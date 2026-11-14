@@ -10,11 +10,12 @@ use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
     Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, is_purged,
-    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
+    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner, used_names_for,
+    zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
-use crate::cloudkit::{Database, SharedNoteRecords, SkippedSharedZone};
+use crate::cloudkit::{Database, SharedNoteRecords};
 use crate::diff3::{has_conflict_markers, merge_note_versions};
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
@@ -114,6 +115,15 @@ pub struct PullSummary {
     pub conflicts: Vec<String>,
     pub notices: Vec<SyncNotice>,
 }
+
+/// What a pull says of a file it could not merge into: the markers of an
+/// earlier conflict are still in it.
+const UNRESOLVED_MARKERS: &str =
+    "still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile";
+/// What a pull says of a merge that left conflict markers.
+const MERGED_WITH_MARKERS: &str = "merged with conflict markers - resolve manually";
+/// What a pull with nothing to apply says.
+pub const UP_TO_DATE: &str = "Already up to date.";
 
 fn read_only_remark() -> PullChangeRemark {
     PullChangeRemark::new(
@@ -246,24 +256,12 @@ pub fn run_pull_with(
         {
             shared_zone_sync_tokens.insert(owner.to_owned(), carried.clone());
         }
-        let owner = skipped_zone_owner(skipped).unwrap_or("unknown");
-        let message = match skipped {
-            SkippedSharedZone::ZoneNotFound { server_error_code, .. } => format!(
-                "Skipped a shared zone the server no longer has (owner {owner}, {server_error_code}) - its share was \
-                 likely revoked or deleted; its local notes were left in place and stay tracked for now"
-            ),
-            SkippedSharedZone::MissingNoteBodies {
-                missing_record_names, ..
-            } => format!(
-                "Skipped the shared zone owned by {owner} this run: {} note(s) came through without their text and \
-                 looking them up didn't fill it in - nothing from that zone was touched, and the next pull will retry it",
-                missing_record_names.len()
-            ),
-        };
-        summary.notices.push(SyncNotice {
-            level: NoticeLevel::Warn,
-            message,
-        });
+        summary.notices.push(skipped_zone_notice(
+            skipped,
+            "its local notes were left in place and stay tracked for now",
+            " this run",
+            "nothing from that zone was touched, and the next pull will retry it",
+        ));
     }
 
     if !held_back.is_empty() {
@@ -587,10 +585,9 @@ pub fn run_pull_with(
                             )?);
                         }
                         if statuses.contains(&MergeStatus::UnresolvedMarkers) {
-                            summary.conflicts.push(format!(
-                                "{}: still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile",
-                                claimants.join(", ")
-                            ));
+                            summary
+                                .conflicts
+                                .push(format!("{}: {UNRESOLVED_MARKERS}", claimants.join(", ")));
                             return Ok(());
                         }
                         let conflicted = statuses.contains(&MergeStatus::Conflict);
@@ -602,7 +599,7 @@ pub fn run_pull_with(
                             if conflicted {
                                 summary
                                     .conflicts
-                                    .push(format!("{claimant}: merged with conflict markers - resolve manually"));
+                                    .push(format!("{claimant}: {MERGED_WITH_MARKERS}"));
                             } else {
                                 summary.merged += 1;
                             }
@@ -693,13 +690,8 @@ pub fn run_pull_with(
                     entry.file = file.clone();
                     entry.pending_rename = None;
                     tracked.notes.insert(record.record_name.clone(), entry);
-                    summary.conflicts.push(format!(
-                        "{file}: still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile"
-                    ));
-                    let mut remarks = vec![PullChangeRemark::new(
-                        "conflict",
-                        "still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile",
-                    )];
+                    summary.conflicts.push(format!("{file}: {UNRESOLVED_MARKERS}"));
+                    let mut remarks = vec![PullChangeRemark::new("conflict", UNRESOLVED_MARKERS)];
                     summary.changes.push(change_with(PullChangeKind::Update, Some(remarks)));
                     return Ok(());
                 }
@@ -709,11 +701,8 @@ pub fn run_pull_with(
                 if merged == MergeStatus::Conflict {
                     summary
                         .conflicts
-                        .push(format!("{file}: merged with conflict markers - resolve manually"));
-                    let mut remarks = vec![PullChangeRemark::new(
-                        "conflict",
-                        "merged with conflict markers - resolve manually",
-                    )];
+                        .push(format!("{file}: {MERGED_WITH_MARKERS}"));
+                    let mut remarks = vec![PullChangeRemark::new("conflict", MERGED_WITH_MARKERS)];
                     remarks.extend(title_remarks.iter().cloned());
                     if unpublishable_reason.is_some() {
                         remarks.push(read_only_remark());
@@ -1327,7 +1316,7 @@ const PULL_LABEL_WIDTH: usize = 10;
 /// `renderPullReport`: the human changelist.
 pub fn render_pull_report(summary: &PullSummary, format_path: &dyn Fn(&str) -> String) -> Vec<String> {
     if summary.changes.is_empty() {
-        return vec!["Already up to date.".into()];
+        return vec![UP_TO_DATE.into()];
     }
     let mut lines = vec!["Changes pulled from iCloud:".to_owned(), String::new()];
     for change in &summary.changes {

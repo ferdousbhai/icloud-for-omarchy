@@ -167,9 +167,10 @@ impl Error {
                 | CkError::ZoneFetchFailed { .. }
                 | CkError::RequestFailed { .. },
             ) => EXIT_UNAVAILABLE,
-            Error::Io(_) | Error::CloudKit(CkError::Io(_)) => EXIT_ERROR,
-            Error::Internal(_) | Error::CloudKit(_) => EXIT_INTERNAL,
-            Error::UnsupportedVaultLayout { .. }
+            Error::Io(_)
+            | Error::Internal(_)
+            | Error::CloudKit(_)
+            | Error::UnsupportedVaultLayout { .. }
             | Error::VaultFromNewerTool { .. }
             | Error::VaultNeedsUpdate { .. }
             | Error::CorruptStateFile(_)

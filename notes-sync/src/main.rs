@@ -293,7 +293,7 @@ fn pull_lines(s: &pull::PullSummary, target: &Path) -> Vec<Line> {
 
 fn pull_summary(s: &pull::PullSummary) -> String {
     if s.changes.is_empty() {
-        "Already up to date.".into()
+        pull::UP_TO_DATE.into()
     } else {
         format!(
             "Pulled {}: {} added, {} updated, {} merged, {} removed",

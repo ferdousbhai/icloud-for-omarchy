@@ -10,10 +10,10 @@ use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
     Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
-    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_owner, used_names_for, zone_for_owner,
+    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::DownloadQueue;
-use crate::cloudkit::{CloudKitRecord, SkippedSharedZone};
+use crate::cloudkit::CloudKitRecord;
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
 use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_file_name};
@@ -91,24 +91,12 @@ pub fn run_clone_with(
 
     let mut summary = CloneSummary::default();
     for skipped in &shared.skipped_zones {
-        let owner = skipped_zone_owner(skipped).unwrap_or("unknown");
-        let message = match skipped {
-            SkippedSharedZone::ZoneNotFound { server_error_code, .. } => format!(
-                "Skipped a shared zone the server no longer has (owner {owner}, {server_error_code}) - its share was \
-                 likely revoked or deleted; no notes from it were cloned"
-            ),
-            SkippedSharedZone::MissingNoteBodies {
-                missing_record_names, ..
-            } => format!(
-                "Skipped the shared zone owned by {owner}: {} note(s) came through without their text and looking \
-                 them up didn't fill it in - no notes from it were cloned; the first pull will retry it",
-                missing_record_names.len()
-            ),
-        };
-        summary.notices.push(SyncNotice {
-            level: NoticeLevel::Warn,
-            message,
-        });
+        summary.notices.push(skipped_zone_notice(
+            skipped,
+            "no notes from it were cloned",
+            "",
+            "no notes from it were cloned; the first pull will retry it",
+        ));
     }
 
     if !held_back.is_empty() {

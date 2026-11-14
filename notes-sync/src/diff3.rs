@@ -340,11 +340,8 @@ enum MergeBlock {
     Ok(Vec<String>),
     Conflict {
         a: Vec<String>,
-        a_index: usize,
         o: Vec<String>,
-        o_index: usize,
         b: Vec<String>,
-        b_index: usize,
     },
 }
 
@@ -387,11 +384,8 @@ fn diff3_merge(a: &[&str], o: &[&str], b: &[&str], exclude_false_conflicts: bool
                     }
                     results.push(MergeBlock::Conflict {
                         a: a_content,
-                        a_index: a_start,
                         o: slice(o, o_start, o_length),
-                        o_index: o_start,
                         b: b_content,
-                        b_index: b_start,
                     });
                 }
             }
@@ -419,7 +413,7 @@ pub fn merge_diff3(a: &[&str], o: &[&str], b: &[&str], options: &MergeDiff3Optio
     for block in diff3_merge(a, o, b, options.exclude_false_conflicts) {
         match block {
             MergeBlock::Ok(lines) => result.extend(lines),
-            MergeBlock::Conflict { a, o, b, .. } => {
+            MergeBlock::Conflict { a, o, b } => {
                 conflict = true;
                 result.push(a_section.clone());
                 result.extend(a);
