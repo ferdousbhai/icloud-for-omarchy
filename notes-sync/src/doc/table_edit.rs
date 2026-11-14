@@ -258,10 +258,9 @@ fn rows_multiset_equal(a: &[Vec<String>], b: &[Vec<String>]) -> bool {
 // --- tableCellEdit ----------------------------------------------------------------
 
 /// The session's clock position: the document's `ttTimestamp` entry for
-/// our replica (index `tt_index`; `replica_index` is its 1-based rank).
+/// our replica (index `tt_index`; its 1-based rank is our `CharID.replicaID`).
 #[derive(Debug, Clone, Copy)]
 struct TextClock {
-    replica_index: u32,
     tt_index: usize,
     style_floor: u64,
 }
@@ -292,7 +291,7 @@ impl SessionClock<'_> {
 
 impl TopotextClockSource for SessionClock<'_> {
     fn replica_index(&self) -> u32 {
-        self.clock.replica_index
+        self.clock.tt_index as u32 + 1
     }
 
     fn take(&mut self, units: u32) -> u32 {
@@ -457,18 +456,20 @@ pub fn validate_cell_invariants(cell: &TableCellDocument) -> Result<()> {
 struct Session {
     replica_index: usize,
     base_clock: u64,
-    highest_tick: u64,
+    /// Rows or columns were added or removed: the save ticks the version
+    /// clock twice, and its new elements carry the second tick.
+    structural: bool,
     text_clock: TextClock,
 }
 
 impl Session {
     fn element_stamp(&mut self) -> (u64, u64) {
-        self.highest_tick = self.highest_tick.max(self.base_clock + 2);
+        self.structural = true;
         (self.replica_index as u64, self.base_clock + 2)
     }
 
     fn mark_structural_save(&mut self) {
-        self.highest_tick = self.highest_tick.max(self.base_clock + 2);
+        self.structural = true;
     }
 }
 
@@ -634,17 +635,13 @@ fn begin_write_session(doc: &mut TableDocument, replica_uuid: &[u8; 16]) -> Resu
     Ok(Session {
         replica_index,
         base_clock,
-        highest_tick: 0,
-        text_clock: TextClock {
-            replica_index: tt_index as u32 + 1,
-            tt_index,
-            style_floor,
-        },
+        structural: false,
+        text_clock: TextClock { tt_index, style_floor },
     })
 }
 
 fn finalize_write_session(doc: &mut TableDocument, session: &Session) {
-    let clock = session.highest_tick.max(session.base_clock + 1);
+    let clock = session.base_clock + if session.structural { 2 } else { 1 };
     version_mut(doc).element[session.replica_index].clock = Some(clock);
 }
 
