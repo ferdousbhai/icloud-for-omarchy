@@ -619,10 +619,12 @@ impl Window {
 
     /// A row showing `value` under `label`; a click copies or opens it.
     fn value_row(self: &Rc<Self>, label: &str, value: &str, action: Action) -> adw::ActionRow {
+        // Markup off first: the builder sets properties in order, and a value
+        // with an ampersand is no markup.
         let row = adw::ActionRow::builder()
+            .use_markup(false)
             .title(label)
             .subtitle(value)
-            .use_markup(false)
             .activatable(true)
             .css_classes(["property"])
             .build();

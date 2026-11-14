@@ -557,10 +557,12 @@ impl Window {
         if let Some(first) = r.notes.lines().find(|l| !l.trim().is_empty()) {
             parts.push(first.to_owned());
         }
+        // Markup off first: the builder sets properties in order, and a title
+        // or note with an ampersand is no markup.
         let row = adw::ActionRow::builder()
+            .use_markup(false)
             .title(&r.title)
             .subtitle(parts.join(" · "))
-            .use_markup(false)
             .activatable(true)
             .subtitle_lines(1)
             .build();
