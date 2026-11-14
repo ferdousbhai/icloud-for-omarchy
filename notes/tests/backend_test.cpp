@@ -1274,6 +1274,21 @@ int main(int argc, char *argv[])
         check(readFile(QStringLiteral("Q.md")) == id + QStringLiteral("# Q\none, mine and more\n\ntwo from iCloud\n"),
               "seam a save queued again after the note was reloaded under the sync keeps that change");
     }
+    // The same before any save waits: the window's save names the text its
+    // editor started from, so the reloaded note is not taken for it.
+    {
+        const QString id = QStringLiteral("---\napple-note-id: id-q\n---\n");
+        const QString loaded = QStringLiteral("# Q\none\n\ntwo\n");
+        writeFile(QStringLiteral("Q.md"), id + loaded);
+        b.refresh();
+        b.runPull();
+        writeFile(QStringLiteral("Q.md"), id + QStringLiteral("# Q\none\n\ntwo from iCloud\n"));
+        b.refresh();
+        check(!b.saveCurrentNote(QStringLiteral("# Q\none, mine\n\ntwo\n"), loaded), "seam the window's save under a sync waits");
+        waitForIdle(b);
+        check(readFile(QStringLiteral("Q.md")) == id + QStringLiteral("# Q\none, mine\n\ntwo from iCloud\n"),
+              "seam a first save queued after the note was reloaded under the sync merges from the editor's base");
+    }
     // A waiting save belongs to its note and its edit: an edit undone, or
     // another note opened, before the sync ends leaves nothing to write.
     {

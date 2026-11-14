@@ -1152,7 +1152,7 @@ void NotesBackend::openNote(const QString &name)
     rewatch();
 }
 
-bool NotesBackend::saveCurrentNote(const QString &body)
+bool NotesBackend::saveNote(const QString &body, const QString *editorBase)
 {
     const QString path = noteAbsolutePath();
     if (path.isEmpty()) // the note went away under these edits: keepEditsAsConflict keeps them
@@ -1164,15 +1164,19 @@ bool NotesBackend::saveCurrentNote(const QString &body)
     }
     // Never under a running sync: a pull may be rewriting this very file.
     // Written once it is done and its changes are loaded (writeQueuedSave).
-    // A save already waiting keeps its base: the note may have been loaded
-    // again under the sync since (the lock coming free, Refresh, a note
-    // followed to where it moved), while the editor's text still stems from
-    // the content the first save was queued on. Taking the newer content
+    // Its base is the text the edits started from: the editor's own, when
+    // the caller has one. The note may have been loaded again under the
+    // sync (the lock coming free, Refresh, a note followed to where it
+    // moved) while the editor kept its edits, and taking that newer content
     // for the base would write the edits over what changed in between.
+    // Without an editor's, a save already waiting keeps the base it has,
+    // and a first one takes the note as loaded.
     if (m_syncRunning) {
         const QString note = vaultRelative(m_currentNote);
         const bool waiting = m_queuedSave.valid && m_queuedSave.note == note;
-        m_queuedSave = { note, waiting ? m_queuedSave.base : m_noteContent, body, true };
+        m_queuedSave = { note,
+                         editorBase ? *editorBase : waiting ? m_queuedSave.base : SyncModel::editorForm(noteBody()),
+                         body, true };
         return false;
     }
     // A pull (or another program) rewrote the note since it was loaded:
@@ -2252,8 +2256,8 @@ void NotesBackend::writeQueuedSave()
     // A note gone keeps its edits through keepEditsAsConflict; another note is not theirs.
     if (!queued.valid || m_currentNote.isEmpty() || vaultRelative(m_currentNote) != queued.note)
         return;
-    const QString base = SyncModel::editorForm(SyncModel::splitEnvelope(queued.base).body);
-    const bool changed = m_noteContent != queued.base;
+    const QString &base = queued.base;
+    const bool changed = SyncModel::editorForm(noteBody()) != base;
     bool written = changed && keepEditsAsConflict(base, queued.body);
     // Saving over the note is only for one the sync left as the edits
     // started, or that already holds them: never over a change a merge

@@ -204,7 +204,13 @@ public:
     // the edits stay unsaved. Also false while a sync runs, which may be
     // rewriting the note: the edits are written once it is done (merged
     // with whatever it changed), and queuedSaveWritten says so.
-    Q_INVOKABLE bool saveCurrentNote(const QString &body);
+    Q_INVOKABLE bool saveCurrentNote(const QString &body) { return saveNote(body, nullptr); }
+    // The window's save: `base` is the text its editor's edits started
+    // from (what it last loaded or saved). A save that has to wait for the
+    // sync is merged from that text, whatever the backend has loaded since:
+    // the note may have been reloaded under the sync while the editor kept
+    // its edits. The command line has no editor, and saves without one.
+    Q_INVOKABLE bool saveCurrentNote(const QString &body, const QString &base) { return saveNote(body, &base); }
     // Forgets a save still waiting on the running sync: the editor is back
     // at the note as loaded, so there is nothing to write after it.
     Q_INVOKABLE void dropQueuedSave() { m_queuedSave = {}; }
@@ -426,6 +432,7 @@ private:
     }
     bool keepEditsAsNewNote(const QString &mine, const QString &why);
     QString syncedCopyPath() const;
+    bool saveNote(const QString &body, const QString *editorBase);
     void writeQueuedSave();
     void writeQueuedSaveOnClose();
     void rewatch();
@@ -494,9 +501,9 @@ private:
     bool m_following = false;
     bool m_merging = false; // keepEditsAsConflict (or a queued save's write) is at work: no merge from its reloads
     // A save asked for while a sync ran: the note (vault-relative), the
-    // editor body, and the note's content it was edited from. Only ever
-    // written to that note: opening another one, or a save that finds the
-    // edit undone, drops it.
+    // editor body, and the body it was edited from (as an editor holds it).
+    // Only ever written to that note: opening another one, or a save that
+    // finds the edit undone, drops it.
     struct QueuedSave {
         QString note;
         QString base;

@@ -311,7 +311,7 @@ ApplicationWindow {
     // or, when the note changed on disk meanwhile, in a conflict to pick from.
     function doSave() {
         var text = editor.text;
-        if (!backend.saveCurrentNote(text)) {
+        if (!backend.saveCurrentNote(text, savedText)) {
             // Under a running sync the backend writes them once it is done.
             if (dirty)
                 notice = backend.syncRunning ? "Saving once the sync is done. Your edits are still in the editor."
