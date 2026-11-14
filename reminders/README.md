@@ -193,7 +193,11 @@ cargo test -p icloud-reminders
 
 `tests/cli.rs` runs the built command line against the fake for every
 command, including notifications (a stand-in `omarchy-notification-send`
-records them). The library has no GTK dependency (the window's code is in
+records them). `tests/folder_model.rs` runs seeded random edits to the
+folder's files and to iCloud, Syncthing conflict copies and runs killed
+mid-write against the fake, and checks that no reminder is lost or made
+twice and each file reads as iCloud has it (`ICLOUD_REMINDERS_MODEL_SEED`,
+`_CASES` and `_STEPS` choose the cases). The library has no GTK dependency (the window's code is in
 `src/bin/app/`), so `cargo test --no-default-features` runs on a machine
 without the GTK stack.
 

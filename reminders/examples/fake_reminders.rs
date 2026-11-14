@@ -146,6 +146,18 @@ impl State {
         self.zone.lock().unwrap().records.get(name).map(|s| s.record.clone())
     }
 
+    /// Every record as the server holds it now.
+    #[allow(dead_code)] // tests/folder_model.rs reads them; tests/cli.rs does not.
+    pub fn records(&self) -> Vec<Value> {
+        self.zone
+            .lock()
+            .unwrap()
+            .records
+            .values()
+            .map(|s| s.record.clone())
+            .collect()
+    }
+
     /// Every request, oldest first: `{"op": "changes/zone", "body": ...}`.
     pub fn requests(&self) -> Vec<Value> {
         self.requests.lock().unwrap().clone()
@@ -322,7 +334,8 @@ impl State {
     }
 }
 
-fn list(id: &str, name: &str, order: &[&str], hex: &str) -> Value {
+/// A list record; `order` is its reminders' UUIDs.
+pub fn list(id: &str, name: &str, order: &[&str], hex: &str) -> Value {
     let order = serde_json::to_string(order).unwrap();
     let color = json!({ "daHexString": hex }).to_string();
     json!({
