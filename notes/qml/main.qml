@@ -346,6 +346,20 @@ ApplicationWindow {
         }
         return doSave();
     }
+    // Closing saves what autosave has not written yet. Under a running
+    // sync the save is queued, and the backend writes it as it closes.
+    // Edits a guardrail holds back stop the first close, so they are not
+    // dropped unseen; closing again discards them.
+    property bool closeWarned: false
+    onClosing: function (close) {
+        if (!dirty || closeWarned)
+            return;
+        if (backend.saveWarning(editor.text).length === 0 && (doSave() || backend.syncRunning))
+            return;
+        closeWarned = true;
+        close.accepted = false;
+        notice = "Your edits are not saved (Ctrl+S shows why). Close again to discard them.";
+    }
     function openNote(folder, name) {
         if (!flushEdits())
             return;
@@ -1464,7 +1478,7 @@ ApplicationWindow {
                             topPadding: 4
                             bottomPadding: 32
                             placeholderText: "Start writing…"
-                            onTextChanged: autosave.restart()
+                            onTextChanged: { root.closeWarned = false; autosave.restart(); }
                             onCursorPositionChanged: root.trackCursor()
                             onActiveFocusChanged: {
                                 root.trackCursor();
