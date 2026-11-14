@@ -12,10 +12,9 @@ use std::time::{Duration, Instant};
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use icloud_app_ui::{SignInBanner, background};
-
 use super::devices::DeviceList;
 use super::map::DeviceMap;
+use icloud_app_ui::{SignInBanner, background};
 use icloud_findmy::findme::{self, FindMe, SessionTransport};
 use icloud_findmy::history::{History, LazyHistory, Point};
 use icloud_findmy::models::{Device, Fix};
