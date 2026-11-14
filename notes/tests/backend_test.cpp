@@ -1667,7 +1667,8 @@ int main(int argc, char *argv[])
             app->openNote(QStringLiteral("W.md"));
             app->runSync();
             waitUntil([] { return false; }, 300); // the engine is up and sleeping
-            const bool waiting = app->syncRunning() && !app->saveCurrentNote(mine);
+            const bool waiting = app->syncRunning() && !app->closeWritesQueuedSave() && !app->saveCurrentNote(mine)
+                && app->closeWritesQueuedSave();
             underTheSync();
             delete app;
             qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
@@ -1693,9 +1694,10 @@ int main(int argc, char *argv[])
         app->openNote(QStringLiteral("W.md"));
         app->runSync();
         const bool waiting = app->syncRunning() && !app->saveCurrentNote(mine);
+        const bool promised = app->closeWritesQueuedSave();
         delete app;
-        check(waiting && readFile(QStringLiteral("W.md")) == note,
-              "background: closing while another sync holds the vault writes nothing under it");
+        check(waiting && !promised && readFile(QStringLiteral("W.md")) == note,
+              "background: closing while another sync holds the vault writes nothing under it, and says so beforehand");
         background.release();
         QFile::remove(testVault() + QStringLiteral("/W.md"));
     }

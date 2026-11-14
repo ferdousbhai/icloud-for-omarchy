@@ -208,6 +208,12 @@ public:
     // Forgets a save still waiting on the running sync: the editor is back
     // at the note as loaded, so there is nothing to write after it.
     Q_INVOKABLE void dropQueuedSave() { m_queuedSave = {}; }
+    // A save is waiting on the running sync and closing now writes it: this
+    // backend holds the vault. While another process holds it (a background
+    // sync this one's sync waits for), closing writes nothing, since that
+    // sync may be writing the same note: the window must not close on the
+    // promise of it.
+    Q_INVOKABLE bool closeWritesQueuedSave() const { return m_queuedSave.valid && m_lock.fd() >= 0; }
     // Copies the file `source` into the open note's attachments/ folder,
     // under a free name, and returns {ok, name, path, link}: `link` is what
     // the sync engine takes for a new attachment once the note's text holds

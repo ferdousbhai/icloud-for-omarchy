@@ -2309,8 +2309,7 @@ NotesBackend::~NotesBackend()
 
 void NotesBackend::writeQueuedSaveOnClose()
 {
-    const bool holdingVault = m_lock.fd() >= 0;
-    if (!m_queuedSave.valid || !holdingVault)
+    if (!closeWritesQueuedSave())
         return;
     m_syncProcess.kill();
     m_syncProcess.waitForFinished();

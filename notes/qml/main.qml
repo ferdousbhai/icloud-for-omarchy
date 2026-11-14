@@ -346,18 +346,24 @@ ApplicationWindow {
         return doSave();
     }
     // Closing saves what autosave has not written yet. Under a running
-    // sync the save is queued, and the backend writes it as it closes.
-    // Edits a guardrail holds back stop the first close, so they are not
-    // dropped unseen; closing again discards them.
+    // sync the save is queued, and the backend writes it as it closes; a
+    // save that found the note changed on disk has merged the edits into
+    // it (nothing is unsaved then). Edits a guardrail holds back stop the
+    // first close, so they are not dropped unseen, and so do edits queued
+    // behind another program's sync, which closing would not write;
+    // closing again discards them.
     property bool closeWarned: false
     onClosing: function (close) {
         if (!dirty || closeWarned)
             return;
-        if (backend.saveWarning(editor.text).length === 0 && (doSave() || backend.syncRunning))
+        var held = backend.saveWarning(editor.text).length > 0;
+        if (!held && (doSave() || !dirty || backend.closeWritesQueuedSave()))
             return;
         closeWarned = true;
         close.accepted = false;
-        notice = "Your edits are not saved (Ctrl+S shows why). Close again to discard them.";
+        notice = !held && backend.syncRunning
+            ? "Your edits are not saved yet: another sync has the notes. Wait for it, or close again to discard them."
+            : "Your edits are not saved (Ctrl+S shows why). Close again to discard them.";
     }
     function openNote(folder, name) {
         if (!flushEdits())
