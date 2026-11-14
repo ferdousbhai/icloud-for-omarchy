@@ -792,7 +792,7 @@ impl Daemon {
                     match self.secrets.set_item(Kind::Session, &a.apple_id, &secret) {
                         Ok(()) => {
                             written.secret = Some(secret);
-                            self.clear_removal_pending();
+                            self.settle_owed_trust();
                         }
                         Err(e) => errors.push(format!("storing the session's cookies in the keyring: {e}")),
                     }
@@ -804,7 +804,7 @@ impl Daemon {
                 }
                 written.secret = None;
                 match self.secrets.remove_item(Kind::Session) {
-                    Ok(_) => self.clear_removal_pending(),
+                    Ok(_) => self.settle_owed_trust(),
                     Err(e) => {
                         errors.push(format!(
                             "removing the session from the keyring (retried at the next start): {e}"
@@ -924,7 +924,24 @@ impl Daemon {
         }
     }
 
-    /// The keyring's session item was replaced or removed: nothing owed.
+    /// The keyring's session item was replaced or removed. If a sign-out
+    /// still owed its removal, the device trust that sign-out left is owed
+    /// one too: it goes now, and the marker only once it has. Call under
+    /// [`Daemon::written`].
+    fn settle_owed_trust(&self) {
+        if !self.cfg.paths.removal_pending.exists() {
+            return;
+        }
+        match self.secrets.remove_item(Kind::Trust) {
+            Ok(()) => self.clear_removal_pending(),
+            Err(e) => {
+                eprintln!("icloud-sessiond: removing the signed-out device trust from the keyring (retried later): {e}")
+            }
+        }
+    }
+
+    /// Nothing of a signed-out account is left in the keyring: the
+    /// session item and the device trust were each replaced or removed.
     fn clear_removal_pending(&self) {
         let marker = &self.cfg.paths.removal_pending;
         if let Err(e) = files::remove(marker) {
@@ -1438,7 +1455,14 @@ impl Daemon {
     /// My's, say) is signed in already. Its WebKit profile is in memory
     /// only, so nothing else carries over from one window to the next.
     fn window_cookies(&self) -> Zeroizing<String> {
-        let mut jar = match self.secrets.get_item(Kind::Trust) {
+        // A removal still owed: what the keyring holds may be a signed-out
+        // account's trust, which no window gets.
+        let trust = if self.cfg.paths.removal_pending.exists() {
+            Ok(None)
+        } else {
+            self.secrets.get_item(Kind::Trust)
+        };
+        let mut jar = match trust {
             Ok(Some(text)) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_else(|e| {
                 eprintln!("icloud-sessiond: the keyring's device trust is not a cookie list ({e}); not used");
                 Vec::new()
@@ -1652,14 +1676,23 @@ impl Daemon {
             .set_item(Kind::Session, &account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
         written.secret = Some(secret);
-        self.clear_removal_pending();
         // The window's trust replaces what was stored (it started with
         // that, so still holds what Apple has not dropped). None captured
-        // keeps the old: losing it would only bring 2FA back.
-        if !trust.is_empty()
-            && let Err(e) = self.set_trust(&account.apple_id, &trust)
-        {
-            eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+        // keeps the old: losing it would only bring 2FA back. Not a
+        // signed-out account's, though, whose removal is still owed (the
+        // window did not start with that): it goes unless replaced.
+        let replaced = !trust.is_empty()
+            && match self.set_trust(&account.apple_id, &trust) {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+                    false
+                }
+            };
+        if replaced {
+            self.clear_removal_pending();
+        } else {
+            self.settle_owed_trust();
         }
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
@@ -1735,8 +1768,10 @@ impl Daemon {
         let Some(apple_id) = current(&lock(&self.state)) else {
             return;
         };
-        if let Err(e) = self.set_trust(&apple_id, trust) {
-            eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+        match self.set_trust(&apple_id, trust) {
+            // Replaced, so a signed-out account's is no longer owed a removal.
+            Ok(()) => self.clear_removal_pending(),
+            Err(e) => eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}"),
         }
     }
 

@@ -1404,6 +1404,70 @@ fn a_sign_in_after_a_sign_out_the_keyring_refused_starts_without_the_old_trust()
     );
 }
 
+/// The same, with the keyring still refusing when the sign-in starts and
+/// answering again while its window is open: the session is stored, so the
+/// signed-out account's trust must go before the owed removal is forgotten.
+#[test]
+fn a_keyring_back_during_a_sign_in_does_not_keep_the_signed_out_trust() {
+    let server = apple();
+    let dir = tempfile::tempdir().unwrap();
+    let token = json!({"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null});
+    let trusted = json!({
+        "cookies": [token],
+        "trust": [{"name": "DES6a1b2c", "value": "trusted", "domain": "idmsa.apple.com", "path": "/", "expires": now() + 86400}],
+    });
+    let untrusted = json!({"cookies": [token]});
+    // With `restore` there, the window runs it (the keyring answers again
+    // while the window is open) and captures no trust.
+    let restoring = format!(
+        "d='{}'\nif [ -e \"$d/restore\" ]; then . \"$d/restore\"; cat > \"$d/stdin\"; cat <<'EOF'\n{untrusted}\nEOF\nexit 0; fi",
+        dir.path().display()
+    );
+    let signin = printing_window(dir.path(), &restoring, &trusted);
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let watch = changes(&conn);
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().signed_in);
+    assert_eq!(trust_names(&env), ["DES6a1b2c"]);
+
+    // The keyring stops answering, and the user signs out.
+    let saved = dir.path().join("keyring");
+    fs::rename(env.secrets_path(), &saved).unwrap();
+    fs::create_dir(env.secrets_path()).unwrap();
+    assert!(matches!(
+        icloud_session::sign_out_on(&conn),
+        Err(Error::KeyringUnavailable(_))
+    ));
+    watch.until("SignedIn false", |s| !s.signed_in);
+    let pending = env.root().join("state/icloud-session/session-removal-pending");
+    assert!(pending.exists());
+
+    // Still refusing when the sign-in starts; back before it is stored.
+    fs::write(
+        dir.path().join("restore"),
+        format!(
+            "rmdir '{k}' && mv '{s}' '{k}'\n",
+            k = env.secrets_path().display(),
+            s = saved.display()
+        ),
+    )
+    .unwrap();
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().signed_in);
+    let given: Value = serde_json::from_str(fs::read_to_string(dir.path().join("stdin")).unwrap().trim()).unwrap();
+    assert_eq!(given, json!([]));
+    assert!(env.session_secret().is_some(), "the sign-in was kept");
+    assert!(trust_item(&env).is_none(), "the signed-out trust is still stored");
+    assert!(!pending.exists());
+}
+
 /// The cookies.sqlite a v0.9.4 sign-in window left (libsoup's
 /// `moz_cookies`), with `rows` of (name, value, host, expiry).
 fn old_profile(env: &Env, rows: &[(&str, &str, &str, u64)]) -> PathBuf {
