@@ -606,10 +606,7 @@ impl Parser<'_> {
             let (text, spans) = line_from_pieces(line_pieces);
             let source_line = start + line_index.min(source_line_count - 1);
             if line_index == 0 {
-                self.record(
-                    source_line,
-                    make_paragraph(seed, block_quote_level, text, spans),
-                );
+                self.record(source_line, make_paragraph(seed, block_quote_level, text, spans));
             } else {
                 let raw_line = if positions_reliable {
                     self.lines.get(source_line - 1).copied()
@@ -617,10 +614,7 @@ impl Parser<'_> {
                     None
                 };
                 let level = raw_line.map_or(block_quote_level, |raw| count_quote_markers(raw) as u32);
-                self.record(
-                    source_line,
-                    make_paragraph(&BODY_SEED, level, text, spans),
-                );
+                self.record(source_line, make_paragraph(&BODY_SEED, level, text, spans));
             }
         }
         // A lone `\r` ends a source line but stays inside the text, so the

@@ -50,8 +50,8 @@ use crate::md::frontmatter::{
 };
 use crate::md::parse::{ParsedNoteMarkdown, parse_note_markdown};
 use crate::md::title::{
-    carried_title_spelling, representability_problem, restore_title_paragraph_text,
-    title_from_note_file_name, title_is_representable, title_paragraph_from_filename,
+    carried_title_spelling, representability_problem, restore_title_paragraph_text, title_from_note_file_name,
+    title_is_representable, title_paragraph_from_filename,
 };
 use crate::vault::attachments::{
     remove_attachments_for_note, remove_table_attachments_for_note, resolve_new_attachment_file, safe_unlink,

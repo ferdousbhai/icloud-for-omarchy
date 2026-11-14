@@ -267,10 +267,7 @@ fn title_paragraph_split_and_restore() {
         paragraph(BulletList, "first item", 0),
         paragraph(BulletList, "second item", 11),
     ];
-    assert_eq!(
-        render_note_markdown(&list[1..]),
-        "- second item"
-    );
+    assert_eq!(render_note_markdown(&list[1..]), "- second item");
 
     let title = FormatParagraph {
         spans: vec![InlineSpan {
