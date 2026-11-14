@@ -245,7 +245,7 @@ fn paragraph(kind: ParagraphKind, text: &str, start: usize) -> FormatParagraph {
 #[test]
 fn title_paragraph_split_and_restore() {
     use ParagraphKind::*;
-    let model = vec![
+    let model = [
         paragraph(Title, "My Note", 0),
         paragraph(Body, "", 8),
         paragraph(Body, "Body text", 9),
@@ -255,7 +255,7 @@ fn title_paragraph_split_and_restore() {
     assert_eq!(body.len(), 2);
     assert_eq!(body[0].text, "");
 
-    let mono = vec![
+    let mono = [
         paragraph(Monospaced, "code line one", 0),
         paragraph(Monospaced, "code line two", 14),
     ];
@@ -263,7 +263,7 @@ fn title_paragraph_split_and_restore() {
     assert_eq!(rendered.matches("```").count() % 2, 0);
     assert!(parse_note_markdown(&rendered).is_ok());
 
-    let list = vec![
+    let list = [
         paragraph(BulletList, "first item", 0),
         paragraph(BulletList, "second item", 11),
     ];
@@ -308,7 +308,7 @@ fn title_paragraph_split_and_restore() {
     ];
     assert_eq!(restore_title_paragraph_text(&model[0], &model[1..]).paragraphs, model);
 
-    let model = vec![
+    let model = [
         paragraph(Title, "My Note", 0),
         paragraph(Body, "", 8),
         paragraph(Heading, "A section", 9),
