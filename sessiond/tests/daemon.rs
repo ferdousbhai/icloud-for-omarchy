@@ -5233,6 +5233,132 @@ fi"#,
         rig.sign_in_and_out_work(case);
     }
 
+    /// A Find My authorization captured by the next daemon while the one
+    /// winding down writes a merge: the next follows that write, and the
+    /// jar it captured, dropped with what it held, is kept on the account
+    /// followed (the same sign-in), rather than lost while the window
+    /// reports success.
+    #[test]
+    fn a_find_my_authorization_stored_across_another_daemon_s_write_is_kept() {
+        let rig = Rig::idling(false, 1.0);
+        rig.sign_in("a");
+        rig.restart();
+        let winding = rig.env.root().join("winding");
+        let first_held = rig.env.root().join("first-held");
+        let next_held = rig.env.root().join("next-held");
+        rig.arm(
+            "PAUSE",
+            &format!(
+                "release:name@{},lock:change:3@{}",
+                winding.display(),
+                first_held.display()
+            ),
+        );
+        let first = {
+            let c = rig.env.conn();
+            icloud_session::status_on(&c).unwrap();
+            rig.owner()
+        };
+        rig.paused(&winding);
+        rig.arm("PAUSE", &format!("captured:find-my@{}", next_held.display()));
+        assert_eq!(rig.status().dsid.as_deref(), Some(DSID));
+        assert_ne!(rig.owner(), first);
+
+        icloud_session::authorize_find_my_on(&rig.conn).unwrap();
+        rig.paused(&next_held);
+        // The first takes the change lock for its merge's write; the next,
+        // released, takes its jar to write and waits for the lock.
+        let conn = rig.env.conn();
+        let first_merging = {
+            let first = first.clone();
+            thread::spawn(move || merge_on(&conn, &first, "X-APPLE-FIRST=a-first"))
+        };
+        rig.paused(&first_held);
+        fs::remove_file(&next_held).unwrap();
+        thread::sleep(Duration::from_millis(300));
+        fs::remove_file(&first_held).unwrap();
+        first_merging.join().unwrap();
+
+        rig.until("the Find My jar kept", |s| s.find_my_authorized && !s.signing_in);
+        let (cookie, _): (String, HashMap<String, String>) = call(&rig.conn, "FindMySession").unwrap();
+        assert!(cookie.contains("X-APPLE-WEBAUTH-FMIP=a-fmip"), "{cookie}");
+        let (header, _, _) = session(&rig.conn).unwrap();
+        assert_eq!(
+            cookie_of(&header, "X-APPLE-FIRST").as_deref(),
+            Some("a-first"),
+            "{header}"
+        );
+        fs::remove_file(&winding).unwrap();
+        wait_until("the first daemon to exit", Duration::from_secs(30), || {
+            !rig.on_bus(&first)
+        });
+        rig.restart();
+        let case = "a Find My authorization stored across another daemon's write";
+        assert_eq!(rig.check(case, false).as_deref(), Some(DSID));
+        let secret = rig.env.session_secret().unwrap();
+        assert!(secret.get("find_my").is_some(), "{secret}");
+        assert!(cookie_named(&secret["cookies"], "X-APPLE-FIRST").is_some(), "{secret}");
+        rig.sign_in_and_out_work(case);
+    }
+
+    /// A /validate by the next daemon whose write waits for a merge by the
+    /// one winding down: the next follows that write, and the cookie
+    /// /validate rotated, dropped with what it held, is merged again into
+    /// the account followed (the same sign-in). Both are kept.
+    #[test]
+    fn a_rotation_stored_across_another_daemon_s_write_is_kept() {
+        let rig = Rig::idling(false, 1.0);
+        rig.sign_in("a");
+        rig.restart();
+        let winding = rig.env.root().join("winding");
+        let held = rig.env.root().join("held");
+        rig.arm(
+            "PAUSE",
+            &format!("release:name@{},lock:change:3@{}", winding.display(), held.display()),
+        );
+        let first = {
+            let c = rig.env.conn();
+            icloud_session::status_on(&c).unwrap();
+            rig.owner()
+        };
+        rig.paused(&winding);
+        assert_eq!(rig.status().dsid.as_deref(), Some(DSID));
+        assert_ne!(rig.owner(), first);
+
+        let conn = rig.env.conn();
+        let first_merging = {
+            let first = first.clone();
+            thread::spawn(move || merge_on(&conn, &first, "X-APPLE-FIRST=a-first"))
+        };
+        rig.paused(&held);
+        let conn = rig.env.conn();
+        let validating = thread::spawn(move || call::<bool>(&conn, "ReportSignInRequired"));
+        thread::sleep(Duration::from_millis(300));
+        fs::remove_file(&held).unwrap();
+        first_merging.join().unwrap();
+        assert!(validating.join().unwrap().unwrap());
+
+        let (header, _, _) = session(&rig.conn).unwrap();
+        assert_eq!(
+            cookie_of(&header, "X-APPLE-FIRST").as_deref(),
+            Some("a-first"),
+            "{header}"
+        );
+        let token = cookie_of(&header, "X-APPLE-WEBAUTH-TOKEN").unwrap();
+        assert!(token.starts_with("a-rotated"), "{header}");
+        fs::remove_file(&winding).unwrap();
+        wait_until("the first daemon to exit", Duration::from_secs(30), || {
+            !rig.on_bus(&first)
+        });
+        rig.restart();
+        let case = "a rotation stored across another daemon's write";
+        assert_eq!(rig.check(case, false).as_deref(), Some(DSID));
+        let jar = rig.env.session_secret().unwrap()["cookies"].clone();
+        let token = cookie_named(&jar, "X-APPLE-WEBAUTH-TOKEN").unwrap();
+        assert!(token["value"].as_str().unwrap().starts_with("a-rotated"), "{jar}");
+        rig.sign_in_and_out_work(case);
+    }
+
     /// A second daemon starting while the first is between its keyring
     /// write and its `account.json` write, signing in as B: it waits for
     /// that change rather than reading half of it (A's `account.json`, B's

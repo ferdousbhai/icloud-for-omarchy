@@ -1359,15 +1359,11 @@ impl Daemon {
             });
         }
         let mut save = None;
+        let mut validated = None;
         let outcome = match result {
             Ok(v) => {
-                if let Some(a) = st.account.as_mut().filter(|_| same) {
-                    cookies::merge_set_cookies(&mut a.cookies, &v.set_cookies, time::now_secs());
-                    a.webservices = v.webservices;
-                    a.apple_id = v.apple_id;
-                    a.full_name = v.full_name;
-                    a.validated_at = time::now_secs();
-                    save = Some(self.save_account(&mut st));
+                if let Some(a) = st.account.as_ref().filter(|_| same) {
+                    validated = Some(((a.dsid.clone(), a.captured_at.clone()), v));
                 }
                 Ok(())
             }
@@ -1386,6 +1382,21 @@ impl Daemon {
         drop(st);
         if let Some(save) = save {
             self.write(save);
+        }
+        // Into the sign-in validated, made again on it if another daemon's
+        // write of it is followed meanwhile, so no rotation is dropped.
+        if let Some((sign_in, v)) = validated {
+            self.apply_following(
+                |a| (&a.dsid, &a.captured_at) == (&sign_in.0, &sign_in.1),
+                |a| {
+                    cookies::merge_set_cookies(&mut a.cookies, &v.set_cookies, time::now_secs());
+                    a.webservices = v.webservices.clone();
+                    a.apple_id = v.apple_id.clone();
+                    a.full_name = v.full_name.clone();
+                    a.validated_at = time::now_secs();
+                    true
+                },
+            );
         }
         self.announce(false);
         outcome
@@ -2184,18 +2195,28 @@ impl Daemon {
     /// and the main jar and its generation are left alone. The account
     /// it names (see [`find_my_capture`]) must be the signed-in one.
     fn store_find_my(&self, seq: u64, (jar, params, dsid, trust): FindMyCapture) -> Result<(), String> {
-        let mut st = lock(&self.state);
-        if st.signin_seq != seq {
-            return Err(CANCELLED.into());
-        }
-        let Some(account) = st.account.as_mut() else {
-            return Err("signed out meanwhile; sign in first".into());
+        let account_dsid = {
+            let st = lock(&self.state);
+            if st.signin_seq != seq {
+                return Err(CANCELLED.into());
+            }
+            let account = st.account.as_ref().ok_or("signed out meanwhile; sign in first")?;
+            same_account(dsid, &account.dsid)?;
+            account.dsid.clone()
         };
-        same_account(dsid, &account.dsid)?;
-        account.find_my = Some(FindMyJar::captured_now(jar, params));
-        let save = self.save_account(&mut st);
-        drop(st);
-        self.write(save);
+        // Kept for the same Apple ID, even if another daemon's change was
+        // followed meanwhile (a SignOut moves `signin_seq` on and forgets it).
+        let jar = FindMyJar::captured_now(jar, params);
+        let kept = self.apply_following(
+            |a| a.dsid == account_dsid,
+            |a| {
+                a.find_my = Some(jar.clone());
+                true
+            },
+        );
+        if !kept || lock(&self.state).signin_seq != seq {
+            return Err("signed out meanwhile; sign in first".into());
+        }
         self.keep_trust(&trust, |st| {
             st.account
                 .as_ref()
