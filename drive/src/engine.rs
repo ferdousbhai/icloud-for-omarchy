@@ -361,16 +361,20 @@ impl<R: Remote> Engine<'_, R> {
                 // both are kept, ours as a conflicted copy, and the next
                 // round downloads iCloud's and uploads the copy.
                 (Err(Error::Remote(remote::Error::Stale(_))), Op::Replace { id, path }) => {
+                    // The row goes first. While it stood, a file no longer
+                    // at its name (set aside and the run stopped there, or
+                    // gone meanwhile) would read as removed here, and take
+                    // to Recently Deleted a version this computer never saw.
+                    self.state.forget(id)?;
                     match self.set_aside(path) {
                         Ok(()) => {
-                            self.state.forget(id)?;
                             outcome.done.push(format!(
                                 "keep {path} as a conflicted copy (it changed in iCloud meanwhile)"
                             ));
                             applied.set_aside = true;
                         }
                         // The file went meanwhile: this file's problem, and
-                        // the next sync looks at it again.
+                        // the next sync brings iCloud's version back.
                         Err(e) => outcome.problems.push(format!("{line}: {e}")),
                     }
                     continue;

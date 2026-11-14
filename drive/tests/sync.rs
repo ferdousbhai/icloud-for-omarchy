@@ -1095,3 +1095,26 @@ fn a_folder_renamed_in_icloud_over_one_removed_there_leaves_no_folder_behind() {
     bed.settle();
     assert_eq!(bed.cloud.paths(), ["Docs", "Docs/x.txt"]);
 }
+
+#[test]
+fn a_file_removed_here_while_its_stale_replace_is_refused_comes_back_as_icloud_has_it() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    // iCloud's edit shows in nothing but the etag; the file here is edited,
+    // then goes just as its replace is refused, so it cannot be set aside.
+    bed.cloud.edit(&a.id, "ONE", a.mtime_ms);
+    bed.write("a.txt", "mine");
+    bed.cloud.0.borrow_mut().stale_removes = Some(bed.root().join("a.txt"));
+    let outcome = bed.try_sync(false).unwrap();
+    assert_eq!(outcome.problems.len(), 1, "{:?}", outcome.problems);
+    // The row is gone with the refusal, so the missing file is not read as
+    // a removal of the version in iCloud that this computer never saw.
+    bed.settle();
+    assert!(
+        bed.cloud.0.borrow().trashed.is_empty(),
+        "{:?}",
+        bed.cloud.0.borrow().trashed
+    );
+    assert_eq!(bed.read("a.txt").as_deref(), Some("ONE"));
+}
