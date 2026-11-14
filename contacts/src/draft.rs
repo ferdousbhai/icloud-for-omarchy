@@ -109,8 +109,13 @@ impl Draft {
                     ));
                 }
             }
-            for (label, v) in now {
-                if !was.iter().any(|(l, w)| l == label && w.trim() == v.trim()) {
+            // Added: a value more rows hold now than before. A row retyped
+            // into a copy of another is one, so it is kept should another
+            // device remove that other meanwhile (an Add the card already
+            // has is no change).
+            for (i, (label, v)) in now.iter().enumerate() {
+                let same = |(l, w): &&(String, String)| l == label && w.trim() == v.trim();
+                if now[..=i].iter().filter(same).count() > was.iter().filter(same).count() {
                     out.push(Change::Add(
                         *m,
                         model::Labeled {
@@ -272,5 +277,44 @@ mod tests {
         }
         read.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = "Lee".into();
         assert_eq!(read.changes(&before), [Change::Set(Field::Last, "Lee".into())]);
+    }
+
+    /// A row retyped into a copy of another row is an addition: when
+    /// another device removed that other row meanwhile, what was typed is
+    /// kept.
+    #[test]
+    fn a_row_retyped_into_a_copy_of_another_is_kept() {
+        let c = Contact(
+            json!({ "firstName": "Ann", "urls": [{"label": "WORK", "field": "x.org"}, {"label": "WORK", "field": "acme.example"}] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let before = Draft::of(&c);
+        let mut after = before.clone();
+        after.multis[2].1[1].1 = "x.org".into();
+        let changes = after.changes(&before);
+        let work = |v: &str| model::Labeled {
+            label: "WORK".into(),
+            value: v.into(),
+        };
+        assert_eq!(
+            changes,
+            [
+                Change::RemoveExact(Multi::Url, work("acme.example")),
+                Change::Add(Multi::Url, work("x.org"))
+            ]
+        );
+        let mut same = c.clone();
+        same.apply(&changes).unwrap();
+        assert_eq!(same.values(Multi::Url), [work("x.org")]);
+        let mut elsewhere = Contact(
+            json!({ "firstName": "Ann", "urls": [{"label": "WORK", "field": "acme.example"}] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        elsewhere.apply(&changes).unwrap();
+        assert_eq!(elsewhere.values(Multi::Url), [work("x.org")]);
     }
 }
