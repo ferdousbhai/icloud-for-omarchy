@@ -474,7 +474,7 @@ private:
     } m_lostNote;
     LostNote lostCopy(const QString &content) const;
     bool m_following = false;
-    bool m_merging = false; // keepEditsAsConflict is reloading its merge
+    bool m_merging = false; // keepEditsAsConflict (or a queued save's write) is at work: no merge from its reloads
     // A save asked for while a sync ran: the note (vault-relative), the
     // editor body, and the note's content it was edited from. Only ever
     // written to that note: opening another one, or a save that finds the

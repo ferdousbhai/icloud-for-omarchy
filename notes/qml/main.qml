@@ -372,16 +372,22 @@ ApplicationWindow {
     // minute old. The editor waits (read-only) until the pull is in, so an
     // edit never starts on a copy iCloud has already moved past.
     property bool freshening: false
-    property bool keepingEdits: false
     property string keptNotice: ""
     function pullIfStale() {
-        if (!backend.cloned || backend.authExpired || backend.syncRunning
-                || dirty || dialogOpen() || Date.now() - lastFocusSync < 60 * 1000)
+        if (!backend.cloned || backend.authExpired || autoSyncBlocked() || Date.now() - lastFocusSync < 60 * 1000)
             return false;
-        lastFocusSync = Date.now();
         freshening = true;
-        backend.runSync(); // pending edits go up first, then the pull
+        syncNow(); // pending edits go up first, then the pull
         return true;
+    }
+    // What every sync that starts on its own waits for: a running sync,
+    // unsaved edits, an open dialog.
+    function autoSyncBlocked() { return backend.syncRunning || dirty || dialogOpen(); }
+    // Both directions, and the minute the focus and stale-note syncs keep
+    // between syncs counts from here.
+    function syncNow() {
+        lastFocusSync = Date.now();
+        backend.runSync();
     }
     function openFolder(folder) {
         if (folder !== backend.currentFolder && flushEdits())
@@ -411,8 +417,7 @@ ApplicationWindow {
         var lookFor = pane === "folders" || (!root.searching && backend.currentNote.length > 0);
         for (var i = 0; lookFor && i < view.count; i++) {
             var md = view.model[i];
-            if (pane === "folders" ? md === backend.currentFolder
-                    : (typeof md === "string" ? md : md.file) === backend.currentNote) {
+            if (pane === "folders" ? md === backend.currentFolder : rowNote(md).file === backend.currentNote) {
                 view.currentIndex = i;
                 break;
             }
@@ -421,6 +426,10 @@ ApplicationWindow {
         kbPane = pane;
         view.forceActiveFocus();
     }
+
+    // A row of the note list as {folder, file}: a note of the open folder
+    // (its file name), or a search result (its folder is "" at the vault root).
+    function rowNote(md) { return typeof md === "string" ? { folder: backend.currentFolder, file: md } : md; }
 
     function kbEnterEditor() {
         kbPane = "editor";
@@ -434,11 +443,8 @@ ApplicationWindow {
     function kbOpenNoteAt(index) {
         if (index < 0 || index >= noteView.count)
             return;
-        var md = noteView.model[index];
-        if (typeof md === "string")
-            root.openNote(backend.currentFolder, md);
-        else // a search result; its folder is "" at the vault root
-            root.openNote(md.folder, md.file);
+        var note = rowNote(noteView.model[index]);
+        root.openNote(note.folder, note.file);
     }
 
     function kbKey(event, pane) {
@@ -474,10 +480,8 @@ ApplicationWindow {
                 root.kbOpenFolderAt(view.currentIndex);
                 root.kbFocus("notes");
             } else if (view.count > 0) {
-                var md = view.model[Math.max(0, view.currentIndex)];
-                var folder = typeof md === "string" ? backend.currentFolder : md.folder;
-                var file = typeof md === "string" ? md : md.file;
-                if (!(file === backend.currentNote && folder === backend.currentFolder))
+                var note = rowNote(view.model[Math.max(0, view.currentIndex)]);
+                if (!(note.file === backend.currentNote && note.folder === backend.currentFolder))
                     root.kbOpenNoteAt(view.currentIndex);
                 root.kbEnterEditor();
             }
@@ -995,8 +999,8 @@ ApplicationWindow {
                             width: noteView.width
                             height: noteColumn.implicitHeight + 18
                             property bool isResult: typeof modelData !== "string"
-                            property string folder: isResult ? modelData.folder : backend.currentFolder
-                            property string fileName: isResult ? modelData.file : modelData
+                            property string folder: root.rowNote(modelData).folder
+                            property string fileName: root.rowNote(modelData).file
                             property bool selected: fileName === backend.currentNote && folder === backend.currentFolder
                             property var pills: isResult ? [] : root.badges(fileName)
                             property bool firstRelated: isResult && modelData.related === true
@@ -1552,7 +1556,7 @@ ApplicationWindow {
         onTriggered: {
             if (!backend.cloned || backend.authExpired)
                 return;
-            if (backend.syncRunning || root.dirty || root.dialogOpen()) {
+            if (root.autoSyncBlocked()) {
                 restart();
                 return;
             }
@@ -1568,11 +1572,9 @@ ApplicationWindow {
             backend.refreshSignIn(); // the day count moves on; also keeps icloud-session validating
         if (!active || !backend.cloned || backend.authExpired)
             return;
-        if (backend.syncRunning || root.dialogOpen() || root.dirty || autoPush.running
-                || Date.now() - lastFocusSync < 60 * 1000)
+        if (root.autoSyncBlocked() || autoPush.running || Date.now() - lastFocusSync < 60 * 1000)
             return;
-        lastFocusSync = Date.now();
-        backend.runSync(); // both directions: a change from any program in any folder
+        root.syncNow(); // both directions: a change from any program in any folder
     }
 
     // iCloud does not tell a web client that something changed, so a phone
@@ -1590,40 +1592,9 @@ ApplicationWindow {
         repeat: true
         running: backend.cloned && !backend.authExpired
         onTriggered: {
-            if (backend.syncRunning || root.dirty || root.dialogOpen() || autoPush.running)
+            if (root.autoSyncBlocked() || autoPush.running)
                 return;
-            root.lastFocusSync = Date.now();
-            backend.runSync(); // pending edits go up first, then the pull
-        }
-    }
-    Connections {
-        target: backend
-        // "~ query" shows Recall's ranking alone; a plain query keeps its
-        // text matches and gains the rest of Recall's hits below them.
-        function onSemanticSearchFinished(query, hits, available) {
-            if (searchField.text !== query || !root.searching) return;
-            if (query.trim().startsWith("~")) {
-                if (available) root.searchResults = hits;
-                root.notice = available ? "Matches by meaning · local Recall" : "Recall unavailable or warming up · showing text matches";
-                return;
-            }
-            if (!available) return;
-            var shown = {};
-            root.searchResults.forEach(function (r) { shown[r.folder + "/" + r.file] = true; });
-            var related = hits.filter(function (h) { return !shown[h.folder + "/" + h.file]; })
-                              .map(function (h) { return Object.assign({ related: true }, h); });
-            if (related.length > 0)
-                root.searchResults = root.searchResults.concat(related);
-        }
-        // Counted from the end of the last sync, whatever started it (a
-        // focus, a push, Pull), so a poll never follows one within the interval.
-        function onSyncChainFinished() {
-            if (poll.running)
-                poll.restart();
-        }
-        function onSyncFinished(label, ok) {
-            if (label === "Pull")
-                root.pollFailures = ok ? 0 : Math.min(root.pollFailures + 1, 4);
+            root.syncNow(); // pending edits go up first, then the pull
         }
     }
 
@@ -1638,10 +1609,8 @@ ApplicationWindow {
             return;
         started = true;
         if (backend.cloned) {
-            if (backend.syncToolAvailable && !backend.authExpired) {
-                root.lastFocusSync = Date.now(); // the window's first activation is this sync
-                backend.runSync(); // edits made while the app was closed go up first
-            }
+            if (backend.syncToolAvailable && !backend.authExpired)
+                root.syncNow(); // edits made while the app was closed go up first; the window's first activation is this sync
         } else if (backend.syncToolAvailable && backend.signedIn) {
             root.notice = "Downloading your notes as " + backend.appleId + "…";
             backend.runClone();
@@ -1683,9 +1652,28 @@ ApplicationWindow {
 
     Connections {
         target: backend
-        function onNoteContentChanged() {
-            if (root.keepingEdits)
+        // "~ query" shows Recall's ranking alone; a plain query keeps its
+        // text matches and gains the rest of Recall's hits below them.
+        function onSemanticSearchFinished(query, hits, available) {
+            if (searchField.text !== query || !root.searching) return;
+            if (query.trim().startsWith("~")) {
+                if (available) root.searchResults = hits;
+                root.notice = available ? "Matches by meaning · local Recall" : "Recall unavailable or warming up · showing text matches";
                 return;
+            }
+            if (!available) return;
+            var shown = {};
+            root.searchResults.forEach(function (r) { shown[r.folder + "/" + r.file] = true; });
+            var related = hits.filter(function (h) { return !shown[h.folder + "/" + h.file]; })
+                              .map(function (h) { return Object.assign({ related: true }, h); });
+            if (related.length > 0)
+                root.searchResults = root.searchResults.concat(related);
+        }
+        function onSyncFinished(label, ok) {
+            if (label === "Pull")
+                root.pollFailures = ok ? 0 : Math.min(root.pollFailures + 1, 4);
+        }
+        function onNoteContentChanged() {
             if (!root.dirty) {
                 root.loadEditor();
                 return;
@@ -1698,12 +1686,10 @@ ApplicationWindow {
             if (backend.syncRunning)
                 return;
             // A note moved elsewhere is followed there; one deleted keeps
-            // the edits as a new note (editsKeptAsNote).
-            root.keepingEdits = true;
+            // the edits as a new note (editsKeptAsNote). The reloads that
+            // merge makes come back here, and it answers those with false.
             root.keptNotice = "";
-            var kept = backend.keepEditsAsConflict(root.savedText, editor.text);
-            root.keepingEdits = false;
-            if (kept) {
+            if (backend.keepEditsAsConflict(root.savedText, editor.text)) {
                 root.loadEditor();
                 root.notice = root.keptNotice.length > 0 ? root.keptNotice
                     : backend.noteConflicts.length === 0 ? "Merged your edits with a change from another device." : "";
@@ -1720,10 +1706,7 @@ ApplicationWindow {
             // Typing went on: the edits now start from what was queued. A
             // sync that changed the note too is merged with them; otherwise
             // they stay unsaved, on top of the text just written.
-            root.keepingEdits = true;
-            var kept = backend.keepEditsAsConflict(body, editor.text);
-            root.keepingEdits = false;
-            if (kept)
+            if (backend.keepEditsAsConflict(body, editor.text))
                 root.loadEditor();
             else
                 root.savedText = body;
@@ -1734,9 +1717,15 @@ ApplicationWindow {
         function onNotesChanged() { root.refreshSearch(); }
         function onFoldersChanged() { root.refreshSearch(); }
         function onCurrentNoteChanged() { root.conflictAsText = false; }
-        // Not on syncRunningChanged: that turns false between runSync's
-        // push and its pull, which would unlock the editor too early.
-        function onSyncChainFinished() { root.freshening = false; }
+        // The poll counts from the end of the last sync, whatever started it
+        // (a focus, a push, Pull), so it never follows one within the interval.
+        // The editor is unlocked here and not on syncRunningChanged: that
+        // turns false between runSync's push and its pull, too early.
+        function onSyncChainFinished() {
+            if (poll.running)
+                poll.restart();
+            root.freshening = false;
+        }
         function onCurrentNoteChangedOnDisk() {
             // Unsaved edits are kept apart from the change (onNoteContentChanged),
             // after any running sync is done writing.
@@ -1877,8 +1866,7 @@ ApplicationWindow {
                 enabled: !backend.syncRunning
                 onClicked: {
                     previewDialog.close();
-                    root.lastFocusSync = Date.now();
-                    backend.runSync();
+                    root.syncNow();
                 }
             }
             Button { text: "Close"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }

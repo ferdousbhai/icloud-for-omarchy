@@ -25,6 +25,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QScopeGuard>
+#include <QScopedValueRollback>
 #include <QStandardPaths>
 #include <QTextDocument>
 #include <QTextStream>
@@ -1370,8 +1371,11 @@ QStringList NotesBackend::clipboardFiles()
 
 bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
 {
+    // The reloads below reach the window, whose own unsaved text is what is
+    // being merged: asked again from there, never a second time.
     if (m_merging)
         return false;
+    const QScopedValueRollback<bool> merging(m_merging, true);
     // Its file went away: a pull may have written the new one only after
     // removing the old, so look for its id once more before giving up on it.
     if (m_currentNote.isEmpty() && m_lostNote.valid
@@ -1402,11 +1406,7 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
     if (!writeText(path, split.envelope + merged))
         return false;
     m_queuedSave = {}; // these edits are in
-    // The reload reaches the window, whose own unsaved text is what was
-    // just merged: never merge it into the result a second time.
-    const bool wasMerging = std::exchange(m_merging, true);
     loadCurrentNote();
-    m_merging = wasMerging;
     rebuildNotes();
     if (!SyncModel::hasConflictMarkers(merged))
         emit vaultChanged(); // a clean merge syncs as any edit
