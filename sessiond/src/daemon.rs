@@ -399,7 +399,8 @@ enum Loaded {
 
 /// The account `account.json` names, with its cookies from the keyring.
 /// A file from before the cookies moved to the keyring has them moved
-/// there, and is rewritten without them. `Err`: the keyring would not
+/// there (unless the keyring already holds the account's session, no
+/// older than the file's), and is rewritten without them. `Err`: the keyring would not
 /// answer, so the account is neither restored nor forgotten. It writes
 /// both stores, so it runs only with [`Daemon::written`] held.
 ///
@@ -421,16 +422,36 @@ fn load_account(path: &Path, secrets: &dyn SecretStore) -> Result<Loaded, Box<Un
     };
     let secret = match stored.legacy_secret() {
         Some(legacy) => {
-            let text = Zeroizing::new(serde_json::to_string(&legacy).expect("the session secret serializes"));
-            if let Err(e) = secrets.set_item(Kind::Session, &stored.apple_id, &text) {
-                let why = format!("moving the session's cookies to the keyring: {e}");
-                return Err(Box::new(Unread { stored, why }));
+            // The account's session already in the keyring: an earlier
+            // start moved the cookies and could not rewrite the file (a
+            // state directory that cannot be written). The keyring's has
+            // been kept up to date since and the file's has not, so the
+            // file's must not go over it. Unless its token expires later:
+            // then an older daemon wrote the file since, and it is newer.
+            let kept = match secrets.get_item(Kind::Session) {
+                Ok(text) => text
+                    .and_then(|text| serde_json::from_str::<SessionSecret>(&text).ok())
+                    .filter(|kept| {
+                        kept.dsid == legacy.dsid
+                            && cookies::token_expiry(&kept.cookies) >= cookies::token_expiry(&legacy.cookies)
+                    }),
+                Err(e) => {
+                    let why = format!("reading the session's cookies from the keyring: {e}");
+                    return Err(Box::new(Unread { stored, why }));
+                }
+            };
+            if kept.is_none() {
+                let text = Zeroizing::new(serde_json::to_string(&legacy).expect("the session secret serializes"));
+                if let Err(e) = secrets.set_item(Kind::Session, &stored.apple_id, &text) {
+                    let why = format!("moving the session's cookies to the keyring: {e}");
+                    return Err(Box::new(Unread { stored, why }));
+                }
             }
             match stored.save(path) {
                 Ok(()) => eprintln!("icloud-sessiond: moved the session's cookies from account.json to the keyring"),
                 Err(e) => eprintln!("icloud-sessiond: rewriting {} without its cookies: {e}", path.display()),
             }
-            legacy
+            kept.unwrap_or(legacy)
         }
         None => {
             let text = match secrets.get_item(Kind::Session) {

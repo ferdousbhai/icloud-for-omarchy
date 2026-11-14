@@ -298,7 +298,9 @@ The cookies are never written to a file. The daemon reads them from the
 keyring off its start path, so a locked keyring's unlock prompt never
 holds up its bus name; a `Session()` meanwhile waits for that read. An `account.json` from an older daemon
 that still holds them has them moved into the keyring then, and is
-rewritten without them. When the keyring cannot be read
+rewritten without them. If that rewrite fails (a state directory that
+cannot be written), later starts keep the keyring's session for the same
+account rather than moving the file's old cookies over it. When the keyring cannot be read
 (no Secret Service on the bus, a locked keyring whose unlock prompt was
 dismissed), the daemon stays signed in as the account `account.json`
 names (`SignedIn`, `AppleId`, `FullName` as before) but hands out no

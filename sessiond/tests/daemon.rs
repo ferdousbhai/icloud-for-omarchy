@@ -2046,6 +2046,47 @@ fn the_cookies_move_to_the_keyring_and_account_json_keeps_none() {
     assert!(env.account_file().is_none());
 }
 
+/// A state directory that cannot be written keeps the old account.json,
+/// cookies and all: the next start must not put those over the session the
+/// keyring has kept up to date since.
+#[test]
+fn an_account_json_that_cannot_be_rewritten_does_not_go_over_the_keyring_s_session() {
+    let server = apple();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let state = env.account_path().parent().unwrap().to_path_buf();
+    let writable = |on: bool| {
+        let mode = if on { 0o700 } else { 0o500 };
+        fs::set_permissions(&state, fs::Permissions::from_mode(mode)).unwrap();
+    };
+    writable(false);
+    let conn = env.conn();
+    let (cookie, _, _) = session(&conn).unwrap();
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("rotated1"));
+    wait_until("the rotated session in the keyring", Duration::from_secs(5), || {
+        env.session_secret()
+            .is_some_and(|s| cookie_named(&s["cookies"], "X-APPLE-WEBAUTH-TOKEN").unwrap()["value"] == "rotated1")
+    });
+    // The file could not be rewritten: it still holds the cookies it had.
+    let file = env.account_file().unwrap();
+    assert_eq!(
+        cookie_named(&file["cookies"], "X-APPLE-WEBAUTH-TOKEN").unwrap()["value"],
+        "original"
+    );
+
+    env.kill_daemon(&conn);
+    session(&conn).unwrap();
+    writable(true);
+    let sent = server.requests(VALIDATE)[1].header("Cookie").unwrap().to_string();
+    assert_eq!(
+        cookie_of(&sent, "X-APPLE-WEBAUTH-TOKEN").as_deref(),
+        Some("rotated1"),
+        "the next start went back to account.json's cookies"
+    );
+}
+
 /// A session item whose secret is `damaged` (empty, or not a session)
 /// signs out at the next start, and says so; `account.json` is moved
 /// aside, not deleted, and the item is left for inspection.
