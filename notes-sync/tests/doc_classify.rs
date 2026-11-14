@@ -420,14 +420,22 @@ fn real_fixture_notes_classify_to_their_golden_markdown() {
 const TABLE: &str = "com.apple.notes.table";
 
 /// A table is written in its placeholder's place: text after it on the line
-/// would end its last row early, and a line after it that looks like a row
-/// would become one. Either way the file reads back as another note, and a
-/// push would send that: such a note is read-only.
+/// would end its last row early, a line after it that looks like a row
+/// would become one, and text before it, or a list, heading, quote or code
+/// block around it, keeps it from being found where it is written at all.
+/// The file would read back as another note (and push refuse every edit):
+/// such a note is read-only.
 #[test]
 fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_read_only() {
     for (text, runs) in [
         ("\u{fffc}#", vec![info(1, Some("T1"), TABLE), styled(1, 3)]),
         ("\u{fffc}\n|x|", vec![info(1, Some("T1"), TABLE), styled(4, 3)]),
+        // Not on a plain line of its own: never found where it is written.
+        ("x\u{fffc}", vec![styled(1, 3), info(1, Some("T1"), TABLE)]),
+        ("\u{fffc}", vec![styled_info(TABLE, 100)]),
+        ("\u{fffc}", vec![styled_info(TABLE, 1)]),
+        ("\u{fffc}", vec![styled_info(TABLE, 4)]),
+        ("\u{fffc}", vec![quoted_info(TABLE)]),
     ] {
         let result = ok(classify(&titled(text, runs), TitleMode::InBody));
         assert!(!result.publishable, "{text:?}");
@@ -448,5 +456,27 @@ fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_read_only() {
             ok(classify(&titled(text, runs), TitleMode::InBody)).publishable,
             "{text:?}"
         );
+    }
+}
+
+/// A placeholder run carrying `uti` and the paragraph style `style`.
+fn styled_info(uti: &str, style: u32) -> AttributeRun {
+    AttributeRun {
+        paragraph_style: Some(ParagraphStyle {
+            style: Some(style),
+            ..Default::default()
+        }),
+        ..info(1, Some("T1"), uti)
+    }
+}
+
+/// A placeholder run carrying `uti`, in a quote.
+fn quoted_info(uti: &str) -> AttributeRun {
+    AttributeRun {
+        paragraph_style: Some(ParagraphStyle {
+            block_quote_level: Some(1),
+            ..Default::default()
+        }),
+        ..info(1, Some("T1"), uti)
     }
 }
