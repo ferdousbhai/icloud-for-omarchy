@@ -1243,6 +1243,14 @@ impl Env {
 
 #[test]
 fn a_file_edited_after_a_run_ended_before_its_write_landed_is_read_against_what_it_last_held() {
+    // The temp file as this version names it, and as the one before did
+    // (`.syncthing.<name>.tmp`): a marker that version left is taken up too.
+    for old in [false, true] {
+        file_edited_after_a_write_that_never_landed(old);
+    }
+}
+
+fn file_edited_after_a_write_that_never_landed(old: bool) {
     // Seed 1874 of the model, which failed only when the reminders' random
     // IDs fell in one order: two "Tea", the second completed.
     let env = start();
@@ -1270,6 +1278,14 @@ fn a_file_edited_after_a_run_ended_before_its_write_landed_is_read_against_what_
     env.state.put(tea);
     env.background_crashing_at("tmp-written");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    let tmp = dir.join(".syncthing.Groceries.md.icloud-reminders.tmp");
+    let left = if old {
+        let to = dir.join(".syncthing.Groceries.md.tmp");
+        std::fs::rename(&tmp, &to).unwrap();
+        to
+    } else {
+        tmp
+    };
     // The file as it was, with its two Tea lines swapped: read against what
     // it held, not against the write that never landed (to which it would
     // be one tick, of whichever Tea came first).
@@ -1280,7 +1296,11 @@ fn a_file_edited_after_a_run_ended_before_its_write_landed_is_read_against_what_
     std::fs::write(&path, swapped).unwrap();
     env.json(&["background", "--sync"]);
     let completed = |id: &str| env.state.record(id).unwrap()["fields"]["Completed"]["value"] == json!(1);
-    assert!(completed("Reminder/REM-TEA-2") && !completed("Reminder/REM-TEA-1"));
+    assert!(
+        completed("Reminder/REM-TEA-2") && !completed("Reminder/REM-TEA-1"),
+        "old: {old}"
+    );
+    assert!(!left.exists(), "old: {old}");
 }
 
 #[test]
@@ -1311,16 +1331,17 @@ fn a_run_ended_between_writing_a_file_and_recording_it_adds_and_deletes_nothing(
 }
 
 #[test]
-fn a_write_that_landed_is_not_undone_by_syncthing_s_temp_file_of_that_name() {
+fn a_write_that_landed_is_not_undone_by_syncthing_s_own_temp_file_and_that_is_left() {
     let env = start();
     let dir = folder(&env);
     let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
     milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
     env.state.put(milk);
     env.background_crashing_at("file-written");
-    // Syncthing starts a download of the file under the temp name it shares
-    // with this program's writes: an empty file, with the write already in.
-    std::fs::write(dir.join(".syncthing.Groceries.md.tmp"), "").unwrap();
+    // Syncthing starts a download of the file: an empty temp file of its
+    // own, with the write already in.
+    let syncthing = dir.join(".syncthing.Groceries.md.tmp");
+    std::fs::write(&syncthing, "").unwrap();
 
     let out = env.json(&["background"]);
     assert_eq!(
@@ -1331,6 +1352,7 @@ fn a_write_that_landed_is_not_undone_by_syncthing_s_temp_file_of_that_name() {
     assert_eq!(env.creates(), 0);
     let milk = env.state.record("Reminder/REM-MILK").unwrap();
     assert_eq!(milk["fields"]["Deleted"]["value"], 0);
+    assert!(syncthing.exists());
 }
 
 #[test]
@@ -1834,7 +1856,7 @@ fn a_write_a_run_ended_before_finishing_leaves_no_temp_file() {
     milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
     env.state.put(milk.clone());
     env.background_crashing_at("tmp-written");
-    let tmp = dir.join(".syncthing.Groceries.md.tmp");
+    let tmp = dir.join(".syncthing.Groceries.md.icloud-reminders.tmp");
     assert!(tmp.exists());
     // Retitled back on the phone: the next run has nothing to write.
     milk["fields"]["TitleDocument"] = title;
@@ -1892,7 +1914,7 @@ fn a_write_a_run_ended_before_finishing_leaves_no_temp_file_after_its_list_is_re
         milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
         env.state.put(milk);
         env.background_crashing_at("tmp-written");
-        assert!(dir.join(".syncthing.Groceries.md.tmp").exists());
+        assert!(dir.join(".syncthing.Groceries.md.icloud-reminders.tmp").exists());
         if deleted {
             delete_groceries(&env);
         } else {

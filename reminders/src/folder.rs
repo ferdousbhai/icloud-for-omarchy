@@ -50,8 +50,9 @@
 //!   next run (deleted since, its line goes), and one iCloud never heard of
 //!   is sent again. A file about to be written is recorded first
 //!   ([`ListState::writing`]): one found as it says was written, by a run
-//!   killed before it could record so (its temp file is removed; one
-//!   still holding the text says it was not); a
+//!   killed before it could record so (its temp file, named apart from
+//!   Syncthing's own, is removed; one still holding the text says it was
+//!   not); a
 //!   rename too ([`ListState::renaming`]): done only when the file is at
 //!   its new name and not its old. Nothing else ties a new
 //!   line to a reminder: one made on the phone that reads the same is
@@ -672,8 +673,10 @@ fn read(path: &Path) -> io::Result<Option<String>> {
 }
 
 /// Replaces the file whole: a temp file beside it, then a rename. The temp
-/// file has the name Syncthing gives its own temporaries
-/// (`.syncthing.<name>.tmp`), which it does not sync. Its data is on disk
+/// file, `.syncthing.<name>.icloud-reminders.tmp`, is of the shape Syncthing
+/// gives its own temporaries, which it does not sync, but never one of
+/// them: Syncthing's download of the file is `.syncthing.<name>.tmp`, and
+/// that is left alone. Its data is on disk
 /// before the rename, as `folder.json`'s is: a power cut must not leave an
 /// empty file that `folder.json` says was written, read as every line removed.
 fn write(path: &Path, text: &str) -> io::Result<()> {
@@ -688,7 +691,7 @@ fn write(path: &Path, text: &str) -> io::Result<()> {
 
 fn tmp_path(path: &Path) -> PathBuf {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("list");
-    path.with_file_name(format!(".syncthing.{name}.tmp"))
+    path.with_file_name(format!(".syncthing.{name}.icloud-reminders.tmp"))
 }
 
 /// What the names of `file`'s conflict copies start with.
@@ -1085,20 +1088,26 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     for ls in state.lists.values_mut() {
         // A write a killed run began: its temp file is this program's own,
         // also once the list is renamed or gone.
-        if let Some(w) = &ls.writing {
+        if let Some(text) = ls.writing.as_ref().map(|w| w.text.clone()) {
             let path = dir.join(&ls.file);
+            let held = |tmp: &Path| fs::read(tmp).is_ok_and(|t| text.as_bytes().starts_with(&t));
             let tmp = tmp_path(&path);
             // Still there with (the start of) what was being written: the
             // rename never happened, so the file is as last recorded, and
             // the user's edits are of that, whatever they look closer to.
-            // Unless the file is what was written: then that temp file is
-            // Syncthing's own, begun since (an empty one is the start of
-            // anything).
-            let landed = read(&path).ok().flatten().is_some_and(|t| t == w.text);
-            if !landed && fs::read(&tmp).is_ok_and(|t| w.text.as_bytes().starts_with(&t)) {
+            if held(&tmp) {
                 ls.writing = None;
             }
             let _ = fs::remove_file(tmp);
+            // A marker left by a version that wrote through Syncthing's own
+            // temp name (`.syncthing.<name>.tmp`), taken as above once, after
+            // an upgrade: only while the file is not what was being written,
+            // as that name may be Syncthing's download, begun since.
+            let old = path.with_file_name(format!(".syncthing.{}.tmp", ls.file));
+            if ls.writing.is_some() && read(&path).ok().flatten() != Some(text.clone()) && held(&old) {
+                ls.writing = None;
+                let _ = fs::remove_file(old);
+            }
         }
         if let Some(to) = ls.renaming.take()
             && dir.join(&to).exists()
