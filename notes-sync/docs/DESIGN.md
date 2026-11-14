@@ -247,6 +247,22 @@ window closes, so a killed run is ordinary.
   Whether a file there is byte-identical to the download is not compared:
   the name is chosen before the download runs.
 
+- A run killed mid-write leaves a temporary file: the engine's own
+  `.<pid>.<n>.tmp` beside a note, the state or a base copy, and
+  icloud-session's `.<name>.<pid>.<n>.tmp` of a download in a folder's
+  `attachments/`, which can be as large as the attachment and which a
+  file-sync tool would carry to other devices. Every pull and every push
+  (not a preview: they hold the vault's lock) starts by removing those
+  whose process is gone (`vault::local::remove_stale_temporaries_in_vault`)
+  from the vault's top directory, every layout directory and its
+  `attachments/`, the state directory and `base/`. Only regular files with
+  exactly those names: the pid and the counter plain decimal numbers with
+  no leading zero, the pid one Linux can hand out; a download's name only
+  in `attachments/`; never a `.syncthing.*.tmp`. The names carry nothing
+  else to tell them by, so a hidden file a user names exactly that way in
+  `attachments/` (with the number of no running process) is still taken
+  for one.
+
 - `push` announces a create before sending it: the record name (a new
   note's, drawn then; a new folder's, drawn by the plan) goes into
   state.json's `pendingCreates` (`{recordName: {file, sharedZoneOwner?,

@@ -762,3 +762,61 @@ fn a_pull_before_the_next_push_does_not_make_the_created_note_two() {
     assert_eq!(again.entries.len(), 0, "{again:?}");
     assert_eq!(creates(&server, "Note"), 1);
 }
+
+// --- what a killed run left half-written ---------------------------------------------
+
+/// A sync killed mid-write (Notes stops the engine when its window closes)
+/// leaves temporaries behind: icloud-session's of a download in a folder's
+/// `attachments/`, as large as the attachment may be, and the engine's own
+/// beside a note, the state and a base copy. The next pull, and the next
+/// push, clear those of processes that are gone, in the folders that are
+/// still in use, and nothing else: not another tool's, not a hidden file
+/// that only looks similar, not one of a process still running. A preview
+/// holds no lock and removes nothing.
+#[test]
+fn a_pull_and_a_push_clear_the_temporaries_a_killed_run_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    // One past the largest pid Linux hands out: no process has it.
+    let dead = 4_194_304u32;
+    let stale = [
+        format!("Notes/attachments/.photo.jpeg.{dead}.3.tmp"),
+        format!("Notes/.{dead}.0.tmp"),
+        format!(".{dead}.4.tmp"),
+        format!(".icloud-notes/.{dead}.1.tmp"),
+        format!(".icloud-notes/base/.{dead}.2.tmp"),
+    ];
+    let kept = [
+        format!("Notes/attachments/.syncthing.photo.jpeg.{dead}.3.tmp"),
+        "Notes/attachments/.mine.0123.4.tmp".to_owned(),
+        "Notes/attachments/.backup.20261114.120000.tmp".to_owned(),
+        format!("Notes/attachments/.live.jpeg.{}.0.tmp", std::process::id()),
+        format!("Notes/.photo.jpeg.{dead}.3.tmp"),
+    ];
+    let litter = || {
+        std::fs::create_dir_all(vault.join("Notes/attachments")).unwrap();
+        for file in stale.iter().chain(&kept) {
+            std::fs::write(vault.join(file), "half").unwrap();
+        }
+    };
+    let left = |files: &[String]| -> Vec<String> { files.iter().filter(|f| vault.join(f).exists()).cloned().collect() };
+
+    litter();
+    let preview = PushOptions {
+        dry_run: true,
+        ..Default::default()
+    };
+    run_push_with(&serve(&server), &vault, &mut |_| {}, &preview).unwrap();
+    assert_eq!(left(&stale), stale, "a preview removes nothing");
+
+    icloud_notes_sync::cmd::pull::run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    assert_eq!(left(&stale), Vec::<String>::new(), "after a pull");
+    assert_eq!(left(&kept), kept, "after a pull");
+
+    litter();
+    let result = push(&server, &vault);
+    assert!(result.entries.is_empty(), "{result:?}");
+    assert_eq!(left(&stale), Vec::<String>::new(), "after a push");
+    assert_eq!(left(&kept), kept, "after a push");
+}

@@ -38,7 +38,7 @@ use crate::vault::layout::{
 };
 use crate::vault::local::{
     LocalFileState, apply_note_file_times, file_names_in, local_file_state, modification_date_of, read_text,
-    rename_no_replace, split_options, write_note_file,
+    remove_stale_temporaries_in_vault, rename_no_replace, split_options, write_note_file,
 };
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
@@ -181,6 +181,9 @@ pub fn run_pull_with(
 ) -> Result<PullSummary, Error> {
     let state = require_vault(target_dir, on_status)?;
     let title_mode = state.mode();
+    // What a run that was killed left half-written (a download cut off,
+    // above all).
+    remove_stale_temporaries_in_vault(target_dir, &previous_layout_dirs(PreviousLayout::of(&state)));
 
     let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
     let db = &remote.db;

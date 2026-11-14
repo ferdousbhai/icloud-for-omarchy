@@ -1108,7 +1108,14 @@ pub fn build_push_plan(
     let mut state = if recording_suppressed() {
         read_vault(target_dir)?
     } else {
-        require_vault(target_dir, on_status)?
+        let state = require_vault(target_dir, on_status)?;
+        // A real push holds the vault's lock: what a killed run left
+        // half-written goes.
+        crate::vault::local::remove_stale_temporaries_in_vault(
+            target_dir,
+            &crate::vault::layout::previous_layout_dirs(PreviousLayout::of(&state)),
+        );
+        state
     };
     let title_mode = state.mode();
     // Before anything is read off the vault: what an earlier push may have

@@ -280,8 +280,8 @@ fn remove_stale_dirs_leaves_dir_with_untracked_files() {
 fn remove_stale_dirs_takes_a_dead_runs_temporaries_along() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
-    // No process has this id: past the largest pid Linux hands out.
-    let dead = 999_999_999u32;
+    // No process has this id: one past the largest pid Linux hands out.
+    let dead = 4_194_304u32;
     write_vault_file(root, &format!("Old/.{dead}.0.tmp"), "half a note");
     write_vault_file(
         root,

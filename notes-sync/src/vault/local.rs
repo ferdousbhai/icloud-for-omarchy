@@ -56,36 +56,72 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8], keep_permissions: bool)
     written
 }
 
+/// The largest process id Linux hands out is one below this
+/// (`PID_MAX_LIMIT`).
+const PID_LIMIT: u32 = 4_194_304;
+
 /// The process id in the name of a temporary file this engine leaves
 /// beside what it writes: [`temp_sibling`]'s `.<pid>.<n>.tmp`, and, with
 /// `downloads` (in an `attachments/` directory), icloud-session's
-/// `.<file name>.<pid>.<n>.tmp` for a download. `None` for any other name,
-/// a file-sync tool's own temporaries (`.syncthing.*.tmp`) among them.
+/// `.<file name>.<pid>.<n>.tmp` for a download. Exactly as those are
+/// written: `<pid>` and `<n>` are plain decimal numbers (no sign, no
+/// leading zero), the pid one a process can have and the counter one that
+/// fits its 64 bits. `None` for any other name, a file-sync tool's own
+/// temporaries (`.syncthing.*.tmp`) among them.
 fn temporary_pid(name: &str, downloads: bool) -> Option<u32> {
     let stem = name.strip_prefix('.')?.strip_suffix(".tmp")?;
     let mut parts = stem.rsplitn(3, '.');
-    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let number = |part: &str| -> Option<u64> {
+        let plain = part.bytes().all(|b| b.is_ascii_digit()) && (part == "0" || !part.starts_with('0'));
+        plain.then(|| part.parse().ok())?
+    };
     let (n, pid, file_name) = (parts.next()?, parts.next()?, parts.next());
     let ours = match file_name {
         None => true,
         Some(file_name) => downloads && !file_name.is_empty() && !stem.starts_with("syncthing."),
     };
-    (ours && digits(n) && digits(pid)).then(|| pid.parse().ok())?
+    number(n)?;
+    let pid = u32::try_from(number(pid)?).ok()?;
+    (ours && (1..=PID_LIMIT).contains(&pid)).then_some(pid)
 }
 
 /// Removes from `dir` the temporaries ([`temporary_pid`]) of processes that
 /// are no longer running: what a run that was killed mid-write left there.
-/// Best effort, and only where running processes can be told (`/proc`).
+/// Only regular files. Best effort, and only where running processes can be
+/// told (`/proc`).
 pub(crate) fn remove_stale_temporaries(dir: &Path, downloads: bool) {
     let proc = Path::new("/proc");
     if !proc.join("self").exists() {
         return;
     }
     for name in file_names_in(dir).unwrap_or_default() {
-        if temporary_pid(&name, downloads).is_some_and(|pid| !proc.join(pid.to_string()).exists()) {
-            let _ = std::fs::remove_file(dir.join(name));
+        let path = dir.join(&name);
+        if temporary_pid(&name, downloads).is_some_and(|pid| !proc.join(pid.to_string()).exists())
+            && std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file())
+        {
+            let _ = std::fs::remove_file(path);
         }
     }
+}
+
+/// Clears what a killed run left half-written in the vault
+/// ([`remove_stale_temporaries`]): in the vault's top directory and every
+/// directory of `dirs` (the layout's), in the `attachments/` of each (where
+/// a download cut off can be as large as the attachment, and a file-sync
+/// tool would carry it to other devices), and in the engine's own state
+/// directory and its base copies. For a command that holds the vault's
+/// lock: no other run of this engine is writing there.
+pub fn remove_stale_temporaries_in_vault(target_dir: &Path, dirs: &[String]) {
+    for dir in std::iter::once("").chain(dirs.iter().map(String::as_str)) {
+        let dir = target_dir.join(dir);
+        remove_stale_temporaries(&dir, false);
+        remove_stale_temporaries(&dir.join("attachments"), true);
+    }
+    remove_stale_temporaries(&super::state::state_dir(target_dir), false);
+    remove_stale_temporaries(
+        &super::state::state_subdir(target_dir, super::state::BASE_DIR_NAME),
+        false,
+    );
 }
 
 /// rename(2) that fails with `AlreadyExists` instead of replacing what is
@@ -293,4 +329,37 @@ pub fn display_path_from(target_dir: &Path, file: &str, cwd: &Path) -> String {
     let to = abs(&target_dir.join(file));
     let relative = posix::relative(&from, &to);
     if relative.is_empty() { ".".into() } else { relative }
+}
+
+#[cfg(test)]
+mod temporary_tests {
+    use super::temporary_pid;
+
+    /// Only the names this engine and icloud-session write.
+    #[test]
+    fn temporary_names_are_exactly_the_ones_written() {
+        assert_eq!(temporary_pid(".1234.0.tmp", false), Some(1234));
+        assert_eq!(temporary_pid(".photo.jpeg.1234.17.tmp", true), Some(1234));
+        assert_eq!(temporary_pid(".a.b.c.4194304.0.tmp", true), Some(4_194_304));
+        // A download's name only where downloads go.
+        assert_eq!(temporary_pid(".photo.jpeg.1234.17.tmp", false), None);
+        // Numbers a pid and a counter are never written as.
+        for name in [
+            ".report.0123.4.tmp",
+            ".report.123.04.tmp",
+            ".report.0.4.tmp",
+            ".report.4194305.4.tmp",
+            ".report.20251114.120000.tmp",
+            ".report.123.99999999999999999999999.tmp",
+            ".report.+12.3.tmp",
+            ".report.12..tmp",
+            "..12.3.tmp",
+        ] {
+            assert_eq!(temporary_pid(name, true), None, "{name}");
+        }
+        assert_eq!(temporary_pid(".012.3.tmp", false), None);
+        assert_eq!(temporary_pid(".syncthing.Pie.md.1234.3.tmp", true), None);
+        assert_eq!(temporary_pid("photo.jpeg.1234.17.tmp", true), None);
+        assert_eq!(temporary_pid(".photo.jpeg.1234.17.part", true), None);
+    }
 }
