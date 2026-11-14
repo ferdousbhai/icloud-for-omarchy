@@ -10,7 +10,7 @@ use super::base::{read_base_copy, write_base_copy};
 use super::layout::{
     RESERVED_SIBLING_DIR_NAMES, RESERVED_TOP_LEVEL_DIR_NAMES, StateDirInfo, VaultLayout, expected_note_dir, note_dir_of,
 };
-use super::local::{read_text, rename_no_replace, write_note_file};
+use super::local::{read_text, remove_stale_temporaries, rename_no_replace, write_note_file};
 use super::pairing::claim_names_on_disk;
 use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
@@ -196,7 +196,9 @@ pub fn relocate_note_attachments(
 }
 
 /// `removeStaleDirs`: best-effort rmdir of directories the previous layout
-/// used and the current one doesn't (deepest first; only if empty).
+/// used and the current one doesn't (deepest first; only if empty). A
+/// temporary file a killed run left in one is no reason to keep it: kept,
+/// the next push would make the directory a folder in iCloud again.
 pub fn remove_stale_dirs(target_dir: &Path, previous_dirs: &[String], current_dirs: &HashSet<String>) {
     let mut stale: Vec<&String> = previous_dirs
         .iter()
@@ -204,8 +206,11 @@ pub fn remove_stale_dirs(target_dir: &Path, previous_dirs: &[String], current_di
         .collect();
     stale.sort_by_key(|d| std::cmp::Reverse(d.split('/').count()));
     for dir in stale {
-        let _ = std::fs::remove_dir(target_dir.join(dir).join("attachments"));
-        let _ = std::fs::remove_dir(target_dir.join(dir));
+        let dir = target_dir.join(dir);
+        remove_stale_temporaries(&dir.join("attachments"), true);
+        let _ = std::fs::remove_dir(dir.join("attachments"));
+        remove_stale_temporaries(&dir, false);
+        let _ = std::fs::remove_dir(dir);
     }
 }
 

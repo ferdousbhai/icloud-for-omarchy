@@ -56,6 +56,38 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8], keep_permissions: bool)
     written
 }
 
+/// The process id in the name of a temporary file this engine leaves
+/// beside what it writes: [`temp_sibling`]'s `.<pid>.<n>.tmp`, and, with
+/// `downloads` (in an `attachments/` directory), icloud-session's
+/// `.<file name>.<pid>.<n>.tmp` for a download. `None` for any other name,
+/// a file-sync tool's own temporaries (`.syncthing.*.tmp`) among them.
+fn temporary_pid(name: &str, downloads: bool) -> Option<u32> {
+    let stem = name.strip_prefix('.')?.strip_suffix(".tmp")?;
+    let mut parts = stem.rsplitn(3, '.');
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let (n, pid, file_name) = (parts.next()?, parts.next()?, parts.next());
+    let ours = match file_name {
+        None => true,
+        Some(file_name) => downloads && !file_name.is_empty() && !stem.starts_with("syncthing."),
+    };
+    (ours && digits(n) && digits(pid)).then(|| pid.parse().ok())?
+}
+
+/// Removes from `dir` the temporaries ([`temporary_pid`]) of processes that
+/// are no longer running: what a run that was killed mid-write left there.
+/// Best effort, and only where running processes can be told (`/proc`).
+pub(crate) fn remove_stale_temporaries(dir: &Path, downloads: bool) {
+    let proc = Path::new("/proc");
+    if !proc.join("self").exists() {
+        return;
+    }
+    for name in file_names_in(dir).unwrap_or_default() {
+        if temporary_pid(&name, downloads).is_some_and(|pid| !proc.join(pid.to_string()).exists()) {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+    }
+}
+
 /// rename(2) that fails with `AlreadyExists` instead of replacing what is
 /// at `to` (a file, a directory, or a symbolic link, dangling or not):
 /// `renameat2(RENAME_NOREPLACE)`, so a file that turns up at `to` after the

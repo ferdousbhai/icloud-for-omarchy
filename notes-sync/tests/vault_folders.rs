@@ -273,6 +273,36 @@ fn remove_stale_dirs_leaves_dir_with_untracked_files() {
     assert_eq!(read(root, "Old/Keep me.md"), "untracked");
 }
 
+/// A temporary file of a run that was killed (its process is gone) doesn't
+/// keep a stale directory: left, push would make it a folder again. One of
+/// a process still running, and any other file, does.
+#[test]
+fn remove_stale_dirs_takes_a_dead_runs_temporaries_along() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    // No process has this id: past the largest pid Linux hands out.
+    let dead = 999_999_999u32;
+    write_vault_file(root, &format!("Old/.{dead}.0.tmp"), "half a note");
+    write_vault_file(
+        root,
+        &format!("Old/attachments/.photo.jpeg.{dead}.3.tmp"),
+        "half a download",
+    );
+    write_vault_file(root, &format!("Busy/.{}.0.tmp", std::process::id()), "being written");
+    write_vault_file(
+        root,
+        &format!("Synced/.syncthing.Pie.md.{dead}.3.tmp"),
+        "another tool's",
+    );
+    write_vault_file(root, &format!("Named/.photo.jpeg.{dead}.3.tmp"), "not in attachments/");
+    let stale: Vec<String> = ["Old", "Busy", "Synced", "Named"].map(str::to_owned).to_vec();
+    remove_stale_dirs(root, &stale, &HashSet::new());
+    assert!(!root.join("Old").exists());
+    for kept in ["Busy", "Synced", "Named"] {
+        assert_eq!(std::fs::read_dir(root.join(kept)).unwrap().count(), 1, "{kept}");
+    }
+}
+
 // --- folderCreate ----------------------------------------------------------------
 
 fn index(entries: &[(&str, StateDirInfo)]) -> IndexMap<String, StateDirInfo> {
