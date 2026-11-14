@@ -221,7 +221,7 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `FindMyPasswordStored` | property | `b`, the keyring holds the Apple ID password for the signed-in account (false when signed out) |
 | `SetPassword(s)` | method | signs in to Find My once with the password (the autofill window, below). If Apple refuses it, nothing is stored (`…Error.PasswordRejected`); otherwise it is stored in the keyring, and a sign-in that failed for another reason is reported as `…Error.Failed` ("stored the password, but the Find My sign-in with it failed: …"). Also `…Error.Failed` (keyring), `…Error.SignInRequired` |
 | `ForgetPassword()` | method | removes the stored password(s) from the keyring; the session's item stays |
-| `SignOut()` | method | forgets the account (and its Find My jar) and the device trust. `…Error.KeyringUnavailable`: signed out, but the keyring would not remove the session's item; the next start removes it |
+| `SignOut()` | method | forgets the account (and its Find My jar) and the device trust. With nobody signed in it still removes any session item the keyring holds (see [Files](#files)). `…Error.KeyringUnavailable`: signed out, but the keyring would not remove the session's item; the next start removes it |
 
 Property changes are announced with the standard
 `org.freedesktop.DBus.Properties.PropertiesChanged` signal, one signal per
@@ -333,6 +333,10 @@ in, and the daemon says which case it is on stderr:
   at, and starts signed out. The next sign-in replaces the item.
 - An item holding another account's session: it removes `account.json`
   and starts signed out.
+
+A session item left with nobody signed in (the last two cases, or a
+daemon killed between writing the keyring and `account.json`) is replaced
+by the next sign-in and removed by a `SignOut()`.
 
 No second copy of the session is kept: a copy in the same keyring does
 not survive the keyring losing data, and reading it instead would hide

@@ -2087,6 +2087,63 @@ fn an_account_json_that_cannot_be_rewritten_does_not_go_over_the_keyring_s_sessi
     );
 }
 
+/// A daemon killed between its keyring write and its `account.json` write
+/// leaves a session in the keyring that `account.json` does not go with:
+/// a sign-out cut off after removing the file, a sign-in as someone else
+/// cut off before writing it. The next start signs nobody in with it, and
+/// a `SignOut()` then leaves no session in the keyring.
+#[test]
+fn a_sign_out_removes_a_session_the_keyring_holds_for_nobody() {
+    let server = apple();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let has_session = || {
+        let items = env.all_secrets();
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["attributes"]["kind"] == "session")
+    };
+    session(&conn).unwrap();
+    wait_stored(&env, &server);
+
+    // The sign-out cut off: no account.json, the session still stored.
+    env.kill_daemon(&conn);
+    let account = fs::read_to_string(env.account_path()).unwrap();
+    fs::remove_file(env.account_path()).unwrap();
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(has_session());
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(!has_session(), "{}", env.all_secrets());
+
+    // The sign-in as someone else cut off: account.json names the first
+    // account, the keyring holds the second's session.
+    env.kill_daemon(&conn);
+    fs::write(env.account_path(), account).unwrap();
+    let other = json!({"dsid": "67890", "cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "other"}]});
+    fs::write(
+        env.secrets_path(),
+        json!([{
+            "label": "iCloud session (icloud-session): other@example.com",
+            "attributes": {"application": "icloud-session", "kind": "session"},
+            "secret": other.to_string(),
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    wait_until("the keyring's look", Duration::from_secs(30), || {
+        !icloud_session::status_on(&conn).unwrap().signed_in
+    });
+    assert!(has_session());
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(!has_session(), "{}", env.all_secrets());
+    assert!(!env.account_path().exists());
+}
+
 /// A session item whose secret is `damaged` (empty, or not a session)
 /// signs out at the next start, and says so; `account.json` is moved
 /// aside, not deleted, and the item is left for inspection.

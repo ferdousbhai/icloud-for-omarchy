@@ -918,13 +918,22 @@ impl Daemon {
 
     /// Removes the session and the device trust from the keyring for a
     /// sign-out that could not (see `removal_pending`), unless an account
-    /// was stored since: at start, on a `SignOut()` with nothing else to
-    /// forget, and before a sign-in window opens (it starts with the stored
-    /// trust, which must not be a signed-out account's).
+    /// was stored since: at start, and before a sign-in window opens (it
+    /// starts with the stored trust, which must not be a signed-out
+    /// account's).
     fn settle_removal(&self) {
-        if !self.cfg.paths.removal_pending.exists() {
-            return;
+        if self.cfg.paths.removal_pending.exists() {
+            self.remove_signed_out();
         }
+    }
+
+    /// With nobody signed in, removes the session and the device trust
+    /// from the keyring, owed a removal or not: a `SignOut()` with no
+    /// account to forget leaves no session there either (one `account.json`
+    /// did not go with and a start left: another account's, a damaged one,
+    /// that of a sign-out or sign-in cut off between the keyring and
+    /// `account.json`). A keyring that will not leaves the removal owed.
+    fn remove_signed_out(&self) {
         let _written = lock(&self.written);
         {
             let st = lock(&self.state);
@@ -941,7 +950,13 @@ impl Daemon {
                 eprintln!("icloud-sessiond: removed the signed-out session from the keyring");
                 self.clear_removal_pending();
             }
-            Err(e) => eprintln!("icloud-sessiond: removing the signed-out session from the keyring: {e}"),
+            Err(e) => {
+                eprintln!("icloud-sessiond: removing the signed-out session from the keyring: {e}");
+                let marker = &self.cfg.paths.removal_pending;
+                if let Err(e) = files::touch(marker) {
+                    eprintln!("icloud-sessiond: writing {}: {e}", marker.display());
+                }
+            }
         }
     }
 
@@ -1827,9 +1842,9 @@ impl Daemon {
         };
         match save {
             Some(save) => self.write(save),
-            // Already signed out: a removal an earlier SignOut owed is
-            // tried again (the keyring may answer now).
-            None => self.settle_removal(),
+            // Already signed out: whatever session the keyring still holds
+            // goes (a removal an earlier SignOut owed is tried again).
+            None => self.remove_signed_out(),
         }
         {
             // After any sign-in's write (`written`), so none stores its
