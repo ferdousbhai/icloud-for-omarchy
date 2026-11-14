@@ -671,3 +671,40 @@ fn appending_after_a_trailing_embed_grows_a_fresh_run() {
     assert!(doc.attribute_runs[2].attachment_info.is_none());
     assert_eq!(reencode_and_decode(&doc), "a\u{fffc} tail");
 }
+
+/// A line broken in two, or two lines joined, is the one line break typed
+/// or deleted: no half of the line is deleted and typed again (losing what
+/// Markdown doesn't show of it, or refusing the push for an embed in it).
+/// Found by `roundtrip_property` (`splices_are_exactly_the_edit`).
+#[test]
+fn compute_splices_breaks_and_joins_a_line_at_the_line_break() {
+    assert_eq!(compute_splices("abcdef", "abc\ndef"), vec![splice(3, 0, "\n")]);
+    assert_eq!(compute_splices("abc\ndef\n", "abcdef\n"), vec![splice(3, 1, "")]);
+    assert_eq!(
+        compute_splices("text \u{fffc}", "text\n\u{fffc}"),
+        vec![splice(4, 1, "\n")]
+    );
+    // A blank line typed above a line of spaces is that line break, not the
+    // spaces moved down a line.
+    assert_eq!(compute_splices(" \n", "\n \n"), vec![splice(0, 0, "\n")]);
+
+    let mut doc = simple_document("abcdef");
+    doc.attribute_runs = vec![
+        AttributeRun::with_length(3),
+        AttributeRun {
+            length: Some(3),
+            emphasis: Some(1),
+            ..Default::default()
+        },
+    ];
+    assert!(apply_text_edit(&mut doc, "abc\ndef", &opts(REPLICA_A)).unwrap());
+    validate_document_invariants(&doc).unwrap();
+    let emphasized: Vec<u32> = doc
+        .attribute_runs
+        .iter()
+        .filter(|r| r.emphasis == Some(1))
+        .map(|r| r.len())
+        .collect();
+    assert_eq!(emphasized, vec![3]);
+    assert!(!doc.runs.iter().any(|r| r.tombstone));
+}

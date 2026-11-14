@@ -577,6 +577,8 @@ pub fn compute_splice(old_text: &str, new_text: &str) -> Splice {
 /// whole, at the hunk's end or at its start, whichever changes less (and,
 /// as often both change as much, whichever leaves the paired lines closer).
 /// What a changed line keeps of itself is kept ([`refine_replacement`]).
+/// A hunk, or the whole edit, is instead one replacement where that changes
+/// less: a line broken in two or two lines joined is the one line break.
 pub fn compute_splices(old_text: &str, new_text: &str) -> Vec<Splice> {
     if old_text == new_text {
         return Vec::new();
@@ -669,15 +671,31 @@ pub fn compute_splices(old_text: &str, new_text: &str) -> Vec<Splice> {
             ((cost, pair_cost), out)
         };
         let front = align(0, 0, true);
-        let chosen = if old_count == new_count {
-            front.1
+        let mut chosen = if old_count == new_count {
+            front
         } else {
             let back = align(old_count - pairs, new_count - pairs, false);
-            if back.0 < front.0 { back.1 } else { front.1 }
+            if back.0 < front.0 { back } else { front }
         };
-        splices.extend(chosen);
+        // A line broken in two or two joined is one character's change, which
+        // pairing lines turns into half a line typed again: the hunk as one
+        // replacement, when that changes less.
+        let mut whole = Vec::new();
+        let whole_cost = tighten(&old_group(0, old_count), &new_group(0, new_count), at(0), &mut whole);
+        if whole_cost < chosen.0.0 {
+            chosen.1 = whole;
+        }
+        splices.extend(chosen.1);
     }
     matched(next, old_lines.len(), &mut splices);
+    // Never more than the one stretch from the first change to the last:
+    // where lines only differing in trailing whitespace pair up the wrong
+    // way, or an edit is one stretch (a line broken in two), that is less.
+    let cost = |splices: &[Splice]| -> usize { splices.iter().map(|s| s.delete_length + len16(&s.insert_text)).sum() };
+    let mut whole = Vec::new();
+    if tighten(&utf16(old_text), &utf16(new_text), 0, &mut whole) < cost(&splices) {
+        return whole;
+    }
     splices
 }
 

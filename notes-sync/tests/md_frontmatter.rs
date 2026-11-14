@@ -339,8 +339,15 @@ fn a_folded_title_keeps_the_no_break_spaces_at_its_line_edges() {
     for mine in ["", "---\nmulti: |\n  line1\n  line2\n---\n\n"] {
         let file = compose_note_file(mine, "Body", ID, Some(&title));
         let envelope = split_frontmatter(&file, titled()).frontmatter;
-        assert!(envelope.contains("\n  \u{a0}"), "not folded before the no-break space: {envelope:?}");
-        assert_eq!(read_note_title(&envelope).as_deref(), Some(title.as_str()), "{envelope:?}");
+        assert!(
+            envelope.contains("\n  \u{a0}"),
+            "not folded before the no-break space: {envelope:?}"
+        );
+        assert_eq!(
+            read_note_title(&envelope).as_deref(),
+            Some(title.as_str()),
+            "{envelope:?}"
+        );
     }
     let envelope = "---\nmulti: |\n  x\napple-note-title: one\n  \u{a0}two\u{a0}\n---\n\n";
     assert_eq!(read_note_title(envelope).as_deref(), Some("one \u{a0}two\u{a0}"));
