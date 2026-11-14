@@ -40,6 +40,10 @@ pub fn run_restore(target_dir: &Path, file: &str) -> Result<RestoreResult, Error
         &tracked.record_name,
         tracked.entry.frontmatter_title.as_deref(),
     );
+    // Its folder's directory may have gone with it.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     write_note_file(&path, &restored)?;
     // A base copy from before blank lines opening a body were left out of it
     // would otherwise leave the restored file reading as modified.

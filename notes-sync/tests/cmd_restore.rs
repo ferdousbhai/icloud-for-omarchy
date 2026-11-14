@@ -171,3 +171,18 @@ fn a_recreated_file_keeps_its_note_id_and_the_title_its_name_cannot_carry() {
     let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
     assert!(entries.is_empty(), "{entries:?}");
 }
+
+/// A note whose folder directory was deleted with it comes back where it
+/// was, directory and all (it used to fail with "No such file or
+/// directory").
+#[test]
+fn restores_a_note_whose_directory_is_gone_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = state();
+    s.notes["REC1"].file = "Recipes/Pie.md".into();
+    write_clone_state(dir.path(), &s).unwrap();
+    write_base_copy(dir.path(), "REC1", "Original synced text").unwrap();
+    run_restore(dir.path(), "Recipes/Pie.md").unwrap();
+    let text = std::fs::read_to_string(dir.path().join("Recipes/Pie.md")).unwrap();
+    assert!(text.ends_with("Original synced text"), "{text}");
+}
