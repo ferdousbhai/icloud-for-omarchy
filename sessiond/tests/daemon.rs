@@ -2240,6 +2240,162 @@ fn a_sign_out_removes_a_session_the_keyring_holds_for_nobody() {
     assert!(!env.account_path().exists());
 }
 
+/// `session-change-pending`: what a daemon killed between the keyring and
+/// `account.json`, while signing in or out, leaves behind.
+fn change_pending(env: &Env) -> PathBuf {
+    env.account_path().with_file_name("session-change-pending")
+}
+
+fn has_session_item(env: &Env) -> bool {
+    let items = env.all_secrets();
+    items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["attributes"]["kind"] == "session")
+}
+
+/// Makes the test keyring hold only another account's session.
+fn store_another_session(env: &Env) {
+    let other = json!({"dsid": "67890", "cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "other"}]});
+    fs::write(
+        env.secrets_path(),
+        json!([{
+            "label": "iCloud session (icloud-session): other@example.com",
+            "attributes": {"application": "icloud-session", "kind": "session"},
+            "secret": other.to_string(),
+        }])
+        .to_string(),
+    )
+    .unwrap();
+}
+
+fn signed_out_at_start(conn: &Connection) {
+    wait_until("the keyring's look", Duration::from_secs(30), || {
+        !icloud_session::status_on(conn).unwrap().signed_in
+    });
+}
+
+/// A daemon killed between the keyring and `account.json` leaves its
+/// marker, and the next start removes the session left for nobody: after
+/// a sign-out that had removed the file, and after a sign-in as someone
+/// else that had not written it yet.
+#[test]
+fn a_start_removes_the_session_a_cut_off_sign_in_or_sign_out_left() {
+    let server = apple();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let marker = change_pending(&env);
+    session(&conn).unwrap();
+    wait_stored(&env, &server);
+    assert!(!marker.exists(), "nothing was cut off");
+    let account = fs::read_to_string(env.account_path()).unwrap();
+
+    // The sign-out: account.json gone, the session still in the keyring.
+    env.kill_daemon(&conn);
+    fs::remove_file(env.account_path()).unwrap();
+    fs::write(&marker, "").unwrap();
+    signed_out_at_start(&conn);
+    assert!(!has_session_item(&env), "{}", env.all_secrets());
+    assert!(!marker.exists());
+
+    // The sign-in as someone else: account.json still names the first
+    // account, the keyring holds the second's session.
+    env.kill_daemon(&conn);
+    fs::write(env.account_path(), account).unwrap();
+    store_another_session(&env);
+    fs::write(&marker, "").unwrap();
+    signed_out_at_start(&conn);
+    assert_eq!(
+        prop::<String>(&conn, "SignOutReason"),
+        "The keyring held another Apple ID's iCloud session"
+    );
+    assert!(!has_session_item(&env), "{}", env.all_secrets());
+    assert!(!marker.exists());
+    assert!(!env.account_path().exists());
+}
+
+/// A sign-in and a sign-out that finish leave no marker.
+#[test]
+fn a_finished_sign_in_or_sign_out_leaves_no_marker() {
+    let server = apple();
+    let dir = tempfile::tempdir().unwrap();
+    let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com"}]});
+    let signin = printing_window(dir.path(), "", &capture);
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        seed: false,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let watch = changes(&conn);
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().signed_in);
+    wait_until("account.json", Duration::from_secs(30), || env.account_path().exists());
+    assert!(has_session_item(&env));
+    wait_until("the marker to go", Duration::from_secs(30), || {
+        !change_pending(&env).exists()
+    });
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(!has_session_item(&env) && !env.account_path().exists());
+    assert!(!change_pending(&env).exists());
+}
+
+/// A damaged item is kept for inspection even when a change was cut off.
+#[test]
+fn a_damaged_session_item_is_kept_whatever_was_cut_off() {
+    let server = apple();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    session(&conn).unwrap();
+    wait_stored(&env, &server);
+    for _ in 0..2 {
+        env.kill_daemon(&conn);
+        env.damage_session_secret("not a session");
+        fs::write(change_pending(&env), "").unwrap();
+        signed_out_at_start(&conn);
+        assert!(has_session_item(&env));
+    }
+}
+
+/// Another daemon holding the change lock is in the middle of a sign-in or
+/// sign-out (one winding down, without the bus name, finishing its window):
+/// its session is not cut off, and a daemon starting meanwhile leaves it.
+#[test]
+fn a_start_leaves_the_session_of_a_change_another_daemon_is_making() {
+    let server = apple();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        seed: false,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let marker = change_pending(&env);
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    store_another_session(&env);
+    fs::write(&marker, "").unwrap();
+    let lock = fs::File::create(marker.with_file_name("change.lock")).unwrap();
+    lock.lock().unwrap();
+    // The start's look at the keyring is over before it takes the name.
+    assert!(!icloud_session::status_on(&conn).unwrap().signed_in);
+    assert!(has_session_item(&env) && marker.exists());
+
+    // Killed, its lock goes with it: now it is cut off.
+    drop(lock);
+    env.kill_daemon(&conn);
+    signed_out_at_start(&conn);
+    assert!(!has_session_item(&env), "{}", env.all_secrets());
+    assert!(!marker.exists());
+}
+
 /// A session item whose secret is `damaged` (empty, or not a session)
 /// signs out at the next start, and says so; `account.json` is moved
 /// aside, not deleted, and the item is left for inspection.

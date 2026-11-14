@@ -351,6 +351,10 @@ pub struct Daemon {
     fingerprint_key: RandomState,
     /// The last account write; held while writing.
     written: Mutex<Written>,
+    /// Held, with the `flock` on `change.lock`, by whatever writes or
+    /// removes the account in its two stores (see [`Change`]). Lock order:
+    /// `change`, then `written`, then `state`.
+    change: Mutex<()>,
     /// Method calls being answered (see [`Busy`]); the idle exit waits for
     /// them.
     in_flight: AtomicUsize,
@@ -373,6 +377,17 @@ impl Drop for Busy {
     fn drop(&mut self) {
         self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// Held while the account is written to, or removed from, its two stores
+/// (the keyring's session item and `account.json`): in this process, and,
+/// with the `flock` on `change.lock`, among daemons (one winding down
+/// without the bus name can still be finishing a sign-in while the next
+/// one starts). A killed daemon's `flock` goes with it. `None`: the lock
+/// file could not be opened or locked (logged); the change goes on without.
+struct Change<'a> {
+    _in_process: MutexGuard<'a, ()>,
+    _among_daemons: Option<std::fs::File>,
 }
 
 /// What [`Daemon::write`] last wrote.
@@ -604,6 +619,7 @@ impl Daemon {
             find_my_login_lock: Mutex::new(()),
             fingerprint_key: RandomState::new(),
             written: Mutex::new(written),
+            change: Mutex::new(()),
             in_flight: AtomicUsize::new(0),
             pings_seen: AtomicU64::new(0),
         })
@@ -635,6 +651,7 @@ impl Daemon {
             if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
                 eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
             }
+            me.settle_cut_off();
             // After the keyring's look, so the trust is labelled with the
             // account, and (with a keyring that answers) before the name is
             // taken, so the first window gets it.
@@ -795,6 +812,12 @@ impl Daemon {
     /// logged: the session in memory is still right, and the next change
     /// retries.
     fn write(&self, save: Save) {
+        let change = self.change();
+        self.write_under(&change, save);
+    }
+
+    /// [`Daemon::write`] for a caller that holds the [`Change`] already.
+    fn write_under(&self, _change: &Change<'_>, save: Save) {
         let mut written = lock(&self.written);
         if save.seq <= written.seq {
             return;
@@ -820,6 +843,9 @@ impl Daemon {
                 }
             }
             None => {
+                // The file goes first: killed before the keyring's item
+                // has gone too, the next start removes it.
+                self.mark_change_pending();
                 if let Err(e) = files::remove(path) {
                     errors.push(format!("removing {}: {e}", path.display()));
                 }
@@ -837,6 +863,10 @@ impl Daemon {
                     }
                 }
             }
+        }
+        if errors.is_empty() {
+            // Both stores hold the same account (or none) again.
+            self.clear_change_pending();
         }
         for e in errors {
             eprintln!("icloud-sessiond: {e}");
@@ -934,6 +964,7 @@ impl Daemon {
     /// that of a sign-out or sign-in cut off between the keyring and
     /// `account.json`). A keyring that will not leaves the removal owed.
     fn remove_signed_out(&self) {
+        let _change = self.change();
         let _written = lock(&self.written);
         {
             let st = lock(&self.state);
@@ -949,6 +980,7 @@ impl Daemon {
             Ok(_) => {
                 eprintln!("icloud-sessiond: removed the signed-out session from the keyring");
                 self.clear_removal_pending();
+                self.clear_change_pending();
             }
             Err(e) => {
                 eprintln!("icloud-sessiond: removing the signed-out session from the keyring: {e}");
@@ -973,6 +1005,97 @@ impl Daemon {
             Err(e) => {
                 eprintln!("icloud-sessiond: removing the signed-out device trust from the keyring (retried later): {e}")
             }
+        }
+    }
+
+    /// Takes the [`Change`], waiting for this process's and any other
+    /// daemon's.
+    fn change(&self) -> Change<'_> {
+        let in_process = lock(&self.change);
+        let path = &self.cfg.paths.change_lock;
+        let file = match files::open_lock(path).and_then(|file| file.lock().map(|()| file)) {
+            Ok(file) => Some(file),
+            Err(e) => {
+                eprintln!("icloud-sessiond: locking {}: {e}", path.display());
+                None
+            }
+        };
+        Change {
+            _in_process: in_process,
+            _among_daemons: file,
+        }
+    }
+
+    /// The account is about to change in the keyring and `account.json`,
+    /// one after the other. Call under the [`Change`].
+    fn mark_change_pending(&self) {
+        let marker = &self.cfg.paths.change_pending;
+        if let Err(e) = files::touch(marker) {
+            eprintln!("icloud-sessiond: writing {}: {e}", marker.display());
+        }
+    }
+
+    fn clear_change_pending(&self) {
+        let marker = &self.cfg.paths.change_pending;
+        if let Err(e) = files::remove(marker) {
+            eprintln!("icloud-sessiond: removing {}: {e}", marker.display());
+        }
+    }
+
+    /// At start: a daemon killed between the keyring and `account.json`
+    /// (`session-change-pending` is still there) while signing in or out
+    /// left a session in the keyring for nobody. It is removed, when:
+    ///
+    /// - no daemon is making such a change now (the `flock` is free: one
+    ///   winding down may be finishing a sign-in, and its session is not
+    ///   cut off), which holds while it is removed;
+    /// - nobody is signed in, here or by `account.json` as it is now;
+    /// - the item is a session: one that is empty or not a session is
+    ///   kept for inspection, as [`load_account`] keeps it.
+    ///
+    /// Otherwise it is left, as it always was: the next sign-in replaces
+    /// it, a `SignOut()` removes it.
+    fn settle_cut_off(&self) {
+        let paths = &self.cfg.paths;
+        if !paths.change_pending.exists() {
+            return;
+        }
+        let _in_process = lock(&self.change);
+        let Ok(file) = files::open_lock(&paths.change_lock) else {
+            return;
+        };
+        if file.try_lock().is_err() {
+            return;
+        }
+        let _written = lock(&self.written);
+        {
+            let st = lock(&self.state);
+            if st.account.is_some() || st.unread.is_some() {
+                return;
+            }
+        }
+        if !paths.change_pending.exists() || paths.account.exists() {
+            return;
+        }
+        let removed = self.secrets.get_item(Kind::Session).and_then(|item| match item {
+            Some(text) if serde_json::from_str::<SessionSecret>(&text).is_ok() => {
+                self.secrets.remove_item(Kind::Session).map(|()| true)
+            }
+            _ => Ok(false),
+        });
+        match removed {
+            Ok(removed) => {
+                if removed {
+                    eprintln!(
+                        "icloud-sessiond: removed from the keyring the session a sign-in or sign-out cut off left"
+                    );
+                }
+                self.clear_change_pending();
+            }
+            Err(e) => eprintln!(
+                "icloud-sessiond: removing the session a cut-off sign-in or sign-out left in the keyring \
+                 (retried at the next start): {e}"
+            ),
         }
     }
 
@@ -1707,7 +1830,9 @@ impl Daemon {
             find_my: None,
         };
         // The keyring write is serialized with every other (`written`, then
-        // `state`), so no older jar's write lands after this one.
+        // `state`), so no older jar's write lands after this one. Under the
+        // `Change` until `account.json` is written too.
+        let change = self.change();
         let mut written = lock(&self.written);
         let unread_same = {
             let st = lock(&self.state);
@@ -1742,6 +1867,7 @@ impl Daemon {
         // says why, rather than lasting only until the daemon exits.
         let secret = account.secret();
         written.secret = None;
+        self.mark_change_pending();
         self.secrets
             .set_item(Kind::Session, &account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
@@ -1771,9 +1897,12 @@ impl Daemon {
             // before this one was stored. (The trust stored above it
             // removes itself: it waits for `written`, held here.)
             written.secret = None;
-            if let Err(e) = self.secrets.remove_item(Kind::Session) {
-                eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
-                let _ = files::touch(&self.cfg.paths.removal_pending);
+            match self.secrets.remove_item(Kind::Session) {
+                Ok(()) => self.clear_change_pending(),
+                Err(e) => {
+                    eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
+                    let _ = files::touch(&self.cfg.paths.removal_pending);
+                }
             }
             return Err(cancelled());
         }
@@ -1789,7 +1918,7 @@ impl Daemon {
         let save = self.save_account(&mut st);
         drop(st);
         drop(written);
-        self.write(save);
+        self.write_under(&change, save);
         Ok(())
     }
 

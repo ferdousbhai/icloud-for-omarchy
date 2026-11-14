@@ -30,6 +30,15 @@ pub struct Paths {
     /// `$XDG_STATE_HOME/icloud-session/session-removal-pending`: a sign-out
     /// could not remove the session from the keyring; removed once it does.
     pub removal_pending: PathBuf,
+    /// `$XDG_STATE_HOME/icloud-session/session-change-pending`: a sign-in
+    /// or sign-out is changing whose session the keyring and
+    /// `account.json` hold; removed once both are written. Left by a
+    /// daemon killed in between.
+    pub change_pending: PathBuf,
+    /// `$XDG_STATE_HOME/icloud-session/change.lock`: `flock`ed by the
+    /// daemon making that change, so another one starting meanwhile can
+    /// tell a change under way from one cut off.
+    pub change_lock: PathBuf,
     /// `$XDG_STATE_HOME/icloud-session/sign-out-reason`: why the account was
     /// last signed out (`SignOutReason`); removed by a sign-in.
     pub sign_out_reason: PathBuf,
@@ -59,6 +68,8 @@ impl Paths {
         Paths {
             account: state.join("account.json"),
             removal_pending: state.join("session-removal-pending"),
+            change_pending: state.join("session-change-pending"),
+            change_lock: state.join("change.lock"),
             sign_out_reason: state.join("sign-out-reason"),
             webkit_data: xdg("XDG_DATA_HOME", ".local/share").join("webkit"),
             webkit_cache: xdg("XDG_CACHE_HOME", ".cache").join("webkit"),
@@ -251,6 +262,22 @@ impl Stored {
     pub fn save(&self, path: &Path) -> io::Result<()> {
         write_json(path, &serde_json::to_value(self).expect("account serializes"))
     }
+}
+
+/// Opens `path` for an `flock`, creating it empty (mode 0600, the parent
+/// directory 0700) if need be. Never truncated or removed: every process
+/// locks the same file.
+pub fn open_lock(path: &Path) -> io::Result<fs::File> {
+    if let Some(dir) = path.parent() {
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
 }
 
 /// Removes a file, treating "already gone" as success.

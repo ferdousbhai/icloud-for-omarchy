@@ -294,6 +294,8 @@ Exit codes, the table every iCloud tool shares ([docs/CLI.md](../docs/CLI.md)):
 | `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | What is not a secret: `apple_id`, `full_name`, `dsid`, `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | Secret Service (keyring), default collection | daemon | The cookie jars: one item labelled `iCloud session (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=session`, its secret JSON `{dsid, cookies, find_my}`: the main jar (name, value, domain, path, expires; session-only cookies too) and, once authorized, the Find My jar (`cookies`, `client_params`, `captured_at`). Written only when a jar changes. |
 | `$XDG_STATE_HOME/icloud-session/session-removal-pending` (0600, empty) | daemon | Present while a sign-out still owes the keyring's session item a removal (the keyring was unavailable); the next start removes the item and the device trust, then this file; so does a sign-out, or a sign-in before its window opens, with the keyring available again. While it is present no window is given the stored trust, and it goes only once both the session item and the trust have been removed or replaced. |
+| `$XDG_STATE_HOME/icloud-session/session-change-pending` (0600, empty) | daemon | Present while a sign-in or sign-out is between its keyring write and its `account.json` write; a daemon killed there leaves it, and the next start then removes the session the keyring holds for nobody (see below). Apart from `session-removal-pending`: it says nothing about the device trust. |
+| `$XDG_STATE_HOME/icloud-session/change.lock` (0600, empty) | daemon | `flock`ed while the account is written to or removed from the keyring and `account.json`, so a daemon starting while another (winding down, without the bus name) finishes a sign-in leaves that session alone. Never removed. |
 | `$XDG_STATE_HOME/icloud-session/sign-out-reason` (0600) | daemon | `SignOutReason` as text, written at a sign-out, removed by a sign-in; absent before anyone ever signed in. |
 | Secret Service (keyring), default collection | daemon | The device trust: one item labelled `iCloud device trust (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=trust`, its secret the JSON list of the cookies "Trust this browser" left (`X-APPLE-WEBAUTH-HSA-TRUST`, idmsa.apple.com's `DES…`), handed to the next sign-in window. Kept when Apple ends the session or a password is forgotten; removed by `SignOut()`. |
 | `$XDG_DATA_HOME/icloud-session/webkit/`, `$XDG_CACHE_HOME/icloud-session/webkit/` | older sign-in windows | their WebKit profile, the web session in plaintext (`cookies.sqlite`). The window keeps none now; the daemon deletes both at start. |
@@ -338,9 +340,15 @@ in, and the daemon says which case it is on stderr:
 - An item holding another account's session: it removes `account.json`
   and starts signed out.
 
-A session item left with nobody signed in (the last two cases, or a
-daemon killed between writing the keyring and `account.json`) is replaced
-by the next sign-in and removed by a `SignOut()`.
+A daemon killed between writing the keyring and `account.json` (a
+sign-out that had removed the file, a sign-in that had not written it yet)
+leaves `session-change-pending`, and the next start removes the session
+the keyring then holds for nobody: only with nobody signed in and no
+`account.json`, with `change.lock` free (no other daemon is in the middle
+of such a change), and only an item that is a session (a damaged one is
+kept). Any other session item left with nobody signed in (the last two
+cases above without that marker) is replaced by the next sign-in and
+removed by a `SignOut()`.
 
 No second copy of the session is kept: a copy in the same keyring does
 not survive the keyring losing data, and reading it instead would hide
