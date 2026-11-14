@@ -1244,3 +1244,36 @@ fn a_conflict_copy_does_not_tick_again_what_the_file_unticked() {
     assert_eq!(out["folder"]["edited"], 1, "{out}");
     assert_eq!(env.json(&["show", "REM-PAINT"])["completed"], false);
 }
+
+#[test]
+fn a_gutted_file_s_run_killed_after_its_adds_still_deletes_nothing() {
+    let env = start();
+    for n in 0..4 {
+        env.state.put(fake::reminder(
+            &format!("REM-EXTRA-{n}"),
+            "List/LIST-GROCERIES",
+            &format!("Extra number {n}"),
+            "",
+            None,
+            now_ms(),
+        ));
+    }
+    let dir = folder(&env);
+    // A file from elsewhere: none of the six lines, eight of its own.
+    let fruit = [
+        "Apples", "Bananas", "Cherries", "Dates", "Plums", "Grapes", "Kiwis", "Lemons",
+    ];
+    let lines: String = fruit.iter().map(|f| format!("- [ ] {f}\n")).collect();
+    std::fs::write(dir.join("Groceries.md"), format!("# Groceries\n\n{lines}")).unwrap();
+    // Killed once the last of them is in iCloud, before it hears so.
+    let mut child = env.background_held_at_write(8);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    env.release_writes();
+
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["deleted"], 0, "{out}");
+    let titles = all_titles(&env, "Groceries");
+    assert_eq!(titles.len(), 14, "{titles:?}");
+    assert_eq!(env.creates(), 8);
+}

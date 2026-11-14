@@ -773,7 +773,9 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         // A conflict copy's, which the file has yet to be written with: not
         // lines removed from it.
         delta.deletes.retain(|id| !ls.unwritten.contains(id));
-        if risky(&delta, ls.items.len()) {
+        // Most of the list as the file last held it: `items` has grown by
+        // what a run killed after its adds made, and by a copy's adds.
+        if risky(&delta, parse(&ls.text, now).len()) {
             // Too much of the list to take from a file: the lines are
             // written back below, with the rest of what it asks applied.
             report.restored.push(Restored {
