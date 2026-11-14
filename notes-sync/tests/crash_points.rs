@@ -2001,3 +2001,43 @@ fn a_push_cut_short_before_more_was_typed_here_is_finished_by_the_next_run() {
     }
     crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
 }
+
+/// The share a push was creating a note in revoked while the push was cut
+/// short after iCloud made the note: every later push looked the note up in
+/// a zone that is no longer shared and failed on the answer, for good.
+#[test]
+fn a_create_in_a_share_revoked_after_the_push_was_cut_short_does_not_stop_every_later_push() {
+    let mut start = shares_changed(false);
+    start.zone.revoked.clear();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let crash = Crash {
+        at: Some((crash::ICLOUD_MODIFY.into(), 1)),
+        ..Default::default()
+    };
+    // The first request is the shared create (the update of an own note
+    // goes after it).
+    let killed = run(&fake, &place, "push", &crash);
+    assert_eq!(killed.status.signal(), Some(6), "{}", says(&killed));
+    assert_eq!(fake.zone().creates("Note").len(), 1);
+    fake.zone().revoked.insert(WRITABLE_OWNER.into());
+    let _ = run(&fake, &place, "sync", &Crash::default());
+    let again = run(&fake, &place, "sync", &Crash::default());
+    succeeded(&again, "the sync after");
+    let raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(place.vault.join(".icloud-notes/state.json")).unwrap()).unwrap();
+    assert!(raw.get("pendingCreates").is_none(), "{raw:#}");
+    // What was typed into it is kept, a note of the account's own now.
+    let mut files = Vec::new();
+    markdown_files(&place.vault, "", &mut files);
+    let kept = files.iter().find(|file| {
+        std::fs::read_to_string(place.vault.join(file)).is_ok_and(|text| text.contains("made here in a share"))
+    });
+    let kept = kept.unwrap_or_else(|| panic!("the new note's text is gone: {files:?}"));
+    let id = note_id_of(&std::fs::read_to_string(place.vault.join(kept)).unwrap()).unwrap();
+    assert!(
+        fake.zone()
+            .live(&id)
+            .is_some_and(|r| body_of(r).contains("made here in a share"))
+    );
+}

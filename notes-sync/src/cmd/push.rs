@@ -669,7 +669,17 @@ fn settle_pending_creates<T: Transport>(
     target_dir: &Path,
     state: &mut CloneState,
 ) -> Result<Vec<String>, Error> {
-    let pending = pending_creates(state);
+    let mut pending = pending_creates(state);
+    // A create in a zone that is no longer shared with this account (a pull
+    // since found the share gone): whatever iCloud made there is the
+    // owner's, and asking would only fail, every push from then on. The
+    // file is left as it is, a note of this account's own to the plan.
+    pending.retain(|_, create| {
+        create
+            .shared_zone_owner
+            .as_ref()
+            .is_none_or(|owner| state.sharer_homes.as_ref().is_some_and(|h| h.contains_key(owner)))
+    });
     let mut zones: IndexMap<Option<String>, Vec<String>> = IndexMap::new();
     for (record_name, create) in &pending {
         let names = zones.entry(create.shared_zone_owner.clone()).or_default();

@@ -336,6 +336,9 @@ window closes, so a killed run is ordinary.
   recorded; one iCloud doesn't have was never created and is created by the
   plan as usual. A lookup that answers an error fails the push
   (`cloudkit_request_failed`): the answer decides between one note and two.
+  A create in a shared zone a pull has since found no longer shared is not
+  looked up (it would fail every push): the entry goes, and the file is a
+  note of the account's own to the plan.
   A pull that ran in between (by itself, or as the pull half of a sync
   whose push failed on that lookup) has added the note as one new to the
   vault, in a file of its own (`X 2.md`); the announced file then takes
