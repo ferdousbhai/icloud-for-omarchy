@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+# Loading the checker by path would leave a compiled copy in bin/.
+sys.dont_write_bytecode = True
 CHECKER = Path(__file__).resolve().parents[1] / 'bin/check-shared-support'
 loader = importlib.machinery.SourceFileLoader('shared_support_checker', str(CHECKER))
 spec = importlib.util.spec_from_loader(loader.name, loader)

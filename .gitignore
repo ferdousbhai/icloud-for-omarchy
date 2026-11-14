@@ -7,3 +7,4 @@
 /packaging/pkg/
 *.pkg.tar.*
 *.sig
+__pycache__/
