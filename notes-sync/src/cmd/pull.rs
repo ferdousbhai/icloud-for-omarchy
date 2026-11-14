@@ -1276,7 +1276,7 @@ fn claim_untracked_attachment_names(
 
 /// Untracked files whose `apple-note-id` names `record_name`: where a note
 /// whose tracked file is gone was moved or renamed to.
-fn note_id_claimants(
+pub(super) fn note_id_claimants(
     target_dir: &Path,
     notes: &IndexMap<String, NoteEntry>,
     record_name: &str,

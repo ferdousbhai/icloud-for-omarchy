@@ -47,6 +47,17 @@ struct Server {
     changes: Mutex<u32>,
 }
 
+/// A field as iCloud answers it: the value sent, with its type.
+fn typed(value: &Value) -> Value {
+    let type_ = match value {
+        Value::String(_) => "ENCRYPTED_BYTES",
+        Value::Number(_) => "INT64",
+        Value::Array(_) => "REFERENCE_LIST",
+        _ => "REFERENCE",
+    };
+    json!({ "value": value, "type": type_ })
+}
+
 impl Server {
     fn with_note() -> Server {
         let lookup = cassette("tiny-lookup.json");
@@ -108,7 +119,7 @@ impl Server {
                         if field["value"].is_null() {
                             record["fields"].as_object_mut().unwrap().remove(name);
                         } else {
-                            record["fields"][name] = json!({ "value": field["value"] });
+                            record["fields"][name] = typed(&field["value"]);
                         }
                     }
                     record["recordChangeTag"] = tag;
@@ -121,6 +132,12 @@ impl Server {
                         sent["recordName"]
                     );
                     let mut record = sent.clone();
+                    // iCloud keeps no field that was sent empty.
+                    let fields = record["fields"].as_object_mut().unwrap();
+                    fields.retain(|_, field| !field["value"].is_null());
+                    for field in fields.values_mut() {
+                        *field = typed(&field["value"]);
+                    }
                     record["recordChangeTag"] = tag;
                     records.push(record.clone());
                     record
@@ -505,4 +522,137 @@ fn deleting_some_notes_is_not_refused() {
         assert_eq!(result.pushed, Some(deleted), "{more} more, {deleted} deleted");
         assert_eq!(state(&vault).notes.len(), more + 1 - deleted);
     }
+}
+
+// --- a push killed between iCloud's answer and its own record of it -----------------
+
+/// A server that takes the whole run down right after it applied the first
+/// `records/modify` holding a create of `record_type`: iCloud has the
+/// record, the push never hears of it. (A panic stands in for the kill: no
+/// code of the push runs after the request.)
+fn dies_after_creating(record_type: &'static str) -> Arc<Server> {
+    let died = Mutex::new(false);
+    let hook: Hook = Box::new(move |operation, before, body| {
+        let creates = body["operations"].as_array().is_some_and(|ops| {
+            ops.iter()
+                .any(|op| op["operationType"] == "create" && op["record"]["recordType"] == record_type)
+        });
+        if operation == "/records/modify" && !before && creates {
+            let mut died = died.lock().unwrap();
+            if !*died {
+                *died = true;
+                drop(died);
+                std::panic::resume_unwind(Box::new("killed"));
+            }
+        }
+    });
+    Arc::new(Server {
+        hook: Some(hook),
+        ..Server::with_note()
+    })
+}
+
+fn killed_push(server: &Arc<Server>, vault: &Path) {
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_push(server, vault)));
+    assert!(killed.is_err(), "the push was cut off");
+}
+
+fn creates(server: &Server, record_type: &str) -> usize {
+    server
+        .posts_to("/records/modify")
+        .iter()
+        .flat_map(|body| body["operations"].as_array().unwrap().clone())
+        .filter(|op| op["operationType"] == "create" && op["record"]["recordType"] == record_type)
+        .count()
+}
+
+/// A new note's create reaches iCloud and the push is killed before it
+/// records anything: the file has no id yet and state doesn't track it. The
+/// push after it finds the create it had announced in state, asks iCloud,
+/// and tracks the note it finds instead of creating it a second time.
+#[test]
+fn a_note_created_just_before_the_push_was_killed_is_not_created_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = dies_after_creating("Note");
+    std::fs::write(vault.join("Notes/Fresh.md"), "Fresh\n\nA note made here.\n").unwrap();
+
+    killed_push(&server, &vault);
+    assert_eq!(creates(&server, "Note"), 1);
+    let left = state(&vault);
+    assert_eq!(left.notes.len(), 1, "the new note is not tracked yet");
+    let pending = left.extra["pendingCreates"]
+        .as_object()
+        .expect("the create was announced");
+    let (record_name, create) = pending.iter().next().unwrap();
+    assert_eq!(create["file"], "Notes/Fresh.md");
+
+    let result = push(&server, &vault);
+    assert!(result.failures().is_empty(), "{result:?}");
+    assert_eq!(creates(&server, "Note"), 1, "not created again");
+    let after = state(&vault);
+    assert_eq!(after.notes[record_name].file, "Notes/Fresh.md");
+    assert!(!after.extra.contains_key("pendingCreates"));
+    assert!(
+        read(&vault, "Notes/Fresh.md").contains(record_name.as_str()),
+        "the file carries its id"
+    );
+
+    // And from here on it is a note like any other: nothing left to push.
+    let again = push(&server, &vault);
+    assert_eq!(again.entries.len(), 0, "{again:?}");
+    assert_eq!(creates(&server, "Note"), 1);
+}
+
+/// The same for a new folder: the folder made just before the kill is the
+/// folder the next push puts the note in, not one of two of that name.
+#[test]
+fn a_folder_created_just_before_the_push_was_killed_is_not_created_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = dies_after_creating("Folder");
+    std::fs::create_dir_all(vault.join("Projects")).unwrap();
+    std::fs::write(vault.join("Projects/Plan.md"), "Plan\n\nFirst steps.\n").unwrap();
+
+    killed_push(&server, &vault);
+    assert_eq!((creates(&server, "Folder"), creates(&server, "Note")), (1, 0));
+
+    let result = push(&server, &vault);
+    assert!(result.failures().is_empty(), "{result:?}");
+    assert_eq!((creates(&server, "Folder"), creates(&server, "Note")), (1, 1));
+    let after = state(&vault);
+    assert!(!after.extra.contains_key("pendingCreates"));
+    let (folder, _) = after
+        .folders
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|(_, f)| f.dir_name == "Projects")
+        .expect("the folder is recorded");
+    let note = after.notes.values().find(|e| e.file == "Projects/Plan.md").unwrap();
+    assert_eq!(note.folder_record_name.as_ref(), Some(folder));
+}
+
+/// A create announced and never sent (killed before the request): iCloud
+/// has no such record, and the note is created as it would have been.
+#[test]
+fn a_create_announced_and_never_sent_is_created_by_the_next_push() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    std::fs::write(vault.join("Notes/Fresh.md"), "Fresh\n\nA note made here.\n").unwrap();
+    let mut announced = state(&vault);
+    announced.extra.insert(
+        "pendingCreates".into(),
+        json!({ "a1b2c3d4-0000-4000-8000-00000000dead": { "file": "Notes/Fresh.md" } }),
+    );
+    write_clone_state(&vault, &announced).unwrap();
+
+    let result = push(&server, &vault);
+    assert_eq!(result.pushed, Some(1), "{result:?}");
+    assert_eq!(creates(&server, "Note"), 1);
+    let after = state(&vault);
+    assert!(!after.extra.contains_key("pendingCreates"));
+    assert!(!after.notes.contains_key("a1b2c3d4-0000-4000-8000-00000000dead"));
+    assert!(after.notes.values().any(|e| e.file == "Notes/Fresh.md"));
 }

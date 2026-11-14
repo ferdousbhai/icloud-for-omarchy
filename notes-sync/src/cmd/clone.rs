@@ -25,7 +25,7 @@ use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of, write_note_file};
 use crate::vault::pairing::claim_names_on_disk;
 use crate::vault::state::{
-    AttachmentEntry, CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
+    CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
 };
 
 /// `CloneOptions`.

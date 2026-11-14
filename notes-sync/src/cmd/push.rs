@@ -515,6 +515,153 @@ struct CreateCandidate {
     shared_zone_owner: Option<String>,
 }
 
+// --- creates a run was cut off in ----------------------------------------------------
+
+/// state.json's `pendingCreates`: the records a push is about to create,
+/// by record name, written before the request is sent and taken out once it
+/// is answered. A push that is killed (or loses the connection) in between
+/// leaves its entry, and the next push asks iCloud whether the record
+/// exists before it plans anything ([`settle_pending_creates`]): otherwise
+/// the note's file, which nothing tracks yet, would be created a second
+/// time. An unknown top-level key to an engine without it, which keeps it.
+const PENDING_CREATES_KEY: &str = "pendingCreates";
+
+/// A record a push was creating when it was last heard of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingCreate {
+    /// The note's file, or the folder's directory (vault-relative).
+    file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shared_zone_owner: Option<String>,
+    /// For a folder: its title and parent, as the create sent them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<PendingFolder>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingFolder {
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_record_name: Option<String>,
+}
+
+/// The state's pending creates (anything unreadable there reads as none).
+fn pending_creates(state: &CloneState) -> IndexMap<String, PendingCreate> {
+    state
+        .extra
+        .get(PENDING_CREATES_KEY)
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
+}
+
+/// Records, on disk, that `record_name` is about to be created.
+fn mark_pending_create(
+    target_dir: &Path,
+    state: &mut CloneState,
+    record_name: &str,
+    pending: PendingCreate,
+) -> Result<(), Error> {
+    let mut all = pending_creates(state);
+    all.insert(record_name.to_owned(), pending);
+    state.extra.insert(
+        PENDING_CREATES_KEY.to_owned(),
+        serde_json::to_value(all).expect("pending creates serialize"),
+    );
+    write_clone_state(target_dir, state)
+}
+
+/// What a push that was cut off while creating records left open: each is
+/// looked up. A note that exists is tracked at its file (the one the create
+/// was for, or the untracked file that already carries the id), as the push
+/// would have tracked it; a folder that exists is recorded. One that does
+/// not exist was never created, and the plan creates it as it would have.
+/// A lookup iCloud answers an error for fails the push: whether the record
+/// exists decides between creating it and creating it twice.
+fn settle_pending_creates<T: Transport>(
+    db: &Database<T>,
+    target_dir: &Path,
+    state: &mut CloneState,
+) -> Result<(), Error> {
+    let pending = pending_creates(state);
+    let mut zones: IndexMap<Option<String>, Vec<String>> = IndexMap::new();
+    for (record_name, create) in &pending {
+        zones
+            .entry(create.shared_zone_owner.clone())
+            .or_default()
+            .push(record_name.clone());
+    }
+    let mut found: HashMap<String, CloudKitRecord> = HashMap::new();
+    for (owner, names) in &zones {
+        let (records, failures) = db.lookup_records_and_failures(&note_zone(owner.as_deref()), names)?;
+        if let Some((name, code)) = failures.first() {
+            return Err(crate::cloudkit::CkError::request_failed(format!(
+                "records/lookup answered {code} for {name}, which an earlier push may have created"
+            ))
+            .into());
+        }
+        found.extend(records.into_iter().map(|r| (r.record_name.clone(), r)));
+    }
+    for (record_name, create) in pending {
+        let Some(record) = found.get(&record_name).filter(|r| !is_deleted(r)) else {
+            continue;
+        };
+        if let Some(folder) = create.folder {
+            state.folders.get_or_insert_with(IndexMap::new).insert(
+                record_name,
+                FolderEntry {
+                    name: folder.title,
+                    parent_record_name: folder.parent_record_name,
+                    dir_name: posix::basename(&create.file).to_owned(),
+                    shared_zone_owner: None,
+                    permission: None,
+                },
+            );
+            continue;
+        }
+        // The file the create was for, unless something else tracks it by
+        // now; else where a file carrying the new id is.
+        let tracked_elsewhere = state.notes.values().any(|e| e.file == create.file);
+        let file = if !tracked_elsewhere && target_dir.join(&create.file).is_file() {
+            Some(create.file.clone())
+        } else {
+            super::pull::note_id_claimants(target_dir, &state.notes, &record_name, state.mode())?
+                .into_iter()
+                .next()
+        };
+        let Some(file) = file else {
+            continue;
+        };
+        // No base copy: the file reads as edited, and the plan compares it
+        // with the record (nothing to send when they agree).
+        if !recording_suppressed() {
+            let path = target_dir.join(&file);
+            let text = read_text(&path)?.unwrap_or_default();
+            let envelope = split_frontmatter(&text, split_options(state.mode()));
+            let stamped = set_note_id(&envelope.frontmatter, &record_name);
+            if stamped != envelope.frontmatter {
+                write_note_file(&path, &join_frontmatter(&stamped, &envelope.body))?;
+            }
+        }
+        state.notes.insert(
+            record_name,
+            NoteEntry {
+                file,
+                record_change_tag: record.record_change_tag.clone().unwrap_or_default(),
+                modification_date: modification_date_of(record),
+                folder_record_name: crate::vault::layout::reference_record_name(
+                    record.fields.get("Folder").map(|f| &f.value),
+                ),
+                shared_zone_owner: create.shared_zone_owner,
+                ..Default::default()
+            },
+        );
+    }
+    state.extra.remove(PENDING_CREATES_KEY);
+    Ok(())
+}
+
 /// `listUntrackedMarkdownFiles`: untracked `.md` files anywhere in the vault
 /// (dot-directories and `attachments/` skipped), sorted.
 pub(crate) fn list_untracked_markdown_files(
@@ -776,6 +923,17 @@ pub fn build_push_plan(
         require_vault(target_dir, on_status)?
     };
     let title_mode = state.mode();
+    // Before anything is read off the vault: what an earlier push may have
+    // created without getting to record it.
+    let mut connected: Option<Remote> = None;
+    if state.extra.contains_key(PENDING_CREATES_KEY) {
+        let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
+        settle_pending_creates(&remote.db, target_dir, &mut state)?;
+        if !recording_suppressed() {
+            write_clone_state(target_dir, &state)?;
+        }
+        connected = Some(remote);
+    }
     let mut planning_mutated_state = settle_pending_renames(target_dir, &mut state.notes, false, title_mode)?.changed;
 
     let mut entries: Vec<ExecutablePlanEntry> = Vec::new();
@@ -1283,11 +1441,14 @@ pub fn build_push_plan(
             state,
             entries,
             notices,
-            remote: None,
+            remote: connected,
         });
     }
 
-    let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
+    let remote = match connected {
+        Some(remote) => remote,
+        None => resolve_folder_account(connector, target_dir, state.account.as_ref())?,
+    };
     let db = &remote.db;
 
     // --- folder creates, ahead of every note write
@@ -2929,6 +3090,19 @@ fn execute<T: Transport>(
                     folder.dir_path
                 )));
             }
+            mark_pending_create(
+                target_dir,
+                state,
+                &folder.record_name,
+                PendingCreate {
+                    file: folder.dir_path.clone(),
+                    shared_zone_owner: None,
+                    folder: Some(PendingFolder {
+                        title: folder.title.clone(),
+                        parent_record_name: folder.parent_record_name.clone(),
+                    }),
+                },
+            )?;
             let fields = build_folder_create_fields(&folder.title, folder.parent_record_name.as_deref());
             let extras = CreateExtras {
                 parent_record_name: fields.parent_record_name.clone(),
@@ -3226,6 +3400,16 @@ fn execute<T: Transport>(
                 )));
             }
             let record_name = rt::random_uuid();
+            mark_pending_create(
+                target_dir,
+                state,
+                &record_name,
+                PendingCreate {
+                    file: file.clone(),
+                    shared_zone_owner: shared_zone_owner.clone(),
+                    folder: None,
+                },
+            )?;
             let zone = note_zone(shared_zone_owner.as_deref());
             let fields = build_note_create_fields(
                 payload_base64,
@@ -3560,6 +3744,10 @@ pub fn run_push_with(
                 return Err(e);
             }
         };
+        // The entry's requests were answered: what it was creating is
+        // either tracked now or was refused. (An error above leaves the
+        // mark, for the next push to ask iCloud about.)
+        state.extra.remove(PENDING_CREATES_KEY);
         // Saved entry by entry (an unchanged state is not rewritten): a run
         // that is killed never gets to the write below, and a note it
         // created would be created again by the next push.

@@ -247,8 +247,25 @@ window closes, so a killed run is ordinary.
   Whether a file there is byte-identical to the download is not compared:
   the name is chosen before the download runs.
 
+- `push` announces a create before sending it: the record name (a new
+  note's, drawn then; a new folder's, drawn by the plan) goes into
+  state.json's `pendingCreates` (`{recordName: {file, sharedZoneOwner?,
+  folder?: {title, parentRecordName?}}}`), which is written before the
+  request and cleared once the entry's requests are answered. A push killed
+  in between (iCloud has the record; the file has no id and nothing tracks
+  it) leaves the entry. The next push, before it reads the vault
+  (`cmd::push::settle_pending_creates`), looks the names up: a note that
+  exists is tracked at its file (the announced one, or the untracked file
+  already carrying the id) and its id stamped; a folder that exists is
+  recorded; one iCloud doesn't have was never created and is created by the
+  plan as usual. A lookup that answers an error fails the push
+  (`cloudkit_request_failed`): the answer decides between one note and two.
+  `pendingCreates` is a top-level key an engine without it keeps and
+  ignores (it would create the note again, as before).
+
 Tests: tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
-failed and a killed push), tests/cmd_clone.rs
+failed and a killed push), tests/cmd_push_guards.rs (a push killed right
+after iCloud created the note or the folder), tests/cmd_clone.rs
 (`a_second_clone_over_an_unfinished_one_adopts_the_files_it_left`,
 `a_second_clone_leaves_a_left_file_that_was_edited_alone`,
 `a_clone_that_fails_part_way_tracks_what_it_wrote`).
