@@ -63,10 +63,10 @@
 //! - A file Syncthing brings back after this computer moved or removed it
 //!   (the phone had changed it meanwhile) is never left unread: one under a
 //!   renamed list's old name ([`ListState::was`]) is read as a conflict copy
-//!   and removed; a deleted list's ([`State::removed`]) is left in the
-//!   folder like one that held changes never sent. Each is named in a
-//!   warning. Only names of Syncthing's exact shape are conflict copies
-//!   (`copy_of`).
+//!   and removed; a deleted list's ([`State::removed`]), or a conflict
+//!   copy of it, is left in the folder like one that held changes never
+//!   sent. Each is named in a warning. Only names of Syncthing's exact
+//!   shape are conflict copies (`copy_of`).
 //! - A list whose run failed and changed nothing is tried again after the
 //!   next sync or when its file changes, not every minute.
 //! - What a line cannot say (alerts, priority, flags, the due time's zone)
@@ -1185,6 +1185,32 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
         } else {
             state.removed.push(name);
         }
+    }
+    // A conflict copy Syncthing makes of such a file (under any name its
+    // list had), or of a file left, after the list was deleted: left the
+    // same way, so a new list of that name never reads it.
+    let gone: Vec<&String> = state
+        .removed
+        .iter()
+        .chain(state.left.iter().filter(|f| copy_of(f).is_none()))
+        .collect();
+    let mut late = Vec::new();
+    for name in fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+    {
+        if copy_of(&name).is_some_and(|of| gone.contains(&&of)) && !state.left.contains(&name) {
+            late.push(name);
+        }
+    }
+    late.sort();
+    for name in late {
+        report.warnings.push(format!(
+            "{name}: a conflict copy of a list deleted in iCloud (it holds changes from another device), so it is left here and no longer kept in step"
+        ));
+        state.left.push(name);
     }
 
     for list in &cache.lists {

@@ -1651,6 +1651,43 @@ fn a_list_named_like_a_conflict_copy_is_a_list_of_its_own() {
     assert!(!all_titles(&env, "Reminders").contains(&"Paprika".to_owned()));
 }
 
+#[test]
+fn a_conflict_copy_of_a_deleted_list_s_file_that_comes_later_is_left_and_not_read_by_a_new_list() {
+    // Under the name the file had when the list was deleted, and under one
+    // it had before the list was renamed.
+    for renamed in [false, true] {
+        let env = start();
+        let dir = folder(&env);
+        if renamed {
+            rename_groceries(&env, "Food");
+            env.json(&["background", "--sync"]);
+            assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+        }
+        let mut list = delete_groceries(&env);
+        env.json(&["background", "--sync"]);
+        assert_eq!(file_names(&dir), ["Reminders.md"], "renamed: {renamed}");
+        let copy = "Groceries.sync-conflict-20261114-093000-ABCDEFG.md";
+        std::fs::write(dir.join(copy), "# Groceries\n\n- [ ] Milk\n- [ ] Paprika\n").unwrap();
+        let out = env.json(&["background", "--sync"]);
+        let warnings = out["folder"]["warnings"].as_array().unwrap();
+        assert!(
+            warnings.len() == 1 && warnings[0].as_str().unwrap().starts_with(&format!("{copy}: ")),
+            "renamed: {renamed}: {out}"
+        );
+        // Said once.
+        assert_eq!(env.json(&["background", "--sync"])["folder"]["warnings"], json!([]));
+        // A new list of the old name gets a file of its own.
+        list["recordName"] = json!("List/LIST-NEW");
+        list["fields"]["Name"]["value"] = json!("Groceries");
+        list["fields"]["Deleted"]["value"] = json!(0);
+        list["fields"]["ReminderIDs"]["value"] = json!("[]");
+        env.state.put(list);
+        let out = env.json(&["background", "--sync"]);
+        assert_eq!(out["folder"]["added"], 0, "renamed: {renamed}: {out}");
+        assert_eq!(file_names(&dir), ["Groceries 2.md", copy, "Reminders.md"]);
+    }
+}
+
 fn rename_groceries(env: &Env, to: &str) {
     let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
     list["fields"]["Name"]["value"] = json!(to);
