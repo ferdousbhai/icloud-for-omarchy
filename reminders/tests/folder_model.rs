@@ -7,7 +7,9 @@
 //! what records it), and some two at once. The edits include subtasks, due
 //! dates changed on both sides, a list renamed or a reminder moved while a
 //! file has unsent edits, a file removed or emptied, and the whole folder
-//! deleted. A run ended before the user's edits can leave a reminder in two
+//! deleted, a renamed list's old file or a deleted list's file brought back
+//! by Syncthing, and a file line like one a conflict copy adds. A run ended
+//! before the user's edits can leave a reminder in two
 //! files (moved in iCloud), and the edits are then made to both. After each
 //! run:
 //!
@@ -323,11 +325,17 @@ struct MList {
     /// The file was removed, and not made again.
     removed: bool,
     copy: Option<Copy>,
+    /// The file's names before its list was renamed.
+    was: Vec<String>,
+    /// The items and text recorded before the file was last written, when a
+    /// run ended before it recorded the write: edited since, the file is
+    /// read against whichever of the two it asks less of.
+    before: Option<(Vec<Known>, String)>,
 }
 
 impl MList {
     /// A list as `text` was written, `written` its items.
-    fn new(id: &str, file: &str, written: Vec<Known>, text: &str) -> MList {
+    fn new(id: &str, file: &str, written: Vec<Known>, text: &str, was: Vec<String>) -> MList {
         // Subtasks are the indented checkboxes; a note that reads as one is
         // written with a backslash.
         let subs: Vec<bool> = text
@@ -356,6 +364,8 @@ impl MList {
             edited: false,
             removed: false,
             copy: None,
+            was,
+            before: None,
         }
     }
 
@@ -387,6 +397,16 @@ impl MList {
             .iter()
             .find(|b| b.origin.as_deref() == Some(id))
             .map(|b| b.item.title.as_str());
+        // Another title like it (one retitled in iCloud by a word added)
+        // may take its line.
+        let mine = [written, block];
+        let near = |t: &str| {
+            let other = |o: &str| !mine.contains(&Some(o)) && alike(o, t) >= ALIKE;
+            self.written.iter().any(|k| other(&k.item.title)) || self.blocks.iter().any(|b| other(&b.item.title))
+        };
+        if mine.iter().flatten().any(|t| near(t)) {
+            return true;
+        }
         match (written, block) {
             (Some(w), Some(b)) if w == b => count(w) > 2,
             (Some(w), Some(b)) => count(w) > 1 || count(b) > 1,
@@ -405,6 +425,8 @@ struct Expect {
     new: BTreeMap<String, Vec<Item>>,
     /// Files of lists deleted in iCloud that stay: they hold changes never sent.
     kept: Vec<String>,
+    /// Files of lists deleted in iCloud that the run removes.
+    removed: Vec<String>,
 }
 
 struct Case {
@@ -417,6 +439,10 @@ struct Case {
     used: Vec<String>,
     /// Files left behind by deleted lists.
     left: BTreeSet<String>,
+    /// Files the runs removed with their deleted lists.
+    removed: BTreeSet<String>,
+    /// Files that may be named in a warning this step: they came back.
+    back: Vec<String>,
     n: usize,
 }
 
@@ -464,6 +490,8 @@ impl Case {
             .map(str::to_owned)
             .to_vec(),
             left: BTreeSet::new(),
+            removed: BTreeSet::new(),
+            back: Vec::new(),
             n: 0,
         };
         // Enough lines that removing most of a list is possible.
@@ -810,7 +838,7 @@ impl Case {
     /// A Syncthing conflict copy of list `li`'s file: the file as last
     /// written, a few lines short, a box or two the other way, a tick and a
     /// line or two of its own.
-    fn copy_op(&mut self, li: usize) {
+    fn copy_op(&mut self, li: usize, back: Option<String>) {
         let mut lines = Vec::new();
         let mut ticks = Vec::new();
         let written = self.lists[li].written.clone();
@@ -847,10 +875,42 @@ impl Case {
             lines.insert(at, it.clone());
             adds.push(it);
         }
+        // The file gets a line like one of them, typed on another device.
+        if let Some(add) = adds.first().filter(|_| self.rng.chance(30)) {
+            let title = format!("{} {}", add.title, self.rng.word());
+            let ml = &self.lists[li];
+            let apart = ml.written.iter().all(|k| alike(&k.item.title, &title) < ALIKE)
+                && ml.blocks.iter().all(|b| alike(&b.item.title, &title) < ALIKE);
+            if apart {
+                self.used.push(title.clone());
+                let block = Block {
+                    origin: None,
+                    item: Item {
+                        done: false,
+                        title,
+                        due: None,
+                        notes: String::new(),
+                    },
+                    style: 0,
+                    sub: false,
+                };
+                self.note(format!("file {}: add {:?}", self.lists[li].file, block_text(&block)));
+                let ml = &mut self.lists[li];
+                ml.blocks.push(block);
+                ml.edited = true;
+                ml.removed = false;
+            }
+        }
         let ml = &mut self.lists[li];
         let stem = ml.file.trim_end_matches(".md").to_owned();
         self.n += 1;
-        let name = format!("{stem}.sync-conflict-20261114-0930{:02}-ABCDEFG.md", self.n % 100);
+        let name = match back {
+            Some(name) => {
+                self.back.push(name.clone());
+                name
+            }
+            None => format!("{stem}.sync-conflict-20261114-0930{:02}-ABCDEFG.md", self.n % 100),
+        };
         let mut text = format!("# {stem}\n\n");
         for it in &lines {
             text.push_str(&block_text(&Block {
@@ -878,14 +938,26 @@ impl Case {
             if !t.lists.iter().any(|l| l.id == ml.id) {
                 if ml.edited {
                     expect.kept.push(ml.file.clone());
+                } else if self.env.folder().join(&ml.file).exists() {
+                    expect.removed.push(ml.file.clone());
                 }
                 continue;
             }
             let new = expect.new.entry(ml.id.clone()).or_default();
             if ml.edited {
                 let local: Vec<Item> = ml.blocks.iter().map(|b| b.item.clone()).collect();
-                let delta = folder::diff(&ml.written, &local, &now);
-                self.check_pairing(ml, &delta);
+                let mut delta = folder::diff(&ml.written, &local, &now);
+                let mut base = ml.written.len();
+                let size = |d: &folder::Delta| d.adds.len() + d.updates.len() + d.deletes.len();
+                match &ml.before {
+                    Some((items, text))
+                        if *text == ml.text() || size(&folder::diff(items, &local, &now)) <= size(&delta) =>
+                    {
+                        delta = folder::diff(items, &local, &now);
+                        base = items.len();
+                    }
+                    _ => self.check_pairing(ml, &delta),
+                }
                 for (id, it, changes) in &delta.updates {
                     if let Some(Some((_, item))) = expect.known.get_mut(id) {
                         for c in changes {
@@ -899,7 +971,7 @@ impl Case {
                         }
                     }
                 }
-                if !folder::risky(&delta, ml.written.len()) {
+                if !folder::risky(&delta, base) {
                     for id in &delta.deletes {
                         if let Some(e) = expect.known.get_mut(id) {
                             *e = None;
@@ -980,7 +1052,8 @@ impl Case {
         {
             let w = w.as_str().unwrap_or("");
             let kept = self.left.iter().chain(&expect.kept);
-            if !kept.clone().any(|f| w.starts_with(&format!("{f}: its list is gone"))) {
+            let back = self.back.iter().any(|f| w.starts_with(&format!("{f}: came back")));
+            if !back && !kept.clone().any(|f| w.starts_with(&format!("{f}: its list is gone"))) {
                 self.fail(&format!("warning: {w}"));
             }
         }
@@ -998,6 +1071,7 @@ impl Case {
             self.left.insert(file.clone());
             want_files.insert(file.clone());
         }
+        self.removed.extend(expect.removed.iter().cloned());
         for l in &after.lists {
             let file = format!("{}.md", l.name);
             let text = std::fs::read_to_string(dir.join(&file)).unwrap_or_default();
@@ -1032,7 +1106,17 @@ impl Case {
                     .zip(folder::parse(&text, &now))
                     .map(|(id, item)| Known { id, item })
                     .collect();
-                MList::new(&l.id, &format!("{}.md", l.name), written, &text)
+                let file = format!("{}.md", l.name);
+                // Renamed: the old name is remembered.
+                let mut was = Vec::new();
+                if let Some(old) = self.lists.iter().find(|m| m.id == l.id) {
+                    was = old.was.clone();
+                    if old.file != file {
+                        was.retain(|w| *w != file);
+                        was.push(old.file.clone());
+                    }
+                }
+                MList::new(&l.id, &file, written, &text, was)
             })
             .collect();
     }
@@ -1049,15 +1133,28 @@ impl Case {
         let dir = self.env.folder();
         let ids: BTreeSet<&String> = t.lists.iter().map(|l| &l.id).collect();
         let left: BTreeSet<String> = state.left.iter().cloned().collect();
+        let removed: BTreeSet<String> = state.removed.iter().cloned().collect();
+        // A file found as the run was about to write it was written.
+        let as_left = |ls: &folder::ListState| {
+            let disk = std::fs::read_to_string(dir.join(&ls.file)).ok()?;
+            match &ls.writing {
+                Some(w) if w.text == disk => Some((
+                    w.text.clone(),
+                    w.items.clone(),
+                    Some((ls.items.clone(), ls.text.clone())),
+                )),
+                _ => (ls.text == disk).then(|| (ls.text.clone(), ls.items.clone(), None)),
+            }
+        };
         let clean = state.lists.keys().collect::<BTreeSet<_>>() == ids
             && left == self.left
+            && removed == self.removed
             && state.lists.values().all(|ls| {
                 ls.adopted
-                    && ls.writing.is_none()
                     && ls.pending.is_empty()
                     && ls.unwritten.is_empty()
                     && ls.stuck.is_none()
-                    && std::fs::read_to_string(dir.join(&ls.file)).ok().as_ref() == Some(&ls.text)
+                    && as_left(ls).is_some()
             });
         let stray = std::fs::read_dir(&dir).unwrap().any(|e| {
             let name = e.unwrap().file_name().to_string_lossy().into_owned();
@@ -1071,7 +1168,10 @@ impl Case {
             .iter()
             .map(|l| {
                 let ls = &state.lists[&l.id];
-                MList::new(&l.id, &ls.file, ls.items.clone(), &ls.text)
+                let (text, items, before) = as_left(ls).expect("clean");
+                let mut ml = MList::new(&l.id, &ls.file, items, &text, ls.was.clone());
+                ml.before = before;
+                ml
             })
             .collect();
         true
@@ -1129,6 +1229,7 @@ impl Case {
 
     fn step(&mut self, i: usize) {
         self.note(format!("--- step {i}"));
+        self.back.clear();
         for _ in 0..self.rng.below(3) {
             self.icloud_op();
         }
@@ -1157,8 +1258,34 @@ impl Case {
         }
         if self.rng.chance(20) && !self.lists.is_empty() {
             let li = self.rng.below(self.lists.len());
-            if live.lists.iter().any(|l| l.id == self.lists[li].id) {
-                self.copy_op(li);
+            // A copy is read against what the run settles the file was.
+            if live.lists.iter().any(|l| l.id == self.lists[li].id) && self.lists[li].before.is_none() {
+                // Syncthing brings back the file under a name it had before
+                // its list was renamed, as the phone had changed it.
+                let dir = self.env.folder();
+                let olds: Vec<String> = self.lists[li]
+                    .was
+                    .iter()
+                    .filter(|w| !dir.join(w).exists())
+                    .cloned()
+                    .collect();
+                let back = (!olds.is_empty() && self.rng.chance(50)).then(|| olds[self.rng.below(olds.len())].clone());
+                self.copy_op(li, back);
+            }
+        }
+        // ... or the file of a deleted list, which the phone had changed.
+        if self.rng.chance(40) && !self.removed.is_empty() {
+            let names: Vec<String> = self.removed.iter().cloned().collect();
+            let name = names[self.rng.below(names.len())].clone();
+            let dir = self.env.folder();
+            if !dir.join(&name).exists() {
+                let line = self.fresh();
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(&name), format!("# Gone\n\n- [ ] {line}\n")).unwrap();
+                self.note(format!("{name} back, with {line:?}"));
+                self.removed.remove(&name);
+                self.left.insert(name.clone());
+                self.back.push(name);
             }
         }
         let now = utc_now();
@@ -1187,6 +1314,13 @@ impl Case {
         if self.rng.chance(4) {
             std::fs::remove_dir_all(&dir).unwrap();
             self.note("the folder deleted".to_owned());
+            // A deleted list's file brought back is gone again, and stays
+            // remembered.
+            for name in &self.back {
+                if self.left.contains(name) {
+                    self.removed.insert(name.clone());
+                }
+            }
             self.left.clear();
             for ml in &mut self.lists {
                 ml.edited = false;
