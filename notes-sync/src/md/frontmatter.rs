@@ -260,7 +260,7 @@ fn top_level_key(line: &str) -> Option<&str> {
     }
     let colon = line.find(": ").or_else(|| line.strip_suffix(':').map(|l| l.len()))?;
     let key = line[..colon].trim_end();
-    (!key.contains(" #")).then_some(key)
+    yaml::comment_start(key).is_none().then_some(key)
 }
 
 /// Does this YAML look like a block mapping (its first content line a key)?
@@ -313,7 +313,7 @@ fn fallback_read(lines: &[String], key: &str) -> Option<String> {
     // space and each empty line as a line break. A line that holds a key
     // can't be part of one: YAML that broken reads as its first line.
     fn uncommented(line: &str) -> (&str, bool) {
-        match line.find(" #") {
+        match yaml::comment_start(line) {
             Some(i) => (line[..i].trim_matches([' ', '\t']), true),
             None => (line.trim_matches([' ', '\t']), false),
         }

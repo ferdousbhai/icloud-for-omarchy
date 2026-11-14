@@ -320,6 +320,8 @@ fn a_title_written_over_two_lines_reads_back_whole() {
         ("apple-note-title: one\n\n  two", "one\ntwo"),
         ("apple-note-title: one\n  - two", "one - two"),
         ("apple-note-title: one # not two\ntags: [a]", "one"),
+        ("apple-note-title: one\t# not two\ntags: [a]", "one"),
+        ("apple-note-title: one\n  two\t# not three", "one two"),
         ("apple-note-title: \"one\n  two\"", "one two"),
         ("apple-note-title: 'one\n  two'", "one two"),
     ] {

@@ -484,6 +484,13 @@ impl<'a> BlockParser<'a> {
     }
 }
 
+/// Where a comment starts in a plain line: the space or tab before a `#`.
+pub(crate) fn comment_start(text: &str) -> Option<usize> {
+    text.as_bytes()
+        .windows(2)
+        .position(|pair| matches!(pair[0], b' ' | b'\t') && pair[1] == b'#')
+}
+
 /// `key: rest` → `(key, rest)` for a plain key that resolves to a string.
 fn split_key(text: &str) -> Option<(String, &str)> {
     let bytes = text.as_bytes();
@@ -493,13 +500,13 @@ fn split_key(text: &str) -> Option<(String, &str)> {
             colon = Some(i);
             break;
         }
-        if bytes[i] == b'#' && i > 0 && bytes[i - 1] == b' ' {
+        if bytes[i] == b'#' && i > 0 && matches!(bytes[i - 1], b' ' | b'\t') {
             return None;
         }
     }
     let colon = colon?;
     let key = text[..colon].trim_end_matches(' ');
-    if key.is_empty() || !plain_start_ok(key) || key.contains(": ") || key.contains(" #") {
+    if key.is_empty() || !plain_start_ok(key) || key.contains(": ") || comment_start(key).is_some() {
         return None;
     }
     if !matches!(resolve_plain(key), Scalar::Str { .. }) {
@@ -537,7 +544,7 @@ fn inline_value(rest: &str) -> Result<Value, Parsed> {
             if rest.contains(": ") || rest.ends_with(':') || rest == "-" || rest.starts_with("- ") {
                 return Err(Parsed::Invalid);
             }
-            if !plain_start_ok(rest) || rest.contains(" #") {
+            if !plain_start_ok(rest) || comment_start(rest).is_some() {
                 return Err(Parsed::Unsupported);
             }
             Ok(Value::Scalar(resolve_plain(rest)))
@@ -926,7 +933,7 @@ impl FlowParser<'_> {
                 if token.is_empty()
                     || !plain_start_ok(token)
                     || token.contains(": ")
-                    || token.contains(" #")
+                    || comment_start(token).is_some()
                     || token.ends_with(':')
                 {
                     return Err(Parsed::Unsupported);
