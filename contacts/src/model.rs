@@ -132,10 +132,12 @@ pub enum Change {
     Add(Multi, Labeled),
     /// Remove the value (see [`Multi::matches`]), whatever its label.
     Remove(Multi, String),
-    /// Remove exactly this entry, label and value as stored: a row of the
+    /// Remove exactly one entry, label and value as stored: a row of the
     /// window's dialog, where another row may hold the same number written
-    /// another way.
-    RemoveExact(Multi, Labeled),
+    /// another way, or the very same entry twice. The `usize` is which of
+    /// the entries stored exactly so (0: the first); when fewer are left
+    /// (another device removed some meanwhile), the last of them goes.
+    RemoveExact(Multi, Labeled, usize),
 }
 
 impl Change {
@@ -143,7 +145,7 @@ impl Change {
     fn removes(&self, e: &Labeled) -> bool {
         match self {
             Change::Remove(m, v) => m.matches(&e.value, v),
-            Change::RemoveExact(_, l) => e == l,
+            Change::RemoveExact(_, l, _) => e == l,
             Change::Set(..) | Change::Add(..) => false,
         }
     }
@@ -414,7 +416,7 @@ impl Contact {
     /// removals may name the same value (one number written two ways).
     pub fn apply(&mut self, changes: &[Change]) -> Result<(), String> {
         for c in changes {
-            if let Change::Remove(m, v) | Change::RemoveExact(m, Labeled { value: v, .. }) = c
+            if let Change::Remove(m, v) | Change::RemoveExact(m, Labeled { value: v, .. }, _) = c
                 && self.has(c)
             {
                 return Err(format!("{} has no {} {v}", self.display_name(), m.noun()));
@@ -436,12 +438,26 @@ impl Contact {
                         *list = json!([]);
                     }
                     let arr = list.as_array_mut().expect("just made an array");
-                    arr.push(json!({ "label": l.label, "field": l.value }));
+                    // A value with no label is stored with none, as iCloud
+                    // sent it.
+                    let mut e = Map::new();
+                    if !l.label.is_empty() {
+                        e.insert("label".into(), json!(l.label));
+                    }
+                    e.insert("field".into(), json!(l.value));
+                    arr.push(Value::Object(e));
                 }
-                Change::Remove(m, _) | Change::RemoveExact(m, _) => {
+                Change::Remove(m, _) | Change::RemoveExact(m, ..) => {
                     let arr = self.0.get_mut(m.key()).and_then(Value::as_array_mut);
                     let arr = arr.expect("has() found the value in an array");
-                    arr.retain(|e| !labeled(e).is_some_and(|l| c.removes(&l)));
+                    if let Change::RemoveExact(_, _, nth) = c {
+                        let at: Vec<usize> = (0..arr.len())
+                            .filter(|&i| labeled(&arr[i]).is_some_and(|l| c.removes(&l)))
+                            .collect();
+                        arr.remove(*at.get(*nth).unwrap_or(&at[at.len() - 1]));
+                    } else {
+                        arr.retain(|e| !labeled(e).is_some_and(|l| c.removes(&l)));
+                    }
                     if arr.is_empty() {
                         self.0.remove(m.key());
                     }
@@ -459,7 +475,7 @@ impl Contact {
                 .values(*m)
                 .iter()
                 .any(|e| m.matches(&e.value, &l.value) && e.label == l.label),
-            Change::Remove(m, _) | Change::RemoveExact(m, _) => !self.values(*m).iter().any(|e| change.removes(e)),
+            Change::Remove(m, _) | Change::RemoveExact(m, ..) => !self.values(*m).iter().any(|e| change.removes(e)),
         }
     }
 }

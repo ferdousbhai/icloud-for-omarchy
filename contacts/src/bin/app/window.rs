@@ -14,7 +14,7 @@ use gtk::{gio, glib};
 
 use icloud_app_ui::{SignInBanner, background};
 use icloud_contacts::api::{Error, SessionTransport};
-use icloud_contacts::draft::{Draft, SCALARS, typed};
+use icloud_contacts::draft::{Draft, Row, SCALARS, typed};
 use icloud_contacts::model::{self, Contact, Field, Multi};
 use icloud_contacts::service::Service;
 use icloud_contacts::store::{Cache, Store};
@@ -336,7 +336,7 @@ impl Window {
             let mut rows: Vec<ValueRow> = draft
                 .values(m)
                 .iter()
-                .map(|(label, value)| (Some(label.clone()), entry(&model::label_display(label), value)))
+                .map(|r| (Some(r.clone()), entry(&model::label_display(&r.label), &r.value)))
                 .collect();
             rows.push((None, entry(add_title, "")));
             group(&rows.iter().map(|(_, r)| r).collect::<Vec<_>>());
@@ -393,13 +393,21 @@ impl Window {
                         .map(|(m, rows)| {
                             let values = rows
                                 .iter()
-                                .map(|(label, r)| typed(*m, label.as_deref(), &r.text()))
-                                .filter(|(_, v)| !v.is_empty())
+                                .map(|(shown, r)| {
+                                    let (label, value) = typed(*m, shown.as_ref().map(|s| s.label.as_str()), &r.text());
+                                    Row {
+                                        origin: shown.as_ref().and_then(|s| s.origin),
+                                        label,
+                                        value,
+                                    }
+                                })
+                                .filter(|r| !r.value.is_empty())
                                 .collect();
                             (*m, values)
                         })
                         .collect(),
                     notes: buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string(),
+                    middle_name: false,
                 }
             }
         });
@@ -655,9 +663,10 @@ enum Action {
     Open(String),
 }
 
-/// A row of the dialog for one phone, email or URL: the stored value's
-/// label, or `None` for the row that adds one.
-type ValueRow = (Option<String>, adw::EntryRow);
+/// A row of the dialog for one phone, email or URL: the draft's row it
+/// shows (its label and the stored value it came from), or `None` for the
+/// row that adds one.
+type ValueRow = (Option<Row>, adw::EntryRow);
 
 fn contact_row(c: &Contact, me: bool) -> gtk::ListBoxRow {
     let name = c.display_name();

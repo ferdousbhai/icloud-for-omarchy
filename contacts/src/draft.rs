@@ -21,8 +21,22 @@ pub const SCALARS: &[(Field, &str)] = &[
 #[derive(Debug, Clone, Default)]
 pub struct Draft {
     pub scalars: Vec<(Field, String)>,
-    pub multis: Vec<(Multi, Vec<(String, String)>)>,
+    pub multis: Vec<(Multi, Vec<Row>)>,
     pub notes: String,
+    /// The card has a middle name, which the dialog does not show: it names
+    /// someone, as it does for `icloud-contacts add --middle`.
+    pub middle_name: bool,
+}
+
+/// One phone, email or URL row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    /// Which of the card's stored values (of this kind, in order) the row
+    /// was filled with; `None` for one typed anew. Two rows holding the same
+    /// value are told apart by it.
+    pub origin: Option<usize>,
+    pub label: String,
+    pub value: String,
 }
 
 impl Draft {
@@ -44,9 +58,19 @@ impl Draft {
                 .collect(),
             multis: [Multi::Phone, Multi::Email, Multi::Url]
                 .into_iter()
-                .map(|m| (m, c.values(m).into_iter().map(|l| (l.label, l.value)).collect()))
+                .map(|m| {
+                    let rows = (c.values(m).into_iter().enumerate())
+                        .map(|(i, l)| Row {
+                            origin: Some(i),
+                            label: l.label,
+                            value: l.value,
+                        })
+                        .collect();
+                    (m, rows)
+                })
                 .collect(),
             notes: c.field(Field::Notes).to_owned(),
+            middle_name: !c.field(Field::Middle).trim().is_empty(),
         }
     }
 
@@ -54,7 +78,7 @@ impl Draft {
         self.scalars.iter().find(|(g, _)| *g == f).map_or("", |(_, v)| v)
     }
 
-    pub fn values(&self, m: Multi) -> &[(String, String)] {
+    pub fn values(&self, m: Multi) -> &[Row] {
         self.multis.iter().find(|(n, _)| *n == m).map_or(&[], |(_, v)| v)
     }
 
@@ -73,7 +97,7 @@ impl Draft {
                 return Some(e);
             }
         }
-        (!model::names_someone(&self.changes(&Draft::default())))
+        (!before.middle_name && !model::names_someone(&self.changes(&Draft::default())))
             .then(|| "A contact needs a name, a company, a phone number or an email.".into())
     }
 
@@ -98,31 +122,34 @@ impl Draft {
         }
         for (m, now) in &self.multis {
             let was = before.values(*m);
-            for (label, v) in was {
-                if !now.iter().any(|(l, n)| l == label && n.trim() == v.trim()) {
-                    out.push(Change::RemoveExact(
-                        *m,
-                        model::Labeled {
-                            label: label.clone(),
-                            value: v.clone(),
-                        },
-                    ));
+            let labeled = |r: &Row| model::Labeled {
+                label: r.label.clone(),
+                value: r.value.clone(),
+            };
+            // A stored value goes when its row is gone or retyped: that one
+            // entry, also when another holds the same. The last first, so
+            // the count of those before each stays as it was.
+            for (i, w) in was.iter().enumerate().rev() {
+                let kept = now
+                    .iter()
+                    .any(|r| r.origin == Some(i) && r.value.trim() == w.value.trim());
+                if !kept {
+                    let nth = was[..i]
+                        .iter()
+                        .filter(|o| o.label == w.label && o.value == w.value)
+                        .count();
+                    out.push(Change::RemoveExact(*m, labeled(w), nth));
                 }
             }
-            // Added: a value more rows hold now than before. A row retyped
-            // into a copy of another is one, so it is kept should another
-            // device remove that other meanwhile (an Add the card already
-            // has is no change).
-            for (i, (label, v)) in now.iter().enumerate() {
-                let same = |(l, w): &&(String, String)| l == label && w.trim() == v.trim();
-                if now[..=i].iter().filter(same).count() > was.iter().filter(same).count() {
-                    out.push(Change::Add(
-                        *m,
-                        model::Labeled {
-                            label: label.clone(),
-                            value: v.clone(),
-                        },
-                    ));
+            // Added: a row typed anew, or retyped. One that is a copy of
+            // another row is kept should another device remove that other
+            // meanwhile (an Add the card already has is no change).
+            for r in now {
+                let retyped = r
+                    .origin
+                    .is_none_or(|i| was.get(i).is_none_or(|w| w.value.trim() != r.value.trim()));
+                if retyped {
+                    out.push(Change::Add(*m, labeled(r)));
                 }
             }
         }
@@ -149,88 +176,86 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn card(v: serde_json::Value) -> Contact {
+        Contact(v.as_object().unwrap().clone())
+    }
+
+    fn row(origin: Option<usize>, label: &str, value: &str) -> Row {
+        Row {
+            origin,
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+
+    fn labeled(label: &str, value: &str) -> model::Labeled {
+        model::Labeled {
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+
+    /// The rows as the window reads them back: each through [`typed`].
+    fn read_back(d: &Draft) -> Draft {
+        let mut d = d.clone();
+        for (m, rows) in &mut d.multis {
+            for r in rows.iter_mut() {
+                let (label, value) = typed(*m, Some(&r.label), &r.value);
+                (r.label, r.value) = (label, value);
+            }
+        }
+        d
+    }
+
+    fn set_last(d: &mut Draft, v: &str) {
+        d.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = v.into();
+    }
+
     #[test]
     fn a_draft_changes_only_what_was_edited() {
-        let c = Contact(
-            json!({
-                "contactId": "A", "firstName": "Ann", "birthday": "1604-05-01",
-                "phones": [{"label": "MOBILE", "field": "+1 555"}, {"label": "WORK", "field": "+1 666"}],
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        );
+        let c = card(json!({
+            "contactId": "A", "firstName": "Ann", "birthday": "1604-05-01",
+            "phones": [{"label": "MOBILE", "field": "+1 555"}, {"label": "WORK", "field": "+1 666"}],
+        }));
         let before = Draft::of(&c);
         assert_eq!(before.scalar(Field::Birthday), "05-01");
         assert!(before.changes(&before).is_empty());
         let mut after = before.clone();
-        after.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = "Lee".into();
-        after.multis[0].1 = vec![("MOBILE".into(), "+1 555".into()), ("HOME".into(), "+1 777".into())];
-        let changes = after.changes(&before);
+        set_last(&mut after, "Lee");
+        after.multis[0].1 = vec![row(Some(0), "MOBILE", "+1 555"), row(None, "HOME", "+1 777")];
         assert_eq!(
-            changes,
+            after.changes(&before),
             [
                 Change::Set(Field::Last, "Lee".into()),
-                Change::RemoveExact(
-                    Multi::Phone,
-                    model::Labeled {
-                        label: "WORK".into(),
-                        value: "+1 666".into()
-                    }
-                ),
-                Change::Add(
-                    Multi::Phone,
-                    model::Labeled {
-                        label: "HOME".into(),
-                        value: "+1 777".into()
-                    }
-                ),
+                Change::RemoveExact(Multi::Phone, labeled("WORK", "+1 666"), 0),
+                Change::Add(Multi::Phone, labeled("HOME", "+1 777")),
             ]
         );
         assert!(Draft::default().problem(&Draft::default()).is_some());
         assert_eq!(after.problem(&before), None);
         // Emptying one row removes that value only: not another row holding
         // the same number written another way.
-        let mut c = Contact(
-            json!({ "phones": [{"label": "HOME", "field": "555-010-0199"}, {"label": "WORK", "field": "+1 555 010 0199"}] })
-                .as_object()
-                .unwrap()
-                .clone(),
+        let mut c = card(
+            json!({ "phones": [{"label": "HOME", "field": "555-010-0199"}, {"label": "WORK", "field": "+1 555 010 0199"}] }),
         );
         let before = Draft::of(&c);
         let mut after = before.clone();
         after.multis[0].1.remove(0);
         c.apply(&after.changes(&before)).unwrap();
-        assert_eq!(
-            c.values(Multi::Phone),
-            [model::Labeled {
-                label: "WORK".into(),
-                value: "+1 555 010 0199".into()
-            }]
-        );
+        assert_eq!(c.values(Multi::Phone), [labeled("WORK", "+1 555 010 0199")]);
         // A value stored without a label keeps none when its row is
         // read back: saving the dialog does not turn it into a mobile number.
-        let c = Contact(
-            json!({ "phones": [{"field": "+1 555"}, {"label": "WORK", "field": "+1 666"}] })
-                .as_object()
-                .unwrap()
-                .clone(),
-        );
+        let c = card(json!({ "phones": [{"field": "+1 555"}, {"label": "WORK", "field": "+1 666"}] }));
         let before = Draft::of(&c);
-        let mut read = before.clone();
-        read.multis[0].1 = before.multis[0]
-            .1
-            .iter()
-            .map(|(label, value)| typed(Multi::Phone, Some(label), value))
-            .collect();
-        assert_eq!(read.changes(&before), []);
+        assert_eq!(read_back(&before).changes(&before), []);
         assert_eq!(
             typed(Multi::Phone, None, "work=+1 777"),
             ("WORK".into(), "+1 777".into())
         );
         // A valid phone does not hide an invalid email after it.
-        let mut bad = after.clone();
-        bad.multis[1].1 = vec![("HOME".into(), "nope".into())];
+        let mut bad = before.clone();
+        bad.multis[0].1.push(row(None, "HOME", "+1 888"));
+        bad.multis[1].1 = vec![row(None, "HOME", "nope")];
         assert_eq!(
             bad.problem(&before).as_deref(),
             Some("\"nope\" is not an email address")
@@ -241,19 +266,16 @@ mod tests {
     /// email with no `@`) does not disable Save for an edit elsewhere.
     #[test]
     fn a_stored_value_the_dialog_would_refuse_does_not_block_another_edit() {
-        let c = Contact(
-            json!({ "firstName": "Ann", "emailAddresses": [{"label": "HOME", "field": "nope"}], "birthday": "1990-02-30" })
-                .as_object()
-                .unwrap()
-                .clone(),
+        let c = card(
+            json!({ "firstName": "Ann", "emailAddresses": [{"label": "HOME", "field": "nope"}], "birthday": "1990-02-30" }),
         );
         let before = Draft::of(&c);
         let mut after = before.clone();
-        after.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = "Lee".into();
+        set_last(&mut after, "Lee");
         assert_eq!(after.problem(&before), None);
         assert_eq!(after.changes(&before), [Change::Set(Field::Last, "Lee".into())]);
         // A value typed anew is still checked.
-        after.multis[1].1.push(("WORK".into(), "also-nope".into()));
+        after.multis[1].1.push(row(None, "WORK", "also-nope"));
         assert!(after.problem(&before).is_some());
     }
 
@@ -262,20 +284,12 @@ mod tests {
     /// row reads back trimmed, and that is not an edit.
     #[test]
     fn a_padded_value_left_alone_is_not_rewritten() {
-        let c = Contact(
-            json!({ "firstName": "Ann", "urls": [{"field": " https://p.example/ann ", "x-extra": 1}, {"label": "WORK", "field": "acme.example"}] })
-                .as_object()
-                .unwrap()
-                .clone(),
+        let c = card(
+            json!({ "firstName": "Ann", "urls": [{"field": " https://p.example/ann ", "x-extra": 1}, {"label": "WORK", "field": "acme.example"}] }),
         );
         let before = Draft::of(&c);
-        let mut read = before.clone();
-        for (m, rows) in &mut read.multis {
-            for r in rows.iter_mut() {
-                *r = typed(*m, Some(&r.0.clone()), &r.1);
-            }
-        }
-        read.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = "Lee".into();
+        let mut read = read_back(&before);
+        set_last(&mut read, "Lee");
         assert_eq!(read.changes(&before), [Change::Set(Field::Last, "Lee".into())]);
     }
 
@@ -284,37 +298,75 @@ mod tests {
     /// kept.
     #[test]
     fn a_row_retyped_into_a_copy_of_another_is_kept() {
-        let c = Contact(
-            json!({ "firstName": "Ann", "urls": [{"label": "WORK", "field": "x.org"}, {"label": "WORK", "field": "acme.example"}] })
-                .as_object()
-                .unwrap()
-                .clone(),
+        let c = card(
+            json!({ "firstName": "Ann", "urls": [{"label": "WORK", "field": "x.org"}, {"label": "WORK", "field": "acme.example"}] }),
         );
         let before = Draft::of(&c);
         let mut after = before.clone();
-        after.multis[2].1[1].1 = "x.org".into();
+        after.multis[2].1[1].value = "x.org".into();
         let changes = after.changes(&before);
-        let work = |v: &str| model::Labeled {
-            label: "WORK".into(),
-            value: v.into(),
-        };
         assert_eq!(
             changes,
             [
-                Change::RemoveExact(Multi::Url, work("acme.example")),
-                Change::Add(Multi::Url, work("x.org"))
+                Change::RemoveExact(Multi::Url, labeled("WORK", "acme.example"), 0),
+                Change::Add(Multi::Url, labeled("WORK", "x.org"))
             ]
         );
         let mut same = c.clone();
         same.apply(&changes).unwrap();
-        assert_eq!(same.values(Multi::Url), [work("x.org")]);
-        let mut elsewhere = Contact(
-            json!({ "firstName": "Ann", "urls": [{"label": "WORK", "field": "acme.example"}] })
-                .as_object()
-                .unwrap()
-                .clone(),
-        );
+        assert_eq!(same.values(Multi::Url), [labeled("WORK", "x.org")]);
+        let mut elsewhere = card(json!({ "firstName": "Ann", "urls": [{"label": "WORK", "field": "acme.example"}] }));
         elsewhere.apply(&changes).unwrap();
-        assert_eq!(elsewhere.values(Multi::Url), [work("x.org")]);
+        assert_eq!(elsewhere.values(Multi::Url), [labeled("WORK", "x.org")]);
+    }
+
+    /// One of two identical entries can be removed: the other stays, with
+    /// whatever else it holds.
+    #[test]
+    fn one_of_two_identical_entries_is_removed_alone() {
+        let c = card(json!({ "firstName": "Ann", "phones": [
+            {"label": "WORK", "field": "+1 555", "x": 1}, {"label": "HOME", "field": "+1 666"},
+            {"label": "WORK", "field": "+1 555", "x": 2},
+        ] }));
+        for (gone, kept) in [(0, 2), (2, 1)] {
+            let before = Draft::of(&c);
+            let mut after = before.clone();
+            after.multis[0].1.retain(|r| r.origin != Some(gone));
+            let mut saved = c.clone();
+            saved.apply(&after.changes(&before)).unwrap();
+            let phones = saved.0["phones"].as_array().unwrap();
+            assert_eq!(phones.len(), 2);
+            assert!(phones.iter().any(|p| p["x"] == kept), "{phones:?}");
+        }
+        // Both go when both rows are emptied.
+        let before = Draft::of(&c);
+        let mut after = before.clone();
+        after.multis[0].1.retain(|r| r.label != "WORK");
+        let mut saved = c.clone();
+        saved.apply(&after.changes(&before)).unwrap();
+        assert_eq!(saved.values(Multi::Phone), [labeled("HOME", "+1 666")]);
+    }
+
+    /// A card whose only name is its middle name (not shown in the dialog)
+    /// still names someone, as `add --middle` does.
+    #[test]
+    fn a_middle_name_alone_names_someone() {
+        let c = card(json!({ "middleName": "Bea", "notes": "x" }));
+        let before = Draft::of(&c);
+        let mut after = before.clone();
+        after.notes = "y".into();
+        assert_eq!(after.problem(&before), None);
+        assert!(model::names_someone(&[Change::Set(Field::Middle, "Bea".into())]));
+    }
+
+    /// A value stored with no label, retyped, is stored with no label.
+    #[test]
+    fn a_retyped_value_without_a_label_keeps_none() {
+        let mut c = card(json!({ "firstName": "Ann", "phones": [{"field": "+1 555"}] }));
+        let before = Draft::of(&c);
+        let mut after = before.clone();
+        after.multis[0].1[0].value = "+1 777".into();
+        c.apply(&after.changes(&before)).unwrap();
+        assert_eq!(c.0["phones"], json!([{ "field": "+1 777" }]));
     }
 }

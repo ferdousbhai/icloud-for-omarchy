@@ -22,7 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 use icloud_app::testing::{code, command, envelope, stderr};
 use icloud_contacts::api::SessionTransport;
-use icloud_contacts::draft::{Draft, typed};
+use icloud_contacts::draft::{Draft, Row, typed};
 use icloud_contacts::model::{Contact, Field, Multi};
 use icloud_contacts::service::Service;
 use icloud_contacts::store::Store;
@@ -258,8 +258,9 @@ fn contact(rng: &mut Rng, id: &str) -> Value {
 enum Op {
     /// Set a field; `None` removes it.
     Set(&'static str, Option<String>),
-    /// Remove every entry stored with exactly this label and value.
-    RemoveExact(Multi, String, String),
+    /// Remove the `n`th entry stored with exactly this label and value (the
+    /// last of them when there are fewer).
+    RemoveExact(Multi, String, String, usize),
     /// Remove every entry whose value `Multi::matches` names, any label.
     RemoveMatching(Multi, String),
     /// Add, unless an entry with this label already holds a matching value.
@@ -288,7 +289,7 @@ fn reference(card: &Value, ops: &[Op]) -> Value {
                         return false;
                     };
                     match op {
-                        Op::RemoveExact(_, l, v) => label_of(e) == l && field == v,
+                        Op::RemoveExact(_, l, v, _) => label_of(e) == l && field == v,
                         Op::RemoveMatching(m, q) => m.matches(field, q),
                         _ => unreachable!(),
                     }
@@ -296,7 +297,12 @@ fn reference(card: &Value, ops: &[Op]) -> Value {
                 if let Some(list) = c.get_mut(m.key()).and_then(Value::as_array_mut)
                     && list.iter().any(gone)
                 {
-                    list.retain(|e| !gone(e));
+                    if let Op::RemoveExact(.., n) = op {
+                        let at: Vec<usize> = (0..list.len()).filter(|&i| gone(&list[i])).collect();
+                        list.remove(*at.get(*n).unwrap_or(at.last().unwrap()));
+                    } else {
+                        list.retain(|e| !gone(e));
+                    }
                     if list.is_empty() {
                         c.remove(m.key());
                     }
@@ -309,7 +315,12 @@ fn reference(card: &Value, ops: &[Op]) -> Value {
                     .iter()
                     .any(|e| e["field"].as_str().is_some_and(|f| m.matches(f, v)) && label_of(e) == l);
                 if !has {
-                    list.push(json!({ "label": l, "field": v }));
+                    // No label: no `label` key.
+                    list.push(if l.is_empty() {
+                        json!({ "field": v })
+                    } else {
+                        json!({ "label": l, "field": v })
+                    });
                 }
             }
         }
@@ -505,10 +516,10 @@ fn cli_edit(rng: &mut Rng, cached: &Contact) -> (Vec<String>, Vec<Op>) {
     (args, removes)
 }
 
-/// A row of the dialog for one phone, email or URL: the stored value it
-/// was filled with (`origin`, its index), its label, and its text.
+/// A row of the dialog for one phone, email or URL as shown: the stored
+/// value it was filled with (`origin`, its index), its label, its text.
 #[derive(Debug, Clone)]
-struct Row {
+struct Shown {
     origin: Option<usize>,
     label: String,
     text: String,
@@ -518,17 +529,16 @@ struct Row {
 /// and the ops the person meant.
 fn dialog_edit(rng: &mut Rng, before: &Draft) -> (Draft, Vec<Op>) {
     let mut now = before.clone();
-    let mut rows: Vec<Vec<Row>> = before
+    let mut rows: Vec<Vec<Shown>> = before
         .multis
         .iter()
         .map(|(_, values)| {
             values
                 .iter()
-                .enumerate()
-                .map(|(i, (label, value))| Row {
-                    origin: Some(i),
-                    label: label.clone(),
-                    text: value.clone(),
+                .map(|r| Shown {
+                    origin: r.origin,
+                    label: r.label.clone(),
+                    text: r.value.clone(),
                 })
                 .collect()
         })
@@ -549,24 +559,13 @@ fn dialog_edit(rng: &mut Rng, before: &Draft) -> (Draft, Vec<Op>) {
             _ => {
                 let mi = rng.below(3);
                 let m = before.multis[mi].0;
-                let was = &before.multis[mi].1;
                 let rows = &mut rows[mi];
-                // A stored value with an exact twin can't be told from it
-                // (known: the dialog cannot remove one of two duplicates).
-                let twin = |r: &Row| {
-                    r.origin.is_some_and(|i| {
-                        was.iter()
-                            .enumerate()
-                            .any(|(j, (l, v))| j != i && *l == was[i].0 && v.trim() == was[i].1.trim())
-                    })
-                };
-                let editable: Vec<usize> = (0..rows.len()).filter(|&i| !twin(&rows[i])).collect();
                 match rng.below(3) {
-                    0 if !editable.is_empty() => {
-                        rows.remove(*rng.pick(&editable));
+                    0 if !rows.is_empty() => {
+                        rows.remove(rng.below(rows.len()));
                     }
-                    1 if !editable.is_empty() => {
-                        let i = *rng.pick(&editable);
+                    1 if !rows.is_empty() => {
+                        let i = rng.below(rows.len());
                         rows[i].text = rng.pick(new_pool(m)).to_string();
                     }
                     _ => {
@@ -577,7 +576,7 @@ fn dialog_edit(rng: &mut Rng, before: &Draft) -> (Draft, Vec<Op>) {
                             v.to_owned()
                         };
                         let (label, _) = typed(m, None, &text);
-                        rows.push(Row {
+                        rows.push(Shown {
                             origin: None,
                             label,
                             text,
@@ -606,51 +605,53 @@ fn dialog_edit(rng: &mut Rng, before: &Draft) -> (Draft, Vec<Op>) {
     if now.notes != before.notes {
         ops.push(Op::Set("notes", (!now.notes.is_empty()).then(|| now.notes.clone())));
     }
-    // Rows: a stored value removed or retyped goes; a retyped or new one is
-    // added (removals first, as the dialog makes them); an untouched row is
-    // no change at all.
+    // Rows: the stored value of a row removed or retyped goes (that entry,
+    // the how-manyth of its exact copies it is; the last first); a retyped
+    // or new one is added; an untouched row is no change at all.
     for (mi, rows) in rows.iter().enumerate() {
         let (m, was) = (before.multis[mi].0, &before.multis[mi].1);
-        let mut adds = Vec::new();
-        let mut still = vec![false; was.len()];
+        let still = |i: usize| {
+            rows.iter()
+                .any(|r| r.origin == Some(i) && r.text.trim() == was[i].value.trim())
+        };
+        for i in (0..was.len()).rev() {
+            if !still(i) {
+                let w = &was[i];
+                let n = was[..i]
+                    .iter()
+                    .filter(|o| o.label == w.label && o.value == w.value)
+                    .count();
+                ops.push(Op::RemoveExact(m, w.label.clone(), w.value.clone(), n));
+            }
+        }
         for r in rows {
             match r.origin {
-                Some(i) if r.text.trim() == was[i].1.trim() => still[i] = true,
-                Some(_) => adds.push(Op::Add(m, r.label.clone(), r.text.trim().to_owned())),
+                Some(i) if r.text.trim() == was[i].value.trim() => {}
+                Some(_) => ops.push(Op::Add(m, r.label.clone(), r.text.trim().to_owned())),
                 None => {
                     let (l, v) = typed(m, None, &r.text);
-                    adds.push(Op::Add(m, l, v));
+                    ops.push(Op::Add(m, l, v));
                 }
             }
         }
-        // A stored value retyped as it was, or added back as it was, is no
-        // change to it.
-        for (i, (l, v)) in was.iter().enumerate() {
-            if still[i] {
-                continue;
-            }
-            match adds
-                .iter()
-                .position(|a| matches!(a, Op::Add(_, al, av) if al == l && av == v.trim()))
-            {
-                Some(j) => {
-                    adds.remove(j);
-                }
-                None => ops.push(Op::RemoveExact(m, l.clone(), v.clone())),
-            }
-        }
-        ops.extend(adds);
     }
     // What the window reads back: each row through `typed`, empty ones out.
     for (mi, rows) in rows.iter().enumerate() {
         let m = before.multis[mi].0;
         now.multis[mi].1 = rows
             .iter()
-            .map(|r| match r.origin {
-                Some(_) => typed(m, Some(&r.label), &r.text),
-                None => typed(m, None, &r.text),
+            .map(|r| {
+                let (label, value) = match r.origin {
+                    Some(_) => typed(m, Some(&r.label), &r.text),
+                    None => typed(m, None, &r.text),
+                };
+                Row {
+                    origin: r.origin,
+                    label,
+                    value,
+                }
             })
-            .filter(|(_, v)| !v.is_empty())
+            .filter(|r| !r.value.is_empty())
             .collect();
     }
     (now, ops)
@@ -745,7 +746,7 @@ fn run_case(seed: u64) {
             }
             Edit::Dialog(before, now) => {
                 log.push(format!("  draft {now:?}"));
-                if !names_someone(&now) {
+                if !names_someone(&now) && !before.middle_name {
                     // Save is disabled: nothing to check.
                     log.push("  (names nobody: not saved)".into());
                     continue;
