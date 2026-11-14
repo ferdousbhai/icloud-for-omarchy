@@ -125,6 +125,10 @@ impl Transport for SharedTransport {
     fn upload(&self, url: &str, bytes: &[u8]) -> Result<Value, CkError> {
         self.0.upload(url, bytes)
     }
+
+    fn shared_downloader(&self) -> Option<crate::cloudkit::transport::SharedDownloader> {
+        self.0.shared_downloader()
+    }
 }
 
 /// `resolveFolderAccount`: the vault must be bound to an account, and it
@@ -163,4 +167,41 @@ pub fn bind_account(connector: &dyn Connector, requested: Option<&str>) -> Resul
         });
     }
     Ok(remote)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cloudkit::transport::SharedDownloader;
+    use std::sync::Arc;
+
+    struct Overlapping;
+
+    impl Transport for Overlapping {
+        fn post_json(&self, _: &str, _: &Value) -> Result<Value, CkError> {
+            Ok(Value::Null)
+        }
+        fn download(&self, _: &str, _: &Path) -> Result<u64, CkError> {
+            Ok(0)
+        }
+        fn shared_downloader(&self) -> Option<SharedDownloader> {
+            Some(Arc::new(|_: &str, _: &Path| Ok(0)))
+        }
+    }
+
+    /// `sync`'s one connection still lets a pull's downloads overlap, as a
+    /// pull by itself does.
+    #[test]
+    fn a_shared_connection_keeps_the_transports_overlapping_downloads() {
+        let inner = FnConnector(|| {
+            Ok(Remote {
+                db: Database::new(Box::new(Overlapping) as Box<dyn Transport>),
+                account: Account::default(),
+            })
+        });
+        let shared = SharedConnector::new(&inner);
+        for _ in 0..2 {
+            assert!(shared.connect().unwrap().db.transport.shared_downloader().is_some());
+        }
+    }
 }
