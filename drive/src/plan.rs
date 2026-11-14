@@ -357,6 +357,14 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
         }
         false
     };
+    // A name beside `path` of its own, free on both sides, for an item
+    // moved here out of the way of another.
+    let aside_here = |path: &str| {
+        (1..)
+            .map(|n| join(parent_of(path), &format!("{} (moving {n})", name_of(path))))
+            .find(|p| !local.contains_key(p) && !remote.by_path.contains_key(p))
+            .unwrap()
+    };
 
     let mut ops = Vec::new();
     let mut moving: Vec<&str> = Vec::new();
@@ -425,16 +433,11 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 // Into where it is now here (another folder took its name
                 // in iCloud, and it went into that one): out of the way
                 // first, under a name of its own, and on from there.
-                let free = |p: &String| !local.contains_key(p) && !remote.by_path.contains_key(p);
-                let aside = (1..)
-                    .map(|n| join(parent_of(from), &format!("{} (moving {n})", name_of(from))))
-                    .find(free)
-                    .unwrap();
                 moving.push(&row.path);
                 ops.push(Op::LocalMove {
                     id: row.node.id.clone(),
                     from: from.to_string(),
-                    to: aside,
+                    to: aside_here(from),
                 });
                 continue;
             }
@@ -538,29 +541,22 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 ops.push(Op::SetAside {
                     path: other.to_string(),
                 });
-            } else if !local.contains_key(rpath)
-                && tracked_ids
-                    .get(rpath.as_str())
-                    .is_some_and(|holder| remote.paths.contains_key(*holder))
+            } else if tracked_ids
+                .get(rpath.as_str())
+                .is_some_and(|holder| remote.paths.contains_key(*holder))
             {
-                // Another item in step still holds the name (moved away
-                // here, and that not recorded yet): wait for it.
+                // Another item in step still holds the name (it may be about
+                // to move away itself, or moved away here unrecorded): wait.
                 stuck.push(row);
                 continue;
             } else if local.contains_key(rpath) {
-                if let Some(holder) = tracked_ids.get(rpath.as_str()) {
-                    if remote.paths.contains_key(*holder) {
-                        // The destination is another item in step, which
-                        // may be about to move away itself: wait.
-                        stuck.push(row);
-                    } else {
-                        // That item is gone from iCloud (removed there, and
-                        // this one given its name): the content rules take
-                        // it out of the way first, and leave this one be.
-                        waiting = true;
-                        if from != row.path {
-                            held.push(from.to_string());
-                        }
+                if tracked_ids.contains_key(rpath.as_str()) {
+                    // That item is gone from iCloud (removed there, and
+                    // this one given its name): the content rules take it
+                    // out of the way first, and leave this one be.
+                    waiting = true;
+                    if from != row.path {
+                        held.push(from.to_string());
                     }
                     continue;
                 }
@@ -766,11 +762,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
         .or_else(|| waited.iter().find(|(row, _)| parent_here(row)));
     if let Some((row, now)) = back.filter(|_| ops.is_empty()) {
         let to = if local.contains_key(&row.path) {
-            let free = |p: &String| !local.contains_key(p) && !remote.by_path.contains_key(p);
-            (1..)
-                .map(|n| join(parent_of(&row.path), &format!("{} (moving {n})", name_of(&row.path))))
-                .find(free)
-                .unwrap()
+            aside_here(&row.path)
         } else {
             row.path.clone()
         };
