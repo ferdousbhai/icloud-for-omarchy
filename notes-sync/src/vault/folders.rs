@@ -16,6 +16,7 @@ use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
 use crate::cmd::plan::FolderRefusal;
 use crate::cmd::used_names_for;
+use crate::doc::embeds::{AttachmentReference, attachment_link_spellings, format_attachment_markdown};
 use crate::js::{self, posix};
 use crate::md::filename::unique_file_name;
 
@@ -178,8 +179,12 @@ pub fn relocate_note_attachments(
         let attachment = attachments[&attachment_record_name].clone();
         let old_base = posix::basename(&attachment.file).to_owned();
         // Moved along with a renamed folder directory: already there.
+        // Unless the file of that name there is another attachment's.
         let already_there = posix::join(&[&to_attachments, &old_base]);
-        if !target_dir.join(&attachment.file).exists() && target_dir.join(&already_there).exists() {
+        if !target_dir.join(&attachment.file).exists()
+            && target_dir.join(&already_there).exists()
+            && !attachments.values().any(|other| other.file == already_there)
+        {
             attachments[&attachment_record_name].file = already_there;
             continue;
         }
@@ -221,14 +226,37 @@ fn rewrite_attachment_link(
     old_base: &str,
     new_base: &str,
 ) -> Result<(), Error> {
-    let old_link = format!("attachments/{}", js::encode_uri_component(old_base));
-    let new_link = format!("attachments/{}", js::encode_uri_component(new_base));
+    // A link as pull writes it (either spelling of its text) becomes the
+    // link pull would write for the new name, text and all: that is the
+    // one push takes for the attachment. Any other link to the file keeps
+    // its text and gets the new target. Whole links only: `x.png` renamed
+    // leaves a link to `x.png.pdf` alone.
+    let file = AttachmentReference {
+        attachment_identifier: String::new(),
+        type_uti: "public.data".into(),
+    };
+    let link_to = |base: &str| format!("attachments/{base}");
+    let new_link = format_attachment_markdown(&file, &link_to(new_base));
+    let target_of = |link: &str| link[link.find("](").unwrap_or(0)..].to_owned();
+    let rewrite = |text: &str| -> String {
+        let mut text = text.to_owned();
+        for old_link in attachment_link_spellings(&file, &link_to(old_base)) {
+            text = text.replace(&old_link, &new_link);
+            let old_target = target_of(&old_link);
+            text = text.replace(&old_target, &target_of(&new_link));
+            // As it was written before parentheses that don't pair up
+            // were percent-encoded.
+            let bare = old_target.replace("%28", "(").replace("%29", ")");
+            text = text.replace(&bare, &target_of(&new_link));
+        }
+        text
+    };
     let note_path = target_dir.join(note_file);
     if let Some(content) = read_text(&note_path)? {
-        write_note_file(&note_path, &content.replace(&old_link, &new_link))?;
+        write_note_file(&note_path, &rewrite(&content))?;
     }
     if let Some(base) = read_base_copy(target_dir, record_name)? {
-        write_base_copy(target_dir, record_name, &base.replace(&old_link, &new_link))?;
+        write_base_copy(target_dir, record_name, &rewrite(&base))?;
     }
     Ok(())
 }

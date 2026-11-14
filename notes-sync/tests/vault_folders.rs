@@ -181,7 +181,8 @@ fn attachment_collision_rewrites_body_and_base_copy_identically() {
 
     assert_eq!(attachments["ATT-MOVE"].file, "Beta/attachments/photo 2.jpeg");
     let moved = read(root, "Beta/Moving.md");
-    assert_eq!(moved, "![photo.jpeg](attachments/photo%202.jpeg)");
+    // The link pull would write for the new name: the one push takes for it.
+    assert_eq!(moved, "![photo 2.jpeg](attachments/photo%202.jpeg)");
     assert_eq!(
         read_base_copy(root, "REC-MOVE").unwrap().as_deref(),
         Some(moved.as_str())
@@ -214,7 +215,7 @@ fn a_moved_attachment_never_replaces_a_file_already_in_the_target() {
     assert_eq!(read(root, "Beta/attachments/photo 2.jpeg"), "moving-bytes");
     assert_eq!(
         read(root, "Beta/Moving.md"),
-        "![photo.jpeg](attachments/photo%202.jpeg)"
+        "![photo 2.jpeg](attachments/photo%202.jpeg)"
     );
 }
 
@@ -503,4 +504,67 @@ fn relocating_a_moved_notes_attachments() {
         read_base_copy(dir, "REC1").unwrap().as_deref(),
         Some("Text ![](attachments/pic%202.jpg)")
     );
+}
+
+/// The renamed attachment's link reads as pull would write it for the new
+/// name, text and all (the link push takes for the attachment), and only
+/// that file's links change: `x.png` renamed leaves `x.png.pdf` alone.
+#[test]
+fn a_renamed_attachments_link_is_rewritten_whole_and_no_other() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write_vault_file(dir, "Notes/attachments/x.png", "mine");
+    write_vault_file(dir, "Notes/attachments/x.png.pdf", "mine too");
+    write_vault_file(dir, "Recipes/attachments/x.png", "someone else's");
+    let text = "![x.png](attachments/x.png)\n[x.png.pdf](attachments/x.png.pdf)\nSee attachments/x.png.pdf too.";
+    write_vault_file(dir, "Recipes/Tracked.md", text);
+    write_base_copy(dir, "REC1", text).unwrap();
+    let entry = |file: &str| AttachmentEntry {
+        file: file.into(),
+        media_record_name: "MEDIA".into(),
+        media_file_checksum: "abc".into(),
+        note_record_name: "REC1".into(),
+    };
+    let mut attachments = IndexMap::from([
+        ("ATT1".to_owned(), entry("Notes/attachments/x.png")),
+        ("ATT2".to_owned(), entry("Notes/attachments/x.png.pdf")),
+    ]);
+    relocate_note_attachments(dir, "REC1", "Recipes/Tracked.md", &mut attachments).unwrap();
+    assert_eq!(attachments["ATT1"].file, "Recipes/attachments/x 2.png");
+    assert_eq!(attachments["ATT2"].file, "Recipes/attachments/x.png.pdf");
+    let rewritten =
+        "![x 2.png](attachments/x%202.png)\n[x.png.pdf](attachments/x.png.pdf)\nSee attachments/x.png.pdf too.";
+    assert_eq!(read(dir, "Recipes/Tracked.md"), rewritten);
+    assert_eq!(read_base_copy(dir, "REC1").unwrap().as_deref(), Some(rewritten));
+    assert_eq!(read(dir, "Recipes/attachments/x.png.pdf"), "mine too");
+}
+
+/// A note's attachment file that is gone from where it was is taken to be
+/// the file of that name already in the new folder's `attachments/` (a
+/// folder directory renamed with everything in it) only when no other
+/// attachment tracks that file: another note's is not this one's.
+#[test]
+fn a_missing_attachment_does_not_adopt_another_notes_file_of_the_same_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write_vault_file(dir, "Recipes/attachments/pic.jpg", "the other note's");
+    write_vault_file(dir, "Recipes/Tracked.md", "Text ![pic.jpg](attachments/pic.jpg)");
+    let entry = |file: &str, note: &str| AttachmentEntry {
+        file: file.into(),
+        media_record_name: "MEDIA".into(),
+        media_file_checksum: "abc".into(),
+        note_record_name: note.into(),
+    };
+    let mut attachments = IndexMap::from([
+        ("ATT1".to_owned(), entry("Notes/attachments/pic.jpg", "REC1")),
+        ("ATT2".to_owned(), entry("Recipes/attachments/pic.jpg", "REC2")),
+    ]);
+    relocate_note_attachments(dir, "REC1", "Recipes/Tracked.md", &mut attachments).unwrap();
+    assert_eq!(attachments["ATT1"].file, "Notes/attachments/pic.jpg");
+    assert_eq!(attachments["ATT2"].file, "Recipes/attachments/pic.jpg");
+
+    // With nothing else tracking it, it is this note's, moved with its folder.
+    attachments.shift_remove("ATT2");
+    relocate_note_attachments(dir, "REC1", "Recipes/Tracked.md", &mut attachments).unwrap();
+    assert_eq!(attachments["ATT1"].file, "Recipes/attachments/pic.jpg");
 }

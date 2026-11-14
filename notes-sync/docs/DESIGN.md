@@ -338,7 +338,11 @@ for more than text edits). The engine:
   made here and not pushed yet): new notes and folder relocations take the
   names already on disk as used and get a `" 2"` name instead. So do the
   attachment files of a note moved to another folder, in that folder's
-  `attachments/`. The rename itself refuses a name that is taken
+  `attachments/`; the note's link to a file renamed that way is rewritten
+  whole, as pull would write it for the new name (link text included: a
+  link with the old text and the new target is one push refuses as
+  "changed or moved"), and no other link is touched (`x.png` renamed
+  leaves a link to `x.png.pdf` alone). The rename itself refuses a name that is taken
   (`renameat2` with `RENAME_NOREPLACE`, `vault::local::rename_no_replace`),
   so a file a file-sync tool delivers between the look and the rename is
   not replaced either.
