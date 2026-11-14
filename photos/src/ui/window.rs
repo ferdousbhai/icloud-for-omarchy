@@ -491,11 +491,15 @@ impl App {
             Msg::TransportReady(Ok(t)) => {
                 let tx = self.tx.clone();
                 let settings = self.settings.borrow().clone();
+                let targets = thumbs::Targets {
+                    dirs: self.dirs.clone(),
+                    library: settings.library_dir,
+                    export: false,
+                };
                 let pool = Downloader::start(
                     t.clone(),
-                    self.dirs.clone(),
-                    settings.library_dir,
-                    4,
+                    targets,
+                    thumbs::DOWNLOAD_WORKERS,
                     Box::new(move |e| {
                         let _ = tx.send_blocking(Msg::Download(e));
                     }),
@@ -747,18 +751,21 @@ impl App {
     }
 
     fn on_download(self: &Rc<Self>, e: thumbs::Event) {
-        if let Some(err) = &e.live_error {
-            // The photo is saved; the next download fetches only the video.
-            if err.is_sign_in() || self.want_open.borrow().contains(&e.id) || self.want_toast.borrow().contains(&e.id) {
-                self.fail("The Live Photo's video did not download", err);
-            } else {
-                eprintln!("icloud-photos: Live Photo video {}: {err}", e.id);
-            }
-        }
-        match (e.job, e.result) {
-            (Job::Thumb, Ok(path)) => self.load_texture(&e.id, &path),
-            (Job::Medium, Ok(path)) => self.viewer.on_medium(self, &e.id, &path),
-            (Job::Original, Ok(path)) => {
+        match (e.job, e.result.map(|f| (f.path, f.live_error))) {
+            (Job::Thumb, Ok((path, _))) => self.load_texture(&e.id, &path),
+            (Job::Medium, Ok((path, _))) => self.viewer.on_medium(self, &e.id, &path),
+            (Job::Original, Ok((path, live_error))) => {
+                if let Some(err) = &live_error {
+                    // The photo is saved; the next download fetches only the video.
+                    if err.is_sign_in()
+                        || self.want_open.borrow().contains(&e.id)
+                        || self.want_toast.borrow().contains(&e.id)
+                    {
+                        self.fail("The Live Photo's video did not download", err);
+                    } else {
+                        eprintln!("icloud-photos: Live Photo video {}: {err}", e.id);
+                    }
+                }
                 if self.want_open.borrow_mut().remove(&e.id) {
                     self.launch(&path);
                 }

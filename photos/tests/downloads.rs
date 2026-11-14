@@ -6,7 +6,7 @@ use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
 use icloud_photos::thumbs::{
-    Downloader, Job, MAX_NOW_JOBS, Priority, Targets, fetch, fetch_detailed, fetch_detailed_with, live_ext,
+    Downloader, Job, MAX_NOW_JOBS, Priority, Targets, fetch, fetch_detailed_with, live_ext,
     prune_cache, rename_noreplace,
 };
 use icloud_photos::transport::{Result, Transport};
@@ -22,6 +22,7 @@ fn synced(t: &FixtureTransport, root: &std::path::Path) -> (Catalog, Targets) {
         Targets {
             dirs,
             library: root.join("Pictures"),
+            export: false,
         },
     )
 }
@@ -295,8 +296,7 @@ fn a_cancelled_job_never_runs_and_old_thumbnail_requests_give_way() {
     let held = gate.1.lock().unwrap();
     let pool = Downloader::start(
         gate.clone(),
-        targets.dirs.clone(),
-        targets.library,
+        targets,
         1,
         Box::new(move |e| tx.lock().unwrap().send(e).unwrap()),
     );
@@ -504,7 +504,7 @@ fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
     );
     t.serve(&orig, b"heic");
 
-    let first = fetch_detailed(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    let first = fetch_detailed_with(&t, &cat, &targets, "ASSET-001", Job::Original, &Vec::new).unwrap();
     assert!(first.live_error.is_some(), "the video 404s");
     let row = cat.asset("ASSET-001").unwrap().unwrap();
     assert_eq!(row.local_path, Some(first.path.clone()), "the photo is recorded anyway");
@@ -512,7 +512,7 @@ fn a_failed_live_video_keeps_the_photo_and_retries_only_the_video() {
 
     t.serve(&live, b"mov");
     let n = t.downloads.lock().unwrap().len();
-    let second = fetch_detailed(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    let second = fetch_detailed_with(&t, &cat, &targets, "ASSET-001", Job::Original, &Vec::new).unwrap();
     assert!(second.live_error.is_none());
     assert_eq!(second.path, first.path);
     assert_eq!(
@@ -580,4 +580,10 @@ fn prune_drops_removed_assets_and_the_oldest_mediums() {
         "thumbs of live assets stay"
     );
     assert!(medium("ASSET-004").exists());
+
+    // A file already gone (the cache cleared by hand) is forgotten, not counted.
+    std::fs::remove_file(root.join("cache/thumbs/ASSET-002.jpg")).unwrap();
+    cat.mark_deleted("ASSET-002", None).unwrap();
+    assert_eq!(prune_cache(&cat, &targets.dirs, 150).unwrap(), 0);
+    assert_eq!(cat.asset("ASSET-002").unwrap().unwrap().thumb_path, None);
 }

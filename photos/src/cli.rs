@@ -1,6 +1,6 @@
 //! `icloud-photos <command>`: every feature of the app from a terminal (or an
 //! agent), without GTK or a display. The commands run the same library code
-//! as the window: `sync::run`, `thumbs::fetch_detailed` and the download pool,
+//! as the window: `sync::run`, `thumbs::fetch` and the download pool,
 //! `upload::upload_batch`, `CloudKit::delete_assets`, `thumbs::prune_cache`.
 //!
 //! Output follows the shared product contract ([`icloud_session::output`]):
@@ -34,7 +34,7 @@ use icloud_photos::session;
 use icloud_photos::still;
 use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
-use icloud_photos::transport::{Error, Transport};
+use icloud_photos::transport::{Error, Result as LibResult, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
 use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN};
 use icloud_session::output::{self, CliError, Mode as OutMode, OutputFlags, Response, SIGN_IN_HINT};
@@ -144,8 +144,10 @@ enum Command {
         /// iCloud's large JPEG preview (the viewer's image) instead of the original.
         #[arg(long)]
         medium: bool,
-        /// Save originals under DIR/<year>/<month>/ instead of the library
-        /// folder; with --medium, copy the preview to DIR.
+        /// Export originals to DIR/<year>/<month>/ instead of the library
+        /// folder (copied from the library when already downloaded; nothing
+        /// there is replaced, and the catalog keeps the library's paths);
+        /// with --medium, copy the preview to DIR.
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
@@ -336,10 +338,13 @@ impl Ctx {
         Ok(session::connect()?)
     }
 
-    fn targets(&self, library: Option<&Path>) -> Targets {
+    /// The library folder, or with `out` that folder as an export
+    /// (`download --out`), which the catalog does not record.
+    fn targets(&self, out: Option<&Path>) -> Targets {
         Targets {
             dirs: self.dirs.clone(),
-            library: library.map_or_else(|| self.settings.library_dir.clone(), Path::to_path_buf),
+            library: out.map_or_else(|| self.settings.library_dir.clone(), Path::to_path_buf),
+            export: out.is_some(),
         }
     }
 
@@ -768,7 +773,7 @@ fn info(ctx: &Ctx, id: &str) -> Res<Response> {
 
 // ---- downloads ----------------------------------------------------------
 
-fn copy_to(src: &Path, dest: &Path) -> Res<PathBuf> {
+fn copy_to(src: &Path, dest: &Path) -> std::io::Result<PathBuf> {
     if let Some(dir) = dest.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
@@ -800,7 +805,7 @@ fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<Response> {
         _ => {
             let t = ctx.transport()?;
             let job = if medium { Job::Medium } else { Job::Original };
-            thumbs::fetch_detailed(&*t, &cat, &ctx.targets(None), id, job)?.path
+            thumbs::fetch(&*t, &cat, &ctx.targets(None), id, job)?
         }
     };
     let opener = std::env::var("ICLOUD_PHOTOS_OPENER").unwrap_or_else(|_| "xdg-open".into());
@@ -858,21 +863,13 @@ fn wallpaper(ctx: &Ctx, id: &str) -> Res<Response> {
     Ok(Response::new(json!({ "id": id, "path": set }), text).ids(vec![id.to_owned()]))
 }
 
-/// Parallel downloads, as in the app.
-const DOWNLOAD_WORKERS: usize = 4;
-
 fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&Path>) -> Res<Response> {
     let cat = ctx.catalog()?;
     let ids = if all { cat.missing_originals()? } else { ids };
     for id in &ids {
         row_or_fail(&cat, id)?;
     }
-    let t = ctx.transport()?;
-    let targets = ctx.targets(if medium { None } else { out });
-    let job = if medium { Job::Medium } else { Job::Original };
-
-    // The app's download pool: a few threads, each with its own catalog
-    // connection; an id named twice is fetched once.
+    // An id named twice is fetched once.
     let mut unique: Vec<&str> = Vec::new();
     let mut seen = HashSet::new();
     for id in &ids {
@@ -880,61 +877,55 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
             unique.push(id);
         }
     }
+    if unique.is_empty() {
+        return Ok(Response::new(json!([]), "Nothing to download").ids(Vec::new()));
+    }
+    let t = ctx.transport()?;
+    let job = if medium { Job::Medium } else { Job::Original };
+
+    // The app's download pool: a few threads, each with its own catalog connection.
     let (tx, rx) = std::sync::mpsc::channel::<thumbs::Event>();
-    let pool = (!unique.is_empty()).then(|| {
-        Downloader::start(
-            t.clone(),
-            targets.dirs.clone(),
-            targets.library.clone(),
-            DOWNLOAD_WORKERS.min(unique.len()),
-            Box::new(move |e| {
-                let _ = tx.send(e);
-            }),
-        )
-    });
+    let pool = Downloader::start(
+        t,
+        ctx.targets(if medium { None } else { out }),
+        thumbs::DOWNLOAD_WORKERS.min(unique.len()),
+        Box::new(move |e| {
+            let _ = tx.send(e);
+        }),
+    );
     for id in &unique {
-        if let Some(p) = &pool {
-            p.enqueue(id, job, Priority::Background);
-        }
+        pool.enqueue(id, job, Priority::Background);
     }
 
-    let mut done: HashMap<String, Res<Value>> = HashMap::new();
+    let mut done: HashMap<String, LibResult<Value>> = HashMap::new();
     let mut failed = 0;
     while done.len() < unique.len() {
         let e = rx.recv().map_err(|_| other("the download threads stopped"))?;
-        let id = e.id.clone();
-        let result: Res<Value> = match e.result {
+        let id = e.id;
+        let result: LibResult<Value> = match e.result {
             // A lapsed sign-in fails every other item too: stop.
             Err(err) if err.is_sign_in() => {
-                if let Some(p) = &pool {
-                    p.clear_background();
-                }
-                return Err(Fail::Err(err));
+                pool.clear_background();
+                return Err(err.into());
             }
-            Err(err) => Err(Fail::Err(err)),
-            Ok(cached) if medium => (|| {
+            Err(err) => Err(err),
+            Ok(f) if medium => (|| {
                 let path = match out {
                     // A PNG original that stands in for a missing preview stays .png.
                     Some(dir) => {
-                        let ext = cached.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
-                        copy_to(&cached, &dir.join(format!("{}.{ext}", sanitize(&id))))?
+                        let ext = f.path.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+                        copy_to(&f.path, &dir.join(format!("{}.{ext}", sanitize(&id))))?
                     }
-                    None => cached,
+                    None => f.path,
                 };
                 Ok(json!({ "id": id, "path": path }))
             })(),
-            Ok(path) => row_or_fail(&cat, &id).map(|row| {
-                json!({
-                    "id": id,
-                    "path": path,
-                    "live_path": existing(&row.live_path),
-                    "live_error": e.live_error.map(|e| e.to_string()),
-                })
-            }),
-        };
-        let result = match result {
-            Err(f @ Fail::Cli(_)) => return Err(f),
-            r => r,
+            Ok(f) => Ok(json!({
+                "id": id,
+                "path": f.path,
+                "live_path": f.live,
+                "live_error": f.live_error.map(|e| e.to_string()),
+            })),
         };
         // Text mode: lines as each finishes; the data keeps the order asked for.
         match &result {
@@ -952,36 +943,33 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
                     }
                 }
             }
-            Err(Fail::Err(err)) => {
+            Err(err) => {
                 failed += 1;
                 if ctx.text() {
                     warn(&format!("error: {id}: {err}"));
                 }
             }
-            Err(Fail::Cli(_)) => {}
         }
         done.insert(id, result);
     }
     let code = if failed > 0 { EXIT_ERROR } else { 0 };
-    if ctx.text() && !unique.is_empty() {
+    if ctx.text() {
         // Every line is already out.
         return Ok(Response::silent().exit(code));
     }
     let results: Vec<Value> = ids
         .iter()
-        .map(|id| match done.get(id) {
-            Some(Ok(v)) => v.clone(),
-            Some(Err(Fail::Err(e))) => json!({ "id": id, "error": e.to_string() }),
-            _ => json!({ "id": id, "error": "not downloaded" }),
+        .map(|id| match &done[id] {
+            Ok(v) => v.clone(),
+            Err(e) => json!({ "id": id, "error": e.to_string() }),
         })
         .collect();
     let ok: Vec<String> = unique
         .iter()
-        .filter(|id| matches!(done.get(**id), Some(Ok(v)) if v["live_error"].is_null()))
+        .filter(|id| matches!(&done[**id], Ok(v) if v["live_error"].is_null()))
         .map(|id| id.to_string())
         .collect();
     let summary = match (unique.len(), failed) {
-        (0, _) => "Nothing to download".to_owned(),
         (n, 0) => format!("Downloaded {}", plural(n, "item", "items")),
         (n, f) => format!("Downloaded {} of {}; {f} failed", n - f, plural(n, "item", "items")),
     };
@@ -1023,7 +1011,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
 
     if !paths.is_empty() {
         let t = ctx.transport()?;
-        let done: RefCell<Vec<(usize, String, icloud_photos::transport::Result<upload::Uploaded>)>> =
+        let done: RefCell<Vec<(usize, String, LibResult<upload::Uploaded>)>> =
             RefCell::new(Vec::new());
         // Progress goes to stderr in every mode: it is not the result.
         let summary = upload::upload_batch(&*t, &paths, Duration::from_secs(60), &|| false, &|event| match event {
@@ -1189,8 +1177,8 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     let ck = CloudKit::connect(&*t)?;
     // Up to 200 deletions per request, each answered on its own.
     let first: Vec<(&str, Option<&str>)> = rows.iter().map(|r| (r.id.as_str(), r.change_tag.as_deref())).collect();
-    let mut outcome: Vec<icloud_photos::transport::Result<Modified>> = ck.delete_assets(&first);
-    let code_of = |r: &icloud_photos::transport::Result<Modified>| match r {
+    let mut outcome: Vec<LibResult<Modified>> = ck.delete_assets(&first);
+    let code_of = |r: &LibResult<Modified>| match r {
         Err(Error::CloudKit { code, .. }) => Some(code.clone()),
         _ => None,
     };

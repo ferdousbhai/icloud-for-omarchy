@@ -42,6 +42,7 @@ fn browse_download_delete_upload_and_resync() {
     let targets = Targets {
         dirs,
         library: root.join("Pictures"),
+        export: false,
     };
     let thumb = fetch(&t, &cat, &targets, &newest.id, Job::Thumb).unwrap();
     assert_eq!(&std::fs::read(&thumb).unwrap()[..2], b"\xFF\xD8");
@@ -121,8 +122,11 @@ fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
     let tx = Mutex::new(tx);
     let pool = Downloader::start(
         t,
-        dirs,
-        root.join("lib"),
+        Targets {
+            dirs,
+            library: root.join("lib"),
+            export: false,
+        },
         3,
         Box::new(move |e| tx.lock().unwrap().send(e).unwrap()),
     );

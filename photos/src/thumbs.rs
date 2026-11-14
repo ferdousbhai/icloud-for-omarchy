@@ -30,31 +30,44 @@ pub enum Job {
 }
 
 /// Where a job's file goes.
+#[derive(Debug, Clone)]
 pub struct Targets {
     pub dirs: Dirs,
+    /// Where originals go: the library folder, or an export folder.
     pub library: PathBuf,
+    /// `library` is an export folder (`download --out`): originals are
+    /// copied there from the library when it has them, downloaded there
+    /// otherwise, and the catalog keeps pointing at the library only.
+    pub export: bool,
 }
 
-/// What a job produced. For an original, `path` is the photo; a Live Photo
-/// video that failed after the photo was saved is reported in `live_error`
-/// (the photo stays recorded, and the next attempt fetches only the video).
+/// What a job produced. For an original, `path` is the photo and `live` its
+/// Live Photo video; a video that failed after the photo was saved is
+/// reported in `live_error` (the photo stays recorded, and the next attempt
+/// fetches only the video).
 #[derive(Debug)]
 pub struct Fetched {
     pub path: PathBuf,
+    pub live: Option<PathBuf>,
     pub live_error: Option<Error>,
+}
+
+impl Fetched {
+    fn file(path: PathBuf) -> Fetched {
+        Fetched {
+            path,
+            live: None,
+            live_error: None,
+        }
+    }
 }
 
 /// Download one rendition of one asset and record its path. Returns the path
 /// (for originals, the photo; the Live Photo video lands next to it).
-pub fn fetch(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job: Job) -> Result<PathBuf> {
-    fetch_detailed(t, cat, targets, id, job).map(|f| f.path)
-}
-
-/// [`fetch`], keeping a Live Photo video failure apart from the photo's.
 /// A 4xx on a signed URL means it expired: the master is looked up again for
 /// fresh URLs and the download retried once.
-pub fn fetch_detailed(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job: Job) -> Result<Fetched> {
-    fetch_detailed_with(t, cat, targets, id, job, &Vec::new)
+pub fn fetch(t: &dyn Transport, cat: &Catalog, targets: &Targets, id: &str, job: Job) -> Result<PathBuf> {
+    fetch_detailed_with(t, cat, targets, id, job, &Vec::new).map(|f| f.path)
 }
 
 /// The most masters one `records/lookup` refreshes.
@@ -65,8 +78,9 @@ pub const LOOKUP_BATCH: usize = 200;
 /// their masters are refreshed in the same `records/lookup`.
 pub type Peers<'a> = &'a dyn Fn() -> Vec<String>;
 
-/// [`fetch_detailed`], refreshing `peers()` along with this asset when its
-/// URL has expired.
+/// [`fetch`], keeping a Live Photo's video (and its failure) apart from the
+/// photo, and refreshing `peers()` along with this asset when its URL has
+/// expired.
 pub fn fetch_detailed_with(
     t: &dyn Transport,
     cat: &Catalog,
@@ -81,6 +95,7 @@ pub fn fetch_detailed_with(
     let (dir, kind, url_of): (PathBuf, PathKind, UrlOf) = match job {
         Job::Thumb => (targets.dirs.thumbs(), PathKind::Thumb, |r| r.thumb_url.as_ref()),
         Job::Medium => (targets.dirs.medium(), PathKind::Medium, medium_url),
+        Job::Original if targets.export => return export(t, cat, targets, row, peers),
         Job::Original => return original(t, cat, targets, row, peers),
     };
     let cached = if job == Job::Thumb {
@@ -92,10 +107,7 @@ pub fn fetch_detailed_with(
         if job == Job::Medium {
             touch(p);
         }
-        return Ok(Fetched {
-            path: p.clone(),
-            live_error: None,
-        });
+        return Ok(Fetched::file(p.clone()));
     }
     // The cache is ours and named by asset id: replacing a file there is fine.
     std::fs::create_dir_all(&dir)?;
@@ -108,10 +120,7 @@ pub fn fetch_detailed_with(
     let dest = dir.join(format!("{}.{ext}", sanitize(&row.id)));
     download_fresh(t, cat, &mut row, url_of, job, &dest, peers)?;
     cat.set_path(id, kind, Some(&dest))?;
-    Ok(Fetched {
-        path: dest,
-        live_error: None,
-    })
+    Ok(Fetched::file(dest))
 }
 
 type UrlOf = fn(&Row) -> Option<&String>;
@@ -155,6 +164,74 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, p
     };
     Ok(Fetched {
         path: photo,
+        live: row.live_path.filter(|p| p.exists()),
+        live_error,
+    })
+}
+
+/// `download --out`: the original (and a Live Photo's video) in the export
+/// folder `targets.library`, copied from the library when it is there and
+/// downloaded otherwise. Nothing is replaced, and the catalog is not told:
+/// its paths are the library's. A file of the right name and size already
+/// in the export folder is taken to be an earlier export of the same photo.
+fn export(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, peers: Peers) -> Result<Fetched> {
+    let len = |p: &Path| std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len());
+    let mut hold = Reservation::default();
+    let source = row.local_path.clone().filter(|p| p.exists());
+    let (first, _) = original_names(&targets.library, &row, 1);
+    let size = source.as_deref().map_or((row.size > 0).then_some(row.size as u64), len);
+    let reused = size.is_some() && len(&first) == size;
+    let photo = if reused {
+        first
+    } else {
+        let dest = {
+            let mut taken = reserved();
+            let photo = plan_original(cat, &targets.library, &row, &taken)?.0;
+            hold.add(&mut taken, photo.clone());
+            photo
+        };
+        let tmp = Temp::beside(&dest)?;
+        match &source {
+            Some(have) => drop(std::fs::copy(have, &tmp.0)?),
+            None => download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?,
+        }
+        settle(tmp, dest, &mut hold, |taken| {
+            Ok(plan_original(cat, &targets.library, &row, taken)?.0)
+        })?
+    };
+    if row.live_url.is_none() {
+        return Ok(Fetched::file(photo));
+    }
+    let video = (|| {
+        let source = row.live_path.clone().filter(|p| p.exists());
+        let first = photo.with_extension(live_ext(row.live_type.as_deref()).trim_start_matches('.'));
+        let same = match source.as_deref() {
+            Some(have) => len(&first).is_some() && len(&first) == len(have),
+            None => reused && len(&first).is_some(),
+        };
+        if first != photo && same {
+            return Ok(first);
+        }
+        let dest = {
+            let mut taken = reserved();
+            let dest = plan_live(cat, &row, &photo, &taken)?;
+            hold.add(&mut taken, dest.clone());
+            dest
+        };
+        let tmp = Temp::beside(&dest)?;
+        match &source {
+            Some(have) => drop(std::fs::copy(have, &tmp.0)?),
+            None => download_fresh(t, cat, &mut row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?,
+        }
+        settle(tmp, dest, &mut hold, |taken| plan_live(cat, &row, &photo, taken))
+    })();
+    let (live, live_error) = match video {
+        Ok(p) => (Some(p), None),
+        Err(e) => (None, Some(e)),
+    };
+    Ok(Fetched {
+        path: photo,
+        live,
         live_error,
     })
 }
@@ -384,17 +461,11 @@ fn plan_original(
     row: &Row,
     taken: &BTreeSet<PathBuf>,
 ) -> Result<(PathBuf, Option<PathBuf>)> {
-    let (y, m, _) = icloud_session::time::civil_from_days(row.created.div_euclid(86_400));
-    let dir = library.join(format!("{y:04}")).join(format!("{m:02}"));
-    let filename = safe_filename(&row.filename);
-    let (stem, ext) = split_name(&filename);
-    let live_ext = row.live_url.is_some().then(|| live_ext(row.live_type.as_deref()));
     for n in 1..10_000 {
-        let photo = numbered(&dir, stem, n, ext);
+        let (photo, live) = original_names(library, row, n);
         if !is_free(cat, row, taken, &photo)? {
             continue;
         }
-        let live = live_ext.map(|e| numbered(&dir, stem, n, e));
         if let Some(l) = &live
             && (*l == photo || !is_free(cat, row, taken, l)?)
         {
@@ -402,7 +473,21 @@ fn plan_original(
         }
         return Ok((photo, live));
     }
-    Err(Error::Other(format!("no free name for {filename}")))
+    Err(Error::Other(format!("no free name for {}", row.filename)))
+}
+
+/// The `n`th name for an original under `library` (1 is the file's own
+/// name), and for its Live Photo video if it has one.
+fn original_names(library: &Path, row: &Row, n: u32) -> (PathBuf, Option<PathBuf>) {
+    let (y, m, _) = icloud_session::time::civil_from_days(row.created.div_euclid(86_400));
+    let dir = library.join(format!("{y:04}")).join(format!("{m:02}"));
+    let filename = safe_filename(&row.filename);
+    let (stem, ext) = split_name(&filename);
+    let live = row
+        .live_url
+        .is_some()
+        .then(|| numbered(&dir, stem, n, live_ext(row.live_type.as_deref())));
+    (numbered(&dir, stem, n, ext), live)
 }
 
 /// The video of a Live Photo whose photo is saved at `photo`: the photo's
@@ -478,11 +563,15 @@ pub const MEDIUM_CACHE_CAP: u64 = 2 << 30;
 /// tombstoned), then the oldest medium JPEGs beyond `medium_cap` bytes.
 /// Only files inside the cache directory are removed. Returns files removed.
 pub fn prune_cache(cat: &Catalog, dirs: &Dirs, medium_cap: u64) -> Result<usize> {
-    let mut removed = 0;
+    let removed = std::cell::Cell::new(0);
+    // Whether the file is gone now; one already missing is not counted.
     let remove = |p: &Path| -> bool {
         p.starts_with(&dirs.cache)
             && match std::fs::remove_file(p) {
-                Ok(()) => true,
+                Ok(()) => {
+                    removed.set(removed.get() + 1);
+                    true
+                }
                 Err(e) => e.kind() == io::ErrorKind::NotFound,
             }
     };
@@ -491,13 +580,11 @@ pub fn prune_cache(cat: &Catalog, dirs: &Dirs, medium_cap: u64) -> Result<usize>
             && remove(&p)
         {
             cat.set_path(&id, PathKind::Thumb, None)?;
-            removed += 1;
         }
         if let Some(p) = medium
             && remove(&p)
         {
             cat.set_path(&id, PathKind::Medium, None)?;
-            removed += 1;
         }
     }
 
@@ -521,19 +608,16 @@ pub fn prune_cache(cat: &Catalog, dirs: &Dirs, medium_cap: u64) -> Result<usize>
         if remove(&path) {
             total = total.saturating_sub(size);
             cat.forget_medium(&path)?;
-            removed += 1;
         }
     }
-    Ok(removed)
+    Ok(removed.get())
 }
 
 #[derive(Debug)]
 pub struct Event {
     pub id: String,
     pub job: Job,
-    pub result: Result<PathBuf>,
-    /// The original was saved but its Live Photo video was not.
-    pub live_error: Option<Error>,
+    pub result: Result<Fetched>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,6 +629,9 @@ pub enum Priority {
 }
 
 type Notify = Box<dyn Fn(Event) + Send + Sync>;
+
+/// Download threads the app and `icloud-photos download` run.
+pub const DOWNLOAD_WORKERS: usize = 4;
 
 /// The most `Now` jobs kept queued: beyond it the oldest thumbnail request
 /// is dropped (a screenful of tiles is far fewer).
@@ -560,8 +647,7 @@ struct Inner {
     queues: Mutex<Queues>,
     wake: Condvar,
     transport: Arc<dyn Transport>,
-    dirs: Dirs,
-    library: Mutex<PathBuf>,
+    targets: Mutex<Targets>,
     notify: Notify,
 }
 
@@ -572,13 +658,7 @@ pub struct Downloader {
 }
 
 impl Downloader {
-    pub fn start(
-        transport: Arc<dyn Transport>,
-        dirs: Dirs,
-        library: PathBuf,
-        workers: usize,
-        notify: Notify,
-    ) -> Downloader {
+    pub fn start(transport: Arc<dyn Transport>, targets: Targets, workers: usize, notify: Notify) -> Downloader {
         let inner = Arc::new(Inner {
             queues: Mutex::new(Queues {
                 now: VecDeque::new(),
@@ -587,8 +667,7 @@ impl Downloader {
             }),
             wake: Condvar::new(),
             transport,
-            dirs,
-            library: Mutex::new(library),
+            targets: Mutex::new(targets),
             notify,
         });
         for i in 0..workers.max(1) {
@@ -602,7 +681,7 @@ impl Downloader {
     }
 
     pub fn set_library(&self, dir: PathBuf) {
-        *self.inner.library.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+        self.inner.targets.lock().unwrap_or_else(|e| e.into_inner()).library = dir;
     }
 
     /// Queue a job unless the same one is already queued or running.
@@ -679,35 +758,21 @@ fn worker(inner: Arc<Inner>) {
                 q = inner.wake.wait(q).unwrap_or_else(|e| e.into_inner());
             }
         };
+        let targets = inner.targets.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if cat.is_none() {
-            cat = Catalog::open(&inner.dirs.catalog()).ok();
+            cat = Catalog::open(&targets.dirs.catalog()).ok();
         }
         let result = match &cat {
             Some(cat) => {
-                let targets = Targets {
-                    dirs: inner.dirs.clone(),
-                    library: inner.library.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-                };
+                // `refresh` leaves out the ids it has seen and stops at a batch.
                 let peers = || {
                     let q = inner.queues.lock().unwrap_or_else(|e| e.into_inner());
-                    let mut ids: Vec<String> = Vec::new();
-                    for (id, _) in q.now.iter().chain(q.background.iter()) {
-                        if ids.len() >= LOOKUP_BATCH {
-                            break;
-                        }
-                        if !ids.contains(id) {
-                            ids.push(id.clone());
-                        }
-                    }
-                    ids
+                    let queued = q.now.iter().chain(q.background.iter());
+                    queued.take(LOOKUP_BATCH).map(|(id, _)| id.clone()).collect()
                 };
                 fetch_detailed_with(&*inner.transport, cat, &targets, &id, job, &peers)
             }
             None => Err(Error::Other("could not open the catalog".into())),
-        };
-        let (result, live_error) = match result {
-            Ok(f) => (Ok(f.path), f.live_error),
-            Err(e) => (Err(e), None),
         };
         inner
             .queues
@@ -715,12 +780,7 @@ fn worker(inner: Arc<Inner>) {
             .unwrap_or_else(|e| e.into_inner())
             .pending
             .remove(&(id.clone(), job));
-        (inner.notify)(Event {
-            id,
-            job,
-            result,
-            live_error,
-        });
+        (inner.notify)(Event { id, job, result });
     }
 }
 

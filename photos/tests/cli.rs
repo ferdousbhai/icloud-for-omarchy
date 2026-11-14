@@ -361,6 +361,7 @@ fn thumb_and_download() {
     let r = env.styled(&["download", &live]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let paths: Vec<PathBuf> = r.stdout.lines().map(PathBuf::from).collect();
+    let library = env.data().join("library");
     assert_eq!(paths.len(), 2, "{}", r.stdout);
     assert!(
         paths
@@ -381,6 +382,31 @@ fn thumb_and_download() {
     let p = PathBuf::from(r[0]["path"].as_str().unwrap());
     assert!(p.starts_with(&dir) && is_jpeg(&p), "{p:?}");
     assert_eq!(r[0]["live_path"], Value::Null);
+    // An export is not the library's copy: the catalog does not record it.
+    assert_eq!(env.json(&["info", &photo])["local_path"], Value::Null);
+    // One already in the library is copied out, video and all, and the
+    // catalog keeps the library's paths. Again: the same files, no "(2)".
+    let (mut p, mut v) = (PathBuf::new(), PathBuf::new());
+    for _ in 0..2 {
+        let r = env.json(&["download", &live, "--out", dir.to_str().unwrap()]);
+        (p, v) = (
+            PathBuf::from(r[0]["path"].as_str().unwrap()),
+            PathBuf::from(r[0]["live_path"].as_str().unwrap()),
+        );
+        assert_eq!(p.strip_prefix(&dir).unwrap(), paths[0].strip_prefix(&library).unwrap());
+        assert_eq!(v.strip_prefix(&dir).unwrap(), paths[1].strip_prefix(&library).unwrap());
+        assert_eq!(std::fs::read(&p).unwrap(), std::fs::read(&paths[0]).unwrap());
+        assert_eq!(std::fs::read(&v).unwrap(), std::fs::read(&paths[1]).unwrap());
+    }
+    let info = env.json(&["info", &live]);
+    assert_eq!(info["local_path"].as_str().map(PathBuf::from).as_ref(), Some(&paths[0]));
+    assert_eq!(info["live_path"].as_str().map(PathBuf::from).as_ref(), Some(&paths[1]));
+    // A file of that name the user put there is not replaced.
+    std::fs::write(&p, b"mine").unwrap();
+    let r = env.json(&["download", &live, "--out", dir.to_str().unwrap()]);
+    let second = PathBuf::from(r[0]["path"].as_str().unwrap());
+    assert!(second != p && second.starts_with(&dir), "{second:?}");
+    assert_eq!(std::fs::read(&p).unwrap(), b"mine");
 
     // --medium: iCloud's viewer preview, into the cache or to --out.
     let m = env.json(&["download", &photo, "--medium"]);
@@ -390,9 +416,9 @@ fn thumb_and_download() {
     let m = env.json(&["download", &photo, "--medium", "--out", mdir.to_str().unwrap()]);
     assert!(PathBuf::from(m[0]["path"].as_str().unwrap()).starts_with(&mdir));
 
-    // --all fetches every original still missing.
+    // --all fetches every original still missing (the exported one too).
     let all = env.json(&["download", "--all"]);
-    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(all.as_array().unwrap().len(), 3);
     assert_eq!(env.json(&["status"])["downloaded"], 4);
     assert_eq!(env.json(&["download", "--all"]).as_array().unwrap().len(), 0);
 

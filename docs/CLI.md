@@ -521,8 +521,11 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
   `YYYY-MM-DDTHH:MM:SS` (UTC) or Unix seconds; dates print as UTC. Lists in
   text mode are tab-separated.
 - `download` saves originals (plus a Live Photo's video) into the library
-  folder, `~/Pictures/<year>/<month>/` unless changed with `config`, or
-  under `--out DIR`; `--medium` fetches the viewer's preview instead.
+  folder, `~/Pictures/<year>/<month>/` unless changed with `config`.
+  `--out DIR` exports them to `DIR/<year>/<month>/` instead: copied from the
+  library when already downloaded, never replacing a file there, and not
+  recorded as the library's copy (`local_path` stays the library's).
+  `--medium` fetches the viewer's preview instead.
 - `thumb` fetches iCloud's thumbnail into the cache (and copies it to
   `--out PATH`). `open` downloads the original if needed (or, with
   `--medium`, the preview) and opens it with `xdg-open`.
