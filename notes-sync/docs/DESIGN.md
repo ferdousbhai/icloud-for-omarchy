@@ -252,6 +252,12 @@ window closes, so a killed run is ordinary.
   new folder in iCloud beside the one the pull was laying out. A push that
   finds `pendingDirs` sends nothing (a warning says why) until a pull has
   finished. An engine without it keeps the key and ignores it.
+- A move whose request iCloud took before the push was cut off leaves the
+  note tracked at its old file with the old change tag. The next push
+  finds the record changed since, which refuses a move; but when iCloud
+  has the note in the folder the file moved to, with the text it was last
+  synced with (`push::moved_there_unchanged`), the move is done: only the
+  file's tracking (and any edit made with the move) is brought up to date.
 - A note whose attachment downloads a failed run may not have finished
   keeps its attachments' entries without their checksum, and forgets its
   change tag (`cmd::redo_downloads`): the next pull applies it again and

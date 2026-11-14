@@ -1077,6 +1077,13 @@ fn changed_here(start: &mut Start) {
     expect.edits.push((both, "line from the phone first".into()));
 }
 
+#[test]
+fn a_push_cut_short_anywhere_is_finished_by_the_next_run() {
+    let mut start = cloned(9);
+    changed_here(&mut start);
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
+}
+
 const ARCHIVE_FOLDER: &str = "F0000000-0000-4000-8000-0000000000AC";
 
 /// The `Work` folder's directory renamed to `Office`, the `Archive`
@@ -1107,6 +1114,25 @@ fn folders_changed_here() -> Start {
 #[test]
 fn a_push_of_folder_changes_cut_short_anywhere_is_finished_by_the_next_run() {
     crash_everywhere(&folders_changed_here(), "push", &[Then::Again, Then::Sync]);
+}
+
+#[test]
+fn a_sync_cut_short_anywhere_is_finished_by_the_next_run() {
+    let mut start = cloned(9);
+    changed_here(&mut start);
+    let zone = &mut start.zone;
+    for i in 0..3 {
+        zone.put(note_record(
+            &format!("A0000000-0000-4000-8000-{i:012}"),
+            &format!("Added {i}\nwritten on the phone"),
+            WORK_FOLDER,
+        ));
+    }
+    start
+        .expect
+        .kept
+        .extend((0..3).map(|i| format!("A0000000-0000-4000-8000-{i:012}")));
+    crash_everywhere(&start, "sync", &[Then::Again]);
 }
 
 /// Every point is reached by the runs the tests above cut short, so every
@@ -1194,4 +1220,30 @@ fn a_folder_a_pull_cut_short_was_laying_out_is_not_made_again_by_the_next_sync()
         Then::Sync,
         "pull killed in a new folder",
     );
+}
+
+/// A push killed right after iCloud moved a note to the folder its file
+/// was moved to: the next push found the record changed since the last
+/// pull and refused the move, leaving the note tracked at a file that is
+/// gone until a pull and another push.
+#[test]
+fn a_move_a_push_cut_short_made_is_not_refused_by_the_next_push() {
+    let start = cloned(3);
+    let moving = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
+    let moved = format!("Work/{}", Path::new(&moving).file_name().unwrap().to_string_lossy());
+    std::fs::rename(start.place.vault.join(&moving), start.place.vault.join(&moved)).unwrap();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let crash = Crash {
+        at: Some((crash::ICLOUD_MODIFY.into(), 1)),
+        ..Default::default()
+    };
+    assert_eq!(run(&fake, &place, "push", &crash).status.signal(), Some(6));
+    let again = run(&fake, &place, "push", &Crash::default());
+    succeeded(&again, "push");
+    let result: Value = serde_json::from_slice(&again.stdout).unwrap();
+    let entries = &result["data"]["entries"];
+    assert_eq!(entries.as_array().map(Vec::len), Some(1), "{}", says(&again));
+    assert_eq!(entries[0]["resolution"], "ready", "{}", says(&again));
+    assert_eq!(tracked_file(&place, "E0000000-0000-4000-8000-000000000001"), moved);
 }

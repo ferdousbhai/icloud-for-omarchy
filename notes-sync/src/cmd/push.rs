@@ -1778,7 +1778,9 @@ pub fn build_push_plan(
                 continue;
             }
         };
-        if record.record_change_tag.clone().unwrap_or_default() != m.entry.record_change_tag {
+        let moved_already =
+            m.relocated && moved_there_unchanged(target_dir, record, &m.folder_record_name, title_mode)?;
+        if record.record_change_tag.clone().unwrap_or_default() != m.entry.record_change_tag && !moved_already {
             entries.push(refuse(Refusal::MoveChangedRemotely));
             continue;
         }
@@ -1804,7 +1806,7 @@ pub fn build_push_plan(
                 entry: m.entry.clone(),
                 to_file: m.to_file.clone(),
                 folder_record_name: m.folder_record_name.clone(),
-                relocated: m.relocated,
+                relocated: m.relocated && !moved_already,
                 dir_changed: m.dir_changed,
                 record: Box::new(record.clone()),
                 retitle,
@@ -2193,6 +2195,33 @@ pub fn build_push_plan(
         notices,
         remote: Some(remote),
     })
+}
+
+/// Whether iCloud has the note in `folder_record_name` already, with the
+/// text it was last synced with: a move a push cut short made (iCloud took
+/// it, nothing here recorded it), or the same move made on another device.
+/// Nothing is left to send for it but the edits made here.
+fn moved_there_unchanged(
+    target_dir: &Path,
+    record: &CloudKitRecord,
+    folder_record_name: &str,
+    title_mode: TitleMode,
+) -> Result<bool, Error> {
+    let folder = crate::vault::layout::reference_record_name(record.fields.get("Folder").map(|f| &f.value));
+    if folder.as_deref() != Some(folder_record_name) {
+        return Ok(false);
+    }
+    let NoteDecodeResult::Ok(decoded) = classify_note_record(record, &ClassifyOptions { title_mode }) else {
+        return Ok(false);
+    };
+    if !decoded.embed_slots.is_empty() {
+        return Ok(false);
+    }
+    let title = crate::md::filename::title_needing_frontmatter(&decoded.title_line, title_mode);
+    let file_text =
+        crate::md::frontmatter::compose_note_file("", &decoded.markdown_text, &record.record_name, title.as_deref());
+    let body = split_frontmatter(&file_text, split_options(title_mode)).body;
+    Ok(read_base_copy(target_dir, &record.record_name)?.as_deref() == Some(body.as_str()))
 }
 
 /// The create path's document build and verification:
