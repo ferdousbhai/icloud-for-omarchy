@@ -1163,8 +1163,15 @@ bool NotesBackend::saveCurrentNote(const QString &body)
     }
     // Never under a running sync: a pull may be rewriting this very file.
     // Written once it is done and its changes are loaded (writeQueuedSave).
+    // A save already waiting keeps its base: the note may have been loaded
+    // again under the sync since (the lock coming free, Refresh, a note
+    // followed to where it moved), while the editor's text still stems from
+    // the content the first save was queued on. Taking the newer content
+    // for the base would write the edits over what changed in between.
     if (m_syncRunning) {
-        m_queuedSave = { vaultRelative(m_currentNote), m_noteContent, body, true };
+        const QString note = vaultRelative(m_currentNote);
+        const bool waiting = m_queuedSave.valid && m_queuedSave.note == note;
+        m_queuedSave = { note, waiting ? m_queuedSave.base : m_noteContent, body, true };
         return false;
     }
     // A pull (or another program) rewrote the note since it was loaded:

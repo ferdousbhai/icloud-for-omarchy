@@ -1240,6 +1240,23 @@ int main(int argc, char *argv[])
                   == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine again and\n\ntwo from iCloud\n"),
               "seam waiting save written under later typing is not merged into a conflict");
     }
+    // The note loaded again under the sync (the vault's lock coming free,
+    // Refresh) while a save waits: a later save still stems from the text
+    // the first was made on, so what changed in between is merged, not
+    // overwritten. (The later save took the reloaded text for its base.)
+    {
+        const QString id = QStringLiteral("---\napple-note-id: id-q\n---\n");
+        writeFile(QStringLiteral("Q.md"), id + QStringLiteral("# Q\none\n\ntwo\n"));
+        b.refresh();
+        b.runPull();
+        b.saveCurrentNote(QStringLiteral("# Q\none, mine\n\ntwo\n"));
+        writeFile(QStringLiteral("Q.md"), id + QStringLiteral("# Q\none\n\ntwo from iCloud\n"));
+        b.refresh();
+        b.saveCurrentNote(QStringLiteral("# Q\none, mine and more\n\ntwo\n"));
+        waitForIdle(b);
+        check(readFile(QStringLiteral("Q.md")) == id + QStringLiteral("# Q\none, mine and more\n\ntwo from iCloud\n"),
+              "seam a save queued again after the note was reloaded under the sync keeps that change");
+    }
     // A waiting save belongs to its note and its edit: an edit undone, or
     // another note opened, before the sync ends leaves nothing to write.
     {
