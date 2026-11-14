@@ -64,6 +64,10 @@ pub enum Error {
     /// (a very large folder, it may be): never read as removals.
     #[error("iCloud Drive listed only {listed} of the {total} items in {id}")]
     Partial { id: String, listed: usize, total: u64 },
+    /// iCloud took an upload but did not say what it made of it: it may
+    /// well be there, so it is looked for rather than sent again.
+    #[error("iCloud Drive: {0}")]
+    Unanswered(String),
     /// A package (a Pages document, an app bundle): not a plain file.
     #[error("{0} is a package, which is not synced")]
     Package(String),
@@ -252,7 +256,7 @@ pub fn parse_document(answer: &Value, zone: &str) -> Result<Node> {
     let doc = &result["document"];
     let docwsid = text(doc, "document_id");
     if docwsid.is_empty() {
-        return Err(Error::Api("upload answered without a document".into()));
+        return Err(Error::Unanswered("the upload was answered without a document".into()));
     }
     Ok(Node {
         id: format!("FILE::{zone}::{docwsid}"),

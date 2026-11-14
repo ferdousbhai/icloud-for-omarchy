@@ -1575,3 +1575,19 @@ fn a_folder_icloud_lists_short_twice_is_left_alone_and_the_rest_syncs() {
     assert_eq!(bed.read("Big/theirs.txt").as_deref(), Some("theirs"));
     assert_eq!(bed.cloud.text("Big/mine.txt").as_deref(), Some("mine"));
 }
+
+#[test]
+fn an_upload_answered_without_saying_what_it_made_is_found_not_sent_again() {
+    let bed = Bed::new();
+    bed.write("a.txt", "one");
+    bed.settle();
+    bed.write("new.txt", "new");
+    bed.cloud.0.borrow_mut().upload_unanswered_once = true;
+    let outcome = bed.try_sync(false).unwrap();
+    assert_eq!(outcome.problems.len(), 1, "{outcome:?}");
+    // Renamed here before the next sync: still found, by its size and date.
+    fs::rename(bed.root().join("new.txt"), bed.root().join("renamed.txt")).unwrap();
+    bed.settle();
+    assert_eq!(bed.cloud.0.borrow().uploads, 2);
+    assert_eq!(bed.cloud.paths(), ["a.txt", "renamed.txt"]);
+}

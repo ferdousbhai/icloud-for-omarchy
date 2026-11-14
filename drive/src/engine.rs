@@ -158,7 +158,8 @@ fn is_item_problem(e: &Error) -> bool {
             | remote::Error::Stale(_)
             | remote::Error::Package(_)
             | remote::Error::Listing { .. }
-            | remote::Error::Partial { .. },
+            | remote::Error::Partial { .. }
+            | remote::Error::Unanswered(_),
         ) => true,
         Error::Remote(remote::Error::Session(icloud_session::Error::Http { status, .. })) => {
             (400..500).contains(status) && !matches!(status, 401 | 421 | 423 | 429)
@@ -573,7 +574,8 @@ impl<R: Remote> Engine<'_, R> {
 
     /// The answer to a request noted as sending `path`: when iCloud said no,
     /// the note goes (nothing of it is in iCloud to find later). It stays
-    /// for an answer lost on the way, which may have been a yes.
+    /// for an answer lost on the way, or one that does not say what was
+    /// made, which may have been a yes.
     fn unsent(&self, answer: remote::Result<Node>, path: &str) -> Result<Node> {
         if let Err(remote::Error::Refused(_) | remote::Error::Api(_) | remote::Error::Stale(_)) = &answer {
             self.state.clear_sending(path)?;

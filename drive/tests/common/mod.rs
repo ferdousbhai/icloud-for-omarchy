@@ -68,6 +68,8 @@ pub struct Cloud {
     pub replaces_trashed: bool,
     /// What such replaces sent.
     pub replaced_in_trash: Vec<Vec<u8>>,
+    /// The next upload is taken, and answered without saying what it made.
+    pub upload_unanswered_once: bool,
     /// A folder below the top holding more than this lists short.
     pub cap_listing: Option<usize>,
 }
@@ -491,7 +493,11 @@ impl Remote for Fake {
         }
         c.parent_exists(&parent.id)?;
         c.uploads += 1;
-        Ok(c.add(&parent.id, name, Kind::File, &bytes, mtime_ms))
+        let node = c.add(&parent.id, name, Kind::File, &bytes, mtime_ms);
+        if std::mem::take(&mut c.upload_unanswered_once) {
+            return Err(remote::Error::Unanswered("answered without a document".into()));
+        }
+        Ok(node)
     }
     fn replace(&self, node: &Node, path: &Path, mtime_ms: i64) -> remote::Result<Node> {
         let bytes = fs::read(path)?;
