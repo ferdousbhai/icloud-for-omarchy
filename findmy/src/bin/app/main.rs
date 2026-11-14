@@ -7,7 +7,6 @@
 //! line links the library, so no GTK code may reach it (not even through
 //! generic code a debug build shares between modules of one crate).
 
-mod banner;
 mod devices;
 mod map;
 mod window;
@@ -15,50 +14,18 @@ mod window;
 #[path = "../../../../native_theme.rs"]
 mod theme;
 
-use gtk::{gio, glib};
-
-fn main() {
-    if std::env::args_os().len() > 1 {
-        std::process::exit(icloud_findmy::cli::run().into());
-    }
-    std::process::exit(i32::from(run().get()));
-}
+use adw::prelude::*;
 
 pub const APP_ID: &str = "com.ferdousbhai.IcloudFindMy";
 
-/// Runs `f` on a worker thread and hands its result back on the main loop.
-/// Every network and SQLite call goes through here, never the main loop.
-pub fn background<T, F, C>(f: F, done: C)
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-    C: FnOnce(Result<T, String>) + 'static,
-{
-    glib::spawn_future_local(async move {
-        let result = gio::spawn_blocking(f)
-            .await
-            .map_err(|_| "the background task crashed".to_string());
-        done(result);
-    });
-}
-
-fn run() -> glib::ExitCode {
-    use adw::prelude::*;
-
-    // The name the app had as one binary (X11 WM_CLASS, logs), not the
-    // `icloud-findmy-app` binary's.
-    glib::set_prgname(Some("icloud-findmy"));
-    glib::set_application_name("Find My");
-    let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_startup(|_| theme::install(map::CSS));
-    app.connect_activate(|app| {
-        if let Some(win) = app.active_window() {
-            win.present();
-            return;
-        }
-        window::Window::new(app).present();
-    });
-    app.set_accels_for_action("win.refresh", &["<Ctrl>r", "F5"]);
-    app.set_accels_for_action("window.close", &["<Ctrl>w", "<Ctrl>q"]);
-    app.run()
+fn main() {
+    icloud_app_ui::main(icloud_findmy::cli::run, || {
+        let app = icloud_app_ui::application(APP_ID, "icloud-findmy", "Find My", |app| {
+            window::Window::new(app).present()
+        });
+        app.connect_startup(|_| theme::install(map::CSS));
+        app.set_accels_for_action("win.refresh", &["<Ctrl>r", "F5"]);
+        app.set_accels_for_action("window.close", &["<Ctrl>w", "<Ctrl>q"]);
+        app
+    })
 }

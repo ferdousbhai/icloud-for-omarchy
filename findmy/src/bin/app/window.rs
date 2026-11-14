@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use super::background;
-use super::banner::SignInBanner;
+use icloud_app_ui::{SignInBanner, background};
+
 use super::devices::DeviceList;
 use super::map::DeviceMap;
 use icloud_findmy::findme::{self, FindMe, SessionTransport};
@@ -137,7 +137,8 @@ impl Window {
                 }
             });
             let (w1, w2) = (weak.clone(), weak.clone());
-            let banner = SignInBanner::new(
+            let banner = SignInBanner::with_find_my(
+                "Sign in to iCloud to see your devices",
                 move || {
                     if let Some(this) = w1.upgrade() {
                         this.signed_in();
@@ -290,16 +291,15 @@ impl Window {
                     Ok(Ok(devices)) => this.show_devices(devices),
                     // Started before the latest sign-in; the refresh queued
                     // by the sign-in answers for the new session.
-                    Ok(Err(findme::Error::SignInRequired | findme::Error::FindMyAuthRequired))
-                        if !this.sign_in_is_current(sign_in_gen) => {}
-                    Ok(Err(findme::Error::SignInRequired)) => {
+                    Ok(Err(e)) if (e.is_sign_in() || e.is_find_my_auth()) && !this.sign_in_is_current(sign_in_gen) => {}
+                    Ok(Err(e)) if e.is_sign_in() => {
                         this.banner.show();
                         if this.devices.borrow().is_empty() {
                             this.list
                                 .set_placeholder("Sign in required", Some("Sign in to iCloud with the button above."));
                         }
                     }
-                    Ok(Err(findme::Error::FindMyAuthRequired)) => {
+                    Ok(Err(e)) if e.is_find_my_auth() => {
                         this.banner.show_find_my();
                         if this.devices.borrow().is_empty() {
                             this.list.set_placeholder(
@@ -532,16 +532,16 @@ impl Window {
     /// Find My authorization shows its banner, unless it was renewed since
     /// the request started; anything else is a toast.
     fn action_failed(&self, e: findme::Error, sign_in_gen: u64) {
-        match e {
-            findme::Error::SignInRequired if !self.sign_in_is_current(sign_in_gen) => {
-                self.toast("Signed in again: try once more");
-            }
-            findme::Error::SignInRequired => self.banner.show(),
-            findme::Error::FindMyAuthRequired if !self.sign_in_is_current(sign_in_gen) => {
-                self.toast("Find My was authorized again: try once more");
-            }
-            findme::Error::FindMyAuthRequired => self.banner.show_find_my(),
-            e => self.toast(&e.to_string()),
+        match (
+            e.is_sign_in(),
+            e.is_find_my_auth(),
+            self.sign_in_is_current(sign_in_gen),
+        ) {
+            (true, _, false) => self.toast("Signed in again: try once more"),
+            (true, _, true) => self.banner.show(),
+            (_, true, false) => self.toast("Find My was authorized again: try once more"),
+            (_, true, true) => self.banner.show_find_my(),
+            _ => self.toast(&e.to_string()),
         }
     }
 

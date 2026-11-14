@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use icloud_findmy::findme::{self, Error, FindMe, Transport};
 use icloud_findmy::history::History;
 use icloud_findmy::models::DeviceClass;
+use icloud_session::Error as S;
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -213,13 +214,21 @@ fn unsupported_actions_send_nothing() {
 fn sign_in_required_resets_to_init_client() {
     let (mut fm, log) = client(vec![
         Ok(fixture("initClient")),
-        Err(Error::SignInRequired),
+        Err(S::SignInRequired.into()),
         Ok(fixture("initClient")),
     ]);
     fm.refresh(false).unwrap();
-    assert!(matches!(fm.refresh(false), Err(Error::SignInRequired)));
+    assert!(fm.refresh(false).unwrap_err().is_sign_in());
     fm.refresh(false).unwrap();
     assert_eq!(endpoints(&log), ["initClient", "refreshClient", "initClient"]);
+}
+
+fn http(status: u16) -> Error {
+    S::Http {
+        status,
+        body: String::new(),
+    }
+    .into()
 }
 
 fn endpoints(log: &Log) -> Vec<String> {
@@ -230,7 +239,7 @@ fn endpoints(log: &Log) -> Vec<String> {
 fn http_500_reinitialises_once() {
     let (mut fm, log) = client(vec![
         Ok(fixture("initClient")),
-        Err(Error::Http(500)),
+        Err(http(500)),
         Ok(fixture("refreshClient")),
     ]);
     fm.refresh(false).unwrap();
@@ -244,7 +253,7 @@ fn http_500_reinitialises_once() {
 fn http_500_retry_still_locates() {
     let (mut fm, log) = client(vec![
         Ok(fixture("initClient")),
-        Err(Error::Http(500)),
+        Err(http(500)),
         Ok(fixture("initClient")),
         Ok(fixture("refreshClient")),
     ]);
@@ -263,15 +272,15 @@ fn http_500_retry_still_locates() {
 #[test]
 fn find_my_auth_required_surfaces_without_retrying() {
     let (mut fm, log) = client(vec![
-        Err(Error::FindMyAuthRequired),
+        Err(S::FindMyAuthRequired.into()),
         Ok(fixture("initClient")),
-        Err(Error::FindMyAuthRequired),
+        Err(S::FindMyAuthRequired.into()),
         Ok(fixture("initClient")),
     ]);
-    assert!(matches!(fm.refresh(false), Err(Error::FindMyAuthRequired)));
+    assert!(fm.refresh(false).unwrap_err().is_find_my_auth());
     assert_eq!(endpoints(&log), ["initClient"]);
     fm.refresh(false).unwrap();
-    assert!(matches!(fm.refresh(false), Err(Error::FindMyAuthRequired)));
+    assert!(fm.refresh(false).unwrap_err().is_find_my_auth());
     assert_eq!(endpoints(&log), ["initClient", "initClient", "refreshClient"]);
     fm.refresh(false).unwrap();
     assert_eq!(
@@ -280,35 +289,16 @@ fn find_my_auth_required_surfaces_without_retrying() {
     );
 }
 
+/// icloud-session's failures are kept whole, so the command line reports
+/// them as every iCloud tool does (exit 5 for offline, say).
 #[test]
-fn session_errors_map_to_find_my_errors() {
+fn session_errors_are_kept_whole() {
+    assert!(Error::from(S::FindMyAuthRequired).is_find_my_auth());
+    assert!(Error::from(S::SignInRequired).is_sign_in());
+    assert!(http(450).is_http(450) && !http(450).is_http(500));
     assert!(matches!(
-        Error::from(icloud_session::Error::FindMyAuthRequired),
-        Error::FindMyAuthRequired
-    ));
-    assert!(matches!(
-        Error::from(icloud_session::Error::SignInRequired),
-        Error::SignInRequired
-    ));
-    assert!(matches!(
-        Error::from(icloud_session::Error::Http {
-            status: 450,
-            body: String::new()
-        }),
-        Error::Http(450)
-    ));
-    // The kind survives, so the command line can exit 5 for offline.
-    assert!(matches!(
-        Error::from(icloud_session::Error::Offline("refused".into())),
-        Error::Session(icloud_session::Error::Offline(_))
-    ));
-    assert!(matches!(
-        Error::from(icloud_session::Error::Service("gone".into())),
-        Error::Session(icloud_session::Error::Service(_))
-    ));
-    assert!(matches!(
-        Error::from(icloud_session::Error::BadResponse("html".into())),
-        Error::Parse(_)
+        Error::from(S::Offline("refused".into())),
+        Error::Session(S::Offline(_))
     ));
 }
 

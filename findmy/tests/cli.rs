@@ -7,9 +7,12 @@ mod fake;
 
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 use std::sync::Arc;
 
+use icloud_app::testing::{
+    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, stderr, stdout,
+};
 use icloud_findmy::history::{History, RETENTION_SECS};
 use icloud_findmy::models::Fix;
 use serde_json::Value;
@@ -63,29 +66,13 @@ impl Env {
     }
 }
 
-/// Runs the binary with stdin not a terminal, `--data-dir <tmp>/data`, and
-/// `XDG_DATA_HOME` in the temp dir too, so nothing reaches the real history.
+/// Runs the binary against the fake server (see [`command`]), so nothing
+/// reaches the real history.
 fn run_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_icloud-findmy"))
+    command(env!("CARGO_BIN_EXE_icloud-findmy"), base, tmp)
         .args(args)
-        .arg("--data-dir")
-        .arg(tmp.join("data"))
-        .env("ICLOUD_SESSION_MOCK", "1")
-        .env("ICLOUD_SESSION_MOCK_URL", base)
-        .env("XDG_DATA_HOME", tmp.join("xdg"))
-        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
-        .stdin(Stdio::null())
         .output()
         .unwrap()
-}
-
-fn code(out: &Output) -> i32 {
-    out.status.code().unwrap()
-}
-
-/// Parses a JSON envelope (`{ok,data,summary}` or `{ok:false,error}`) from stdout.
-fn envelope(stdout: &[u8]) -> Value {
-    serde_json::from_slice(stdout).unwrap()
 }
 
 /// `--styled` forces human text even when piped (tests run with no terminal).
@@ -93,14 +80,6 @@ fn styled_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
     let mut a = args.to_vec();
     a.push("--styled");
     run_at(base, tmp, &a)
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 #[test]
@@ -352,7 +331,7 @@ fn usage_errors_exit_2() {
     }
     // Help never touches the network or the history.
     let help = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_icloud-findmy"))
+        std::process::Command::new(env!("CARGO_BIN_EXE_icloud-findmy"))
             .args(args)
             .env("ICLOUD_SESSION_MOCK", "1")
             .env("ICLOUD_SESSION_MOCK_URL", "http://127.0.0.1:9")
@@ -619,101 +598,19 @@ fn errors_go_where_the_mode_says() {
     assert!(err.starts_with("error: no device matches \"nokia\"\nhint: "), "{err}");
 }
 
-/// The shared libraries an x86-64 ELF executable needs (its `DT_NEEDED`
-/// entries), as `ldd` would start from.
-fn needed_libs(path: &str) -> Vec<String> {
-    let f = std::fs::read(path).unwrap();
-    let u16_at = |o: usize| u16::from_le_bytes(f[o..o + 2].try_into().unwrap()) as usize;
-    let u64_at = |o: usize| u64::from_le_bytes(f[o..o + 8].try_into().unwrap()) as usize;
-    assert_eq!(&f[..5], b"\x7fELF\x02", "a 64-bit ELF file");
-    let (phoff, phentsize, phnum) = (u64_at(0x20), u16_at(0x36), u16_at(0x38));
-    let headers: Vec<usize> = (0..phnum).map(|i| phoff + i * phentsize).collect();
-    let p_type = |h: usize| u32::from_le_bytes(f[h..h + 4].try_into().unwrap());
-    // A virtual address to its file offset, through the PT_LOAD segments.
-    let file_offset = |vaddr: usize| {
-        headers
-            .iter()
-            .filter(|&&h| p_type(h) == 1)
-            .find(|&&h| (u64_at(h + 0x10)..u64_at(h + 0x10) + u64_at(h + 0x20)).contains(&vaddr))
-            .map(|&h| vaddr - u64_at(h + 0x10) + u64_at(h + 0x08))
-            .expect("address in a loaded segment")
-    };
-    let dynamic = headers.iter().find(|&&h| p_type(h) == 2).expect("dynamically linked");
-    let entries: Vec<(usize, usize)> = (u64_at(dynamic + 0x08)..u64_at(dynamic + 0x08) + u64_at(dynamic + 0x20))
-        .step_by(16)
-        .map(|e| (u64_at(e), u64_at(e + 8)))
-        .take_while(|&(tag, _)| tag != 0)
-        .collect();
-    let strtab = file_offset(entries.iter().find(|e| e.0 == 5).expect("DT_STRTAB").1);
-    entries
-        .iter()
-        .filter(|e| e.0 == 1)
-        .map(|&(_, name)| {
-            let start = strtab + name;
-            let end = start + f[start..].iter().position(|&b| b == 0).unwrap();
-            String::from_utf8_lossy(&f[start..end]).into_owned()
-        })
-        .collect()
-}
-
 /// `icloud-findmy` is the command line only: GTK, libadwaita and libshumate
 /// are not among the libraries it needs, so commands do not load them. The
 /// app binary does need them.
 #[test]
 fn the_command_line_binary_does_not_link_gtk() {
-    let ui = |libs: Vec<String>| {
-        libs.into_iter()
-            .filter(|l| {
-                ["libgtk-4.", "libadwaita-1.", "libshumate-1.0."]
-                    .iter()
-                    .any(|p| l.starts_with(p))
-            })
-            .count()
-    };
-    let cli = needed_libs(env!("CARGO_BIN_EXE_icloud-findmy"));
-    assert!(cli.iter().any(|l| l.starts_with("libc.")), "{cli:?}");
-    assert_eq!(ui(cli.clone()), 0, "{cli:?}");
-    if let Some(app) = option_env!("CARGO_BIN_EXE_icloud-findmy-app") {
-        assert_eq!(ui(needed_libs(app)), 3);
-    }
+    assert_cli_links_no_gtk(
+        env!("CARGO_BIN_EXE_icloud-findmy"),
+        option_env!("CARGO_BIN_EXE_icloud-findmy-app"),
+        &["libgtk-4.", "libadwaita-1.", "libshumate-1.0."],
+    );
 }
 
-/// With no command, `icloud-findmy` becomes `icloud-findmy-app` from its
-/// own directory (the same process: its exit code is the app's).
 #[test]
 fn no_command_runs_the_app_beside_it() {
-    use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
-    let cli = tmp.path().join("icloud-findmy");
-    std::fs::copy(env!("CARGO_BIN_EXE_icloud-findmy"), &cli).unwrap();
-    let app = tmp.path().join("icloud-findmy-app");
-    let marker = tmp.path().join("ran");
-    let script = format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display());
-    std::fs::write(&app, script).unwrap();
-    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    // A test thread forking while the copy was open for writing holds its
-    // fd until that child execs: "Text file busy" (ETXTBSY) for a moment.
-    let mut tries = 0;
-    let out = loop {
-        match Command::new(&cli).stdin(Stdio::null()).output() {
-            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
-                tries += 1;
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            r => break r.unwrap(),
-        }
-    };
-    assert_eq!(code(&out), 7, "{}", stderr(&out));
-    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "0");
-
-    // Without it (and none on PATH) it says so.
-    std::fs::remove_file(&app).unwrap();
-    let out = Command::new(&cli)
-        .env("PATH", tmp.path().join("nowhere"))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(code(&out), 1);
-    assert!(stderr(&out).contains("cannot open the app"), "{}", stderr(&out));
+    assert_no_command_runs_the_app(env!("CARGO_BIN_EXE_icloud-findmy"), "icloud-findmy");
 }

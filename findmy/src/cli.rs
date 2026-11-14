@@ -19,12 +19,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{
-    self, EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
-};
-use icloud_session::output::{
-    self, CliError, FIND_MY_AUTH_HINT, Mode, OutputFlags, Response, SERVICE_TROUBLE_HINT, SIGN_IN_HINT,
-};
+use icloud_app::cli::{confirm, fold, no_data_dir, other, session_failure, usage};
+use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+use icloud_session::output::{self, CliError, Mode, OutputFlags, Response, SERVICE_TROUBLE_HINT};
 use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
 
@@ -182,42 +179,18 @@ type Failure = CliError;
 
 type Outcome = Result<Response, Failure>;
 
-fn usage(msg: impl Into<String>) -> Failure {
-    CliError::new("usage", EXIT_USAGE, msg)
-}
-
-fn other(msg: impl Into<String>) -> Failure {
-    CliError::new("error", EXIT_ERROR, msg)
-}
-
-/// The shared sign-in hint, plus the app's own button.
-fn sign_in_hint() -> String {
-    format!("{SIGN_IN_HINT}, or Sign In in the app")
-}
-
 /// A Find My failure as the contract's code, exit code, message and hint:
-/// the shared mapping of `icloud_session::output` (`session_failure`,
-/// `http_failure`), plus Find My's own `find_my_unavailable`, `bad_response`
-/// for an answer it cannot read, and `unsupported`.
+/// icloud-session's failures as every iCloud tool reports them, plus Find
+/// My's own `find_my_unavailable`, `bad_response` for an answer it cannot
+/// read, and `unsupported`.
 fn find_error(e: findme::Error) -> Failure {
     use findme::Error as F;
-    let msg = e.to_string();
-    let with_app_hint = |e: CliError| {
-        if e.hint.as_deref() == Some(SIGN_IN_HINT) {
-            e.hint(sign_in_hint())
-        } else {
-            e
-        }
-    };
     match e {
-        F::SignInRequired => output::sign_in_required().hint(sign_in_hint()),
-        F::FindMyAuthRequired => CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, msg).hint(FIND_MY_AUTH_HINT),
-        F::NoService => CliError::new("find_my_unavailable", EXIT_SIGN_IN, msg)
+        F::Session(e) => session_failure(&e),
+        F::NoService => CliError::new("find_my_unavailable", EXIT_SIGN_IN, e.to_string())
             .hint("turn on Find My on one of this Apple ID's devices, or sign in with another Apple ID"),
-        F::Http(status) => with_app_hint(output::http_failure(status, msg)),
-        F::Parse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint(SERVICE_TROUBLE_HINT),
+        F::Parse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string()).hint(SERVICE_TROUBLE_HINT),
         F::Unsupported(m) => CliError::new("unsupported", EXIT_ERROR, m),
-        F::Session(s) => with_app_hint(output::session_failure(&s)),
     }
 }
 
@@ -291,8 +264,7 @@ impl<T: Transport> Cli<T> {
     fn history_path(&self) -> Result<PathBuf, Failure> {
         match &self.data_dir {
             Some(dir) => Ok(dir.join("history.db")),
-            None => history::default_path()
-                .ok_or_else(|| other("no data directory (no $XDG_DATA_HOME or $HOME)").hint("pass --data-dir DIR")),
+            None => history::default_path().ok_or_else(no_data_dir),
         }
     }
 
@@ -527,33 +499,8 @@ fn positions(n: usize) -> String {
     }
 }
 
-/// Asks unless `yes`, and only when someone can answer
-/// ([`output::interactive`]: text mode, stdin and stdout a terminal);
-/// otherwise refuses (exit 2) without `--yes`.
-fn confirm(mode: Mode, cmd: &str, yes: bool, question: &str) -> Result<(), Failure> {
-    if yes {
-        return Ok(());
-    }
-    if !output::interactive(mode) {
-        return Err(
-            usage(format!("{cmd} asks before it acts, and nobody can be asked here"))
-                .hint(format!("pass --yes to {cmd} without asking")),
-        );
-    }
-    if cli::confirm(question) {
-        Ok(())
-    } else {
-        Err(CliError::new("cancelled", EXIT_ERROR, "cancelled"))
-    }
-}
-
 fn db(e: rusqlite::Error) -> Failure {
     other(format!("history: {e}"))
-}
-
-/// Lowercase, with typographic apostrophes as plain ones ("Dous’s" = "dous's").
-fn fold(s: &str) -> String {
-    s.to_lowercase().replace(['\u{2019}', '\u{2018}'], "'")
 }
 
 /// Finds a device by exact ID, else by name ignoring case, else by a unique
@@ -684,29 +631,24 @@ mod tests {
     fn failures_use_the_shared_codes_exits_and_hints() {
         use findme::Error as F;
         use icloud_session::Error as S;
-        let cases = [
-            (F::Http(421), "session_rejected", 3),
-            (F::Http(401), "session_rejected", 3),
-            (F::Http(503), "http", 5),
-            (F::Http(404), "http", 1),
-            (F::NoService, "find_my_unavailable", 3),
-            (F::Parse("x".into()), "bad_response", 5),
-            (F::Session(S::Offline("x".into())), "offline", 5),
-            (F::Session(S::Service("x".into())), "session_service", 5),
-            (F::Session(S::KeyringUnavailable("x".into())), "keyring_unavailable", 5),
-            (F::Session(S::Io(std::io::Error::other("x"))), "io", 1),
-        ];
-        for (e, code, exit) in cases {
-            let what = format!("{e:?}");
+        let code = |e: F| {
             let f = find_error(e);
-            assert_eq!((f.code.as_str(), f.exit), (code, exit), "{what}");
-            assert!(exit != 5 || f.hint.is_some(), "{what}");
-        }
-        let f = find_error(F::Http(421));
-        assert_eq!(f.hint.as_deref(), Some(sign_in_hint().as_str()));
-        assert!(f.hint.unwrap().starts_with(SIGN_IN_HINT));
-        let f = find_error(F::Session(S::Offline("x".into())));
-        assert_eq!(f.hint.as_deref(), Some(output::NETWORK_HINT));
+            assert!(f.exit != 5 || f.hint.is_some(), "{}", f.code);
+            (f.code, f.exit)
+        };
+        // icloud-session's failures read as in every iCloud tool.
+        assert_eq!(code(S::Offline("x".into()).into()), ("offline".into(), 5));
+        assert_eq!(code(S::FindMyAuthRequired.into()), ("find_my_auth_required".into(), 3));
+        let rejected = find_error(F::from(S::Http {
+            status: 421,
+            body: String::new(),
+        }));
+        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 3));
+        assert_eq!(rejected.hint, Some(icloud_app::cli::sign_in_hint()));
+        // Find My's own.
+        assert_eq!(code(F::NoService), ("find_my_unavailable".into(), 3));
+        assert_eq!(code(F::Parse("x".into())), ("bad_response".into(), 5));
+        assert_eq!(code(F::Unsupported("x")), ("unsupported".into(), 1));
     }
 
     #[test]

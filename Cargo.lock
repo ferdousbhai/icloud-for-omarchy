@@ -949,9 +949,10 @@ dependencies = [
 name = "icloud-findmy"
 version = "0.11.1"
 dependencies = [
- "async-channel",
  "clap",
  "gtk4",
+ "icloud-app",
+ "icloud-app-ui",
  "icloud-session",
  "libadwaita",
  "libshumate",

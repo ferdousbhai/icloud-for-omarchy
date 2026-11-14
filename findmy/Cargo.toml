@@ -30,11 +30,13 @@ required-features = ["ui"]
 # command line is built.
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:adw", "dep:async-channel", "dep:shumate"]
+ui = ["dep:icloud-app-ui", "dep:gtk", "dep:adw", "dep:shumate"]
 
 [dependencies]
 # The workspace's session/ crate.
 icloud-session = { workspace = true, features = ["clap"] }
+# What the iCloud GTK apps share (app/).
+icloud-app.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -43,8 +45,10 @@ rusqlite.workspace = true
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
 shumate = { package = "libshumate", version = "0.8", optional = true }
-async-channel = { workspace = true, optional = true }
+# What the apps' windows share (app/ui/): only `icloud-findmy-app` uses it.
+icloud-app-ui = { workspace = true, optional = true }
 
 [dev-dependencies]
+icloud-app = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 tiny_http.workspace = true

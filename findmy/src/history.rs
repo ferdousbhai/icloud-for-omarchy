@@ -53,9 +53,7 @@ pub struct History {
 /// `~/.local/share/icloud-findmy/history.db` (honours an absolute
 /// `XDG_DATA_HOME`); `None` without either.
 pub fn default_path() -> Option<PathBuf> {
-    let absolute = |var| std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute());
-    let data = absolute("XDG_DATA_HOME").or_else(|| Some(absolute("HOME")?.join(".local/share")))?;
-    Some(data.join("icloud-findmy").join("history.db"))
+    Some(icloud_app::store::data_dir("icloud-findmy")?.join("history.db"))
 }
 
 impl History {

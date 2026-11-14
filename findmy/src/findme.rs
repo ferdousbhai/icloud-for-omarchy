@@ -16,23 +16,16 @@ use crate::models::Device;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("sign in to iCloud required")]
-    SignInRequired,
-    /// Find My answered HTTP 450: it wants the Apple ID password entered
-    /// again (`icloud_session::authorize_find_my`), not a new sign-in.
-    #[error("Find My needs your Apple password")]
-    FindMyAuthRequired,
+    /// Anything icloud-session failed with: signed out, Find My wanting the
+    /// Apple ID password again (HTTP 450: `icloud_session::authorize_find_my`,
+    /// not a new sign-in), any other HTTP status, offline, the daemon or the
+    /// keyring out of reach. Kept whole, so the command line reports it as
+    /// every iCloud tool does.
+    #[error(transparent)]
+    Session(#[from] icloud_session::Error),
     #[error("Find My is not enabled for this Apple ID")]
     NoService,
-    /// Any other non-2xx answer. A 401/421 here persisted although the
-    /// daemon still says signed in.
-    #[error("iCloud answered HTTP {0}")]
-    Http(u16),
-    /// Any other `icloud-session` failure (offline, network, the daemon
-    /// unreachable, the keyring locked, I/O), kept whole so the command
-    /// line can tell them apart.
-    #[error("{0}")]
-    Session(#[source] icloud_session::Error),
+    /// An answer that is JSON but not what Find My sends.
     #[error("unexpected Find My response: {0}")]
     Parse(String),
     #[error("{0}")]
@@ -41,15 +34,21 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<icloud_session::Error> for Error {
-    fn from(e: icloud_session::Error) -> Self {
-        match e {
-            icloud_session::Error::SignInRequired => Error::SignInRequired,
-            icloud_session::Error::FindMyAuthRequired => Error::FindMyAuthRequired,
-            icloud_session::Error::Http { status, .. } => Error::Http(status),
-            icloud_session::Error::BadResponse(msg) => Error::Parse(msg),
-            other => Error::Session(other),
-        }
+impl Error {
+    /// The iCloud web session is gone: the window shows its sign-in banner.
+    pub fn is_sign_in(&self) -> bool {
+        matches!(self, Error::Session(icloud_session::Error::SignInRequired))
+    }
+
+    /// Find My wants the Apple ID password entered again.
+    pub fn is_find_my_auth(&self) -> bool {
+        matches!(self, Error::Session(icloud_session::Error::FindMyAuthRequired))
+    }
+
+    /// Any other non-2xx answer with this status. A 401/421 here persisted
+    /// although the daemon still says signed in.
+    pub fn is_http(&self, status: u16) -> bool {
+        matches!(self, Error::Session(icloud_session::Error::Http { status: s, .. }) if *s == status)
     }
 }
 
@@ -64,60 +63,28 @@ pub trait Transport: Send {
     fn reset(&mut self) {}
 }
 
-/// [`Transport`] over the shared `icloud-session` crate. Connects to
-/// `icloud-sessiond` lazily, so a missing sign-in surfaces as
-/// `SignInRequired` on first use, and drops the connection on
-/// `SignInRequired` or a daemon failure so the next call reconnects and a
-/// later sign-in is picked up without restarting the app.
-#[derive(Default)]
-pub struct SessionTransport {
-    session: Option<icloud_session::Session>,
-}
-
-impl SessionTransport {
-    fn session(&mut self) -> Result<&icloud_session::Session> {
-        if self.session.is_none() {
-            self.session = Some(icloud_session::Session::connect()?);
-        }
-        Ok(self.session.as_ref().expect("just connected"))
-    }
-
-    /// Drops the connection after `SignInRequired` or a daemon failure, so
-    /// the next call reconnects.
-    fn drop_on_lost_session(&mut self, e: &icloud_session::Error) {
-        if matches!(
-            e,
-            icloud_session::Error::SignInRequired
-                | icloud_session::Error::KeyringUnavailable(_)
-                | icloud_session::Error::Service(_)
-                | icloud_session::Error::Daemon { .. }
-        ) {
-            self.session = None;
-        }
-    }
-}
+/// [`Transport`] over the shared `icloud-session` crate (icloud-app's
+/// lazily connected session).
+pub use icloud_app::SessionTransport;
 
 impl Transport for SessionTransport {
     fn service_root(&mut self) -> Result<String> {
-        let result = self.session()?.webservices();
-        let ws = result.inspect_err(|e| self.drop_on_lost_session(e))?;
-        ws.url("findme")
+        self.service_url("findme")?
             .map(|url| url.trim_end_matches('/').to_string())
             .ok_or(Error::NoService)
     }
 
     fn post_json(&mut self, url: &str, body: &Value) -> Result<Value> {
-        let result = self.session()?.post_json(url, body);
-        let resp = result.inspect_err(|e| self.drop_on_lost_session(e))?;
+        let resp = self.with(|s| s.post_json(url, body))?;
         if resp.body.is_empty() {
             return Ok(Value::Null);
         }
-        resp.json::<Value>().map_err(Error::from)
+        Ok(resp.json::<Value>()?)
     }
 
     /// Drops the daemon connection, and with it the old account's dsid.
     fn reset(&mut self) {
-        self.session = None;
+        SessionTransport::reset(self);
     }
 }
 
@@ -250,11 +217,11 @@ impl<T: Transport> FindMe<T> {
     /// another `initClient` would only answer 450 again.
     pub fn refresh(&mut self, locate: bool) -> Result<Vec<Device>> {
         let mut result = self.refresh_inner(locate);
-        if matches!(result, Err(Error::Http(500))) {
+        if matches!(&result, Err(e) if e.is_http(500)) {
             self.reset();
             result = self.refresh_inner(locate);
         }
-        if matches!(result, Err(Error::SignInRequired | Error::FindMyAuthRequired)) {
+        if matches!(&result, Err(e) if e.is_sign_in() || e.is_find_my_auth()) {
             self.reset();
         }
         result
