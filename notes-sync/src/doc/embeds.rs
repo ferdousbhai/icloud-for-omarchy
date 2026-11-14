@@ -224,7 +224,8 @@ pub fn has_attachment_reference(text: &str) -> bool {
 }
 
 /// Every attachment link in `text`, in order: an unescaped `[`, the link
-/// text up to the first unescaped `]` on the same line, then
+/// text (no unescaped `[` in it) up to the first unescaped `]` on the same
+/// line, then
 /// `(attachments/...)` with no space or line break in it. A `!` right
 /// before the `[` of a link to an image belongs to the link.
 pub fn find_attachment_links(text: &str) -> Vec<AttachmentLink> {
@@ -260,9 +261,12 @@ fn scan_attachment_links(units: &[u16]) -> AttachmentLinkScan {
             i += 1;
             continue;
         }
+        // The link text runs to the first `]`. Another `[` before it opens
+        // the link instead ("[fig [a.pdf](attachments/a.pdf)]"): this one
+        // is the note's own text.
         let mut close = i + 1;
         let mut one_line = true;
-        while close < units.len() && !is(close, b']') {
+        while close < units.len() && !is(close, b']') && !is(close, b'[') {
             one_line = one_line && !is(close, b'\n');
             close += if is(close, b'\\') { 2 } else { 1 };
         }

@@ -176,6 +176,39 @@ fn an_attachment_link_with_brackets_maps_back_escaped_or_as_written_before() {
     }
 }
 
+/// An attachment the note keeps in square brackets ("[<photo>]", which
+/// pull writes unescaped): the bracket before the link is the note's text,
+/// not the start of a longer link.
+#[test]
+fn an_attachment_inside_square_brackets_maps_back_to_its_placeholder() {
+    let tracked: HashMap<String, String> = [("FILE-1".to_string(), "attachments/photo.jpeg".to_string())].into();
+    for (text, body) in [
+        ("[![photo.jpeg](attachments/photo.jpeg)]", format!("[{O}]")),
+        (
+            "see [fig ![photo.jpeg](attachments/photo.jpeg)] here",
+            format!("see [fig {O}] here"),
+        ),
+        ("[[![photo.jpeg](attachments/photo.jpeg)]]", format!("[[{O}]]")),
+    ] {
+        let plan = ok(plan_embed_representations(
+            text,
+            &[slot("FILE-1", "public.jpeg")],
+            &tracked,
+        ));
+        assert_eq!(plan.reconstructed_body_text, body, "{text}");
+        assert!(plan.new_links.is_empty() && plan.removed_slots.is_empty(), "{text}");
+    }
+    // The same for a file to add.
+    let plan = ok(plan_embed_representations(
+        "[[new.pdf](attachments/new.pdf)]",
+        &[],
+        &none(),
+    ));
+    assert_eq!(plan.reconstructed_body_text, format!("[{O}]"));
+    assert_eq!(plan.new_links.len(), 1);
+    assert_eq!(plan.new_links[0].text, "[new.pdf](attachments/new.pdf)");
+}
+
 /// A link to the attachment's file that is still there, but not as pull
 /// wrote it or not where it was, is refused: only a link gone entirely
 /// removes the attachment.
