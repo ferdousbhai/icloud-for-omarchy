@@ -533,7 +533,7 @@ struct CreateCandidate {
 /// exists before it plans anything ([`settle_pending_creates`]): otherwise
 /// the note's file, which nothing tracks yet, would be created a second
 /// time. An unknown top-level key to an engine without it, which keeps it.
-const PENDING_CREATES_KEY: &str = "pendingCreates";
+pub(super) const PENDING_CREATES_KEY: &str = "pendingCreates";
 
 /// A record a push was creating when it was last heard of.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,6 +617,52 @@ struct PendingFolder {
     title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_record_name: Option<String>,
+}
+
+/// What a listing of the whole private zone holds in each folder that this
+/// vault doesn't track (`notes`, `folders`): the folders holding a note or
+/// folder it could sync (another device put it there since the last pull),
+/// and how many notes it can't (locked or unreadable ones, which pull never
+/// tracks) each holds. A folder deleted here is deleted from iCloud only
+/// when it holds neither.
+pub(super) fn untracked_in_folders(
+    records: &[CloudKitRecord],
+    notes: &IndexMap<String, NoteEntry>,
+    folders: Option<&IndexMap<String, FolderEntry>>,
+    title_mode: TitleMode,
+) -> (HashSet<String>, HashMap<String, usize>) {
+    let mut syncable_in: HashSet<String> = HashSet::new();
+    let mut unsyncable_in: HashMap<String, usize> = HashMap::new();
+    let known = |rn: &String| notes.contains_key(rn) || folders.is_some_and(|f| f.contains_key(rn));
+    for record in records
+        .iter()
+        .filter(|r| !r.is_deleted() && !is_in_trash(r) && !known(&r.record_name))
+    {
+        let field = if record.record_type == "Folder" {
+            "ParentFolder"
+        } else {
+            "Folder"
+        };
+        let Some(folder) = crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
+        else {
+            continue;
+        };
+        let syncable = match record.record_type.as_str() {
+            "Folder" => true,
+            "Note" => match classify_note_record(record, &ClassifyOptions { title_mode }) {
+                NoteDecodeResult::Deleted => continue,
+                NoteDecodeResult::Ok(_) => true,
+                NoteDecodeResult::Unsyncable(_) => false,
+            },
+            _ => false,
+        };
+        if syncable {
+            syncable_in.insert(folder);
+        } else {
+            *unsyncable_in.entry(folder).or_default() += 1;
+        }
+    }
+    (syncable_in, unsyncable_in)
 }
 
 /// The attachments an edit a push cut short was adding to a note tracked at
@@ -1916,6 +1962,9 @@ pub fn build_push_plan(
     }
 
     // --- creates
+    // The base copies of the leftovers removed below, once all are: every
+    // untouched copy of one note reads against it.
+    let mut left_of_deleted: Vec<&String> = Vec::new();
     for c in &create_candidates {
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             PlanEntry::refused(PlanEntryKind::Create, c.file.clone(), refusal).into()
@@ -1964,7 +2013,7 @@ pub fn build_push_plan(
                 let preview = recording_suppressed();
                 if !preview {
                     safe_unlink(&target_dir.join(&c.file))?;
-                    remove_base_copy(target_dir, id)?;
+                    left_of_deleted.push(id);
                 }
                 notices.push(SyncNotice {
                     level: NoticeLevel::Info,
@@ -2012,6 +2061,9 @@ pub fn build_push_plan(
                 new_attachments: c.new_attachments.clone(),
             },
         ));
+    }
+    for id in left_of_deleted {
+        remove_base_copy(target_dir, id)?;
     }
 
     // --- updates
@@ -2188,39 +2240,8 @@ pub fn build_push_plan(
                 let zone = db.fetch_all_note_records(None, &mut |_| {})?;
                 // Only what this vault doesn't track: tracked notes there are
                 // being trashed or moved by this push.
-                let known = |rn: &String| {
-                    state.notes.contains_key(rn) || state.folders.as_ref().is_some_and(|f| f.contains_key(rn))
-                };
-                for record in zone
-                    .records
-                    .iter()
-                    .filter(|r| !r.is_deleted() && !is_in_trash(r) && !known(&r.record_name))
-                {
-                    let field = if record.record_type == "Folder" {
-                        "ParentFolder"
-                    } else {
-                        "Folder"
-                    };
-                    let Some(folder) =
-                        crate::vault::layout::reference_record_name(record.fields.get(field).map(|f| &f.value))
-                    else {
-                        continue;
-                    };
-                    let syncable = match record.record_type.as_str() {
-                        "Folder" => true,
-                        "Note" => match classify_note_record(record, &ClassifyOptions { title_mode }) {
-                            NoteDecodeResult::Deleted => continue,
-                            NoteDecodeResult::Ok(_) => true,
-                            NoteDecodeResult::Unsyncable(_) => false,
-                        },
-                        _ => false,
-                    };
-                    if syncable {
-                        kept_folders.insert(folder);
-                    } else {
-                        *unsyncable_in.entry(folder).or_default() += 1;
-                    }
-                }
+                (kept_folders, unsyncable_in) =
+                    untracked_in_folders(&zone.records, &state.notes, state.folders.as_ref(), title_mode);
             }
             None => kept_folders.extend(folder_deletes.iter().map(|(_, rn)| rn.clone())),
         }

@@ -1355,10 +1355,25 @@ fn folders_changed_here() -> Start {
 
 #[test]
 fn a_push_of_folder_changes_cut_short_anywhere_is_finished_by_the_next_run() {
-    // Not `Then::Pull`: a pull before the push brings back the directory
-    // of a folder deleted here, by design (a refused folder delete says
-    // so), and the push then keeps that folder.
-    crash_everywhere(&folders_changed_here(), "push", &[Then::Again, Then::Sync]);
+    crash_everywhere(&folders_changed_here(), "push", &[Then::Again, Then::Sync, Then::Pull]);
+}
+
+/// A folder directory deleted here and another renamed, then a pull before
+/// any push: neither directory comes back, so the push that follows
+/// deletes the one folder and renames the other. The pull used to make
+/// both again, empty: the deleted folder stayed in iCloud, and the renamed
+/// one became a new folder beside the old.
+#[test]
+fn a_folder_deleted_and_one_renamed_here_are_pushed_so_after_a_pull() {
+    let start = folders_changed_here();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    assert!(!place.vault.join("Archive").exists(), "{}", says(&pull));
+    assert!(!place.vault.join("Work").exists(), "{}", says(&pull));
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(&fake, &place, &start.expect, "a pull before the push");
 }
 
 #[test]
@@ -2270,6 +2285,31 @@ fn a_file_a_pull_cut_short_wrote_and_edited_here_since_is_kept_when_its_note_is_
             then,
             &format!("pull killed after the deleted note's file, then {then:?}"),
         );
+    }
+}
+
+/// Two untouched copies of the file a pull cut short wrote for a note
+/// deleted on the phone since (a file-sync tool's copy, say): both go. The
+/// first one's removal used to take the base copy with it, and the second
+/// was pushed as a new note.
+#[test]
+fn two_untouched_copies_of_a_file_a_pull_cut_short_wrote_for_a_deleted_note_both_go() {
+    let mut start = deleted_while_pulled();
+    fn copy_here(vault: &Path) {
+        std::fs::copy(vault.join("Notes/Twin 2.md"), vault.join("Notes/Twin copy.md")).unwrap();
+    }
+    start.expect.between_here = Some(copy_here);
+    for then in [Then::Again, Then::Sync] {
+        let place = one_case_place(
+            &start,
+            "pull",
+            crash::NOTE_FILE,
+            2,
+            then,
+            &format!("pull killed after the deleted note's file, copied, then {then:?}"),
+        );
+        assert!(!place.vault.join("Notes/Twin copy.md").exists());
+        assert!(!place.vault.join("Notes/Twin 2.md").exists());
     }
 }
 

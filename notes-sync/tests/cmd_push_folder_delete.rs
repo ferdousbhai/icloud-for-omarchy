@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cloudkit::{CkError, Database, Transport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
-use icloud_notes_sync::cmd::plan::PlanResolution;
+use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution};
 use icloud_notes_sync::cmd::pull::run_pull_with;
 use icloud_notes_sync::cmd::push::{PushOptions, PushResult, run_push_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
@@ -162,7 +162,7 @@ fn clone_with(extra: &[Value]) -> (Cassette, Vec<Value>) {
 
 /// Clones with `extra`, deletes the "Private" directory (empty here) and
 /// pushes: the result, and the bodies of the records/modify requests sent.
-fn delete_its_folder(vault: &Path, extra: &[Value]) -> (PushResult, Vec<Value>, String) {
+fn delete_its_folder(vault: &Path, extra: &[Value]) -> (PushResult, Vec<Value>, String, Vec<Value>) {
     let (clone, all_records) = clone_with(extra);
     let summary = run_clone_with(
         &replay(clone, vault.with_extension("clone.json")),
@@ -182,7 +182,7 @@ fn delete_its_folder(vault: &Path, extra: &[Value]) -> (PushResult, Vec<Value>, 
     let token = state.sync_token.clone().unwrap();
     let server = Server {
         token: token.clone(),
-        records: all_records,
+        records: all_records.clone(),
         log: log.clone(),
     };
     let result = run_push_with(&serve(server), vault, &mut |_| {}, &PushOptions::default()).unwrap();
@@ -193,13 +193,13 @@ fn delete_its_folder(vault: &Path, extra: &[Value]) -> (PushResult, Vec<Value>, 
         .filter(|(path, _)| path.contains("/records/modify"))
         .map(|(_, body)| body.clone())
         .collect();
-    (result, modifies, token)
+    (result, modifies, token, all_records)
 }
 
 fn deleting_its_folder_keeps(extra: Value) {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault");
-    let (result, modifies, token) = delete_its_folder(&vault, &[extra]);
+    let (result, modifies, token, records) = delete_its_folder(&vault, &[extra]);
     assert!(modifies.is_empty(), "deleted the folder: {modifies:?}");
     let refused = &result
         .entries
@@ -213,10 +213,11 @@ fn deleting_its_folder_keeps(extra: Value) {
     let state = read_clone_state(&vault).unwrap().unwrap();
     assert!(state.folders.as_ref().unwrap().contains_key(FOLDER));
 
-    // As the reason says, a pull brings the directory back.
+    // As the reason says, a pull brings the directory back: the folder
+    // still holds that note in iCloud.
     let server = Server {
         token,
-        records: vec![],
+        records,
         log: Arc::default(),
     };
     run_pull_with(&serve(server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
@@ -245,11 +246,49 @@ fn an_empty_folder_and_one_holding_only_deleted_notes_are_deleted() {
     for extra in [vec![], vec![deleted, trashed]] {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path().join("vault");
-        let (_, modifies, _) = delete_its_folder(&vault, &extra);
+        let (_, modifies, _, _) = delete_its_folder(&vault, &extra);
         assert_eq!(modifies.len(), 1, "{modifies:?}");
         assert_eq!(modifies[0]["operations"][0]["operationType"], "delete");
         assert_eq!(modifies[0]["operations"][0]["record"]["recordName"], FOLDER);
         let state = read_clone_state(&vault).unwrap().unwrap();
         assert!(!state.folders.as_ref().unwrap().contains_key(FOLDER));
     }
+}
+
+/// A folder directory deleted here stays deleted through a pull that runs
+/// before the push (a local delete wins over a pull): the push then deletes
+/// the folder. The pull used to make the directory again, empty, and the
+/// folder stayed in iCloud.
+#[test]
+fn a_folder_deleted_here_is_not_made_again_by_a_pull_before_the_push() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    let (clone, all_records) = clone_with(&[]);
+    run_clone_with(
+        &replay(clone, vault.with_extension("clone.json")),
+        &vault,
+        &mut NoProgress,
+        &CloneOptions::default(),
+    )
+    .unwrap();
+    let token = read_clone_state(&vault).unwrap().unwrap().sync_token.unwrap();
+    std::fs::remove_dir(vault.join("Private")).unwrap();
+    let server = || Server {
+        token: token.clone(),
+        records: all_records.clone(),
+        log: Arc::default(),
+    };
+    run_pull_with(&serve(server()), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    assert!(!vault.join("Private").exists());
+    let result = run_push_with(&serve(server()), &vault, &mut |_| {}, &PushOptions::default()).unwrap();
+    let entry = &result
+        .entries
+        .iter()
+        .find(|e| e.entry.file == "Private")
+        .expect("a folder entry")
+        .entry;
+    assert_eq!(entry.kind, PlanEntryKind::DeleteFolder);
+    assert_eq!(entry.resolution, PlanResolution::Ready);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert!(!state.folders.as_ref().unwrap().contains_key(FOLDER));
 }

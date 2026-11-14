@@ -343,7 +343,8 @@ pub fn run_pull_with(
     // the notes moved one by one, below.
     let moves = rename_folder_dirs(target_dir, &state, &layout, &pending_dirs)?;
     let moved_with_dirs = retarget_tracked_paths(target_dir, &moves, &mut tracked);
-    for dir in &layout.all_dirs {
+    let deleted_here = folder_dirs_deleted_here(db, target_dir, &state, &layout, &changes, &tracked, title_mode)?;
+    for dir in layout.all_dirs.iter().filter(|dir| !deleted_here.contains(*dir)) {
         std::fs::create_dir_all(target_dir.join(dir))?;
     }
     let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
@@ -671,6 +672,10 @@ pub fn run_pull_with(
                     // tells the next run that a file carrying its id is
                     // untouched since (`left_untouched`).
                     write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
+                    // Into a folder's directory deleted here, too: the note
+                    // is new there, so the folder is no longer what was
+                    // deleted.
+                    std::fs::create_dir_all(target_dir.join(&note_dir))?;
                     write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
                     tracked.notes.insert(
@@ -806,6 +811,9 @@ pub fn run_pull_with(
                     }
                     let file_text =
                         compose_note_file(&frontmatter, &body_text, &record.record_name, recorded_title.as_deref());
+                    if let Some(dir) = file_path.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
                     write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
                     write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
@@ -1198,6 +1206,60 @@ pub fn rename_for_remote_title(
         }
     }
     Ok(posix::join(&[&dir, &wanted]))
+}
+
+/// The directories of this account's own folders (not the default one)
+/// that were deleted or renamed here since the last pull: the folder's
+/// directory is gone, at its old path and at the one the layout gives it
+/// now. A pull leaves them gone, so that the next push deletes the folder
+/// (or sends the rename) as the user did it: a local delete wins over a
+/// pull. Made again, empty, the directory would keep the folder in iCloud.
+/// Except a folder that holds notes push can neither send nor delete
+/// (locked or unreadable ones, which the vault never tracks): its delete is
+/// refused, and its directory comes back. A note this pull writes into one
+/// makes it again too. Only when there is such a directory is the private
+/// zone listed whole, as push lists it to delete a folder.
+fn folder_dirs_deleted_here<T: Transport>(
+    db: &Database<T>,
+    target_dir: &Path,
+    state: &CloneState,
+    layout: &VaultLayout,
+    changes: &crate::cloudkit::ZoneChanges,
+    tracked: &Tracked,
+    title_mode: TitleMode,
+) -> Result<HashSet<String>, Error> {
+    let gone: Vec<(String, String)> = crate::vault::layout::state_dir_index(PreviousLayout::of(state))
+        .into_iter()
+        .filter_map(|(old, info)| match info {
+            crate::vault::layout::StateDirInfo::Folder {
+                folder_record_name,
+                shared_zone_owner: None,
+                ..
+            } if folder_record_name != crate::doc::encode::DEFAULT_FOLDER_RECORD_NAME => {
+                let now = layout.folder_dirs.get(&folder_record_name)?;
+                (!old.is_empty() && !target_dir.join(&old).exists() && !target_dir.join(now).exists())
+                    .then(|| (folder_record_name, now.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    if gone.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let listed;
+    let records = if changes.resynced_from_scratch {
+        &changes.records
+    } else {
+        listed = db.fetch_all_note_records(None, &mut |_| {})?;
+        &listed.records
+    };
+    let (_, unsyncable_in) =
+        super::push::untracked_in_folders(records, &tracked.notes, state.folders.as_ref(), title_mode);
+    Ok(gone
+        .into_iter()
+        .filter(|(folder, _)| !unsyncable_in.contains_key(folder))
+        .map(|(_, dir)| dir)
+        .collect())
 }
 
 /// The directory moves a pull makes for folders (and sharers' homes) whose
@@ -1703,7 +1765,7 @@ fn forget_what_no_file_carries(
     title_mode: TitleMode,
 ) -> Result<(), Error> {
     let creating: HashSet<&String> = extra
-        .get("pendingCreates")
+        .get(super::push::PENDING_CREATES_KEY)
         .and_then(|v| v.as_object())
         .map(|creates| creates.keys().collect())
         .unwrap_or_default();

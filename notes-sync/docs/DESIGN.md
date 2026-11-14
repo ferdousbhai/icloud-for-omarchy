@@ -263,7 +263,7 @@ window closes, so a killed run is ordinary.
   note, except in a file a pull cut short wrote for a note deleted on
   another device since, untouched: that file is removed, as a remote
   deletion removes a clean file (up to 0.11.1 the deleted note came back
-  as a new one). A file edited since (`cmd::left_untouched`, above), or put back
+  as a new one), and so is every other untouched copy of it. A file edited since (`cmd::left_untouched`, above), or put back
   from a backup after the note was deleted from here, is pushed as before.
   A pull removes such a file too, without asking iCloud, from a directory
   no folder has any more (the folder deleted or renamed, or the share
@@ -472,7 +472,23 @@ for more than text edits). The engine:
   so a file a file-sync tool delivers between the look and the rename is
   not replaced either.
 
-Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
+- A folder directory deleted or renamed here stays so through a pull
+  that runs before the push (`pull::folder_dirs_deleted_here`): the pull
+  does not make a folder's directory again (one of this account's own,
+  not the default folder) when it is gone at its old path and at the one
+  the layout gives it now, so the push deletes the folder or sends the
+  rename. Up to 0.11.1 the pull made it again, empty: the deleted folder
+  stayed in iCloud, and a renamed one became a new folder beside the old.
+  Two exceptions bring the directory back: a note the pull writes into it
+  (a note new to the folder, from another device), and a folder that
+  still holds notes push can neither send nor delete (locked or unreadable
+  ones; to tell, the pull lists the private zone whole, as push does to
+  delete a folder, only when such a directory is gone), whose delete push
+  refuses saying that a pull brings the directory back.
+
+Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs,
+tests/cmd_push_folder_delete.rs, tests/crash_points.rs
+(`a_folder_deleted_and_one_renamed_here_are_pushed_so_after_a_pull`).
 
 ### What a push never takes on trust
 
