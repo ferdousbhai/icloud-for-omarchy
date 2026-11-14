@@ -296,7 +296,9 @@ fn fallback_read(lines: &[String], key: &str) -> Option<String> {
     // and the empty ones among them. A title past 80 columns is written
     // over two (`fold_flow_lines`).
     let mut end = at + 1;
-    while end < lines.len() && (lines[end].starts_with([' ', '\t']) || lines[end].trim().is_empty()) {
+    // YAML's white space is spaces and tabs (a no-break space is text).
+    let blank = |line: &str| line.trim_matches([' ', '\t']).is_empty();
+    while end < lines.len() && (lines[end].starts_with([' ', '\t']) || blank(&lines[end])) {
         end += 1;
     }
     let continuation = &lines[at + 1..end];
@@ -312,15 +314,15 @@ fn fallback_read(lines: &[String], key: &str) -> Option<String> {
     // can't be part of one: YAML that broken reads as its first line.
     fn uncommented(line: &str) -> (&str, bool) {
         match line.find(" #") {
-            Some(i) => (line[..i].trim(), true),
-            None => (line.trim(), false),
+            Some(i) => (line[..i].trim_matches([' ', '\t']), true),
+            None => (line.trim_matches([' ', '\t']), false),
         }
     }
     let (first, mut ended) = uncommented(rest);
     let mut plain = first.to_string();
     let mut empty_lines = 0;
     for line in continuation {
-        if ended || first.is_empty() || line.trim_start().starts_with('#') {
+        if ended || first.is_empty() || line.trim_start_matches([' ', '\t']).starts_with('#') {
             break;
         }
         let (text, commented) = uncommented(line);

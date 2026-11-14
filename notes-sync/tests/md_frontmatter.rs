@@ -331,6 +331,22 @@ fn a_title_written_over_two_lines_reads_back_whole() {
 }
 
 #[test]
+fn a_folded_title_keeps_the_no_break_spaces_at_its_line_edges() {
+    // YAML trims only spaces and tabs from a folded line: a no-break space
+    // where the title was folded is the title's, in YAML this tool models and
+    // in YAML it reads a line at a time (a `|` block beside it) alike.
+    let title = format!("{} \u{a0} *\u{a0}", "u&#35;".repeat(16));
+    for mine in ["", "---\nmulti: |\n  line1\n  line2\n---\n\n"] {
+        let file = compose_note_file(mine, "Body", ID, Some(&title));
+        let envelope = split_frontmatter(&file, titled()).frontmatter;
+        assert!(envelope.contains("\n  \u{a0}"), "not folded before the no-break space: {envelope:?}");
+        assert_eq!(read_note_title(&envelope).as_deref(), Some(title.as_str()), "{envelope:?}");
+    }
+    let envelope = "---\nmulti: |\n  x\napple-note-title: one\n  \u{a0}two\u{a0}\n---\n\n";
+    assert_eq!(read_note_title(envelope).as_deref(), Some("one \u{a0}two\u{a0}"));
+}
+
+#[test]
 fn a_first_key_outside_the_modelled_yaml_is_still_a_mapping() {
     // A quoted, anchored or non-string first key is valid YAML: the id reads
     // and is stamped the same as when such a key comes later.
