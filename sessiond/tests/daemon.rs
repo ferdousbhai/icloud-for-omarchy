@@ -853,6 +853,44 @@ fn a_background_refresh_that_finds_the_session_ended_signs_out() {
     sign_in_required_message(&conn);
 }
 
+/// A `/validate` that answers for another account than the one signed in
+/// is a failed validate: nothing of it is kept, and nobody is signed out.
+#[test]
+fn a_validate_that_answers_for_another_account_changes_nothing() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE => {
+            let mut r = validate_ok(n, base);
+            r.body = r.body.replace(DSID, "67890").replace("someone@", "other@");
+            r
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        log: true,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let (cookie, _, webservices) = session(&conn).unwrap();
+    assert_eq!(server.count(VALIDATE), 1);
+    assert_eq!(cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").as_deref(), Some("original"));
+    assert!(webservices.is_empty(), "{webservices:?}");
+    let status = icloud_session::status_on(&conn).unwrap();
+    assert!(status.signed_in);
+    assert_eq!(status.apple_id.as_deref(), Some("someone@example.com"));
+    assert_eq!(status.dsid.as_deref(), Some(DSID));
+    assert_eq!(status.full_name, None);
+    let account = env.account().unwrap();
+    assert_eq!(account["apple_id"], "someone@example.com");
+    assert_eq!(account["validated_at"], 0);
+    let log = env.log();
+    assert!(
+        log.contains("/validate answered for another account (dsid 67890, signed in as 12345)"),
+        "{log}"
+    );
+    assert!(!log.contains("rotated") && !log.contains("original"), "{log}");
+}
+
 #[test]
 fn an_unreachable_apple_answers_at_once() {
     // Nothing listens on the default setup URL: the connect is refused.

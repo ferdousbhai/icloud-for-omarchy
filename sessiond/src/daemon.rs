@@ -1019,7 +1019,17 @@ impl Daemon {
                 generation,
             )
         };
-        let result = apple::validate(&self.agent, &self.cfg.setup_url, &cookie, &params, Some(&dsid));
+        // An answer about another account says nothing about this one: none
+        // of it (name, webservices, cookies) is kept. A failed validate.
+        let result = apple::validate(&self.agent, &self.cfg.setup_url, &cookie, &params, Some(&dsid)).and_then(|v| {
+            if v.dsid == dsid {
+                return Ok(v);
+            }
+            Err(ValidateError::Failed(format!(
+                "/validate answered for another account (dsid {}, signed in as {dsid}); not kept",
+                v.dsid
+            )))
+        });
         let mut st = lock(&self.state);
         // Signed out or signed in again meanwhile: this answer is about a
         // jar we no longer hold.

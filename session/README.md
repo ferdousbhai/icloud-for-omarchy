@@ -75,7 +75,8 @@ no truncated-read retries and no status polling.
   in all; a name that does not resolve or a refused connect fails at
   once and is logged as offline), callers get the session as it is, and
   `/validate` is not tried again for a minute; callers that queued behind
-  a failed attempt share its answer.
+  a failed attempt share its answer. An answer that names another dsid
+  than the account's counts as no answer: nothing of it is kept.
 - **Expiry** is the captured X-APPLE-WEBAUTH-TOKEN cookie's own expiry,
   updated when Apple rotates it.
 - **Signing out.** 421/401 on `/validate` signs out. A client's 421/401
