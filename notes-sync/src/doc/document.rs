@@ -249,16 +249,8 @@ pub fn delete_attachment_placeholder(
     if units.get(offset) != Some(&ORC) {
         return Err(invalid("There is no attachment placeholder where one is expected"));
     }
-    let mut run_start = 0usize;
-    let run = doc.attribute_runs.iter().find(|run| {
-        let found = offset < run_start + run.len() as usize;
-        if !found {
-            run_start += run.len() as usize;
-        }
-        found
-    });
-    let holds = run
-        .and_then(|run| run.attachment_info.as_ref())
+    let holds = attribute_run_at(&doc.attribute_runs, offset)
+        .and_then(|(index, _)| doc.attribute_runs[index].attachment_info.as_ref())
         .and_then(|info| info.attachment_identifier.as_deref());
     if holds != Some(attachment_identifier) {
         return Err(invalid("The attachment placeholder holds another attachment"));
@@ -279,40 +271,49 @@ pub fn mark_attachment_placeholder(doc: &mut NoteDocument, offset: usize, info: 
     if utf16(&doc.text).get(offset) != Some(&ORC) {
         return Err(invalid("There is no attachment placeholder where one is expected"));
     }
-    let mut run_start = 0usize;
-    for index in 0..doc.attribute_runs.len() {
-        let length = doc.attribute_runs[index].len() as usize;
-        if offset >= run_start + length {
-            run_start += length;
-            continue;
-        }
-        let run = doc.attribute_runs[index].clone();
-        if run.attachment_info.is_some() {
-            return Err(invalid("The attachment placeholder already holds an attachment"));
-        }
-        let piece = |length: usize| AttributeRun {
-            length: Some(length as u32),
-            ..run.clone()
-        };
-        let mut pieces = Vec::with_capacity(3);
-        if offset > run_start {
-            pieces.push(piece(offset - run_start));
-        }
-        pieces.push(AttributeRun {
-            length: Some(1),
-            paragraph_style: run.paragraph_style.clone(),
-            attachment_info: Some(info),
-            ..AttributeRun::default()
-        });
-        if run_start + length > offset + 1 {
-            pieces.push(piece(run_start + length - offset - 1));
-        }
-        doc.attribute_runs.splice(index..=index, pieces);
-        return Ok(());
+    let Some((index, run_start)) = attribute_run_at(&doc.attribute_runs, offset) else {
+        return Err(invalid(
+            "Attribute runs are shorter than the note text - document model out of sync",
+        ));
+    };
+    let run = doc.attribute_runs[index].clone();
+    let length = run.len() as usize;
+    if run.attachment_info.is_some() {
+        return Err(invalid("The attachment placeholder already holds an attachment"));
     }
-    Err(invalid(
-        "Attribute runs are shorter than the note text - document model out of sync",
-    ))
+    let piece = |length: usize| AttributeRun {
+        length: Some(length as u32),
+        ..run.clone()
+    };
+    let mut pieces = Vec::with_capacity(3);
+    if offset > run_start {
+        pieces.push(piece(offset - run_start));
+    }
+    pieces.push(AttributeRun {
+        length: Some(1),
+        paragraph_style: run.paragraph_style.clone(),
+        attachment_info: Some(info),
+        ..AttributeRun::default()
+    });
+    if run_start + length > offset + 1 {
+        pieces.push(piece(run_start + length - offset - 1));
+    }
+    doc.attribute_runs.splice(index..=index, pieces);
+    Ok(())
+}
+
+/// The attribute run covering `offset` (UTF-16 units): its index, and where
+/// it starts.
+fn attribute_run_at(runs: &[AttributeRun], offset: usize) -> Option<(usize, usize)> {
+    let mut run_start = 0usize;
+    for (index, run) in runs.iter().enumerate() {
+        let length = run.len() as usize;
+        if offset < run_start + length {
+            return Some((index, run_start));
+        }
+        run_start += length;
+    }
+    None
 }
 
 fn set_counter(counters: &mut Vec<u32>, index: usize, value: u32) {
