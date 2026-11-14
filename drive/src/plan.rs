@@ -206,7 +206,8 @@ pub fn plan(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, co
 /// next round, when its folder's move has carried it along.
 fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, unknown: &[String]) -> Plan {
     let unseen = |path: &str| unknown.iter().any(|u| is_under(path, u));
-    let tracked: HashSet<&str> = base.iter().map(|r| r.path.as_str()).collect();
+    let tracked_ids: HashMap<&str, &str> = base.iter().map(|r| (r.path.as_str(), r.node.id.as_str())).collect();
+    let tracked: HashSet<&str> = tracked_ids.keys().copied().collect();
     // Untracked local entries by inode: where a tracked one may have gone.
     let mut by_ino: HashMap<u64, Vec<&str>> = HashMap::new();
     for (path, entry) in local {
@@ -315,22 +316,30 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 continue;
             }
             // Folders it was moved into that are not in step yet: iCloud
-            // does not have them, or has one of that name made there too
-            // (which is taken as the same folder, as the content rules
-            // would). Without them the move could never be done, and no
-            // round would get past it.
+            // does not have them, or has one of that name that this folder
+            // is not in step with (made there too, or made there after the
+            // one in step was removed), which is taken as the same folder,
+            // as the content rules would. Without them the move could never
+            // be done, and no round would get past it.
             let mut missing = Vec::new();
             let mut dir = parent_of(to);
             let mut blocked = false;
             while !dir.is_empty() && !made.contains(dir) {
+                let in_step = tracked_ids.get(dir);
                 match remote.by_path.get(dir) {
-                    Some(_) if tracked.contains(dir) => break,
-                    Some(id) if remote.nodes[id].kind == Kind::Folder => missing.push(Op::Adopt {
-                        id: id.clone(),
-                        path: dir.to_string(),
-                    }),
-                    // A file of that name in iCloud: the content rules
-                    // sort that out (this one reads as deleted here).
+                    Some(id) if in_step == Some(&id.as_str()) => break,
+                    Some(id)
+                        if remote.nodes[id].kind == Kind::Folder
+                            && in_step.is_none_or(|old| !remote.paths.contains_key(*old)) =>
+                    {
+                        missing.push(Op::Adopt {
+                            id: id.clone(),
+                            path: dir.to_string(),
+                        })
+                    }
+                    // A file of that name in iCloud, or the folder in step
+                    // here has moved there: the other rules sort that out
+                    // first (this one may read as deleted here).
                     Some(_) => blocked = true,
                     None => missing.push(Op::MkdirRemote { path: dir.to_string() }),
                 }

@@ -285,6 +285,9 @@ impl Remote for Fake {
     }
     fn move_to(&self, node: &Node, parent_id: &str) -> remote::Result<Node> {
         let mut c = self.0.borrow_mut();
+        if parent_id != ROOT_ID && !c.nodes.contains_key(parent_id) {
+            return Err(remote::Error::Api("the move refused: ID_INVALID".into()));
+        }
         let old = c.nodes[&node.id].parent.clone();
         c.nodes.get_mut(&node.id).unwrap().parent = parent_id.to_string();
         c.touch(&old);
@@ -829,4 +832,25 @@ fn a_file_moved_into_a_folder_both_sides_made_does_not_stop_the_sync() {
     assert_eq!(bed.cloud.id_at("Trip/a.txt").as_deref(), Some(a.id.as_str()));
     assert_eq!(bed.cloud.text("other.txt").as_deref(), Some("unrelated"));
     assert!(bed.cloud.0.borrow().trashed.is_empty());
+}
+
+#[test]
+fn a_file_moved_into_a_folder_icloud_replaced_does_not_stop_the_sync() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    bed.cloud.file(&docs.id, "in.txt", "inside", bed.time());
+    bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    // In iCloud the folder is removed and another of its name made; here a
+    // synced file is moved into the folder meanwhile.
+    bed.cloud.remove(&docs.id);
+    let again = bed.cloud.folder(ROOT_ID, "Docs");
+    bed.cloud.file(&again.id, "new.txt", "new", bed.time());
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Docs/a.txt")).unwrap();
+    bed.write("other.txt", "unrelated");
+    bed.settle();
+    assert_eq!(bed.cloud.text("other.txt").as_deref(), Some("unrelated"));
+    assert_eq!(bed.cloud.text("Docs/a.txt").as_deref(), Some("one"));
+    assert_eq!(bed.read("Docs/a.txt").as_deref(), Some("one"));
+    assert_eq!(bed.read("Docs/new.txt").as_deref(), Some("new"));
 }
