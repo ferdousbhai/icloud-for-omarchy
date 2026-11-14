@@ -1088,26 +1088,15 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     for ls in state.lists.values_mut() {
         // A write a killed run began: its temp file is this program's own,
         // also once the list is renamed or gone.
-        if let Some(text) = ls.writing.as_ref().map(|w| w.text.clone()) {
-            let path = dir.join(&ls.file);
-            let held = |tmp: &Path| fs::read(tmp).is_ok_and(|t| text.as_bytes().starts_with(&t));
-            let tmp = tmp_path(&path);
+        if let Some(w) = &ls.writing {
+            let tmp = tmp_path(&dir.join(&ls.file));
             // Still there with (the start of) what was being written: the
             // rename never happened, so the file is as last recorded, and
             // the user's edits are of that, whatever they look closer to.
-            if held(&tmp) {
+            if fs::read(&tmp).is_ok_and(|t| w.text.as_bytes().starts_with(&t)) {
                 ls.writing = None;
             }
             let _ = fs::remove_file(tmp);
-            // A marker left by a version that wrote through Syncthing's own
-            // temp name (`.syncthing.<name>.tmp`), taken as above once, after
-            // an upgrade: only while the file is not what was being written,
-            // as that name may be Syncthing's download, begun since.
-            let old = path.with_file_name(format!(".syncthing.{}.tmp", ls.file));
-            if ls.writing.is_some() && read(&path).ok().flatten() != Some(text.clone()) && held(&old) {
-                ls.writing = None;
-                let _ = fs::remove_file(old);
-            }
         }
         if let Some(to) = ls.renaming.take()
             && dir.join(&to).exists()

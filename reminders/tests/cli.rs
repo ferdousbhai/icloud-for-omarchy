@@ -1243,14 +1243,6 @@ impl Env {
 
 #[test]
 fn a_file_edited_after_a_run_ended_before_its_write_landed_is_read_against_what_it_last_held() {
-    // The temp file as this version names it, and as the one before did
-    // (`.syncthing.<name>.tmp`): a marker that version left is taken up too.
-    for old in [false, true] {
-        file_edited_after_a_write_that_never_landed(old);
-    }
-}
-
-fn file_edited_after_a_write_that_never_landed(old: bool) {
     // Seed 1874 of the model, which failed only when the reminders' random
     // IDs fell in one order: two "Tea", the second completed.
     let env = start();
@@ -1279,13 +1271,6 @@ fn file_edited_after_a_write_that_never_landed(old: bool) {
     env.background_crashing_at("tmp-written");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     let tmp = dir.join(".syncthing.Groceries.md.icloud-reminders.tmp");
-    let left = if old {
-        let to = dir.join(".syncthing.Groceries.md.tmp");
-        std::fs::rename(&tmp, &to).unwrap();
-        to
-    } else {
-        tmp
-    };
     // The file as it was, with its two Tea lines swapped: read against what
     // it held, not against the write that never landed (to which it would
     // be one tick, of whichever Tea came first).
@@ -1296,11 +1281,8 @@ fn file_edited_after_a_write_that_never_landed(old: bool) {
     std::fs::write(&path, swapped).unwrap();
     env.json(&["background", "--sync"]);
     let completed = |id: &str| env.state.record(id).unwrap()["fields"]["Completed"]["value"] == json!(1);
-    assert!(
-        completed("Reminder/REM-TEA-2") && !completed("Reminder/REM-TEA-1"),
-        "old: {old}"
-    );
-    assert!(!left.exists(), "old: {old}");
+    assert!(completed("Reminder/REM-TEA-2") && !completed("Reminder/REM-TEA-1"));
+    assert!(!tmp.exists());
 }
 
 #[test]
