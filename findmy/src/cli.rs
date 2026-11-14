@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use icloud_app::cli::{confirm, fold, no_data_dir, other, session_failure, usage};
+use icloud_app::cli::{confirm, fold, no_data_dir, other, session_failure, usage, warning};
 use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response, SERVICE_TROUBLE_HINT};
 use icloud_session::time::rfc3339;
@@ -286,10 +286,7 @@ impl<T: Transport> Cli<T> {
                 .map_err(|e| other(e.to_string()))
         });
         if let Err(e) = result {
-            eprintln!(
-                "{}",
-                output::terminal_safe(&format!("warning: could not save history: {}", e.message))
-            );
+            warning(&format!("could not save history: {}", e.message));
         }
     }
 
