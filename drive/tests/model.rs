@@ -781,6 +781,7 @@ fn run_case(seed: u64, widened: bool) -> Result<(), (String, Vec<String>)> {
         c.shuffle = (extra.below(2) == 0).then(|| extra.next());
         c.refusal = extra.below(3) as u8;
         c.never_names = vec![NEVER.to_string()];
+        c.replaces_trashed = extra.below(2) == 0;
     }
     let mut model = Model {
         bed,

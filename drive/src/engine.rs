@@ -564,23 +564,29 @@ impl<R: Remote> Engine<'_, R> {
     /// of that answer, so that the next round sees the change and fetches
     /// it, rather than take it for what is here.
     fn listed(&self, parent_id: &str, sent: &Node) -> Result<Node> {
+        self.listed_if_there(parent_id, sent)?
+            .ok_or_else(|| Error::Remote(remote::Error::Api("the item is not in its folder's listing".into())))
+    }
+
+    /// As [`Engine::listed`], with `None` when the listing does not hold
+    /// the item.
+    fn listed_if_there(&self, parent_id: &str, sent: &Node) -> Result<Option<Node>> {
         let (_, kids) = self.remote.list(parent_id)?;
-        let listed = kids
-            .into_iter()
-            .find(|k| k.id == sent.id)
-            .ok_or_else(|| Error::Remote(remote::Error::Api("the item is not in its folder's listing".into())))?;
+        let Some(listed) = kids.into_iter().find(|k| k.id == sent.id) else {
+            return Ok(None);
+        };
         // An answer's etag or date may not be spelled as a listing's: the
         // same size and date, or the same etag, is the same version.
         let same_content = listed.size == sent.size && (listed.mtime_ms - sent.mtime_ms).abs() <= plan::SAME_TIME_MS;
         if listed.etag == sent.etag || same_content {
-            return Ok(listed);
+            return Ok(Some(listed));
         }
-        Ok(Node {
+        Ok(Some(Node {
             size: sent.size,
             mtime_ms: sent.mtime_ms,
             etag: sent.etag.clone(),
             ..listed
-        })
+        }))
     }
 
     /// Whether something beside `path` (but `except`) has its name in
@@ -819,18 +825,33 @@ impl<R: Remote> Engine<'_, R> {
                     path,
                 )?;
                 crash::point("remote.replace");
-                // Recorded at once from the answer, so a listing that fails
-                // now does not leave the old row to read as a conflict.
-                let answered = Node {
-                    etag: sent.etag.clone(),
-                    size: sent.size,
-                    mtime_ms: sent.mtime_ms,
-                    ..row.node.clone()
-                };
-                self.put(answered, path, before)?;
+                match self.listed_if_there(&row.node.parent, &sent) {
+                    Ok(Some(node)) => self.put(node, path, before)?,
+                    // Not where it was (in Recently Deleted, say, where a
+                    // replace may still land): nothing of it is in step, and
+                    // the next round sends the file here as new.
+                    Ok(None) => {
+                        self.state.forget(id)?;
+                        self.state.clear_sending(path)?;
+                        return Err(Error::Remote(remote::Error::Api(
+                            "it is no longer in its folder in iCloud".into(),
+                        )));
+                    }
+                    // Recorded from the answer, so a listing that fails now
+                    // does not leave the old row to read as a conflict.
+                    Err(e) => {
+                        let answered = Node {
+                            etag: sent.etag.clone(),
+                            size: sent.size,
+                            mtime_ms: sent.mtime_ms,
+                            ..row.node.clone()
+                        };
+                        self.put(answered, path, before)?;
+                        self.state.clear_sending(path)?;
+                        return Err(e);
+                    }
+                }
                 self.state.clear_sending(path)?;
-                let node = self.listed(&row.node.parent, &sent)?;
-                self.put(node, path, before)?;
             }
             Op::TrashLocal { id, path } => {
                 let Some(row) = self.state.row(id)? else {

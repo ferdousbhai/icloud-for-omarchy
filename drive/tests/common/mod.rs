@@ -64,6 +64,10 @@ pub struct Cloud {
     pub during_download: Option<(String, i64)>,
     /// What `during_download` did: the text it replaced, if any.
     pub download_edited: Option<Option<String>>,
+    /// A replace of an item in Recently Deleted is taken (not refused).
+    pub replaces_trashed: bool,
+    /// What such replaces sent.
+    pub replaced_in_trash: Vec<Vec<u8>>,
 }
 
 /// A change another device makes while a sync is listing.
@@ -491,6 +495,18 @@ impl Remote for Fake {
             return Err(remote::Error::Stale(node.name.clone()));
         }
         if !c.nodes.contains_key(&node.id) {
+            if c.replaces_trashed && c.trashed.contains(&node.id) {
+                // Taken, in Recently Deleted. Kept apart, so that what the
+                // trash holds is still what was removed.
+                c.replaced_in_trash.push(bytes);
+                let n = c.tick();
+                return Ok(Node {
+                    etag: format!("e{n}"),
+                    size: c.replaced_in_trash.last().unwrap().len() as u64,
+                    mtime_ms: mtime_ms + 5_000,
+                    ..node.clone()
+                });
+            }
             return Err(remote::Error::Api("gone".into()));
         }
         c.uploads += 1;

@@ -1508,3 +1508,27 @@ fn a_file_moved_here_into_a_folder_holding_its_old_name_is_renamed_first() {
     assert_eq!(bed.cloud.text("P/e").as_deref(), Some("mine"));
     assert_eq!(bed.local_paths(), ["P", "P/d", "P/e"]);
 }
+
+#[test]
+fn a_replace_icloud_takes_for_an_item_in_recently_deleted_leaves_nothing_in_step() {
+    let bed = Bed::new();
+    bed.write("a.txt", "one");
+    bed.write("b.txt", "two");
+    bed.settle();
+    bed.cloud.0.borrow_mut().replaces_trashed = true;
+    bed.write("a.txt", "uno");
+    bed.write("b.txt", "edited");
+    // Removed in iCloud after the sync listed it, before its replace (in
+    // the listing after a.txt's).
+    let at = bed.cloud.0.borrow().listings + 1;
+    let gone = MidOp::Remove {
+        id: bed.cloud.id_at("b.txt").unwrap(),
+    };
+    bed.cloud.0.borrow_mut().mid_listing = Some((at, gone));
+    let outcome = bed.try_sync(false).unwrap();
+    assert_eq!(bed.cloud.0.borrow().replaced_in_trash.len(), 1, "{outcome:?}");
+    bed.settle();
+    assert_eq!(bed.read("b.txt").as_deref(), Some("edited"));
+    assert_eq!(bed.cloud.text("b.txt").as_deref(), Some("edited"));
+    assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
+}
