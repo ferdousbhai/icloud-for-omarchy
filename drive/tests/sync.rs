@@ -1153,3 +1153,31 @@ fn a_move_icloud_refused_leaves_no_note_to_undo_a_later_move_made_in_icloud() {
     assert_eq!(bed.cloud.paths(), ["Docs", "Docs/a.txt"], "the phone's move stands");
     assert_eq!(bed.local_paths(), ["Docs", "Docs/a.txt"]);
 }
+
+#[test]
+fn a_file_moved_into_a_folder_whose_rename_icloud_refuses_and_edited_stays_in_icloud_until_it_can_be_sent() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "zDocs");
+    bed.cloud.file(&docs.id, "in.txt", "inside", bed.time());
+    bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("zDocs"), bed.root().join("Papers")).unwrap();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Papers/a.txt")).unwrap();
+    bed.write("Papers/a.txt", "edited after the move");
+    bed.cloud.0.borrow_mut().refuses_moves = true;
+    for _ in 0..2 {
+        bed.try_sync(false).unwrap();
+        assert!(
+            bed.cloud.0.borrow().trashed.is_empty(),
+            "{:?}",
+            bed.cloud.0.borrow().trashed
+        );
+        assert_eq!(bed.cloud.paths(), ["a.txt", "zDocs", "zDocs/in.txt"]);
+    }
+    // Once the folder's move goes through, the usual rule: the old file is
+    // removed in iCloud and the edited one sent as new.
+    bed.cloud.0.borrow_mut().refuses_moves = false;
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Papers", "Papers/a.txt", "Papers/in.txt"]);
+    assert_eq!(bed.cloud.text("Papers/a.txt").as_deref(), Some("edited after the move"));
+}

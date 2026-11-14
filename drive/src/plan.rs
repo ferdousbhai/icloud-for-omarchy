@@ -417,6 +417,17 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 id: row.node.id.clone(),
                 to: to.to_string(),
             });
+        } else if here(row).is_none()
+            && !row.local.is_dir
+            && by_ino
+                .get(&row.local.ino)
+                .is_some_and(|paths| paths.iter().any(|p| !local[*p].is_dir && unseen(p)))
+        {
+            // Gone from its place, and its inode is a changed file where
+            // nothing is touched: moved there and edited. Elsewhere that
+            // is a removal and a new file; here the new file cannot be
+            // sent yet, so the old one stays in iCloud until it can.
+            held.push(row.path.clone());
         }
     }
     if ops.is_empty() {
