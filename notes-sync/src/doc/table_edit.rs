@@ -27,6 +27,7 @@ use super::tables::{
 };
 use crate::cloudkit::CloudKitRecord;
 use crate::js::{base64_decode, base64_encode, len16, utf16};
+use crate::md::table::{parse_markdown_table, render_markdown_table};
 
 const IDENTITY_TYPE_NAME: &str = "com.apple.CRDT.NSUUID";
 
@@ -688,7 +689,15 @@ pub fn apply_table_edit_with(
 
     normalize_topotext_order(doc, replica_uuid)?;
     validate_table_document_invariants(doc)?;
-    let plan = diff_table_grid(&grid_from_table_document(doc)?, desired_grid);
+    // The edit is what the file changed: the difference from the table as
+    // its Markdown shows it, so a cell the file can't show whole is left
+    // as it is.
+    let current = grid_from_table_document(doc)?;
+    let plan = if current == desired_grid {
+        TableEditPlan::Noop
+    } else {
+        diff_table_grid(&shown_grid(&current), desired_grid)
+    };
     match &plan {
         TableEditPlan::Noop => return Ok(false),
         TableEditPlan::Unsupported(reason) => return fail(reason.clone()),
@@ -723,10 +732,23 @@ pub fn apply_table_edit_with(
     finalize_write_session(doc, &session);
 
     validate_table_document_invariants(doc)?;
-    if grid_from_table_document(doc)? != desired_grid {
+    let edited = grid_from_table_document(doc)?;
+    if edited != desired_grid && shown_grid(&edited) != desired_grid {
         return fail("Table edit did not produce the desired grid - refusing to write the result");
     }
     Ok(true)
+}
+
+/// `grid` as its Markdown table reads back, which is what an unedited file
+/// asks for: a Markdown table cell holds no whitespace at its edges (and
+/// no `\r`), so a cell that has some reads back without it. `grid` itself
+/// when its table can't be read back cell for cell.
+fn shown_grid(grid: &[Vec<String>]) -> Vec<Vec<String>> {
+    render_markdown_table(grid)
+        .ok()
+        .and_then(|markdown| parse_markdown_table(&markdown).ok())
+        .filter(|shown| shown.len() == grid.len() && shown.iter().zip(grid).all(|(a, b)| a.len() == b.len()))
+        .unwrap_or_else(|| grid.to_vec())
 }
 
 fn apply_cell_edits(doc: &mut TableDocument, session: &Session, edits: &[CellEdit]) -> Result<()> {

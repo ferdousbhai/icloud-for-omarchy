@@ -1079,3 +1079,55 @@ fn after_a_row_insert_the_mirror_is_one_placeholder_per_live_row() {
         4
     );
 }
+
+/// A Markdown table doesn't hold the whitespace at a cell's edges: the file
+/// shows such a cell without it, and that isn't an edit to the cell.
+#[test]
+fn whitespace_at_a_cells_edges_is_not_an_edit() {
+    use icloud_notes_sync::md::table::{parse_markdown_table, render_markdown_table};
+    let padded = g(&[
+        &["apple-r1c1 ", "berry-r1c2"],
+        &[" cedar-r2c1", "  "],
+        &["echo-r3c1\t", "x \n y"],
+    ]);
+    let doc = edit_and_verify(&mut base_3x2(), &padded);
+    let shown = parse_markdown_table(&render_markdown_table(&padded).unwrap()).unwrap();
+    assert_eq!(
+        shown,
+        g(&[
+            &["apple-r1c1", "berry-r1c2"],
+            &["cedar-r2c1", ""],
+            &["echo-r3c1", "x \n y"]
+        ])
+    );
+
+    // The file as pull wrote it asks for nothing.
+    let mut unedited = doc.clone();
+    assert!(!apply(&mut unedited, &shown, &our_replica()).unwrap());
+    assert_eq!(grid_from_table_document(&unedited).unwrap(), padded);
+
+    // An edit to one cell changes that cell alone.
+    let mut desired = shown.clone();
+    desired[0][1] = "berry-edited".into();
+    let mut edited = doc.clone();
+    assert!(apply(&mut edited, &desired, &our_replica()).unwrap());
+    let mut expected = padded.clone();
+    expected[0][1] = "berry-edited".into();
+    assert_eq!(grid_from_table_document(&edited).unwrap(), expected);
+
+    // A row added below, and a column removed, leave the other cells alone.
+    let mut desired = shown.clone();
+    desired.push(vec!["tail-1".into(), "tail-2".into()]);
+    let mut grown = doc.clone();
+    assert!(apply(&mut grown, &desired, &our_replica()).unwrap());
+    let mut expected = padded.clone();
+    expected.push(vec!["tail-1".into(), "tail-2".into()]);
+    assert_eq!(grid_from_table_document(&grown).unwrap(), expected);
+
+    let desired: Vec<Vec<String>> = shown.iter().map(|row| vec![row[0].clone()]).collect();
+    let mut narrowed = doc.clone();
+    assert!(apply(&mut narrowed, &desired, &our_replica()).unwrap());
+    let expected: Vec<Vec<String>> = padded.iter().map(|row| vec![row[0].clone()]).collect();
+    assert_eq!(grid_from_table_document(&narrowed).unwrap(), expected);
+    validate_table_document_invariants(&narrowed).unwrap();
+}
