@@ -3,7 +3,7 @@
 //! copy the image, and make it the Omarchy background.
 
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -256,7 +256,10 @@ impl Viewer {
                     let p = path.clone();
                     std::thread::spawn(move || icloud_photos::thumbs::touch(&p));
                 }
-                self.load(app, &id, &path)
+                // An original that cannot be decoded (too large, damaged)
+                // falls back to Apple's medium JPEG, fetched if need be.
+                let medium = row.medium_path.clone().filter(|m| *m != path);
+                self.load(app, &id, &path, medium, row.medium_path.as_ref() != Some(&path));
             }
             None => {
                 self.spinner.set_visible(true);
@@ -270,12 +273,9 @@ impl Viewer {
         {
             app.load_texture(&id, p);
         }
-        // Warm the neighbours' medium renditions.
+        // Warm the neighbours' medium renditions (a cached one is not fetched again).
         for n in [index + 1, index.wrapping_sub(1)] {
-            if let Some(nid) = self.ids.borrow().get(n)
-                && let (Some(d), Ok(Some(r))) = (app.downloader.borrow().as_ref(), app.cat.asset(nid))
-                && r.medium_path.as_ref().is_none_or(|p| !p.exists())
-            {
+            if let (Some(nid), Some(d)) = (self.ids.borrow().get(n), app.downloader.borrow().as_ref()) {
                 d.enqueue(nid, Job::Medium, Priority::Now);
             }
         }
@@ -309,12 +309,13 @@ impl Viewer {
         self.info.set_label(&parts.join("  ·  "));
     }
 
-    fn load(&self, app: &Rc<App>, id: &str, path: &Path) {
+    /// Show `path`, or `fallback` if that cannot be decoded; when neither
+    /// can and `fetch_medium` is set, ask for Apple's medium JPEG instead
+    /// (which comes back through [`on_medium`](Self::on_medium)).
+    fn load(&self, app: &Rc<App>, id: &str, path: &Path, fallback: Option<PathBuf>, fetch_medium: bool) {
         self.spinner.set_visible(true);
         self.sharp.set(true);
-        // An original too large to decode falls back to Apple's medium JPEG.
-        let medium = app.cat.asset(id).ok().flatten().and_then(|r| r.medium_path);
-        let medium = medium.filter(|m| m != path);
+        let medium = fallback;
         let (a, id, path) = (app.clone(), id.to_owned(), path.to_owned());
         glib::spawn_future_local(async move {
             let tex = gio::spawn_blocking(move || {
@@ -327,17 +328,23 @@ impl Viewer {
             .flatten();
             // Only if the viewer is still on this photo.
             if a.viewer.current().as_deref() == Some(id.as_str()) {
-                a.viewer.spinner.set_visible(false);
-                if let Some(t) = tex {
-                    a.viewer.picture.set_paintable(Some(&t));
+                match (tex, a.downloader.borrow().as_ref()) {
+                    (Some(t), _) => a.viewer.picture.set_paintable(Some(&t)),
+                    (None, Some(d)) if fetch_medium => {
+                        // The spinner stays until the medium arrives or fails.
+                        d.enqueue(&id, Job::Medium, Priority::Now);
+                        return;
+                    }
+                    (None, _) => {}
                 }
+                a.viewer.spinner.set_visible(false);
             }
         });
     }
 
     pub fn on_medium(&self, app: &Rc<App>, id: &str, path: &Path) {
         if self.current().as_deref() == Some(id) {
-            self.load(app, id, path);
+            self.load(app, id, path, None, false);
         }
     }
 
@@ -349,7 +356,7 @@ impl Viewer {
 
     /// The file the viewer shows for the current photo, or a toast saying why
     /// there is none yet. Videos are left out: their still is only a poster.
-    fn current_still(&self, app: &App) -> Option<std::path::PathBuf> {
+    fn current_still(&self, app: &App) -> Option<PathBuf> {
         let row = app.cat.asset(&self.current()?).ok().flatten()?;
         if row.kind == Kind::Video {
             app.toast("Videos can't be used as an image");
