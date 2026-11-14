@@ -104,6 +104,11 @@ pub struct State {
     /// By list ID.
     #[serde(default)]
     pub lists: BTreeMap<String, ListState>,
+    /// Files of lists gone from iCloud that were left in the folder because
+    /// they held changes never sent. No list's file takes such a name while
+    /// the file is there: a new list of that name would read it as its own.
+    #[serde(default)]
+    pub left: Vec<String>,
 }
 
 /// A file that would have removed most of its list: its lines were put back.
@@ -525,10 +530,14 @@ fn write(path: &Path, text: &str) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// What the names of `file`'s conflict copies start with.
+fn conflict_prefix(file: &str) -> String {
+    format!("{}.sync-conflict-", file.strip_suffix(".md").unwrap_or(file))
+}
+
 /// Syncthing's conflict copies of `file`: `Work.sync-conflict-<when>-<device>.md`.
 fn conflict_copies(dir: &Path, file: &str) -> Vec<PathBuf> {
-    let stem = file.trim_end_matches(".md");
-    let prefix = format!("{stem}.sync-conflict-");
+    let prefix = conflict_prefix(file);
     let mut found: Vec<PathBuf> = fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -704,6 +713,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     fs::create_dir_all(dir)?;
 
     // A list gone from iCloud: its file goes too, unless it was changed.
+    state.left.retain(|file| dir.join(file).exists());
     let gone: Vec<String> = state
         .lists
         .keys()
@@ -713,8 +723,16 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     for id in gone {
         let ls = state.lists.remove(&id).expect("listed above");
         let path = dir.join(&ls.file);
-        if read(&path)?.is_some_and(|text| text == ls.text) {
-            fs::remove_file(&path)?;
+        match read(&path)? {
+            Some(text) if text == ls.text => fs::remove_file(&path)?,
+            Some(_) => {
+                report.warnings.push(format!(
+                    "{}: its list is gone from iCloud; the file has changes that were never sent, so it is left here and no longer kept in step",
+                    ls.file
+                ));
+                state.left.push(ls.file);
+            }
+            None => {}
         }
     }
 
@@ -724,6 +742,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             .iter()
             .filter(|(id, _)| **id != list.id)
             .map(|(_, ls)| ls.file.clone())
+            .chain(state.left.iter().cloned())
             .collect();
         let wanted = free_name(&file_stem(&list.name), &others);
         let ls = state.lists.entry(list.id.clone()).or_default();
@@ -733,6 +752,16 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             // The list was renamed: the file follows, when nothing is in the way.
             let (from, to) = (dir.join(&ls.file), dir.join(&wanted));
             if !to.exists() && (!from.exists() || fs::rename(&from, &to).is_ok()) {
+                // Its conflict copies too: they are found by the file's name.
+                let (old, new) = (conflict_prefix(&ls.file), conflict_prefix(&wanted));
+                for copy in conflict_copies(dir, &ls.file) {
+                    let rest = copy.file_name().and_then(|n| n.to_str()).map(|n| &n[old.len()..]);
+                    if let Some(to) = rest.map(|rest| dir.join(format!("{new}{rest}")))
+                        && !to.exists()
+                    {
+                        let _ = fs::rename(&copy, &to);
+                    }
+                }
                 ls.file = wanted;
             }
         }

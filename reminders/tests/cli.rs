@@ -927,3 +927,71 @@ fn a_file_found_already_there_only_adds_what_is_new() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("- [ ] Eggs\n") && text.contains("- [ ] Tea\n"), "{text}");
 }
+
+fn file_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_renamed_list_takes_its_conflict_copies_along() {
+    let env = start();
+    let dir = folder(&env);
+    std::fs::write(
+        dir.join("Groceries.sync-conflict-20261114-093000-ABCDEFG.md"),
+        "# Groceries\n\n- [ ] Butter\n",
+    )
+    .unwrap();
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Name"]["value"] = json!("Food");
+    env.state.put(list);
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["added"], 1, "{out}");
+    assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+    assert!(all_titles(&env, "Food").contains(&"Butter".to_owned()));
+}
+
+#[test]
+fn a_file_left_by_a_deleted_list_is_not_taken_by_a_new_list_of_that_name() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    // A line added to the file, and the list deleted on the phone: the file
+    // has something that was never sent, so it stays.
+    let text = std::fs::read_to_string(&path).unwrap() + "- [ ] Bread\n";
+    std::fs::write(&path, &text).unwrap();
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Deleted"]["value"] = json!(1);
+    env.state.put(list.clone());
+    let out = env.json(&["background", "--sync"]);
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1 && warnings[0].as_str().unwrap().starts_with("Groceries.md: "),
+        "{out}"
+    );
+    // Said once.
+    assert_eq!(env.json(&["background", "--sync"])["folder"]["warnings"], json!([]));
+
+    // Another list of that name is made: it gets a file of its own.
+    list["recordName"] = json!("List/LIST-NEW");
+    list["fields"]["Deleted"]["value"] = json!(0);
+    list["fields"]["ReminderIDs"]["value"] = json!("[]");
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["added"], 0, "{out}");
+    assert_eq!(modifies(&env), 0);
+    assert_eq!(file_names(&dir), ["Groceries 2.md", "Groceries.md", "Reminders.md"]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Groceries 2.md")).unwrap(),
+        "# Groceries\n"
+    );
+    // Once the leftover is removed, the list's file takes the name.
+    std::fs::remove_file(&path).unwrap();
+    env.json(&["background", "--sync"]);
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+}
