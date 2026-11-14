@@ -335,6 +335,9 @@ pub enum Refusal {
     },
     /// (delete, refused)
     DeleteSharedNote { file: String },
+    /// (delete, refused): the lookup of the note answered an error, so
+    /// whether it still exists isn't known.
+    DeleteLookupFailed { server_error_code: String },
     /// (move, refused); `previous_file` = the tracked path
     MoveSharedNote { previous_file: String },
     /// (move, refused)
@@ -448,6 +451,9 @@ impl Refusal {
             ),
             DeleteSharedNote { file } => format!(
                 "deleting notes shared by someone else isn't supported - run \"icloud-notes restore {file}\" to bring the file back"
+            ),
+            DeleteLookupFailed { server_error_code } => format!(
+                "iCloud couldn't look this note up ({server_error_code}), so it wasn't deleted - push again later"
             ),
             MoveSharedNote { previous_file } => format!(
                 "renaming or moving notes shared by someone else isn't supported yet - move the file back to {previous_file}"

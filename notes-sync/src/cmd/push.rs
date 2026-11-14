@@ -1258,10 +1258,15 @@ pub fn build_push_plan(
         lookup_groups.entry(None).or_default().push(record_name.clone());
     }
     let mut records_by_name: HashMap<String, CloudKitRecord> = HashMap::new();
+    // Records iCloud answered an error for (other than "not found"): it
+    // didn't say they are gone.
+    let mut lookup_failures: HashMap<String, String> = HashMap::new();
     for (owner, names) in &lookup_groups {
-        for record in db.lookup_records(&note_zone(owner.as_deref()), names)? {
+        let (records, failures) = db.lookup_records_and_failures(&note_zone(owner.as_deref()), names)?;
+        for record in records {
             records_by_name.insert(record.record_name.clone(), record);
         }
+        lookup_failures.extend(failures);
     }
 
     let replica_id = match &state.replica_id {
@@ -1355,6 +1360,21 @@ pub fn build_push_plan(
         };
         let record = match records_by_name.get(record_name) {
             Some(r) if !r.is_deleted() && !is_purged(r) => r,
+            // Not known to be gone: untracking it now would leave the note
+            // in iCloud with nothing here to delete it by.
+            None if lookup_failures.contains_key(record_name) => {
+                entries.push(
+                    PlanEntry::refused(
+                        PlanEntryKind::Delete,
+                        entry.file.clone(),
+                        Refusal::DeleteLookupFailed {
+                            server_error_code: lookup_failures[record_name].clone(),
+                        },
+                    )
+                    .into(),
+                );
+                continue;
+            }
             _ => {
                 entries.push(ready(Action::DeleteAlreadyGone {
                     record_name: record_name.clone(),

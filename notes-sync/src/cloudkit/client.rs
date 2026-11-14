@@ -415,7 +415,20 @@ impl<T: Transport> Database<T> {
     /// `lookupRecords`: `records/lookup` in batches of 200; per-record error
     /// entries (no `recordType`/`fields`) are skipped.
     pub fn lookup_records(&self, zone: &NoteZone, record_names: &[String]) -> Result<Vec<CloudKitRecord>, CkError> {
+        Ok(self.lookup_records_and_failures(zone, record_names)?.0)
+    }
+
+    /// [`Self::lookup_records`], plus the names iCloud answered an error
+    /// for other than `NOT_FOUND`, each with its `serverErrorCode`: records
+    /// it could not say anything about, which is not the same as records
+    /// that are gone.
+    pub fn lookup_records_and_failures(
+        &self,
+        zone: &NoteZone,
+        record_names: &[String],
+    ) -> Result<(Vec<CloudKitRecord>, Vec<(String, String)>), CkError> {
         let mut records = Vec::new();
+        let mut failures = Vec::new();
         for batch in record_names.chunks(LOOKUP_BATCH_SIZE) {
             let names: Vec<Value> = batch.iter().map(|name| json!({ "recordName": name })).collect();
             let body = self.post_database(
@@ -434,13 +447,17 @@ impl<T: Transport> Database<T> {
                     && get(entry, "fields").is_some_and(is_record)
                 {
                     records.push(parse_record(entry)?);
+                } else if let (Some(name), Some(code)) = (get_str(entry, "recordName"), get_str(entry, "serverErrorCode"))
+                    && code != "NOT_FOUND"
+                {
+                    failures.push((name.to_owned(), code.to_owned()));
                 }
             }
         }
         // A note whose text is a `TextDataAsset` reads like any other, as it
         // does out of a zone walk: push edits what it looks up.
         self.inline_asset_bodies(&mut records)?;
-        Ok(records)
+        Ok((records, failures))
     }
 
     /// `updateRecords`: one `records/modify` with an `update` op per record;

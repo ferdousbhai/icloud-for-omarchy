@@ -83,6 +83,13 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             ),
         ),
         (
+            Refusal::DeleteLookupFailed {
+                server_error_code: "TRY_AGAIN_LATER".into(),
+            },
+            Refused,
+            "iCloud couldn't look this note up (TRY_AGAIN_LATER), so it wasn't deleted - push again later".into(),
+        ),
+        (
             Refusal::MoveSharedNote {
                 previous_file: "Pat/Shared/Pie.md".into(),
             },
@@ -475,6 +482,7 @@ fn every_refusal_variant_is_listed() {
             | UpdateUnknownContent { .. }
             | AmbiguousNoteId { .. }
             | DeleteSharedNote { .. }
+            | DeleteLookupFailed { .. }
             | MoveSharedNote { .. }
             | MoveIntoUnfolderableDir { .. }
             | MoveIntoSharerArea
@@ -507,7 +515,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 33, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 34, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()

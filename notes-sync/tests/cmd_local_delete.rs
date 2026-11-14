@@ -109,6 +109,61 @@ fn push_trashes_a_deleted_note_that_changed_remotely() {
     assert!(!vault.join(FILE).exists());
 }
 
+/// tiny-push-delete's answers, with the lookup answering `code` for the
+/// note instead of the record.
+fn push_delete_lookup_error_cassette(out: &Path, code: &str) -> PathBuf {
+    let mut cassette: Value =
+        serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes/tiny-push-delete.json")).unwrap())
+            .unwrap();
+    let lookup = &mut cassette["interactions"][0];
+    assert!(lookup["request"]["path"].as_str().unwrap().ends_with("/records/lookup"));
+    lookup["response"]["body"]["records"][0] =
+        serde_json::json!({ "recordName": RECORD, "serverErrorCode": code, "reason": "replayed" });
+    let path = out.join("cassette.json");
+    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
+    path
+}
+
+/// iCloud failing to look the note up is not iCloud saying it is gone: the
+/// delete is refused and the note stays tracked, for the next push.
+#[test]
+fn push_refuses_a_delete_whose_lookup_answered_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = vault_with_note_deleted(&out);
+    let cassette = push_delete_lookup_error_cassette(&out, "TRY_AGAIN_LATER");
+
+    let (code, stdout, stderr) = run(&out, &cassette, &["--quiet", "push", vault.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let entries = stdout["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{stdout}");
+    assert_eq!(entries[0]["kind"], "delete");
+    assert_eq!(entries[0]["resolution"], "refused", "{stdout}");
+    assert!(
+        entries[0]["reason"].as_str().unwrap().contains("TRY_AGAIN_LATER"),
+        "{stdout}"
+    );
+    assert_eq!(modify_requests(&out), 0);
+    let state = state(&vault);
+    assert!(state["notes"].get(RECORD).is_some(), "still tracked: {state}");
+}
+
+/// "Not found" is the one answer that does say it is gone.
+#[test]
+fn push_untracks_a_deleted_note_the_lookup_did_not_find() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = vault_with_note_deleted(&out);
+    let cassette = push_delete_lookup_error_cassette(&out, "NOT_FOUND");
+
+    let (code, stdout, stderr) = run(&out, &cassette, &["--quiet", "push", vault.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"][0]["resolution"], "ready", "{stdout}");
+    assert_eq!(modify_requests(&out), 0);
+    let state = state(&vault);
+    assert!(state["notes"].get(RECORD).is_none(), "no longer tracked: {state}");
+}
+
 #[test]
 fn pull_leaves_a_deleted_note_deleted_and_the_next_push_trashes_it() {
     let tmp = tempfile::tempdir().unwrap();
