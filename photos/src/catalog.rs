@@ -564,6 +564,18 @@ impl Catalog {
         Ok(n)
     }
 
+    /// The originals and Live Photo videos recorded under the folder `dir`,
+    /// each with its size as iCloud reports it (0 when not known).
+    pub fn paths_under(&self, dir: &Path) -> Result<Vec<(PathBuf, i64)>> {
+        let under = format!("{}/", dir.to_string_lossy());
+        let mut st = self.conn.prepare(
+            "SELECT local_path, size FROM assets WHERE substr(local_path, 1, length(?1)) = ?1
+             UNION ALL SELECT live_path, live_size FROM assets WHERE substr(live_path, 1, length(?1)) = ?1",
+        )?;
+        let rows = st.query_map([under], |r| Ok((PathBuf::from(r.get::<_, String>(0)?), r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Is `path` already the original of an asset other than `id`?
     /// Two indexed lookups (one per partial index), not a scan.
     pub fn path_taken(&self, path: &Path, id: &str) -> Result<bool> {

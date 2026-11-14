@@ -8,8 +8,9 @@
 //! is already taken (a year folder in both) is merged file by file; a file
 //! whose name is taken stays where it is and is reported. The catalog's
 //! paths move with the files, one transaction per rename, so a download is
-//! never thought missing. The old folder is removed only if it ends up
-//! empty. A library the user chose themselves is never moved; once the move
+//! never thought missing; a rename whose transaction a crash cut off is
+//! found and recorded on the next run. The old folder is removed only if it
+//! ends up empty. A library the user chose themselves is never moved; once the move
 //! has run (or there was nothing to move), that includes the old folder
 //! itself, chosen again in the preferences.
 
@@ -124,9 +125,28 @@ pub fn run(dirs: &Dirs, pictures: &Path) -> Settings {
 /// remove `from` if it is empty.
 pub fn move_library(cat: &mut Catalog, from: &Path, to: &Path) -> Moved {
     let mut moved = Moved::default();
+    follow_renamed(cat, from, to);
     merge(cat, from, to, &mut moved);
     let _ = std::fs::remove_dir(from);
     moved
+}
+
+/// A move killed between a rename and the commit of its catalog update
+/// left the file in `to` and its record in `from`: point each record whose
+/// file is gone from `from` at the file of its name and size in `to`.
+fn follow_renamed(cat: &Catalog, from: &Path, to: &Path) {
+    let Ok(recorded) = cat.paths_under(from) else { return };
+    for (path, size) in recorded {
+        let Ok(rel) = path.strip_prefix(from) else { continue };
+        let moved = to.join(rel);
+        let there = |p: &Path| std::fs::symlink_metadata(p).ok().filter(|m| m.is_file());
+        if there(&path).is_none()
+            && there(&moved).is_some_and(|m| size <= 0 || m.len() == size as u64)
+            && let Err(e) = cat.move_paths(&path, &moved)
+        {
+            eprintln!("icloud-photos: cannot record {} moved: {e}", moved.display());
+        }
+    }
 }
 
 fn merge(cat: &mut Catalog, from: &Path, to: &Path, out: &mut Moved) {

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use icloud_photos::catalog::Catalog;
+use icloud_photos::migrate::MOVED_KEY;
 use serde_json::Value;
 use support::fake_server::FakeServer;
 use support::temp_dir;
@@ -400,6 +401,57 @@ fn an_upload_killed_at_any_point_is_in_icloud_once() {
         assert_eq!(env.server.asset_ids().len(), before + 1, "{point}: in iCloud once");
         in_step_with_icloud(&env);
         assert_eq!(std::fs::read(&file).unwrap(), b"\xFF\xD8 a new photo");
+    }
+}
+
+/// A library downloaded into `~/Pictures`, then put back as an earlier
+/// version had it: in `~/Pictures/icloud-photos`, recorded there, not yet
+/// moved. The user also has a `2025` folder in the old one and their own
+/// files in `~/Pictures/2026/09`, so the move renames `2025` whole and
+/// merges the month file by file.
+fn old_library(env: &Env) -> (PathBuf, PathBuf) {
+    let bare = |args: &[&str]| env.exec(false, args, None).ok();
+    bare(&["sync"]);
+    bare(&["download", "--all"]);
+    let pictures = env.home().join("Pictures");
+    let old = pictures.join("icloud-photos");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::rename(pictures.join("2026"), old.join("2026")).unwrap();
+    let cat = Catalog::open(&env.home().join("xdg-data/icloud-photos/catalog.db")).unwrap();
+    cat.move_paths(&pictures.join("2026"), &old.join("2026")).unwrap();
+    cat.set_meta(MOVED_KEY, None).unwrap();
+    write(&old.join("2025/07/user.jpg"), b"user");
+    write(&pictures.join("2026/09/mine.txt"), b"mine");
+    (pictures, old)
+}
+
+#[test]
+fn a_library_move_killed_at_any_point_keeps_every_file_and_its_record() {
+    // Renames: 2025, then the month's four files (a Live Photo has two).
+    let points = (1..=5).map(|n| format!("migrate.renamed:{n}"));
+    for point in points.chain(["migrate.moved".into(), "migrate.marked".into()]) {
+        let env = Env::new("move", 3);
+        let (pictures, old) = old_library(&env);
+        let before: BTreeMap<PathBuf, Digest> = files(&pictures)
+            .into_iter()
+            .map(|(p, b)| (p.strip_prefix("icloud-photos").map(Path::to_path_buf).unwrap_or(p), b))
+            .collect();
+        env.exec(false, &["status"], Some(&point)).crashed(&point);
+        env.exec(false, &["status"], None).ok();
+        assert_eq!(files(&pictures), before, "{point}: every file, moved");
+        assert!(!old.exists(), "{point}");
+        let rows = env.exec(false, &["list"], None).ok();
+        for r in rows.as_array().unwrap() {
+            for key in ["local_path", "live_path"] {
+                if r["kind"] == "live" || key == "local_path" {
+                    let p = r[key].as_str().unwrap_or_else(|| panic!("{point}: {key} lost: {r}"));
+                    assert!(Path::new(p).starts_with(pictures.join("2026/09")), "{point}: {p}");
+                }
+            }
+        }
+        let again = env.exec(false, &["download", "--all"], None).ok();
+        assert_eq!(again, serde_json::json!([]), "{point}: nothing to fetch again");
+        assert_eq!(files(&pictures), before, "{point}");
     }
 }
 
