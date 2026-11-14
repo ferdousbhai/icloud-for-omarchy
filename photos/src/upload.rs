@@ -141,6 +141,7 @@ impl<'t> Uploader<'t> {
             .ok_or_else(|| Error::Other("createUploadUrl did not return an upload URL".into()))?
             .to_owned();
         self.check_target(&target)?;
+        crate::crash::point("upload.reserved");
 
         progress(Step::Sending { bytes: size });
         // The bare body to the bare URL, as pyicloud does: icloud-session
@@ -151,6 +152,7 @@ impl<'t> Uploader<'t> {
             .get("singleFile")
             .cloned()
             .ok_or_else(|| Error::Other("upload host returned no receipt".into()))?;
+        crate::crash::point("upload.sent");
 
         progress(Step::Registering);
         let (zone_id, offset) = local_time_zone();
@@ -166,6 +168,7 @@ impl<'t> Uploader<'t> {
             "importGroup": client_id,
         });
         let results = self.t.post_json(&self.url(PUT_ASSET), &body)?;
+        crate::crash::point("upload.registered");
         let results = results
             .as_array()
             .ok_or_else(|| Error::Other("putAsset returned an unexpected payload".into()))?;

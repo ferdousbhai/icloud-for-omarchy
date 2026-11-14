@@ -30,6 +30,7 @@ use icloud_app::cli::{usage, with_sign_in_hint};
 use icloud_photos::catalog::{Catalog, LAST_SYNC_KEY, Row, SYNC_TOKEN_KEY};
 use icloud_photos::cloudkit::{CloudKit, Kind, Modified, sanitize};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
+use icloud_photos::crash;
 use icloud_photos::session;
 use icloud_photos::still;
 use icloud_photos::sync::{self, Mode, Progress, Report};
@@ -1188,6 +1189,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     // Up to 200 deletions per request, each answered on its own.
     let first: Vec<(&str, Option<&str>)> = rows.iter().map(|r| (r.id.as_str(), r.change_tag.as_deref())).collect();
     let mut outcome: Vec<LibResult<Modified>> = ck.delete_assets(&first);
+    crash::point("delete.sent");
     let code_of = |r: &LibResult<Modified>| match r {
         Err(Error::CloudKit { code, .. }) => Some(code.clone()),
         _ => None,
@@ -1226,6 +1228,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
         for ((i, ..), r) in retry.iter().zip(ck.delete_assets(&again)) {
             outcome[*i] = r;
         }
+        crash::point("delete.retried");
     }
     cat.transaction(|cat| {
         for (row, r) in rows.iter().zip(&outcome) {
@@ -1345,6 +1348,7 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
             continue;
         }
         let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref());
+        crash::point("restore.sent");
         // Changed on another device since the last sync: sync, then try
         // again with the fresh change tag, as delete does.
         // A failed re-sync fails only this item; the others are still tried.
@@ -1354,7 +1358,9 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
                 Ok(_) => {
                     let fresh = row_or_fail(&cat, &row.id)?;
                     if fresh.deleted {
-                        ck.restore_asset(&fresh.id, fresh.change_tag.as_deref())
+                        let again = ck.restore_asset(&fresh.id, fresh.change_tag.as_deref());
+                        crash::point("restore.retried");
+                        again
                     } else {
                         Ok(Modified {
                             name: fresh.id,

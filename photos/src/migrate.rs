@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::catalog::Catalog;
 use crate::config::{Dirs, DownloadMode, Settings};
+use crate::crash;
 use crate::thumbs::rename_noreplace;
 use crate::transport::Error;
 
@@ -109,9 +110,11 @@ pub fn run(dirs: &Dirs, pictures: &Path) -> Settings {
     };
     if cat.meta(MOVED_KEY).ok().flatten().is_none() {
         let moved = move_library(&mut cat, &old, pictures);
+        crash::point("migrate.moved");
         if let Err(e) = cat.set_meta(MOVED_KEY, Some("1")) {
             eprintln!("icloud-photos: cannot record the library move: {e}");
         }
+        crash::point("migrate.marked");
         log(&old, pictures, &moved);
     }
     rewrite(settings(pictures.to_path_buf()))
@@ -142,6 +145,7 @@ fn merge(cat: &mut Catalog, from: &Path, to: &Path, out: &mut Moved) {
                 let renamed = cat.transaction(|c| {
                     c.move_paths(&src, &dst)?;
                     rename_noreplace(&src, &dst)?;
+                    crash::point("migrate.renamed");
                     Ok(())
                 });
                 match renamed {

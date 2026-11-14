@@ -20,6 +20,7 @@ use std::time::{Duration, SystemTime};
 use crate::catalog::{Catalog, PathKind, Row};
 use crate::cloudkit::{CloudKit, extension_for, sanitize};
 use crate::config::Dirs;
+use crate::crash;
 use crate::transport::{Error, Result, Transport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,6 +123,7 @@ pub fn fetch_detailed_with(
     };
     let dest = dir.join(format!("{}.{ext}", sanitize(&row.id)));
     download_fresh(t, cat, &mut row, url_of, job, &dest, peers)?;
+    crash::point("download.cache.placed");
     cat.set_path(id, kind, Some(&dest))?;
     Ok(Fetched::file(dest))
 }
@@ -161,10 +163,12 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, p
             } else {
                 let tmp = Temp::beside(&dest)?;
                 download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?;
+                crash::point("download.original.fetched");
                 settle(tmp, dest, &mut hold, |taken| {
                     Ok(plan_original(cat, &targets.library, &row, taken)?.0)
                 })?
             };
+            crash::point("download.original.placed");
             cat.set_path(&row.id, PathKind::Original, Some(&photo))?;
             row.local_path = Some(photo.clone());
             photo
@@ -216,10 +220,12 @@ fn export(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, pee
             Some(have) => drop(std::fs::copy(have, &tmp.0)?),
             None => download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?,
         }
+        crash::point("export.original.fetched");
         settle(tmp, dest, &mut hold, |taken| {
             Ok(plan_original(cat, &targets.library, &row, taken)?.0)
         })?
     };
+    crash::point("export.original.placed");
     if row.live_url.is_none() {
         return Ok(Fetched::file(photo));
     }
@@ -290,8 +296,10 @@ fn live(
     } else {
         let tmp = Temp::beside(&dest)?;
         download_fresh(t, cat, row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?;
+        crash::point("download.live.fetched");
         settle(tmp, dest, &mut hold, |taken| plan_live(cat, row, photo, taken))?
     };
+    crash::point("download.live.placed");
     cat.set_path(&row.id, PathKind::Live, Some(&live))?;
     row.live_path = Some(live.clone());
     Ok(live)
