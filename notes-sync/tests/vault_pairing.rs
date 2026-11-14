@@ -242,6 +242,24 @@ fn performing_finishes_a_rename() {
     );
 }
 
+/// Something at the target that a look at the file behind it misses (a
+/// symbolic link to nowhere) - or that turned up after the look - is not
+/// replaced either: the rename itself refuses.
+#[test]
+fn performing_never_replaces_what_is_at_the_target() {
+    let dir = vault();
+    write_note(dir.path(), "Notes/Shopping list.md", NOTE_ID, "Milk");
+    let target = dir.path().join("Notes/Groceries.md");
+    std::os::unix::fs::symlink("nowhere", &target).unwrap();
+    let mut notes = notes_with("Notes/Shopping list.md", Some("Groceries.md"));
+    let settled = settle_pending_renames(dir.path(), &mut notes, true, TitleMode::InBody).unwrap();
+    assert_eq!(settled.blocked.len(), 1);
+    assert!(settled.performed.is_empty());
+    assert_eq!(notes[NOTE_ID].file, "Notes/Shopping list.md");
+    assert!(std::fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+    assert!(dir.path().join("Notes/Shopping list.md").exists());
+}
+
 #[test]
 fn performing_refuses_to_overwrite_target() {
     let dir = vault();

@@ -36,8 +36,8 @@ use crate::vault::layout::{
     PreviousLayout, VaultLayout, build_vault_layout, expected_note_dir, note_dir_of, place_note, previous_layout_dirs,
 };
 use crate::vault::local::{
-    LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
-    write_note_file,
+    LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, rename_no_replace,
+    split_options, write_note_file,
 };
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
@@ -996,11 +996,19 @@ pub fn rename_for_remote_title(
     }
     used_in_dir.insert(wanted.clone());
 
-    let new_file = posix::join(&[&dir, &wanted]);
     if on_disk {
-        std::fs::rename(target_dir.join(current_file), target_dir.join(&new_file))?;
+        let from = target_dir.join(current_file);
+        // A file that turned up under the name since the check above is
+        // never replaced: the next name.
+        while let Err(e) = rename_no_replace(&from, &target_dir.join(&dir).join(&wanted)) {
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e.into());
+            }
+            wanted = unique_file_name(&note_file_name_for(title_line, title_mode), used_in_dir);
+            used_in_dir.insert(wanted.clone());
+        }
     }
-    Ok(new_file)
+    Ok(posix::join(&[&dir, &wanted]))
 }
 
 fn drop_tracking(target_dir: &Path, record_name: &str, tracked: &mut Tracked) -> Result<(), Error> {

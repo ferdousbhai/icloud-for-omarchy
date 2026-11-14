@@ -25,6 +25,7 @@ icu_collator = "2"
 icu_properties = "2.3"
 indexmap = { version = "2", features = ["serde"] }
 markdown = "1.0.0"
+rustix = { version = "1", features = ["fs"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true

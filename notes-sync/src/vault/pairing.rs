@@ -188,14 +188,17 @@ pub fn settle_pending_renames(
             if !perform {
                 continue;
             }
-            if file_exists(&target_dir.join(&target))? {
-                settlement.blocked.push(BlockedRename {
-                    file: entry.file.clone(),
-                    to: target,
-                });
-                continue;
+            match super::local::rename_no_replace(&target_dir.join(&entry.file), &target_dir.join(&target)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    settlement.blocked.push(BlockedRename {
+                        file: entry.file.clone(),
+                        to: target,
+                    });
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
             }
-            std::fs::rename(target_dir.join(&entry.file), target_dir.join(&target))?;
             settlement.performed.push(PerformedRename {
                 from: entry.file.clone(),
                 to: target.clone(),

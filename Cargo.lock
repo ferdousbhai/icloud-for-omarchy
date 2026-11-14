@@ -977,6 +977,7 @@ dependencies = [
  "icu_properties",
  "indexmap",
  "markdown",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

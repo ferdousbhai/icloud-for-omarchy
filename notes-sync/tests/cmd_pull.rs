@@ -393,6 +393,29 @@ fn remote_retitle_renames_the_file() {
     assert_eq!(read(dir, &file), "Milk");
 }
 
+/// What is at the wanted name and the check before the rename doesn't see
+/// (here a symbolic link to nowhere; a file delivered in between is the
+/// same to the rename) is not replaced: the note takes the next name.
+#[test]
+fn remote_retitle_never_replaces_what_is_at_the_name() {
+    let tmp = vault();
+    let dir = tmp.path();
+    write_vault_file(dir, "Notes/Shopping list.md", "Milk");
+    std::os::unix::fs::symlink("nowhere", dir.join("Notes/Groceries.md")).unwrap();
+    let file = rename(
+        dir,
+        "Notes/Shopping list.md",
+        "Groceries",
+        TitleMode::Filename,
+        &mut used(&["Notes/Shopping list.md"]),
+        true,
+    );
+    assert_eq!(file, "Notes/Groceries 2.md");
+    assert_eq!(read(dir, &file), "Milk");
+    let link = std::fs::symlink_metadata(dir.join("Notes/Groceries.md")).unwrap();
+    assert!(link.file_type().is_symlink());
+}
+
 #[test]
 fn file_already_carrying_title_is_left_alone() {
     let tmp = vault();

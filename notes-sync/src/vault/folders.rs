@@ -10,7 +10,7 @@ use super::base::{read_base_copy, write_base_copy};
 use super::layout::{
     RESERVED_SIBLING_DIR_NAMES, RESERVED_TOP_LEVEL_DIR_NAMES, StateDirInfo, VaultLayout, expected_note_dir, note_dir_of,
 };
-use super::local::{read_text, write_note_file};
+use super::local::{read_text, rename_no_replace, write_note_file};
 use super::pairing::claim_names_on_disk;
 use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
@@ -28,20 +28,34 @@ pub struct Relocation {
     pub to: String,
 }
 
-fn try_rename(from: &Path, to: &Path) -> Result<bool, Error> {
-    match std::fs::rename(from, to) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e.into()),
+/// Moves the file `from` into the directory `to_dir` (both
+/// vault-relative; the directory is made if need be) under `name`, or under
+/// the next `" 2"` name when that one is in `used` or turns out to be taken
+/// on disk: nothing there is ever replaced. The name it got, which joins
+/// `used`; `None` when there is no file at `from`.
+fn move_to_free_name(
+    target_dir: &Path,
+    from: &str,
+    to_dir: &str,
+    name: &str,
+    used: &mut HashSet<String>,
+) -> Result<Option<String>, Error> {
+    let from = target_dir.join(from);
+    std::fs::create_dir_all(target_dir.join(to_dir))?;
+    loop {
+        let candidate = unique_file_name(name, used);
+        used.insert(candidate.clone());
+        match rename_no_replace(&from, &target_dir.join(to_dir).join(&candidate)) {
+            Ok(()) => return Ok(Some(candidate)),
+            // Taken since the names on disk were read: the next name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                used.remove(&candidate);
+                return Ok(None);
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
-}
-
-fn parent_dir_of(target_dir: &Path, file: &str) -> std::path::PathBuf {
-    target_dir
-        .join(file)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| target_dir.to_path_buf())
 }
 
 /// `reconcileNotePlacements`: move every tracked note (and its attachments)
@@ -86,15 +100,18 @@ pub fn reconcile_note_placements(
         };
         let from_file = entry.file.clone();
         claim_names_on_disk(target_dir, to_dir, used_names_for(&mut claimed_names, to_dir))?;
-        let base_name = unique_file_name(posix::basename(&from_file), used_names_for(&mut claimed_names, to_dir));
-        let to_file = posix::join(&[to_dir, &base_name]);
-
-        std::fs::create_dir_all(parent_dir_of(target_dir, &to_file))?;
-        if !try_rename(&target_dir.join(&from_file), &target_dir.join(&to_file))? {
+        let Some(base_name) = move_to_free_name(
+            target_dir,
+            &from_file,
+            to_dir,
+            posix::basename(&from_file),
+            used_names_for(&mut claimed_names, to_dir),
+        )?
+        else {
             used_names_for(&mut claimed_names, &note_dir_of(&from_file)).insert(posix::basename(&from_file).to_owned());
             continue;
-        }
-        used_names_for(&mut claimed_names, to_dir).insert(base_name);
+        };
+        let to_file = posix::join(&[to_dir, &base_name]);
         notes[record_name].file = to_file.clone();
         relocations.push(Relocation {
             from: from_file,
@@ -106,27 +123,31 @@ pub fn reconcile_note_placements(
             .filter(|(_, a)| a.note_record_name == *record_name)
             .map(|(k, _)| k.clone())
             .collect();
+        let to_attachments = posix::join(&[to_dir, "attachments"]);
         if !attachment_names.is_empty() {
             // What is in the target's `attachments/` stays: a file no note
             // tracks (put there to be attached), or one of a note that is
             // itself still to move out.
             claim_names_on_disk(
                 target_dir,
-                &posix::join(&[to_dir, "attachments"]),
+                &to_attachments,
                 used_names_for(&mut claimed_attachment_names, to_dir),
             )?;
         }
         for attachment_record_name in attachment_names {
             let attachment = attachments[&attachment_record_name].clone();
             let old_base = posix::basename(&attachment.file).to_owned();
-            let new_base = unique_file_name(&old_base, used_names_for(&mut claimed_attachment_names, to_dir));
-            let to_attachment = posix::join(&[to_dir, "attachments", &new_base]);
-            std::fs::create_dir_all(parent_dir_of(target_dir, &to_attachment))?;
-            if !try_rename(&target_dir.join(&attachment.file), &target_dir.join(&to_attachment))? {
+            let Some(new_base) = move_to_free_name(
+                target_dir,
+                &attachment.file,
+                &to_attachments,
+                &old_base,
+                used_names_for(&mut claimed_attachment_names, to_dir),
+            )?
+            else {
                 continue;
-            }
-            used_names_for(&mut claimed_attachment_names, to_dir).insert(new_base.clone());
-            attachments[&attachment_record_name].file = to_attachment;
+            };
+            attachments[&attachment_record_name].file = posix::join(&[&to_attachments, &new_base]);
             if new_base != old_base {
                 rewrite_attachment_link(target_dir, &to_file, record_name, &old_base, &new_base)?;
             }
@@ -162,14 +183,11 @@ pub fn relocate_note_attachments(
             attachments[&attachment_record_name].file = already_there;
             continue;
         }
-        let new_base = unique_file_name(&old_base, &used);
-        let to_attachment = posix::join(&[&to_attachments, &new_base]);
-        std::fs::create_dir_all(target_dir.join(&to_attachments))?;
-        if !try_rename(&target_dir.join(&attachment.file), &target_dir.join(&to_attachment))? {
+        let Some(new_base) = move_to_free_name(target_dir, &attachment.file, &to_attachments, &old_base, &mut used)?
+        else {
             continue;
-        }
-        used.insert(new_base.clone());
-        attachments[&attachment_record_name].file = to_attachment;
+        };
+        attachments[&attachment_record_name].file = posix::join(&[&to_attachments, &new_base]);
         if new_base != old_base {
             rewrite_attachment_link(target_dir, note_file, record_name, &old_base, &new_base)?;
         }
@@ -352,5 +370,39 @@ fn drop_unreachable(plan: &mut FolderCreatePlan, wanted: &[String], refused_dirs
             plan.folders.remove(i);
             plan.dir_to_record_name.shift_remove(&folder_dir);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A name taken on disk that `used` doesn't hold (a file delivered after
+    /// the directory was read) is not replaced: the move takes the next name.
+    #[test]
+    fn a_move_never_replaces_a_file_that_is_not_among_the_used_names() {
+        let dir = std::env::temp_dir().join(format!("icloud-notes-sync-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Alpha")).unwrap();
+        std::fs::create_dir_all(dir.join("Beta")).unwrap();
+        std::fs::write(dir.join("Alpha/Pie.md"), "moving").unwrap();
+        std::fs::write(dir.join("Beta/Pie.md"), "delivered since").unwrap();
+
+        let mut used = HashSet::new();
+        let name = move_to_free_name(&dir, "Alpha/Pie.md", "Beta", "Pie.md", &mut used).unwrap();
+        assert_eq!(name.as_deref(), Some("Pie 2.md"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("Beta/Pie.md")).unwrap(),
+            "delivered since"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("Beta/Pie 2.md")).unwrap(), "moving");
+        assert!(used.contains("Pie.md") && used.contains("Pie 2.md"));
+
+        assert_eq!(
+            move_to_free_name(&dir, "Alpha/Gone.md", "Beta", "Gone.md", &mut used).unwrap(),
+            None
+        );
+        assert!(!used.contains("Gone.md"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

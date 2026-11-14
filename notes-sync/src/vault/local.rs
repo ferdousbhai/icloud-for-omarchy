@@ -56,6 +56,25 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8], keep_permissions: bool)
     written
 }
 
+/// rename(2) that fails with `AlreadyExists` instead of replacing what is
+/// at `to` (a file, a directory, or a symbolic link, dangling or not):
+/// `renameat2(RENAME_NOREPLACE)`, so a file that turns up at `to` after the
+/// caller found the name free (one a file-sync tool delivers, say) is never
+/// lost. On a filesystem without it, a check and then a plain rename.
+pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Err(Errno::INVAL | Errno::NOSYS) => {
+            if std::fs::symlink_metadata(to).is_ok() {
+                return Err(std::io::ErrorKind::AlreadyExists.into());
+            }
+            std::fs::rename(from, to)
+        }
+        result => Ok(result?),
+    }
+}
+
 /// Writes a note file whole or not at all ([`write_atomic`]), so a crash or
 /// a full disk never leaves a truncated note for push to upload. An existing
 /// file keeps its permissions; a symlink keeps pointing where it did, its
