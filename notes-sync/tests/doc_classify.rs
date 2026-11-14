@@ -480,3 +480,41 @@ fn quoted_info(uti: &str) -> AttributeRun {
         ..info(1, Some("T1"), uti)
     }
 }
+
+/// What a note's file can't hold is put back when push reads it: the empty
+/// lines an in-body note starts with (the frontmatter takes the blank lines
+/// after it), and nothing at all for a filename-as-title note that is only
+/// its title (its empty file reads as one empty line). Found by
+/// `roundtrip_property`: an edit dropped the first, and a push of the second
+/// added an empty line to the note.
+#[test]
+fn the_lines_a_note_file_cant_hold_are_put_back() {
+    use icloud_notes_sync::md::parse::parse_note_markdown;
+    for (text, file_body, wanted) in [
+        ("\nHello", "Hello more", "\nHello more"),
+        ("\n\nHello", "Hello", "\n\nHello"),
+        ("\n\n", "", "\n\n"),
+        ("Hello", "Hello", "Hello"),
+        ("\nHello", "\u{20}\nHello", "\nHello"),
+    ] {
+        let note = ok(classify(&titled(text, vec![]), TitleMode::InBody));
+        let read = note.with_unwritten_lines(parse_note_markdown(file_body).unwrap());
+        assert_eq!(read.text, wanted, "{text:?}");
+    }
+    let note = ok(classify(
+        &titled("Just a title", vec![styled(12, 0)]),
+        TitleMode::Filename,
+    ));
+    assert!(
+        note.with_unwritten_lines(parse_note_markdown("").unwrap())
+            .paragraphs
+            .is_empty()
+    );
+    let note = ok(classify(&titled("Title\n", vec![styled(6, 0)]), TitleMode::Filename));
+    assert_eq!(
+        note.with_unwritten_lines(parse_note_markdown("").unwrap())
+            .paragraphs
+            .len(),
+        1
+    );
+}

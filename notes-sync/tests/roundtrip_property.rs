@@ -18,8 +18,7 @@
 //! that doesn't read back as its note counts as (b) when every edit to it
 //! is refused: that is how the held-back cases show up (a table right below
 //! a list item or quote; strikethrough or an emoji next to a letter, which
-//! makes the note read-only). One known (c) is left for the owner and
-//! counted apart ([`starts_with_an_empty_line`]).
+//! makes the note read-only).
 //!
 //! Three suites: `codec_*` (the codec and the Markdown in memory, many
 //! cases), `markdown_*` (generated Markdown, as a new note's file), and
@@ -732,8 +731,6 @@ enum Outcome {
     Refused,
     /// Not a case: what was generated is no note at all.
     Skipped,
-    /// A known (c) left open for the owner (see [`starts_with_an_empty_line`]).
-    Known,
 }
 
 type Checked = Result<Outcome, String>;
@@ -827,9 +824,7 @@ fn untouched_paragraphs_kept(before: &[FormatParagraph], after: &[FormatParagrap
 }
 
 /// Whether Markdown that reads back as `back` holds the note `format`: the
-/// same text, but for trailing whitespace, and the same formatting. A
-/// filename-as-title note that is only its title has an empty file, which
-/// reads back as the title and an empty line.
+/// same text, but for trailing whitespace, and the same formatting.
 fn reads_back_as(format: &[FormatParagraph], back: &ParsedNoteMarkdown) -> bool {
     let trim = |paragraphs: &[FormatParagraph]| -> Vec<FormatParagraph> {
         paragraphs.iter().map(trim_trailing_whitespace).collect()
@@ -842,10 +837,7 @@ fn reads_back_as(format: &[FormatParagraph], back: &ParsedNoteMarkdown) -> bool 
             .join("\n")
     };
     let (note, back) = (trim(format), trim(&back.paragraphs));
-    if text(&note) == text(&back) && formats_round_trip_equal(&note, &back) {
-        return true;
-    }
-    note.len() == 1 && back.len() == 2 && back[1].text.is_empty() && formats_round_trip_equal(&note, &back[..1])
+    text(&note) == text(&back) && formats_round_trip_equal(&note, &back)
 }
 
 /// `parsed` with the title paragraph a filename-as-title note keeps out of
@@ -1089,9 +1081,7 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
     // but the trailing whitespace Markdown can't keep.
     let unedited = edit_document(&doc, &back).map_err(|e| format!("the unedited Markdown is refused: {e}"))?;
     let rewritten = format_of(&unedited);
-    // (A title-only note's empty file reads as the title and an empty line.)
-    let title_only = classified.title_stripped && markdown.is_empty();
-    if !title_only && (rewritten.len() != format.len() || untouched_paragraphs_kept(&format, &rewritten).is_err()) {
+    if rewritten.len() != format.len() || untouched_paragraphs_kept(&format, &rewritten).is_err() {
         return Err(format!(
             "pushing the unedited Markdown {markdown:?} rewrites the note's formatting:\n  before {:?}\n  after  {:?}",
             format, rewritten
@@ -1902,12 +1892,9 @@ fn add_frontmatter(text: &str, rng: &mut Rng, filename_mode: bool) -> String {
 /// 6. a new note's file pushed and cloned afresh ([`check_new_note`]).
 fn check_vault(note: &GenNote, seed: u64) -> Checked {
     let mut rng = Rng(seed ^ 0xfa11);
-    let Some((server, doc)) = zone_for(note, &mut rng) else {
+    let Some((server, _)) = zone_for(note, &mut rng) else {
         return Ok(Outcome::Skipped);
     };
-    if starts_with_an_empty_line(&doc, note.filename_mode) {
-        return Ok(Outcome::Known);
-    }
     let server = Arc::new(server);
     let dir = tempfile::tempdir().unwrap();
     let fm = note.filename_mode;
@@ -2086,31 +2073,16 @@ fn check_new_note(server: &Arc<Server>, vault: &Path, dir: &Path, fm: bool, rng:
             says.paragraphs
         ));
     }
-    if starts_with_an_empty_line(&parse_note_document(&raw_document(server, name)).unwrap(), fm) {
-        return Ok(());
-    }
     let fresh = clone_vault(server, dir, "c", fm)?;
     settle(server, &fresh, name, fm, "the new note's fresh clone")?;
     Ok(())
 }
 
-/// Known and left open: an in-body vault's file body starts after the
-/// frontmatter and every blank line after it (`split_frontmatter`), so a
-/// note that starts with an empty line (as `real_unicode_note.json` does)
-/// is written as a file that reads back without it, unflagged, and an edit
-/// pushed from that file drops it from the note. Writing those lines
-/// holding a space would keep them, but changes that fixture's golden
-/// Markdown; restoring them in push (as a stripped title is) is `cmd/`'s.
-fn starts_with_an_empty_line(doc: &NoteDocument, filename_mode: bool) -> bool {
-    !filename_mode
-        && format_of(doc)
-            .first()
-            .is_some_and(|p| trim_trailing_whitespace(p).text.is_empty())
-        && doc.text.contains('\n')
-}
-
+/// An in-body vault's file body starts after the frontmatter and every
+/// blank line after it, so the empty line a note starts with (as
+/// `real_unicode_note.json` does) isn't in what its file reads as: push
+/// puts it back, as it does a stripped title, and an edit keeps it.
 #[test]
-#[ignore = "known, reported: an in-body note's leading empty lines don't survive its file"]
 fn an_in_body_note_keeps_the_empty_line_it_starts_with_through_an_edit() {
     let note = GenNote {
         paragraphs: vec![

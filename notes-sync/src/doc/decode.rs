@@ -11,6 +11,7 @@ use super::format::{FormatParagraph, ParagraphKind, decode_note_format, trim_tra
 use super::text::decode_note_string;
 use crate::cloudkit::{CloudKitRecord, FieldValue};
 use crate::js::{base64_decode, buffer_to_utf8};
+use crate::md::parse::ParsedNoteMarkdown;
 use crate::md::render::{projection_survives, render_note_markdown};
 use crate::vault::state::TitleMode;
 
@@ -65,6 +66,53 @@ pub struct DecodedNote {
     pub attachments: Vec<AttachmentReference>,
     pub publishable: bool,
     pub unpublishable_reason: Option<String>,
+}
+
+impl DecodedNote {
+    /// `parsed`, what the note's file reads as, with the lines the file
+    /// can't hold put back as the note has them. An in-body vault's file
+    /// body starts after the frontmatter and every blank line after it
+    /// (`split_frontmatter`), so the empty lines a note starts with are in
+    /// the note but never in what its file reads as. A filename-as-title
+    /// note that is only its title has an empty file, which reads as one
+    /// empty line rather than none. (The title of a stripped note is put
+    /// back by the caller.)
+    pub fn with_unwritten_lines(&self, parsed: ParsedNoteMarkdown) -> ParsedNoteMarkdown {
+        let plain_empty =
+            |p: &FormatParagraph| p.text.is_empty() && p.kind == ParagraphKind::Body && p.block_quote_level == 0;
+        if self.title_stripped {
+            let title_only = self.format.as_ref().is_some_and(|f| f.len() == 1);
+            return if title_only && parsed.paragraphs.len() == 1 && plain_empty(&parsed.paragraphs[0]) {
+                ParsedNoteMarkdown::from_paragraphs(Vec::new())
+            } else {
+                parsed
+            };
+        }
+        // Each empty line the Markdown starts with is an empty paragraph
+        // (one in a quote, a list or a heading has its marker).
+        let leading = self
+            .markdown_text
+            .split('\n')
+            .take_while(|line| line.is_empty())
+            .count();
+        let kept = parsed.paragraphs.iter().take_while(|p| plain_empty(p)).count();
+        if leading <= kept {
+            return parsed;
+        }
+        let empty = FormatParagraph {
+            kind: ParagraphKind::Body,
+            indent: 0,
+            block_quote_level: 0,
+            done: None,
+            start_number: 0,
+            text: String::new(),
+            spans: Vec::new(),
+            start: 0,
+        };
+        let mut paragraphs = vec![empty; leading - kept];
+        paragraphs.extend(parsed.paragraphs);
+        ParsedNoteMarkdown::from_paragraphs(paragraphs)
+    }
 }
 
 /// `NoteDecodeResult`.

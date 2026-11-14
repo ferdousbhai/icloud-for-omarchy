@@ -2908,7 +2908,7 @@ pub fn restore_stripped_title(
         if requested_title.is_some() {
             return Err(PrepareRefusal::TitleHasEmbedCannotRetitle);
         }
-        return Ok(parsed);
+        return Ok(classified.with_unwritten_lines(parsed));
     }
     let Some(current) = classified.format.as_ref().and_then(|f| f.first()) else {
         return Err(PrepareRefusal::NoTitleParagraph);
@@ -2917,7 +2917,10 @@ pub fn restore_stripped_title(
         Some(retitle) => title_paragraph_from_filename(&retitle),
         None => current.clone(),
     };
-    Ok(restore_title_paragraph_text(&title, &parsed.paragraphs))
+    Ok(restore_title_paragraph_text(
+        &title,
+        &classified.with_unwritten_lines(parsed).paragraphs,
+    ))
 }
 
 fn note_record_update(record: &CloudKitRecord, entry: &NoteEntry, fields: UpdateFields) -> RecordUpdate {
