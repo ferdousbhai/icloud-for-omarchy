@@ -98,6 +98,47 @@ impl Env {
             .collect()
     }
 
+    /// Starts `background` with the fake holding back the answer to its
+    /// `nth` write (which it applies), and returns once that write is in.
+    fn background_held_at_write(&self, nth: usize) -> std::process::Child {
+        let number = self.sent("records/modify").len() + nth;
+        *self.state.hold_modify.lock().unwrap() = Some(number);
+        let mut child = command_at(&self.base, self.dir.path(), &["background"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // Applied: the record carries a tag newer than the one sent.
+        let written = || {
+            let sent = self.sent("records/modify");
+            let record = &sent.get(number - 1)?["operations"][0]["record"];
+            let stored = self.state.record(record["recordName"].as_str()?)?;
+            (stored["recordChangeTag"] != record["recordChangeTag"]).then_some(())
+        };
+        let mut tries = 0;
+        while written().is_none() && tries < 2000 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            tries += 1;
+        }
+        if written().is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("write {number} never arrived: {:?}", self.ops());
+        }
+        child
+    }
+
+    fn release_writes(&self) {
+        *self.state.hold_modify.lock().unwrap() = None;
+    }
+
+    fn creates(&self) -> usize {
+        self.sent("records/modify")
+            .iter()
+            .filter(|m| m["operations"][0]["operationType"] == "create")
+            .count()
+    }
+
     fn notifications(&self) -> Vec<Vec<String>> {
         let log = std::fs::read_to_string(self.dir.path().join("notifications.log")).unwrap_or_default();
         log.split("---\n")
@@ -111,13 +152,16 @@ impl Env {
 /// a `PATH` of the stand-in notifier alone (Omarchy installs the real one
 /// in /usr/bin, and it must never run here).
 fn run_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
-    command(env!("CARGO_BIN_EXE_icloud-reminders"), base, tmp)
-        .args(args)
+    command_at(base, tmp, args).output().unwrap()
+}
+
+fn command_at(base: &str, tmp: &Path, args: &[&str]) -> std::process::Command {
+    let mut c = command(env!("CARGO_BIN_EXE_icloud-reminders"), base, tmp);
+    c.args(args)
         .env("TZ", "UTC")
         .env("PATH", tmp.join("bin"))
-        .env_remove("OMARCHY_PATH")
-        .output()
-        .unwrap()
+        .env_remove("OMARCHY_PATH");
+    c
 }
 
 fn titles(v: &Value) -> Vec<String> {
@@ -994,4 +1038,131 @@ fn a_file_left_by_a_deleted_list_is_not_taken_by_a_new_list_of_that_name() {
     std::fs::remove_file(&path).unwrap();
     env.json(&["background", "--sync"]);
     assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+}
+
+fn count(titles: &[String], title: &str) -> usize {
+    titles.iter().filter(|t| *t == title).count()
+}
+
+#[test]
+fn a_run_killed_between_writes_does_not_add_twice() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text + "- [ ] Bread\n- [x] Butter 📅 2030-01-02 09:30\n    Salted\n",
+    )
+    .unwrap();
+    // Bread is added; Butter reaches iCloud, and the run is killed before it
+    // hears so.
+    let mut child = env.background_held_at_write(2);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    env.release_writes();
+    assert_eq!(env.creates(), 2);
+
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["added"], 0, "{out}");
+    assert_eq!(env.creates(), 2, "neither is made again");
+    let titles = all_titles(&env, "Groceries");
+    assert_eq!(
+        (count(&titles, "Bread"), count(&titles, "Butter")),
+        (1, 1),
+        "{titles:?}"
+    );
+    // What was left of the line is done: the tick.
+    let butter = env.json(&["show", "butter"]);
+    assert_eq!(
+        (&butter["completed"], &butter["notes"]),
+        (&json!(true), &json!("Salted"))
+    );
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains("- [ ] Bread\n") && after.contains("- [x] Butter 📅 2030-01-02 09:30\n"),
+        "{after}"
+    );
+
+    // A second line of a title is a second reminder all the same.
+    std::fs::write(&path, after + "- [ ] Bread\n").unwrap();
+    assert_eq!(env.json(&["background"])["folder"]["added"], 1);
+    assert_eq!(count(&all_titles(&env, "Groceries"), "Bread"), 2);
+}
+
+#[test]
+fn what_a_conflict_copy_added_is_not_deleted_by_a_file_that_never_held_it() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let copy = dir.join("Groceries.sync-conflict-20261114-093000-ABCDEFG.md");
+    std::fs::write(&copy, "# Groceries\n\n- [x] Eggs\n- [ ] Butter\n").unwrap();
+    // While the copy's lines are sent, the phone's next edit of the file
+    // arrives: the run leaves the file to the next one.
+    let mut child = env.background_held_at_write(2);
+    let edited = text + "- [ ] Tea\n";
+    std::fs::write(&path, &edited).unwrap();
+    env.release_writes();
+    assert!(child.wait().unwrap().success());
+    assert!(!copy.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+
+    let sent = modifies(&env);
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["deleted"], 0, "{out}");
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["edited"].as_i64()),
+        (Some(1), Some(0)),
+        "{out}"
+    );
+    assert_eq!(modifies(&env), sent + 1, "Tea alone");
+    let titles = all_titles(&env, "Groceries");
+    assert_eq!((count(&titles, "Butter"), count(&titles, "Tea")), (1, 1), "{titles:?}");
+    assert_eq!(
+        env.json(&["show", "REM-EGGS"])["completed"],
+        true,
+        "the copy's tick stays"
+    );
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains("- [ ] Butter\n") && after.contains("- [ ] Tea\n"),
+        "{after}"
+    );
+}
+
+#[test]
+fn a_list_that_keeps_failing_does_not_sync_every_minute() {
+    let env = start();
+    let dir = folder(&env);
+    // A conflict copy that cannot be read.
+    std::fs::create_dir(dir.join("Groceries.sync-conflict-20261114-093000-ABCDEFG.md")).unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(out["synced"], true);
+    assert_eq!(out["folder"]["warnings"].as_array().unwrap().len(), 1, "{out}");
+    // Nothing changed since: it waits for the next sync, and the other
+    // lists' files are still kept.
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (&out["synced"], &out["folder"]["warnings"]),
+        (&json!(false), &json!([])),
+        "{out}"
+    );
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(
+        out["folder"]["warnings"].as_array().unwrap().len(),
+        1,
+        "tried again after a sync"
+    );
+    assert_eq!(env.json(&["background"])["synced"], false);
+    // A change to its file is sent at once all the same.
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Bread\n").unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (&out["synced"], &out["folder"]["added"]),
+        (&json!(true), &json!(1)),
+        "{out}"
+    );
 }

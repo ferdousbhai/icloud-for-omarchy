@@ -40,8 +40,19 @@
 //! - Syncthing's conflict copies (`Work.sync-conflict-….md`) are made from an
 //!   older file, so only what cannot undo anything is taken from one: a tick
 //!   on a reminder that is still open, and lines unlike any there is.
-//! - A write that fails stops that list; what was written is recorded, so
-//!   the next run goes on from there instead of adding twice.
+//! - A write that fails stops that list. Each write is recorded in
+//!   `folder.json` as soon as it is made, so the next run goes on from there
+//!   instead of adding twice, also after a run that was killed. A reminder
+//!   that reached iCloud without the run hearing so (killed, or the answer
+//!   lost) is found again: a line to add takes up a reminder of its list
+//!   made in the last [`TAKE_UP_MS`] that reads exactly as it and that no
+//!   line has yet.
+//! - What a conflict copy added is in iCloud before it is in the file. Until
+//!   the file is written with it ([`ListState::unwritten`]), a changed file
+//!   that lacks it does not delete it, and a tick taken from a copy is not
+//!   undone by a file that still shows the box empty.
+//! - A list whose run failed and changed nothing is tried again after the
+//!   next sync or when its file changes, not every minute.
 //! - What a line cannot say (alerts, priority, flags, the due time's zone)
 //!   is never written, so it stays as it is in iCloud.
 
@@ -65,6 +76,10 @@ const DUE_MARK: &str = "📅";
 const UNTITLED: &str = "(untitled)";
 /// Titles at least this alike are one reminder, retitled.
 const ALIKE: f64 = 0.5;
+/// How new a reminder no line has must be for a line that reads exactly as it
+/// to take it up instead of being added: long enough for the run after a
+/// killed one, too short to merge a line with a reminder made on purpose.
+pub const TAKE_UP_MS: i64 = 10 * 60 * 1000;
 
 /// One line of a file, with the indented lines under it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +110,29 @@ pub struct ListState {
     /// file from elsewhere, compared with iCloud as it is, and only adds.
     #[serde(default)]
     pub adopted: bool,
+    /// Reminders among `items` that `text` never held: added from a conflict
+    /// copy, and waiting for the file to be written.
+    #[serde(default)]
+    pub unwritten: Vec<String>,
+    /// Set by a run on this list that failed and changed nothing.
+    #[serde(default)]
+    pub stuck: Option<Stuck>,
+}
+
+/// A list's file and the sync it was read against when its run failed: the
+/// same again would fail the same way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stuck {
+    /// The file's text; `None` when it was missing or unreadable.
+    pub text: Option<String>,
+    pub synced_ms: Option<i64>,
+}
+
+impl ListState {
+    /// Still as it was when its run failed.
+    fn stuck_on(&self, text: &Option<String>) -> bool {
+        self.stuck.as_ref().is_some_and(|s| s.text == *text)
+    }
 }
 
 /// `folder.json` in the data directory: the folder's files. The folder
@@ -559,59 +597,107 @@ pub fn default_dir() -> Option<PathBuf> {
 }
 
 /// Whether a file has something to send: it differs from what was last
-/// written, or has a conflict copy.
-/// A background run syncs with iCloud first when this is so.
+/// written, or has a conflict copy. A background run syncs with iCloud first
+/// when this is so. A file whose run failed is not, until it changes: one bad
+/// list does not make every minute's run a sync.
 pub fn pending(state: &State, dir: &Path) -> bool {
     state.lists.values().any(|ls| {
-        let changed = match read(&dir.join(&ls.file)) {
-            Ok(Some(text)) => text != ls.text,
-            _ => false,
-        };
-        changed || !conflict_copies(dir, &ls.file).is_empty()
+        let text = read(&dir.join(&ls.file)).ok().flatten();
+        !ls.stuck_on(&text) && (text.is_some_and(|text| text != ls.text) || !conflict_copies(dir, &ls.file).is_empty())
     })
 }
 
-/// Writes a delta to iCloud, keeping `base` as the file's items with their
-/// reminders as far as the writes got.
-fn apply(
-    svc: &Service,
-    list: &List,
-    delta: Delta,
-    base: &mut Vec<Known>,
-    now: &Zoned,
-    report: &mut Report,
-) -> Result<()> {
+/// A reminder as its line in a file reads.
+fn as_item(r: &Reminder, now: &Zoned) -> Option<Item> {
+    let mut line = String::new();
+    write_item(&mut line, r, false, now);
+    parse(&line, now).into_iter().next()
+}
+
+/// Records a list's state in `folder.json`.
+type Save<'a> = &'a mut dyn FnMut(&ListState) -> Result<()>;
+
+/// Where a delta is from: the list's file, or a conflict copy of it.
+#[derive(Clone, Copy, PartialEq)]
+enum Source {
+    File,
+    Copy,
+}
+
+/// What a run on one list works with.
+#[derive(Clone, Copy)]
+struct Run<'a, 's> {
+    svc: &'a Service<'s>,
+    list: &'a List,
+    now: &'a Zoned,
+}
+
+/// Writes a delta to iCloud, keeping `ls.items` as the file's items with
+/// their reminders as far as the writes got, saved after each.
+fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut Report, save: Save) -> Result<()> {
+    let Run { svc, list, now } = run;
     // Read once: a change tag gone stale meanwhile is `Service::update`'s
     // conflict to retry.
     let cache = svc.cache()?;
+    let now_ms = now.timestamp().as_millisecond();
     for (id, it, changes) in delta.updates {
-        // Gone in iCloud meanwhile: the line goes with the next write.
-        if let Some(r) = cache.reminders.get(&id) {
+        // Gone in iCloud meanwhile: the line goes with the next write. A
+        // copy's tick already given (by a run that then failed) is not
+        // given again.
+        if let Some(r) = cache
+            .reminders
+            .get(&id)
+            .filter(|r| from == Source::File || !r.completed)
+        {
             if let Some(w) = svc.update(r, &changes)?.warning {
                 report.warnings.push(w);
             }
             report.edited += 1;
         }
-        if let Some(k) = base.iter_mut().find(|k| k.id == id) {
+        // A copy's tick is not the file's: the item stays as the file has
+        // it, so the file is not read as unticking it.
+        if from == Source::File
+            && let Some(k) = ls.items.iter_mut().find(|k| k.id == id)
+        {
             k.item = it;
+            save(ls)?;
         }
     }
     for it in delta.adds {
-        let when = it.due.as_deref().and_then(|d| due::parse_when(d, now).ok());
-        let saved = svc.add(&list.id, &it.title, &it.notes, when.as_ref())?;
-        report.warnings.extend(saved.warning);
-        report.added += 1;
+        // Made by a run that never heard so: taken up, not made again.
+        let lost = cache.reminders.values().find(|r| {
+            r.list_id == list.id
+                && (it.done || !r.completed)
+                && r.created_ms.is_some_and(|ms| now_ms - ms < TAKE_UP_MS)
+                && !ls.items.iter().any(|k| k.id == r.id)
+                && as_item(r, now).is_some_and(|i| i.title == it.title && i.due == it.due && i.notes == it.notes)
+        });
+        let made = match lost {
+            Some(r) => r.clone(),
+            None => {
+                let when = it.due.as_deref().and_then(|d| due::parse_when(d, now).ok());
+                let saved = svc.add(&list.id, &it.title, &it.notes, when.as_ref())?;
+                report.warnings.extend(saved.warning);
+                report.added += 1;
+                saved.value
+            }
+        };
         // Known from here on, so a failure below does not add it again.
-        base.push(Known {
-            id: saved.value.id.clone(),
+        ls.items.push(Known {
+            id: made.id.clone(),
             item: Item {
-                done: false,
+                done: made.completed,
                 ..it.clone()
             },
         });
-        if it.done {
-            svc.update(&saved.value, &[Change::Completed(true)])?;
-            base.last_mut().expect("just pushed").item.done = true;
+        if from == Source::Copy {
+            ls.unwritten.push(made.id.clone());
+        }
+        save(ls)?;
+        if it.done && !made.completed {
+            svc.update(&made, &[Change::Completed(true)])?;
+            ls.items.last_mut().expect("just pushed").item.done = true;
+            save(ls)?;
         }
     }
     for id in delta.deletes {
@@ -619,35 +705,41 @@ fn apply(
             svc.update(r, &[Change::Deleted])?;
             report.deleted += 1;
         }
-        base.retain(|k| k.id != id);
+        ls.items.retain(|k| k.id != id);
+        save(ls)?;
     }
     Ok(())
 }
 
 /// One list: the file's changes to iCloud, then iCloud's state to the file.
-fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, report: &mut Report) -> Result<()> {
+fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save) -> Result<()> {
+    let Run { svc, list, now } = run;
     let path = dir.join(&ls.file);
     let on_disk = read(&path)?;
     // Not ours yet: a file already there (from another computer, or from
     // before the data directory was cleared) is compared with iCloud as it is, and only adds.
     let first = !ls.adopted;
-    let mut base = if first {
+    if first {
         let (text, ids) = render(list, &svc.cache()?, now);
-        known(&text, ids, now).map_err(Error::Other)?
-    } else {
-        ls.items.clone()
-    };
+        ls.items = known(&text, ids, now).map_err(Error::Other)?;
+        ls.unwritten.clear();
+    }
 
-    let changed = on_disk.as_ref().filter(|text| **text != ls.text);
-    if let Some(text) = changed {
-        let mut delta = diff(&base, &parse(text, now), now);
+    // What the file holds is recorded as the writes are made: the next run
+    // compares against that, so a write that failed is tried again and one
+    // that worked is not.
+    if let Some(text) = on_disk.as_ref().filter(|text| **text != ls.text) {
+        let mut delta = diff(&ls.items, &parse(text, now), now);
         if first {
             // Nobody knows how old it is: what it lacks is not removed, and
             // a line that differs from its reminder does not change it.
             delta.deletes.clear();
             delta.updates.clear();
         }
-        if risky(&delta, base.len()) {
+        // A conflict copy's, which the file has yet to be written with: not
+        // lines removed from it.
+        delta.deletes.retain(|id| !ls.unwritten.contains(id));
+        if risky(&delta, ls.items.len()) {
             // Too much of the list to take from a file: the lines are
             // written back below, with the rest of what it asks applied.
             report.restored.push(Restored {
@@ -657,25 +749,17 @@ fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, 
             });
             delta.deletes.clear();
         }
-        let applied = apply(svc, list, delta, &mut base, now, report);
-        // What the file holds, with the reminders made so far: the next run
-        // compares against this, so a write that failed is tried again and
-        // one that worked is not.
-        ls.items = base.clone();
-        if applied.is_ok() {
-            ls.text = text.clone();
-        }
-        applied?;
+        apply(run, delta, Source::File, ls, report, save)?;
+        ls.text = text.clone();
+        save(ls)?;
     }
 
     for copy in conflict_copies(dir, &ls.file) {
         let Some(text) = read(&copy)? else {
             continue;
         };
-        let delta = from_conflict_copy(&base, &parse(&text, now));
-        let applied = apply(svc, list, delta, &mut base, now, report);
-        ls.items = base.clone();
-        applied?;
+        let delta = from_conflict_copy(&ls.items, &parse(&text, now));
+        apply(run, delta, Source::Copy, ls, report, save)?;
         fs::remove_file(&copy)?;
     }
 
@@ -697,13 +781,15 @@ fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, 
     }
     ls.text = text;
     ls.items = items;
+    ls.unwritten.clear();
     ls.adopted = true;
     Ok(())
 }
 
 /// Brings the folder and iCloud in step. The cache must be fresh (the
 /// caller syncs first): what it holds is taken as iCloud's state. One list's failure is a warning
-/// and does not stop the others.
+/// and does not stop the others. `state` is saved after each write to iCloud;
+/// the caller saves it once more when this returns.
 pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result<Report> {
     let mut report = Report::default();
     let cache = svc.cache()?;
@@ -745,7 +831,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             .chain(state.left.iter().cloned())
             .collect();
         let wanted = free_name(&file_stem(&list.name), &others);
-        let ls = state.lists.entry(list.id.clone()).or_default();
+        let mut ls = state.lists.get(&list.id).cloned().unwrap_or_default();
         if ls.file.is_empty() {
             ls.file = wanted;
         } else if ls.file != wanted {
@@ -765,9 +851,28 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                 ls.file = wanted;
             }
         }
-        if let Err(e) = one(svc, dir, list, ls, now, &mut report) {
-            report.warnings.push(format!("{}: {e}", ls.file));
+        // Failed on this file and this sync, and neither is new: not again.
+        let waits = ls.stuck.as_ref().is_some_and(|s| s.synced_ms == cache.synced_ms)
+            && ls.stuck_on(&read(&dir.join(&ls.file)).ok().flatten());
+        if !waits {
+            let before = (ls.items.clone(), ls.text.clone());
+            let result = one(Run { svc, list, now }, dir, &mut ls, &mut report, &mut |ls| {
+                state.lists.insert(list.id.clone(), ls.clone());
+                Ok(svc.store.save_folder(state)?)
+            });
+            ls.stuck = match result {
+                Ok(()) => None,
+                Err(e) => {
+                    report.warnings.push(format!("{}: {e}", ls.file));
+                    // One that got somewhere is tried again the next minute.
+                    (before == (ls.items.clone(), ls.text.clone())).then(|| Stuck {
+                        text: read(&dir.join(&ls.file)).ok().flatten(),
+                        synced_ms: cache.synced_ms,
+                    })
+                }
+            };
         }
+        state.lists.insert(list.id.clone(), ls);
     }
     Ok(report)
 }

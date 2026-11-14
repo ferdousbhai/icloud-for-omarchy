@@ -41,6 +41,10 @@ pub struct State {
     pub signed_out: Mutex<bool>,
     /// Records per changes/zone page (0: as many as asked for).
     pub page: Mutex<usize>,
+    /// The records/modify with this number (the first is 1) is applied and
+    /// then not answered while this stays set: a write whose answer is late
+    /// or lost.
+    pub hold_modify: Mutex<Option<usize>>,
 }
 
 fn doc(text: &str) -> Value {
@@ -305,7 +309,14 @@ impl State {
         match op {
             "changes/zone" => (200, self.changes(sent)),
             "records/lookup" => (200, self.lookup(sent)),
-            "records/modify" => (200, self.modify(sent)),
+            "records/modify" => {
+                let number = self.requests().iter().filter(|r| r["op"] == "records/modify").count();
+                let reply = self.modify(sent);
+                while *self.hold_modify.lock().unwrap() == Some(number) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                (200, reply)
+            }
             _ => (404, json!({ "error": "not found" })),
         }
     }
