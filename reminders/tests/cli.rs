@@ -1230,3 +1230,17 @@ fn a_renamed_list_s_file_keeps_its_new_name_after_a_run_killed_later() {
         ]
     );
 }
+
+#[test]
+fn a_conflict_copy_does_not_tick_again_what_the_file_unticked() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Reminders.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    // The copy is the file as it was; the file reopens Buy paint.
+    std::fs::write(dir.join("Reminders.sync-conflict-20261114-093000-ABCDEFG.md"), &text).unwrap();
+    std::fs::write(&path, text.replace("- [x] Buy paint", "- [ ] Buy paint")).unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["edited"], 1, "{out}");
+    assert_eq!(env.json(&["show", "REM-PAINT"])["completed"], false);
+}

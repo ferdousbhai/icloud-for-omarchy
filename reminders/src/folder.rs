@@ -741,6 +741,24 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         ls.unwritten.clear();
     }
 
+    // Before the file: a copy is compared with the file as last written, so
+    // a box it shows ticked that the file has just unticked is not news.
+    let mut unreadable = None;
+    for copy in conflict_copies(dir, &ls.file) {
+        let text = match read(&copy) {
+            Ok(Some(text)) => text,
+            Ok(None) => continue,
+            // The run fails once the file's own changes are in.
+            Err(e) => {
+                unreadable.get_or_insert(e);
+                continue;
+            }
+        };
+        let delta = from_conflict_copy(&ls.items, &parse(&text, now));
+        apply(run, delta, Source::Copy, ls, report, save)?;
+        fs::remove_file(&copy)?;
+    }
+
     // What the file holds is recorded as the writes are made: the next run
     // compares against that, so a write that failed is tried again and one
     // that worked is not.
@@ -769,14 +787,8 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         ls.text = text.clone();
         save(ls)?;
     }
-
-    for copy in conflict_copies(dir, &ls.file) {
-        let Some(text) = read(&copy)? else {
-            continue;
-        };
-        let delta = from_conflict_copy(&ls.items, &parse(&text, now));
-        apply(run, delta, Source::Copy, ls, report, save)?;
-        fs::remove_file(&copy)?;
+    if let Some(e) = unreadable {
+        return Err(e.into());
     }
 
     let cache = svc.cache()?;
