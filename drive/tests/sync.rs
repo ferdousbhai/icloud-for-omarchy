@@ -1002,3 +1002,28 @@ fn a_file_that_goes_while_its_stale_replace_is_refused_is_one_files_problem() {
     assert_eq!(outcome.problems.len(), 1, "{:?}", outcome.problems);
     assert_eq!(bed.cloud.text("other.txt").as_deref(), Some("unrelated"));
 }
+
+#[test]
+fn a_file_renamed_and_edited_in_icloud_arrives_with_its_edit() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    bed.cloud.rename_item(&a.id, "b.txt");
+    bed.cloud.edit(&a.id, "two from icloud", bed.time());
+    bed.settle();
+    assert_eq!(bed.read("b.txt").as_deref(), Some("two from icloud"));
+    assert_eq!(bed.local_paths(), ["b.txt"]);
+}
+
+#[test]
+fn a_file_renamed_here_and_edited_in_icloud_gets_the_edit() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("b.txt")).unwrap();
+    bed.cloud.edit(&a.id, "two from icloud", bed.time());
+    bed.settle();
+    assert_eq!(bed.read("b.txt").as_deref(), Some("two from icloud"));
+    assert_eq!(bed.cloud.id_at("b.txt").as_deref(), Some(a.id.as_str()));
+    assert_eq!(bed.local_paths(), ["b.txt"]);
+}

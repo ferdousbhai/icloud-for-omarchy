@@ -430,6 +430,19 @@ impl<R: Remote> Engine<'_, R> {
         })?)
     }
 
+    /// Records a moved item at `to`: named and placed as iCloud has it
+    /// now, with the content both sides were in step with before the move
+    /// (the size and date in iCloud, the stamp here), so an edit made on
+    /// either side since still shows as one in the next round.
+    fn put_moved(&self, node: Node, to: &str, row: &Row) -> Result<()> {
+        let node = Node {
+            size: row.node.size,
+            mtime_ms: row.node.mtime_ms,
+            ..node
+        };
+        self.put(node, to, row.local)
+    }
+
     /// The folder in iCloud that holds `path`, once it is in step.
     fn parent_node(&self, path: &str) -> Result<Node> {
         let parent = parent_of(path);
@@ -491,7 +504,7 @@ impl<R: Remote> Engine<'_, R> {
                     }
                 }
                 self.state.move_paths(&row.path, to)?;
-                self.put(node, to, row.local)?;
+                self.put_moved(node, to, &row)?;
                 self.state.clear_pending_move(id)?;
             }
             Op::RemoteMove { id, to } => {
@@ -515,10 +528,7 @@ impl<R: Remote> Engine<'_, R> {
                     node = self.remote.rename(&node, name_of(to))?;
                 }
                 self.state.move_paths(&row.path, to)?;
-                // It keeps the stamp it was in step with (the planner found
-                // it by that stamp and its inode), so an edit made since
-                // still shows as one.
-                self.put(node, to, row.local)?;
+                self.put_moved(node, to, &row)?;
                 self.state.clear_pending_move(id)?;
             }
             Op::SetAside { path } => {
