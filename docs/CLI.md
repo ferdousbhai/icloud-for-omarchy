@@ -525,7 +525,8 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
   folder, `~/Pictures/<year>/<month>/` unless changed with `config`.
   `--out DIR` exports them to `DIR/<year>/<month>/` instead: copied from the
   library when already downloaded, never replacing a file there, and not
-  recorded as the library's copy (`local_path` stays the library's).
+  recorded as the library's copy (`local_path` stays the library's). `DIR`
+  being the library folder itself is a plain download.
   `--medium` fetches the viewer's preview instead.
 - `thumb` fetches iCloud's thumbnail into the cache (and copies it to
   `--out PATH`). `open` downloads the original if needed (or, with

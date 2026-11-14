@@ -453,6 +453,22 @@ fn thumb_and_download() {
 }
 
 #[test]
+fn out_naming_the_library_folder_is_a_plain_download() {
+    let env = Env::synced("out-library", 3);
+    let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
+    // Not an export: the file is the library's copy, so the catalog records
+    // it and a later download does not save a second one beside it.
+    let library = env.data().join("library");
+    let spelled = format!("{}/.", library.display());
+    let r = env.json(&["download", &photo, "--out", &spelled]);
+    let path = r[0]["path"].as_str().unwrap().to_owned();
+    assert!(Path::new(&path).starts_with(&library), "{path}");
+    assert_eq!(env.json(&["info", &photo])["local_path"], path.as_str());
+    assert_eq!(env.json(&["download", &photo])[0]["path"], path.as_str());
+    assert_eq!(env.json(&["status"])["downloaded"], 1);
+}
+
+#[test]
 fn a_png_with_no_preview_keeps_its_name_as_a_medium_download() {
     let env = Env::synced("medium-png", 4);
     let shot = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);

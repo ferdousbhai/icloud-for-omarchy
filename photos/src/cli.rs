@@ -146,7 +146,8 @@ enum Command {
         medium: bool,
         /// Export originals to DIR/<year>/<month>/ instead of the library
         /// folder (copied from the library when already downloaded; nothing
-        /// there is replaced, and the catalog keeps the library's paths);
+        /// there is replaced, and the catalog keeps the library's paths; DIR
+        /// being the library folder is a plain download);
         /// with --medium, copy the preview to DIR.
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
@@ -335,8 +336,11 @@ impl Ctx {
     }
 
     /// The library folder, or with `out` that folder as an export
-    /// (`download --out`), which the catalog does not record.
+    /// (`download --out`), which the catalog does not record. `out` naming
+    /// the library folder itself is no export: the file is the library's.
     fn targets(&self, out: Option<&Path>) -> Targets {
+        let real = |p: &Path| std::fs::canonicalize(p).or_else(|_| std::path::absolute(p)).ok();
+        let out = out.filter(|dir| real(dir).is_none_or(|dir| Some(dir) != real(&self.settings.library_dir)));
         Targets {
             dirs: self.dirs.clone(),
             library: out.map_or_else(|| self.settings.library_dir.clone(), Path::to_path_buf),
