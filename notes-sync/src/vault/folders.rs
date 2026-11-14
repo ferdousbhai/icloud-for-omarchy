@@ -6,7 +6,7 @@ use std::path::Path;
 
 use indexmap::{IndexMap, IndexSet};
 
-use super::base::{read_base_copy, write_base_copy};
+use super::base::{read_base_copy, read_sent_copy, replace_base_copy, write_sent_copy};
 use super::layout::{
     RESERVED_SIBLING_DIR_NAMES, RESERVED_TOP_LEVEL_DIR_NAMES, StateDirInfo, VaultLayout, expected_note_dir, note_dir_of,
 };
@@ -157,7 +157,7 @@ pub fn reconcile_note_placements(
                 &to_attachments,
                 &old_base,
                 used_names_for(&mut claimed_attachment_names, to_dir),
-                &mut links_follow(target_dir, &to_file, record_name, &old_base),
+                &mut links_follow(target_dir, &to_file, record_name, &old_base, attachments)?,
             )?
             else {
                 continue;
@@ -205,7 +205,7 @@ pub fn relocate_note_attachments(
             &to_attachments,
             &old_base,
             &mut used,
-            &mut links_follow(target_dir, note_file, record_name, &old_base),
+            &mut links_follow(target_dir, note_file, record_name, &old_base, attachments)?,
         )?
         else {
             continue;
@@ -247,21 +247,46 @@ fn already_moved(
 
 /// For [`move_to_free_name`]: the links to an attachment file in
 /// `note_file` and its base copy follow each name the file is about to get,
-/// so that a run cut short after the move finds the file by its link.
+/// so that a run cut short after the move finds the file by its link. They
+/// follow from the name the file links now: its own, or, when a run cut
+/// short before the move left them on a free name (`name 2.ext`) that is
+/// taken since, that one (none of the note's other attachments' names).
 fn links_follow<'a>(
     target_dir: &'a Path,
     note_file: &'a str,
     record_name: &'a str,
     old_base: &str,
-) -> impl FnMut(&str) -> Result<(), Error> + 'a {
-    let mut linked_as = old_base.to_owned();
-    move |name: &str| {
-        if name != linked_as {
-            rewrite_attachment_link(target_dir, note_file, record_name, &linked_as, name)?;
-            linked_as = name.to_owned();
+    attachments: &IndexMap<String, AttachmentEntry>,
+) -> Result<impl FnMut(&str) -> Result<(), Error> + 'a, Error> {
+    let text = read_text(&target_dir.join(note_file))?.unwrap_or_default();
+    let links = |name: &str| has_attachment_link_to(&text, &format!("attachments/{name}"));
+    let mut linked_as = vec![old_base.to_owned()];
+    if !links(old_base) {
+        let siblings: HashSet<&str> = attachments
+            .values()
+            .filter(|a| a.note_record_name == record_name)
+            .map(|a| posix::basename(&a.file))
+            .collect();
+        let mut names = HashSet::from([old_base.to_owned()]);
+        for _ in 0..100 {
+            let name = unique_file_name(old_base, &names);
+            if links(&name) && !siblings.contains(name.as_str()) {
+                // The base copy may still link the old name.
+                linked_as.push(name);
+                break;
+            }
+            names.insert(name);
+        }
+    }
+    Ok(move |name: &str| {
+        if linked_as.iter().any(|from| from != name) {
+            for from in linked_as.iter().filter(|from| *from != name) {
+                rewrite_attachment_link(target_dir, note_file, record_name, from, name)?;
+            }
+            linked_as = vec![name.to_owned()];
         }
         Ok(())
-    }
+    })
 }
 
 /// `removeStaleDirs`: best-effort rmdir of directories the previous layout
@@ -319,8 +344,14 @@ fn rewrite_attachment_link(
     if let Some(content) = read_text(&note_path)? {
         write_note_file(&note_path, &rewrite(&content))?;
     }
+    // The base copy, and the text a push cut short sent (which iCloud may
+    // have, and now reads with the new link): rewritten as they are, the
+    // sent copy kept.
     if let Some(base) = read_base_copy(target_dir, record_name)? {
-        write_base_copy(target_dir, record_name, &rewrite(&base))?;
+        replace_base_copy(target_dir, record_name, &rewrite(&base))?;
+    }
+    if let Some(sent) = read_sent_copy(target_dir, record_name)? {
+        write_sent_copy(target_dir, record_name, &rewrite(&sent))?;
     }
     Ok(())
 }
@@ -473,6 +504,7 @@ fn drop_unreachable(plan: &mut FolderCreatePlan, wanted: &[String], refused_dirs
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// A name taken on disk that `used` doesn't hold (a file delivered after
     /// the directory was read) is not replaced: the move takes the next name.
@@ -500,6 +532,87 @@ mod tests {
             None
         );
         assert!(!used.contains("Gone.md"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const NOTE: &str = "a1b2c3d4-0000-4000-8000-000000000001";
+
+    /// A vault with the note moved here to `Beta/Pie.md` (linking `link`, its
+    /// base copy linking `base_link`) and its photo tracked at
+    /// `Alpha/attachments/x.png`, with `taken` files in `Beta/attachments/`.
+    fn moved_note(
+        name: &str,
+        link: &str,
+        base_link: &str,
+        taken: &[&str],
+    ) -> (PathBuf, IndexMap<String, AttachmentEntry>) {
+        let dir = std::env::temp_dir().join(format!("icloud-notes-sync-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Alpha/attachments")).unwrap();
+        std::fs::create_dir_all(dir.join("Beta/attachments")).unwrap();
+        std::fs::write(dir.join("Alpha/attachments/x.png"), "the photo").unwrap();
+        for file in taken {
+            std::fs::write(dir.join("Beta/attachments").join(file), "another file").unwrap();
+        }
+        let text = |link: &str| format!("Pie\n![x.png](attachments/{})\n", link.replace(' ', "%20"));
+        std::fs::write(
+            dir.join("Beta/Pie.md"),
+            format!("---\napple-note-id: {NOTE}\n---\n{}", text(link)),
+        )
+        .unwrap();
+        super::super::base::write_base_copy(&dir, NOTE, &text(base_link)).unwrap();
+        let mut attachments = IndexMap::new();
+        attachments.insert(
+            "ATT".to_owned(),
+            AttachmentEntry {
+                file: "Alpha/attachments/x.png".into(),
+                media_record_name: "MEDIA".into(),
+                media_file_checksum: "ck".into(),
+                note_record_name: NOTE.into(),
+            },
+        );
+        (dir, attachments)
+    }
+
+    /// A move to a free name keeps the text a push cut short sent for the
+    /// note (`.sent`), its link following the file like the base copy's.
+    #[test]
+    fn a_free_name_keeps_the_sent_copy_with_its_link_following() {
+        let (dir, mut attachments) = moved_note("sent", "x.png", "x.png", &["x.png"]);
+        let sent = "Pie\n![x.png](attachments/x.png)\nsent\n";
+        super::super::base::write_sent_copy(&dir, NOTE, sent).unwrap();
+        relocate_note_attachments(&dir, NOTE, "Beta/Pie.md", &mut attachments).unwrap();
+        assert_eq!(attachments["ATT"].file, "Beta/attachments/x 2.png");
+        let sent = super::super::base::read_sent_copy(&dir, NOTE)
+            .unwrap()
+            .expect("the sent copy is kept");
+        assert!(sent.contains("](attachments/x%202.png)"), "{sent}");
+        assert!(sent.ends_with("sent\n"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A run cut short after the links followed `x 2.png` and before the
+    /// file moved, with `x 2.png` taken there since: the file gets `x 3.png`
+    /// and the links (in the file, and the base copy still on `x.png`)
+    /// follow it from where each is.
+    #[test]
+    fn links_left_on_a_free_name_taken_since_follow_the_next_one() {
+        let (dir, mut attachments) = moved_note("taken-since", "x 2.png", "x.png", &["x.png", "x 2.png"]);
+        relocate_note_attachments(&dir, NOTE, "Beta/Pie.md", &mut attachments).unwrap();
+        assert_eq!(attachments["ATT"].file, "Beta/attachments/x 3.png");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("Beta/attachments/x 3.png")).unwrap(),
+            "the photo"
+        );
+        let text = std::fs::read_to_string(dir.join("Beta/Pie.md")).unwrap();
+        let base = super::super::base::read_base_copy(&dir, NOTE).unwrap().unwrap();
+        for read in [&text, &base] {
+            assert!(read.contains("](attachments/x%203.png)"), "{read}");
+            assert!(
+                !read.contains("](attachments/x%202.png)") && !read.contains("](attachments/x.png)"),
+                "{read}"
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

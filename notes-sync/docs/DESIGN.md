@@ -481,7 +481,10 @@ for more than text edits). The engine:
   not replaced either. The links (in the file and the base copy) follow
   before the attachment file moves, so a pull cut short after the move
   finds the file by the name the note links; up to 0.11.1 the next pull
-  took the other file of the old name for the attachment.
+  took the other file of the old name for the attachment. A run cut short
+  between the two, the free name taken since, has the links follow the
+  next free name from the one they hold. A push's sent copy
+  (`base/.<recordName>.sent`, below) is kept, its links following too.
 
 - A folder directory deleted or renamed here stays so through a pull
   that runs before the push (`pull::folder_dirs_deleted_here`): the pull
@@ -550,7 +553,10 @@ for this account (`cmd::pull::handle_remote_deletion`):
   untracked file that carries the note's id: where the note was renamed or
   moved to here without a push since. Up to 0.11.1 such a renamed file was
   left, with an id nothing tracked, and the next push created it: a note
-  deleted on the phone came back as a new one.
+  deleted on the phone came back as a new one. Its attachments are taken
+  from beside that file (when the files carrying its id are all in one
+  directory, its folder's directory renamed here, say), so they go with it
+  rather than stay there tracked by nothing.
 - A file with edits made here is kept and no longer tracked. Of a deleted
   note it loses its `apple-note-id` and the next push creates it as a new
   note, edits and all (as before).

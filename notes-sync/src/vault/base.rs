@@ -23,13 +23,20 @@ pub fn read_base_copy(target_dir: &Path, record_name: &str) -> Result<Option<Str
 /// `writeBaseCopy`, whole or not at all: a truncated base would be a wrong
 /// ancestor for the next merge.
 pub fn write_base_copy(target_dir: &Path, record_name: &str, content: &str) -> Result<(), Error> {
+    replace_base_copy(target_dir, record_name, content)?;
+    remove_sent_copy(target_dir, record_name)
+}
+
+/// The base copy rewritten as something it already stands for (its links
+/// following a renamed attachment file): a push's sent copy is kept.
+pub(crate) fn replace_base_copy(target_dir: &Path, record_name: &str, content: &str) -> Result<(), Error> {
     let path = base_copy_path(target_dir, record_name)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     super::local::write_atomic(&path, content.as_bytes(), false)?;
     crate::crash::point(crate::crash::BASE_COPY);
-    remove_sent_copy(target_dir, record_name)
+    Ok(())
 }
 
 fn remove_sent_copy(target_dir: &Path, record_name: &str) -> Result<(), Error> {
