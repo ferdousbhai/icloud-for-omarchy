@@ -104,6 +104,22 @@ pub(crate) fn skipped_note_notice(record_name: &str, shared_zone_owner: Option<&
     }
 }
 
+/// The warning for a note clone or pull leaves as it is this run because
+/// iCloud answered an error (`failure`: the record, the error's code) when
+/// asked for one of its attachment records
+/// (`AttachmentRecords::lookup_failure`). `note` is its file, or its title
+/// when it has none yet.
+pub(crate) fn attachment_lookup_notice(note: &str, failure: &(String, String)) -> SyncNotice {
+    let (record_name, code) = failure;
+    SyncNotice {
+        level: NoticeLevel::Warn,
+        message: format!(
+            "{note}: iCloud answered {code} when asked for its attachment record {record_name} - the note and its \
+             attachments were left as they are this run, and the next pull tries again"
+        ),
+    }
+}
+
 /// [`skipped_note_notice`]'s `why` for a record name that can't name a file.
 pub(crate) const UNSAFE_RECORD_NAME: &str = "its record name isn't one plain file name";
 

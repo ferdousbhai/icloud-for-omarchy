@@ -11,7 +11,8 @@ use super::push::is_sync_conflict_name;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
     Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
-    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, used_names_for, zone_for_owner,
+    attachment_lookup_notice, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, used_names_for,
+    zone_for_owner,
 };
 use crate::cloudkit::CloudKitRecord;
 use crate::cloudkit::client::DownloadQueue;
@@ -158,6 +159,10 @@ pub fn run_clone_with(
     // which a failure may have left undone.
     let mut failure: Option<Error> = None;
     let mut downloading: Vec<String> = Vec::new();
+    // Zones (by shared-zone owner; `None` is the private one) with a note
+    // not written because an attachment record could not be looked up: no
+    // sync token is saved for them, so the first pull lists it again.
+    let mut retry_zones: HashSet<Option<String>> = HashSet::new();
     'records: for (records, shared_zone_owner) in &sources {
         let owner = shared_zone_owner.as_deref().filter(|o| !o.is_empty());
         for record in records.iter() {
@@ -194,6 +199,14 @@ pub fn run_clone_with(
                     }
                     NoteDecodeResult::Ok(decoded) => decoded,
                 };
+                if let Some(failure) =
+                    attachment_records.lookup_failure(db, &zone_for_owner(owner), &decoded.embed_slots)?
+                {
+                    let note = format!("The note {:?}", decoded.title_line);
+                    summary.notices.push(attachment_lookup_notice(&note, &failure));
+                    retry_zones.insert(shared_zone_owner.clone());
+                    return Ok(());
+                }
                 let placement = place_note(&layout, record, shared_zone_owner.as_deref());
 
                 let mut body_text = decoded.markdown_text.clone();
@@ -313,6 +326,7 @@ pub fn run_clone_with(
         }
     }
     let failed = failure.is_some();
+    let shared_held = failed || retry_zones.iter().any(Option::is_some);
     // Nothing written, nothing to record: the directory is not a clone yet.
     if failed && notes.is_empty() {
         return Err(failure.expect("failed"));
@@ -323,17 +337,17 @@ pub fn run_clone_with(
         title_mode: Some(title_mode),
         // Held back, or not all written: no token, so the first pull walks
         // from scratch and sees them.
-        sync_token: if held_back.is_empty() && !failed {
+        sync_token: if held_back.is_empty() && !failed && !retry_zones.contains(&None) {
             changes.sync_token.clone()
         } else {
             None
         },
-        shared_zone_sync_tokens: Some(if failed {
+        shared_zone_sync_tokens: Some(if shared_held {
             IndexMap::new()
         } else {
             shared_zone_sync_tokens
         }),
-        shared_database: if failed { None } else { shared.cursor.clone() },
+        shared_database: if shared_held { None } else { shared.cursor.clone() },
         notes,
         folders: Some(layout.state_folders),
         sharer_homes: Some(layout.state_sharer_homes),

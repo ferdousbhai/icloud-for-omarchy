@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, is_purged,
-    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner, used_names_for,
-    zone_for_owner,
+    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
+    attachment_lookup_notice, is_purged, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice,
+    skipped_zone_owner, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -329,6 +329,10 @@ pub fn run_pull_with(
     // ([`checkpoint_state`]), while the layout leaves every note where it is.
     let mut failure: Option<Error> = None;
     let mut downloading: Vec<String> = Vec::new();
+    // Zones (by shared-zone owner; `None` is the private one) with a note
+    // left alone because an attachment record could not be looked up: their
+    // sync tokens stay where they were, so the next pull lists it again.
+    let mut retry_zones: HashSet<Option<String>> = HashSet::new();
     let notes_at_start = tracked.notes.clone();
     let checkpoints = layout_moves_nothing(&state, &layout, &tracked.notes);
     let mut notes_seen = 0usize;
@@ -434,6 +438,15 @@ pub fn run_pull_with(
                     }
                     NoteDecodeResult::Ok(decoded) => decoded,
                 };
+                let zone = zone_for_owner(source.shared_zone_owner.as_deref());
+                if let Some(failure) = attachment_records.lookup_failure(db, &zone, &decoded.embed_slots)? {
+                    let note = existing
+                        .as_ref()
+                        .map_or_else(|| format!("The new note {:?}", decoded.title_line), |e| e.file.clone());
+                    summary.notices.push(attachment_lookup_notice(&note, &failure));
+                    retry_zones.insert(source.shared_zone_owner.clone());
+                    return Ok(());
+                }
 
                 let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
                 let title_remarks: Vec<PullChangeRemark> = match &recorded_title {
@@ -789,21 +802,23 @@ pub fn run_pull_with(
     remove_stale_dirs(target_dir, &previous_layout_dirs(PreviousLayout::of(&state)), &current);
 
     let failed = failure.is_some();
+    // A shared zone is listed again only from the old listing cursor.
+    let shared_held = failed || retry_zones.iter().any(Option::is_some);
     let new_state = CloneState {
         account: state.account.clone(),
         // Held back, or not all applied: the next pull walks from the old
         // token and sees them again.
-        sync_token: if held_back.is_empty() && !failed {
+        sync_token: if held_back.is_empty() && !failed && !retry_zones.contains(&None) {
             changes.sync_token.clone()
         } else {
             state.sync_token.clone()
         },
-        shared_zone_sync_tokens: if failed {
+        shared_zone_sync_tokens: if shared_held {
             state.shared_zone_sync_tokens.clone()
         } else {
             Some(shared_zone_sync_tokens)
         },
-        shared_database: if failed {
+        shared_database: if shared_held {
             state.shared_database.clone()
         } else {
             shared.cursor.clone()

@@ -12,6 +12,7 @@ use icloud_notes_sync::cmd::push::build_push_plan;
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
 use icloud_notes_sync::vault::state::{Account, read_clone_state};
+use serde_json::json;
 
 /// The attach cassette's notes: one with an audio attachment, then one with
 /// an image (listed in that order).
@@ -126,6 +127,132 @@ fn a_note_written_before_the_pull_failed_stays_tracked() {
         files
     };
     assert_eq!(notes_under(&vault), tracked);
+}
+
+/// The image note's Attachment record.
+const IMAGE_ATTACHMENT: &str = "7ED80274-4400-4C02-87EA-F542F056FF02";
+
+/// attach-clone's answers as a later pull's: the listing ends at the sync
+/// token "NEXT" and has the image note at `image_tag`; with `failing`, the
+/// lookup answers an error for that note's Attachment record.
+fn image_note_listed(image_tag: &str, failing: bool) -> Cassette {
+    let mut cassette = cassette("attach-clone.json");
+    for interaction in &mut cassette.interactions {
+        let path = interaction.request.path.clone().unwrap_or_default();
+        let Some(body) = interaction.response.body.as_mut() else {
+            continue;
+        };
+        if path.ends_with("/private/changes/zone") {
+            body["zones"][0]["syncToken"] = json!("NEXT");
+            for record in body["zones"][0]["records"].as_array_mut().unwrap() {
+                if record["recordName"] == IMAGE_NOTE {
+                    record["recordChangeTag"] = json!(image_tag);
+                }
+            }
+        } else if path.ends_with("/records/lookup") && failing {
+            for record in body["records"].as_array_mut().unwrap() {
+                if record["recordName"] == IMAGE_ATTACHMENT {
+                    *record = json!({
+                        "recordName": IMAGE_ATTACHMENT, "reason": "try again", "serverErrorCode": "INTERNAL_ERROR",
+                    });
+                }
+            }
+        }
+    }
+    cassette
+}
+
+fn clone_of(name: &str, vault: &Path, log: PathBuf) {
+    run_clone_with(
+        &replay(cassette(name), log),
+        vault,
+        &mut NoProgress,
+        &CloneOptions::default(),
+    )
+    .unwrap();
+}
+
+/// iCloud answers an error (not "not found") for a tracked note's Attachment
+/// record: that says nothing of the attachment, so the note, its link and
+/// its file stay as they are, the pull goes on, and the zone's sync token
+/// stays put so the next pull lists the note again.
+#[test]
+fn an_attachment_lookup_error_leaves_the_note_and_its_file_for_the_next_pull() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    clone_of("attach-clone.json", &vault, dir.path().join("clone.json"));
+    let before = read_clone_state(&vault).unwrap().unwrap();
+    let note_file = vault.join(&before.notes[IMAGE_NOTE].file);
+    let text = std::fs::read_to_string(&note_file).unwrap();
+    let attachment = before.attachments.clone().unwrap()[IMAGE_ATTACHMENT].clone();
+    assert!(vault.join(&attachment.file).exists());
+
+    let summary = pull(&vault, image_note_listed("31a", true), dir.path().join("failing.json")).unwrap();
+    assert!(
+        summary
+            .notices
+            .iter()
+            .any(|n| n.message.contains("INTERNAL_ERROR") && n.message.contains(&before.notes[IMAGE_NOTE].file)),
+        "{:?}",
+        summary.notices
+    );
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(std::fs::read_to_string(&note_file).unwrap(), text, "no embed marker");
+    assert!(vault.join(&attachment.file).exists(), "the file is kept");
+    assert_eq!(state.attachments.clone().unwrap()[IMAGE_ATTACHMENT], attachment);
+    assert_eq!(state.notes[IMAGE_NOTE], before.notes[IMAGE_NOTE]);
+    assert_eq!(state.sync_token, before.sync_token, "listed again by the next pull");
+
+    pull(&vault, image_note_listed("31a", false), dir.path().join("pull.json")).unwrap();
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.notes[IMAGE_NOTE].record_change_tag, "31a");
+    assert_eq!(state.sync_token.as_deref(), Some("NEXT"));
+    assert_eq!(std::fs::read_to_string(&note_file).unwrap(), text);
+    assert!(vault.join(&attachment.file).exists());
+}
+
+/// The same for a note new to the vault: it is not written this run (with a
+/// marker for an attachment it has), the other notes are, and the next pull
+/// adds it.
+#[test]
+fn an_attachment_lookup_error_holds_a_new_note_back_without_stopping_the_pull() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    clone_of("tiny-clone.json", &vault, dir.path().join("clone.json"));
+    let token = read_clone_state(&vault).unwrap().unwrap().sync_token;
+
+    let summary = pull(&vault, image_note_listed("30b", true), dir.path().join("failing.json")).unwrap();
+    assert_eq!(summary.added, 1, "the audio note");
+    assert!(summary.notices.iter().any(|n| n.message.contains("INTERNAL_ERROR")));
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert!(state.notes.contains_key(AUDIO_NOTE) && !state.notes.contains_key(IMAGE_NOTE));
+    assert_eq!(state.sync_token, token);
+
+    let summary = pull(&vault, image_note_listed("30b", false), dir.path().join("pull.json")).unwrap();
+    assert_eq!(summary.added, 1);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert!(vault.join(&state.attachments.unwrap()[IMAGE_ATTACHMENT].file).exists());
+    assert_eq!(notes_under(&vault).len(), state.notes.len());
+}
+
+/// A clone leaves such a note out and saves no sync token for its zone, so
+/// the first pull adds it.
+#[test]
+fn an_attachment_lookup_error_in_a_clone_leaves_the_note_to_the_first_pull() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    let failing = replay(image_note_listed("30b", true), dir.path().join("clone.json"));
+    let summary = run_clone_with(&failing, &vault, &mut NoProgress, &CloneOptions::default()).unwrap();
+    assert!(summary.notices.iter().any(|n| n.message.contains("INTERNAL_ERROR")));
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert!(state.notes.contains_key(AUDIO_NOTE) && !state.notes.contains_key(IMAGE_NOTE));
+    assert_eq!(state.sync_token, None);
+
+    let summary = pull(&vault, image_note_listed("30b", false), dir.path().join("pull.json")).unwrap();
+    assert_eq!(summary.added, 1);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert!(state.notes.contains_key(IMAGE_NOTE));
+    assert_eq!(notes_under(&vault).len(), state.notes.len());
 }
 
 /// tiny-pull-update's answers, listing `count` new notes (copies of its one

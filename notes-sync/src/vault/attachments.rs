@@ -238,6 +238,10 @@ pub struct AttachmentRecords {
 struct ZoneAttachmentRecords {
     records: HashMap<String, CloudKitRecord>,
     asked: HashSet<String>,
+    /// Names iCloud answered an error for other than `NOT_FOUND`, with its
+    /// `serverErrorCode`: nothing is known of these records, which is not
+    /// the same as their being gone.
+    failed: HashMap<String, String>,
 }
 
 impl AttachmentRecords {
@@ -262,19 +266,48 @@ impl AttachmentRecords {
             let Ok(Some(slots)) = decode_note_embed_slots(&base64_decode(text)) else {
                 continue;
             };
-            refs.extend(slots.into_iter().filter_map(|slot| match slot {
-                EmbedSlot::Attachment(r) => Some(r),
-                EmbedSlot::Unknown { .. } => None,
-            }));
+            refs.extend(slots.iter().filter_map(attachment_of).cloned());
         }
-        let names: Vec<String> = refs.iter().map(|r| r.attachment_identifier.clone()).collect();
+        self.ensure_refs(db, zone, &refs).map(drop)
+    }
+
+    /// The first record a note with the embeds `slots` needs (an Attachment
+    /// record, or a file attachment's Media record) that iCloud answered an
+    /// error for other than `NOT_FOUND`, with that error's code. Such a note
+    /// can't be resolved this run: read as gone, its attachment would
+    /// become a marker and the file it has here be deleted.
+    pub fn lookup_failure<T: Transport>(
+        &mut self,
+        db: &Database<T>,
+        zone: &NoteZone,
+        slots: &[EmbedSlot],
+    ) -> Result<Option<(String, String)>, Error> {
+        let refs: Vec<AttachmentReference> = slots.iter().filter_map(attachment_of).cloned().collect();
+        let names = self.ensure_refs(db, zone, &refs)?;
+        let failed = self.zones.get(zone).map(|cache| &cache.failed);
+        Ok(names
+            .into_iter()
+            .find_map(|name| failed?.get(&name).map(|code| (name.clone(), code.clone()))))
+    }
+
+    /// Looks up the Attachment records of `refs`, then the Media records of
+    /// the file attachments among them; every name that was needed.
+    fn ensure_refs<T: Transport>(
+        &mut self,
+        db: &Database<T>,
+        zone: &NoteZone,
+        refs: &[AttachmentReference],
+    ) -> Result<Vec<String>, Error> {
+        let mut names: Vec<String> = refs.iter().map(|r| r.attachment_identifier.clone()).collect();
         self.ensure(db, zone, &names)?;
-        let file_refs: Vec<AttachmentReference> = refs.into_iter().filter(|r| !is_table_uti(&r.type_uti)).collect();
+        let file_refs: Vec<AttachmentReference> = refs.iter().filter(|r| !is_table_uti(&r.type_uti)).cloned().collect();
         let media_names: Vec<String> = extract_media_record_names(&file_refs, &self.records_named(zone, &names))
             .into_iter()
             .flatten()
             .collect();
-        self.ensure(db, zone, &media_names)
+        self.ensure(db, zone, &media_names)?;
+        names.extend(media_names);
+        Ok(names)
     }
 
     /// Looks up the names in `zone` not asked for yet (first occurrence
@@ -290,10 +323,12 @@ impl AttachmentRecords {
         if missing.is_empty() {
             return Ok(());
         }
+        let (records, failures) = db.lookup_records_and_failures(zone, &missing)?;
         // A later duplicate wins, as `.rev().find()` over the answer did.
-        for record in db.lookup_records(zone, &missing)? {
+        for record in records {
             cache.records.insert(record.record_name.clone(), record);
         }
+        cache.failed.extend(failures);
         Ok(())
     }
 
@@ -303,6 +338,14 @@ impl AttachmentRecords {
             return Vec::new();
         };
         names.iter().filter_map(|n| cache.records.get(n)).cloned().collect()
+    }
+}
+
+/// The attachment an embed slot names, if it names one.
+fn attachment_of(slot: &EmbedSlot) -> Option<&AttachmentReference> {
+    match slot {
+        EmbedSlot::Attachment(r) => Some(r),
+        EmbedSlot::Unknown { .. } => None,
     }
 }
 
@@ -354,14 +397,11 @@ pub fn resolve_note_attachments<T: Transport>(
         });
     }
 
-    let identified: Vec<&AttachmentReference> = slots
+    let names: Vec<String> = slots
         .iter()
-        .filter_map(|s| match s {
-            EmbedSlot::Attachment(r) => Some(r),
-            EmbedSlot::Unknown { .. } => None,
-        })
+        .filter_map(attachment_of)
+        .map(|r| r.attachment_identifier.clone())
         .collect();
-    let names: Vec<String> = identified.iter().map(|r| r.attachment_identifier.clone()).collect();
     records.ensure(db, zone, &names)?;
     let attachment_records = records.records_named(zone, &names);
     let by_name = |name: &str| attachment_records.iter().rev().find(|r| r.record_name == name);

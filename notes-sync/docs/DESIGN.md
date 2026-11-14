@@ -451,11 +451,23 @@ The engine (`vault::attachments::AttachmentRecords`,
   scenarios' `ReplayTransport`, the test mocks) each download runs when
   queued, in order, so request logs stay deterministic.
 
+A lookup answers per record. `NOT_FOUND` means the record is gone, and its
+slot becomes an embed marker. Any other per-record error says nothing of the
+record (`Database::lookup_records_and_failures`), so a note that needs it
+(`AttachmentRecords::lookup_failure`) is left exactly as it is this run - no
+marker, its tracked attachments and their files kept, a new note not written
+yet - with a warning naming it, and the run goes on. Its zone's sync token
+stays where it was (a shared zone's: every shared token and the listing
+cursor; in a clone, none is saved), so the next pull lists the note again.
+Read as gone, the attachment's file would be deleted and the note, then at
+its current change tag, never looked at again until it changed in iCloud.
+
 File names, link paths and state entries are computed exactly as before,
 in the same order. Recorded: `attach-clone` and `attach-pull` (two notes,
 one file attachment each) send 2 lookups instead of 4.
 
-Tests: tests/cli_differential.rs `attach_*`, tests/cloudkit_downloads.rs.
+Tests: tests/cli_differential.rs `attach_*`, tests/cloudkit_downloads.rs,
+tests/cmd_pull_interrupted.rs (`an_attachment_lookup_error_*`).
 
 ### Adding an attachment
 
