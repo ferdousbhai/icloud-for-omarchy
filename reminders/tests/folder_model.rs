@@ -1,8 +1,15 @@
 //! A model-based test of the Markdown folder (`src/folder.rs`): seeded random
 //! sequences of edits to the list files as a phone would make them, edits in
 //! iCloud (straight into the fake server), Syncthing conflict copies, and
-//! `background` runs, some of them killed once a write has reached iCloud
-//! but before its answer has (the fake's `hold_modify`). After each run:
+//! `background` runs: some killed once a write has reached iCloud but
+//! before its answer has (the fake's `hold_modify`), some ended at one of
+//! the folder's crash points (`folder::CRASH_POINTS`, between each write and
+//! what records it), and some two at once. The edits include subtasks, due
+//! dates changed on both sides, a list renamed or a reminder moved while a
+//! file has unsent edits, a file removed or emptied, and the whole folder
+//! deleted. A run ended before the user's edits can leave a reminder in two
+//! files (moved in iCloud), and the edits are then made to both. After each
+//! run:
 //!
 //! - every reminder iCloud had before it is as the model says: kept (with
 //!   the edits its line asked for, and none meant for another line) or
@@ -273,10 +280,13 @@ struct Block {
     item: Item,
     /// How the line is spelled: `- [ ]`, a bare line, `* `, `- `.
     style: usize,
+    /// Indented, as a subtask is written.
+    sub: bool,
 }
 
 fn block_text(b: &Block) -> String {
-    let head = match (b.style, b.item.done) {
+    let (pad, notes) = if b.sub { ("    ", "        ") } else { ("", "    ") };
+    let head = match (if b.sub { 0 } else { b.style }, b.item.done) {
         (0, false) => "- [ ] ",
         (0, true) => "- [x] ",
         (1, false) => "",
@@ -287,9 +297,9 @@ fn block_text(b: &Block) -> String {
         (_, true) => "[x] ",
     };
     let due = b.item.due.as_ref().map(|d| format!(" 📅 {d}")).unwrap_or_default();
-    let mut s = format!("{head}{}{due}\n", b.item.title);
+    let mut s = format!("{pad}{head}{}{due}\n", b.item.title);
     for line in b.item.notes.lines() {
-        s.push_str(&format!("    {line}\n"));
+        s.push_str(&format!("{notes}{line}\n"));
     }
     s
 }
@@ -307,17 +317,58 @@ struct MList {
     written: Vec<Known>,
     blocks: Vec<Block>,
     bom: bool,
+    /// Written with no heading.
+    bare: bool,
     edited: bool,
+    /// The file was removed, and not made again.
+    removed: bool,
     copy: Option<Copy>,
 }
 
 impl MList {
+    /// A list as `text` was written, `written` its items.
+    fn new(id: &str, file: &str, written: Vec<Known>, text: &str) -> MList {
+        // Subtasks are the indented checkboxes; a note that reads as one is
+        // written with a backslash.
+        let subs: Vec<bool> = text
+            .lines()
+            .filter(|l| l.starts_with("- [") || l.starts_with("    - ["))
+            .map(|l| l.starts_with(' '))
+            .collect();
+        assert_eq!(subs.len(), written.len(), "{text}");
+        let blocks = written
+            .iter()
+            .zip(subs)
+            .map(|(k, sub)| Block {
+                origin: Some(k.id.clone()),
+                item: k.item.clone(),
+                style: 0,
+                sub,
+            })
+            .collect();
+        MList {
+            id: id.to_owned(),
+            file: file.to_owned(),
+            written,
+            blocks,
+            bom: false,
+            bare: false,
+            edited: false,
+            removed: false,
+            copy: None,
+        }
+    }
+
     fn text(&self) -> String {
-        let mut s = format!(
-            "{}# {}\n\n",
-            if self.bom { "\u{feff}" } else { "" },
-            self.file.trim_end_matches(".md")
-        );
+        let mut s = if self.bare {
+            String::new()
+        } else {
+            format!(
+                "{}# {}\n\n",
+                if self.bom { "\u{feff}" } else { "" },
+                self.file.trim_end_matches(".md")
+            )
+        };
         for b in &self.blocks {
             s.push_str(&block_text(b));
         }
@@ -458,7 +509,7 @@ impl Case {
         let t = truth(&self.env.state);
         let ids: Vec<&Reminder> = t.live.values().collect();
         let pick_list = |rng: &mut Rng| t.lists[rng.below(t.lists.len())].id.clone();
-        match self.rng.below(10) {
+        match self.rng.below(12) {
             0 | 1 if !t.lists.is_empty() => {
                 let list = pick_list(&mut self.rng);
                 let title = self.fresh();
@@ -535,6 +586,42 @@ impl Case {
                 self.note(format!("icloud: new list {id} {name:?}"));
                 self.env.state.put(fake::list(&id, &name, &[], "#34C759"));
             }
+            10 if !ids.is_empty() => {
+                let r = ids[self.rng.below(ids.len())];
+                let due = if self.rng.chance(30) {
+                    Value::Null
+                } else {
+                    json!(1_893_456_000_000i64 + (1 + self.rng.below(300) as i64) * 86_400_000)
+                };
+                self.note(format!("icloud: due of {} to {due}", r.id));
+                self.env.edit(&r.id, |rec| {
+                    rec["fields"]["DueDate"] = json!({ "type": "TIMESTAMP", "value": due });
+                    rec["fields"]["AllDay"] = json!({ "type": "INT64", "value": 1 });
+                });
+            }
+            11 if !ids.is_empty() => {
+                // One level of subtasks, as Apple's Reminders has.
+                let r = ids[self.rng.below(ids.len())];
+                let parent = if r.parent_id.is_some() && self.rng.chance(40) {
+                    None
+                } else {
+                    let parents: Vec<&&Reminder> = ids
+                        .iter()
+                        .filter(|p| p.list_id == r.list_id && p.id != r.id && p.parent_id.is_none())
+                        .collect();
+                    if parents.is_empty() || ids.iter().any(|c| c.parent_id.as_deref() == Some(&r.id)) {
+                        return;
+                    }
+                    Some(parents[self.rng.below(parents.len())].id.clone())
+                };
+                self.note(format!("icloud: parent of {} to {parent:?}", r.id));
+                self.env.edit(&r.id, |rec| {
+                    rec["fields"]["ParentReminder"] = match parent {
+                        Some(p) => json!({ "type": "REFERENCE", "value": { "recordName": p, "action": "NONE" } }),
+                        None => json!({ "type": "REFERENCE", "value": Value::Null }),
+                    };
+                });
+            }
             _ => {}
         }
     }
@@ -581,7 +668,7 @@ impl Case {
         let n = self.lists[li].blocks.len();
         let file = self.lists[li].file.clone();
         let pick = self.rng.below(n);
-        let what = match self.rng.below(13) {
+        let what = match self.rng.below(15) {
             0 | 1 if n > 0 => {
                 let b = &mut self.lists[li].blocks[pick];
                 b.item.done = !b.item.done;
@@ -610,6 +697,7 @@ impl Case {
                         notes,
                     },
                     style: self.rng.below(4),
+                    sub: self.rng.chance(10),
                 };
                 let at = self.rng.below(n + 1);
                 let what = format!("add {:?}", block_text(&block));
@@ -638,6 +726,7 @@ impl Case {
                             notes: String::new(),
                         },
                         style: 0,
+                        sub: false,
                     });
                 }
                 format!("remove {k} lines, add {}", self.lists[li].blocks.len() + k - n)
@@ -698,9 +787,23 @@ impl Case {
                 self.lists[li].bom = true;
                 "byte order mark".to_owned()
             }
+            13 if self.rng.chance(40) => {
+                let ml = &mut self.lists[li];
+                ml.blocks.clear();
+                ml.edited = false;
+                ml.removed = true;
+                self.note(format!("file {file}: removed"));
+                return;
+            }
+            14 if self.rng.chance(40) => {
+                self.lists[li].blocks.clear();
+                self.lists[li].bare = self.rng.chance(50);
+                "emptied".to_owned()
+            }
             _ => return,
         };
         self.lists[li].edited = true;
+        self.lists[li].removed = false;
         self.note(format!("file {file}: {what}"));
     }
 
@@ -754,6 +857,7 @@ impl Case {
                 origin: None,
                 item: it.clone(),
                 style: 0,
+                sub: false,
             }));
         }
         std::fs::write(self.env.folder().join(&name), &text).unwrap();
@@ -846,7 +950,7 @@ impl Case {
         }
     }
 
-    fn check(&mut self, before: &Truth, expect: &Expect, data: &Value) {
+    fn check(&mut self, before: &Truth, expect: &Expect, datas: &[Value]) {
         let after = truth(&self.env.state);
         for (id, want) in &expect.known {
             let got = after.live.get(id).map(|r| (r.list_id.clone(), item_of(r)));
@@ -870,7 +974,10 @@ impl Case {
         if !made.is_empty() {
             self.fail(&format!("made in lists with no file: {made:?}"));
         }
-        for w in data["folder"]["warnings"].as_array().into_iter().flatten() {
+        for w in datas
+            .iter()
+            .flat_map(|d| d["folder"]["warnings"].as_array().into_iter().flatten())
+        {
             let w = w.as_str().unwrap_or("");
             let kept = self.left.iter().chain(&expect.kept);
             if !kept.clone().any(|f| w.starts_with(&format!("{f}: its list is gone"))) {
@@ -925,31 +1032,120 @@ impl Case {
                     .zip(folder::parse(&text, &now))
                     .map(|(id, item)| Known { id, item })
                     .collect();
-                let blocks = written
-                    .iter()
-                    .map(|k| Block {
-                        origin: Some(k.id.clone()),
-                        item: k.item.clone(),
-                        style: 0,
-                    })
-                    .collect();
-                MList {
-                    id: l.id.clone(),
-                    file: format!("{}.md", l.name),
-                    written,
-                    blocks,
-                    bom: false,
-                    edited: false,
-                    copy: None,
-                }
+                MList::new(&l.id, &format!("{}.md", l.name), written, &text)
             })
             .collect();
+    }
+
+    /// The model's lists from `folder.json`, after a run that ended early:
+    /// false (and nothing changed) unless every list's file is as its state
+    /// says it was written, with nothing half done.
+    fn rebuild_from_state(&mut self) -> bool {
+        let Ok(text) = std::fs::read_to_string(self.env.dir.path().join("data/folder.json")) else {
+            return false;
+        };
+        let state: folder::State = serde_json::from_str(&text).unwrap();
+        let t = truth(&self.env.state);
+        let dir = self.env.folder();
+        let ids: BTreeSet<&String> = t.lists.iter().map(|l| &l.id).collect();
+        let left: BTreeSet<String> = state.left.iter().cloned().collect();
+        let clean = state.lists.keys().collect::<BTreeSet<_>>() == ids
+            && left == self.left
+            && state.lists.values().all(|ls| {
+                ls.adopted
+                    && ls.writing.is_none()
+                    && ls.pending.is_empty()
+                    && ls.unwritten.is_empty()
+                    && ls.stuck.is_none()
+                    && std::fs::read_to_string(dir.join(&ls.file)).ok().as_ref() == Some(&ls.text)
+            });
+        let stray = std::fs::read_dir(&dir).unwrap().any(|e| {
+            let name = e.unwrap().file_name().to_string_lossy().into_owned();
+            name.contains(".sync-conflict-")
+        });
+        if !clean || stray {
+            return false;
+        }
+        self.lists = t
+            .lists
+            .iter()
+            .map(|l| {
+                let ls = &state.lists[&l.id];
+                MList::new(&l.id, &ls.file, ls.items.clone(), &ls.text)
+            })
+            .collect();
+        true
+    }
+
+    /// A run that ends at a crash point: whether it got there.
+    fn crashed_at(&mut self, points: &[&str]) -> bool {
+        let point = points[self.rng.below(points.len())];
+        let n = 1 + self.rng.below(3);
+        let out = self
+            .env
+            .background_command()
+            .env(folder::CRASH_AT, format!("{point}:{n}"))
+            .output()
+            .unwrap();
+        let crashed = match code(&out) {
+            0 => false,
+            86 => true,
+            c => self.fail(&format!("the run to crash at {point}:{n} exited {c}: {}", stderr(&out))),
+        };
+        self.note(format!("run, crashing at {point}:{n}: {crashed}"));
+        crashed
+    }
+
+    /// Two runs at once.
+    fn overlapping(&mut self) -> Vec<Value> {
+        let children: Vec<_> = (0..2)
+            .map(|_| {
+                self.env
+                    .background_command()
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        let mut datas = Vec::new();
+        for child in children {
+            let out = child.wait_with_output().unwrap();
+            if code(&out) != 0 {
+                self.fail(&format!("an overlapping run exited {}: {}", code(&out), stderr(&out)));
+            }
+            datas.push(envelope(&out.stdout)["data"].clone());
+        }
+        self.note(format!(
+            "two runs at once: {}",
+            datas
+                .iter()
+                .map(|d| d["folder"].to_string())
+                .collect::<Vec<_>>()
+                .join(" and ")
+        ));
+        datas
     }
 
     fn step(&mut self, i: usize) {
         self.note(format!("--- step {i}"));
         for _ in 0..self.rng.below(3) {
             self.icloud_op();
+        }
+        // iCloud's changes half written to the files, which the user then
+        // edits: a reminder moved in iCloud can be in two files.
+        if self.rng.chance(20) {
+            let crashed = self.crashed_at(&["tmp-written", "file-written", "renamed", "gone-removed"]);
+            if crashed && self.rebuild_from_state() {
+                self.note("the files as that run left them".to_owned());
+            } else if crashed {
+                // Finished by a run before the user edits.
+                let data = self.env.background().unwrap_or_else(|e| self.fail(&e));
+                self.note(format!("run: {}", data["folder"]));
+                self.rebuild();
+            } else {
+                self.rebuild();
+            }
         }
         let live = truth(&self.env.state);
         for _ in 0..self.rng.below(5) {
@@ -984,19 +1180,39 @@ impl Case {
                 if ml.edited {
                     std::fs::write(dir.join(&ml.file), text).unwrap();
                 }
+            } else if ml.removed {
+                let _ = std::fs::remove_file(dir.join(&ml.file));
+            }
+        }
+        if self.rng.chance(4) {
+            std::fs::remove_dir_all(&dir).unwrap();
+            self.note("the folder deleted".to_owned());
+            self.left.clear();
+            for ml in &mut self.lists {
+                ml.edited = false;
+                ml.copy = None;
             }
         }
 
         let before = truth(&self.env.state);
         let expect = self.predict(&before);
-        if self.rng.chance(40) {
-            let nth = 1 + self.rng.below(4);
-            let killed = self.env.killed_at_write(nth);
-            self.note(format!("run, killed at write {nth}: {killed}"));
+        let mut datas = Vec::new();
+        match self.rng.below(100) {
+            0..30 => {
+                let nth = 1 + self.rng.below(4);
+                let killed = self.env.killed_at_write(nth);
+                self.note(format!("run, killed at write {nth}: {killed}"));
+            }
+            30..55 => {
+                self.crashed_at(folder::CRASH_POINTS);
+            }
+            55..65 => datas = self.overlapping(),
+            _ => {}
         }
         let data = self.env.background().unwrap_or_else(|e| self.fail(&e));
         self.note(format!("run: {}", data["folder"]));
-        self.check(&before, &expect, &data);
+        datas.push(data);
+        self.check(&before, &expect, &datas);
 
         // A list's run may change a reminder that another list's file,
         // written earlier in the run, shows (one moved there in iCloud):
@@ -1053,9 +1269,16 @@ fn random_edits_on_both_sides_and_killed_runs_keep_the_folder_and_icloud_in_step
             (1..=cases).collect()
         }
     };
+    // A few cases at a time: thousands at once would time the runs out.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
     std::thread::scope(|s| {
-        for seed in seeds {
-            s.spawn(move || run_case(seed));
+        for _ in 0..workers.min(seeds.len()) {
+            s.spawn(|| {
+                while let Some(&seed) = seeds.get(next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) {
+                    run_case(seed);
+                }
+            });
         }
     });
 }
