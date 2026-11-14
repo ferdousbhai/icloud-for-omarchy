@@ -571,6 +571,23 @@ impl Window {
         dialog.set_response_appearance("lost", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
+        // Both are needed, as on the command line: a locked device with
+        // nothing to say or no number to call helps nobody.
+        let complete = {
+            let (dialog, phone, message) = (dialog.downgrade(), phone.downgrade(), message.downgrade());
+            move || {
+                if let (Some(dialog), Some(phone), Some(message)) = (dialog.upgrade(), phone.upgrade(), message.upgrade()) {
+                    let filled = !phone.text().trim().is_empty() && !message.text().trim().is_empty();
+                    dialog.set_response_enabled("lost", filled);
+                }
+            }
+        };
+        complete();
+        phone.connect_changed({
+            let complete = complete.clone();
+            move |_| complete()
+        });
+        message.connect_changed(move |_| complete());
 
         let weak = Rc::downgrade(self);
         dialog.connect_response(Some("lost"), move |_, _| {

@@ -98,11 +98,12 @@ enum Command {
         #[arg(long)]
         coords: bool,
     },
-    /// Ask one device for a fresh fix and print it.
+    /// Wait for one device's fresh fix and print it.
     ///
-    /// Asks one device for a fresh fix and waits for one newer than the
-    /// last; prints it with its coordinates. No fresh fix in time is an
-    /// error (code no_fix).
+    /// Asks for fresh fixes (the request goes to every device on the Apple
+    /// ID, as `devices --locate` does, and wakes them) and waits for one
+    /// from this device newer than its last; prints it with its
+    /// coordinates. No fresh fix in time is an error (code no_fix).
     ///
     /// JSON: the device, as in `devices --coords`.
     #[command(after_help = AFTER_HELP)]

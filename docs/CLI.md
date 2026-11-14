@@ -558,10 +558,11 @@ $ icloud-findmy --quiet play-sound "iphone" --yes
 - `devices` shows what Apple last heard; `--locate` asks every device to
   report first (it wakes them). Coordinates are printed only with
   `--coords`. Positions are stored in the history as the app stores them.
-- `locate` asks one device for a fresh fix and waits (30 s unless `--wait
-  SECS`) until one newer than the last arrives, then prints it with its
-  coordinates. A device that left the Apple ID while it waited is
-  `not_found`.
+- `locate` asks for fresh fixes (the request goes to every device, as
+  `--locate` does, and wakes them) and waits (30 s unless `--wait SECS`)
+  until one from the named device newer than its last arrives, then prints
+  it with its coordinates. A device that left the Apple ID while it waited
+  is `not_found`.
 - `history` prints the stored trail (24 h unless `--since`, e.g. `90m`,
   `7d`); a device ID already in the history needs no network.
 - Lost Mode locks the device.

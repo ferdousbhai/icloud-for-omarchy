@@ -126,14 +126,10 @@ pub struct Snapshot {
 /// Parses an `initClient` / `refreshClient` response. Takes it by value so
 /// the server context is moved out rather than copied.
 pub fn parse_response(resp: Value) -> Result<Snapshot> {
+    check_status(&resp)?;
     let Value::Object(mut obj) = resp else {
         return Err(Error::Parse("not a JSON object".into()));
     };
-    if let Some(code) = obj.get("statusCode").and_then(Value::as_str)
-        && code != "200"
-    {
-        return Err(Error::Parse(format!("statusCode {code}")));
-    }
     let server_ctx = obj.remove("serverContext").map(|mut ctx| {
         if let Some(theft_loss) = ctx.get_mut("theftLoss") {
             *theft_loss = Value::Null;
@@ -146,6 +142,15 @@ pub fn parse_response(resp: Value) -> Result<Snapshot> {
         Some(_) => return Err(Error::Parse("content is not a list".into())),
     };
     Ok(Snapshot { server_ctx, devices })
+}
+
+/// Find My answers HTTP 200 with its own `statusCode` in the body: anything
+/// but "200" there is a refusal. An answer without one passes.
+fn check_status(resp: &Value) -> Result<()> {
+    match resp.get("statusCode").and_then(Value::as_str) {
+        Some(code) if code != "200" => Err(Error::Parse(format!("statusCode {code}"))),
+        _ => Ok(()),
+    }
 }
 
 fn play_sound_body(device_id: &str) -> Value {
@@ -255,8 +260,7 @@ impl<T: Transport> FindMe<T> {
             return Err(Error::Unsupported("This device cannot play a sound."));
         }
         let url = self.url("playSound")?;
-        self.transport.post_json(&url, &play_sound_body(&device.id))?;
-        Ok(())
+        check_status(&self.transport.post_json(&url, &play_sound_body(&device.id))?)
     }
 
     /// Turns on Lost Mode: the device locks and shows `message`, with a
@@ -266,8 +270,10 @@ impl<T: Transport> FindMe<T> {
             return Err(Error::Unsupported("This device does not support Lost Mode."));
         }
         let url = self.url("lostDevice")?;
-        self.transport
-            .post_json(&url, &lost_mode_body(&device.id, phone, message))?;
-        Ok(())
+        check_status(
+            &self
+                .transport
+                .post_json(&url, &lost_mode_body(&device.id, phone, message))?,
+        )
     }
 }

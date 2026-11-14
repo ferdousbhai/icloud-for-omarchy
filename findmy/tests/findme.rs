@@ -198,6 +198,21 @@ fn play_sound_and_lost_mode_payloads() {
     assert_eq!(b["passcode"], "");
 }
 
+/// Find My refuses in the body of an HTTP 200: that is a failure, not a
+/// sound played or a device locked.
+#[test]
+fn an_action_answered_with_another_status_code_fails() {
+    let snap = findme::parse_response(fixture("initClient")).unwrap();
+    let phone = &snap.devices[0];
+    let refused = || Ok(serde_json::json!({"statusCode": "500"}));
+    let (mut fm, log) = client(vec![refused(), refused(), Ok(Value::Null)]);
+    assert!(matches!(fm.play_sound(phone), Err(Error::Parse(m)) if m == "statusCode 500"));
+    assert!(matches!(fm.lost_mode(phone, "1", "x"), Err(Error::Parse(_))));
+    // An empty answer carries no refusal.
+    fm.play_sound(phone).unwrap();
+    assert_eq!(log.lock().unwrap().len(), 3);
+}
+
 #[test]
 fn unsupported_actions_send_nothing() {
     let snap = findme::parse_response(fixture("initClient")).unwrap();
