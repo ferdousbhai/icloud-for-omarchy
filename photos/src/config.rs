@@ -83,7 +83,7 @@ impl Dirs {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum DownloadMode {
     /// Originals download when you open, download or export one.
@@ -113,12 +113,6 @@ impl Settings {
         std::fs::read(dirs.settings())
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
-    }
-
-    /// The saved settings, or `fallback` when there are none (the CLI's
-    /// `--data-dir` keeps the library under that directory too).
-    pub fn load_or(dirs: &Dirs, fallback: Settings) -> Settings {
-        Settings::saved(dirs).unwrap_or(fallback)
     }
 
     pub fn save(&self, dirs: &Dirs) -> std::io::Result<()> {

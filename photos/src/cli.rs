@@ -228,7 +228,7 @@ enum Command {
         library_dir: Option<PathBuf>,
         /// Download originals on demand, or all of them in the background (the app).
         #[arg(long, value_enum)]
-        download: Option<DownloadArg>,
+        download: Option<DownloadMode>,
     },
 }
 
@@ -237,12 +237,6 @@ enum KindFilter {
     Photo,
     Video,
     Live,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum DownloadArg {
-    OnDemand,
-    All,
 }
 
 /// A failure: either already the contract's error object (usage, not
@@ -377,11 +371,11 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
         Some(dir) => {
             let root = std::path::absolute(dir)?;
             let dirs = Dirs::under(&root);
-            let fallback = Settings {
+            // The library is kept under that directory too.
+            let settings = Settings::saved(&dirs).unwrap_or(Settings {
                 library_dir: root.join("library"),
                 download: DownloadMode::OnDemand,
-            };
-            let settings = Settings::load_or(&dirs, fallback);
+            });
             (dirs, settings)
         }
         None => {
@@ -581,16 +575,13 @@ fn sign_in() -> Res<Response> {
     Ok(Response::new(json!({ "started": true, "mock": mock }), summary))
 }
 
-fn config(mut ctx: Ctx, library_dir: Option<PathBuf>, download: Option<DownloadArg>) -> Res<Response> {
+fn config(mut ctx: Ctx, library_dir: Option<PathBuf>, download: Option<DownloadMode>) -> Res<Response> {
     let changed = library_dir.is_some() || download.is_some();
     if let Some(dir) = library_dir {
         ctx.settings.library_dir = std::path::absolute(dir)?;
     }
     if let Some(d) = download {
-        ctx.settings.download = match d {
-            DownloadArg::OnDemand => DownloadMode::OnDemand,
-            DownloadArg::All => DownloadMode::All,
-        };
+        ctx.settings.download = d;
     }
     if changed {
         ctx.settings.save(&ctx.dirs)?;

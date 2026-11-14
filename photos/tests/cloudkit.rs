@@ -10,7 +10,8 @@ fn records(name: &str) -> Vec<Record> {
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(Record::parse)
+        .cloned()
+        .filter_map(Record::from_value)
         .collect()
 }
 
@@ -203,18 +204,6 @@ fn album_members_keep_one_entry_per_asset_preferring_the_relation() {
 }
 
 #[test]
-fn owned_and_borrowed_parsing_agree() {
-    let v = fixture("assets_page1.json");
-    for r in v["records"].as_array().unwrap() {
-        let (a, b) = (Record::parse(r).unwrap(), Record::from_value(r.clone()).unwrap());
-        assert_eq!(
-            (&a.name, &a.record_type, &a.change_tag, &a.fields),
-            (&b.name, &b.record_type, &b.change_tag, &b.fields)
-        );
-    }
-}
-
-#[test]
 fn zone_changes_parse_records_tombstones_and_token() {
     let t = FixtureTransport::new(|_| Ok(fixture("zone_changes_page2.json")));
     let ck = CloudKit::connect(&t).unwrap();
@@ -347,7 +336,7 @@ fn sign_in_required_propagates() {
 }
 
 fn master(fields: Value) -> Record {
-    Record::parse(&json!({ "recordName": "AX/m", "recordType": "CPLMaster", "fields": fields })).unwrap()
+    Record::from_value(json!({ "recordName": "AX/m", "recordType": "CPLMaster", "fields": fields })).unwrap()
 }
 
 fn res(url: &str) -> Value {
@@ -393,7 +382,7 @@ fn kind_comes_from_the_uti_not_from_video_renditions() {
 
 #[test]
 fn hidden_assets_count_as_removed() {
-    let rec = Record::parse(&json!({
+    let rec = Record::from_value(json!({
         "recordName": "A1", "recordType": "CPLAsset",
         "fields": { "masterRef": { "value": { "recordName": "M1" } }, "isHidden": { "value": 1 } },
     }))

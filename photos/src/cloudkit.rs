@@ -80,30 +80,19 @@ pub struct Record {
 }
 
 impl Record {
-    /// Parse a borrowed record (its fields are copied).
-    pub fn parse(v: &Value) -> Option<Record> {
-        let mut r = Self::header(v)?;
-        r.fields = v.get("fields").and_then(Value::as_object).cloned().unwrap_or_default();
-        Some(r)
-    }
-
-    /// Parse a record the caller owns: its fields are moved, not copied
-    /// (a page of 200 records carries a few hundred KB of them).
+    /// Parse a record: its fields are moved out of `v`, not copied (a page
+    /// of 200 records carries a few hundred KB of them).
     pub fn from_value(mut v: Value) -> Option<Record> {
-        let mut r = Self::header(&v)?;
-        if let Some(Value::Object(fields)) = v.get_mut("fields").map(Value::take) {
-            r.fields = fields;
-        }
-        Some(r)
-    }
-
-    fn header(v: &Value) -> Option<Record> {
+        let fields = match v.get_mut("fields").map(Value::take) {
+            Some(Value::Object(fields)) => fields,
+            _ => serde_json::Map::new(),
+        };
         Some(Record {
             name: v.get("recordName")?.as_str()?.to_owned(),
             record_type: v.get("recordType").and_then(Value::as_str).map(str::to_owned),
             change_tag: v.get("recordChangeTag").and_then(Value::as_str).map(str::to_owned),
             deleted: v.get("deleted").and_then(Value::as_bool).unwrap_or(false),
-            fields: serde_json::Map::new(),
+            fields,
             created_ms: v.pointer("/created/timestamp").and_then(Value::as_i64),
         })
     }
@@ -719,9 +708,9 @@ impl<'t> CloudKit<'t> {
     /// `<asset>-IN-<album>` like the relations Apple lists. The record shape is
     /// the one `album_members` reads back (fixtures from pyicloud). Verified
     /// live on 2026-09-30 (an upload with `--album` landed in the album); no
-    /// capture of icloud.com creating one has been made. Returns the relations created; a per-record error fails
-    /// the call (the request is atomic).
-    pub fn add_to_album(&self, album_id: &str, asset_ids: &[&str]) -> Result<Vec<Relation>> {
+    /// capture of icloud.com creating one has been made. A per-record error
+    /// fails the call (the request is atomic).
+    pub fn add_to_album(&self, album_id: &str, asset_ids: &[&str]) -> Result<()> {
         let operations: Vec<Value> = asset_ids
             .iter()
             .map(|asset| {
@@ -740,17 +729,8 @@ impl<'t> CloudKit<'t> {
             "records/modify",
             &json!({ "atomic": true, "operations": operations, "zoneID": Self::zone() }),
         )?;
-        let mut out = Vec::new();
-        for rec in v
-            .get("records")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
-            server_error(rec)?;
-            out.extend(Record::parse(rec).as_ref().and_then(Relation::from_record));
-        }
-        Ok(out)
+        let records = v.get("records").and_then(Value::as_array);
+        records.into_iter().flatten().try_for_each(server_error)
     }
 }
 
