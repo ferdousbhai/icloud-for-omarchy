@@ -60,6 +60,8 @@ fn parse_options() -> markdown::ParseOptions {
 /// Why `to_mdast` has no tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unparsed {
+    /// Some line opens more than `MAX_MARKDOWN_NESTING` quotes and lists.
+    TooNested,
     /// markdown-rs 1.0.0 panicked (a few pathological list/fence nestings), or
     /// no thread could be started to run it.
     Panicked,
@@ -124,7 +126,7 @@ fn dismantle(root: mdast::Node) {
 /// nests too deeply to parse safely or markdown-rs panics.
 pub(crate) fn to_mdast(source: &str) -> Result<mdast::Node, Unparsed> {
     if too_deeply_nested(source) {
-        return Err(Unparsed::TooDeep);
+        return Err(Unparsed::TooNested);
     }
     let mut root = parse_bounded(source)?;
     super::mdast_fix::fix_tree(&mut root, source);
@@ -282,15 +284,10 @@ fn top_level_fence(line: &str) -> Option<(u8, usize, &str)> {
 
 /// `parseNoteMarkdown`.
 pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRefusal> {
-    if too_deeply_nested(markdown) {
-        return refuse(too_deeply_nested_reason());
-    }
     let lines = source_lines(markdown);
-    let root = match parse_bounded(markdown) {
-        Ok(mut root) => {
-            super::mdast_fix::fix_tree(&mut root, markdown);
-            root
-        }
+    let root = match to_mdast(markdown) {
+        Ok(root) => root,
+        Err(Unparsed::TooNested) => return refuse(too_deeply_nested_reason()),
         Err(Unparsed::TooDeep) => {
             return refuse("the note nests its Markdown (quotes, lists, emphasis or links) too deeply to read");
         }

@@ -7,7 +7,8 @@
 use super::parse::{joined_text, parse_note_markdown};
 use super::to_markdown::{Node, Serializer, W, unw, w};
 use crate::doc::format::{
-    FormatParagraph, InlineSpan, ParagraphKind, formats_round_trip_equal, normalize_spans, trim_trailing_whitespace,
+    FormatParagraph, InlineSpan, ParagraphKind, effective_start_number, formats_round_trip_equal, normalize_spans,
+    trim_trailing_whitespace,
 };
 use crate::js;
 use crate::js::starts_with_at;
@@ -200,11 +201,7 @@ fn build_list_nodes(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> Ve
             Some((_, indent)) => indent < paragraph.indent,
         };
         if needs_new {
-            let start = ordered.then_some(if paragraph.start_number == 0 {
-                1
-            } else {
-                paragraph.start_number
-            });
+            let start = ordered.then(|| effective_start_number(paragraph.start_number));
             arena.push(ListBuild {
                 ordered,
                 start,
