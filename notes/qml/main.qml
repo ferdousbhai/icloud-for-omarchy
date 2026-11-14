@@ -1531,11 +1531,14 @@ ApplicationWindow {
         id: autosave
         interval: 1500
         onTriggered: {
-            if (backend.syncRunning) { // never write under a running pull; try again after
-                restart();
+            if (backend.currentNote.length === 0)
                 return;
-            }
-            if (root.dirty && backend.currentNote.length > 0 && backend.saveWarning(editor.text).length === 0)
+            // Under a running sync the backend writes nothing: it keeps the
+            // text and writes it once the sync is done (or the window
+            // closes). An edit undone meanwhile takes that back.
+            if (!root.dirty)
+                backend.dropQueuedSave();
+            else if (backend.saveWarning(editor.text).length === 0)
                 root.doSave();
         }
     }

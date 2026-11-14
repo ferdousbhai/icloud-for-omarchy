@@ -1251,6 +1251,11 @@ int main(int argc, char *argv[])
         b.saveCurrentNote(b.noteBody()); // undone
         waitForIdle(b);
         check(readFile(QStringLiteral("Q.md")) == q, "seam a waiting save whose edit was undone is not written");
+        b.runPull();
+        b.saveCurrentNote(QStringLiteral("# Q\nan edit\n"));
+        b.dropQueuedSave(); // as the window does once its editor is back at the note
+        waitForIdle(b);
+        check(readFile(QStringLiteral("Q.md")) == q, "seam a waiting save the window dropped is not written");
         writeFile(QStringLiteral("R.md"), QStringLiteral("---\napple-note-id: id-r\n---\n# R\nother\n"));
         b.refresh();
         b.runPull();

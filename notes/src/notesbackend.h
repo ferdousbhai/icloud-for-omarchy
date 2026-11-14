@@ -204,6 +204,9 @@ public:
     // rewriting the note: the edits are written once it is done (merged
     // with whatever it changed), and queuedSaveWritten says so.
     Q_INVOKABLE bool saveCurrentNote(const QString &body);
+    // Forgets a save still waiting on the running sync: the editor is back
+    // at the note as loaded, so there is nothing to write after it.
+    Q_INVOKABLE void dropQueuedSave() { m_queuedSave = {}; }
     // Copies the file `source` into the open note's attachments/ folder,
     // under a free name, and returns {ok, name, path, link}: `link` is what
     // the sync engine takes for a new attachment once the note's text holds
