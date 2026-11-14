@@ -181,8 +181,8 @@ const QList<Spec> &specs()
         { "status", "status",
           "Where the vault is, whether it is cloned, the sign-in (from icloud-session), who holds the\n"
           "vault's lock (the Notes window, a background sync), and the notes the window badges: conflict,\n"
-          "new, read-only, missing-id, foreign-id, tables. Signed out, it still prints all that, and\n"
-          "exits 3. --count: the number of notes.\n"
+          "new, read-only, missing-id, foreign-id, conflict-copy (a Syncthing conflict copy, which is not\n"
+          "synced), tables. Signed out, it still prints all that, and exits 3. --count: the number of notes.\n"
           "JSON: {vault, cloned, title_mode, sync_tool, sign_in_known, signed_in, apple_id,\n"
           "sign_in_days_left, lock: {held_by, app_open}, notes, folders, flagged: {FLAG: [path]}}",
           {}, 0, 0 },
@@ -194,9 +194,9 @@ const QList<Spec> &specs()
           {}, 0, 0 },
         { "list", "list [--folder F] [--flag FLAG]",
           "Every note, newest first within each folder: path, title, preview, modified time, id and the\n"
-          "badges the window shows (conflict, new, read-only, missing-id, foreign-id, tables). --folder\n"
-          "lists that folder and its subfolders; --flag only notes with that badge. --ids-only:\n"
-          "the paths.\n"
+          "badges the window shows (conflict, new, read-only, missing-id, foreign-id, conflict-copy,\n"
+          "tables). --folder lists that folder and its subfolders; --flag only notes with that badge.\n"
+          "--ids-only: the paths.\n"
           "JSON: [{path, folder, file, title, snippet, modified, modified_ms, id, flags}]",
           { QStringLiteral("--folder"), QStringLiteral("--flag") }, 0, 0 },
         { "read", "read NOTE [--raw]",

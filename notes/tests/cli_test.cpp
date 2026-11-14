@@ -1149,13 +1149,17 @@ int main(int argc, char *argv[])
                   && dry.json().toObject().value(QStringLiteral("notices")).isArray(),
               "real engine: push --dry-run lists the edited note as an update, ready");
         const QJsonObject notice = dry.json().toObject().value(QStringLiteral("notices")).toArray().at(0).toObject();
+        const Run copies = real({ QStringLiteral("--ids-only"), QStringLiteral("list"), QStringLiteral("--flag"), QStringLiteral("conflict-copy") },
+                                "tiny-lookup.json");
         const Run appended = real({ QStringLiteral("write"), note, QStringLiteral("--append"), QStringLiteral("--body"), QStringLiteral("more") },
                                   "tiny-lookup.json");
         check(dry.json().toObject().value(QStringLiteral("notices")).toArray().size() == 1
                   && notice.value(QStringLiteral("level")).toString() == QStringLiteral("warn")
                   && notice.value(QStringLiteral("message")).toString().startsWith(copy + QStringLiteral(" is a Syncthing conflict copy"))
-                  && appended.code == 0 && readFile(note, vault).endsWith(QStringLiteral("A line added locally.\nmore\n")),
-              "real engine: a Syncthing conflict copy is a warning, not a note to push, and the note beside it is still written");
+                  && appended.code == 0 && readFile(note, vault).endsWith(QStringLiteral("A line added locally.\nmore\n"))
+                  && copies.out == copy.toUtf8() + '\n',
+              "real engine: a Syncthing conflict copy is a warning, not a note to push; here it is flagged conflict-copy, "
+              "and the note beside it is still written");
         QFile::remove(vault + QLatin1Char('/') + copy);
         // history (no version is recorded under the pinned clock) and an
         // unknown version: the engine's own data and error, passed through.

@@ -943,7 +943,8 @@ void NotesBackend::rebuildNotes()
 
 // Per-note list details plus the guardrail flags the badges show: notes
 // the sync tool does not track ("new"), tracked notes that lost their id,
-// untracked notes carrying an id from elsewhere, conflicts and tables.
+// untracked notes carrying an id from elsewhere, Syncthing's conflict
+// copies (which it never syncs), conflicts and tables.
 void NotesBackend::classifyNotes()
 {
     const VaultInfo &info = vaultInfo();
@@ -977,7 +978,11 @@ void NotesBackend::classifyNotes()
             flags << QStringLiteral("conflict");
         if (scan.table)
             flags << QStringLiteral("tables");
-        if (!tracked.contains(vaultRelative(name)))
+        // A Syncthing conflict copy is no note to the engine: never "new"
+        // (it will not be created) nor a note with someone else's id.
+        if (SyncModel::isSyncConflictName(name))
+            flags << QStringLiteral("conflict-copy");
+        else if (!tracked.contains(vaultRelative(name)))
             flags << (scan.id.isEmpty() ? QStringLiteral("new") : QStringLiteral("foreign-id"));
         else if (scan.id.isEmpty())
             flags << QStringLiteral("missing-id");
@@ -1438,10 +1443,11 @@ QString NotesBackend::guardrailWarning(const QString &body)
     const QString id = SyncModel::extractNoteId(text);
     const QDir dir(folderAbsolutePath(m_currentFolder));
     for (const QString &name : m_notes) {
-        // A Syncthing conflict copy of this note carries its id, but the
-        // engine never syncs one: nothing ambiguous about it.
+        // A Syncthing conflict copy of a note carries its id, but the
+        // engine never syncs one: nothing ambiguous about it, whether it
+        // is the other file or the one being saved.
         if (id.isEmpty() || name == m_currentNote || m_scans.value(dir.filePath(name)).id != id
-            || SyncModel::isSyncConflictName(name))
+            || SyncModel::isSyncConflictName(name) || SyncModel::isSyncConflictName(m_currentNote))
             continue;
         warnings << QStringLiteral("Another note in this folder (%1) carries the same apple-note-id. "
                                    "Pushing two files with one id is ambiguous, so keep only one.")

@@ -464,6 +464,13 @@ int main(int argc, char *argv[])
         b.refresh();
         check(b.notes().contains(copy) && b.saveWarning(QStringLiteral("edited\n")).isEmpty(),
               "backend a Syncthing conflict copy with the note's id does not hold its save back");
+        // It has a badge of its own, and opens and saves like a file of the user's.
+        b.openNote(copy);
+        check(b.noteStates().value(copy).toStringList() == QStringList{ QStringLiteral("conflict-copy") }
+                  && b.noteBody() == QStringLiteral("# Alpha\nfrom the phone\n") && b.readOnlyReason().isEmpty()
+                  && b.saveWarning(QStringLiteral("# Alpha\nfrom the phone, read\n")).isEmpty(),
+              "backend a Syncthing conflict copy is flagged as one, not as new or a foreign id, and opens");
+        b.openNote(QStringLiteral("A.md"));
         const QString a = readFile(QStringLiteral("A.md"));
         QFile::remove(testVault() + QStringLiteral("/A.md"));
         b.refresh();

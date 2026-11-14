@@ -714,7 +714,10 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `push --dry-run`, `history [--records]`, `diff`, `restore` | icloud-notes-sync's own output (below) |
 
 `flags`: `new` (not synced yet), `conflict`, `read-only`, `missing-id`,
-`foreign-id`, `tables`. `modified` is UTC ISO 8601.
+`foreign-id`, `conflict-copy` (a Syncthing conflict copy,
+`<name>.sync-conflict-<date>-<time>-<device>.md`: never synced; merge what
+you want from it into the note and delete it), `tables`. `modified` is UTC
+ISO 8601.
 
 ### icloud-notes-sync (the engine, inside icloud-notes)
 

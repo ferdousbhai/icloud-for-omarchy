@@ -60,6 +60,9 @@ ApplicationWindow {
     property string notice: ""
     // The sync tool reads this note but will never push it, so it opens locked.
     readonly property bool noteLocked: backend.readOnlyReason.length > 0
+    // A copy Syncthing made of a note two devices changed at once: the sync
+    // tool never syncs it, and the open note says so.
+    readonly property bool noteIsConflictCopy: (backend.noteStates[backend.currentNote] || []).indexOf("conflict-copy") >= 0
     // A note both sides edited opens on its conflict blocks, one version
     // picked per block, instead of on the raw markers ("Edit as text").
     readonly property var conflicts: backend.noteConflicts
@@ -284,6 +287,7 @@ ApplicationWindow {
     function badges(name) {
         var labels = { "conflict": ["conflict", root.colRed], "new": ["new", root.colGreen],
                        "missing-id": ["no id", root.colYellow], "foreign-id": ["foreign id", root.colYellow],
+                       "conflict-copy": ["Syncthing copy, not synced", root.colYellow],
                        "tables": ["tables", root.colTextMuted], "read-only": ["read-only", root.colTextMuted] };
         var out = (backend.noteStates[name] || []).map(function (flag) { return labels[flag] || [flag, root.colTextMuted]; });
         var st = statusByFile[vaultRel(name)];
@@ -1170,6 +1174,19 @@ ApplicationWindow {
                         Keys.onReturnPressed: editor.forceActiveFocus()
                         Keys.onEnterPressed: editor.forceActiveFocus()
                         Keys.onEscapePressed: { text = current; editor.forceActiveFocus(); }
+                    }
+                    Label {
+                        textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 32
+                        Layout.rightMargin: 32
+                        Layout.topMargin: 10
+                        visible: root.noteIsConflictCopy
+                        wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                        color: root.colYellow
+                        font.pixelSize: root.pt(11)
+                        text: "This is a Syncthing conflict copy, so it is not synced. Merge what you want from it into the note and delete it."
                     }
                     Label {
                         textFormat: Text.PlainText
