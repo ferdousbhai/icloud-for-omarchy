@@ -18,11 +18,9 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_UNAVAILABLE, EXIT_USAGE};
-use icloud_session::output::{
-    self, CliError, KEYRING_HINT, Mode, NETWORK_HINT, OutputFlags, Response, SERVICE_TROUBLE_HINT,
-    SESSION_SERVICE_HINT, SIGN_IN_HINT,
-};
+use icloud_app::cli::{confirm, no_data_dir, other, session_failure, usage, warn};
+use icloud_session::cli::{EXIT_NOT_FOUND, EXIT_USAGE};
+use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use serde_json::{Value, json};
 
 use crate::api::{self, SessionTransport};
@@ -219,40 +217,13 @@ type Failure = CliError;
 
 type Outcome = Result<Response, Failure>;
 
-fn usage(msg: impl Into<String>) -> Failure {
-    CliError::new("usage", EXIT_USAGE, msg)
-}
-
-fn other(msg: impl Into<String>) -> Failure {
-    CliError::new("error", EXIT_ERROR, msg)
-}
-
-/// The shared sign-in hint, plus the app's own button.
-fn sign_in_hint() -> String {
-    format!("{SIGN_IN_HINT}, or Sign In in the app")
-}
-
-/// A Contacts failure as the contract's code, exit code, message and hint,
-/// worded as `icloud_session::output` words it in every iCloud tool.
+/// A Contacts failure as the contract's code, exit code, message and hint:
+/// icloud-session's failures as every iCloud tool reports them.
 impl From<api::Error> for Failure {
     fn from(e: api::Error) -> Self {
-        use api::Error as A;
-        let msg = e.to_string();
         match e {
-            A::SignInRequired => output::sign_in_required().hint(sign_in_hint()),
-            A::Http { status, .. } => {
-                let e = output::http_failure(status, msg);
-                if e.hint.as_deref() == Some(SIGN_IN_HINT) {
-                    e.hint(sign_in_hint())
-                } else {
-                    e
-                }
-            }
-            A::Offline(_) => CliError::new("offline", EXIT_UNAVAILABLE, msg).hint(NETWORK_HINT),
-            A::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, msg).hint(SESSION_SERVICE_HINT),
-            A::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg).hint(KEYRING_HINT),
-            A::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint(SERVICE_TROUBLE_HINT),
-            A::Refused { .. } | A::Other(_) => other(msg),
+            api::Error::Session(e) => session_failure(&e),
+            e @ (api::Error::Refused { .. } | api::Error::Other(_)) => other(e.to_string()),
         }
     }
 }
@@ -274,10 +245,7 @@ pub fn run() -> u8 {
     let mode = args.out.mode();
     let transport = SessionTransport::default();
     let result = (|| {
-        let dir = args
-            .data_dir
-            .or_else(Store::default_dir)
-            .ok_or_else(|| other("no data directory (no $XDG_DATA_HOME or $HOME)").hint("pass --data-dir DIR"))?;
+        let dir = args.data_dir.or_else(Store::default_dir).ok_or_else(no_data_dir)?;
         let cli = Cli {
             mode,
             cached: args.cached,
@@ -511,35 +479,6 @@ fn changes(f: Fields) -> Result<Vec<Change>, Failure> {
     Ok(out)
 }
 
-/// Asks unless `yes`, and only when someone can answer
-/// ([`output::interactive`]: text mode, stdin and stdout a terminal);
-/// otherwise refuses (exit 2) without `--yes`.
-fn confirm(mode: Mode, cmd: &str, yes: bool, question: &str) -> Result<(), Failure> {
-    if yes {
-        return Ok(());
-    }
-    if !output::interactive(mode) {
-        return Err(
-            usage(format!("{cmd} asks before it acts, and nobody can be asked here"))
-                .hint(format!("pass --yes to {cmd} without asking")),
-        );
-    }
-    if cli::confirm(question) {
-        Ok(())
-    } else {
-        Err(CliError::new("cancelled", EXIT_ERROR, "cancelled"))
-    }
-}
-
-/// A write that happened but left a problem behind: on stderr, and as
-/// `warning` in the data. The command still succeeds.
-fn warn(data: &mut Value, warning: Option<String>) {
-    if let Some(w) = warning {
-        eprintln!("{}", output::terminal_safe(&format!("warning: {w}")));
-        data["warning"] = Value::String(w);
-    }
-}
-
 /// Finds a contact by ID or `me`, else by name (ignoring case), email or
 /// phone number, else by a unique part of its name.
 fn resolve<'c>(cache: &'c Cache, query: &str) -> Result<&'c Contact, Failure> {
@@ -724,39 +663,25 @@ mod tests {
 
     #[test]
     fn failures_use_the_shared_codes_exits_and_hints() {
-        use api::Error as A;
-        let http = |status| A::Http {
-            status,
-            body: String::new(),
-        };
-        let cases = [
-            (http(421), "session_rejected", 3),
-            (http(401), "session_rejected", 3),
-            (http(503), "http", 5),
-            (http(404), "http", 1),
-            (A::Offline("x".into()), "offline", 5),
-            (A::Service("x".into()), "session_service", 5),
-            (A::KeyringUnavailable("x".into()), "keyring_unavailable", 5),
-            (A::BadResponse("x".into()), "bad_response", 5),
-            (
-                A::Refused {
-                    code: 412,
-                    message: "x".into(),
-                },
-                "error",
-                1,
-            ),
-            (A::Other("x".into()), "error", 1),
-        ];
-        for (e, code, exit) in cases {
-            let what = format!("{e:?}");
+        use icloud_session::Error as S;
+        let code = |e: api::Error| {
             let f = Failure::from(e);
-            assert_eq!((f.code.as_str(), f.exit), (code, exit), "{what}");
-            assert!(exit != 5 || f.hint.is_some(), "{what}");
-        }
-        let f = Failure::from(http(421));
-        assert_eq!(f.hint.as_deref(), Some(sign_in_hint().as_str()));
-        let f = Failure::from(A::Offline("x".into()));
-        assert_eq!(f.hint.as_deref(), Some(NETWORK_HINT));
+            (f.code, f.exit)
+        };
+        // icloud-session's failures read as in every iCloud tool.
+        assert_eq!(code(S::Network("x".into()).into()), ("network".into(), 5));
+        let rejected = Failure::from(api::Error::from(S::Http {
+            status: 421,
+            body: String::new(),
+        }));
+        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 3));
+        assert_eq!(rejected.hint, Some(icloud_app::cli::sign_in_hint()));
+        // Contacts' own.
+        let refused = api::Error::Refused {
+            code: 412,
+            message: "x".into(),
+        };
+        assert_eq!(code(refused), ("error".into(), 1));
+        assert_eq!(code(api::Error::Other("x".into())), ("error".into(), 1));
     }
 }

@@ -26,61 +26,40 @@
 //! `/co/startup` for fresh tokens and tries once more. Tokens are base64 and
 //! must be percent-encoded in the query.
 //!
-//! All HTTP goes through [`SessionTransport`], over `icloud_session::Session`;
+//! All HTTP goes through [`SessionTransport`] (icloud-app's), over `icloud_session::Session`;
 //! the tests point that at a fake server with icloud-session's mock mode.
-
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+pub use icloud_app::SessionTransport;
 
 /// The query every call carries (icloud.com's own).
 const QUERY: &str = "clientVersion=2.1&locale=en_US&order=last%2Cfirst";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The iCloud web session is gone: `icloud-session sign-in`.
-    #[error("sign in to iCloud required")]
-    SignInRequired,
-    /// No network (or Apple unreachable).
-    #[error("offline: {0}")]
-    Offline(String),
-    /// Signed in, but the keyring holding the iCloud session won't give it
-    /// (locked, no Secret Service): unlock it and try again. Not a sign-in.
-    #[error("the keyring holding the iCloud session cannot be read ({0}): unlock it and try again")]
-    KeyringUnavailable(String),
-    /// The service answered, but with a body this version can't read.
-    #[error("unexpected response: {0}")]
-    BadResponse(String),
-    #[error("iCloud answered HTTP {status}: {body}")]
-    Http { status: u16, body: String },
+    /// Anything icloud-session failed with: signed out, offline, an HTTP
+    /// status, the daemon or the keyring out of reach, an answer that is not
+    /// JSON. Kept whole, so the command line reports it as every iCloud
+    /// tool does.
+    #[error(transparent)]
+    Session(#[from] icloud_session::Error),
     /// iCloud answered 200 but refused the card (412: changed elsewhere).
     #[error("iCloud refused the change ({code}): {message}")]
     Refused { code: i64, message: String },
-    /// `icloud-sessiond` cannot be reached.
-    #[error("{0}")]
-    Service(String),
     #[error("{0}")]
     Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<icloud_session::Error> for Error {
-    fn from(e: icloud_session::Error) -> Self {
-        match e {
-            icloud_session::Error::SignInRequired => Error::SignInRequired,
-            icloud_session::Error::Http { status, body } => Error::Http { status, body },
-            icloud_session::Error::Offline(m) | icloud_session::Error::Network(m) => Error::Offline(m),
-            icloud_session::Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m),
-            icloud_session::Error::BadResponse(m) => Error::BadResponse(m),
-            e @ icloud_session::Error::Service(_) => Error::Service(e.to_string()),
-            other => Error::Other(other.to_string()),
-        }
-    }
-}
-
 impl Error {
+    /// The iCloud web session is gone: the window shows its sign-in banner.
+    pub fn is_sign_in(&self) -> bool {
+        matches!(self, Error::Session(icloud_session::Error::SignInRequired))
+    }
+
     /// The card changed on another device since its `etag` was read.
     pub fn is_conflict(&self) -> bool {
         matches!(self, Error::Refused { code: 412, .. })
@@ -88,59 +67,12 @@ impl Error {
 
     /// iCloud no longer accepts the tokens the request carried.
     pub fn is_stale_token(&self) -> bool {
-        matches!(self, Error::Http { status: 420, .. })
+        matches!(self, Error::Session(icloud_session::Error::Http { status: 420, .. }))
     }
 }
 
-/// HTTP with the iCloud session, over `icloud-session`. Connects lazily, so
-/// a missing sign-in surfaces as `SignInRequired` on first use, and drops
-/// the connection on `SignInRequired` or a daemon failure so that a later
-/// sign-in is picked up without restarting.
-#[derive(Default)]
-pub struct SessionTransport {
-    session: Mutex<Option<icloud_session::Session>>,
-}
-
-impl SessionTransport {
-    fn with<T>(&self, f: impl FnOnce(&icloud_session::Session) -> icloud_session::Result<T>) -> Result<T> {
-        let mut guard = self.session.lock().unwrap_or_else(|p| p.into_inner());
-        if guard.is_none() {
-            *guard = Some(icloud_session::Session::connect()?);
-        }
-        let result = f(guard.as_ref().expect("just connected"));
-        if let Err(icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)) = &result {
-            *guard = None;
-        }
-        Ok(result?)
-    }
-
-    /// Base URL of the `contacts` entry of `webservices`.
-    fn contacts_url(&self) -> Result<String> {
-        let ws = self.with(|s| s.webservices())?;
-        ws.url("contacts")
-            .map(str::to_owned)
-            .ok_or_else(|| Error::Other("iCloud did not offer the contacts service for this account".into()))
-    }
-
-    fn get_json(&self, url: &str) -> Result<Value> {
-        let response = self.with(|s| s.get(url))?;
-        parse(url, &response.body)
-    }
-
-    fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        let response = self.with(|s| s.post_json(url, body))?;
-        parse(url, &response.body)
-    }
-}
-
-fn parse(url: &str, body: &[u8]) -> Result<Value> {
-    // A 200 that isn't JSON is the service misbehaving, not the network.
-    serde_json::from_slice(body).map_err(|e| {
-        let endpoint = url.split('?').next().unwrap_or(url);
-        Error::BadResponse(format!(
-            "iCloud answered {endpoint} with something that isn't JSON: {e}"
-        ))
-    })
+fn bad_response(msg: String) -> Error {
+    icloud_session::Error::BadResponse(msg).into()
 }
 
 /// The pair every call after `/co/startup` carries.
@@ -184,8 +116,13 @@ pub struct Client<'a> {
 
 impl<'a> Client<'a> {
     pub fn connect(t: &'a SessionTransport) -> Result<Self> {
-        let base = t.contacts_url()?.trim_end_matches('/').to_owned();
-        Ok(Client { t, base })
+        let base = t
+            .service_url("contacts")?
+            .ok_or_else(|| Error::Other("iCloud did not offer the contacts service for this account".into()))?;
+        Ok(Client {
+            t,
+            base: base.trim_end_matches('/').to_owned(),
+        })
     }
 
     /// Fresh tokens and the "me" card's id.
@@ -194,7 +131,7 @@ impl<'a> Client<'a> {
         let token = |k: &str| {
             v[k].as_str()
                 .map(str::to_owned)
-                .ok_or_else(|| Error::BadResponse(format!("/co/startup has no {k}")))
+                .ok_or_else(|| bad_response(format!("/co/startup has no {k}")))
         };
         let tokens = Tokens {
             pref: token("prefToken")?,
@@ -213,7 +150,7 @@ impl<'a> Client<'a> {
             tokens.query()
         ))?;
         let Value::Array(cards) = v["contacts"].take() else {
-            return Err(Error::BadResponse("/co/contacts has no contacts".into()));
+            return Err(bad_response("/co/contacts has no contacts".into()));
         };
         let cards = cards
             .into_iter()
@@ -228,7 +165,7 @@ impl<'a> Client<'a> {
     fn card_call(&self, tokens: &Tokens, method: Option<&str>, card: Value) -> Result<Value> {
         let method = method.map(|m| format!("&method={m}")).unwrap_or_default();
         let url = format!("{}/co/contacts/card/?{QUERY}&{}{method}", self.base, tokens.query());
-        self.t.post_json(&url, &json!({ "contacts": [card] }))
+        Ok(self.t.post_json(&url, &json!({ "contacts": [card] }))?)
     }
 
     /// Creates `card` (`method` `None`; the card carries its new
@@ -257,7 +194,7 @@ impl<'a> Client<'a> {
             .as_array()
             .is_some_and(|ids| ids.iter().any(|d| d == id));
         if !deleted {
-            return Err(Error::BadResponse(format!(
+            return Err(bad_response(format!(
                 "iCloud's answer does not list contact {id} as deleted"
             )));
         }
@@ -288,7 +225,7 @@ fn saved(answer: &Value, id: &str, tokens: &Tokens) -> Result<(Map<String, Value
         .and_then(|cards| cards.iter().find(|c| c["contactId"] == id))
         .and_then(Value::as_object)
         .cloned()
-        .ok_or_else(|| Error::BadResponse(format!("iCloud's answer has no contact {id}")))?;
+        .ok_or_else(|| bad_response(format!("iCloud's answer has no contact {id}")))?;
     Ok((card, tokens.after(answer)))
 }
 
@@ -327,7 +264,10 @@ mod tests {
                 sync: "s2".into()
             }
         );
-        assert!(matches!(saved(&answer, "GONE", &tokens), Err(Error::BadResponse(_))));
+        assert!(matches!(
+            saved(&answer, "GONE", &tokens),
+            Err(Error::Session(icloud_session::Error::BadResponse(_)))
+        ));
     }
 
     #[test]

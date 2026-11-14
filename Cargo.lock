@@ -891,15 +891,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "icloud-contacts"
+name = "icloud-app"
+version = "0.11.1"
+dependencies = [
+ "icloud-session",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "icloud-app-ui"
 version = "0.11.1"
 dependencies = [
  "async-channel",
- "clap",
  "gtk4",
  "icloud-session",
  "libadwaita",
- "rustix",
+]
+
+[[package]]
+name = "icloud-contacts"
+version = "0.11.1"
+dependencies = [
+ "clap",
+ "gtk4",
+ "icloud-app",
+ "icloud-app-ui",
+ "icloud-session",
+ "libadwaita",
  "serde",
  "serde_json",
  "tempfile",

@@ -1,0 +1,18 @@
+[package]
+name = "icloud-app-ui"
+version.workspace = true
+edition.workspace = true
+description = "What the iCloud GTK apps' windows share (the GTK half of icloud-app); internal, builds no binary"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "icloud_app_ui"
+
+[dependencies]
+# The workspace's session/ crate.
+icloud-session.workspace = true
+gtk.workspace = true
+adw.workspace = true
+async-channel.workspace = true

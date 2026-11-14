@@ -6,10 +6,12 @@
 mod fake;
 
 use std::net::TcpListener;
-use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 use std::sync::Arc;
 
+use icloud_app::testing::{
+    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, stderr, stdout,
+};
 use serde_json::{Value, json};
 
 struct Env {
@@ -36,18 +38,9 @@ impl Env {
     /// Stdin not a terminal, `--data-dir <tmp>/data`, a home and XDG
     /// directories in the temp dir, and no session bus.
     fn run(&self, args: &[&str]) -> Output {
-        let tmp = self.dir.path();
-        Command::new(env!("CARGO_BIN_EXE_icloud-contacts"))
+        command(env!("CARGO_BIN_EXE_icloud-contacts"), &self.base, self.dir.path())
             .args(args)
-            .arg("--data-dir")
-            .arg(tmp.join("data"))
-            .env("ICLOUD_SESSION_MOCK", "1")
-            .env("ICLOUD_SESSION_MOCK_URL", &self.base)
-            .env("HOME", tmp.join("home"))
-            .env("XDG_DATA_HOME", tmp.join("xdg"))
             .env("FAKE_CONTACTS_QUIET", "1")
-            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
-            .stdin(Stdio::null())
             .output()
             .unwrap()
     }
@@ -100,23 +93,6 @@ impl Env {
             })
             .collect()
     }
-}
-
-fn code(out: &Output) -> i32 {
-    out.status.code().unwrap()
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// Parses a JSON envelope (`{ok,data,summary}` or `{ok:false,error}`).
-fn envelope(stdout: &str) -> Value {
-    serde_json::from_str(stdout).unwrap_or_else(|e| panic!("not JSON ({e}): {stdout}"))
 }
 
 fn names(v: &Value) -> Vec<String> {
@@ -478,86 +454,17 @@ fn sync_counts_changes() {
     assert_eq!(env.ok(&["sync", "--count"]), "1\n");
 }
 
-/// The shared libraries a 64-bit little-endian ELF executable needs (its
-/// `DT_NEEDED` entries).
-fn needed_libs(path: &str) -> Vec<String> {
-    let f = std::fs::read(path).unwrap();
-    let u16_at = |o: usize| u16::from_le_bytes(f[o..o + 2].try_into().unwrap()) as usize;
-    let u64_at = |o: usize| u64::from_le_bytes(f[o..o + 8].try_into().unwrap()) as usize;
-    assert_eq!(&f[..5], b"\x7fELF\x02", "a 64-bit ELF file");
-    let (phoff, phentsize, phnum) = (u64_at(0x20), u16_at(0x36), u16_at(0x38));
-    let headers: Vec<usize> = (0..phnum).map(|i| phoff + i * phentsize).collect();
-    let p_type = |h: usize| u32::from_le_bytes(f[h..h + 4].try_into().unwrap());
-    let file_offset = |vaddr: usize| {
-        headers
-            .iter()
-            .filter(|&&h| p_type(h) == 1)
-            .find(|&&h| (u64_at(h + 0x10)..u64_at(h + 0x10) + u64_at(h + 0x20)).contains(&vaddr))
-            .map(|&h| vaddr - u64_at(h + 0x10) + u64_at(h + 0x08))
-            .expect("address in a loaded segment")
-    };
-    let dynamic = headers.iter().find(|&&h| p_type(h) == 2).expect("dynamically linked");
-    let entries: Vec<(usize, usize)> = (u64_at(dynamic + 0x08)..u64_at(dynamic + 0x08) + u64_at(dynamic + 0x20))
-        .step_by(16)
-        .map(|e| (u64_at(e), u64_at(e + 8)))
-        .take_while(|&(tag, _)| tag != 0)
-        .collect();
-    let strtab = file_offset(entries.iter().find(|e| e.0 == 5).expect("DT_STRTAB").1);
-    entries
-        .iter()
-        .filter(|e| e.0 == 1)
-        .map(|&(_, name)| {
-            let start = strtab + name;
-            let end = start + f[start..].iter().position(|&b| b == 0).unwrap();
-            String::from_utf8_lossy(&f[start..end]).into_owned()
-        })
-        .collect()
-}
-
 /// `icloud-contacts` is what agents and scripts run: it must not load GTK.
 #[test]
 fn the_command_line_binary_does_not_link_gtk() {
-    let ui = |libs: Vec<String>| {
-        libs.into_iter()
-            .filter(|l| ["libgtk-4.", "libadwaita-1."].iter().any(|p| l.starts_with(p)))
-            .count()
-    };
-    let cli = needed_libs(env!("CARGO_BIN_EXE_icloud-contacts"));
-    assert!(cli.iter().any(|l| l.starts_with("libc.")), "{cli:?}");
-    assert_eq!(ui(cli.clone()), 0, "{cli:?}");
-    // Named but not built without the `ui` feature.
-    if let Some(app) = option_env!("CARGO_BIN_EXE_icloud-contacts-app").filter(|p| Path::new(p).exists()) {
-        assert_eq!(ui(needed_libs(app)), 2);
-    }
+    assert_cli_links_no_gtk(
+        env!("CARGO_BIN_EXE_icloud-contacts"),
+        option_env!("CARGO_BIN_EXE_icloud-contacts-app"),
+        &["libgtk-4.", "libadwaita-1."],
+    );
 }
 
-/// With no command, `icloud-contacts` becomes `icloud-contacts-app` from
-/// its own directory (the same process: its exit code is the app's).
 #[test]
 fn no_command_runs_the_app_beside_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let cli = tmp.path().join("icloud-contacts");
-    std::fs::copy(env!("CARGO_BIN_EXE_icloud-contacts"), &cli).unwrap();
-    let marker = tmp.path().join("ran");
-    let app = tmp.path().join("icloud-contacts-app");
-    std::fs::write(
-        &app,
-        format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&app, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    // A test thread forking while the copy was open for writing holds its
-    // fd until that child execs: "Text file busy" (ETXTBSY) for a moment.
-    let mut tries = 0;
-    let out = loop {
-        match Command::new(&cli).stdin(Stdio::null()).output() {
-            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
-                tries += 1;
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            r => break r.unwrap(),
-        }
-    };
-    assert_eq!(code(&out), 7, "{}", stderr(&out));
-    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "0");
+    assert_no_command_runs_the_app(env!("CARGO_BIN_EXE_icloud-contacts"), "icloud-contacts");
 }

@@ -12,8 +12,7 @@ use std::sync::Arc;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use super::background;
-use super::banner::SignInBanner;
+use icloud_app_ui::{SignInBanner, background};
 use icloud_contacts::api::{Error, SessionTransport};
 use icloud_contacts::model::{self, Change, Contact, Field, Multi};
 use icloud_contacts::service::Service;
@@ -48,6 +47,7 @@ impl Window {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let (w1, w2) = (weak.clone(), weak.clone());
             let banner = SignInBanner::new(
+                "Sign in to iCloud to see your contacts",
                 move || {
                     if let Some(this) = w1.upgrade() {
                         this.sync();
@@ -206,7 +206,7 @@ impl Window {
                             this.show_list();
                         }
                     }
-                    Ok(Err(Error::SignInRequired)) => this.banner.show(),
+                    Ok(Err(e)) if e.is_sign_in() => this.banner.show(),
                     Ok(Err(e)) => this.error(&e.to_string()),
                     Err(e) => this.error(&e),
                 }
@@ -253,7 +253,7 @@ impl Window {
                         this.show_list();
                         return;
                     }
-                    Ok(Err(Error::SignInRequired)) => {
+                    Ok(Err(e)) if e.is_sign_in() => {
                         this.banner.show();
                         None
                     }

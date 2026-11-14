@@ -1,0 +1,30 @@
+[package]
+name = "icloud-app"
+version.workspace = true
+edition.workspace = true
+description = "What the iCloud GTK apps (Photos, Find My, Reminders, Contacts) share; internal, builds no binary"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "icloud_app"
+
+# No GTK anywhere in this crate: the apps' command lines link it. What their
+# windows share is icloud-app-ui (ui/). `testing` is what their CLI tests
+# share (a dev-dependency only).
+[features]
+testing = ["dep:tempfile"]
+
+[dependencies]
+# The workspace's session/ crate.
+icloud-session.workspace = true
+# flock(2) on an app's data directory.
+rustix = { version = "1", features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

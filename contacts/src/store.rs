@@ -10,10 +10,10 @@
 //! The cache is replaced whole (a temp file, then rename). One that does
 //! not parse is an error naming it, never silently reset.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::PathBuf;
 
+use icloud_app::store;
 use serde::{Deserialize, Serialize};
 
 use crate::api::Tokens;
@@ -61,68 +61,31 @@ pub struct Store {
     dir: PathBuf,
 }
 
-/// Held while it lives; dropping it unlocks.
-pub struct Lock(#[allow(dead_code)] File);
+pub use icloud_app::store::Lock;
 
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         Store { dir }
     }
 
-    /// `$XDG_DATA_HOME/icloud-contacts` (`~/.local/share/icloud-contacts`;
-    /// a relative `XDG_DATA_HOME` is ignored, as the XDG spec says).
+    /// `$XDG_DATA_HOME/icloud-contacts` (`~/.local/share/icloud-contacts`).
     pub fn default_dir() -> Option<PathBuf> {
-        let data = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
-        Some(data.join("icloud-contacts"))
+        store::data_dir("icloud-contacts")
     }
 
     pub fn lock(&self) -> io::Result<Lock> {
-        fs::create_dir_all(&self.dir)?;
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(self.dir.join("lock"))?;
-        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive)?;
-        Ok(Lock(f))
+        store::lock(&self.dir, "lock")
     }
 
     /// The cache: empty when there is none yet, or when an older version
     /// of the app wrote it (the next sync then fetches everything).
     pub fn cache(&self) -> io::Result<Cache> {
-        let path = self.dir.join("cache.json");
-        let bytes = match fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Cache::default()),
-            Err(e) => return Err(e),
-        };
-        #[derive(Deserialize)]
-        struct Header {
-            version: Option<u32>,
-        }
-        let header: Header = serde_json::from_slice(&bytes).map_err(|e| damaged(&path, e))?;
-        if header.version != Some(CACHE_VERSION) {
-            return Ok(Cache::default());
-        }
-        serde_json::from_slice(&bytes).map_err(|e| damaged(&path, e))
+        Ok(store::read_json_version(&self.dir.join("cache.json"), CACHE_VERSION)?.unwrap_or_default())
     }
 
-    /// Saves `cache`, stamped with this version's [`CACHE_VERSION`]: to a
-    /// temp file, then renamed over the old one. Called holding
-    /// [`Store::lock`], which made the directory.
+    /// Saves `cache`, stamped with this version's [`CACHE_VERSION`].
     pub fn save_cache(&self, cache: &mut Cache) -> io::Result<()> {
         cache.version = CACHE_VERSION;
-        let tmp = self.dir.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
-        let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        f.write_all(&serde_json::to_vec(cache).expect("serializable"))?;
-        f.sync_all()?;
-        fs::rename(&tmp, self.dir.join("cache.json"))
+        store::write_json(&self.dir.join("cache.json"), cache)
     }
-}
-
-fn damaged(path: &Path, e: impl std::fmt::Display) -> io::Error {
-    io::Error::other(format!("{} is damaged ({e}); delete it to start over", path.display()))
 }
