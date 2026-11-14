@@ -781,6 +781,35 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
 }
 
 #[test]
+fn an_unclear_answer_on_an_item_deleted_already_fails_it_and_only_it() {
+    use support::fake_server::AssetLookups;
+    // iCloud may answer a lookup of asset records otherwise than the fake
+    // does: the item fails as "already deleted", the others are deleted.
+    for how in [AssetLookups::BadRequest, AssetLookups::RecordError, AssetLookups::Bare] {
+        let env = Env::synced("unclear", 4);
+        let ids = env.ids(&[]);
+        let (one, two) = (&ids[0], &ids[1]);
+        assert_eq!(env.run(&["delete", one, "--yes"]).code, 0);
+        env.server.asset_lookups(how);
+        let r = env.run(&["delete", one, two, "--yes"]);
+        assert_eq!(r.code, 1, "{how:?}: {}\n{}", r.stdout, r.stderr);
+        let v = r.json();
+        assert_eq!(v[0]["deleted"], false, "{how:?}: {v}");
+        let err = v[0]["error"].as_str().unwrap();
+        assert!(err.contains("is already deleted"), "{how:?}: {err}");
+        assert_eq!(
+            v[1],
+            serde_json::json!({ "id": two, "deleted": true, "already": false })
+        );
+        assert!(!env.server.asset_ids().contains(two), "{how:?}");
+        assert_eq!(env.json(&["info", one])["deleted"], true, "{how:?}");
+        // Restore never asks: it still brings both back.
+        assert_eq!(env.run(&["restore", one, two]).code, 0, "{how:?}");
+        assert_eq!(env.server.asset_ids().len(), 4, "{how:?}");
+    }
+}
+
+#[test]
 fn restore_undoes_delete() {
     let env = Env::synced("restore", 6);
     let ids = env.ids(&[]);

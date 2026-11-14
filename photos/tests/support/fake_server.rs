@@ -54,9 +54,24 @@ struct State {
     sign_out_after_uploads: Option<usize>,
     /// Answer 503 to the listings a sync makes (`changes/zone`, `records/query`).
     listings_down: bool,
+    /// How `records/lookup` answers for asset (not master) records.
+    asset_lookups: AssetLookups,
     uploads: HashMap<String, Arc<Vec<u8>>>,
     jpegs: HashMap<(usize, &'static str), Arc<Vec<u8>>>,
     next_id: usize,
+}
+
+/// How the fake answers a `records/lookup` of CPLAsset records, which is
+/// unverified against Apple: as it answers for masters, or otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssetLookups {
+    Records,
+    /// HTTP 400 for the whole request.
+    BadRequest,
+    /// A per-record `serverErrorCode` other than NOT_FOUND.
+    RecordError,
+    /// The record with no fields.
+    Bare,
 }
 
 pub struct FakeServer {
@@ -115,6 +130,11 @@ impl FakeServer {
     /// Make every sync fail with a 503 (writes still go through) until called with false.
     pub fn fail_syncs(&self, down: bool) {
         self.state.lock().unwrap().listings_down = down;
+    }
+
+    /// Change how `records/lookup` answers for asset records.
+    pub fn asset_lookups(&self, how: AssetLookups) {
+        self.state.lock().unwrap().asset_lookups = how;
     }
 
     /// Simulate an edit made on another device: the asset's change tag moves on.
@@ -225,6 +245,7 @@ impl State {
             sign_out_after_modifies: None,
             sign_out_after_uploads: None,
             listings_down: false,
+            asset_lookups: AssetLookups::Records,
             uploads: HashMap::new(),
             jpegs: HashMap::new(),
             next_id: count,
@@ -389,7 +410,13 @@ impl State {
             .map(
                 |n| match self.assets.iter().position(|a| a.master == *n || a.id == *n) {
                     Some(i) if self.assets[i].master == *n => self.master_record(i),
-                    Some(i) => self.asset_record(i),
+                    Some(i) => match self.asset_lookups {
+                        AssetLookups::Records | AssetLookups::BadRequest => self.asset_record(i),
+                        AssetLookups::RecordError => {
+                            json!({ "recordName": n, "serverErrorCode": "BAD_REQUEST", "reason": "not here" })
+                        }
+                        AssetLookups::Bare => json!({ "recordName": n, "recordType": "CPLAsset" }),
+                    },
                     None => json!({ "recordName": n, "serverErrorCode": "NOT_FOUND", "reason": "Record not found" }),
                 },
             )
@@ -624,6 +651,20 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
                 json_ok(json!({ "zones": [{ "zoneID": State::zone(), "syncToken": s.token(), "deleted": false }] }))
             }
             "changes/zone" => json_ok(s.changes(&body)),
+            "records/lookup"
+                if s.asset_lookups == AssetLookups::BadRequest
+                    && body["records"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|r| s.assets.iter().any(|a| r["recordName"] == a.id.as_str())) =>
+            {
+                (
+                    400,
+                    "application/json",
+                    br#"{"serverErrorCode":"BAD_REQUEST"}"#.to_vec(),
+                )
+            }
             "records/lookup" => json_ok(s.lookup(&body)),
             "records/modify" => {
                 let answer = s.modify(&body);

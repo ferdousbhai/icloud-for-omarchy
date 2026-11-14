@@ -1279,12 +1279,18 @@ impl Done {
 
 /// An item the catalog has as deleted: done already when iCloud has it
 /// deleted too; hidden, or back in the library on another device, it fails.
+/// When iCloud gives no clear answer (the lookup is unverified for asset
+/// records) the item fails as it did before the lookup was asked.
 fn already_deleted(ck: &CloudKit, id: &str) -> LibResult<Done> {
-    match ck.is_deleted(id)? {
-        true => Ok(Done::Already),
-        false => Err(Error::Other(format!(
+    match ck.is_deleted(id) {
+        Ok(true) => Ok(Done::Already),
+        Ok(false) => Err(Error::Other(format!(
             "{id} is not in the library here, but not deleted in iCloud (hidden, or changed on another device); \
              run `icloud-photos sync` and try again"
+        ))),
+        Err(e) if e.is_sign_in() => Err(e),
+        Err(e) => Err(Error::Other(format!(
+            "{id} is already deleted (iCloud could not confirm it: {e})"
         ))),
     }
 }

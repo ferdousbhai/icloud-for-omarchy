@@ -548,6 +548,8 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
   as the app does. The data is `[{id, deleted, already, error?}]`: an item
   iCloud has deleted already (a delete that was cut off, run again) is done,
   `deleted: true, already: true`, "already deleted" in text mode, exit 0.
+  When iCloud cannot confirm that (no clear answer to asking about the
+  item), the item fails as "already deleted" (exit 1).
 - `restore` undoes `delete`: `[{id, restored, already, error?}]`. An item
   restored here already (a restore cut off part-way, run again) is done,
   `already: true`, "already restored" in text mode; the others are
@@ -780,8 +782,8 @@ mode progress goes to stderr as `icloud-notes:progress:...` lines.
 | `copy` | `{id, path, type:"image/jpeg"\|"image/png"}` |
 | `wallpaper` | `{id, path}` (the file the background now points at) |
 | `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, sync_error, not_in_catalog}`; a sync that failed after the upload is `sync_error` (the files are in iCloud, `not_in_catalog` lists them), exit 1 |
-| `delete` | `[{id, deleted, error?}]` |
-| `restore` | `[{id, restored, error?}]` |
+| `delete` | `[{id, deleted, already, error?}]` |
+| `restore` | `[{id, restored, already, error?}]` |
 | `prune-cache` | `{removed}` |
 | `sign-in` | `{started, mock}` |
 | `config` | `{library_dir, download, file, saved}` |
