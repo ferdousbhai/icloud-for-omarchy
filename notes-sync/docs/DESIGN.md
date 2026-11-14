@@ -372,7 +372,10 @@ the user kept was deleted or untracked, no edit was lost and state.json
 reads back. The runs: clone, pull (with checkpoints, and with notes and
 folders moved), push (notes, attachments, folders), sync, shared zones
 (written in, read only, revoked), a filename-title vault retitled on both
-sides, and migrations from layouts 2 and 3. The points are in `src/crash.rs`: one right after every durable
+sides, and migrations from layouts 2 and 3; and runs cut short and then
+met by a change before the next one: a share revoked, a folder renamed
+again or a note edited on the phone, more typed here; and a clone with two
+attachments of one name, notes of one title. The points are in `src/crash.rs`: one right after every durable
 write (state.json, note files, base copies, history snapshots and epochs,
 attachment downloads, renames, removals, an atomic write's temporary file,
 `pendingCreates` written and cleared, each step of the 3 → 4 migration)

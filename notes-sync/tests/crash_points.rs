@@ -2041,3 +2041,35 @@ fn a_create_in_a_share_revoked_after_the_push_was_cut_short_does_not_stop_every_
             .is_some_and(|r| body_of(r).contains("made here in a share"))
     );
 }
+
+/// After the push was cut short, and before the next run, a note the push
+/// was editing was edited on the phone too, further down: both edits end
+/// up in the file and in iCloud.
+#[test]
+fn a_push_cut_short_before_an_edit_on_the_phone_is_finished_by_the_next_run() {
+    const LONG: &str = "E0000000-0000-4000-8000-000000000003";
+    let mut zone = account(9);
+    let mut record = zone.live(LONG).unwrap().clone();
+    record["fields"]["TextDataEncrypted"]["value"] =
+        json!(note_text_field("Extra 3\nline of note 3\n\nmiddle\n\nlast line"));
+    zone.put(record);
+    let mut start = cloned_from(zone);
+    changed_here(&mut start);
+    fn edit_on_the_phone(zone: &mut Zone) {
+        let mut record = zone.live(LONG).unwrap().clone();
+        let text = body_of(&record).replace("last line", "last line, from the phone");
+        record["fields"]["TextDataEncrypted"]["value"] = json!(note_text_field(&text));
+        zone.put(record);
+    }
+    let edited = tracked_file(&start.place, LONG);
+    let text = std::fs::read_to_string(start.place.vault.join(&edited)).unwrap();
+    std::fs::write(
+        start.place.vault.join(&edited),
+        text.replacen("line of note 3", "line of note 3, typed here", 1),
+    )
+    .unwrap();
+    start.expect.edits.push((edited.clone(), "typed here".into()));
+    start.expect.edits.push((edited, "from the phone".into()));
+    start.expect.between = Some(edit_on_the_phone);
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
+}
