@@ -148,6 +148,10 @@ pub struct Stored {
     pub validated_at: u64,
     #[serde(default)]
     pub captured_at: String,
+    /// New each time the jars are stored in the keyring, so a change of
+    /// them alone changes this file too, and another daemon follows it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub jars: String,
     #[serde(default, skip_serializing)]
     pub cookies: Option<Vec<Cookie>>,
     #[serde(default, skip_serializing)]
@@ -186,6 +190,7 @@ impl Account {
             webservices: self.webservices.clone(),
             validated_at: self.validated_at,
             captured_at: self.captured_at.clone(),
+            jars: String::new(),
             cookies: None,
             find_my: None,
         }

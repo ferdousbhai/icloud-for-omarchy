@@ -364,6 +364,10 @@ pub struct Daemon {
     /// Pings this daemon sent itself that `track_clients` has seen: every
     /// call sent before such a ping has been seen too.
     pings_seen: AtomicU64,
+    /// [`Daemon::follow_disk`] followed another daemon's change: the next
+    /// tick reads the account it stored, so the properties that need its
+    /// jars (`FindMyAuthorized`, `ExpiresAt`) say what it holds.
+    followed: AtomicBool,
 }
 
 /// Counts a method call as in flight while it is answered.
@@ -648,6 +652,7 @@ impl Daemon {
             change: Mutex::new(()),
             in_flight: AtomicUsize::new(0),
             pings_seen: AtomicU64::new(0),
+            followed: AtomicBool::new(false),
         })
     }
 
@@ -873,11 +878,20 @@ impl Daemon {
         let mut errors = Vec::new();
         match &save.account {
             Some(a) => {
-                if let Err(e) = a.stored().save(path) {
+                let secret = a.secret();
+                let store = written.secret.as_ref() != Some(&secret);
+                let mut stored = a.stored();
+                stored.jars = match store {
+                    true => uuid::Uuid::new_v4().to_string(),
+                    false => (written.file.as_deref())
+                        .and_then(|file| serde_json::from_slice::<Stored>(file).ok())
+                        .map(|file| file.jars)
+                        .unwrap_or_default(),
+                };
+                if let Err(e) = stored.save(path) {
                     errors.push(format!("saving {}: {e}", path.display()));
                 }
-                let secret = a.secret();
-                if written.secret.as_ref() != Some(&secret) {
+                if store {
                     written.secret = None;
                     match self.secrets.set_item(Kind::Session, &a.apple_id, &secret) {
                         Ok(()) => {
@@ -975,6 +989,7 @@ impl Daemon {
         st.sign_out_reason = written.reason.clone();
         drop(st);
         drop(written);
+        self.followed.store(true, Ordering::SeqCst);
         self.announce(false);
     }
 
@@ -2228,6 +2243,10 @@ impl Daemon {
         loop {
             thread::sleep(tick);
             self.follow_disk();
+            if self.followed.swap(false, Ordering::SeqCst) {
+                // The other daemon just wrote the keyring: it answers.
+                let _ = self.retry_keyring();
+            }
 
             let clients: Vec<String> = lock(&self.state).clients.iter().cloned().collect();
             let gone: Vec<String> = clients

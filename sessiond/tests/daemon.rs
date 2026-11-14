@@ -4700,12 +4700,18 @@ fi"#,
         assert!(!rig.status().signed_in);
         assert!(change_pending(&rig.env).exists());
         keyring_up(&rig.env, &held);
-        assert!(trust_item(&rig.env).is_some(), "the cut-off sign-out's trust is still there");
+        assert!(
+            trust_item(&rig.env).is_some(),
+            "the cut-off sign-out's trust is still there"
+        );
 
         no_trust_of_its_own(&rig);
         rig.sign_in("a");
         let secrets = rig.env.all_secrets();
-        assert!(trust_item(&rig.env).is_none(), "the signed-out trust was kept: {secrets}");
+        assert!(
+            trust_item(&rig.env).is_none(),
+            "the signed-out trust was kept: {secrets}"
+        );
         rig.restart();
         let case = "a cut-off sign-out settled before a sign-in";
         assert_eq!(rig.check(case, false).as_deref(), Some(DSID));
@@ -4820,6 +4826,56 @@ fi"#,
         rig.restart();
         let case = "a sign-in finished by a daemon winding down";
         assert_eq!(rig.check(case, false).as_deref(), Some(B_DSID));
+        rig.sign_in_and_out_work(case);
+    }
+
+    /// The same with a Find My authorization, which changes only the jars
+    /// in the keyring: the next daemon follows it too, rather than handing
+    /// out no Find My jar and storing its own jars over it.
+    #[test]
+    fn a_find_my_authorization_a_winding_down_daemon_finishes_is_followed_by_the_next() {
+        let rig = Rig::idling(false, 1.0);
+        rig.sign_in("a");
+        rig.restart();
+        let paused = rig.env.root().join("paused");
+        rig.arm("PAUSE", &format!("release:name@{}", paused.display()));
+        fs::write(rig.window.path().join("hold"), "").unwrap();
+        let first = {
+            let c = rig.env.conn();
+            icloud_session::status_on(&c).unwrap();
+            rig.owner()
+        };
+        rig.paused(&paused);
+
+        let direct = rig.env.conn();
+        direct
+            .call_method(
+                Some(first.as_str()),
+                OBJECT_PATH,
+                Some(INTERFACE),
+                "AuthorizeFindMy",
+                &(),
+            )
+            .unwrap();
+        assert!(!rig.status().find_my_authorized);
+        assert_ne!(rig.owner(), first);
+        fs::remove_file(&paused).unwrap();
+
+        fs::remove_file(rig.window.path().join("hold")).unwrap();
+        wait_until("the first daemon to exit", Duration::from_secs(30), || {
+            !rig.on_bus(&first)
+        });
+        rig.until("the next daemon to follow the authorization", |s| s.find_my_authorized);
+        let (cookie, _): (String, HashMap<String, String>) = call(&rig.conn, "FindMySession").unwrap();
+        assert!(cookie.contains("X-APPLE-WEBAUTH-FMIP=a-fmip"), "{cookie}");
+
+        // Its own writes since keep it.
+        assert!(call::<bool>(&rig.conn, "ReportSignInRequired").unwrap());
+        rig.restart();
+        let case = "a Find My authorization finished by a daemon winding down";
+        assert_eq!(rig.check(case, false).as_deref(), Some(DSID));
+        let secret = rig.env.session_secret().unwrap();
+        assert!(secret.get("find_my").is_some(), "{secret}");
         rig.sign_in_and_out_work(case);
     }
 
