@@ -497,9 +497,14 @@ impl Catalog {
             .query_row("SELECT COUNT(*) FROM assets WHERE deleted = 0", [], |r| r.get(0))?)
     }
 
-    /// Assets with no downloaded original ("download all" mode).
+    /// Assets with no downloaded original, or a Live Photo with no
+    /// downloaded video ("download all" mode).
     pub fn missing_originals(&self) -> Result<Vec<String>> {
-        let mut st = self.conn.prepare("SELECT id FROM assets WHERE deleted = 0 AND local_path IS NULL AND orig_url IS NOT NULL ORDER BY created DESC")?;
+        let mut st = self.conn.prepare(
+            "SELECT id FROM assets WHERE deleted = 0
+               AND ((local_path IS NULL AND orig_url IS NOT NULL) OR (live_path IS NULL AND live_url IS NOT NULL))
+             ORDER BY created DESC",
+        )?;
         Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
     }
 

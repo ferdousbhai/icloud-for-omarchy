@@ -182,6 +182,78 @@ fn kept(before: &BTreeMap<PathBuf, Digest>, after: &BTreeMap<PathBuf, Digest>, w
     }
 }
 
+/// The user's own files in the library's month folder: one with the name of
+/// the newest photo (another size), one of no photo's name.
+fn users_files(month: &Path) -> BTreeMap<PathBuf, Digest> {
+    write(&month.join("IMG_1003.JPG"), b"mine");
+    write(&month.join("notes.txt"), b"notes");
+    files(month)
+}
+
+/// Every visible item's original (and a Live Photo's video) is recorded,
+/// exists and is of iCloud's size; and the library holds exactly those files
+/// beside the user's own.
+fn catalog_and_files_agree(env: &Env, users: &BTreeMap<PathBuf, Digest>, month: &Path) {
+    let mut recorded = BTreeMap::new();
+    for r in env.rows() {
+        let photo = PathBuf::from(r["local_path"].as_str().unwrap_or_else(|| panic!("not recorded: {r}")));
+        assert_eq!(
+            std::fs::metadata(&photo).unwrap().len(),
+            r["size"].as_u64().unwrap(),
+            "{r}"
+        );
+        recorded.insert(photo, ());
+        if r["kind"] == "live" {
+            let video = r["live_path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("video not recorded: {r}"));
+            recorded.insert(PathBuf::from(video), ());
+        }
+    }
+    let on_disk = files(&env.library());
+    let ours: Vec<PathBuf> = on_disk
+        .keys()
+        .map(|p| env.library().join(p))
+        .filter(|p| !users.contains_key(p.strip_prefix(month).unwrap_or(p)))
+        .collect();
+    assert_eq!(
+        ours,
+        recorded.into_keys().collect::<Vec<_>>(),
+        "one file per record, no copies"
+    );
+    kept(users, &files(month), "the user's files");
+}
+
+#[test]
+fn a_download_killed_at_any_point_finishes_with_one_copy_of_each() {
+    // Three items in one month; the oldest is a Live Photo.
+    for point in [
+        "download.original.fetched",
+        "download.original.fetched:3",
+        "download.original.placed",
+        "download.original.placed:2",
+        "download.live.fetched",
+        "download.live.placed",
+    ] {
+        let env = Env::new("download", 3);
+        env.run(&["sync"]).ok();
+        let month = env.library().join("2026/09");
+        let users = users_files(&month);
+        env.crash(point, &["download", "--all"]);
+        kept(&users, &files(&month), point);
+        let again = env.run(&["download", "--all"]);
+        assert_eq!(again.code, Some(0), "{point}: {}\n{}", again.stdout, again.stderr);
+        catalog_and_files_agree(&env, &users, &month);
+        // Nothing is left to do, and doing it changes nothing.
+        let before = files(&env.library());
+        assert_eq!(env.run(&["download", "--all"]).ok(), serde_json::json!([]), "{point}");
+        for id in env.ids() {
+            env.run(&["download", &id]).ok();
+        }
+        assert_eq!(files(&env.library()), before, "{point}");
+    }
+}
+
 #[test]
 fn a_preview_killed_before_its_record_is_fetched_again_into_the_cache() {
     let env = Env::new("cache", 2);

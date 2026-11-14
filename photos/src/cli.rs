@@ -139,7 +139,7 @@ enum Command {
     Download {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         ids: Vec<String>,
-        /// Every original not downloaded yet (what "download all" does in the app).
+        /// Every original, or Live Photo video, not downloaded yet (what "download all" does in the app).
         #[arg(long)]
         all: bool,
         /// iCloud's large JPEG preview (the viewer's image) instead of the original.
