@@ -483,23 +483,25 @@ pub(crate) fn list_untracked_markdown_files(
     target_dir: &Path,
     notes: &IndexMap<String, NoteEntry>,
 ) -> Result<Vec<String>, Error> {
-    let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
-    let mut found = walk_vault(target_dir)?.files;
-    found.retain(|file| !tracked.contains(file.as_str()));
-    found.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-    Ok(found)
+    Ok(untracked_files(walk_vault(target_dir)?.files, notes))
 }
 
-/// Every directory in the vault that could be a folder's: dot-directories
-/// and `attachments/` skipped, as for note files.
-fn list_vault_dirs(target_dir: &Path) -> Result<HashSet<String>, Error> {
-    Ok(walk_vault(target_dir)?.dirs)
+/// `files` without the tracked ones, sorted.
+fn untracked_files(mut files: Vec<String>, notes: &IndexMap<String, NoteEntry>) -> Vec<String> {
+    let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
+    files.retain(|file| !tracked.contains(file.as_str()));
+    files.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    files
 }
 
 /// What [`walk_vault`] finds, relative to the vault's directory.
 #[derive(Default)]
 struct VaultWalk {
+    /// Every directory that could be a folder's.
     dirs: HashSet<String>,
+    /// `attachments/` directories that hold `.md` files (which are not
+    /// notes there).
+    attachments_with_notes: Vec<String>,
     /// `.md` files.
     files: Vec<String>,
     /// Syncthing conflict copies ([`is_sync_conflict_name`]), of any
@@ -546,11 +548,18 @@ fn walk_vault(target_dir: &Path) -> Result<VaultWalk, Error> {
             let file_type = entry.file_type()?;
             let attachments = name.to_lowercase() == "attachments";
             let relative = if dir.is_empty() { name } else { format!("{dir}/{name}") };
-            if file_type.is_dir() {
-                if !attachments {
-                    walk(target_dir, &relative, found)?;
-                    found.dirs.insert(relative);
+            if attachments && entry.path().is_dir() {
+                let holds_notes = std::fs::read_dir(entry.path())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|f| f.file_name().to_string_lossy().ends_with(".md"));
+                if holds_notes {
+                    found.attachments_with_notes.push(relative);
                 }
+            } else if file_type.is_dir() {
+                walk(target_dir, &relative, found)?;
+                found.dirs.insert(relative);
             } else if file_type.is_file() {
                 if is_sync_conflict_name(posix::basename(&relative)) {
                     found.conflicts.push(relative);
@@ -745,41 +754,27 @@ pub fn build_push_plan(
         entries.push(plan_entry.into());
     }
 
+    let VaultWalk {
+        dirs: dirs_on_disk,
+        attachments_with_notes: mut attachments_dirs,
+        files,
+        conflicts: mut conflict_copies,
+    } = walk_vault(target_dir)?;
     // `attachments/` holds attachment files, never notes: say so rather than
     // skip notes put there in silence.
-    for dir in list_vault_dirs(target_dir)?
-        .iter()
-        .chain(std::iter::once(&String::new()))
-    {
-        let Ok(entries) = std::fs::read_dir(target_dir.join(dir)) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.to_lowercase() != "attachments" || !entry.path().is_dir() {
-                continue;
-            }
-            let holds_notes = std::fs::read_dir(entry.path())
-                .into_iter()
-                .flatten()
-                .flatten()
-                .any(|f| f.file_name().to_string_lossy().ends_with(".md"));
-            if holds_notes {
-                let at = if dir.is_empty() { name } else { format!("{dir}/{name}") };
-                notices.push(SyncNotice {
-                    level: NoticeLevel::Warn,
-                    message: format!(
-                        "{at}/ holds note files, but \"attachments\" is where attachment files live, so they're \
-                         ignored - move them to a folder with another name"
-                    ),
-                });
-            }
-        }
+    attachments_dirs.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    for at in attachments_dirs {
+        notices.push(SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!(
+                "{at}/ holds note files, but \"attachments\" is where attachment files live, so they're \
+                 ignored - move them to a folder with another name"
+            ),
+        });
     }
 
     // A Syncthing conflict copy is never a note file: say so, so that it
     // gets merged by hand and deleted.
-    let mut conflict_copies = walk_vault(target_dir)?.conflicts;
     conflict_copies.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     for file in conflict_copies {
         notices.push(SyncNotice {
@@ -792,7 +787,7 @@ pub fn build_push_plan(
     }
 
     let mut untracked: Vec<UntrackedNote> = Vec::new();
-    for file in list_untracked_markdown_files(target_dir, &state.notes)? {
+    for file in untracked_files(files, &state.notes) {
         let text = read_text(&target_dir.join(&file))?.unwrap_or_default();
         let envelope = split_frontmatter(&text, split_options(title_mode));
         untracked.push(UntrackedNote {
@@ -1015,7 +1010,6 @@ pub fn build_push_plan(
     }
 
     // --- folder directories renamed or deleted here
-    let dirs_on_disk = list_vault_dirs(target_dir)?;
     let (folder_renames, folder_deletes) = plan_folder_dir_changes(
         &dir_index,
         &dirs_on_disk,
