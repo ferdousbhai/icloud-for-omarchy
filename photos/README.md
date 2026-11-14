@@ -125,7 +125,8 @@ folder already exists in `~/Pictures` (a year folder, say) the two are
 merged; a file whose name is already taken stays in
 `~/Pictures/icloud-photos/` and is listed on stderr. The old folder is
 removed once empty. A library folder you chose yourself in Preferences is
-left where it is.
+left where it is. After that first start, `~/Pictures/icloud-photos/` is a
+folder like any other and can be chosen again.
 
 ## What has and has not been checked against Apple
 

@@ -9,7 +9,9 @@
 //! whose name is taken stays where it is and is reported. The catalog's
 //! paths move with the files, one transaction per rename, so a download is
 //! never thought missing. The old folder is removed only if it ends up
-//! empty. A library the user chose themselves is never moved.
+//! empty. A library the user chose themselves is never moved; once the move
+//! has run (or there was nothing to move), that includes the old folder
+//! itself, chosen again in the preferences.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -40,11 +42,20 @@ pub struct Moved {
 /// folder `<pictures>/icloud-photos` into `pictures` itself. A saved
 /// `library_dir` other than the old default is the user's choice: it is
 /// returned as it is and nothing moves. A saved old default is rewritten to
-/// the new one.
+/// the new one, until the move is marked done in the catalog: a path saved
+/// after that is the user's choice too.
 pub fn run(dirs: &Dirs, pictures: &Path) -> Settings {
     let saved = Settings::saved(dirs);
     let old = pictures.join(OLD_FOLDER);
     if let Some(s) = saved.as_ref().filter(|s| s.library_dir != old) {
+        return s.clone();
+    }
+    // Looked up without creating a catalog where there is none yet.
+    let marked = || {
+        let cat = dirs.catalog().exists().then(|| Catalog::open(&dirs.catalog()).ok());
+        cat.flatten().filter(|c| c.meta(MOVED_KEY).ok().flatten().is_some())
+    };
+    if let Some(s) = saved.as_ref().filter(|_| marked().is_some()) {
         return s.clone();
     }
     let download = saved.as_ref().map_or(DownloadMode::default(), |s| s.download);
@@ -70,8 +81,18 @@ pub fn run(dirs: &Dirs, pictures: &Path) -> Settings {
             }
             return s;
         }
-        // Nothing to move.
-        _ => return rewrite(settings(pictures.to_path_buf())),
+        // Nothing to move, now or later: from here on the old folder is
+        // an ordinary one.
+        _ => {
+            if dirs.catalog().exists()
+                && let Ok(cat) = Catalog::open(&dirs.catalog())
+                && cat.meta(MOVED_KEY).ok().flatten().is_none()
+                && let Err(e) = cat.set_meta(MOVED_KEY, Some("1"))
+            {
+                eprintln!("icloud-photos: cannot record the library move: {e}");
+            }
+            return rewrite(settings(pictures.to_path_buf()));
+        }
     }
     let mut cat = match Catalog::open(&dirs.catalog()) {
         Ok(c) => c,

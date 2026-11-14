@@ -195,3 +195,37 @@ fn a_library_folder_the_user_chose_is_left_alone() {
     assert!(!pictures.join("2025").exists());
     assert!(!dirs.catalog().exists());
 }
+
+#[test]
+fn the_old_folder_chosen_after_the_move_is_the_users_choice() {
+    let tmp = temp_dir("migrate-rechosen");
+    let (dirs, pictures) = setup(tmp.path());
+    let old = pictures.join("icloud-photos");
+    write(&old.join("2025/09/IMG_0001.HEIC"), b"heic");
+    save(&dirs, old.clone());
+    assert_eq!(migrate::run(&dirs, &pictures).library_dir, pictures);
+    assert!(!old.exists());
+
+    // `config --library-dir ~/Pictures/icloud-photos`, after the move: kept,
+    // with the folder there or not, and nothing in it moves.
+    save(&dirs, old.clone());
+    assert_eq!(migrate::run(&dirs, &pictures).library_dir, old);
+    write(&old.join("2026/01/IMG_0200.JPG"), b"new");
+    assert_eq!(migrate::run(&dirs, &pictures).library_dir, old);
+    assert_eq!(Settings::saved(&dirs).unwrap().library_dir, old);
+    assert!(old.join("2026/01/IMG_0200.JPG").exists() && !pictures.join("2026").exists());
+}
+
+#[test]
+fn with_nothing_to_move_the_old_folder_can_be_chosen_too() {
+    let tmp = temp_dir("migrate-fresh");
+    let (dirs, pictures) = setup(tmp.path());
+    let old = pictures.join("icloud-photos");
+    // A first start with no old folder: nothing moves, and that is recorded.
+    assert_eq!(migrate::run(&dirs, &pictures).library_dir, pictures);
+    assert!(!dirs.settings().exists());
+    save(&dirs, old.clone());
+    write(&old.join("2026/01/IMG_0200.JPG"), b"new");
+    assert_eq!(migrate::run(&dirs, &pictures).library_dir, old);
+    assert!(old.join("2026/01/IMG_0200.JPG").exists());
+}
