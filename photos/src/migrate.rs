@@ -133,15 +133,20 @@ pub fn move_library(cat: &mut Catalog, from: &Path, to: &Path) -> Moved {
 
 /// A move killed between a rename and the commit of its catalog update
 /// left the file in `to` and its record in `from`: point each record whose
-/// file is gone from `from` at the file of its name and size in `to`.
+/// file is gone from `from` at the file of its name and size in `to`, unless
+/// another record has that file. A record of no known size is left alone:
+/// the file of its name may be anybody's (a download takes it up by its
+/// bytes later).
 fn follow_renamed(cat: &Catalog, from: &Path, to: &Path) {
     let Ok(recorded) = cat.paths_under(from) else { return };
     for (path, size) in recorded {
         let Ok(rel) = path.strip_prefix(from) else { continue };
         let moved = to.join(rel);
         let there = |p: &Path| std::fs::symlink_metadata(p).ok().filter(|m| m.is_file());
-        if there(&path).is_none()
-            && there(&moved).is_some_and(|m| size <= 0 || m.len() == size as u64)
+        if size > 0
+            && there(&path).is_none()
+            && there(&moved).is_some_and(|m| m.len() == size as u64)
+            && cat.path_taken(&moved, "").is_ok_and(|taken| !taken)
             && let Err(e) = cat.move_paths(&path, &moved)
         {
             eprintln!("icloud-photos: cannot record {} moved: {e}", moved.display());

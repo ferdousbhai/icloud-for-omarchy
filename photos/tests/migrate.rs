@@ -229,3 +229,38 @@ fn with_nothing_to_move_the_old_folder_can_be_chosen_too() {
     assert_eq!(migrate::run(&dirs, &pictures).library_dir, old);
     assert!(old.join("2026/01/IMG_0200.JPG").exists());
 }
+
+#[test]
+fn a_missing_download_is_followed_only_to_its_own_file() {
+    let tmp = temp_dir("migrate-follow");
+    let (dirs, pictures) = setup(tmp.path());
+    let old = pictures.join("icloud-photos");
+    let (heic, mov) = ("2025/09/IMG_0001.HEIC", "2025/09/IMG_0001.MOV");
+    // ASSET-001's photo and video are recorded in the old folder, but the
+    // user deleted both there. Files of those names in Pictures are not
+    // them: the photo's is ASSET-002's download (of the same size), the
+    // video's the user's own (and the catalog knows no size for the video).
+    for (id, kind, path) in [
+        ("ASSET-001", PathKind::Original, old.join(heic)),
+        ("ASSET-001", PathKind::Live, old.join(mov)),
+        ("ASSET-002", PathKind::Original, pictures.join(heic)),
+    ] {
+        downloaded(&dirs, id, kind, &path, b"same");
+    }
+    write(&pictures.join(mov), b"mine");
+    for p in [heic, mov] {
+        std::fs::remove_file(old.join(p)).unwrap();
+    }
+    let db = rusqlite::Connection::open(dirs.catalog()).unwrap();
+    db.execute(
+        "UPDATE assets SET size = 4, live_size = 0 WHERE id IN ('ASSET-001', 'ASSET-002')",
+        [],
+    )
+    .unwrap();
+
+    assert_eq!(migrate::run(&dirs, &pictures).library_dir, pictures);
+
+    assert_eq!(paths(&dirs, "ASSET-002").0, Some(pictures.join(heic)));
+    assert_eq!(paths(&dirs, "ASSET-001"), (Some(old.join(heic)), Some(old.join(mov))));
+    assert_eq!(std::fs::read(pictures.join(mov)).unwrap(), b"mine");
+}
