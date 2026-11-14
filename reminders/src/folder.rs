@@ -576,11 +576,16 @@ fn read(path: &Path) -> io::Result<Option<String>> {
 
 /// Replaces the file whole: a temp file beside it, then a rename. The temp
 /// file has the name Syncthing gives its own temporaries
-/// (`.syncthing.<name>.tmp`), which it does not sync.
+/// (`.syncthing.<name>.tmp`), which it does not sync. Its data is on disk
+/// before the rename, as `folder.json`'s is: a power cut must not leave an
+/// empty file that `folder.json` says was written, read as every line removed.
 fn write(path: &Path, text: &str) -> io::Result<()> {
+    use std::io::Write;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("list");
     let tmp = path.with_file_name(format!(".syncthing.{name}.tmp"));
-    fs::write(&tmp, text)?;
+    let mut f = fs::File::create(&tmp)?;
+    f.write_all(text.as_bytes())?;
+    f.sync_all()?;
     fs::rename(&tmp, path)
 }
 
