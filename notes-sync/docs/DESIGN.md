@@ -226,26 +226,25 @@ window closes, so a killed run is ordinary.
 - `clone` that fails after writing notes writes state.json for them, with
   no sync tokens: the directory is a clone from then on, and the first pull
   lists everything and adds the rest. One that fails before writing any
-  note leaves no state. A clone killed outright leaves files and no state;
-  the clone after it finds, in each directory it writes to, the files that
-  carry the id of the note it is about to write, and takes one that reads
-  exactly as it would write it for that note's file instead of writing
-  `X 2.md` beside it. A file with the id that reads differently (edited
-  since, or the note changed in iCloud) is left alone and the note written
-  beside it; push then creates that file as a note of its own, so neither
-  text is lost.
+  note leaves no state. A clone killed outright leaves files and no state.
 
-- `pull` does the same for a note new to the vault: an untracked file in
-  the note's directory that carries its id and reads exactly as the pull
-  would write it (what a pull killed before a save, or one that failed
-  between writing the file and recording it, left) is taken for the note's
-  file instead of `X 2.md` being written beside it.
-- A note that another device moved to another folder (or whose folder it
-  renamed) after a pull or clone cut short wrote its file is written in its
-  directory now, and the file left in the old one, when it reads exactly as
-  the one written, is removed (`cmd::remove_left_elsewhere`). Left there,
-  it would carry the id of a note tracked elsewhere: a copy, which push
-  creates as a note of its own.
+- A clone or pull writes a new note's base copy before its file, and
+  untracking a note removes its base copy, so an untracked file that
+  carries the id of a note nothing tracks, whose body reads as that note's
+  base copy under no frontmatter but the id and `apple-note-title`, is what
+  a run that never got to record the note wrote, untouched since
+  (`cmd::left_untouched`). Before a clone or pull writes a note new to the
+  vault, it removes every such file of the note, wherever it is (the note
+  moved to another folder, or its folder renamed, on another device since)
+  and however the note changed in iCloud since, and one that reads exactly
+  as the run is about to write it; then it writes the note where and as it
+  is now, under the name a removed file in that directory had
+  (`cmd::remove_left_files`). Left there, such a file would carry the id of
+  a note tracked elsewhere: a copy, which push creates as a note of its
+  own (up to 0.11.1 a note edited on the phone after a pull cut short wrote
+  it came back as a second note with its older text). A file edited since,
+  frontmatter included, is left alone and the note written beside it; push
+  then creates that file as a note of its own, so neither text is lost.
 - `push` (the first half of the sync that follows such a pull in the
   Notes app) leaves such a file alone: an untracked file whose
   `apple-note-id` no note here is tracked under is looked up first, and
@@ -259,10 +258,7 @@ window closes, so a killed run is ordinary.
   note, except in a file a pull cut short wrote for a note deleted on
   another device since, untouched: that file is removed, as a remote
   deletion removes a clean file (up to 0.11.1 the deleted note came back
-  as a new one). A pull (and a clone) writes a new note's base copy before its file, and
-  untracking a note removes its base copy, so a base copy of a note
-  nothing tracks that reads as the file's body says exactly that
-  (`push::left_by_a_pull_unchanged`). A file edited since, or put back
+  as a new one). A file edited since (`cmd::left_untouched`, above), or put back
   from a backup after the note was deleted from here, is pushed as before.
   A pull removes such a file too, without asking iCloud, from a directory
   no folder has any more (the folder deleted or renamed, or the share
@@ -314,7 +310,7 @@ window closes, so a killed run is ordinary.
   (`cmd::pull::claim_untracked_attachment_names`). The exception is what a
   killed pull left: a file linked from a note file that is itself untracked
   and carries an id nothing tracks is fetched again under its name, so that
-  the note file reads as the pull would write it and is adopted (above).
+  no second copy (`name 2.ext`) is left beside it.
   Whether a file there is byte-identical to the download is not compared:
   the name is chosen before the download runs.
 - `clone` does not replace one either: the names a folder's `attachments/`
@@ -323,8 +319,8 @@ window closes, so a killed run is ordinary.
   downloaded under its name, or under the `name N.ext` a clone gives it
   when an earlier attachment or file took the name (what a clone killed
   after the download left; only one of the asset's size is fetched to
-  compare), is taken for the attachment instead, so that the note file
-  left beside it reads as the clone would write it and is adopted (above).
+  compare), is taken for the attachment instead, so that no second copy is
+  left beside it.
   Up to 0.11.1 a clone into a directory with such a file replaced it.
 
 - A run killed mid-write leaves a temporary file: the engine's own

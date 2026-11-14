@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, LeftAnywhere, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, PENDING_DIRS_KEY, SyncNotice, SyncProgress,
-    UNSAFE_RECORD_NAME, UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of,
-    redo_downloads, remove_left_elsewhere, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice,
-    skipped_zone_owner, unshared_note_ids, used_names_for, zone_for_owner,
+    Error, LeftAnywhere, NoticeLevel, OTHER_ZONES_RECORD_NAME, PENDING_DIRS_KEY, SyncNotice, SyncProgress,
+    UNSAFE_RECORD_NAME, UNSHARED_KEY, attachment_lookup_notice, is_purged, left_untouched, redo_downloads,
+    remove_left_files, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner,
+    unshared_note_ids, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -396,7 +396,6 @@ pub fn run_pull_with(
     // left alone because an attachment record could not be looked up: their
     // sync tokens stay where they were, so the next pull lists it again.
     let mut retry_zones: HashSet<Option<String>> = HashSet::new();
-    let mut left_behind: HashMap<String, LeftBehind> = HashMap::new();
     let mut left_anywhere: LeftAnywhere = None;
     let mut claimed_attachment_dirs: HashSet<String> = HashSet::new();
     let notes_at_start = tracked.notes.clone();
@@ -623,49 +622,35 @@ pub fn run_pull_with(
                 }
 
                 let Some(existing) = existing else {
-                    let used_in_dir = used_names_for(&mut used_file_names, &note_dir);
-                    // What an earlier pull wrote here and never recorded
-                    // (killed, or failed on that note): the files no note
-                    // tracks, found once per directory.
-                    if !left_behind.contains_key(&note_dir) {
-                        let on_disk = file_names_in(&target_dir.join(&note_dir))?;
-                        let untracked = on_disk.iter().filter(|name| !used_in_dir.contains(*name));
-                        let left = left_behind_in(target_dir, &note_dir, untracked, title_mode)?;
-                        left_behind.insert(note_dir.clone(), left);
-                    }
-                    claim_names_on_disk(target_dir, &note_dir, used_in_dir)?;
                     let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                    let adopted = left_file_of(
+                    // What an earlier run wrote for the note and never
+                    // recorded (killed, or failed on that note), untouched
+                    // since, goes first, its name with it: this run writes
+                    // the note where and as it is now.
+                    let removed = remove_left_files(
                         target_dir,
-                        &note_dir,
-                        &left_behind[&note_dir],
+                        &mut left_anywhere,
+                        &tracked.notes,
                         &record.record_name,
                         &file_text,
-                    );
-                    let file_name = adopted.clone().unwrap_or_else(|| {
-                        unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir)
-                    });
+                        title_mode,
+                    )?;
+                    let used_in_dir = used_names_for(&mut used_file_names, &note_dir);
+                    for file in removed.iter().filter(|file| note_dir_of(file) == note_dir) {
+                        used_in_dir.remove(posix::basename(file));
+                    }
+                    claim_names_on_disk(target_dir, &note_dir, used_in_dir)?;
+                    let file_name = unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir);
                     used_in_dir.insert(file_name.clone());
                     let relative_file = posix::join(&[&note_dir, &file_name]);
                     let file_path = target_dir.join(&relative_file);
                     // The base copy first: a base copy of a note nothing
                     // tracks is what a pull cut short wrote it from, which
-                    // tells push that a file carrying its id is untouched
-                    // since (see `push::left_by_a_pull_unchanged`).
+                    // tells the next run that a file carrying its id is
+                    // untouched since (`left_untouched`).
                     write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
-                    if adopted.is_none() {
-                        write_note_file(&file_path, &file_text)?;
-                    }
+                    write_note_file(&file_path, &file_text)?;
                     apply_note_file_times(&file_path, record)?;
-                    remove_left_elsewhere(
-                        target_dir,
-                        &mut left_anywhere,
-                        &tracked.notes,
-                        &record.record_name,
-                        &note_dir,
-                        &file_text,
-                        title_mode,
-                    )?;
                     tracked.notes.insert(
                         record.record_name.clone(),
                         NoteEntry {
@@ -1438,9 +1423,8 @@ fn checkpoint_state(
 ///
 /// Not the files a pull that was killed left: those are linked from a note
 /// file it wrote and never recorded (untracked, with an id nothing tracks).
-/// The pull after it fetches them again under the same names, so that the
-/// note file it writes reads as the one left, and is taken for the note
-/// instead of being written a second time beside it.
+/// The pull after it fetches them again under the same names, rather than
+/// a second copy of each beside them.
 fn claim_untracked_attachment_names(
     target_dir: &Path,
     note_dir: &str,
@@ -1636,10 +1620,10 @@ fn remove_left_in_stale_dirs(
             if !is_plain_record_name(&id) || tracked.notes.contains_key(&id) {
                 continue;
             }
-            let Some(base) = read_base_copy(target_dir, &id)? else {
+            if read_base_copy(target_dir, &id)?.is_none() {
                 continue;
-            };
-            if base == envelope.body {
+            }
+            if left_untouched(target_dir, &id, &text, title_mode)? {
                 safe_unlink(&path)?;
                 remove_base_copy(target_dir, &id)?;
             } else if unshared_dirs.contains(dir) {

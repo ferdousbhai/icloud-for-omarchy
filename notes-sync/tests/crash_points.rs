@@ -2156,6 +2156,35 @@ fn a_pull_cut_short_before_a_note_it_wrote_was_deleted_is_finished_by_the_next_r
     crash_everywhere(&deleted_while_pulled(), "pull", &[Then::Again, Then::Sync]);
 }
 
+/// Notes added on the phone, and one of them edited there while a pull
+/// writing them was cut short: the file the pull wrote for it, untouched
+/// since, is the note's file, brought up to the edit, not a copy beside the
+/// note for the next push to create a second time.
+#[test]
+fn a_pull_cut_short_before_a_note_it_wrote_was_edited_on_the_phone_is_finished_by_the_next_run() {
+    let mut start = cloned(3);
+    for i in 0..2 {
+        start.zone.put(note_record(
+            &format!("A0000000-0000-4000-8000-{i:012}"),
+            &format!("Twin\nwritten on the phone, {i}"),
+            if i == 0 { DEFAULT_FOLDER } else { WORK_FOLDER },
+        ));
+    }
+    fn edit_them(zone: &mut Zone) {
+        for i in 0..2 {
+            let name = format!("A0000000-0000-4000-8000-{i:012}");
+            let mut record = zone.live(&name).unwrap().clone();
+            record["fields"]["TextDataEncrypted"]["value"] = json!(note_text_field(&format!(
+                "Twin\nwritten on the phone, {i}\nand edited there"
+            )));
+            zone.put(record);
+        }
+    }
+    start.expect.kept = kept_notes(&start.zone);
+    start.expect.between = Some(edit_them);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
 /// The same with the file edited here before the next run: it is kept, and
 /// pushed as a new note, edits and all.
 #[test]

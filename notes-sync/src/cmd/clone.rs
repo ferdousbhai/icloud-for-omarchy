@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
-    Error, LeftAnywhere, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress,
-    UNSAFE_RECORD_NAME, attachment_lookup_notice, left_behind_in, left_file_of, redo_downloads, remove_left_elsewhere,
-    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, used_names_for, zone_for_owner,
+    Error, LeftAnywhere, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
+    attachment_lookup_notice, redo_downloads, remove_left_files, shared_zone_tokens_and_records, skipped_note_notice,
+    skipped_zone_notice, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::CloudKitRecord;
 use crate::cloudkit::client::DownloadQueue;
@@ -21,7 +21,7 @@ use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_
 use crate::md::frontmatter::compose_note_file;
 use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy_of;
-use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
+use crate::vault::layout::{PreviousLayout, build_vault_layout, note_dir_of, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of, write_note_file};
 use crate::vault::pairing::claim_names_on_disk;
 use crate::vault::state::{
@@ -124,8 +124,7 @@ pub fn run_clone_with(
     // in the set already, so once per directory is enough).
     let mut claimed_dirs: HashSet<String> = HashSet::new();
     // What a clone that never finished (killed before its state was written)
-    // left in each directory.
-    let mut left_behind: HashMap<String, LeftBehind> = HashMap::new();
+    // left, by the id each file carries.
     let mut left_anywhere: LeftAnywhere = None;
     let (shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     let mut sources: Vec<(&[CloudKitRecord], Option<String>)> = vec![(&changes.records, None)];
@@ -239,40 +238,36 @@ pub fn run_clone_with(
                     table_attachments.extend(resolved.table_attachments);
                 }
 
+                let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
+                let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
+                // What a clone killed before this one wrote for the note,
+                // untouched since, goes first, its name with it (as a pull
+                // does): this run writes the note where and as it is now.
+                let removed = remove_left_files(
+                    target_dir,
+                    &mut left_anywhere,
+                    &notes,
+                    &record.record_name,
+                    &file_text,
+                    title_mode,
+                )?;
                 let used_in_dir = used_names_for(&mut used_file_names, &placement.dir);
                 if claimed_dirs.insert(placement.dir.clone()) {
                     claim_names_on_disk(target_dir, &placement.dir, used_in_dir)?;
-                    let left = left_behind_in(target_dir, &placement.dir, used_in_dir.iter(), title_mode)?;
-                    left_behind.insert(placement.dir.clone(), left);
                 }
-                let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
-                let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                let adopted = left_behind
-                    .get(&placement.dir)
-                    .and_then(|left| left_file_of(target_dir, &placement.dir, left, &record.record_name, &file_text));
-                let file_name = adopted.clone().unwrap_or_else(|| {
-                    unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir)
-                });
+                for file in removed.iter().filter(|file| note_dir_of(file) == placement.dir) {
+                    used_in_dir.remove(posix::basename(file));
+                }
+                let file_name = unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir);
                 used_in_dir.insert(file_name.clone());
                 let relative_file = posix::join(&[&placement.dir, &file_name]);
 
                 let file_path = target_dir.join(&relative_file);
                 // The base copy first, as pull writes it (see
-                // `push::left_by_a_pull_unchanged`).
+                // `left_untouched`).
                 write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
-                if adopted.is_none() {
-                    write_note_file(&file_path, &file_text)?;
-                }
+                write_note_file(&file_path, &file_text)?;
                 apply_note_file_times(&file_path, record)?;
-                remove_left_elsewhere(
-                    target_dir,
-                    &mut left_anywhere,
-                    &notes,
-                    &record.record_name,
-                    &placement.dir,
-                    &file_text,
-                    title_mode,
-                )?;
                 if owner.is_some() {
                     summary.written_shared += 1;
                 } else {

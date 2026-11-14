@@ -185,77 +185,53 @@ pub(crate) fn redo_downloads(
     }
 }
 
-/// The note files a directory holds that nothing tracks, by the
-/// `apple-note-id` each carries: what a clone or pull that never got to
-/// record them (killed, or failed on that note) left there. Several files
-/// may carry one id (a copy made since); a Syncthing conflict copy is never
-/// a note file.
-pub(crate) type LeftBehind = HashMap<String, Vec<String>>;
-
-/// The [`LeftBehind`] files among `names` (file names in `dir`).
-pub(crate) fn left_behind_in<'a>(
-    target_dir: &std::path::Path,
-    dir: &str,
-    names: impl IntoIterator<Item = &'a String>,
-    title_mode: crate::vault::state::TitleMode,
-) -> Result<LeftBehind, Error> {
-    let mut names: Vec<&String> = names
-        .into_iter()
-        .filter(|name| name.ends_with(".md") && !push::is_sync_conflict_name(name))
-        .collect();
-    names.sort();
-    let mut ids = LeftBehind::new();
-    for name in names {
-        let file = crate::js::posix::join(&[dir, name]);
-        if let Some(id) = crate::vault::pairing::note_id_at(target_dir, &file, title_mode)? {
-            ids.entry(id).or_default().push(name.clone());
-        }
-    }
-    Ok(ids)
-}
-
-/// The file a run that never recorded it wrote for the note `record_name`:
-/// the note's file, not a name to write beside. Only one that reads exactly
-/// as `file_text`, what this run would write for the note: a file with the
-/// id that differs (edited since, or the note changed in iCloud) is kept as
-/// it is, and the note written beside it.
-pub(crate) fn left_file_of(
-    target_dir: &std::path::Path,
-    dir: &str,
-    left_behind: &LeftBehind,
-    record_name: &str,
-    file_text: &str,
-) -> Option<String> {
-    left_behind
-        .get(record_name)?
-        .iter()
-        .find(|name| {
-            let path = target_dir.join(crate::js::posix::join(&[dir, name]));
-            std::fs::read_to_string(path).is_ok_and(|text| text == file_text)
-        })
-        .cloned()
-}
-
 /// The untracked note files of the whole vault by the id each carries
 /// (vault-relative paths), listed the first time a run needs them.
 pub(crate) type LeftAnywhere = Option<HashMap<String, Vec<String>>>;
 
+/// Whether `text`, a file that carries the id of `record_name`, a note
+/// nothing tracks, is what a run that never got to record the note wrote
+/// for it, untouched since. A clone or pull writes a new note's base copy
+/// before its file, and nothing else leaves a base copy for a note no
+/// longer tracked (untracking removes it), so a body that reads as the base
+/// copy, under no frontmatter but the id and `apple-note-title` such a run
+/// writes, is that run's. A file edited since (frontmatter included), or put
+/// back from a backup after the note was deleted from here, reads otherwise.
+pub(crate) fn left_untouched(
+    target_dir: &std::path::Path,
+    record_name: &str,
+    text: &str,
+    title_mode: crate::vault::state::TitleMode,
+) -> Result<bool, Error> {
+    if !crate::vault::state::is_plain_record_name(record_name) {
+        return Ok(false);
+    }
+    let envelope = crate::md::frontmatter::split_frontmatter(text, crate::vault::local::split_options(title_mode));
+    let frontmatter =
+        crate::md::frontmatter::clear_note_title(&crate::md::frontmatter::clear_note_id(&envelope.frontmatter));
+    if !frontmatter.is_empty() {
+        return Ok(false);
+    }
+    Ok(crate::vault::base::read_base_copy(target_dir, record_name)?.as_deref() == Some(envelope.body.as_str()))
+}
+
 /// Removes what a run that never recorded the note `record_name` wrote for
-/// it outside `note_dir`, where its file now is: a note moved to another
-/// folder, or whose folder was renamed, on another device before this run.
-/// Left there, the file would carry the id of a note tracked elsewhere, a
-/// copy that the next push creates as a second note. Only a file that
-/// reads exactly as `file_text`, what this run wrote for the note, so
-/// nothing that was edited since (or differs at all) is lost.
-pub(crate) fn remove_left_elsewhere(
+/// it, before this run writes the note's file: every untracked file that
+/// carries its id and is untouched since ([`left_untouched`]), or reads
+/// exactly as `file_text`, what this run writes for it. Wherever such a file
+/// is (the note moved to another folder, or its folder renamed, on another
+/// device since) and however the note changed since, its text is in
+/// iCloud. Left there, it would carry the id of a note tracked elsewhere: a
+/// copy, which the next push creates as a second note. Called before the
+/// note's base copy is written, which it reads. Returns the files removed.
+pub(crate) fn remove_left_files(
     target_dir: &std::path::Path,
     left: &mut LeftAnywhere,
     notes: &IndexMap<String, crate::vault::state::NoteEntry>,
     record_name: &str,
-    note_dir: &str,
     file_text: &str,
     title_mode: crate::vault::state::TitleMode,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     if left.is_none() {
         let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
         for file in push::list_untracked_markdown_files(target_dir, notes)? {
@@ -266,21 +242,27 @@ pub(crate) fn remove_left_elsewhere(
         *left = Some(by_id);
     }
     let Some(files) = left.as_mut().and_then(|by_id| by_id.get_mut(record_name)) else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
-    let mut kept = Vec::new();
+    let mut removed = Vec::new();
     for file in std::mem::take(files) {
-        let elsewhere = crate::vault::layout::note_dir_of(&file) != note_dir && !tracked.contains(file.as_str());
         let path = target_dir.join(&file);
-        if elsewhere && std::fs::read_to_string(&path).is_ok_and(|text| text == file_text) {
+        let text = crate::vault::local::read_text(&path)?;
+        let untouched = match &text {
+            Some(text) if !tracked.contains(file.as_str()) => {
+                text == file_text || left_untouched(target_dir, record_name, text, title_mode)?
+            }
+            _ => false,
+        };
+        if untouched {
             crate::vault::attachments::safe_unlink(&path)?;
+            removed.push(file);
         } else {
-            kept.push(file);
+            files.push(file);
         }
     }
-    *files = kept;
-    Ok(())
+    Ok(removed)
 }
 
 /// state.json's `unshared`: the ids of notes someone stopped sharing whose
