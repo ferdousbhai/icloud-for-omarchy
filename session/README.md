@@ -22,8 +22,9 @@ session bus. No systemd unit, no Python, no Node.
 and exits after 5 minutes with no connected clients and no sign-in in
 progress. It is the only process that holds the cookie jar, calls
 `setup.icloud.com/setup/ws/1/validate`, and writes session state. With one
-owner there are no file locks, no validate cache file, no sign-in marker,
-no truncated-read retries and no status polling.
+owner there is no validate cache file, no truncated-read retries and no
+status polling; its one lock and its markers are for a daemon killed, or
+winding down, in the middle of a change (see [Files](#files)).
 
 - **Sign-in.** `SignIn()` runs `icloud-session-signin`, a window showing
   `https://www.icloud.com/`: Apple's own page, so every 2FA flavour and
@@ -294,8 +295,8 @@ Exit codes, the table every iCloud tool shares ([docs/CLI.md](../docs/CLI.md)):
 | `$XDG_STATE_HOME/icloud-session/account.json` (0600) | daemon | What is not a secret: `apple_id`, `full_name`, `dsid`, `client_params` (clientId, clientBuildNumber, clientMasteringNumber), `webservices`, `validated_at`, `captured_at`. One that cannot be read is moved to `account.json.bad` and the daemon starts signed out. |
 | Secret Service (keyring), default collection | daemon | The cookie jars: one item labelled `iCloud session (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=session`, its secret JSON `{dsid, cookies, find_my}`: the main jar (name, value, domain, path, expires; session-only cookies too) and, once authorized, the Find My jar (`cookies`, `client_params`, `captured_at`). Written only when a jar changes. |
 | `$XDG_STATE_HOME/icloud-session/session-removal-pending` (0600, empty) | daemon | Present while a sign-out still owes the keyring's session item a removal (the keyring was unavailable); the next start removes the item and the device trust, then this file; so does a sign-out, or a sign-in before its window opens, with the keyring available again. While it is present no window is given the stored trust, and it goes only once both the session item and the trust have been removed or replaced. |
-| `$XDG_STATE_HOME/icloud-session/session-change-pending` (0600, empty) | daemon | Present while a sign-in or sign-out is between its keyring write and its `account.json` write; a daemon killed there leaves it, and the next start then removes the session the keyring holds for nobody (see below). Apart from `session-removal-pending`: it says nothing about the device trust. |
-| `$XDG_STATE_HOME/icloud-session/change.lock` (0600, empty) | daemon | `flock`ed while the account is written to or removed from the keyring and `account.json`, so a daemon starting while another (winding down, without the bus name) finishes a sign-in leaves that session alone. Never removed. |
+| `$XDG_STATE_HOME/icloud-session/session-change-pending` (0600) | daemon | Present while a sign-in or sign-out is between its keyring writes and its `account.json` write: for a sign-in, the `account.json` it is writing; for a sign-out, `forget_trust` (empty when Apple ended the session). A daemon killed there leaves it, and the next start finishes or undoes the change (see below). |
+| `$XDG_STATE_HOME/icloud-session/change.lock` (0600, empty) | daemon | `flock`ed while the account is written to or removed from the keyring and `account.json`, or read from them, so a daemon starting while another (winding down, without the bus name) finishes a sign-in waits for it rather than reading half of it. A daemon that finds `account.json` changed since it last read or wrote it (checked at each change and every tick) follows it: what the other daemon stored is the account now. Never removed. |
 | `$XDG_STATE_HOME/icloud-session/sign-out-reason` (0600) | daemon | `SignOutReason` as text, written at a sign-out, removed by a sign-in; absent before anyone ever signed in. |
 | Secret Service (keyring), default collection | daemon | The device trust: one item labelled `iCloud device trust (icloud-session): <apple id>`, attributes `application=icloud-session`, `kind=trust`, its secret the JSON list of the cookies "Trust this browser" left (`X-APPLE-WEBAUTH-HSA-TRUST`, idmsa.apple.com's `DES…`), handed to the next sign-in window. Kept when Apple ends the session or a password is forgotten; removed by `SignOut()`. |
 | `$XDG_DATA_HOME/icloud-session/webkit/`, `$XDG_CACHE_HOME/icloud-session/webkit/` | older sign-in windows | their WebKit profile, the web session in plaintext (`cookies.sqlite`). The window keeps none now; the daemon deletes both at start. |
@@ -340,15 +341,23 @@ in, and the daemon says which case it is on stderr:
 - An item holding another account's session: it removes `account.json`
   and starts signed out.
 
-A daemon killed between writing the keyring and `account.json` (a
-sign-out that had removed the file, a sign-in that had not written it yet)
-leaves `session-change-pending`, and the next start removes the session
-the keyring then holds for nobody: only with nobody signed in and no
-`account.json`, with `change.lock` free (no other daemon is in the middle
-of such a change), and only an item that is a session (a damaged one is
-kept). Any other session item left with nobody signed in (the last two
-cases above without that marker) is replaced by the next sign-in and
-removed by a `SignOut()`.
+A daemon killed in the middle of a change leaves `session-change-pending`,
+and the next start (with `change.lock` free: no other daemon is in the
+middle of such a change) settles it by what the keyring holds, so the
+stores hold the account before the change or the one after, whole:
+
+- A sign-in whose session is in the keyring is finished: `account.json`
+  is written from the marker. One whose session is not is undone. A
+  sign-in replacing the device trust removes the old trust before it
+  stores the session, so a crash leaves none rather than one account's
+  trust beside another's session.
+- A sign-out (or Apple ending the session) that had removed
+  `account.json` is finished: the session goes, and for a sign-out the
+  device trust. One that had not is undone.
+
+A damaged item is kept either way. Any other session item left with
+nobody signed in (the last two cases above) is replaced by the next
+sign-in and removed by a `SignOut()`.
 
 No second copy of the session is kept: a copy in the same keyring does
 not survive the keyring losing data, and reading it instead would hide
@@ -440,6 +449,7 @@ never yields and `watch_forever` returns at once.
 | `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
 | `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring |
 | `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS`, `ICLOUD_SESSIOND_HANDOUT_SECS`, `ICLOUD_SESSIOND_RETRY_SECS` | daemon (tests) | 300, 600, 21600, 60 |
+| `ICLOUD_SESSIOND_CRASH_AT`, `ICLOUD_SESSIOND_PAUSE_AT` | daemon, debug builds only (tests) | unset: kill or hold the daemon at a named step (`sessiond/src/crash.rs`); release builds read neither |
 
 ## The sign-in spike
 
@@ -519,7 +529,11 @@ daemon (requests, rotation, retry, sign-out), the CLI, idle exit, a second
 daemon refusing to start, mock mode without D-Bus, and automatic Find My
 re-authorization through a fake `--find --autofill` window (which checks
 the password reaches it on stdin only) with a file standing in for the
-keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`).
+keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`). In a debug build they also
+kill the daemon at every durable step of each change (sign-in, sign-out,
+Find My, a merge, a refresh, the start's own) and check that the next
+start finds one account whole, or none and nothing left for it, and start
+a second daemon in the middle of another's change.
 
 ## Releasing
 

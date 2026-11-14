@@ -18,7 +18,8 @@ use zbus::zvariant::Value;
 
 use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
-use crate::files::{self, Account, FindMyJar, Paths, SessionSecret, Stored};
+use crate::crash;
+use crate::files::{self, Account, FindMyJar, Paths, Pending, SessionSecret, Stored};
 use crate::old_profile;
 use crate::secrets::{self, Kind, Password, SecretStore};
 use zeroize::Zeroizing;
@@ -280,6 +281,8 @@ struct Save {
     seq: u64,
     account: Option<Account>,
     sign_out_reason: String,
+    /// With no account: a sign-out, which forgets the device trust too.
+    forget_trust: bool,
 }
 
 /// An account whose cookies the keyring would not give, and why.
@@ -390,6 +393,12 @@ struct Change<'a> {
     _among_daemons: Option<std::fs::File>,
 }
 
+impl Drop for Change<'_> {
+    fn drop(&mut self) {
+        crash::point("unlock", "change");
+    }
+}
+
 /// What [`Daemon::write`] last wrote.
 #[derive(Default)]
 struct Written {
@@ -400,6 +409,19 @@ struct Written {
     secret: Option<Zeroizing<String>>,
     /// What `sign-out-reason` holds (empty: no file).
     reason: String,
+    /// `account.json` as this daemon last read or wrote it (`None`: there
+    /// was none), so a change another daemon made is noticed.
+    file: Option<Vec<u8>>,
+}
+
+/// `path`'s bytes (`None`: there is no such file), or why they could not
+/// be read.
+fn read_file(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// What [`load_account`] found.
@@ -499,7 +521,7 @@ fn load_account(path: &Path, secrets: &dyn SecretStore) -> Result<Loaded, Box<Un
                         path.display(),
                         bad.display()
                     );
-                    if let Err(e) = std::fs::rename(path, &bad) {
+                    if let Err(e) = files::set_aside(path) {
                         eprintln!("icloud-sessiond: moving {} aside: {e}", path.display());
                     }
                     return Ok(Loaded::SignedOut(SESSION_DAMAGED));
@@ -567,8 +589,11 @@ impl Daemon {
         let secrets = secrets::from_env();
         // Only account.json here: the keyring may prompt to unlock, and
         // `run` reads it with a bounded wait before taking the bus name.
+        // Read before the file is loaded: one changed in between is
+        // followed later (see [`Daemon::follow_disk`]).
         let mut written = Written {
             reason: read_reason(&cfg.paths.sign_out_reason),
+            file: read_file(&cfg.paths.account).ok().flatten(),
             ..Written::default()
         };
         let mut sign_out_reason = written.reason.clone();
@@ -580,6 +605,7 @@ impl Daemon {
                 })
             }),
             Err(_) => {
+                written.file = None;
                 sign_out_reason = ACCOUNT_FILE_UNREADABLE.into();
                 store_reason(&cfg.paths.sign_out_reason, &mut written, &sign_out_reason);
                 None
@@ -647,11 +673,12 @@ impl Daemon {
         let (looked, keyring_looked) = std::sync::mpsc::channel();
         let me = self.clone();
         thread::spawn(move || {
+            // First, while `account.json` may be half of a change.
+            me.settle_cut_off();
             me.settle_removal();
             if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
                 eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
             }
-            me.settle_cut_off();
             // After the keyring's look, so the trust is labelled with the
             // account, and (with a keyring that answers) before the name is
             // taken, so the first window gets it.
@@ -785,13 +812,17 @@ impl Daemon {
 
     /// Forgets the account (confirmed 421/401 or `SignOut`) for `reason`
     /// (a `SignOutReason`); the returned [`Save`] removes `account.json`
-    /// and the keyring's session, and keeps the reason.
-    fn forget(&self, st: &mut State, reason: &str) -> Save {
+    /// and the keyring's session (with `forget_trust`, the device trust
+    /// too), and keeps the reason.
+    fn forget(&self, st: &mut State, reason: &str, forget_trust: bool) -> Save {
         st.account = None;
         st.unread = None;
         st.generation += 1;
         st.sign_out_reason = reason.into();
-        self.save_account(st)
+        Save {
+            forget_trust,
+            ..self.save_account(st)
+        }
     }
 
     /// Takes the account's next stored state (the account now, or none):
@@ -803,6 +834,7 @@ impl Daemon {
             seq: st.save_seq,
             account: st.account.clone(),
             sign_out_reason: st.sign_out_reason.clone(),
+            forget_trust: false,
         }
     }
 
@@ -843,23 +875,34 @@ impl Daemon {
                 }
             }
             None => {
-                // The file goes first: killed before the keyring's item
-                // has gone too, the next start removes it.
-                self.mark_change_pending();
+                // The file goes first: killed before the keyring's items
+                // have gone too, the next start removes them.
+                self.mark_change_pending(&Pending {
+                    account: None,
+                    forget_trust: save.forget_trust,
+                });
+                store_reason(&self.cfg.paths.sign_out_reason, &mut written, &save.sign_out_reason);
                 if let Err(e) = files::remove(path) {
                     errors.push(format!("removing {}: {e}", path.display()));
                 }
                 written.secret = None;
-                match self.secrets.remove_item(Kind::Session) {
-                    Ok(_) => self.settle_owed_trust(),
-                    Err(e) => {
-                        errors.push(format!(
-                            "removing the session from the keyring (retried at the next start): {e}"
-                        ));
-                        let marker = &self.cfg.paths.removal_pending;
-                        if let Err(e) = files::touch(marker) {
-                            errors.push(format!("writing {}: {e}", marker.display()));
-                        }
+                let removed = self.secrets.remove_item(Kind::Session).and_then(|()| {
+                    if save.forget_trust {
+                        self.secrets
+                            .remove_item(Kind::Trust)
+                            .map(|()| self.clear_removal_pending())
+                    } else {
+                        self.settle_owed_trust();
+                        Ok(())
+                    }
+                });
+                if let Err(e) = removed {
+                    errors.push(format!(
+                        "removing the session (or the device trust) from the keyring (retried at the next start): {e}"
+                    ));
+                    let marker = &self.cfg.paths.removal_pending;
+                    if let Err(e) = files::touch(marker) {
+                        errors.push(format!("writing {}: {e}", marker.display()));
                     }
                 }
             }
@@ -872,20 +915,70 @@ impl Daemon {
             eprintln!("icloud-sessiond: {e}");
         }
         store_reason(&self.cfg.paths.sign_out_reason, &mut written, &save.sign_out_reason);
+        self.note_file(&mut written);
+    }
+
+    /// Notes `account.json` as it is now: call under the [`Change`], after
+    /// this daemon read or wrote it.
+    fn note_file(&self, written: &mut Written) {
+        match read_file(&self.cfg.paths.account) {
+            Ok(file) => written.file = file,
+            Err(e) => eprintln!("icloud-sessiond: reading {}: {e}", self.cfg.paths.account.display()),
+        }
+    }
+
+    /// Another daemon (one winding down, without the bus name, finishing
+    /// a sign-in or sign-out) changed `account.json` since this one last
+    /// read or wrote it: what it stored is the account now. Forgets the
+    /// one held, takes the file's as not read from the keyring yet (the
+    /// next call that needs the jar reads it), and drops every write taken
+    /// before, so none puts the old account over the new one.
+    fn follow_disk(&self) {
+        let mut written = lock(&self.written);
+        let file = match read_file(&self.cfg.paths.account) {
+            Ok(file) if file != written.file => file,
+            _ => return,
+        };
+        let stored = file
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<Stored>(bytes).ok());
+        eprintln!("icloud-sessiond: another icloud-sessiond changed the account; following it");
+        written.file = file;
+        written.secret = None;
+        written.reason = read_reason(&self.cfg.paths.sign_out_reason);
+        let mut st = lock(&self.state);
+        st.save_seq += 1;
+        written.seq = st.save_seq;
+        st.account = None;
+        st.unread = stored.map(|stored| {
+            Box::new(Unread {
+                stored,
+                why: "the session's cookies are not read from the keyring yet".into(),
+            })
+        });
+        st.generation += 1;
+        st.keyring_failed = None;
+        st.sign_out_reason = written.reason.clone();
+        drop(st);
+        drop(written);
+        self.announce(false);
     }
 
     /// With the cookies of the account `account.json` names unread (the
     /// keyring failed before), tries the keyring again: `Ok` once they are
     /// read (or the account is gone), else why not.
     ///
-    /// It holds [`Daemon::written`] throughout, so a sign-in or sign-out
-    /// meanwhile writes after it (lock order: `written`, then `state`), and
-    /// a result for an account replaced meanwhile is dropped.
+    /// It holds the [`Change`] throughout, so a sign-in or sign-out
+    /// meanwhile, of this daemon or another, writes after it, and a result
+    /// for an account replaced meanwhile is dropped.
     fn retry_keyring(&self) -> Result<(), ServiceError> {
         if lock(&self.state).unread.is_none() {
             return Ok(());
         }
         let arrived = Instant::now();
+        // `load_account` may write both stores, and must not read half of
+        // another daemon's change.
+        let _change = self.change();
         let mut written = lock(&self.written);
         let generation = {
             let st = lock(&self.state);
@@ -902,6 +995,7 @@ impl Daemon {
             st.generation
         };
         let result = load_account(&self.cfg.paths.account, self.secrets.as_ref());
+        self.note_file(&mut written);
         let mut st = lock(&self.state);
         if st.generation != generation || st.unread.is_none() {
             return Ok(());
@@ -964,7 +1058,12 @@ impl Daemon {
     /// that of a sign-out or sign-in cut off between the keyring and
     /// `account.json`). A keyring that will not leaves the removal owed.
     fn remove_signed_out(&self) {
-        let _change = self.change();
+        let change = self.change();
+        self.remove_signed_out_under(&change);
+    }
+
+    /// [`Daemon::remove_signed_out`] for a caller that holds the [`Change`].
+    fn remove_signed_out_under(&self, _change: &Change<'_>) {
         let _written = lock(&self.written);
         {
             let st = lock(&self.state);
@@ -1009,7 +1108,7 @@ impl Daemon {
     }
 
     /// Takes the [`Change`], waiting for this process's and any other
-    /// daemon's.
+    /// daemon's, then follows what another daemon changed meanwhile.
     fn change(&self) -> Change<'_> {
         let in_process = lock(&self.change);
         let path = &self.cfg.paths.change_lock;
@@ -1020,17 +1119,20 @@ impl Daemon {
                 None
             }
         };
-        Change {
+        crash::point("lock", "change");
+        let change = Change {
             _in_process: in_process,
             _among_daemons: file,
-        }
+        };
+        self.follow_disk();
+        change
     }
 
     /// The account is about to change in the keyring and `account.json`,
-    /// one after the other. Call under the [`Change`].
-    fn mark_change_pending(&self) {
+    /// one after the other, as `pending` says. Call under the [`Change`].
+    fn mark_change_pending(&self, pending: &Pending) {
         let marker = &self.cfg.paths.change_pending;
-        if let Err(e) = files::touch(marker) {
+        if let Err(e) = pending.save(marker) {
             eprintln!("icloud-sessiond: writing {}: {e}", marker.display());
         }
     }
@@ -1043,18 +1145,21 @@ impl Daemon {
     }
 
     /// At start: a daemon killed between the keyring and `account.json`
-    /// (`session-change-pending` is still there) while signing in or out
-    /// left a session in the keyring for nobody. It is removed, when:
+    /// (`session-change-pending` is still there) left the change it was
+    /// making half done. What the keyring holds says how far it got:
     ///
-    /// - no daemon is making such a change now (the `flock` is free: one
-    ///   winding down may be finishing a sign-in, and its session is not
-    ///   cut off), which holds while it is removed;
-    /// - nobody is signed in, here or by `account.json` as it is now;
-    /// - the item is a session: one that is empty or not a session is
-    ///   kept for inspection, as [`load_account`] keeps it.
+    /// - a sign-in whose session is in the keyring is finished:
+    ///   `account.json` is written as the marker has it. One whose session
+    ///   is not (the keyring still holds the account before, or none) is
+    ///   undone: `account.json` is still that account's;
+    /// - a sign-out (or Apple ending the session) that removed
+    ///   `account.json` is finished: the session goes, and for a sign-out
+    ///   the device trust. One that had not is undone.
     ///
-    /// Otherwise it is left, as it always was: the next sign-in replaces
-    /// it, a `SignOut()` removes it.
+    /// Only when no daemon is making such a change now (the `flock` is free:
+    /// one winding down may be finishing a sign-in, and its change is not
+    /// cut off), which holds while it is settled. An item that is empty or
+    /// not a session is kept for inspection, as [`load_account`] keeps it.
     fn settle_cut_off(&self) {
         let paths = &self.cfg.paths;
         if !paths.change_pending.exists() {
@@ -1067,34 +1172,55 @@ impl Daemon {
         if file.try_lock().is_err() {
             return;
         }
-        let _written = lock(&self.written);
-        {
-            let st = lock(&self.state);
-            if st.account.is_some() || st.unread.is_some() {
+        crash::point("lock", "change");
+        let mut written = lock(&self.written);
+        let pending = match Pending::load(&paths.change_pending) {
+            Ok(Some(pending)) => pending,
+            Ok(None) => return,
+            Err(e) => {
+                eprintln!("icloud-sessiond: reading {}: {e}", paths.change_pending.display());
                 return;
             }
-        }
-        if !paths.change_pending.exists() || paths.account.exists() {
-            return;
-        }
-        let removed = self.secrets.get_item(Kind::Session).and_then(|item| match item {
-            Some(text) if serde_json::from_str::<SessionSecret>(&text).is_ok() => {
-                self.secrets.remove_item(Kind::Session).map(|()| true)
+        };
+        let session = match self.secrets.get_item(Kind::Session) {
+            Ok(item) => item.and_then(|text| serde_json::from_str::<SessionSecret>(&text).ok()),
+            Err(e) => {
+                eprintln!(
+                    "icloud-sessiond: reading the keyring to settle a cut-off sign-in or sign-out (retried at the next start): {e}"
+                );
+                return;
             }
-            _ => Ok(false),
-        });
-        match removed {
-            Ok(removed) => {
-                if removed {
-                    eprintln!(
-                        "icloud-sessiond: removed from the keyring the session a sign-in or sign-out cut off left"
-                    );
-                }
-                self.clear_change_pending();
+        };
+        let account = Stored::load_or_set_aside(&paths.account).ok().flatten();
+        let settled = match (pending.account, account, session) {
+            (Some(new), old, Some(session))
+                if session.dsid == new.dsid && old.as_ref().is_none_or(|old| old.dsid != new.dsid) =>
+            {
+                new.save(&paths.account).map_err(|e| e.to_string()).map(|()| {
+                    eprintln!("icloud-sessiond: finished the sign-in a crash cut off");
+                    store_reason(&paths.sign_out_reason, &mut written, "");
+                    let mut st = lock(&self.state);
+                    st.sign_out_reason.clear();
+                    st.unread = Some(Box::new(Unread {
+                        stored: new,
+                        why: "the session's cookies are not read from the keyring yet".into(),
+                    }));
+                })
             }
+            (None, None, session) => session
+                .map_or(Ok(()), |_| self.secrets.remove_item(Kind::Session))
+                .and_then(|()| match pending.forget_trust {
+                    true => self.secrets.remove_item(Kind::Trust),
+                    false => Ok(()),
+                })
+                .map(|()| eprintln!("icloud-sessiond: finished the sign-out a crash cut off")),
+            _ => Ok(()),
+        };
+        self.note_file(&mut written);
+        match settled {
+            Ok(()) => self.clear_change_pending(),
             Err(e) => eprintln!(
-                "icloud-sessiond: removing the session a cut-off sign-in or sign-out left in the keyring \
-                 (retried at the next start): {e}"
+                "icloud-sessiond: settling a sign-in or sign-out a crash cut off (retried at the next start): {e}"
             ),
         }
     }
@@ -1182,7 +1308,7 @@ impl Daemon {
             Err(ValidateError::SignedOut) => {
                 if same {
                     eprintln!("icloud-sessiond: Apple ended the session; signed out");
-                    save = Some(self.forget(&mut st, SESSION_ENDED));
+                    save = Some(self.forget(&mut st, SESSION_ENDED, false));
                 }
                 Err(Refresh::SignedOut)
             }
@@ -1755,6 +1881,7 @@ impl Daemon {
             }
         }
         let (status, out) = self.finish_window(slot, generation, stdout, window)?;
+        crash::point("captured", "autofill");
         if status.code() == Some(3) {
             return Err(LoginError::Rejected);
         }
@@ -1782,6 +1909,7 @@ impl Daemon {
         let _ = stdin.write_all(cookies.as_bytes());
         drop(stdin);
         let (status, out) = self.finish_window(slot, seq, stdout, window)?;
+        crash::point("captured", if find { "find-my" } else { "sign-in" });
         if !status.success() {
             return Err(NotKept::Closed(format!(
                 "{} exited with {status} (window closed?)",
@@ -1865,48 +1993,45 @@ impl Daemon {
             }
         }
         // Into the keyring first: a sign-in that cannot be kept fails, and
-        // says why, rather than lasting only until the daemon exits.
+        // says why, rather than lasting only until the daemon exits. Killed
+        // once it is there, the next start writes `account.json` as the
+        // marker says; killed before, it undoes the sign-in.
         let secret = account.secret();
         written.secret = None;
-        self.mark_change_pending();
+        self.mark_change_pending(&Pending {
+            account: Some(account.stored()),
+            forget_trust: false,
+        });
+        // The window's trust replaces what was stored (it started with
+        // that, so still holds what Apple has not dropped). The old goes
+        // before the session is replaced, so no crash leaves one account's
+        // trust beside another's session (only none). None captured keeps
+        // the old: losing it would only bring 2FA back. Not a signed-out
+        // account's, though, whose removal is still owed (the window did
+        // not start with that): it goes unless replaced.
+        let cleared = !trust.is_empty()
+            && match self.secrets.remove_item(Kind::Trust) {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("icloud-sessiond: replacing the device trust in the keyring: {e}");
+                    false
+                }
+            };
         self.secrets
             .set_item(Kind::Session, &account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
         written.secret = Some(secret);
-        // The window's trust replaces what was stored (it started with
-        // that, so still holds what Apple has not dropped). None captured
-        // keeps the old: losing it would only bring 2FA back. Not a
-        // signed-out account's, though, whose removal is still owed (the
-        // window did not start with that): it goes unless replaced.
-        let replaced = !trust.is_empty()
-            && match self.set_trust(&account.apple_id, &trust) {
-                Ok(()) => true,
-                Err(e) => {
-                    eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
-                    false
-                }
-            };
-        if replaced {
+        if cleared {
             self.clear_removal_pending();
+            if let Err(e) = self.set_trust(&account.apple_id, &trust) {
+                eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+            }
         } else {
             self.settle_owed_trust();
         }
+        // No SignOut can have come in since the check above: it takes the
+        // `Change` before it moves `signin_seq` on.
         let mut st = lock(&self.state);
-        if st.signin_seq != seq {
-            drop(st);
-            // A SignOut came in meanwhile, and may have removed the session
-            // before this one was stored. (The trust stored above it
-            // removes itself: it waits for `written`, held here.)
-            written.secret = None;
-            match self.secrets.remove_item(Kind::Session) {
-                Ok(()) => self.clear_change_pending(),
-                Err(e) => {
-                    eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
-                    let _ = files::touch(&self.cfg.paths.removal_pending);
-                }
-            }
-            return Err(cancelled());
-        }
         // The Find My jar as it is now: a merge or Find My sign-in may have
         // changed it while the keyring was written (`write` below stores it).
         if let Some(now) = st.account.as_ref().filter(|now| now.dsid == account.dsid) {
@@ -1969,13 +2094,16 @@ impl Daemon {
         }
     }
 
-    /// Forgets the account, closes an open sign-in window (its result is
-    /// dropped), then forgets this browser's device trust and deletes any
-    /// WebKit profile an older window left.
+    /// Forgets the account and this browser's device trust, closes an
+    /// open sign-in window (its result is dropped), then deletes any WebKit
+    /// profile an older window left.
     ///
     /// `KeyringUnavailable`: signed out, but the keyring would not remove
     /// the session's cookies; the next start removes them.
     fn sign_out(&self) -> Result<(), ServiceError> {
+        // Taken first: the account signed out is the one stored now, even
+        // if another daemon stored it.
+        let change = self.change();
         let save = {
             let mut slot = lock(&self.signin_child);
             if let Some((_, child)) = slot.take() {
@@ -1989,31 +2117,19 @@ impl Daemon {
             st.signin_seq += 1;
             st.signing_in = false;
             st.last_activity = Instant::now();
-            (st.account.is_some() || st.unread.is_some()).then(|| self.forget(&mut st, SIGNED_OUT))
+            (st.account.is_some() || st.unread.is_some()).then(|| self.forget(&mut st, SIGNED_OUT, true))
         };
         match save {
-            Some(save) => self.write(save),
+            Some(save) => self.write_under(&change, save),
             // Already signed out: whatever session the keyring still holds
             // goes (a removal an earlier SignOut owed is tried again).
-            None => self.remove_signed_out(),
+            None => self.remove_signed_out_under(&change),
         }
+        drop(change);
         {
-            // After any sign-in's write (`written`), so none stores its
-            // trust after this.
-            let _written = lock(&self.written);
-            if let Err(e) = self.secrets.remove_item(Kind::Trust) {
-                eprintln!(
-                    "icloud-sessiond: removing the device trust from the keyring (retried at the next start): {e}"
-                );
-                if let Err(e) = files::touch(&self.cfg.paths.removal_pending) {
-                    eprintln!(
-                        "icloud-sessiond: writing {}: {e}",
-                        self.cfg.paths.removal_pending.display()
-                    );
-                }
-            }
             // An old profile's trust too, before the start-up's move could
-            // store it.
+            // store it (under `written`, as that is).
+            let _written = lock(&self.written);
             for dir in [&self.cfg.paths.webkit_data, &self.cfg.paths.webkit_cache] {
                 if let Err(e) = files::remove_dir(dir) {
                     eprintln!("icloud-sessiond: removing {}: {e}", dir.display());
@@ -2071,6 +2187,7 @@ impl Daemon {
         let dbus = self.conn().and_then(|c| zbus::blocking::fdo::DBusProxy::new(c).ok());
         loop {
             thread::sleep(tick);
+            self.follow_disk();
 
             let clients: Vec<String> = lock(&self.state).clients.iter().cloned().collect();
             let gone: Vec<String> = clients
@@ -2124,6 +2241,7 @@ impl Daemon {
         if let Err(e) = conn.release_name(icloud_session::BUS_NAME) {
             eprintln!("icloud-sessiond: releasing the bus name: {e}");
         }
+        crash::point("release", "name");
         let pings = self.pings_seen.load(Ordering::SeqCst);
         let own = conn.unique_name().map(|n| n.to_string()).unwrap_or_default();
         match conn.call_method(

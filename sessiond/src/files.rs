@@ -12,6 +12,7 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use crate::cookies::{self, Cookie};
+use crate::crash;
 
 /// The client parameter names, as the web client sends them.
 pub const CLIENT_ID: &str = "clientId";
@@ -236,13 +237,12 @@ impl Stored {
         match loaded {
             Ok(stored) => Ok(stored),
             Err(e) => {
-                let bad = path.with_extension("json.bad");
                 eprintln!(
                     "icloud-sessiond: cannot read {}: {e}; moved it to {} and starting signed out",
                     path.display(),
-                    bad.display()
+                    path.with_extension("json.bad").display()
                 );
-                if let Err(e) = fs::rename(path, &bad) {
+                if let Err(e) = set_aside(path) {
                     eprintln!("icloud-sessiond: moving {} aside: {e}", path.display());
                 }
                 Err(e)
@@ -261,6 +261,41 @@ impl Stored {
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
         write_json(path, &serde_json::to_value(self).expect("account serializes"))
+    }
+}
+
+/// `session-change-pending`: what the change of the account under way is,
+/// for the start after a daemon killed in the middle of it to finish or
+/// undo it. Empty (a sign-out, or one of a daemon before it said more):
+/// `account.json` is removed and the keyring's session with it.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Pending {
+    /// A sign-in: the `account.json` it writes once its session is in the
+    /// keyring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<Stored>,
+    /// A sign-out: the device trust goes too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forget_trust: bool,
+}
+
+impl Pending {
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        write_json(path, &serde_json::to_value(self).expect("the marker serializes"))
+    }
+
+    /// The marker at `path` (`None`: there is none). One that cannot be
+    /// parsed is an empty one.
+    pub fn load(path: &Path) -> io::Result<Option<Pending>> {
+        match fs::read(path) {
+            Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => Ok(Some(Pending::default())),
+            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                eprintln!("icloud-sessiond: {}: {e}; read as an empty one", path.display());
+                Pending::default()
+            }))),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -284,8 +319,23 @@ pub fn open_lock(path: &Path) -> io::Result<fs::File> {
 pub fn remove(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
+        _ => {
+            crash::point("remove", &file_name(path));
+            Ok(())
+        }
     }
+}
+
+/// Moves `path` aside to `<path>.bad` (`account.json.bad`).
+pub fn set_aside(path: &Path) -> io::Result<PathBuf> {
+    let bad = path.with_extension("json.bad");
+    fs::rename(path, &bad)?;
+    crash::point("rename", &file_name(path));
+    Ok(bad)
+}
+
+fn file_name(path: &Path) -> std::borrow::Cow<'_, str> {
+    path.file_name().unwrap_or_default().to_string_lossy()
 }
 
 pub fn remove_dir(path: &Path) -> io::Result<()> {
@@ -326,7 +376,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let name = file_name(path);
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
     let result = (|| {
@@ -337,6 +387,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
+    } else {
+        crash::point("write", &name);
     }
     result
 }

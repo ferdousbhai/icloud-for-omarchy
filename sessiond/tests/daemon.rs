@@ -285,6 +285,9 @@ struct Opts<'a> {
     log: bool,
     /// What the bus starts for the daemon's name.
     exec: &'a str,
+    /// Started through a wrapper that arms the crash or pause point
+    /// [`Env::arm`] wrote, for that one start.
+    crash: bool,
 }
 
 impl Default for Opts<'_> {
@@ -299,6 +302,7 @@ impl Default for Opts<'_> {
             seed: true,
             log: false,
             exec: DAEMON,
+            crash: false,
         }
     }
 }
@@ -325,9 +329,25 @@ impl Env {
         for d in ["home", "state", "data", "cache", "config", "services"] {
             fs::create_dir_all(root.join(d)).unwrap();
         }
+        let exec = if opts.crash {
+            write_script(
+                root,
+                "sessiond",
+                &format!(
+                    r#"for v in CRASH PAUSE; do
+  f='{root}/arm-'$v
+  [ -e "$f" ] && export ICLOUD_SESSIOND_${{v}}_AT="$(cat "$f")" && rm -f "$f"
+done
+exec '{DAEMON}' "$@""#,
+                    root = root.display()
+                ),
+            )
+        } else {
+            opts.exec.to_string()
+        };
         fs::write(
             root.join("services/io.github.ferdousbhai.ICloudSession.service"),
-            format!("[D-BUS Service]\nName={BUS_NAME}\nExec={}\n", opts.exec),
+            format!("[D-BUS Service]\nName={BUS_NAME}\nExec={exec}\n"),
         )
         .unwrap();
         fs::write(
@@ -2277,11 +2297,13 @@ fn signed_out_at_start(conn: &Connection) {
 }
 
 /// A daemon killed between the keyring and `account.json` leaves its
-/// marker, and the next start removes the session left for nobody: after
-/// a sign-out that had removed the file, and after a sign-in as someone
-/// else that had not written it yet.
+/// marker, and the next start finishes or undoes the change by what the
+/// keyring holds: a sign-out that had removed the file has the session
+/// removed; a sign-in as someone else whose session is stored has its
+/// `account.json` written (the marker holds it); one whose session is
+/// not is undone.
 #[test]
-fn a_start_removes_the_session_a_cut_off_sign_in_or_sign_out_left() {
+fn a_start_settles_a_cut_off_sign_in_or_sign_out() {
     let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
@@ -2293,6 +2315,7 @@ fn a_start_removes_the_session_a_cut_off_sign_in_or_sign_out_left() {
     wait_stored(&env, &server);
     assert!(!marker.exists(), "nothing was cut off");
     let account = fs::read_to_string(env.account_path()).unwrap();
+    let keyring = fs::read(env.secrets_path()).unwrap();
 
     // The sign-out: account.json gone, the session still in the keyring.
     env.kill_daemon(&conn);
@@ -2302,20 +2325,31 @@ fn a_start_removes_the_session_a_cut_off_sign_in_or_sign_out_left() {
     assert!(!has_session_item(&env), "{}", env.all_secrets());
     assert!(!marker.exists());
 
-    // The sign-in as someone else: account.json still names the first
-    // account, the keyring holds the second's session.
+    // The sign-in as someone else, its session stored: account.json still
+    // names the first account, the keyring holds the second's session.
+    let other = json!({"apple_id": "other@example.com", "dsid": "67890", "validated_at": now()});
     env.kill_daemon(&conn);
-    fs::write(env.account_path(), account).unwrap();
+    fs::write(env.account_path(), &account).unwrap();
     store_another_session(&env);
-    fs::write(&marker, "").unwrap();
-    signed_out_at_start(&conn);
-    assert_eq!(
-        prop::<String>(&conn, "SignOutReason"),
-        "The keyring held another Apple ID's iCloud session"
-    );
-    assert!(!has_session_item(&env), "{}", env.all_secrets());
+    fs::write(&marker, json!({"account": other}).to_string()).unwrap();
+    wait_until("the keyring's look", Duration::from_secs(30), || {
+        prop::<String>(&conn, "Dsid") == "67890"
+    });
+    assert_eq!(env.account_file().unwrap()["apple_id"], "other@example.com");
+    let (cookie, _, _) = session(&conn).unwrap();
+    assert_eq!(cookie, "X-APPLE-WEBAUTH-TOKEN=other");
     assert!(!marker.exists());
-    assert!(!env.account_path().exists());
+
+    // The same, cut off before its session was stored.
+    env.kill_daemon(&conn);
+    fs::write(env.account_path(), &account).unwrap();
+    fs::write(env.secrets_path(), &keyring).unwrap();
+    fs::write(&marker, json!({"account": other}).to_string()).unwrap();
+    wait_until("the keyring's look", Duration::from_secs(30), || {
+        prop::<String>(&conn, "Dsid") == DSID
+    });
+    assert_eq!(env.account_file().unwrap()["dsid"], DSID);
+    assert!(!marker.exists());
 }
 
 /// A sign-in and a sign-out that finish leave no marker.
@@ -3835,4 +3869,806 @@ fn skill_prints_the_markdown_and_install_remove_report_paths() {
         String::from_utf8_lossy(&out.stdout).starts_with("Removed nothing"),
         "{out:?}"
     );
+}
+
+// ------------------------------------------------------- crash injection
+
+/// The daemon killed at each of its crash points (`ICLOUD_SESSIOND_CRASH_AT`,
+/// debug builds only: see `src/crash.rs`) in the middle of each change it
+/// makes, then started again. A first run of each change with `trace`
+/// lists the points it passes (its start-up's included); then, for each,
+/// a fresh run is killed there and the next start must find the stores
+/// whole: one account's `account.json`, session, Find My jar and device
+/// trust (the old one or the new one), or none and nothing left in the
+/// keyring for nobody; and a sign-in and a sign-out must work after it.
+///
+/// Two accounts: A (`DSID`, cookie values not starting `b-`) and B
+/// (`B_DSID`, `b-…`), so a cookie of the wrong account is told apart.
+#[cfg(debug_assertions)]
+mod crash {
+    use super::*;
+
+    pub(super) const B_DSID: &str = "67890";
+
+    pub(super) fn apple_id(dsid: &str) -> &'static str {
+        if dsid == B_DSID {
+            "other@example.com"
+        } else {
+            "someone@example.com"
+        }
+    }
+
+    /// The account a cookie value is A's or B's.
+    fn owner(value: &str) -> &'static str {
+        if value.starts_with("b-") { B_DSID } else { DSID }
+    }
+
+    /// Apple for both accounts: `/validate` answers for the account of the
+    /// token it is sent (421 for A's once `ended`), rotating it unless
+    /// `still`.
+    pub(super) fn two_accounts(ended: Arc<AtomicBool>, still: Arc<AtomicBool>) -> Server {
+        Server::start(move |s, n, base| {
+            let cookie = s.header("Cookie").unwrap_or_default().to_string();
+            let token = cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").unwrap_or_default();
+            let dsid = owner(&token);
+            match s.path() {
+                VALIDATE if dsid == DSID && ended.load(Ordering::SeqCst) => signed_out(),
+                VALIDATE => {
+                    let who = if dsid == B_DSID { "b" } else { "a" };
+                    let reply = Reply::json(
+                        200,
+                        json!({
+                            "dsInfo": {"dsid": dsid, "appleId": apple_id(dsid), "fullName": who},
+                            "webservices": {"ckdatabasews": {"url": base}, "findme": {"url": findme_url(base)}},
+                        }),
+                    );
+                    if still.load(Ordering::SeqCst) {
+                        return reply;
+                    }
+                    reply.cookie(&format!(
+                        "X-APPLE-WEBAUTH-TOKEN={who}-rotated{n}; Domain=.icloud.com; Path=/; Max-Age=2592000"
+                    ))
+                }
+                _ => Reply::json(404, json!({})),
+            }
+        })
+    }
+
+    /// A fake window for the account named in `<dir>/who` (`a` or `b`):
+    /// a sign-in capture, or with `--find` (and `--autofill`) a one-factor
+    /// one with Find My's cookie; each with that account's device trust.
+    /// While `<dir>/hold` exists it waits.
+    pub(super) fn two_window(dir: &Path) -> String {
+        let cookie = |name: &str, value: &str| {
+            format!(
+                r#"{{"name": "{name}", "value": "{value}", "domain": ".icloud.com", "path": "/", "expires": null}}"#
+            )
+        };
+        let user = cookie("X-APPLE-WEBAUTH-USER", r#"\"v=1:s=0:d=$dsid\""#);
+        let trust = format!(
+            r#""trust": [{{"name": "DES$who", "value": "$who-trust", "domain": "idmsa.apple.com", "path": "/", "expires": {}}}]"#,
+            now() + 86400
+        );
+        let end = "EOF";
+        write_script(
+            dir,
+            "signin",
+            &format!(
+                r#"d='{d}'
+cat > /dev/null
+while [ -e "$d/hold" ]; do sleep 0.02; done
+who=$(cat "$d/who" 2>/dev/null || echo a)
+case $who in b) dsid={B_DSID} ;; *) dsid={DSID} ;; esac
+if [ "$1" = --find ]; then
+cat <<{end}
+{{"cookies": [{user}, {token1}, {fmip}], {trust}, "dsid": "$dsid", "clientId": "$who-find"}}
+{end}
+else
+cat <<{end}
+{{"cookies": [{user}, {token}], {trust}, "clientId": "$who-client"}}
+{end}
+fi"#,
+                d = dir.display(),
+                token1 = cookie("X-APPLE-WEBAUTH-TOKEN", "$who-onefactor"),
+                fmip = cookie("X-APPLE-WEBAUTH-FMIP", "$who-fmip"),
+                token = cookie("X-APPLE-WEBAUTH-TOKEN", "$who-captured"),
+            ),
+        )
+    }
+
+    pub(super) struct Rig {
+        pub(super) env: Env,
+        pub(super) conn: Connection,
+        pub(super) server: Server,
+        signin: String,
+        pub(super) window: tempfile::TempDir,
+        /// Apple ends A's session.
+        pub(super) ended: Arc<AtomicBool>,
+        /// `/validate` rotates no cookie.
+        pub(super) still: Arc<AtomicBool>,
+        from: std::cell::Cell<usize>,
+    }
+
+    impl Rig {
+        pub(super) fn new(seed: bool) -> Rig {
+            Rig::idling(seed, 60.0)
+        }
+
+        /// A rig whose daemons exit after `idle_secs`.
+        pub(super) fn idling(seed: bool, idle_secs: f64) -> Rig {
+            let ended = Arc::new(AtomicBool::new(false));
+            let still = Arc::new(AtomicBool::new(false));
+            let server = two_accounts(ended.clone(), still.clone());
+            let window = tempfile::tempdir().unwrap();
+            let signin = two_window(window.path());
+            let env = Env::start(Opts {
+                setup_url: &server.url,
+                signin: Some(&signin),
+                seed,
+                log: true,
+                crash: true,
+                idle_secs,
+                ..Default::default()
+            });
+            let conn = env.conn();
+            Rig {
+                env,
+                conn,
+                server,
+                signin,
+                window,
+                ended,
+                still,
+                from: std::cell::Cell::new(0),
+            }
+        }
+
+        /// The next daemon started stops at `spec` (`CRASH` or `PAUSE`).
+        pub(super) fn arm(&self, what: &str, spec: &str) {
+            fs::write(self.env.root().join(format!("arm-{what}")), spec).unwrap();
+        }
+
+        /// What the daemons logged since [`Rig::mark`].
+        pub(super) fn log_since(&self) -> String {
+            self.env.log().get(self.from.get()..).unwrap_or_default().to_string()
+        }
+
+        pub(super) fn mark(&self) {
+            self.from.set(self.env.log().len());
+        }
+
+        pub(super) fn status(&self) -> icloud_session::Status {
+            icloud_session::status_on(&self.conn).unwrap()
+        }
+
+        /// Waits until the status says `cond`.
+        pub(super) fn until(&self, what: &str, cond: impl Fn(&icloud_session::Status) -> bool) {
+            wait_until(what, Duration::from_secs(30), || cond(&self.status()));
+        }
+
+        /// Opens the sign-in window for `who`, without waiting.
+        pub(super) fn start_sign_in(&self, who: &str) {
+            fs::write(self.window.path().join("who"), who).unwrap();
+            let _ = icloud_session::sign_in_on(&self.conn);
+        }
+
+        /// Signs in as `who` and waits until it is stored.
+        pub(super) fn sign_in(&self, who: &str) {
+            self.start_sign_in(who);
+            let dsid = if who == "b" { B_DSID } else { DSID };
+            self.until(&format!("signed in as {who}"), |s| {
+                !s.signing_in && s.dsid.as_deref() == Some(dsid)
+            });
+            wait_until("the sign-in stored", Duration::from_secs(30), || {
+                self.env.account_file().is_some_and(|f| f["dsid"] == dsid) && !change_pending(&self.env).exists()
+            });
+        }
+
+        /// Kills the daemon: the next call starts another (armed, if
+        /// [`Rig::arm`] said so).
+        pub(super) fn restart(&self) {
+            if self.env.daemon_running(&self.conn) {
+                self.env.kill_daemon(&self.conn);
+            }
+        }
+
+        /// The stores, as the next start finds them, hold one account
+        /// whole, or none and no session in the keyring (with
+        /// `forgets_trust`, no device trust either). Its dsid.
+        pub(super) fn check(&self, case: &str, forgets_trust: bool) -> Option<String> {
+            let status = self.status();
+            let secrets = self.env.all_secrets();
+            assert!(
+                !change_pending(&self.env).exists(),
+                "{case}: session-change-pending is left"
+            );
+            let trust = trust_item(&self.env);
+            if !status.signed_in {
+                assert!(
+                    self.env.account_file().is_none(),
+                    "{case}: signed out with account.json"
+                );
+                // A damaged item is kept for inspection; a session is not.
+                let live = secrets.as_array().unwrap().iter().any(|i| {
+                    i["attributes"]["kind"] == "session"
+                        && serde_json::from_str::<Value>(i["secret"].as_str().unwrap_or_default())
+                            .is_ok_and(|v| v.get("dsid").is_some())
+                });
+                assert!(!live, "{case}: a session for nobody: {secrets}");
+                if forgets_trust {
+                    assert!(trust.is_none(), "{case}: the device trust of a sign-out: {secrets}");
+                }
+                return None;
+            }
+            let dsid = status.dsid.clone().unwrap();
+            let file = self.env.account_file();
+            let file = file.unwrap_or_else(|| panic!("{case}: signed in as {dsid} without account.json"));
+            assert_eq!(file["dsid"], dsid.as_str(), "{case}: {file}");
+            assert_eq!(file["apple_id"], apple_id(&dsid), "{case}: {file}");
+            let secret = self.env.session_secret();
+            let secret = secret.unwrap_or_else(|| panic!("{case}: signed in as {dsid} with no session: {secrets}"));
+            assert_eq!(secret["dsid"], dsid.as_str(), "{case}: {secrets}");
+            let mine = |jar: &Value, what: &str| {
+                for c in jar.as_array().unwrap() {
+                    let (name, value) = (c["name"].as_str().unwrap(), c["value"].as_str().unwrap());
+                    let ok = match name {
+                        "X-APPLE-WEBAUTH-USER" => value.contains(&format!("d={dsid}")),
+                        _ => owner(value) == dsid,
+                    };
+                    assert!(ok, "{case}: {what} of {dsid} holds {name}={value}: {secrets}");
+                }
+            };
+            mine(&secret["cookies"], "the jar");
+            if let Some(fm) = secret.get("find_my") {
+                mine(&fm["cookies"], "the Find My jar");
+            }
+            if let Some((label, cookies)) = &trust {
+                assert_eq!(
+                    label,
+                    &format!("iCloud device trust (icloud-session): {}", apple_id(&dsid)),
+                    "{case}"
+                );
+                mine(cookies, "the device trust");
+            }
+            let (header, _, _) = session(&self.conn).unwrap();
+            let token = cookie_of(&header, "X-APPLE-WEBAUTH-TOKEN").unwrap();
+            assert_eq!(owner(&token), dsid, "{case}: {header}");
+            Some(dsid)
+        }
+
+        /// A sign-in as B, then a sign-out, work, and leave nothing behind.
+        pub(super) fn sign_in_and_out_work(&self, case: &str) {
+            self.sign_in("b");
+            assert_eq!(self.check(case, false).as_deref(), Some(B_DSID), "{case}");
+            icloud_session::sign_out_on(&self.conn).unwrap();
+            assert!(self.env.account_file().is_none(), "{case}");
+            let secrets = self.env.all_secrets();
+            assert!(
+                !has_session_item(&self.env) && trust_item(&self.env).is_none(),
+                "{case}: left after a sign-out: {secrets}"
+            );
+        }
+    }
+
+    /// One change the daemon makes, cut off at each point it passes.
+    struct Change<'a> {
+        name: &'a str,
+        /// The state before: the daemon that made it is killed after.
+        setup: &'a dyn Fn(&Rig),
+        /// Starts the change (and the next daemon, with its call).
+        act: &'a dyn Fn(&Rig),
+        /// Waits until it is done (in the traced run).
+        done: &'a dyn Fn(&Rig),
+        /// After the crash, before the next start (a keyring back).
+        after: &'a dyn Fn(&Rig),
+        /// A sign-out: when it took the account, the device trust must go
+        /// with it.
+        forgets_trust: bool,
+        /// Points it must pass.
+        passes: &'a [&'a str],
+        /// Who may be signed in after it, cut off anywhere: the account
+        /// before it, or after it (`None`: nobody).
+        outcomes: &'a [Option<&'a str>],
+        seed: bool,
+    }
+
+    impl Default for Change<'_> {
+        fn default() -> Self {
+            Change {
+                name: "",
+                setup: &|rig| {
+                    rig.sign_in("a");
+                    rig.restart();
+                },
+                act: &|_| {},
+                done: &|_| {},
+                after: &|_| {},
+                forgets_trust: false,
+                passes: &[],
+                outcomes: &[Some(DSID)],
+                seed: false,
+            }
+        }
+    }
+
+    const PREFIX: &str = "icloud-sessiond: crash point ";
+
+    fn run(change: &Change<'_>) {
+        let name = change.name;
+        let rig = Rig::new(change.seed);
+        (change.setup)(&rig);
+        rig.arm("CRASH", "trace");
+        rig.mark();
+        (change.act)(&rig);
+        (change.done)(&rig);
+        let trace: Vec<String> = rig
+            .log_since()
+            .lines()
+            .filter_map(|l| l.strip_prefix(PREFIX))
+            .filter(|p| !p.ends_with("secrets.json"))
+            .map(str::to_string)
+            .collect();
+        for point in change.passes {
+            assert!(
+                trace.iter().any(|p| p == point),
+                "{name}: never passes {point}: {trace:?}"
+            );
+        }
+        drop(rig);
+        eprintln!("{name}: cut off at each of {trace:?}");
+        for (i, point) in trace.iter().enumerate() {
+            let n = trace[..=i].iter().filter(|p| *p == point).count();
+            let case = format!("{name} cut off at {point}:{n}");
+            let rig = Rig::new(change.seed);
+            (change.setup)(&rig);
+            rig.arm("CRASH", &format!("{point}:{n}"));
+            rig.mark();
+            (change.act)(&rig);
+            wait_until(&case, Duration::from_secs(30), || {
+                rig.log_since().contains(&format!("crash injected at {point}"))
+            });
+            wait_until("the killed daemon to leave the bus", Duration::from_secs(30), || {
+                !rig.env.daemon_running(&rig.conn)
+            });
+            (change.after)(&rig);
+            let dsid = rig.check(&case, change.forgets_trust);
+            assert!(
+                change.outcomes.contains(&dsid.as_deref()),
+                "{case}: signed in as {dsid:?}, neither before nor after"
+            );
+            rig.sign_in_and_out_work(&case);
+        }
+    }
+
+    /// Makes the test keyring refuse everything (a directory where its
+    /// file goes); returns what it held.
+    fn keyring_down(env: &Env) -> Vec<u8> {
+        let held = fs::read(env.secrets_path()).unwrap_or_else(|_| b"[]".to_vec());
+        let _ = fs::remove_file(env.secrets_path());
+        fs::create_dir(env.secrets_path()).unwrap();
+        held
+    }
+
+    fn keyring_up(env: &Env, held: &[u8]) {
+        if env.secrets_path().is_dir() {
+            fs::remove_dir(env.secrets_path()).unwrap();
+            fs::write(env.secrets_path(), held).unwrap();
+        }
+    }
+
+    fn kept_keyring(rig: &Rig) -> PathBuf {
+        rig.env.root().join("kept-keyring")
+    }
+
+    #[test]
+    fn a_sign_in_as_another_account_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-in A to B",
+            outcomes: &[Some(DSID), Some(B_DSID)],
+            act: &|rig| rig.start_sign_in("b"),
+            done: &|rig| rig.sign_in("b"),
+            passes: &[
+                "captured:sign-in",
+                "lock:change",
+                "write:session-change-pending",
+                "set:session",
+                "set:trust",
+                "write:account.json",
+                "remove:session-change-pending",
+                "unlock:change",
+            ],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_sign_in_again_as_the_same_account_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-in A to A",
+            act: &|rig| rig.start_sign_in("a"),
+            done: &|rig| {
+                rig.until("the window closed", |s| !s.signing_in);
+                wait_until("stored", Duration::from_secs(30), || !change_pending(&rig.env).exists());
+            },
+            passes: &["captured:sign-in", "set:session", "write:account.json"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_sign_in_after_a_sign_out_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-in after a sign-out",
+            outcomes: &[None, Some(B_DSID)],
+            setup: &|rig| {
+                rig.sign_in("a");
+                icloud_session::sign_out_on(&rig.conn).unwrap();
+                rig.restart();
+            },
+            act: &|rig| rig.start_sign_in("b"),
+            done: &|rig| rig.sign_in("b"),
+            passes: &["set:session", "write:account.json", "remove:sign-out-reason"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_sign_out_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-out",
+            outcomes: &[Some(DSID), None],
+            act: &|rig| {
+                let _ = icloud_session::sign_out_on(&rig.conn);
+            },
+            done: &|rig| rig.until("signed out", |s| !s.signed_in),
+            forgets_trust: true,
+            passes: &[
+                "lock:change",
+                "write:session-change-pending",
+                "write:sign-out-reason",
+                "remove:account.json",
+                "remove:session",
+                "remove:trust",
+                "remove:session-change-pending",
+                "unlock:change",
+            ],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn apple_ending_the_session_cut_off_anywhere() {
+        run(&Change {
+            name: "Apple ends the session",
+            outcomes: &[Some(DSID), None],
+            act: &|rig| {
+                rig.ended.store(true, Ordering::SeqCst);
+                let _ = call::<bool>(&rig.conn, "ReportSignInRequired");
+            },
+            done: &|rig| rig.until("signed out", |s| !s.signed_in),
+            after: &|rig| rig.ended.store(false, Ordering::SeqCst),
+            passes: &["remove:account.json", "remove:session", "write:sign-out-reason"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_refresh_cut_off_anywhere() {
+        run(&Change {
+            name: "refresh",
+            act: &|rig| {
+                let _ = call::<bool>(&rig.conn, "ReportSignInRequired");
+            },
+            done: &|rig| {
+                wait_until("the rotated cookie stored", Duration::from_secs(30), || {
+                    rig.env
+                        .account_cookie("X-APPLE-WEBAUTH-TOKEN")
+                        .is_some_and(|t| t.contains("rotated2"))
+                })
+            },
+            passes: &["write:account.json", "set:session"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_cookie_merge_cut_off_anywhere() {
+        run(&Change {
+            name: "cookie merge",
+            act: &|rig| {
+                let cookies = vec!["X-APPLE-WEBAUTH-TOKEN=a-merged; Domain=.icloud.com; Path=/".to_string()];
+                let _ = rig.conn.call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(INTERFACE),
+                    "MergeCookiesFor",
+                    &(DSID, cookies),
+                );
+            },
+            done: &|rig| {
+                wait_until("the merged cookie stored", Duration::from_secs(30), || {
+                    rig.env.account_cookie("X-APPLE-WEBAUTH-TOKEN").as_deref() == Some("a-merged")
+                })
+            },
+            passes: &["write:account.json", "set:session"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_find_my_authorization_cut_off_anywhere() {
+        run(&Change {
+            name: "Find My authorization",
+            act: &|rig| {
+                let _ = icloud_session::authorize_find_my_on(&rig.conn);
+            },
+            done: &|rig| rig.until("Find My authorized", |s| s.find_my_authorized && !s.signing_in),
+            passes: &["captured:find-my", "set:session", "set:trust"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_find_my_sign_in_with_the_password_cut_off_anywhere() {
+        run(&Change {
+            name: "SetPassword",
+            act: &|rig| {
+                let _ = rig.conn.call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(INTERFACE),
+                    "SetPassword",
+                    &("hunter2",),
+                );
+            },
+            done: &|rig| {
+                rig.until("the password stored", |s| {
+                    s.find_my_password_stored && s.find_my_authorized
+                })
+            },
+            passes: &["captured:autofill", "set:session", "set:trust", "set:password"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn forgetting_the_password_cut_off_anywhere() {
+        run(&Change {
+            name: "ForgetPassword",
+            setup: &|rig| {
+                rig.sign_in("a");
+                rig.env.store_password("hunter2");
+                rig.restart();
+            },
+            act: &|rig| {
+                let _ = call::<()>(&rig.conn, "ForgetPassword");
+            },
+            done: &|rig| rig.until("no password", |s| !s.find_my_password_stored),
+            passes: &["remove:password"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn moving_an_old_account_file_s_cookies_to_the_keyring_cut_off_anywhere() {
+        run(&Change {
+            name: "the cookies' move to the keyring",
+            setup: &|rig| rig.env.seed_validated_at(now()),
+            act: &|rig| {
+                let _ = icloud_session::status_on(&rig.conn);
+            },
+            done: &|rig| {
+                wait_until("moved", Duration::from_secs(30), || {
+                    rig.env.account_file().is_some_and(|f| f.get("cookies").is_none())
+                })
+            },
+            passes: &["set:session", "write:account.json"],
+            seed: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_sign_out_the_keyring_refuses_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-out with the keyring refusing",
+            outcomes: &[Some(DSID), None],
+            act: &|rig| {
+                fs::write(kept_keyring(rig), keyring_down(&rig.env)).unwrap();
+                let _ = icloud_session::sign_out_on(&rig.conn);
+            },
+            done: &|rig| rig.until("signed out", |s| !s.signed_in),
+            after: &|rig| keyring_up(&rig.env, &fs::read(kept_keyring(rig)).unwrap()),
+            forgets_trust: true,
+            passes: &["remove:account.json", "write:session-removal-pending"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_start_finishing_an_owed_removal_cut_off_anywhere() {
+        run(&Change {
+            name: "the owed removal at start",
+            outcomes: &[None],
+            setup: &|rig| {
+                rig.sign_in("a");
+                let held = keyring_down(&rig.env);
+                let _ = icloud_session::sign_out_on(&rig.conn);
+                rig.restart();
+                keyring_up(&rig.env, &held);
+            },
+            act: &|rig| {
+                let _ = icloud_session::status_on(&rig.conn);
+            },
+            done: &|rig| {
+                wait_until("the removal", Duration::from_secs(30), || {
+                    !rig.env
+                        .account_path()
+                        .with_file_name("session-removal-pending")
+                        .exists()
+                })
+            },
+            forgets_trust: true,
+            passes: &["remove:session", "remove:trust", "remove:session-removal-pending"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_damaged_session_item_set_aside_cut_off_anywhere() {
+        run(&Change {
+            name: "a damaged session item",
+            outcomes: &[None],
+            setup: &|rig| {
+                rig.sign_in("a");
+                rig.restart();
+                rig.env.damage_session_secret("not a session");
+            },
+            act: &|rig| {
+                let _ = icloud_session::status_on(&rig.conn);
+            },
+            done: &|rig| rig.until("signed out", |s| !s.signed_in),
+            passes: &["rename:account.json", "write:sign-out-reason"],
+            ..Default::default()
+        });
+    }
+
+    // ------------------------------------------------------- two daemons
+
+    impl Rig {
+        /// The unique bus name of the daemon owning the name now.
+        fn owner(&self) -> String {
+            zbus::blocking::fdo::DBusProxy::new(&self.conn)
+                .unwrap()
+                .get_name_owner(BUS_NAME.try_into().unwrap())
+                .unwrap()
+                .to_string()
+        }
+
+        fn on_bus(&self, unique: &str) -> bool {
+            zbus::blocking::fdo::DBusProxy::new(&self.conn)
+                .unwrap()
+                .name_has_owner(unique.try_into().unwrap())
+                .unwrap()
+        }
+
+        /// Waits until the armed pause is reached; `paused` is its file.
+        fn paused(&self, paused: &Path) {
+            wait_until("the daemon to pause", Duration::from_secs(30), || paused.exists());
+        }
+
+        /// Another daemon, started by hand rather than by the bus, as the
+        /// bus would start it.
+        fn another_daemon(&self) -> Child {
+            let root = self.env.root();
+            Command::new(DAEMON)
+                .env_clear()
+                .env("DBUS_SESSION_BUS_ADDRESS", &self.env.address)
+                .env("HOME", root.join("home"))
+                .env("XDG_STATE_HOME", root.join("state"))
+                .env("XDG_DATA_HOME", root.join("data"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("ICLOUD_SESSION_SETUP_URL", &self.server.url)
+                .env("ICLOUD_SESSION_SIGNIN_BIN", &self.signin)
+                .env("ICLOUD_SESSION_TEST_SECRET_FILE", self.env.secrets_path())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+    }
+
+    /// A daemon winding down (idle, the bus name given up) is asked to
+    /// sign in by a caller that addressed it directly, while the next
+    /// daemon starts; it finishes the sign-in, as B, after that one has
+    /// read A from the stores. The next daemon follows (it says B), its
+    /// own writes since keep the stores whole, and the start after it
+    /// finds B.
+    #[test]
+    fn a_sign_in_a_winding_down_daemon_finishes_is_followed_by_the_next() {
+        let rig = Rig::idling(false, 1.0);
+        rig.sign_in("a");
+        rig.restart();
+        let paused = rig.env.root().join("paused");
+        rig.arm("PAUSE", &format!("release:name@{}", paused.display()));
+        fs::write(rig.window.path().join("hold"), "").unwrap();
+        let first = {
+            let c = rig.env.conn();
+            icloud_session::status_on(&c).unwrap();
+            rig.owner()
+        };
+        rig.paused(&paused);
+
+        // The caller that had it by its unique name opens a window there.
+        let direct = rig.env.conn();
+        fs::write(rig.window.path().join("who"), "b").unwrap();
+        direct
+            .call_method(Some(first.as_str()), OBJECT_PATH, Some(INTERFACE), "SignIn", &())
+            .unwrap();
+        // The next daemon starts, signed in as A.
+        assert_eq!(rig.status().dsid.as_deref(), Some(DSID));
+        assert_ne!(rig.owner(), first);
+        fs::remove_file(&paused).unwrap();
+
+        // The window closes: the winding-down daemon stores B and exits.
+        fs::remove_file(rig.window.path().join("hold")).unwrap();
+        wait_until("the first daemon to exit", Duration::from_secs(30), || {
+            !rig.on_bus(&first)
+        });
+        rig.until("the next daemon to follow the sign-in", |s| {
+            s.dsid.as_deref() == Some(B_DSID)
+        });
+        let (cookie, _, _) = session(&rig.conn).unwrap();
+        assert!(cookie.contains("X-APPLE-WEBAUTH-TOKEN=b-"), "{cookie}");
+
+        // Its own writes since: a merge for A is refused, a /validate
+        // stores B.
+        let cookies = vec!["X-APPLE-WEBAUTH-TOKEN=a-merged; Domain=.icloud.com; Path=/".to_string()];
+        assert!(
+            rig.conn
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(INTERFACE),
+                    "MergeCookiesFor",
+                    &(DSID, cookies)
+                )
+                .is_err()
+        );
+        rig.still.store(true, Ordering::SeqCst);
+        assert!(call::<bool>(&rig.conn, "ReportSignInRequired").unwrap());
+        rig.still.store(false, Ordering::SeqCst);
+        rig.restart();
+        let case = "a sign-in finished by a daemon winding down";
+        assert_eq!(rig.check(case, false).as_deref(), Some(B_DSID));
+        rig.sign_in_and_out_work(case);
+    }
+
+    /// A second daemon starting while the first is between its keyring
+    /// write and its `account.json` write, signing in as B: it waits for
+    /// that change rather than reading half of it (A's `account.json`, B's
+    /// session) as a keyring holding another account's session.
+    #[test]
+    fn a_daemon_starting_while_another_signs_in_leaves_the_sign_in_alone() {
+        let rig = Rig::new(false);
+        rig.sign_in("a");
+        rig.restart();
+        let paused = rig.env.root().join("paused");
+        rig.arm("PAUSE", &format!("set:session@{}", paused.display()));
+        rig.start_sign_in("b");
+        rig.paused(&paused);
+
+        let mut second = rig.another_daemon();
+        // Its start is over (or waiting for the first daemon's change)
+        // once it has given up on the bus name.
+        let exited = second.wait().unwrap();
+        assert!(!exited.success());
+        fs::remove_file(&paused).unwrap();
+        rig.sign_in("b");
+        let reason = rig.env.account_path().with_file_name("sign-out-reason");
+        assert!(!reason.exists(), "{}", fs::read_to_string(&reason).unwrap_or_default());
+        rig.restart();
+        let case = "a sign-in while another daemon started";
+        assert_eq!(rig.check(case, false).as_deref(), Some(B_DSID));
+        rig.sign_in_and_out_work(case);
+    }
 }

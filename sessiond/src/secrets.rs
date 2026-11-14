@@ -46,12 +46,18 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn attributes(self) -> HashMap<&'static str, String> {
-        let kind = match self {
+    fn name(self) -> &'static str {
+        match self {
             Kind::Session => "session",
             Kind::Trust => "trust",
-        };
-        HashMap::from([("application", APPLICATION.to_string()), ("kind", kind.to_string())])
+        }
+    }
+
+    fn attributes(self) -> HashMap<&'static str, String> {
+        HashMap::from([
+            ("application", APPLICATION.to_string()),
+            ("kind", self.name().to_string()),
+        ])
     }
 
     fn label(self, apple_id: &str) -> String {
@@ -105,10 +111,14 @@ fn not_passwords() -> [HashMap<&'static str, String>; 2] {
 
 /// The keyring, or the test file when `ICLOUD_SESSION_TEST_SECRET_FILE` is set.
 pub fn from_env() -> Box<dyn SecretStore> {
-    match std::env::var_os("ICLOUD_SESSION_TEST_SECRET_FILE").filter(|v| !v.is_empty()) {
-        Some(path) => Box::new(TestFile(path.into())),
-        None => keyring(),
-    }
+    let store: Box<dyn SecretStore> =
+        match std::env::var_os("ICLOUD_SESSION_TEST_SECRET_FILE").filter(|v| !v.is_empty()) {
+            Some(path) => Box::new(TestFile(path.into())),
+            None => keyring(),
+        };
+    #[cfg(debug_assertions)]
+    let store = Box::new(CrashPoints(store));
+    store
 }
 
 /// The Secret Service, whatever `ICLOUD_SESSION_TEST_SECRET_FILE` says
@@ -415,6 +425,51 @@ impl SecretStore for Keyring {
 }
 
 // --------------------------------------------------------------- tests
+
+/// The store, with a [`crate::crash`] point after each change it makes.
+#[cfg(debug_assertions)]
+struct CrashPoints(Box<dyn SecretStore>);
+
+#[cfg(debug_assertions)]
+impl CrashPoints {
+    fn after<T>(result: Result<T, String>, op: &str, target: &str) -> Result<T, String> {
+        if result.is_ok() {
+            crate::crash::point(op, target);
+        }
+        result
+    }
+}
+
+#[cfg(debug_assertions)]
+impl SecretStore for CrashPoints {
+    fn get(&self, apple_id: &str) -> Result<Option<Password>, String> {
+        self.0.get(apple_id)
+    }
+
+    fn contains(&self, apple_id: &str) -> Result<bool, String> {
+        self.0.contains(apple_id)
+    }
+
+    fn set(&self, apple_id: &str, password: &str) -> Result<(), String> {
+        Self::after(self.0.set(apple_id, password), "set", "password")
+    }
+
+    fn forget_passwords(&self) -> Result<usize, String> {
+        Self::after(self.0.forget_passwords(), "remove", "password")
+    }
+
+    fn get_item(&self, kind: Kind) -> Result<Option<Zeroizing<String>>, String> {
+        self.0.get_item(kind)
+    }
+
+    fn set_item(&self, kind: Kind, apple_id: &str, secret: &str) -> Result<(), String> {
+        Self::after(self.0.set_item(kind, apple_id, secret), "set", kind.name())
+    }
+
+    fn remove_item(&self, kind: Kind) -> Result<(), String> {
+        Self::after(self.0.remove_item(kind), "remove", kind.name())
+    }
+}
 
 /// A JSON file standing in for the keyring in the tests:
 /// `[{"label", "attributes": {..}, "secret"}]`.

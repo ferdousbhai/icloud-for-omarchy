@@ -6,6 +6,7 @@ mod agent_skill;
 pub mod apple;
 pub mod cli;
 pub mod cookies;
+pub mod crash;
 pub mod daemon;
 pub mod files;
 mod old_profile;
