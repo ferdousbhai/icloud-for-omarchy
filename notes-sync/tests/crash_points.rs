@@ -2309,7 +2309,5 @@ fn a_pull_cut_short_before_a_share_it_wrote_a_note_from_was_revoked_is_finished_
     revoke(&mut after);
     start.expect.kept = kept_notes(&after);
     start.expect.between = Some(revoke);
-    // (A sync straight away fails its push half once, on the lookup in the
-    // zone that is gone; its pull half settles it.)
-    crash_everywhere(&start, "pull", &[Then::Again]);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
 }

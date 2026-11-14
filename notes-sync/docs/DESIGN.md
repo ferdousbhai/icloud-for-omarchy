@@ -461,6 +461,11 @@ Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
   (`PrepareRefusal::LookupFailed`): read as gone, the note would be
   untracked (and stay in iCloud), or an attachment's records left out of
   its removal.
+  A shared zone whose lookup answers HTTP 404 as a whole is the exception:
+  the share is gone (revoked since the last pull), so its records are
+  none, nothing is created in it (`Refusal::CreateInGoneShare`, a
+  conflict), and the pull that follows settles its notes; the push itself
+  goes on (up to 0.11.1 it failed).
 - A copy is not the note. A missing note is paired with the one untracked
   file of its name only when that file doesn't carry another tracked note's
   id: such a file is that note's copy, and taking it for the missing note

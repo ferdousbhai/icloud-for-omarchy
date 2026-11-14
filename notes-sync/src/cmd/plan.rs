@@ -340,6 +340,9 @@ pub enum Refusal {
     CreateLooseInSharerHome,
     /// (create, refused)
     CreateInReadOnlyShare,
+    /// (create, conflict): the folder's share is gone from iCloud (revoked
+    /// since the last pull).
+    CreateInGoneShare,
     /// (create, refused)
     CreateEmptyFile,
     /// (create, refused - unlike the update case)
@@ -402,7 +405,8 @@ impl Refusal {
             | FolderChangedRemotely
             | UpdateGoneRemotely
             | UpdateChangedRemotelyUnmergeable
-            | MergedWithConflicts => PlanResolution::Conflict,
+            | MergedWithConflicts
+            | CreateInGoneShare => PlanResolution::Conflict,
             UpdatePrepare(p) if p.is_conflict() => PlanResolution::Conflict,
             _ => PlanResolution::Refused,
         }
@@ -457,6 +461,9 @@ impl Refusal {
             }
             CreateInReadOnlyShare => {
                 "sits in a shared folder you only have read access to - the server would reject the create".into()
+            }
+            CreateInGoneShare => {
+                "sits in a shared folder that is no longer shared with you - run \"pull\" to reconcile".into()
             }
             CreateEmptyFile => "the file is empty - nothing to create".into(),
             CreateUnknownContent => "this file contains the unknown-content banner - remove it before pushing".into(),

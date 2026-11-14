@@ -1732,8 +1732,19 @@ pub fn build_push_plan(
     // Records iCloud answered an error for (other than "not found"): it
     // didn't say they are gone.
     let mut lookup_failures: HashMap<String, String> = HashMap::new();
+    // Shared zones whose lookup answered HTTP 404: the share is gone (revoked
+    // since the last pull). Their records are none, as for a note gone, and
+    // the next pull settles them; nothing is created there.
+    let mut gone_zones: HashSet<String> = HashSet::new();
     for (owner, names) in &lookup_groups {
-        let (records, failures) = db.lookup_records_and_failures(&note_zone(owner.as_deref()), names)?;
+        let looked_up = db.lookup_records_and_failures(&note_zone(owner.as_deref()), names);
+        let (records, failures) = match (owner, looked_up) {
+            (Some(owner), Err(crate::cloudkit::CkError::RequestFailed { status: Some(404), .. })) => {
+                gone_zones.insert(owner.clone());
+                continue;
+            }
+            (_, looked_up) => looked_up?,
+        };
         for record in records {
             records_by_name.insert(record.record_name.clone(), record);
         }
@@ -1887,6 +1898,10 @@ pub fn build_push_plan(
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             PlanEntry::refused(PlanEntryKind::Create, c.file.clone(), refusal).into()
         };
+        if c.shared_zone_owner.as_ref().is_some_and(|o| gone_zones.contains(o)) {
+            entries.push(refuse(Refusal::CreateInGoneShare));
+            continue;
+        }
         // A file carrying the id of a note iCloud has that nothing here
         // tracks is what a clone or pull killed before it recorded the note
         // left (docs/DESIGN.md, "A run that fails or is killed part way"):

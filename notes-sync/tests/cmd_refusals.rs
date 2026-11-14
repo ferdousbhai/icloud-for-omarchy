@@ -156,6 +156,11 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             "sits in a shared folder you only have read access to - the server would reject the create".into(),
         ),
         (
+            Refusal::CreateInGoneShare,
+            Conflict,
+            "sits in a shared folder that is no longer shared with you - run \"pull\" to reconcile".into(),
+        ),
+        (
             Refusal::CreateEmptyFile,
             Refused,
             "the file is empty - nothing to create".into(),
@@ -495,6 +500,7 @@ fn every_refusal_variant_is_listed() {
             | CreateInUnfolderableDir { .. }
             | CreateLooseInSharerHome
             | CreateInReadOnlyShare
+            | CreateInGoneShare
             | CreateEmptyFile
             | CreateConflictMarkers
             | CreateUnknownContent
@@ -520,7 +526,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 34, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 35, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()
