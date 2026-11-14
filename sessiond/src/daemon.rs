@@ -674,8 +674,7 @@ impl Daemon {
         let me = self.clone();
         thread::spawn(move || {
             // First, while `account.json` may be half of a change.
-            me.settle_cut_off(&me.change());
-            me.settle_removal();
+            me.settle();
             if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
                 eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
             }
@@ -1056,14 +1055,18 @@ impl Daemon {
         }
     }
 
-    /// Removes the session and the device trust from the keyring for a
-    /// sign-out that could not (see `removal_pending`), unless an account
-    /// was stored since: at start, and before a sign-in window opens (it
-    /// starts with the stored trust, which must not be a signed-out
-    /// account's).
-    fn settle_removal(&self) {
+    /// Settles what a crash or a refusing keyring left owed: a change cut
+    /// off ([`Daemon::settle_cut_off`]), then the removal of the session
+    /// and the device trust a sign-out could not make (see
+    /// `removal_pending`), unless an account was stored since. At start,
+    /// and before a sign-in window opens: it starts with the stored trust,
+    /// which must not be a signed-out account's, and its own change would
+    /// replace the marker of one cut off.
+    fn settle(&self) {
+        let change = self.change();
+        self.settle_cut_off(&change);
         if self.cfg.paths.removal_pending.exists() {
-            self.remove_signed_out();
+            self.remove_signed_out_under(&change);
         }
     }
 
@@ -1073,12 +1076,7 @@ impl Daemon {
     /// did not go with and a start left: another account's, a damaged one,
     /// that of a sign-out or sign-in cut off between the keyring and
     /// `account.json`). A keyring that will not leaves the removal owed.
-    fn remove_signed_out(&self) {
-        let change = self.change();
-        self.remove_signed_out_under(&change);
-    }
-
-    /// [`Daemon::remove_signed_out`] for a caller that holds the [`Change`].
+    /// Call under the [`Change`].
     fn remove_signed_out_under(&self, _change: &Change<'_>) {
         let _written = lock(&self.written);
         {
@@ -1180,7 +1178,9 @@ impl Daemon {
     /// keeps it.
     fn settle_cut_off(&self, _change: &Change<'_>) {
         let paths = &self.cfg.paths;
-        if !paths.change_pending.exists() {
+        // Holding an account read from the stores, the marker is this
+        // daemon's own, left by a write that failed: its next write retries.
+        if !paths.change_pending.exists() || lock(&self.state).account.is_some() {
             return;
         }
         let mut written = lock(&self.written);
@@ -1785,9 +1785,11 @@ impl Daemon {
     /// My's, say) is signed in already. Its WebKit profile is in memory
     /// only, so nothing else carries over from one window to the next.
     fn window_cookies(&self) -> Zeroizing<String> {
-        // A removal still owed: what the keyring holds may be a signed-out
+        // A removal still owed, or a change cut off that the keyring kept
+        // from being settled: what the keyring holds may be a signed-out
         // account's trust, which no window gets.
-        let trust = if self.cfg.paths.removal_pending.exists() {
+        let paths = &self.cfg.paths;
+        let trust = if paths.removal_pending.exists() || paths.change_pending.exists() {
             Ok(None)
         } else {
             self.read_trust()
@@ -1906,7 +1908,7 @@ impl Daemon {
     fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), NotKept> {
         let bin = &self.cfg.signin_bin;
         let cancelled = || NotKept::from(WindowError::Cancelled);
-        self.settle_removal();
+        self.settle();
         let cookies = self.window_cookies();
         let slot = &self.signin_child;
         let args: &[&str] = if find { &["--find", "--cookies"] } else { &["--cookies"] };

@@ -4680,6 +4680,39 @@ fi"#,
         rig.sign_in_and_out_work(case);
     }
 
+    /// A sign-out cut off once `account.json` was gone, and a keyring that
+    /// cannot be read when the next daemon starts, so the sign-out is not
+    /// settled then. A sign-in once the keyring is back settles it before
+    /// the window opens: the window gets no device trust the sign-out
+    /// forgot, and the sign-in keeps none of it.
+    #[test]
+    fn a_cut_off_sign_out_is_settled_before_the_next_sign_in_window() {
+        let rig = Rig::new(false);
+        rig.sign_in("a");
+        rig.restart();
+        rig.arm("CRASH", "remove:account.json:1");
+        rig.mark();
+        let _ = icloud_session::sign_out_on(&rig.conn);
+        wait_until("the killed daemon to leave the bus", Duration::from_secs(30), || {
+            !rig.env.daemon_running(&rig.conn)
+        });
+        let held = keyring_down(&rig.env);
+        assert!(!rig.status().signed_in);
+        assert!(change_pending(&rig.env).exists());
+        keyring_up(&rig.env, &held);
+        assert!(trust_item(&rig.env).is_some(), "the cut-off sign-out's trust is still there");
+
+        no_trust_of_its_own(&rig);
+        rig.sign_in("a");
+        let secrets = rig.env.all_secrets();
+        assert!(trust_item(&rig.env).is_none(), "the signed-out trust was kept: {secrets}");
+        rig.restart();
+        let case = "a cut-off sign-out settled before a sign-in";
+        assert_eq!(rig.check(case, false).as_deref(), Some(DSID));
+        fs::remove_file(rig.window.path().join("notrust")).unwrap();
+        rig.sign_in_and_out_work(case);
+    }
+
     // ------------------------------------------------------- two daemons
 
     impl Rig {
