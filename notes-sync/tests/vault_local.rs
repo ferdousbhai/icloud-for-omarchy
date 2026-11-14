@@ -299,3 +299,15 @@ fn write_note_file_writes_through_a_symlink() {
     assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
 }
+
+#[test]
+fn a_note_whose_name_fills_a_file_name_is_written() {
+    // 80 three-byte characters and ".md": 243 bytes, which a temp name built
+    // on the note's own name would push past the 255 a file name holds.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{}.md", "\u{6587}".repeat(80)));
+    write_note_file(&path, "first").unwrap();
+    write_note_file(&path, "second").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}

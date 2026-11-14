@@ -168,6 +168,12 @@ pub(crate) fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Res
     serde_json::from_str(&raw).map_err(|e| Error::Internal(format!("{}: {e}", path.display())))
 }
 
+/// Writes a snapshot or epoch file whole or not at all: a truncated one
+/// would be the latest, and unreadable.
+pub(crate) fn write_capture(path: &Path, json: &serde_json::Value) -> Result<(), Error> {
+    Ok(super::local::write_atomic(path, to_js_json(json).as_bytes(), false)?)
+}
+
 /// Every `*.json` in `dir`, in [`json_file_names`] order, parsed.
 pub(crate) fn read_json_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>, Error> {
     json_file_names(dir)?
@@ -206,11 +212,13 @@ pub fn record_version(target_dir: &Path, input: &VersionSnapshotInput) -> Result
     }
     let dir = record_history_dir(target_dir, &input.record_name)?;
     let names = json_file_names(&dir)?;
-    if let Some(last) = names.last() {
-        let last: VersionSnapshot = read_json_file(&dir.join(last))?;
-        if last.value_base64 == input.value_base64 {
-            return Ok(false);
-        }
+    // A latest snapshot that can't be read (cut short by a crash of an
+    // older version, which wrote it in place) repeats nothing.
+    if let Some(last) = names.last()
+        && let Ok(last) = read_json_file::<VersionSnapshot>(&dir.join(last))
+        && last.value_base64 == input.value_base64
+    {
+        return Ok(false);
     }
     let captured_at = rt::now_ms();
     let id = rt::random_uuid();
@@ -226,10 +234,7 @@ pub fn record_version(target_dir: &Path, input: &VersionSnapshotInput) -> Result
     };
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_value(&snapshot).expect("snapshot serializes");
-    std::fs::write(
-        dir.join(capture_file_name(captured_at, next_seq(&names), &id)),
-        to_js_json(&json),
-    )?;
+    write_capture(&dir.join(capture_file_name(captured_at, next_seq(&names), &id)), &json)?;
     let note_record_name = input.note_record_name.as_deref().unwrap_or(&input.record_name);
     prune_history(target_dir, note_record_name, std::slice::from_ref(&input.record_name))?;
     Ok(true)

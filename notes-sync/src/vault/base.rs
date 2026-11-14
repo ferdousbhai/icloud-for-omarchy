@@ -20,13 +20,14 @@ pub fn read_base_copy(target_dir: &Path, record_name: &str) -> Result<Option<Str
     read_text(&base_copy_path(target_dir, record_name)?)
 }
 
-/// `writeBaseCopy`.
+/// `writeBaseCopy`, whole or not at all: a truncated base would be a wrong
+/// ancestor for the next merge.
 pub fn write_base_copy(target_dir: &Path, record_name: &str, content: &str) -> Result<(), Error> {
     let path = base_copy_path(target_dir, record_name)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, content)?;
+    super::local::write_atomic(&path, content.as_bytes(), false)?;
     Ok(())
 }
 

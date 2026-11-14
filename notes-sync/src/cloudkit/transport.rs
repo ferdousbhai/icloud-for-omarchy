@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -375,19 +374,7 @@ impl Transport for ReplayTransport {
         if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent)?;
         }
-        let mut tmp_name = dest.file_name().unwrap_or_default().to_os_string();
-        tmp_name.push(format!(".{}.tmp", std::process::id()));
-        let tmp = dest.with_file_name(tmp_name);
-        let result = (|| -> std::io::Result<()> {
-            let mut file = fs::File::create(&tmp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            fs::rename(&tmp, dest)
-        })();
-        if let Err(e) = result {
-            let _ = fs::remove_file(&tmp);
-            return Err(e.into());
-        }
+        crate::vault::local::write_atomic(dest, &bytes, false)?;
         Ok(bytes.len() as u64)
     }
 }

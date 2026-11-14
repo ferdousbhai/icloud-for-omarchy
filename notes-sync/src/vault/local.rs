@@ -25,34 +25,47 @@ pub fn read_text(path: &Path) -> Result<Option<String>, Error> {
     }
 }
 
-/// Writes a note file whole or not at all: a temp file beside it, then a
-/// rename, so a crash or a full disk never leaves a truncated note for push
-/// to upload. An existing file keeps its permissions; a symlink keeps
-/// pointing where it did, its target replaced.
+/// A temp file's path beside `path` (so the rename stays on one
+/// filesystem): `.<pid>.<n>.tmp`, hidden, and short whatever `path`'s name
+/// is - a name built on a note's (up to 243 bytes of it) could pass the 255
+/// a file name holds.
+fn temp_sibling(path: &Path) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    path.with_file_name(format!(".{}.{n}.tmp", std::process::id()))
+}
+
+/// Writes `contents` to `path` whole or not at all: a temp file beside it,
+/// synced, then a rename, so a crash or a full disk leaves the old file or
+/// the new one, never a truncated one. With `keep_permissions`, an existing
+/// file's permissions carry over.
+pub(crate) fn write_atomic(path: &Path, contents: &[u8], keep_permissions: bool) -> std::io::Result<()> {
+    let tmp = temp_sibling(path);
+    let written = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(contents)?;
+        if keep_permissions && let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Writes a note file whole or not at all ([`write_atomic`]), so a crash or
+/// a full disk never leaves a truncated note for push to upload. An existing
+/// file keeps its permissions; a symlink keeps pointing where it did, its
+/// target replaced.
 pub fn write_note_file(path: &Path, contents: &str) -> Result<(), Error> {
     let path = match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path)?,
         _ => path.to_path_buf(),
     };
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let written = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(contents.as_bytes())?;
-        if let Ok(meta) = std::fs::metadata(&path) {
-            file.set_permissions(meta.permissions())?;
-        }
-        file.sync_all()?;
-        std::fs::rename(&tmp, &path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    Ok(written?)
+    Ok(write_atomic(&path, contents.as_bytes(), true)?)
 }
 
 /// `SplitFrontmatterOptions` for a vault of `mode`.

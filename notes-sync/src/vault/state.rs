@@ -19,6 +19,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::local::write_atomic;
 use crate::cloudkit::SharedDatabaseCursor;
 use crate::cmd::errors::Error;
 use crate::js::is_record;
@@ -306,27 +307,6 @@ pub fn to_js_json(value: &Value) -> String {
     text
 }
 
-/// Write `contents` to `path` atomically: a temp file beside it, synced,
-/// then a rename, so a crash leaves the old file or the new one.
-pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let written = std::fs::File::create(&tmp).and_then(|mut file| {
-        file.write_all(contents)?;
-        file.sync_all()
-    });
-    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, path)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
-}
-
 /// Write `state` stamped with the current layout version and generator,
 /// atomically, into `.icloud-notes/`.
 pub fn write_clone_state(target_dir: &Path, state: &CloneState) -> Result<(), Error> {
@@ -378,7 +358,7 @@ pub fn write_raw_state_file(target_dir: &Path, state: &RawStateFile) -> Result<(
     if std::fs::read(&path).is_ok_and(|on_disk| on_disk == bytes.as_bytes()) {
         return Ok(());
     }
-    write_atomic(&path, bytes.as_bytes())?;
+    write_atomic(&path, bytes.as_bytes(), false)?;
     Ok(())
 }
 

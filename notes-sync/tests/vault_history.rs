@@ -635,3 +635,43 @@ fn a_record_name_that_is_not_one_plain_file_name_writes_nothing() {
         assert_eq!(read_base_copy(tmp.path(), name).unwrap().as_deref(), Some("body"));
     }
 }
+
+// --- interrupted writes ---------------------------------------------------------
+
+#[test]
+fn an_unreadable_latest_snapshot_does_not_block_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap();
+    // What a crash left of a later snapshot written in place.
+    let history = dir.path().join(".icloud-notes/history/REC-1");
+    std::fs::write(
+        history.join("9999999999999-000001-deadbeef.json"),
+        "{\"recordName\": \"REC",
+    )
+    .unwrap();
+    assert!(record_version(dir.path(), &note_input("REC-1", "tag-2", "AAAA")).unwrap());
+    assert_eq!(std::fs::read_dir(&history).unwrap().count(), 3);
+}
+
+#[test]
+fn snapshots_epochs_and_base_copies_leave_no_temp_file_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap();
+    record_epoch(dir.path(), "REC-1", &names(&["REC-1"])).unwrap();
+    write_base_copy(dir.path(), "REC-1", "body").unwrap();
+    fn files(dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                files(&entry.path(), out);
+            } else {
+                out.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut found = Vec::new();
+    files(dir.path(), &mut found);
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(found.iter().all(|name| !name.ends_with(".tmp")), "{found:?}");
+    assert_eq!(read_base_copy(dir.path(), "REC-1").unwrap().as_deref(), Some("body"));
+}

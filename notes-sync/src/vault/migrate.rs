@@ -15,8 +15,7 @@ use serde_json::Value;
 
 use super::state::{
     CURRENT_LAYOUT_VERSION, CloneState, LEGACY_STATE_DIR_NAME, RawStateFile, STATE_DIR_NAME, STATE_FILE_NAME,
-    STATE_SUBDIR_NAMES, node_display, read_clone_state, read_raw_state_file, to_js_json, write_atomic,
-    write_raw_state_file,
+    STATE_SUBDIR_NAMES, node_display, read_clone_state, read_raw_state_file, to_js_json, write_raw_state_file,
 };
 use crate::cmd::errors::Error;
 use crate::md::frontmatter::{SplitOptions, join_frontmatter, set_note_id, split_frontmatter};
@@ -180,7 +179,7 @@ fn finish_layout_4(target_dir: &Path) -> Result<(), Error> {
     if std::fs::read(&path).is_ok_and(|on_disk| on_disk == tombstone.as_bytes()) {
         return Ok(());
     }
-    write_atomic(&path, tombstone.as_bytes())?;
+    super::local::write_atomic(&path, tombstone.as_bytes(), false)?;
     Ok(())
 }
 

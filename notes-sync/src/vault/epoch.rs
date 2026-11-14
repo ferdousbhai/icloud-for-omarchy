@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use super::history::{
     capture_file_name, find_json_by_id, history_dir, json_file_names, latest_version, next_seq, prune_history,
-    read_json_dir, recording_suppressed,
+    read_json_dir, recording_suppressed, write_capture,
 };
 use super::rt;
-use super::state::{plain_record_name, to_js_json};
+use super::state::plain_record_name;
 use crate::cmd::errors::Error;
 use crate::js;
 
@@ -58,9 +58,9 @@ pub fn record_epoch(target_dir: &Path, note_record_name: &str, record_names: &[S
     std::fs::create_dir_all(&dir)?;
     let existing = json_file_names(&dir)?;
     let json = serde_json::to_value(&epoch).expect("epoch serializes");
-    std::fs::write(
-        dir.join(capture_file_name(captured_at, next_seq(&existing), &id)),
-        to_js_json(&json),
+    write_capture(
+        &dir.join(capture_file_name(captured_at, next_seq(&existing), &id)),
+        &json,
     )?;
     prune_history(target_dir, note_record_name, record_names)?;
     Ok(())
