@@ -469,6 +469,38 @@ fn check_layout_version(root: &Map<String, Value>, file_path: &Path, target_dir:
     })
 }
 
+/// The entries of the state's `key` map (`None` when it has none): each
+/// must be an object whose `required` keys pass their test, or the state is
+/// refused (`{fp} has a malformed entry for {label} "{name}".`); one that
+/// `build` turns down is dropped.
+fn entries<T>(
+    root: &Map<String, Value>,
+    key: &str,
+    fp: &str,
+    label: &str,
+    required: &[(&str, fn(&Value) -> bool)],
+    build: impl Fn(&str, &Map<String, Value>) -> Option<T>,
+) -> Result<Option<IndexMap<String, T>>, Error> {
+    let Some(map) = root.get(key).and_then(obj) else {
+        return Ok(None);
+    };
+    let mut out = IndexMap::new();
+    for (name, entry) in map {
+        let well_formed = entry
+            .as_object()
+            .filter(|m| required.iter().all(|(key, test)| m.get(*key).is_some_and(test)));
+        let Some(m) = well_formed else {
+            return Err(Error::CorruptStateFile(format!(
+                "{fp} has a malformed entry for {label} \"{name}\"."
+            )));
+        };
+        if let Some(built) = build(&name, m) {
+            out.insert(name, built);
+        }
+    }
+    Ok(Some(out))
+}
+
 fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Result<CloneState, Error> {
     let fp = node_display(file_path);
     let corrupt = |msg: String| Error::CorruptStateFile(msg);
@@ -488,34 +520,29 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
 
     let layout_version = check_layout_version(root, file_path, target_dir)?;
 
-    let mut notes = IndexMap::new();
-    for (record_name, entry) in obj(&root["notes"]).unwrap_or_default() {
-        let m = match &entry {
-            Value::Object(m)
-                if m.get("file").is_some_and(Value::is_string)
-                    && m.get("recordChangeTag").is_some_and(Value::is_string)
-                    && m.get("modificationDate").is_some_and(Value::is_number) =>
-            {
-                m
-            }
-            _ => {
-                return Err(corrupt(format!(
-                    "{fp} has a malformed entry for note \"{record_name}\"."
-                )));
-            }
-        };
-        // Sync writes, moves and removes these paths as they are: an entry
-        // that would leave the vault (or whose record name can't name its
-        // base copy) is dropped, as attachments are below, and the note
-        // syncs again.
-        if !is_plain_record_name(&record_name) || !opt_str(m, "file").is_some_and(|file| is_vault_relative(&file)) {
-            continue;
-        }
-        notes.insert(
-            record_name,
-            NoteEntry {
-                file: opt_str(m, "file").unwrap_or_default(),
-                record_change_tag: opt_str(m, "recordChangeTag").unwrap_or_default(),
+    const STRING: fn(&Value) -> bool = Value::is_string;
+    const NUMBER: fn(&Value) -> bool = Value::is_number;
+    let str_of = |m: &Map<String, Value>, key: &str| opt_str(m, key).unwrap_or_default();
+
+    // Sync writes, moves and removes these paths as they are: an entry
+    // that would leave the vault (or whose record name can't name its
+    // base copy) is dropped, as attachments are below, and the note
+    // syncs again.
+    let notes = entries(
+        root,
+        "notes",
+        &fp,
+        "note",
+        &[
+            ("file", STRING),
+            ("recordChangeTag", STRING),
+            ("modificationDate", NUMBER),
+        ],
+        |record_name, m| {
+            let file = str_of(m, "file");
+            (is_plain_record_name(record_name) && is_vault_relative(&file)).then(|| NoteEntry {
+                file,
+                record_change_tag: str_of(m, "recordChangeTag"),
                 modification_date: num(m.get("modificationDate")).unwrap_or_default(),
                 shared_zone_owner: opt_str(m, "sharedZoneOwner"),
                 // A note kept as a separate file was read-only up to 0.10.1;
@@ -527,79 +554,44 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
                 // forgotten, and the next pull works the rename out again.
                 pending_rename: opt_str(m, "pendingRename").filter(|to| is_single_component(to)),
                 frontmatter_title: opt_str(m, "frontmatterTitle"),
-            },
-        );
-    }
+            })
+        },
+    )?
+    .unwrap_or_default();
 
-    let folders = match root.get("folders").and_then(obj) {
-        None => None,
-        Some(entries) => {
-            let mut folders = IndexMap::new();
-            for (record_name, entry) in entries {
-                let m = match &entry {
-                    Value::Object(m)
-                        if m.get("name").is_some_and(Value::is_string)
-                            && m.get("dirName").is_some_and(Value::is_string) =>
-                    {
-                        m
-                    }
-                    _ => {
-                        return Err(corrupt(format!(
-                            "{fp} has a malformed entry for folder \"{record_name}\"."
-                        )));
-                    }
-                };
-                // One directory name; the folder is laid out afresh otherwise.
-                if !opt_str(m, "dirName").is_some_and(|dir| is_single_component(&dir)) {
-                    continue;
-                }
-                folders.insert(
-                    record_name,
-                    FolderEntry {
-                        name: opt_str(m, "name").unwrap_or_default(),
-                        parent_record_name: opt_str(m, "parentRecordName"),
-                        dir_name: opt_str(m, "dirName").unwrap_or_default(),
-                        shared_zone_owner: opt_str(m, "sharedZoneOwner"),
-                        permission: opt_str(m, "permission"),
-                    },
-                );
-            }
-            Some(folders)
-        }
-    };
+    // One directory name; the folder is laid out afresh otherwise.
+    let folders = entries(
+        root,
+        "folders",
+        &fp,
+        "folder",
+        &[("name", STRING), ("dirName", STRING)],
+        |_, m| {
+            let dir_name = str_of(m, "dirName");
+            is_single_component(&dir_name).then(|| FolderEntry {
+                name: str_of(m, "name"),
+                parent_record_name: opt_str(m, "parentRecordName"),
+                dir_name,
+                shared_zone_owner: opt_str(m, "sharedZoneOwner"),
+                permission: opt_str(m, "permission"),
+            })
+        },
+    )?;
 
-    let sharer_homes = match root.get("sharerHomes").and_then(obj) {
-        None => None,
-        Some(entries) => {
-            let mut homes = IndexMap::new();
-            for (owner, entry) in entries {
-                let m = match &entry {
-                    Value::Object(m)
-                        if m.get("name").is_some_and(Value::is_string)
-                            && m.get("dirName").is_some_and(Value::is_string) =>
-                    {
-                        m
-                    }
-                    _ => {
-                        return Err(corrupt(format!(
-                            "{fp} has a malformed entry for sharer home \"{owner}\"."
-                        )));
-                    }
-                };
-                if !opt_str(m, "dirName").is_some_and(|dir| is_single_component(&dir)) {
-                    continue;
-                }
-                homes.insert(
-                    owner,
-                    SharerHomeEntry {
-                        name: opt_str(m, "name").unwrap_or_default(),
-                        dir_name: opt_str(m, "dirName").unwrap_or_default(),
-                    },
-                );
-            }
-            Some(homes)
-        }
-    };
+    let sharer_homes = entries(
+        root,
+        "sharerHomes",
+        &fp,
+        "sharer home",
+        &[("name", STRING), ("dirName", STRING)],
+        |_, m| {
+            let dir_name = str_of(m, "dirName");
+            is_single_component(&dir_name).then(|| SharerHomeEntry {
+                name: str_of(m, "name"),
+                dir_name,
+            })
+        },
+    )?;
 
     let replica_id = opt_str(root, "replicaId");
 
@@ -624,98 +616,60 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
         .get("sharedDatabase")
         .and_then(|v| serde_json::from_value::<SharedDatabaseCursor>(v.clone()).ok());
 
-    let attachments = match root.get("attachments").and_then(obj) {
-        None => None,
-        Some(entries) => {
-            let mut out = IndexMap::new();
-            for (record_name, entry) in entries {
-                let m = match &entry {
-                    Value::Object(m)
-                        if ["file", "mediaRecordName", "mediaFileChecksum", "noteRecordName"]
-                            .iter()
-                            .all(|k| m.get(*k).is_some_and(Value::is_string)) =>
-                    {
-                        m
-                    }
-                    _ => {
-                        return Err(corrupt(format!(
-                            "{fp} has a malformed entry for attachment \"{record_name}\"."
-                        )));
-                    }
-                };
-                // Earlier releases took an attachment's file name from the
-                // server as it was, so a file can point outside the vault.
-                // Dropped: the attachment downloads again under a safe name,
-                // and sync never writes, moves or removes the file outside.
-                if !opt_str(m, "file").is_some_and(|file| is_vault_relative(&file)) {
-                    continue;
-                }
-                out.insert(
-                    record_name,
-                    AttachmentEntry {
-                        file: opt_str(m, "file").unwrap_or_default(),
-                        media_record_name: opt_str(m, "mediaRecordName").unwrap_or_default(),
-                        media_file_checksum: opt_str(m, "mediaFileChecksum").unwrap_or_default(),
-                        note_record_name: opt_str(m, "noteRecordName").unwrap_or_default(),
-                    },
-                );
-            }
-            Some(out)
-        }
-    };
+    // Earlier releases took an attachment's file name from the server as
+    // it was, so a file can point outside the vault. Dropped: the
+    // attachment downloads again under a safe name, and sync never writes,
+    // moves or removes the file outside.
+    let attachments = entries(
+        root,
+        "attachments",
+        &fp,
+        "attachment",
+        &[
+            ("file", STRING),
+            ("mediaRecordName", STRING),
+            ("mediaFileChecksum", STRING),
+            ("noteRecordName", STRING),
+        ],
+        |_, m| {
+            let file = str_of(m, "file");
+            is_vault_relative(&file).then(|| AttachmentEntry {
+                file,
+                media_record_name: str_of(m, "mediaRecordName"),
+                media_file_checksum: str_of(m, "mediaFileChecksum"),
+                note_record_name: str_of(m, "noteRecordName"),
+            })
+        },
+    )?;
 
-    let table_attachments = match root.get("tableAttachments").and_then(obj) {
-        None => None,
-        Some(entries) => {
-            let mut out = IndexMap::new();
-            for (record_name, entry) in entries {
-                let Some(note) = entry.as_object().and_then(|m| opt_str(m, "noteRecordName")) else {
-                    return Err(corrupt(format!(
-                        "{fp} has a malformed entry for table attachment \"{record_name}\"."
-                    )));
-                };
-                // Its versions live in `history/<recordName>/`.
-                if !is_plain_record_name(&record_name) {
-                    continue;
-                }
-                out.insert(record_name, TableAttachmentEntry { note_record_name: note });
-            }
-            Some(out)
-        }
-    };
+    // Its versions live in `history/<recordName>/`.
+    let table_attachments = entries(
+        root,
+        "tableAttachments",
+        &fp,
+        "table attachment",
+        &[("noteRecordName", STRING)],
+        |record_name, m| {
+            is_plain_record_name(record_name).then(|| TableAttachmentEntry {
+                note_record_name: str_of(m, "noteRecordName"),
+            })
+        },
+    )?;
 
-    let trashed = match root.get("trashed").and_then(obj) {
-        None => None,
-        Some(entries) => {
-            let mut out = IndexMap::new();
-            for (record_name, entry) in entries {
-                let m = match &entry {
-                    Value::Object(m)
-                        if m.get("file").is_some_and(Value::is_string)
-                            && m.get("trashedAt").is_some_and(Value::is_number) =>
-                    {
-                        m
-                    }
-                    _ => {
-                        return Err(corrupt(format!(
-                            "{fp} has a malformed entry for trashed note \"{record_name}\"."
-                        )));
-                    }
-                };
-                if !opt_str(m, "file").is_some_and(|file| is_vault_relative(&file)) {
-                    continue;
-                }
-                out.insert(
-                    record_name,
-                    TrashedEntry {
-                        file: opt_str(m, "file").unwrap_or_default(),
-                        trashed_at: num(m.get("trashedAt")).unwrap_or_default(),
-                    },
-                );
-            }
-            Some(out)
-        }
-    };
+    let trashed = entries(
+        root,
+        "trashed",
+        &fp,
+        "trashed note",
+        &[("file", STRING), ("trashedAt", NUMBER)],
+        |_, m| {
+            let file = str_of(m, "file");
+            is_vault_relative(&file).then(|| TrashedEntry {
+                file,
+                trashed_at: num(m.get("trashedAt")).unwrap_or_default(),
+            })
+        },
+    )?;
 
     let account = match root.get("account") {
         None => None,
