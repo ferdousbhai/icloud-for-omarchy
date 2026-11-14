@@ -62,18 +62,18 @@ aren't available from iCloud on the web either.
 Notes, Photos, Find My, Reminders, Contacts, iCloud Drive and the shared sign-in have scriptable CLIs with one
 output contract: text on a terminal, a JSON envelope when piped (`--quiet`
 for the bare result), JSON errors with stable codes, and shared exit codes;
-see [docs/AGENTS.md](docs/AGENTS.md) and [docs/CLI.md](docs/CLI.md).
+see [docs/CLI.md](docs/CLI.md).
 `icloud-session skill install` installs the agent skill
 ([docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md)) to `~/.agents/skills/icloud`, linked
 into `~/.claude/skills` for Claude Code; `icloud-session skill remove` removes it, and a new
 release refreshes it.
 
-- [docs/AGENTS.md](docs/AGENTS.md): the reference to give an agent (auth,
-  commands with example JSON, safety rules, recipes).
-- [docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md): the same as a
-  Claude Code skill; copy `docs/skills/icloud` into `~/.claude/skills/`.
-- [docs/CLI.md](docs/CLI.md): every GUI feature mapped to its command, the
-  exit and error codes, the JSON shapes.
+- [docs/CLI.md](docs/CLI.md): the reference. Every GUI feature mapped to
+  its command, the exit and error codes, each tool's notes with example
+  JSON, the JSON shapes, recipes.
+- [docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md): the short
+  version to give an agent (auth, commands, safety rules), as a Claude Code
+  skill; copy `docs/skills/icloud` into `~/.claude/skills/`.
 
 Signing in is the one thing a person must do: Apple's page (password, 2FA)
 opens in a window from `icloud-session sign-in`.
@@ -211,7 +211,7 @@ packaging/PKGBUILD       one split recipe builds all seven packages
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, check, build-packages, arch-run, collect-packages, make-installers, release, verify-release; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh (installers against stubbed pacman); packaging_test.py
-docs/                    the command-line reference (CLI.md, AGENTS.md, skills/)
+docs/                    the command-line reference (CLI.md) and the agent skill (skills/)
 ```
 
 Each directory kept its history: the five former repositories

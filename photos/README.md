@@ -79,76 +79,25 @@ target/release/icloud-photos       # or target/release/icloud-photos-app
 ## Command line
 
 `icloud-photos` is also the command-line tool: with no arguments it opens
-the app; `icloud-photos <command>` runs without GTK or a display, over the
-same sign-in, catalog, cache and library folder as the app. The package
-ships two binaries: `icloud-photos`, the command line, which links no GTK
-(a command starts in a few milliseconds) and runs `icloud-photos-app`, the
-window, when given no arguments; the desktop entry starts
-`icloud-photos-app` directly.
+the app (`icloud-photos-app`, which the desktop entry starts directly);
+`icloud-photos <command>` runs without GTK or a display, over the
+same sign-in, catalog, cache and library folder as the app.
 
-| command | what it does |
-|---|---|
-| `status` | signed in?, catalog path, item/album/downloaded counts, last sync, library and cache folders |
-| `sync [--full]` | incremental sync (falling back to a full listing), or `--full`; prints what changed |
-| `albums` | id, name, count |
-| `list [--album ID] [--since DATE] [--limit N] [--kind photo\|video\|live]` | id, date, kind, size, file name, local path if downloaded; newest first |
-| `info ID` | everything the catalog knows about one item, including its albums |
-| `thumb ID [--out PATH]` | fetches iCloud's thumbnail into the cache (and copies it to `PATH`) |
-| `download ID... \| --all [--medium] [--out DIR]` | originals (plus a Live Photo's video) into the library folder, or under `DIR`; `--medium` fetches the viewer's preview instead; prints the saved paths |
-| `open ID [--medium]` | the viewer's Open: downloads the original if needed (or fetches the preview) and opens it in the default app (`xdg-open`) |
-| `upload FILE... [--album ID] [--no-sync]` | uploads, progress on stderr, prints the new ids, then syncs until they are in the catalog |
-| `delete ID... [--yes]` | moves to Recently Deleted; asks on a terminal (text mode), refuses without `--yes` otherwise |
-| `restore ID...` | brings items back from Recently Deleted: the window's Undo |
-| `copy ID` | the viewer's Copy Image: puts the photo on the clipboard (`wl-copy`) |
-| `wallpaper ID` | the viewer's Set as Wallpaper: makes the photo the Omarchy background |
-| `prune-cache` | drops cached previews of deleted items, trims the preview cache |
-| `sign-in` | opens the iCloud sign-in window |
-| `config [--library-dir DIR] [--download on-demand\|all]` | shows or changes the preferences |
+```console
+$ icloud-photos status
+$ icloud-photos sync
+$ icloud-photos albums
+$ icloud-photos list --album ID --since 2026-08-01 --limit 20
+$ icloud-photos download ID... --out ~/Downloads/holiday
+$ icloud-photos upload IMG_0001.HEIC --album ID
+$ icloud-photos delete ID --yes          # to Recently Deleted
+$ icloud-photos restore ID
+```
 
-- Output follows the shared contract of every iCloud tool: human-readable
-  text on a terminal (tab-separated for lists), and a JSON envelope when
-  stdout is piped, `{"ok":true,"data":…,"summary":"…"}`. `--json` forces the
-  envelope, `--styled` text, `--quiet` prints only `data`, `--ids-only` one id
-  per line (album ids for `albums`; item ids for `list`, `info`, `thumb`,
-  `open`, `copy`, `wallpaper`; the items that succeeded for `download`, `delete` and `restore`; the new asset
-  ids for `upload`), `--count` the number of results (`list`, `albums`, the
-  ids above, files removed for `prune-cache`). The flags may be combined;
-  the strongest wins: ids-only > count > quiet > json > styled. Every command
-  has `--help`.
-- Errors: in a machine mode (piped, `--json`, `--quiet`, `--ids-only`,
-  `--count`) one JSON document on **stdout**,
-  `{"ok":false,"error":{"code":"not_found","message":…,"hint":…}}`, and
-  nothing on stderr; in text mode `error: …` and `hint: …` lines on stderr.
-  `hint`, a remediation such as "run `icloud-session sign-in`", is there
-  only when there is one. Codes: `usage`, `not_found`, `cancelled`,
-  `sign_in_required`, `photos_unavailable` (iCloud Photos not enabled for
-  the Apple ID), `session_rejected` (Apple keeps answering 401/421 although
-  icloud-sessiond still holds the sign-in), `offline`, `network`,
-  `session_service` (icloud-sessiond unreachable), `keyring_unavailable`,
-  `bad_response`, `http`, `io`, `error`. Every exit-5 error has a hint.
-- Progress (a sync on a terminal in text mode, upload steps) goes to
-  stderr. `download`, `delete` and `upload` report every item: in text mode
-  each saved path or deleted id is printed as it finishes and failures go to
-  stderr; in a machine mode the data lists each item, a failed one with its
-  `error`, and the command exits 1 if any failed.
-- Exit codes, as in every iCloud tool ([docs/CLI.md](../docs/CLI.md)):
-  0 ok; 1 error (also `cancelled`, an HTTP 4xx, or some items of a
-  `download`/`upload`/`delete`/`restore` failed); 2 usage, or `delete` without `--yes`
-  when nobody can be asked (it asks only in text mode with stdin and stdout
-  a terminal); 3 not signed in (`status` also exits 3 when signed out, with
-  its data), iCloud Photos not offered for the account, or Apple refusing
-  the session (`session_rejected`) while the daemon says signed in; 4 not found;
-  5 a service unavailable: offline, network, icloud-sessiond, keyring, bad
-  response or an Apple 5xx.
-- `--data-dir DIR` keeps the catalog, cache, preferences and library all
-  under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`), so a
-  test run never touches your own.
-- `DATE` is `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS` (UTC) or Unix seconds; dates
-  print as UTC.
-- A delete that conflicts with a change made on another device syncs and
-  tries once more, as the app does.
-- `upload --album` adds the new items to an album (checked against a real
-  account on 2026-09-30, see below).
+`icloud-photos COMMAND --help` describes one command and its JSON. Every
+command, the output modes (text on a terminal, JSON when piped), the exit
+and error codes and the JSON shapes are in the
+[command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
 ## Your files
 

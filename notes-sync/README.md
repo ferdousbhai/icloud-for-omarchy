@@ -108,7 +108,7 @@ version is recorded, and touches only that note's directories. Recording
 reads only the latest snapshot's file. status and push --dry-run record no
 history. `vault-info` prints what the app reads from the vault's state,
 `stateDir` included. In the vault Notes syncs (`~/Documents/Notes`),
-use `icloud-notes` (see [docs/AGENTS.md](../docs/AGENTS.md)).
+use `icloud-notes` (see [docs/CLI.md](../docs/CLI.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the
 Qt tests point it at a stub; point it at `target/debug/icloud-notes-sync`

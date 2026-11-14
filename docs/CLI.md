@@ -3,7 +3,10 @@
 Every iCloud app here can be driven from a terminal or by an agent, with no
 window and no display. This page maps each thing a person can do in a window
 to the command that does it, then fixes the conventions all the tools share.
-[AGENTS.md](AGENTS.md) is the short version for an agent.
+[Tool by tool](#tool-by-tool) has each tool's defaults and caveats with
+example output, [Recipes](#recipes) the common tasks; the agent skill
+([skills/icloud/SKILL.md](skills/icloud/SKILL.md), `icloud-session skill install`)
+is the short version for an agent.
 
 | Tool | Package | What it drives |
 |---|---|---|
@@ -213,8 +216,9 @@ PATH (a development build).
 
 ## Conventions every tool follows
 
-All six tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
-`icloud-photos`, `icloud-findmy`, `icloud-drive`) follow the same output contract
+All eight tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
+`icloud-photos`, `icloud-findmy`, `icloud-reminders`, `icloud-contacts`,
+`icloud-drive`) follow the same output contract
 (`session/src/output.rs` for the Rust tools; `notes/src/cli.cpp` mirrors it).
 
 ### Output modes
@@ -431,6 +435,220 @@ timer that fails every minute while signed out would only fill the journal.
 In mock mode (`ICLOUD_SESSION_MOCK=1`) there is no daemon to confirm a
 session, so a 401/421 is `sign_in_required`, not `session_rejected`.
 
+## Tool by tool
+
+What each tool's commands do beyond the tables above: defaults, argument
+forms and caveats. The example output is `--quiet`'s, on fewer lines than
+the tools print it.
+
+### icloud-session
+
+One Apple account per computer, held by the daemon; every tool takes its
+session from it and none signs in by itself.
+
+- `sign-in` waits for the window and exits 0 once signed in. With
+  `--no-wait` it returns at once: poll `icloud-session --quiet status` until
+  `signing_in` is false.
+- `expires_at` says when the sign-in lapses.
+
+### icloud-notes
+
+```console
+$ icloud-notes --quiet list --folder Notes
+[{"path":"Notes/Groceries.md","folder":"Notes","file":"Groceries.md","title":"Groceries","snippet":"bread",
+  "modified":"2026-09-30T08:12:00Z","modified_ms":1790755920000,"id":"8C1F...","flags":[]}]
+$ icloud-notes --quiet new "Packing" --body "- [ ] passport" --push
+{"action":"new","path":"Notes/Packing.md","folder":"Notes","file":"Packing.md","title":"Packing",
+ "sync":{"ok":true,"runs":[{"command":"push","ok":true,"exit_code":0,"result":{...}},{"command":"pull",...}],"log":"..."}}
+$ icloud-notes --ids-only list --flag conflict
+Work/Plan.md
+```
+
+- **The lock.** Commands that change the vault or sync take the vault's
+  lock first, as the window and the background sync do. While the window is
+  open it holds that lock, so they fail at once with `vault_busy` (exit 1):
+  make the change in the window, or quit it. A background sync holding it is
+  waited for (30 s, or `--wait SECS`). Reading (`status`, `folders`, `list`,
+  `read`, `search`, and `history`, `diff`, `push --dry-run`) never needs it.
+- **Changes stay local until a sync**: the window's, the background
+  timer's, or `icloud-notes sync`. `--push` on any change runs one right
+  after it (push, then pull). `push --dry-run` previews one: `entries` lists
+  what would go, and an entry with `resolution: "refused"` what will not and
+  why. In a sync's data, `log` holds the engine's report and warnings, never
+  its progress lines.
+- `new TITLE [--folder F] [--body T | --file P | --stdin]`: the default
+  folder is the account's "Notes"; the body goes below the title line.
+- `write NOTE (--body T | --file P | --stdin) [--append]` replaces the text
+  `read` shows (its first line is the title), or appends to it.
+- `toggle NOTE LINE`: LINE counts from 1 in `read`'s body.
+- `new-folder NAME [--in F]` makes the folder inside F.
+- `delete` moves the note to the trash and, on push, to Recently Deleted in
+  iCloud (recoverable there for about 30 days).
+- `resolve`: `local` is this computer's side of a conflict block, `remote`
+  iCloud's. `recover --strip` keeps every line and drops the markers,
+  `--synced` takes the last synced text; both back the note up first.
+- `export-pdf` writes the PDF next to the note.
+- Read-only notes (`read_only` set: content this tool cannot write back
+  faithfully) cannot be written, renamed or moved. A very large note is not
+  one of them: its text goes up as a separate file, as Apple's own apps send
+  it.
+- A note with attachments can be edited and moved (the next push takes its
+  attachment files along); its attachment links must stay as they are.
+  `attach` does not work on a note someone else shared.
+- `not_cloned` is this tool's own check before the engine runs; the engine
+  says `not_cloned_directory`.
+- The commands that are the engine itself (`push --dry-run`, `history`,
+  `diff`, `restore`) get the output flags as given; with none, `--styled` on
+  a terminal and `--json` when piped.
+
+### icloud-photos
+
+A local catalog of the iCloud library; `sync` refreshes it.
+
+```console
+$ icloud-photos --quiet albums
+[{"id":"A1B2...","name":"Holiday","count":42}]
+$ icloud-photos --quiet list --album A1B2... --limit 1
+[{"id":"AQx...","filename":"IMG_0001.HEIC","created":"2026-08-01T10:00:00Z","created_unix":1785578400,"kind":"live",
+  "size":2048576,"width":4032,"height":3024,"local_path":null,"live_path":null}]
+$ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
+[{"id":"AQx...","path":"/home/me/Downloads/holiday/2026/08/IMG_0001.HEIC","live_path":"...MOV","live_error":null}]
+```
+
+- `sync` is incremental, falling back to a full listing; `--full` forces
+  one.
+- `list` is newest first. DATE (`--since`) is `YYYY-MM-DD`,
+  `YYYY-MM-DDTHH:MM:SS` (UTC) or Unix seconds; dates print as UTC. Lists in
+  text mode are tab-separated.
+- `download` saves originals (plus a Live Photo's video) into the library
+  folder, `~/Pictures/<year>/<month>/` unless changed with `config`, or
+  under `--out DIR`; `--medium` fetches the viewer's preview instead.
+- `thumb` fetches iCloud's thumbnail into the cache (and copies it to
+  `--out PATH`). `open` downloads the original if needed (or, with
+  `--medium`, the preview) and opens it with `xdg-open`.
+- `upload` prints the new ids, then syncs until they are in the catalog
+  (`--no-sync` skips that); `--album ID` adds them to an album.
+- `delete` moves items to Recently Deleted, on every device. One that
+  conflicts with a change made on another device syncs and tries once more,
+  as the app does.
+- `wallpaper` on a video is a usage error.
+- `prune-cache` drops cached previews of deleted items and trims the
+  preview cache.
+- `download`, `delete` and `upload` in text mode print each saved path or
+  deleted id as it finishes, failures on stderr.
+- `--data-dir DIR` keeps the catalog, cache, preferences and library all
+  under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`).
+- Every exit-5 error has a hint.
+
+### icloud-findmy
+
+```console
+$ icloud-findmy --quiet devices
+[{"id":"aVBo...","name":"Dous's iPhone","model":"iPhone 15 Pro","class":"iphone","battery_percent":81,
+  "charging":false,"online":true,"lost_mode":false,"can_play_sound":true,"can_lost_mode":true,
+  "last_fix":{"time":"2026-09-30T09:58:02Z","timestamp_ms":1790762282000,"age_secs":95,"accuracy_m":12.0,"is_old":false}}]
+$ icloud-findmy --quiet locate "iphone" --wait 30
+{"id":"aVBo...","name":"Dous's iPhone",...,"last_fix":{...,"lat":60.17,"lon":24.94}}
+$ icloud-findmy --quiet play-sound "iphone" --yes
+{"action":"play_sound","device":{"id":"aVBo...","name":"Dous's iPhone"}}
+```
+
+- A device is named by its ID or its name, ignoring case; a unique part of
+  the name is enough.
+- `devices` shows what Apple last heard; `--locate` asks every device to
+  report first (it wakes them). Coordinates are printed only with
+  `--coords`. Positions are stored in the history as the app stores them.
+- `locate` asks one device for a fresh fix and waits (30 s unless `--wait
+  SECS`) until one newer than the last arrives, then prints it with its
+  coordinates. A device that left the Apple ID while it waited is
+  `not_found`.
+- `history` prints the stored trail (24 h unless `--since`, e.g. `90m`,
+  `7d`); a device ID already in the history needs no network.
+- Lost Mode locks the device.
+- `find_my_auth_required` comes after icloud-session could not re-authorize
+  with a stored password.
+- `--data-dir DIR` keeps `history.db` in `DIR` instead of
+  `~/.local/share/icloud-findmy`. Like the output flags, it may come before
+  or after the command.
+- `icloud-findmy help COMMAND` is the same as `COMMAND --help`.
+
+### icloud-drive
+
+```console
+$ icloud-drive --quiet status
+{"files":93,"folder":"/home/me/iCloud Drive","folders":19,"last_sync":"2026-11-11T02:50:06Z",
+ "not_synced":[{"path":"letter.pages","reason":"a package (a Pages document, say), which is not synced"}],
+ "problem":null,"signed_in":true,"starts_at_login":true,"sync":"on"}
+$ icloud-drive --quiet sync --dry-run
+{"done":["upload notes/todo.txt"],"dry_run":true,"pending":[],"problems":[],"skipped":[]}
+```
+
+- `start` turns the background service on, now and at login; the first sync
+  downloads the whole Drive. `stop` turns it off.
+- A file written into the folder reaches iCloud within about a minute.
+  Removals go to the trash on the other side, never away for good.
+- `sync` while the service is mid-sync waits up to two minutes, then fails
+  with `busy`.
+
+### icloud-reminders
+
+```console
+$ icloud-reminders --quiet lists
+[{"id":"6F0A...","name":"Groceries","color":"#FF9500","open":2}]
+$ icloud-reminders --quiet list
+[{"id":"9B1C...","list":{"id":"6F0A...","name":"Groceries"},"title":"Milk","notes":"Oat","completed":false,
+  "completed_at":null,"due":{"date":"2026-10-09","time":"17:30","all_day":false,"time_zone":"Europe/Helsinki",
+  "at":"2026-10-09T14:30:00Z"},"flagged":false,"priority":0,"alerts":0}]
+$ icloud-reminders --quiet complete "dentist"
+{"action":"complete","changed":true,"reminder":{...,"completed":true,"completed_at":"2026-10-09T11:02:41Z"}}
+```
+
+- Reading commands sync first; `--cached` skips that and reads what the
+  last sync left. Without a network every command but a `--cached` read
+  fails with `offline`; nothing is queued.
+- `list` shows open reminders, soonest due first.
+- `add`: `--list` is required unless the account has one list (iCloud
+  records no default list).
+- WHEN (`--due`): `2026-10-10` (all day), `"2026-10-10 17:30"`, `today` or
+  `tomorrow` with an optional time, `17:30`, or `+30m`/`+2h`/`+3d`.
+- Alerts set on an Apple device (`alerts`) keep their own time when `--due`
+  changes.
+- `delete` moves the reminder to Recently Deleted.
+- `background` is what the systemd timer runs every minute: it syncs if the
+  last sync is stale and notifies about reminders that fell due.
+
+### icloud-contacts
+
+```console
+$ icloud-contacts --quiet list "ann"
+[{"id":"3C9E...","name":"Ann Lee","first":"Ann","last":"Lee","company":"Acme","is_company":false,"me":false,
+  "phones":[{"label":"mobile","value":"+1 (555) 010-0100"}],"emails":[{"label":"work","value":"ann@acme.example"}],
+  "urls":[],"addresses":[...],"birthday":"1990-05-01","notes":null,"has_photo":true,...}]
+$ icloud-contacts --quiet add --first Cleo --last Park --phone work=+44 20 7946 0000 --email cleo@example.org
+{"action":"add","contact":{"id":"...","name":"Cleo Park",...}}
+$ icloud-contacts --quiet edit "cleo park" --job-title Designer --remove-phone "20 7946 0000"
+```
+
+- Reading commands sync first; `--cached` skips that and reads what the
+  last sync left. Without a network every command but a `--cached` read
+  fails with `offline`; nothing is queued.
+- A phone number names a contact by its digits: `555-0100` finds
+  `+1 555 0100`.
+- `add` needs a name, company, phone or email; `--is-company` (with
+  `--company`) makes the card a company's.
+- A phone, email or URL can start with a label: `work=`, `home=`,
+  `mobile=`, `iPhone=`, `main=`, or your own (`WhatsApp=`). Without one, a
+  phone is mobile, an email home and a URL homepage.
+- `--birthday` takes `YYYY-MM-DD`, or `MM-DD` without a year.
+- `edit` changes only what is named; an empty value (`--nickname ""`)
+  removes a field.
+- `delete` deletes on every device: there is no Recently Deleted for
+  contacts. Answering no to its question is `cancelled`.
+- `export` without `--output` prints the vCards themselves in text mode
+  (`icloud-contacts export --styled > contacts.vcf` when piped).
+- A write that could not update the cache also says so on stderr
+  (`warning: …`).
+
 ## JSON shapes
 
 These are the `data` of the envelope (what `--quiet` prints). Stable:
@@ -588,3 +806,80 @@ number (by its digits) or a unique part of a name. IDs are iCloud's
 | `export` | `{action:"export", count, file}` with `--output`, else `{action:"export", count, vcard}`. Only text mode prints bare vCards: `export > FILE` writes the envelope, so use `--output FILE` |
 | (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
 | `sync` | `{contacts, changed}` (`changed`: cards added, changed or gone since the last sync) |
+
+## Recipes
+
+**Sync notes and read one**
+
+```bash
+icloud-notes --quiet sync                      # exit 3: ask the user to sign in; 5: offline, retry later
+icloud-notes --ids-only search "dentist"       # the paths of matching notes
+icloud-notes --quiet read "Notes/Dentist.md" | jq -r .body
+```
+
+**Add a note and push it**
+
+```bash
+icloud-notes --quiet new "Meeting 30 Sep" --folder Work --body "- agenda" --push
+# exit 1, error.code "vault_busy": Notes is open; ask the user to quit it or add it there
+# exit 3 with data: written locally, not synced (.sync.error); after the user signs in: icloud-notes sync
+```
+
+**Append to a checklist and tick an item**
+
+```bash
+icloud-notes --quiet write Groceries --append --body "- [ ] jam"
+icloud-notes --quiet read Groceries | jq -r .body   # find the line number (first line is 1)
+icloud-notes --quiet toggle Groceries 3 --push
+```
+
+**Attach a file to a note**
+
+```bash
+icloud-notes --quiet attach Groceries ~/Pictures/receipt.png --push
+```
+
+**Remove an attachment from a note** (it is deleted on every device)
+
+```bash
+icloud-notes --quiet read Groceries | jq -r '.attachments[].name'
+icloud-notes --quiet detach Groceries receipt.png --yes --push
+```
+
+**Resolve a conflict**
+
+```bash
+icloud-notes --ids-only list --flag conflict
+icloud-notes --quiet read "Work/Plan.md"       # .conflicts[i].local / .remote
+icloud-notes --quiet resolve "Work/Plan.md" --choices local,both --push
+# .conflicts_unreadable true instead: icloud-notes recover "Work/Plan.md" --strip
+```
+
+**Download the photos of an album**
+
+```bash
+icloud-photos --quiet sync
+icloud-photos --quiet albums                   # pick the album's id
+icloud-photos --ids-only list --album "$ID" | xargs -r icloud-photos --quiet download --out ~/Downloads/album
+```
+
+**Locate a device and play a sound**
+
+```bash
+icloud-findmy --quiet locate "iPhone" --wait 30     # exit 3 find_my_auth_required: ask for icloud-session authorize-find-my
+icloud-findmy --quiet play-sound "iPhone" --yes
+```
+
+**Add a reminder and find it**
+
+```bash
+icloud-reminders --quiet add "Renew passport" --list Personal --due "2026-11-01 09:00"   # a list from `lists`
+icloud-reminders --quiet list --all | jq '.[] | select(.title | test("passport"; "i"))'
+```
+
+**Look someone up**
+
+```bash
+icloud-contacts --quiet show "ann lee" | jq -r '.phones[0].value'
+icloud-contacts --quiet list "@acme.example" | jq -r '.[].name'
+```

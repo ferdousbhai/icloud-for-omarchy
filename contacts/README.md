@@ -75,63 +75,16 @@ $ icloud-contacts list 5550100                  # matching a phone number's digi
 $ icloud-contacts show "ann lee"
 $ icloud-contacts show me
 $ icloud-contacts add --first Ann --last Lee --phone work=+1 555 0100 --email ann@acme.com
-$ icloud-contacts add --company "Acme Hardware" --is-company --url https://acme.example
 $ icloud-contacts edit ann --job-title Manager --phone home=+1 555 0177 --remove-email ann@old.com
 $ icloud-contacts edit ann --nickname ""        # an empty value removes a field
 $ icloud-contacts delete ann --yes
 $ icloud-contacts export --output contacts.vcf  # everyone, as vCard 3.0
-$ icloud-contacts export ann bob --output two.vcf
-$ icloud-contacts list acme --ids-only          # one contact ID per line
-$ icloud-contacts list --count
 $ icloud-contacts sync
 ```
 
-- A contact is named by its ID, `me`, its name (ignoring case), an email
-  address, a phone number (by its digits: `555-0100` finds
-  `+1 555 0100`), or a unique part of its name.
-- A phone, email or URL can start with a label: `work=`, `home=`,
-  `mobile=`, `iPhone=`, `main=`, or your own (`WhatsApp=`). Without one, a
-  phone is mobile, an email home and a URL homepage.
-- `--birthday` takes `YYYY-MM-DD`, or `MM-DD` without a year.
-- Reading commands sync first and fail with `offline` without a network;
-  `--cached` reads what the last sync left instead.
-- `delete` asks in text mode on a terminal and needs `--yes` anywhere
-  else (piped, or in a machine output mode): without it, a `usage` error,
-  exit 2.
-- `export` without `--output` prints the vCards themselves in text mode
-  (`--styled` when piped: `icloud-contacts export --styled > contacts.vcf`)
-  and puts them in the JSON (`data.vcard`) otherwise.
-- `--data-dir DIR` keeps the cache elsewhere.
-- `icloud-contacts COMMAND --help` describes one command and its JSON.
-
-### Output
-
-The contract every iCloud tool shares ([docs/CLI.md](../docs/CLI.md)):
-human-readable text on a terminal, a JSON envelope when piped.
-
-```json
-{"ok": true, "data": [{"id": "…", "name": "Ann Lee", "phones": [{"label": "mobile", "value": "…"}]}], "summary": "1 contact"}
-```
-
-- `--json` forces the envelope, `--styled` text; `--quiet` prints only
-  `data`; `--ids-only` one contact ID per line (the contacts a command
-  returned or changed); `--count` the number of results (contacts for
-  `list` and `export`, changed contacts for `sync`). They combine:
-  ids-only > count > quiet > json > styled.
-- A failure in a machine mode is
-  `{"ok":false,"error":{"code":"not_found","message":…,"hint":…}}` on
-  stdout; in text mode, `error:` and `hint:` lines on stderr.
-- A write that succeeded but could not update the cache says so on stderr
-  (`warning: …`) and as `warning` in the data.
-
-| Exit | Codes |
-|---|---|
-| 0 | ok |
-| 1 | `error`, `cancelled` (answered no to `delete`), `http` (a 4xx) |
-| 2 | `usage`, `ambiguous` (the hint lists the matches with their IDs), `delete` without `--yes` when nobody can be asked |
-| 3 | `sign_in_required` (`icloud-session sign-in`), `session_rejected` (iCloud keeps refusing the session: sign in again) |
-| 4 | `not_found` |
-| 5 | `offline`, `session_service` (`icloud-sessiond` unreachable), `keyring_unavailable` (the keyring holding the session is locked: unlock it), `bad_response` (iCloud answered with something unreadable), `http` (a 5xx) |
+Every command, how contacts and labels are named, the output modes (text
+on a terminal, JSON when piped), the exit and error codes and the JSON
+shapes are in the [command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
 ## Building from source
 

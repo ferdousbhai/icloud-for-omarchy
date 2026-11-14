@@ -241,79 +241,17 @@ icloud-notes read "Groceries"             # a path in the vault, an apple-note-i
 icloud-notes search milk
 icloud-notes new "Groceries" --body "bread" [--folder Notes] [--push]
 icloud-notes write Groceries --append --body "- [ ] jam" [--push]
-icloud-notes rename|move|delete|toggle ...
 icloud-notes attach Groceries receipt.png [--push]  # add a file to a note
-icloud-notes detach Groceries receipt.png --yes [--push]  # remove an attachment
 icloud-notes resolve NOTE --all local|remote|both   # or --choices local,both,...
-icloud-notes recover NOTE --strip|--synced          # unreadable conflict markers
-icloud-notes new-folder|rename-folder|delete-folder ...
 icloud-notes sync | pull | push [--dry-run] | clone
 icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
 ```
 
-- Output, the contract every iCloud tool shares: text on a terminal, and
-  when piped (or with `--json`) the JSON envelope
-  `{"ok":true,"data":…,"summary":"…"}`, where `data` is the result each
-  command's `--help` describes. `--quiet` prints only `data`, `--styled`
-  forces text, `--ids-only` one id per line (the note paths of `list`,
-  `search` and `read`, the folder paths of `folders`, the path a change
-  touched) and `--count` the number of results. The flags combine:
-  ids-only > count > quiet > json > styled.
-- A failure in those machine modes is one document on stdout,
-  `{"ok":false,"error":{"code","message","hint"?}}` (`hint`, when present,
-  is how to fix it), with nothing on stderr; in text mode it is `error: …`
-  and `hint: …` on stderr. Parse it as JSON: `ok` comes first, but the keys
-  inside `data` and `error` are sorted (QJsonObject), and key order is not
-  part of the contract.
-- `sync`, `pull`, `push` and `clone` print their result `{ok, runs, log}`
-  even when they fail, with the failure in it as `error`, and exit with its
-  code; so does a change's `--push` (in `data.sync`). That failure is the
-  sync engine's own error (code, message, hint and exit, e.g.
-  `account_mismatch` exit 3, `cloudkit_request_failed` exit 5), except a
-  refused sign-in (`sign_in_required`, exit 3) and iCloud out of reach
-  (`offline`/`network`, exit 5), worded by this tool; `sync_failed` (exit
-  1) only when the engine failed without saying why. `log` holds the
-  engine's report and warnings, never its progress lines.
-- `--version` prints `icloud-notes VERSION`, in every mode.
-- Exit codes, the table every iCloud tool shares
-  ([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells cases apart:
-  - 0 ok. `status`, `push --dry-run` and `diff` report their changes in
-    the result and exit 0.
-  - 1 any other failure (`guardrail`, `read_only`, `vault_busy`,
-    `cancelled`, `sync_failed`, ...).
-  - 2 invalid usage or request: `usage`, `ambiguous`, `exists`,
-    `already_cloned`, `choices_mismatch`, a destructive command without
-    `--yes`.
-  - 3 not signed in (`sign_in_required`, or `session_rejected` when Apple
-    refuses a session icloud-session still holds: `icloud-session
-    sign-in`) or not set up: nothing cloned (`not_cloned`, this tool's own
-    check before the engine runs; the engine says `not_cloned_directory`),
-    `account_mismatch`, ...
-  - 4 not found (`not_found`).
-  - 5 unavailable: `offline`/`network`, `session_service`
-    (icloud-sessiond unreachable), `sync_tool_missing`, iCloud trouble
-    from the engine (`bad_response`, `cloudkit_request_failed`, ...).
-  - Hints use the wording every iCloud tool shares (from
-    `icloud_session::output`), e.g. ``run `icloud-session sign-in` (a
-    person signs in in the window)``.
-  - `push --dry-run`, `history`, `diff` and `restore` are the engine
-    itself, so its exit codes and error codes come through unchanged; it
-    gets the output flags as given (with none, `--styled` on a terminal and
-    `--json` when piped), so its output follows the same contract.
-- Commands that change the vault or sync take the vault's lock first, as
-  the window and the background sync do. While the window is open it holds
-  that lock, so they are refused at once (`vault_busy`): make the change in
-  the window, or quit it. A background sync is waited for (30 s, or
-  `--wait SECS`). Reading never needs the lock; `history`, `diff` and
-  `push --dry-run` only read too. icloud-notes-sync takes the same lock
-  itself, so running it directly obeys it as well.
-- A change stays on this computer until the next sync (the window's, the
-  background timer's, or `icloud-notes sync`); `--push` on any change runs
-  one right after it.
-- `delete`, `delete-folder` and `restore` ask only in text mode with
-  stdin and stdout a terminal, and need `--yes` otherwise (exit 2). Nothing
-  else ever asks.
-- `--vault DIR` works on another vault (tests use a scratch one).
+While the Notes window is open it holds the vault, so a command that
+changes a note is refused (`vault_busy`): make the change in the window, or
+quit it. Every command, the output modes (text on a terminal, JSON when
+piped), the exit and error codes and the JSON shapes are in the
+[command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
 ## Your files
 

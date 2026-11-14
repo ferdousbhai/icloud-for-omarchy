@@ -5,7 +5,7 @@ Apple web sign-in held by the `icloud-session` D-Bus daemon. Each app is a GUI p
 scriptable `--json` CLI; iCloud Drive is a synced folder with a small control command.
 
 This file is for working on the code. For *using* the CLIs as an agent, read
-[docs/AGENTS.md](docs/AGENTS.md) (short) and [docs/CLI.md](docs/CLI.md) (every command, JSON shape
+[docs/CLI.md](docs/CLI.md) (every command, JSON shape
 and error code); `docs/skills/icloud/SKILL.md` is the installable skill, embedded in `icloud-session skill` (`sessiond/src/agent_skill.rs`, shared verbatim with our other product CLIs).
 
 ## Code index
@@ -85,7 +85,7 @@ packaging tests, then native x86_64/aarch64 package builds.
   command without `--yes` / 3 not signed in, credentials rejected, or not set up (the JSON `code`
   tells them apart) / 4 not found / 5 a service unavailable (network, daemon, keyring, iCloud 5xx).
   `push --dry-run` and `diff` report their changes and exit 0. Nothing prompts outside text mode on
-  a TTY. New commands must follow this and be added to docs/CLI.md, docs/AGENTS.md and the skill.
+  a TTY. New commands must follow this and be added to docs/CLI.md and the skill.
 - No app signs in by itself: everything goes through icloud-sessiond. Tests never touch the real
   account; use the fakes.
 - One suite version in `[workspace.package]` of `Cargo.toml` is inherited by every Rust crate

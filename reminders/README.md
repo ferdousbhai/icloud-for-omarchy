@@ -155,39 +155,9 @@ $ icloud-reminders sync [--full]
 $ icloud-reminders background                 # what the timer runs
 ```
 
-- A reminder is named by its ID, its title (ignoring case) or a unique
-  part of it; open reminders are matched before completed ones. A list by
-  its ID or name.
-- Reading commands sync first and fail with `offline` without a network;
-  `--cached` reads what the last sync left instead.
-- `delete` asks in text mode on a terminal; anywhere else (piped, or a
-  machine output mode) it needs `--yes` and refuses with `usage` (exit 2)
-  without it.
-- Output is text on a terminal and a JSON envelope when piped:
-  `{"ok":true,"data":…,"summary":"…"}`. `--json` forces the envelope,
-  `--styled` text, `--quiet` prints only the data, `--ids-only` one ID per
-  line (the lists' for `lists`; the reminders' for `list`, `show`, `add`,
-  `edit`, `complete`, `uncomplete`, `delete`; the notified reminders' for
-  `background`), `--count` the number of results (lists, reminders, changed
-  records for `sync`, notified reminders for `background`). They combine:
-  ids-only > count > quiet > json > styled.
-- A failure is `{"ok":false,"error":{"code":"not_found","message":…,"hint":…}}`
-  on stdout in a machine mode, and `error:`/`hint:` lines on stderr in text
-  mode; the exit code carries the number.
-- `--data-dir DIR` keeps the cache elsewhere.
-- `icloud-reminders COMMAND --help` describes one command and its data.
-
-Exit codes, the table every iCloud tool shares
-([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells them apart:
-
-| Exit | Codes |
-|---|---|
-| 0 | ok |
-| 1 | `cancelled`, `error`, `http` (a 4xx) |
-| 2 | `usage`, `ambiguous`, `delete` without `--yes` when nobody can be asked |
-| 3 | `sign_in_required` (`icloud-session sign-in`), `session_rejected` (iCloud keeps refusing the session: sign in again) |
-| 4 | `not_found` |
-| 5 | `offline`, `keyring_unavailable` (the keyring holding the session is locked: unlock it), `bad_response` (iCloud answered with something unreadable), `http` (a 5xx) |
+Every command, how reminders and due times are named, the output modes
+(text on a terminal, JSON when piped), the exit and error codes and the
+JSON shapes are in the [command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
 ## Building from source
 

@@ -76,10 +76,8 @@ files `0600`). Delete the file to clear the history.
 ## Command line
 
 `icloud-findmy` given a command runs it without the window, with the
-same Find My client and history as the app. It is a binary of its own
-with no GTK linked in, so a command starts in a few milliseconds; with no
-command it opens the app, `icloud-findmy-app` (which the desktop entry
-runs directly):
+same Find My client and history as the app; with no command it opens the
+app, `icloud-findmy-app` (which the desktop entry runs directly):
 
 ```console
 $ icloud-findmy devices                  # name, model, battery, online, last fix
@@ -92,52 +90,9 @@ $ icloud-findmy prune-history
 $ icloud-findmy help
 ```
 
-- `devices` shows what Apple last heard; `--locate` asks every device to
-  report first (it wakes them, like **Ctrl+R** in the app). Coordinates
-  are printed only with `--coords`. Positions are stored in the history
-  as the app stores them.
-- `locate` asks one device for a fresh fix and waits (30 s unless
-  `--wait SECS`) until one newer than the last arrives, then prints it
-  with its coordinates; it fails if none comes.
-- `play-sound` and `lost-mode` ask for confirmation in text mode on a
-  terminal, and refuse to act without `--yes` anywhere else (exit 2).
-- A device is named by its ID or its name, ignoring case (a unique part
-  of the name is enough); an ambiguous name lists the matching devices
-  (in the error's `hint`; exit 2).
-- `history` prints the stored trail (24 h unless `--since`, e.g. `90m`,
-  `7d`); a device ID already in the history needs no network.
-- `--data-dir DIR` keeps `history.db` in `DIR` instead of
-  `~/.local/share/icloud-findmy`. It and the output flags may come before
-  or after the command.
-- `icloud-findmy COMMAND --help` (or `help COMMAND`) describes one
-  command and its JSON.
-
-Output follows the contract every iCloud tool is moving to
-([docs/CLI.md](../docs/CLI.md)): human-readable text on a terminal, and
-when piped a JSON envelope on stdout,
-`{"ok":true,"data":…,"summary":"4 devices"}`; the shapes `--help` lists
-are its `data`. `--json` forces the envelope, `--styled` text, `--quiet`
-prints only `data`, `--ids-only` one device id per line (`devices`,
-`locate`, `play-sound`, `lost-mode`), `--count` the number of results
-(devices; positions for `history`; deleted positions for
-`prune-history`). The flags may be combined; the strongest wins:
-`--ids-only` > `--count` > `--quiet` > `--json` > `--styled`.
-
-A failure in a machine mode is one JSON document on stdout (nothing on
-stderr), `{"ok":false,"error":{"code":"not_found","message":"no device
-matches \"nokia\"","hint":"name one of these devices or use its ID: …"}}`;
-in text mode it is `error: …` and `hint: …` on stderr.
-
-Exit codes, the table every iCloud tool shares:
-
-| exit | codes |
-|---|---|
-| 0 | ok |
-| 1 | `unsupported`, `no_fix`, `cancelled`, `io`, `error`, `http` (4xx) |
-| 2 | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` |
-| 3 | `sign_in_required` (`icloud-session sign-in`), `find_my_auth_required` (Find My needs the Apple password after `icloud-session` could not re-authorize with a stored one: `icloud-session authorize-find-my`), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` (iCloud keeps answering 401/421 although `icloud-sessiond` still holds the sign-in: sign in again) |
-| 4 | `not_found` (also a device that left the Apple ID while `locate` waited) |
-| 5 | `offline`, `network`, `session_service` (`icloud-sessiond` unreachable), `keyring_unavailable`, `bad_response`, `http` (5xx) |
+Every command, the output modes (text on a terminal, JSON when piped), the
+exit and error codes and the JSON shapes are in the
+[command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
 ## Building from source
 
