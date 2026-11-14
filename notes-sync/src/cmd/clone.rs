@@ -7,6 +7,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::pull::backfill_new_note_bodies;
+use super::push::is_sync_conflict_name;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
     Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
@@ -122,7 +123,9 @@ pub fn run_clone_with(
     // The note files a directory already held, by the `apple-note-id` each
     // carries: what a clone that never finished (killed before its state
     // was written) left there.
-    let mut left_behind: HashMap<String, HashMap<String, String>> = HashMap::new();
+    // Several files may carry one id (a copy made since); a Syncthing
+    // conflict copy is never a note file.
+    let mut left_behind: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
     let (shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     let mut sources: Vec<(&[CloudKitRecord], Option<String>)> = vec![(&changes.records, None)];
     sources.extend(
@@ -220,10 +223,15 @@ pub fn run_clone_with(
                 if claimed_dirs.insert(placement.dir.clone()) {
                     claim_names_on_disk(target_dir, &placement.dir, used_in_dir)?;
                     let ids = left_behind.entry(placement.dir.clone()).or_default();
-                    for name in used_in_dir.iter().filter(|name| name.ends_with(".md")) {
+                    let mut names: Vec<&String> = used_in_dir
+                        .iter()
+                        .filter(|name| name.ends_with(".md") && !is_sync_conflict_name(name))
+                        .collect();
+                    names.sort();
+                    for name in names {
                         let file = posix::join(&[&placement.dir, name]);
                         if let Some(id) = note_id_at(target_dir, &file, title_mode)? {
-                            ids.insert(id, name.clone());
+                            ids.entry(id).or_default().push(name.clone());
                         }
                     }
                 }
@@ -236,9 +244,11 @@ pub fn run_clone_with(
                 let adopted = left_behind
                     .get(&placement.dir)
                     .and_then(|ids| ids.get(&record.record_name))
-                    .filter(|name| {
-                        let path = target_dir.join(posix::join(&[&placement.dir, name]));
-                        std::fs::read_to_string(path).is_ok_and(|text| text == file_text)
+                    .and_then(|names| {
+                        names.iter().find(|name| {
+                            let path = target_dir.join(posix::join(&[&placement.dir, name]));
+                            std::fs::read_to_string(path).is_ok_and(|text| text == file_text)
+                        })
                     })
                     .cloned();
                 let file_name = adopted.clone().unwrap_or_else(|| {

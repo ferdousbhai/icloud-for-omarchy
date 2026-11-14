@@ -346,6 +346,30 @@ fn a_second_clone_leaves_a_left_file_that_was_edited_alone() {
     assert_ne!(tracked_files(&vault), written);
 }
 
+/// Other files may carry the left note's id by the time of the second clone
+/// (copies edited since, Syncthing conflict copies). The file that still
+/// reads as the note is the one taken, whichever of them is found first.
+#[test]
+fn a_second_clone_adopts_the_left_file_among_copies_that_carry_its_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    clone_from(cassette("tiny-clone.json"), &vault, dir.path().join("first.json"));
+    let written = notes_under(&vault);
+    assert_eq!(written.len(), 1);
+    std::fs::remove_dir_all(vault.join(".icloud-notes")).unwrap();
+    let edited = std::fs::read_to_string(vault.join(&written[0])).unwrap() + "\nedited since";
+    let stem = written[0].strip_suffix(".md").unwrap();
+    for n in 0..4 {
+        std::fs::write(vault.join(format!("{stem} copy {n}.md")), &edited).unwrap();
+        let conflict = format!("{stem}.sync-conflict-20261114-10000{n}-ABCDEFG.md");
+        std::fs::write(vault.join(conflict), &edited).unwrap();
+    }
+
+    clone_from(cassette("tiny-clone.json"), &vault, dir.path().join("second.json"));
+    assert_eq!(tracked_files(&vault), written, "the note's own file is taken");
+    assert_eq!(notes_under(&vault).len(), 1 + 8, "nothing written beside it");
+}
+
 /// A clone that fails part way (here an attachment download) records the
 /// notes it wrote, as a failed pull does: push has nothing to create, and
 /// the first pull brings the rest without a second copy of any note.
