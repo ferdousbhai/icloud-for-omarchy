@@ -233,8 +233,10 @@ pub struct State {
     #[serde(default)]
     pub lists: BTreeMap<String, ListState>,
     /// Files of lists gone from iCloud that were left in the folder because
-    /// they held changes never sent. No list's file takes such a name while
-    /// the file is there: a new list of that name would read it as its own.
+    /// they held changes never sent, or could not be read or removed (a
+    /// conflict copy too). No list's file takes such a name (a copy's, its
+    /// file's) while the file is there: a new list of that name would read
+    /// it as its own.
     #[serde(default)]
     pub left: Vec<String>,
     /// Files removed with their deleted lists. One that comes back (changed
@@ -1087,31 +1089,49 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             .collect();
         // As a run killed before it recorded so wrote it: nothing unsent.
         let written = |text: &String| *text == ls.text || ls.writing.as_ref().is_some_and(|w| w.text == *text);
-        match read(&path)? {
-            Some(text) if !written(&text) => {
-                let beside = match names.as_slice() {
-                    [] => String::new(),
-                    names => format!(" (and beside it {})", names.join(", ")),
-                };
-                report.warnings.push(format!(
-                    "{}: its list is gone from iCloud; the file has changes that were never sent, so it is left here{beside} and no longer kept in step",
-                    ls.file
-                ));
+        let beside = match names.as_slice() {
+            [] => String::new(),
+            names => format!(" (and beside it {})", names.join(", ")),
+        };
+        // Left as it is when it cannot be read or removed: one list's
+        // trouble, not the run's, and never taken by a new list of its name.
+        let cannot = |what: &str, e: io::Error| {
+            format!(
+                "{}: its list is gone from iCloud, and the file could not be {what} ({e}), so it is left here{beside} and no longer kept in step",
+                ls.file
+            )
+        };
+        let left = match read(&path) {
+            Err(e) => Some(cannot("read", e)),
+            Ok(Some(text)) if !written(&text) => Some(format!(
+                "{}: its list is gone from iCloud; the file has changes that were never sent, so it is left here{beside} and no longer kept in step",
+                ls.file
+            )),
+            Ok(file) => match file.map_or(Ok(()), |_| fs::remove_file(&path)) {
+                Err(e) => Some(cannot("removed", e)),
+                Ok(()) => None,
+            },
+        };
+        match left {
+            Some(warning) => {
+                report.warnings.push(warning);
                 state.left.push(ls.file);
             }
-            file => {
-                if file.is_some() {
-                    fs::remove_file(&path)?;
-                }
+            None => {
                 state.removed.push(ls.file.clone());
                 // Nothing can take them in now: the list and its reminders
                 // are gone, and a new list of its name would read them as
                 // its own.
                 for (copy, name) in copies.iter().zip(&names) {
-                    fs::remove_file(copy)?;
-                    report.warnings.push(format!(
-                        "{name}: its list is gone from iCloud, so this conflict copy was removed unread"
-                    ));
+                    report.warnings.push(match fs::remove_file(copy) {
+                        Ok(()) => format!("{name}: its list is gone from iCloud, so this conflict copy was removed unread"),
+                        Err(e) => {
+                            state.left.push(name.clone());
+                            format!(
+                                "{name}: its list is gone from iCloud, and this conflict copy could not be removed ({e}), so it is left here"
+                            )
+                        }
+                    });
                 }
             }
         }
@@ -1150,7 +1170,12 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                 let back = ls.was.iter().filter(|w| dir.join(w).exists()).cloned();
                 std::iter::once(ls.file.clone()).chain(back)
             })
-            .chain(state.left.iter().cloned())
+            // A conflict copy left keeps its file's name: a list of that name
+            // would read it as its own.
+            .chain(state.left.iter().map(|f| match f.split_once(".sync-conflict-") {
+                Some((stem, _)) => format!("{stem}.md"),
+                None => f.clone(),
+            }))
             .collect();
         let wanted = free_name(&file_stem(&list.name), &others);
         let mut ls = state.lists.get(&list.id).cloned().unwrap_or_default();

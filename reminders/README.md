@@ -124,8 +124,9 @@ adds. From one of Syncthing's conflict copies (`Work.sync-conflict-….md`)
 only ticks and unknown lines are taken, after which the copy is removed.
 The file of a list deleted in iCloud is removed too, with its conflict
 copies (the journal names each), unless it holds changes that were never
-sent: then it stays as it is with its copies, no longer kept in step, and a
-new list of that name gets a file of its own (`Work 2.md`). A file that
+sent or cannot be removed: then it stays as it is with its copies (a copy
+that cannot be removed stays too), no longer kept in step, and a new list
+of that name gets a file of its own (`Work 2.md`). A file that
 Syncthing brings back after this computer moved or removed it (the phone
 had changed it meanwhile) is never left unread: under a renamed list's old
 name it is read like a conflict copy and removed; a deleted list's (under

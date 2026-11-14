@@ -1755,3 +1755,71 @@ fn a_write_a_run_ended_before_finishing_leaves_no_temp_file_after_its_list_is_re
         assert_eq!(file_names(&dir), want, "deleted: {deleted}");
     }
 }
+
+#[test]
+fn a_deleted_list_s_file_that_cannot_be_removed_is_left_and_the_run_goes_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = start();
+    let dir = folder(&env);
+    delete_groceries(&env);
+    // The other list's file gets a line; the folder cannot be changed.
+    let path = dir.join("Reminders.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Stretch\n").unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let out = env.json(&["background", "--sync"]);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(out["folder"]["added"], 1, "the other list's line is sent: {out}");
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    // The other list's own write back fails too, as a warning of its own.
+    assert!(
+        warnings.len() == 2
+            && warnings[1].as_str().unwrap().starts_with("Reminders.md: ")
+            && warnings[0]
+                .as_str()
+                .unwrap()
+                .starts_with("Groceries.md: its list is gone from iCloud, and the file could not be removed"),
+        "{out}"
+    );
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+    // Said once, and a new list of that name gets a file of its own.
+    assert_eq!(env.json(&["background", "--sync"])["folder"]["warnings"], json!([]));
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["recordName"] = json!("List/LIST-NEW");
+    list["fields"]["Deleted"]["value"] = json!(0);
+    list["fields"]["ReminderIDs"]["value"] = json!("[]");
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["added"], 0, "{out}");
+    assert_eq!(file_names(&dir), ["Groceries 2.md", "Groceries.md", "Reminders.md"]);
+}
+
+#[test]
+fn a_deleted_list_s_conflict_copy_that_cannot_be_removed_is_left_and_not_read_by_a_new_list() {
+    let env = start();
+    let dir = folder(&env);
+    // A directory of a copy's name, with something in it: not removable.
+    let copy = "Groceries.sync-conflict-20261114-093000-ABCDEFG.md";
+    std::fs::create_dir(dir.join(copy)).unwrap();
+    std::fs::write(dir.join(copy).join("x"), "").unwrap();
+    let mut list = delete_groceries(&env);
+    let out = env.json(&["background", "--sync"]);
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1 && warnings[0].as_str().unwrap().starts_with(&format!("{copy}: ")),
+        "{out}"
+    );
+    assert_eq!(file_names(&dir), [copy, "Reminders.md"]);
+    // A new list of that name would read it as its own copy: it gets
+    // another name while the copy is there.
+    list["recordName"] = json!("List/LIST-NEW");
+    list["fields"]["Deleted"]["value"] = json!(0);
+    list["fields"]["ReminderIDs"]["value"] = json!("[]");
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
+    assert_eq!(file_names(&dir), ["Groceries 2.md", copy, "Reminders.md"]);
+    std::fs::remove_dir_all(dir.join(copy)).unwrap();
+    env.json(&["background", "--sync"]);
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+}
