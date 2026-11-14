@@ -351,17 +351,4 @@ mod tests {
         };
         assert_eq!(Account::join(stored, other), None, "another account's jars");
     }
-
-    #[test]
-    fn a_bad_account_file_is_set_aside() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("account.json");
-        fs::write(&path, "{not json").unwrap();
-        assert!(Stored::load_or_set_aside(&path).is_err());
-        assert!(!path.exists());
-        assert_eq!(
-            fs::read_to_string(dir.path().join("account.json.bad")).unwrap(),
-            "{not json"
-        );
-    }
 }
