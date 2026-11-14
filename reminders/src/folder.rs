@@ -1086,11 +1086,16 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
         // A write a killed run began: its temp file is this program's own,
         // also once the list is renamed or gone.
         if let Some(w) = &ls.writing {
-            let tmp = tmp_path(&dir.join(&ls.file));
+            let path = dir.join(&ls.file);
+            let tmp = tmp_path(&path);
             // Still there with (the start of) what was being written: the
             // rename never happened, so the file is as last recorded, and
             // the user's edits are of that, whatever they look closer to.
-            if fs::read(&tmp).is_ok_and(|t| w.text.as_bytes().starts_with(&t)) {
+            // Unless the file is what was written: then that temp file is
+            // Syncthing's own, begun since (an empty one is the start of
+            // anything).
+            let landed = read(&path).ok().flatten().is_some_and(|t| t == w.text);
+            if !landed && fs::read(&tmp).is_ok_and(|t| w.text.as_bytes().starts_with(&t)) {
                 ls.writing = None;
             }
             let _ = fs::remove_file(tmp);

@@ -1311,6 +1311,29 @@ fn a_run_ended_between_writing_a_file_and_recording_it_adds_and_deletes_nothing(
 }
 
 #[test]
+fn a_write_that_landed_is_not_undone_by_syncthing_s_temp_file_of_that_name() {
+    let env = start();
+    let dir = folder(&env);
+    let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
+    milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
+    env.state.put(milk);
+    env.background_crashing_at("file-written");
+    // Syncthing starts a download of the file under the temp name it shares
+    // with this program's writes: an empty file, with the write already in.
+    std::fs::write(dir.join(".syncthing.Groceries.md.tmp"), "").unwrap();
+
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["deleted"].as_i64()),
+        (Some(0), Some(0)),
+        "{out}"
+    );
+    assert_eq!(env.creates(), 0);
+    let milk = env.state.record("Reminder/REM-MILK").unwrap();
+    assert_eq!(milk["fields"]["Deleted"]["value"], 0);
+}
+
+#[test]
 fn a_run_ended_between_renaming_a_file_and_recording_it_keeps_the_file_and_its_edits() {
     let env = start();
     let dir = folder(&env);
