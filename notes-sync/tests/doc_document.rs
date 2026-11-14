@@ -417,6 +417,56 @@ fn compute_splices_mid_document_insert_plus_trailing_newline_stays_two_small_hun
     );
 }
 
+/// Two changed lines next to each other are one hunk: each line is
+/// tightened on its own, so the text between their changes (an embed here)
+/// is not deleted and typed again. (Found by `roundtrip_property`: two
+/// lines' trailing spaces trimmed around an attachment refused the push.)
+#[test]
+fn compute_splices_tightens_each_of_two_changed_lines_next_to_each_other() {
+    assert_eq!(
+        compute_splices("a \n\u{fffc}b ", "a\n\u{fffc}b"),
+        vec![splice(1, 1, ""), splice(5, 1, "")]
+    );
+    assert_eq!(
+        compute_splices("one\ntwo\n", "one!\ntwo!\n"),
+        vec![splice(3, 0, "!"), splice(7, 0, "!")]
+    );
+}
+
+/// Lines are matched without their trailing whitespace (which push trims):
+/// a list item that only lost a trailing space is the same line, not one
+/// deleted and typed again because an empty line matched first, which made
+/// a dash list item a bullet one. Found by `roundtrip_property`.
+#[test]
+fn compute_splices_matches_a_line_that_only_lost_its_trailing_space() {
+    assert_eq!(
+        compute_splices("[\n\n> \n\nRemote ", "[\n>\n\nRemote"),
+        vec![splice(2, 1, ""), splice(4, 1, ""), splice(13, 1, "")]
+    );
+}
+
+/// A line that loses a trailing space as a line is added in front of it is
+/// one replacement: what the two have in common is kept, not typed again
+/// (losing what Markdown doesn't show of it, a list item's dash, a code
+/// line's bold). Found by `roundtrip_property`.
+#[test]
+fn compute_splices_keeps_the_characters_a_replacement_leaves_in_place() {
+    let splices = compute_splices("x\n\\ ", "x\n-\\\n\\");
+    let deleted: usize = splices.iter().map(|s| s.delete_length).sum();
+    assert_eq!(deleted, 1, "{splices:?}");
+    let mut doc = simple_document("x\n\\ ");
+    apply_text_edit(&mut doc, "x\n-\\\n\\", &opts(REPLICA_A)).unwrap();
+    assert_eq!(doc.text, "x\n-\\\n\\");
+    // Astral characters are diffed whole, never split.
+    let splices = compute_splices("😀a ", "b😀a");
+    let mut text: Vec<u16> = "😀a ".encode_utf16().collect();
+    for s in splices.iter().rev() {
+        text.splice(s.start..s.start + s.delete_length, s.insert_text.encode_utf16());
+    }
+    assert_eq!(String::from_utf16(&text).unwrap(), "b😀a");
+    assert!(splices.iter().all(|s| !s.insert_text.contains('\u{fffd}')));
+}
+
 #[test]
 fn a_multi_hunk_edit_never_re_authors_another_replicas_text_between_the_hunks() {
     let mut doc = make_document(

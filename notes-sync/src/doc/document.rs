@@ -566,6 +566,17 @@ pub fn compute_splice(old_text: &str, new_text: &str) -> Splice {
 
 /// `computeSplices`: per-hunk splices (line-level LCS via node-diff3's
 /// `diffIndices`, each hunk tightened with `computeSplice`).
+///
+/// Text an edit leaves alone is never deleted and typed again, which would
+/// lose what Markdown doesn't show of it (a list item's dash or checklist
+/// identity, a code line's styling) or refuse the push (an embed): lines
+/// are matched without their trailing whitespace, the lines both texts
+/// start and end with are never in a hunk, and a hunk of several changed
+/// lines is tightened a line at a time. Its old and new lines are paired in
+/// order; where one side has more lines, the others are added or removed
+/// whole, at the hunk's end or at its start, whichever changes less (and,
+/// as often both change as much, whichever leaves the paired lines closer).
+/// What a changed line keeps of itself is kept ([`refine_replacement`]).
 pub fn compute_splices(old_text: &str, new_text: &str) -> Vec<Splice> {
     if old_text == new_text {
         return Vec::new();
@@ -574,22 +585,170 @@ pub fn compute_splices(old_text: &str, new_text: &str) -> Vec<Splice> {
     let new_lines = split_lines_inclusive(&utf16(new_text));
     let old_offsets = line_start_offsets(&old_lines);
 
+    // Lines are matched by their text without trailing whitespace, which
+    // push trims from every line but a code block's: a line that only lost
+    // its trailing spaces is the same line, and isn't taken for another (an
+    // empty one, say) that happens to match it as well. Such a pair is
+    // tightened as a change of its own.
+    let key = |line: &Vec<u16>| -> Vec<u16> {
+        let (body, newline) = match line.split_last() {
+            Some((&last, body)) if last == u16::from(b'\n') => (body, true),
+            _ => (&line[..], false),
+        };
+        let kept = body.len() - body.iter().rev().take_while(|&&u| u == 32 || u == 9).count();
+        let mut key = body[..kept].to_vec();
+        key.extend(newline.then_some(u16::from(b'\n')));
+        key
+    };
+    let old_keys: Vec<Vec<u16>> = old_lines.iter().map(key).collect();
+    let new_keys: Vec<Vec<u16>> = new_lines.iter().map(key).collect();
+    // The lines both start and end with are left out of the diff: where
+    // the longest common subsequence can be had more than one way (equal
+    // lines, an embed's alone on each), it is then had without them.
+    let prefix = old_keys.iter().zip(&new_keys).take_while(|(a, b)| a == b).count();
+    let suffix = old_keys[prefix..]
+        .iter()
+        .rev()
+        .zip(new_keys[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let old_middle = &old_keys[prefix..old_keys.len() - suffix];
+    let new_middle = &new_keys[prefix..new_keys.len() - suffix];
+
     let mut splices = Vec::new();
-    for hunk in diff_indices(&old_lines, &new_lines) {
-        let old_start = old_offsets[hunk.buffer1.0];
-        let old_hunk: Vec<u16> = old_lines[hunk.buffer1.0..hunk.buffer1.0 + hunk.buffer1.1].concat();
-        let new_hunk: Vec<u16> = new_lines[hunk.buffer2.0..hunk.buffer2.0 + hunk.buffer2.1].concat();
-        let (start, delete_length, insert) = compute_splice16(&old_hunk, &new_hunk);
-        if delete_length == 0 && insert.is_empty() {
+    // The matched line pairs from (old, new) up to `old_end`.
+    let matched = |from: (usize, usize), old_end: usize, splices: &mut Vec<Splice>| {
+        for offset in 0..old_end - from.0 {
+            let (old, new) = (from.0 + offset, from.1 + offset);
+            tighten(&old_lines[old], &new_lines[new], old_offsets[old], splices);
+        }
+    };
+    let mut next = (0, 0);
+    for hunk in diff_indices(old_middle, new_middle) {
+        let (old_first, old_count) = (hunk.buffer1.0 + prefix, hunk.buffer1.1);
+        let (new_first, new_count) = (hunk.buffer2.0 + prefix, hunk.buffer2.1);
+        matched(next, old_first, &mut splices);
+        next = (old_first + old_count, new_first + new_count);
+        let old_group = |from: usize, count: usize| old_lines[old_first + from..old_first + from + count].concat();
+        let new_group = |from: usize, count: usize| new_lines[new_first + from..new_first + from + count].concat();
+        let at = |from: usize| old_offsets[old_first + from];
+        if old_count == 0 || new_count == 0 {
+            tighten(&old_group(0, old_count), &new_group(0, new_count), at(0), &mut splices);
             continue;
         }
-        splices.push(Splice {
-            start: old_start + start,
+        let pairs = old_count.min(new_count);
+        // (old line, new line) offsets of the pairs, and where the lines
+        // one side has over goes, for the hunk's end and its start.
+        let align = |old_skip: usize, new_skip: usize, extra_at_end: bool| {
+            let mut out = Vec::new();
+            let (old_extra, new_extra) = (old_count - pairs, new_count - pairs);
+            let extra = |out: &mut Vec<Splice>, from_old: usize, from_new: usize| {
+                tighten(
+                    &old_group(from_old, old_extra),
+                    &new_group(from_new, new_extra),
+                    at(from_old),
+                    out,
+                )
+            };
+            if !extra_at_end {
+                extra(&mut out, 0, 0);
+            }
+            let mut pair_cost = 0;
+            for pair in 0..pairs {
+                pair_cost += tighten(
+                    &old_group(old_skip + pair, 1),
+                    &new_group(new_skip + pair, 1),
+                    at(old_skip + pair),
+                    &mut out,
+                );
+            }
+            if extra_at_end {
+                extra(&mut out, pairs, pairs);
+            }
+            let cost: usize = out.iter().map(|s| s.delete_length + len16(&s.insert_text)).sum();
+            ((cost, pair_cost), out)
+        };
+        let front = align(0, 0, true);
+        let chosen = if old_count == new_count {
+            front.1
+        } else {
+            let back = align(old_count - pairs, new_count - pairs, false);
+            if back.0 < front.0 { back.1 } else { front.1 }
+        };
+        splices.extend(chosen);
+    }
+    matched(next, old_lines.len(), &mut splices);
+    splices
+}
+
+/// The splices that turn `old` (at `old_start` in the old text) into `new`,
+/// added to `out`: one, tightened ([`compute_splice16`]), or the pieces of a
+/// replacement ([`refine_replacement`]). How many units they delete and
+/// insert.
+fn tighten(old: &[u16], new: &[u16], old_start: usize, out: &mut Vec<Splice>) -> usize {
+    let (start, delete_length, insert) = compute_splice16(old, new);
+    if delete_length == 0 && insert.is_empty() {
+        return 0;
+    }
+    let mut cost = 0;
+    for (at, delete_length, insert) in refine_replacement(&old[start..start + delete_length], &insert) {
+        cost += delete_length + insert.len();
+        out.push(Splice {
+            start: old_start + start + at,
             delete_length,
             insert_text: from_utf16(&insert),
         });
     }
-    splices
+    cost
+}
+
+/// The most characters a replacement may have on either side for
+/// [`refine_replacement`] to diff it (the diff is quadratic at worst).
+const MAX_REFINED_REPLACEMENT: usize = 400;
+
+/// A replacement of `deleted` by `inserted` (UTF-16) as the splices of a
+/// character diff of the two, `(offset in deleted, delete length, insert)`:
+/// the characters they have in common are kept, not deleted and typed again
+/// (a line's trailing space trimmed next to a line added after it is one
+/// replacement, and would retype the line). One splice when either is empty
+/// or long.
+fn refine_replacement(deleted: &[u16], inserted: &[u16]) -> Vec<(usize, usize, Vec<u16>)> {
+    let whole = || vec![(0, deleted.len(), inserted.to_vec())];
+    if deleted.is_empty() || inserted.is_empty() {
+        return whole();
+    }
+    let old: Vec<char> = char::decode_utf16(deleted.iter().copied())
+        .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect();
+    let new: Vec<char> = char::decode_utf16(inserted.iter().copied())
+        .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect();
+    if old.len().max(new.len()) > MAX_REFINED_REPLACEMENT
+        || old.iter().chain(&new).any(|&c| c == char::REPLACEMENT_CHARACTER)
+    {
+        return whole();
+    }
+    let offsets = |chars: &[char]| -> Vec<usize> {
+        let mut offsets = vec![0];
+        for c in chars {
+            offsets.push(offsets[offsets.len() - 1] + c.len_utf16());
+        }
+        offsets
+    };
+    let (old_offsets, new_offsets) = (offsets(&old), offsets(&new));
+    diff_indices(&old, &new)
+        .into_iter()
+        .map(|hunk| {
+            let (old_at, old_count) = hunk.buffer1;
+            let (new_at, new_count) = hunk.buffer2;
+            let start = old_offsets[old_at];
+            (
+                start,
+                old_offsets[old_at + old_count] - start,
+                inserted[new_offsets[new_at]..new_offsets[new_at + new_count]].to_vec(),
+            )
+        })
+        .collect()
 }
 
 fn split_lines_inclusive(text: &[u16]) -> Vec<Vec<u16>> {
