@@ -1541,6 +1541,31 @@ fn records_that_are_deleted_already_are_not_sent_again() {
     assert!(!exists(&vault, "Notes/attachments/one.txt") && !exists(&vault, "Notes/attachments/two.txt"));
 }
 
+/// iCloud answering an error for the attachment's record is not iCloud
+/// saying it is gone: the removal is refused for now, not sent without it.
+#[test]
+fn a_removal_whose_lookup_answered_an_error_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let ids = attached(&server, &vault, &[("one.txt", b"first")]);
+    let modifies = server.posts_to("/records/modify").len();
+    {
+        let mut records = server.records.lock().unwrap();
+        records.retain(|r| r["recordName"] != ids[0].0.as_str());
+        records.push(json!({ "recordName": ids[0].0, "serverErrorCode": "TRY_AGAIN_LATER", "reason": "busy" }));
+    }
+    edit_note(&vault, |text| text.replace("[one.txt](attachments/one.txt)\n", ""));
+    let reason = refusal(&push(&server, &vault)).to_owned();
+    assert!(
+        reason.starts_with("iCloud couldn't look up a table or attachment of this note (TRY_AGAIN_LATER)"),
+        "{reason}"
+    );
+    assert_eq!(server.posts_to("/records/modify").len(), modifies);
+    assert!(exists(&vault, "Notes/attachments/one.txt"));
+    assert_eq!(state(&vault).attachments.unwrap().len(), 1);
+}
+
 /// The record the vault tracks as the attachment has to be this note's
 /// file attachment in iCloud: anything else is not marked deleted.
 #[test]

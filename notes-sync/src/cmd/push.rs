@@ -969,6 +969,12 @@ pub fn build_push_plan(
                     !claimed_by_move.contains(&u.file)
                         && !refused_by_id_claim.contains(&u.file)
                         && posix::basename(&u.file) == base_name
+                        // A file carrying another tracked note's id is that
+                        // note's copy, whatever it is called.
+                        && !u
+                            .note_id
+                            .as_deref()
+                            .is_some_and(|id| id != record_name && state.notes.contains_key(id))
                 })
                 .collect();
             let rivals = unpaired
@@ -1259,6 +1265,14 @@ pub fn build_push_plan(
         lookup_failures.extend(failures);
     }
 
+    // A record iCloud answered an error for is not one it said is gone.
+    let gone_or_lookup_failed = |record_name: &str, gone: Refusal| match lookup_failures.get(record_name) {
+        Some(code) => Refusal::LookupFailed {
+            server_error_code: code.clone(),
+        },
+        None => gone,
+    };
+
     let replica_id = match &state.replica_id {
         Some(id) => id.clone(),
         None => js::base64_encode(&rt::random_bytes(16)),
@@ -1284,7 +1298,7 @@ pub fn build_push_plan(
                 PlanEntry::refused(
                     PlanEntryKind::RenameFolder,
                     rename.to.clone(),
-                    Refusal::FolderGoneRemotely,
+                    gone_or_lookup_failed(&rename.record_name, Refusal::FolderGoneRemotely),
                 )
                 .into(),
             ),
@@ -1301,7 +1315,7 @@ pub fn build_push_plan(
         let record = match records_by_name.get(&m.record_name) {
             Some(r) if !r.is_deleted() && !is_purged(r) && !is_in_trash(r) => r,
             _ => {
-                entries.push(refuse(Refusal::MoveGoneRemotely));
+                entries.push(refuse(gone_or_lookup_failed(&m.record_name, Refusal::MoveGoneRemotely)));
                 continue;
             }
         };
@@ -1436,7 +1450,10 @@ pub fn build_push_plan(
             PlanEntry::refused(PlanEntryKind::Update, file.clone(), refusal).into()
         };
         let Some(record) = records_by_name.get(&c.record_name).filter(|r| !r.is_deleted()) else {
-            entries.push(refuse(Refusal::UpdateGoneRemotely));
+            entries.push(refuse(gone_or_lookup_failed(
+                &c.record_name,
+                Refusal::UpdateGoneRemotely,
+            )));
             continue;
         };
 
@@ -1634,6 +1651,20 @@ pub fn build_push_plan(
         if kept_folders.contains(record_name) {
             entries.push(
                 PlanEntry::refused(PlanEntryKind::DeleteFolder, dir.clone(), Refusal::FolderChangedRemotely).into(),
+            );
+            continue;
+        }
+        // Untracking a folder iCloud didn't say is gone would leave it there.
+        if let Some(code) = lookup_failures.get(record_name) {
+            entries.push(
+                PlanEntry::refused(
+                    PlanEntryKind::DeleteFolder,
+                    dir.clone(),
+                    Refusal::LookupFailed {
+                        server_error_code: code.clone(),
+                    },
+                )
+                .into(),
             );
             continue;
         }
@@ -2106,7 +2137,15 @@ fn prepare_embed_candidate<T: Transport>(
     let attachment_records = if names.is_empty() {
         Vec::new()
     } else {
-        db.lookup_records(zone, &names)?
+        let (records, failures) = db.lookup_records_and_failures(zone, &names)?;
+        // Not known to be gone: neither skipped as removed already, nor
+        // reported as a table that no longer exists.
+        if let Some((_, code)) = failures.first() {
+            return Ok(Err(PrepareRefusal::LookupFailed {
+                server_error_code: code.clone(),
+            }));
+        }
+        records
     };
     for removed in &mut removed_attachments {
         let media = tracked

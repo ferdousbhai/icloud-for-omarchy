@@ -90,6 +90,13 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             "iCloud couldn't look this note up (TRY_AGAIN_LATER), so it wasn't deleted - push again later".into(),
         ),
         (
+            Refusal::LookupFailed {
+                server_error_code: "TRY_AGAIN_LATER".into(),
+            },
+            Refused,
+            "iCloud couldn't look this up (TRY_AGAIN_LATER), so nothing was sent for it - push again later".into(),
+        ),
+        (
             Refusal::MoveSharedNote {
                 previous_file: "Pat/Shared/Pie.md".into(),
             },
@@ -328,6 +335,15 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             format!("unsupported markdown. {restore}"),
         ),
         (
+            Refusal::UpdatePrepare(PrepareRefusal::LookupFailed {
+                server_error_code: "TRY_AGAIN_LATER".into(),
+            }),
+            Refused,
+            "iCloud couldn't look up a table or attachment of this note (TRY_AGAIN_LATER), so nothing was sent for \
+             it - push again later"
+                .into(),
+        ),
+        (
             Refusal::UpdatePrepare(PrepareRefusal::TableGoneRemotely),
             Conflict,
             "a table in this note no longer exists remotely - run \"pull\" to reconcile".into(),
@@ -472,6 +488,7 @@ fn every_refusal_variant_is_listed() {
             | AmbiguousNoteId { .. }
             | DeleteSharedNote { .. }
             | DeleteLookupFailed { .. }
+            | LookupFailed { .. }
             | MoveSharedNote { .. }
             | MoveIntoUnfolderableDir { .. }
             | MoveIntoSharerArea
@@ -503,7 +520,7 @@ fn every_refusal_variant_is_listed() {
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 33, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 34, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()
@@ -512,7 +529,7 @@ fn every_refusal_variant_is_listed() {
             _ => None,
         })
         .collect();
-    assert_eq!(prepare.len(), 11, "one row per PrepareRefusal variant");
+    assert_eq!(prepare.len(), 12, "one row per PrepareRefusal variant");
     let text: std::collections::HashSet<std::mem::Discriminant<TextUpdateRefusal>> = listed
         .iter()
         .filter_map(|r| match r {

@@ -191,6 +191,9 @@ pub enum PrepareRefusal {
     RemovedAttachment { reason: String, file: String },
     /// (conflict)
     TableGoneRemotely,
+    /// The lookup of the note's tables or of the attachments it removes
+    /// answered an error for one: whether it still exists isn't known.
+    LookupFailed { server_error_code: String },
     /// `prepareTableAttachmentUpdate`'s reason.
     TableUpdate { reason: String, file: String },
     /// 1865
@@ -230,6 +233,10 @@ impl PrepareRefusal {
             PrepareRefusal::TableGoneRemotely => {
                 "a table in this note no longer exists remotely - run \"pull\" to reconcile".into()
             }
+            PrepareRefusal::LookupFailed { server_error_code } => format!(
+                "iCloud couldn't look up a table or attachment of this note ({server_error_code}), so nothing was \
+                 sent for it - push again later"
+            ),
             PrepareRefusal::TitleHasEmbedCannotRetitle => format!(
                 "this note's title contains an embedded object, so \"{NOTE_TITLE_KEY}\" can't retitle it - \
                  retitle it in Notes instead."
@@ -312,6 +319,9 @@ pub enum Refusal {
     /// (delete, refused): the lookup of the note answered an error, so
     /// whether it still exists isn't known.
     DeleteLookupFailed { server_error_code: String },
+    /// (update, move, folder rename or delete; refused): the lookup of the
+    /// record answered an error, so whether it still exists isn't known.
+    LookupFailed { server_error_code: String },
     /// (move, refused); `previous_file` = the tracked path
     MoveSharedNote { previous_file: String },
     /// (move, refused)
@@ -426,6 +436,9 @@ impl Refusal {
             ),
             DeleteLookupFailed { server_error_code } => format!(
                 "iCloud couldn't look this note up ({server_error_code}), so it wasn't deleted - push again later"
+            ),
+            LookupFailed { server_error_code } => format!(
+                "iCloud couldn't look this up ({server_error_code}), so nothing was sent for it - push again later"
             ),
             MoveSharedNote { previous_file } => format!(
                 "renaming or moving notes shared by someone else isn't supported yet - move the file back to {previous_file}"
