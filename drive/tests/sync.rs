@@ -1451,3 +1451,22 @@ fn a_file_renamed_on_each_side_to_the_name_both_removed_keeps_both_and_removes_n
     texts.sort();
     assert_eq!(texts, ["mine", "theirs"]);
 }
+
+#[test]
+fn a_file_renamed_here_to_the_name_of_one_moved_away_on_both_sides_leaves_one_copy_of_each() {
+    let bed = Bed::new();
+    bed.write("a.txt", "first");
+    bed.write("c.md", "second");
+    bed.settle();
+    let away = bed.cloud.folder(ROOT_ID, "There");
+    move_there(&bed, &bed.cloud.id_at("c.md").unwrap(), &away.id);
+    fs::create_dir(bed.root().join("Here")).unwrap();
+    fs::rename(bed.root().join("c.md"), bed.root().join("Here/c.md")).unwrap();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("c.md")).unwrap();
+    bed.sync();
+    bed.settle();
+    let mut texts: Vec<String> = bed.local_tree().into_values().flatten().collect();
+    texts.sort();
+    assert_eq!(texts, ["first", "second"]);
+    assert_eq!(bed.local_paths(), ["Here", "There", "There/c.md", "c.md"]);
+}

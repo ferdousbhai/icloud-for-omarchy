@@ -651,6 +651,16 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 waited.push((row, to));
                 continue;
             }
+            if tracked_ids
+                .get(to)
+                .is_some_and(|holder| *holder != row.node.id && remote.paths.contains_key(*holder))
+            {
+                // Another item in step is still recorded at that name (moved
+                // away on both sides, say, which this round records): wait
+                // for it, so that recording this move does not drop its row.
+                stuck.push(row);
+                continue;
+            }
             // Folders it was moved into that are not in step yet: iCloud
             // does not have them, or has one of that name that this folder
             // is not in step with (made there too, or made there after the

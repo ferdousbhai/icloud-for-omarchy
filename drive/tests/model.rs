@@ -158,17 +158,20 @@ impl Model {
         }
     }
 
-    /// Whether `paths` (to be created, from `old` if moved) would differ
-    /// from something on either side by case alone: iCloud takes such names
-    /// as one, which the model does not follow.
-    fn clashes(&self, paths: &[(String, String)]) -> bool {
-        let all: Vec<String> = [Side::Here, Side::There]
-            .into_iter()
-            .flat_map(|s| self.tree(s).into_keys())
-            .collect();
-        paths.iter().any(|(new, old)| {
-            all.iter()
-                .any(|q| q != new && q != old && q.to_lowercase() == new.to_lowercase())
+    /// Whether `paths` (to be created, from `old` if moved on `side`) would
+    /// differ from something on either side by case alone: iCloud takes
+    /// such names as one, which the model does not follow. (The old path is
+    /// only the moving item's own on its side: the other side may hold
+    /// something else there. The cases of the named regressions were found
+    /// without that.)
+    fn clashes(&self, side: Side, paths: &[(String, String)]) -> bool {
+        [Side::Here, Side::There].into_iter().any(|s| {
+            let own = s == side || self.extra.is_none();
+            self.tree(s).into_keys().any(|q| {
+                paths
+                    .iter()
+                    .any(|(new, old)| &q != new && !(own && &q == old) && q.to_lowercase() == new.to_lowercase())
+            })
         })
     }
 
@@ -177,7 +180,7 @@ impl Model {
         let tree = self.tree(side);
         let name = self.rng.pick(names)?.to_string();
         let path = join(dir, &name);
-        (!tree.contains_key(&path) && !self.clashes(&[(path.clone(), path.clone())])).then_some(path)
+        (!tree.contains_key(&path) && !self.clashes(side, &[(path.clone(), path.clone())])).then_some(path)
     }
 
     fn dirs(&self, side: Side) -> Vec<String> {
@@ -303,7 +306,7 @@ impl Model {
             .filter(|p| is_under(p, from))
             .map(|p| (format!("{to}{}", &p[from.len()..]), p.clone()))
             .collect();
-        if self.clashes(&moved) {
+        if self.clashes(side, &moved) {
             return false;
         }
         match side {
@@ -421,7 +424,7 @@ impl Model {
             || [Side::Here, Side::There]
                 .iter()
                 .any(|s| self.tree(*s).contains_key(&path))
-            || self.clashes(&[(path.clone(), path.clone())])
+            || self.clashes(Side::Here, &[(path.clone(), path.clone())])
         {
             return None;
         }
