@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use icloud_photos::catalog::Catalog;
 use serde_json::Value;
 use support::fake_server::FakeServer;
 use support::temp_dir;
@@ -120,6 +121,10 @@ impl Env {
 
     fn library(&self) -> PathBuf {
         self.root.join("data-dir/library")
+    }
+
+    fn catalog(&self) -> PathBuf {
+        self.root.join("data-dir/data/catalog.db")
     }
 
     fn rows(&self) -> Vec<Value> {
@@ -396,4 +401,88 @@ fn an_upload_killed_at_any_point_is_in_icloud_once() {
         in_step_with_icloud(&env);
         assert_eq!(std::fs::read(&file).unwrap(), b"\xFF\xD8 a new photo");
     }
+}
+
+/// The catalog schema of the releases before `live_size`.
+const SCHEMA_BEFORE_LIVE_SIZE: &str = "
+CREATE TABLE assets(
+  id TEXT PRIMARY KEY,
+  master_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  size INTEGER NOT NULL DEFAULT 0,
+  w INTEGER NOT NULL DEFAULT 0,
+  h INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'photo',
+  is_live INTEGER NOT NULL DEFAULT 0,
+  local_path TEXT NULL,
+  live_path TEXT NULL,
+  thumb_path TEXT NULL,
+  medium_path TEXT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  change_tag TEXT NULL,
+  orig_url TEXT NULL, orig_type TEXT NULL,
+  thumb_url TEXT NULL, medium_url TEXT NULL, live_url TEXT NULL, live_type TEXT NULL
+);
+CREATE INDEX assets_by_date ON assets(deleted, created DESC);
+CREATE INDEX assets_by_master ON assets(master_id);
+CREATE TABLE albums(
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE album_assets(
+  album_id TEXT NOT NULL,
+  asset_id TEXT NOT NULL,
+  relation_id TEXT NULL,
+  PRIMARY KEY(album_id, asset_id)
+);
+CREATE INDEX album_assets_by_asset ON album_assets(asset_id);
+CREATE INDEX album_assets_by_relation ON album_assets(relation_id);
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+";
+
+#[test]
+fn a_catalog_from_before_live_size_is_upgraded_and_takes_up_the_files_on_disk() {
+    let env = Env::new("upgrade", 3);
+    env.run(&["sync"]).ok();
+    let month = env.library().join("2026/09");
+    let users = users_files(&month);
+    env.run(&["download", "--all"]).ok();
+    let library = files(&env.library());
+    // The same rows in a catalog of the old schema, the downloads' paths
+    // lost (a download cut off before its record, or killed mid-way).
+    let old = env.root.join("old.db");
+    {
+        let conn = rusqlite::Connection::open(&old).unwrap();
+        conn.execute_batch(SCHEMA_BEFORE_LIVE_SIZE).unwrap();
+        conn.execute("ATTACH ?1 AS cur", [env.catalog().to_str().unwrap()])
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO assets SELECT id, master_id, filename, created, size, w, h, kind, is_live, NULL, NULL,
+               thumb_path, medium_path, deleted, change_tag, orig_url, orig_type, thumb_url, medium_url, live_url,
+               live_type FROM cur.assets;
+             INSERT INTO albums SELECT * FROM cur.albums;
+             INSERT INTO album_assets SELECT * FROM cur.album_assets;
+             INSERT INTO meta SELECT * FROM cur.meta;
+             DETACH cur;",
+        )
+        .unwrap();
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", env.catalog().display()));
+    }
+    std::fs::rename(&old, env.catalog()).unwrap();
+
+    // It opens, gains the column, and the video's size is not known.
+    let live = env.rows().into_iter().find(|r| r["kind"] == "live").unwrap();
+    let id = live["id"].as_str().unwrap();
+    let row = Catalog::open(&env.catalog()).unwrap().asset(id).unwrap().unwrap();
+    assert_eq!((row.live_size, row.live_path.is_none()), (0, true));
+    assert!(row.size > 0);
+
+    // The originals on disk are taken up, the video too: no " (2)" copies.
+    env.run(&["download", "--all"]).ok();
+    assert_eq!(files(&env.library()), library);
+    catalog_and_files_agree(&env, &users, &month);
 }

@@ -9,7 +9,9 @@
 //! the disk, and a file that appears meanwhile only moves ours to the next name.
 //! A file already there under the original's name and of its exact size,
 //! which the catalog has for no asset, is an earlier download the catalog
-//! lost: it is recorded, not downloaded again (`unrecorded`).
+//! lost: it is recorded, not downloaded again (`unrecorded`). A Live Photo
+//! video whose size the catalog does not know (one from before it kept it)
+//! is told by its bytes, once downloaded.
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::io;
@@ -147,7 +149,7 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, p
             let (dest, have) = {
                 let mut taken = reserved();
                 let names = (1..10_000).map(|n| original_names(&targets.library, &row, n));
-                let have = unrecorded(cat, &row, &taken, row.size, names)?;
+                let have = unrecorded(cat, &row, &taken, names, of_size(row.size))?;
                 let (photo, live) = match &have {
                     Some(photo) => (photo.clone(), None),
                     None => plan_original(cat, &targets.library, &row, &taken)?,
@@ -276,14 +278,7 @@ fn live(
         let mut taken = reserved();
         // The photo is in the catalog now; re-plan the video with the lock held.
         hold.release(&mut taken);
-        let names = (1..10_000).map(|n| (live_name(row, photo, n), None));
-        let have = unrecorded(
-            cat,
-            row,
-            &taken,
-            row.live_size,
-            names.filter(|(video, _)| video != photo),
-        )?;
+        let have = unrecorded(cat, row, &taken, live_names(row, photo), of_size(row.live_size))?;
         let dest = match &have {
             Some(video) => video.clone(),
             None => plan_live(cat, row, photo, &taken)?,
@@ -297,7 +292,26 @@ fn live(
         let tmp = Temp::beside(&dest)?;
         download_fresh(t, cat, row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?;
         crash::point("download.live.fetched");
-        settle(tmp, dest, &mut hold, |taken| plan_live(cat, row, photo, taken))?
+        // A catalog from before the video's size was kept knows none: an
+        // earlier download is told by its bytes instead, now they are here.
+        let earlier = if row.live_size > 0 {
+            None
+        } else {
+            let mut taken = reserved();
+            let len = std::fs::metadata(&tmp.0)?.len() as i64;
+            let found = unrecorded(cat, row, &taken, live_names(row, photo), |file| {
+                of_size(len)(file) && same_bytes(file, &tmp.0).unwrap_or(false)
+            })?;
+            if let Some(file) = &found {
+                hold.add(&mut taken, file.clone());
+            }
+            found
+        };
+        match earlier {
+            // The download is dropped with `tmp`.
+            Some(file) => file,
+            None => settle(tmp, dest, &mut hold, |taken| plan_live(cat, row, photo, taken))?,
+        }
     };
     crash::point("download.live.placed");
     cat.set_path(&row.id, PathKind::Live, Some(&live))?;
@@ -310,27 +324,47 @@ fn live(
 /// was cut off before its path was recorded), so that it is recorded instead
 /// of downloaded again as " (2)": among `names` (the file's own, then the
 /// numbered ones, each with the name that goes with it, while any is in
-/// use), the first file of `size` bytes, the size iCloud reports, that no
-/// other asset and no running download has. A file of another size is
-/// somebody else's: never touched, never recorded.
+/// use), the first file that no other asset and no running download has and
+/// that `is_ours` (of the size iCloud reports, [`of_size`]). Any other file
+/// is somebody else's: never touched, never recorded.
 fn unrecorded(
     cat: &Catalog,
     row: &Row,
     taken: &BTreeSet<PathBuf>,
-    size: i64,
     names: impl Iterator<Item = (PathBuf, Option<PathBuf>)>,
+    is_ours: impl Fn(&Path) -> bool,
 ) -> Result<Option<PathBuf>> {
-    if size <= 0 {
-        return Ok(None);
-    }
     let in_use = |(file, pair): &(PathBuf, Option<PathBuf>)| file.exists() || pair.as_ref().is_some_and(|p| p.exists());
     for (file, _) in names.take_while(in_use) {
-        let same_size = std::fs::symlink_metadata(&file).is_ok_and(|m| m.is_file() && m.len() == size as u64);
-        if same_size && !taken.contains(&file) && !cat.path_taken(&file, &row.id)? {
+        if !taken.contains(&file) && !cat.path_taken(&file, &row.id)? && is_ours(&file) {
             return Ok(Some(file));
         }
     }
     Ok(None)
+}
+
+/// A plain file of exactly `size` bytes; nothing when the size is not known (0).
+fn of_size(size: i64) -> impl Fn(&Path) -> bool {
+    move |file| size > 0 && std::fs::symlink_metadata(file).is_ok_and(|m| m.is_file() && m.len() == size as u64)
+}
+
+/// Whether two files hold the same bytes, read a block at a time.
+fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
+    use std::io::Read;
+    let (mut a, mut b) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
+    let (mut x, mut y) = (vec![0; 1 << 16], vec![0; 1 << 16]);
+    loop {
+        let n = a.read(&mut x)?;
+        if n == 0 {
+            return Ok(b.read(&mut y[..1])? == 0);
+        }
+        match b.read_exact(&mut y[..n]) {
+            Ok(()) if x[..n] == y[..n] => {}
+            Ok(()) => return Ok(false),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Download `url_of(row)` to `dest`; on an expired URL, refresh `row` (and
@@ -649,6 +683,14 @@ fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) 
         "no free name for the video of {}",
         photo.display()
     )))
+}
+
+/// The names the video of a Live Photo saved at `photo` can have, for
+/// [`unrecorded`].
+fn live_names<'a>(row: &'a Row, photo: &'a Path) -> impl Iterator<Item = (PathBuf, Option<PathBuf>)> + 'a {
+    (1..10_000)
+        .map(|n| (live_name(row, photo, n), None))
+        .filter(move |(video, _)| video != photo)
 }
 
 /// The `n`th name for the video of a Live Photo saved at `photo`.
