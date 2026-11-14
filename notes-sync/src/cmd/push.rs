@@ -89,6 +89,9 @@ pub struct PushOptions {
 pub struct ExecuteOutcome {
     pub succeeded: bool,
     pub message: String,
+    /// Nothing was done, and nothing failed: the next push takes it up.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 
 impl ExecuteOutcome {
@@ -96,6 +99,17 @@ impl ExecuteOutcome {
         ExecuteOutcome {
             succeeded: true,
             message: message.into(),
+            skipped: false,
+        }
+    }
+
+    /// The file was saved again after the plan read it: writing the merge
+    /// planned from the older text would undo that save.
+    fn changed_since_planned(file: &str) -> Self {
+        ExecuteOutcome {
+            succeeded: true,
+            message: format!("{file}: changed here while it was being pushed - left for the next push"),
+            skipped: true,
         }
     }
 
@@ -103,6 +117,7 @@ impl ExecuteOutcome {
         ExecuteOutcome {
             succeeded: false,
             message: message.into(),
+            skipped: false,
         }
     }
 }
@@ -402,6 +417,22 @@ pub struct RemoteMerge {
     pub remote_text: String,
     pub remote_tag: String,
     pub has_conflict: bool,
+    /// The file's frontmatter and body as the plan read them: the merge is
+    /// written only over a file that still reads so.
+    pub planned_frontmatter: String,
+    pub planned_text: String,
+}
+
+impl RemoteMerge {
+    /// Whether the note's file still reads as it did when this merge was
+    /// planned from it.
+    fn still_as_planned(&self, target_dir: &Path, file: &str, title_mode: TitleMode) -> Result<bool, Error> {
+        let Some(text) = read_text(&target_dir.join(file))? else {
+            return Ok(false);
+        };
+        let envelope = split_frontmatter(&text, split_options(title_mode));
+        Ok(envelope.frontmatter == self.planned_frontmatter && envelope.body == self.planned_text)
+    }
 }
 
 /// `ExecutablePlanEntry`.
@@ -1778,6 +1809,8 @@ pub fn merge_remote_change(
         remote_text: remote_text.to_owned(),
         remote_tag: remote_tag.to_owned(),
         has_conflict: outcome.has_conflict,
+        planned_frontmatter: frontmatter.to_owned(),
+        planned_text: local_text.to_owned(),
     })
 }
 
@@ -2802,8 +2835,15 @@ fn batch_writes<T: Transport>(
                 updates,
                 new_attachments,
                 removed_attachments,
+                merged,
                 ..
-            } if updates.len() == 1 && new_attachments.is_empty() && removed_attachments.is_empty() => {
+            // One that carries a merge is sent when its turn comes, right
+            // after checking the file is still the one the merge was made from.
+            } if updates.len() == 1
+                && new_attachments.is_empty()
+                && removed_attachments.is_empty()
+                && merged.is_none() =>
+            {
                 by_zone.entry(zone.clone()).or_default().push(updates[0].clone());
             }
             _ => {}
@@ -3252,6 +3292,9 @@ fn execute<T: Transport>(
             entry,
             merged,
         } => {
+            if !merged.still_as_planned(target_dir, &entry.file, state.mode())? {
+                return Ok(ExecuteOutcome::changed_since_planned(&entry.file));
+            }
             apply_remote_merge(target_dir, state, record_name, entry, merged)?;
             Ok(ExecuteOutcome::ok(format!(
                 "{}: merged the remote change into your edit",
@@ -3265,6 +3308,9 @@ fn execute<T: Transport>(
             merged,
         } => {
             if let Some(merged) = merged {
+                if !merged.still_as_planned(target_dir, file, state.mode())? {
+                    return Ok(ExecuteOutcome::changed_since_planned(file));
+                }
                 write_note_file(&target_dir.join(file), &merged.file_text)?;
                 if let Some(entry) = state.notes.get_mut(record_name) {
                     entry.record_change_tag = merged.remote_tag.clone();
@@ -3286,6 +3332,11 @@ fn execute<T: Transport>(
             new_attachments,
             removed_attachments,
         } => {
+            if let Some(merged) = merged
+                && !merged.still_as_planned(target_dir, &entry.file, state.mode())?
+            {
+                return Ok(ExecuteOutcome::changed_since_planned(&entry.file));
+            }
             let sent = match batched.remove(record_name) {
                 Some(results) => SentWrite {
                     results,
@@ -3453,7 +3504,7 @@ pub fn run_push_with(
         // that is killed never gets to the write below, and a note it
         // created would be created again by the next push.
         write_clone_state(target_dir, &state)?;
-        if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded {
+        if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded && !outcome.skipped {
             pushed += 1;
         }
         results.push(PushEntryResult {

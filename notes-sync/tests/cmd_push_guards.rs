@@ -29,9 +29,10 @@ fn cassette(name: &str) -> Cassette {
     .unwrap()
 }
 
-/// What a test does when a `records/modify` arrives, before it is applied
-/// (`true`) or after (`false`), given the request's body.
-type Hook = Box<dyn Fn(bool, &Value) + Send + Sync>;
+/// What a test does when a request arrives: the operation, whether it is
+/// about to be answered (`true`) or, for a `records/modify`, was just applied
+/// (`false`), and its body.
+type Hook = Box<dyn Fn(&str, bool, &Value) + Send + Sync>;
 
 /// A private Notes zone holding `records`: it answers lookups (an entry
 /// with a `serverErrorCode` is answered as that error) and applies every
@@ -143,6 +144,9 @@ impl Transport for Server {
             .or_else(|| path.strip_prefix(SHARED))
             .unwrap_or_else(|| panic!("unexpected request to {path}"));
         self.posts.lock().unwrap().push((operation.to_owned(), body.clone()));
+        if let Some(hook) = &self.hook {
+            hook(operation, true, body);
+        }
         Ok(match operation {
             "/records/lookup" => {
                 let records = self.records.lock().unwrap();
@@ -156,12 +160,9 @@ impl Transport for Server {
                 json!({ "records": found })
             }
             "/records/modify" => {
-                if let Some(hook) = &self.hook {
-                    hook(true, body);
-                }
                 let answer = self.modify(body);
                 if let Some(hook) = &self.hook {
-                    hook(false, body);
+                    hook(operation, false, body);
                 }
                 answer
             }
@@ -343,4 +344,50 @@ fn a_copy_of_another_note_is_not_taken_for_a_deleted_note_of_the_same_name() {
         planned.iter().all(|(kind, ..)| *kind != PlanEntryKind::Move),
         "{planned:?}"
     );
+}
+
+// --- a file saved again while it is being pushed ------------------------------------
+
+/// The note changed in iCloud since the last pull, so the push plans a merge
+/// and would write the merged text over the file. A save that lands after
+/// the plan read the file (here: while iCloud is being asked) is not undone:
+/// the entry is left for the next push, which sends both edits.
+#[test]
+fn a_planned_merge_is_not_written_over_a_later_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let saved_later = Arc::new(Mutex::new(false));
+    let hook: Hook = {
+        let (vault, saved_later) = (vault.clone(), saved_later.clone());
+        Box::new(move |operation, _, _| {
+            let mut saved = saved_later.lock().unwrap();
+            if operation == "/records/lookup" && !*saved {
+                *saved = true;
+                append(&vault, NOTE_FILE, "A line saved while the push ran.\n");
+            }
+        })
+    };
+    let server = Arc::new(Server {
+        hook: Some(hook),
+        ..Server::with_note()
+    });
+    // Another device touched the note: only its change tag differs.
+    server.records.lock().unwrap()[0]["recordChangeTag"] = json!("26z");
+    append(&vault, NOTE_FILE, "\nA line added before the push.\n");
+
+    let result = push(&server, &vault);
+    assert_eq!(result.pushed, Some(0), "{result:?}");
+    let outcome = result.entries[0].outcome.as_ref().unwrap();
+    assert!(outcome.skipped && outcome.succeeded, "{outcome:?}");
+    assert!(result.failures().is_empty());
+    assert!(server.operations().is_empty(), "nothing was sent");
+    let text = read(&vault, NOTE_FILE);
+    assert!(text.contains("A line saved while the push ran."), "{text}");
+    assert_eq!(state(&vault).notes[NOTE].record_change_tag, "25q");
+
+    let result = push(&server, &vault);
+    assert_eq!(result.pushed, Some(1), "{result:?}");
+    assert_eq!(server.operations(), [("update".to_owned(), NOTE.to_owned())]);
+    let text = read(&vault, NOTE_FILE);
+    assert!(text.contains("A line added before the push.") && text.contains("A line saved while the push ran."));
 }
