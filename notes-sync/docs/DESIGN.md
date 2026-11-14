@@ -469,6 +469,11 @@ index) the last one; on a real vault one note with an 837 KB document grew
   the same rule, and a snapshot a kept epoch names is kept, so every
   listed epoch still resolves. Files that aren't capture names are left
   alone.
+- A snapshot or epoch file that can't be read (cut short by a crash of a
+  version that wrote it in place, or damaged since) is left out of a
+  listing instead of failing it: `history` lists the rest and names the
+  file in a notice (`notices` in its data, a warning in text mode), and a
+  lookup by id (`diff`) passes over it.
 - `status` and `push --dry-run` record nothing: planning runs inside
   `history::without_recording`, where `record_version` and `record_epoch`
   are no-ops (and no migration runs either).

@@ -9,8 +9,8 @@ use icloud_notes_sync::vault::base::{read_base_copy, remove_base_copy, write_bas
 use icloud_notes_sync::vault::epoch::{find_epoch_by_id, list_epochs, record_epoch};
 use icloud_notes_sync::vault::history::{
     HISTORY_KEEP_RECENT, HISTORY_RETENTION_DAYS, VersionSnapshotInput, find_snapshot_by_id, find_version,
-    history_record_names, latest_version, list_versions, match_tracked_file, record_version, resolve_tracked_note_from,
-    retention_keeps, without_recording,
+    history_record_names, latest_version, list_versions, list_versions_and_unreadable, match_tracked_file,
+    record_version, resolve_tracked_note_from, retention_keeps, without_recording,
 };
 use icloud_notes_sync::vault::state::{CloneState, NoteEntry, TableAttachmentEntry};
 use indexmap::IndexMap;
@@ -457,10 +457,11 @@ fn record_version_and_record_epoch_parse_only_the_latest_snapshot() {
     let epochs = list_epochs(dir.path(), "REC-1").unwrap();
     assert_eq!(epochs[0].snapshots["REC-1"], Some(latest.id.clone()));
     assert_eq!(find_version(dir.path(), "REC-1", &latest.id).unwrap(), Some(latest));
-    assert!(
-        list_versions(dir.path(), "REC-1").is_err(),
-        "the full listing still parses every file"
-    );
+    // The full listing leaves the file that can't be read out, and names it.
+    assert_eq!(list_versions(dir.path(), "REC-1").unwrap().len(), 2);
+    let (listed, unreadable) = list_versions_and_unreadable(dir.path(), "REC-1").unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(unreadable, [format!(".icloud-notes/history/REC-1/{older}")]);
 }
 
 #[test]
@@ -699,4 +700,18 @@ fn snapshots_epochs_and_base_copies_leave_no_temp_file_behind() {
     assert_eq!(found.len(), 3, "{found:?}");
     assert!(found.iter().all(|name| !name.ends_with(".tmp")), "{found:?}");
     assert_eq!(read_base_copy(dir.path(), "REC-1").unwrap().as_deref(), Some("body"));
+}
+
+/// A lookup by id passes over a file that can't be read instead of failing
+/// on it: the snapshot asked for is still found.
+#[test]
+fn a_lookup_by_id_passes_over_a_file_that_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap();
+    let wanted = latest_version(dir.path(), "REC-1").unwrap().unwrap();
+    let record_dir = dir.path().join(".icloud-notes/history/REC-1");
+    // Not a capture file name, so every lookup reads it.
+    std::fs::write(record_dir.join("0-stray.json"), "not json").unwrap();
+    assert_eq!(find_version(dir.path(), "REC-1", &wanted.id).unwrap(), Some(wanted));
+    assert_eq!(find_version(dir.path(), "REC-1", "no-such-id").unwrap(), None);
 }

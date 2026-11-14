@@ -739,7 +739,7 @@ ISO 8601.
 | `push` (and `--dry-run`) | `{dryRun, pushed?, entries:[{kind, file, resolution, outcome?:{succeeded, message}, ...}], unchanged, notices}`; a push with an entry whose `outcome.succeeded` is false (iCloud refused the change) prints this all the same and exits 1 |
 | `pull` | `{added, updated, merged, removed, changes:[{kind, file}], conflicts, notices, ...}` |
 | `clone` | `{written, writtenShared, attachmentsDownloaded, notices, ...}` |
-| `history` | `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`; with `--records`, `{mode:"records", records:[...]}` |
+| `history` | `{mode:"epochs", epochs:[{id, timestamp, changed, carriedOver}]}`; with `--records`, `{mode:"records", records:[...]}`. A history file that can't be read is left out and named in `notices:[{level, message}]` (absent otherwise; a warning on stderr in text mode) |
 | `diff` | a snapshot ref: `{kind:"snapshot", from, to, hasDifferences, text}`; an epoch ref: `{kind:"epoch", epochId, hasDifferences, sections:[{label, skipped, hasDifferences?, text}]}` (no top-level `text`). The whole diff's text is always in `meta.text` |
 | `restore` | `{file}` |
 | `sync` | `{push, pull, vault_info}` (below) |

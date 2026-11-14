@@ -4,9 +4,11 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::Error;
-use crate::vault::epoch::{NoteEpoch, list_epochs};
-use crate::vault::history::{VersionSnapshot, history_record_names, list_versions, resolve_tracked_note};
+use super::{Error, NoticeLevel, SyncNotice};
+use crate::vault::epoch::{NoteEpoch, list_epochs_and_unreadable};
+use crate::vault::history::{
+    VersionSnapshot, history_record_names, list_versions_and_unreadable, resolve_tracked_note,
+};
 use crate::vault::migrate::read_vault;
 
 /// `HistoryOptions`.
@@ -36,12 +38,40 @@ pub struct HistoryRecordRow {
 }
 
 /// `HistoryResult`: `{"mode":"epochs","epochs":[..]}` or
-/// `{"mode":"records","records":[..]}`.
+/// `{"mode":"records","records":[..]}`, with `notices` when a history file
+/// could not be read and was left out of the listing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum HistoryResult {
-    Epochs { epochs: Vec<HistoryEpochRow> },
-    Records { records: Vec<HistoryRecordRow> },
+    Epochs {
+        epochs: Vec<HistoryEpochRow>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notices: Vec<SyncNotice>,
+    },
+    Records {
+        records: Vec<HistoryRecordRow>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notices: Vec<SyncNotice>,
+    },
+}
+
+impl HistoryResult {
+    pub fn notices(&self) -> &[SyncNotice] {
+        match self {
+            HistoryResult::Epochs { notices, .. } | HistoryResult::Records { notices, .. } => notices,
+        }
+    }
+}
+
+/// One warning per history file left out of a listing.
+fn unreadable_notices(files: Vec<String>) -> Vec<SyncNotice> {
+    files
+        .into_iter()
+        .map(|file| SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!("{file} can't be read, so it is left out of the history"),
+        })
+        .collect()
 }
 
 /// `runHistory`: the epoch timeline (or, with `records`, the flat
@@ -50,11 +80,14 @@ pub fn run_history(target_dir: &Path, file: &str, options: &HistoryOptions) -> R
     let state = read_vault(target_dir)?;
     let record_name = resolve_tracked_note(&state, file, target_dir)?.record_name;
     if options.records {
+        let (records, unreadable) =
+            build_record_history(target_dir, &history_record_names(&state, &record_name), &record_name)?;
         return Ok(HistoryResult::Records {
-            records: build_record_history(target_dir, &history_record_names(&state, &record_name), &record_name)?,
+            records,
+            notices: unreadable_notices(unreadable),
         });
     }
-    let epochs = list_epochs(target_dir, &record_name)?;
+    let (epochs, unreadable) = list_epochs_and_unreadable(target_dir, &record_name)?;
     let mut rows = Vec::with_capacity(epochs.len());
     let mut previous: Option<&NoteEpoch> = None;
     for epoch in &epochs {
@@ -62,7 +95,10 @@ pub fn run_history(target_dir: &Path, file: &str, options: &HistoryOptions) -> R
         previous = Some(epoch);
     }
     rows.reverse();
-    Ok(HistoryResult::Epochs { epochs: rows })
+    Ok(HistoryResult::Epochs {
+        epochs: rows,
+        notices: unreadable_notices(unreadable),
+    })
 }
 
 /// How a record of the note is named in a row: the note itself, or one of
@@ -97,16 +133,19 @@ fn build_record_history(
     target_dir: &Path,
     record_names: &[String],
     note_record_name: &str,
-) -> Result<Vec<HistoryRecordRow>, Error> {
+) -> Result<(Vec<HistoryRecordRow>, Vec<String>), Error> {
     let mut rows: Vec<(VersionSnapshot, String)> = Vec::new();
+    let mut unreadable = Vec::new();
     for rn in record_names {
         let label = record_label(rn, note_record_name);
-        for snapshot in list_versions(target_dir, rn)?.into_iter().rev() {
+        let (snapshots, skipped) = list_versions_and_unreadable(target_dir, rn)?;
+        unreadable.extend(skipped);
+        for snapshot in snapshots.into_iter().rev() {
             rows.push((snapshot, label.clone()));
         }
     }
     rows.sort_by(|(a, _), (b, _)| b.timestamp.cmp(&a.timestamp));
-    Ok(rows
+    let rows = rows
         .into_iter()
         .map(|(snapshot, label)| HistoryRecordRow {
             id: snapshot.id,
@@ -114,5 +153,6 @@ fn build_record_history(
             label,
             record_change_tag: snapshot.record_change_tag,
         })
-        .collect())
+        .collect();
+    Ok((rows, unreadable))
 }

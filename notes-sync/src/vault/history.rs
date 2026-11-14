@@ -164,11 +164,27 @@ pub(crate) fn write_capture(path: &Path, json: &serde_json::Value) -> Result<(),
     Ok(super::local::write_atomic(path, to_js_json(json).as_bytes(), false)?)
 }
 
-/// Every `*.json` in `dir`, in [`json_file_names`] order, parsed.
-pub(crate) fn read_json_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>, Error> {
-    json_file_names(dir)?
+/// Every `*.json` in `dir`, in [`json_file_names`] order, parsed, and the
+/// files that can't be read (cut short by a crash of an older version, or
+/// damaged since), which are left out: one bad file doesn't hide the rest.
+pub(crate) fn read_json_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<(Vec<T>, Vec<PathBuf>), Error> {
+    let mut read = Vec::new();
+    let mut unreadable = Vec::new();
+    for name in json_file_names(dir)? {
+        let path = dir.join(name);
+        match read_json_file(&path) {
+            Ok(parsed) => read.push(parsed),
+            Err(_) => unreadable.push(path),
+        }
+    }
+    Ok((read, unreadable))
+}
+
+/// `paths` as the vault-relative names a notice gives.
+pub(crate) fn vault_relative(target_dir: &Path, paths: Vec<PathBuf>) -> Vec<String> {
+    paths
         .iter()
-        .map(|name| read_json_file(&dir.join(name)))
+        .map(|path| path.strip_prefix(target_dir).unwrap_or(path).display().to_string())
         .collect()
 }
 
@@ -184,7 +200,10 @@ pub(crate) fn find_json_by_id<T: serde::de::DeserializeOwned>(
         if parse_capture_file_name(&name).is_some_and(|(_, _, s)| s != short) {
             continue;
         }
-        let found: T = read_json_file(&dir.join(&name))?;
+        // One that can't be read has no id to match.
+        let Ok(found) = read_json_file::<T>(&dir.join(&name)) else {
+            continue;
+        };
         if id_of(&found) == id {
             return Ok(Some(found));
         }
@@ -230,9 +249,20 @@ pub fn record_version(target_dir: &Path, input: &VersionSnapshotInput) -> Result
     Ok(true)
 }
 
-/// `listVersions`: oldest first.
+/// `listVersions`: oldest first. A snapshot file that can't be read is
+/// left out ([`list_versions_and_unreadable`] names it).
 pub fn list_versions(target_dir: &Path, record_name: &str) -> Result<Vec<VersionSnapshot>, Error> {
-    read_json_dir(&record_history_dir(target_dir, record_name)?)
+    Ok(list_versions_and_unreadable(target_dir, record_name)?.0)
+}
+
+/// [`list_versions`], and the snapshot files that can't be read
+/// (vault-relative).
+pub fn list_versions_and_unreadable(
+    target_dir: &Path,
+    record_name: &str,
+) -> Result<(Vec<VersionSnapshot>, Vec<String>), Error> {
+    let (versions, unreadable) = read_json_dir(&record_history_dir(target_dir, record_name)?)?;
+    Ok((versions, vault_relative(target_dir, unreadable)))
 }
 
 /// A record's latest snapshot, parsing only that one file - or, when it

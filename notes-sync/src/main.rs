@@ -586,16 +586,20 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let target = resolve_target_dir(directory)?;
             let r = history::run_history(&target, &file, &history::HistoryOptions { records })?;
             let (ids, summary): (Vec<String>, String) = match &r {
-                history::HistoryResult::Records { records } => (
+                history::HistoryResult::Records { records, .. } => (
                     records.iter().map(|row| row.id.clone()).collect(),
                     plural(records.len(), "snapshot", "snapshots"),
                 ),
-                history::HistoryResult::Epochs { epochs } => (
+                history::HistoryResult::Epochs { epochs, .. } => (
                     epochs.iter().map(|e| e.id.clone()).collect(),
                     plural(epochs.len(), "epoch", "epochs"),
                 ),
             };
-            Response::new(&r, summary).human(history_text(&r)).ids(ids)
+            // A file left out is a warning on stderr in text mode, and in
+            // the data's `notices` otherwise.
+            let mut lines = notice_lines(r.notices());
+            lines.push((false, history_text(&r)));
+            Response::new(&r, summary).human(human(mode, lines)).ids(ids)
         }
         Command::Diff {
             file,
@@ -629,7 +633,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
 fn history_text(result: &history::HistoryResult) -> String {
     let mut lines = Vec::new();
     match result {
-        history::HistoryResult::Records { records } => {
+        history::HistoryResult::Records { records, .. } => {
             if records.is_empty() {
                 lines.push("No version history recorded yet.".to_owned());
             }
@@ -640,7 +644,7 @@ fn history_text(result: &history::HistoryResult) -> String {
                 ));
             }
         }
-        history::HistoryResult::Epochs { epochs } => {
+        history::HistoryResult::Epochs { epochs, .. } => {
             if epochs.is_empty() {
                 lines.push("No version history recorded yet.".to_owned());
             }

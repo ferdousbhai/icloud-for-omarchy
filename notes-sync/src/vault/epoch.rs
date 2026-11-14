@@ -66,9 +66,19 @@ pub fn record_epoch(target_dir: &Path, note_record_name: &str, record_names: &[S
     Ok(())
 }
 
-/// `listEpochs`: oldest first.
+/// `listEpochs`: oldest first. An epoch file that can't be read is left
+/// out ([`list_epochs_and_unreadable`] names it).
 pub fn list_epochs(target_dir: &Path, note_record_name: &str) -> Result<Vec<NoteEpoch>, Error> {
-    read_json_dir(&epoch_dir(target_dir, note_record_name)?)
+    Ok(list_epochs_and_unreadable(target_dir, note_record_name)?.0)
+}
+
+/// [`list_epochs`], and the epoch files that can't be read (vault-relative).
+pub fn list_epochs_and_unreadable(
+    target_dir: &Path,
+    note_record_name: &str,
+) -> Result<(Vec<NoteEpoch>, Vec<String>), Error> {
+    let (epochs, unreadable) = read_json_dir(&epoch_dir(target_dir, note_record_name)?)?;
+    Ok((epochs, super::history::vault_relative(target_dir, unreadable)))
 }
 
 /// `findEpochById`.
