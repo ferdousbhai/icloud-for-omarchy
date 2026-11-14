@@ -925,6 +925,27 @@ pub fn run_pull_with(
     }
     remove_stale_dirs(target_dir, &stale_dirs, &current);
 
+    // What nothing would clear otherwise: a base copy (and a push's sent
+    // copy) of a note nothing tracks and no file carries the id of (a pull
+    // cut short wrote it, and the note was deleted before its file was
+    // written or since its file went), and a kept copy of a note no longer
+    // shared whose file is gone. A base copy an untracked file still
+    // carries the id of is kept: it tells whether that file is untouched
+    // (`left_untouched`); so is one a push cut short is creating.
+    let mut carried: Option<HashSet<String>> = None;
+    if failure.is_none()
+        && let Err(e) = forget_what_no_file_carries(
+            target_dir,
+            &mut left_anywhere,
+            &tracked,
+            &state.extra,
+            &mut carried,
+            title_mode,
+        )
+    {
+        failure = Some(e);
+    }
+
     let failed = failure.is_some();
     // A shared zone is listed again only from the old listing cursor.
     let shared_held = failed || retry_zones.iter().any(Option::is_some);
@@ -935,10 +956,14 @@ pub fn run_pull_with(
     let mut unshared = unshared_note_ids(&extra);
     unshared.extend(std::mem::take(&mut tracked.unshared));
     unshared.retain(|id| !tracked.notes.contains_key(id));
+    if let Some(carried) = &carried {
+        unshared.retain(|id| carried.contains(id));
+    }
     if unshared.is_empty() {
         extra.remove(UNSHARED_KEY);
     } else {
-        unshared.dedup();
+        let mut seen = HashSet::new();
+        unshared.retain(|id| seen.insert(id.clone()));
         extra.insert(UNSHARED_KEY.to_owned(), unshared.into());
     }
     let new_state = CloneState {
@@ -1639,6 +1664,58 @@ fn remove_left_in_stale_dirs(
             }
         }
     }
+    Ok(())
+}
+
+/// Removes the base copies (and sent copies) of notes nothing tracks whose
+/// id no untracked file carries, and none a push cut short is creating
+/// (`pendingCreates`). Sets `carried` to the ids untracked files carry when
+/// it had to list them: only when there is such a copy, or `unshared` ids
+/// (state's or this run's) to check against the files.
+fn forget_what_no_file_carries(
+    target_dir: &Path,
+    left: &mut LeftAnywhere,
+    tracked: &Tracked,
+    extra: &serde_json::Map<String, serde_json::Value>,
+    carried: &mut Option<HashSet<String>>,
+    title_mode: TitleMode,
+) -> Result<(), Error> {
+    let creating: HashSet<&String> = extra
+        .get("pendingCreates")
+        .and_then(|v| v.as_object())
+        .map(|creates| creates.keys().collect())
+        .unwrap_or_default();
+    let base_dir = crate::vault::state::state_subdir(target_dir, crate::vault::state::BASE_DIR_NAME);
+    let mut orphans: Vec<String> = file_names_in(&base_dir)?
+        .into_iter()
+        .filter_map(|name| {
+            name.strip_suffix(".md")
+                .filter(|_| !name.starts_with('.'))
+                .or_else(|| name.strip_prefix('.').and_then(|n| n.strip_suffix(".sent")))
+                .map(str::to_owned)
+        })
+        .filter(|id| is_plain_record_name(id) && !tracked.notes.contains_key(id) && !creating.contains(id))
+        .collect();
+    orphans.sort();
+    orphans.dedup();
+    if orphans.is_empty() && tracked.unshared.is_empty() && unshared_note_ids(extra).is_empty() {
+        return Ok(());
+    }
+    let by_id = super::left_files(target_dir, left, &tracked.notes, title_mode)?;
+    // The listing may be from before this run wrote or untracked anything:
+    // a file it removed since no longer counts; one it rewrote without its
+    // id still does, which only keeps more; and the copies it kept of notes
+    // no longer shared, tracked when it was made, are added.
+    let ids: HashSet<String> = by_id
+        .iter()
+        .filter(|(_, files)| files.iter().any(|f| target_dir.join(f).is_file()))
+        .map(|(id, _)| id.clone())
+        .chain(tracked.unshared.iter().cloned())
+        .collect();
+    for id in orphans.iter().filter(|id| !ids.contains(*id)) {
+        remove_base_copy(target_dir, id)?;
+    }
+    *carried = Some(ids);
     Ok(())
 }
 

@@ -730,3 +730,54 @@ fn an_edited_copy_of_a_note_no_longer_shared_is_kept_and_not_uploaded() {
         .collect();
     assert_eq!(kinds, ["createFolder", "create"], "{stdout}");
 }
+
+/// What only an earlier run's state names goes once no file carries it: the
+/// base copy of a note a pull cut short wrote and that was deleted before
+/// its file was (or since its file went), and a kept copy of a note no
+/// longer shared whose file the user deleted. A base copy an untracked file
+/// still carries the id of stays (it tells whether that file is untouched),
+/// and so does a listed id whose kept file is still there.
+#[test]
+fn a_pull_forgets_base_copies_and_kept_copies_no_file_carries() {
+    const GONE: &str = "A0000000-0000-4000-8000-000000000001";
+    const LEFT: &str = "A0000000-0000-4000-8000-000000000002";
+    const KEPT: &str = "A0000000-0000-4000-8000-000000000003";
+    const DELETED: &str = "A0000000-0000-4000-8000-000000000004";
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    let base = vault.join(".icloud-notes/base");
+    std::fs::write(base.join(format!("{GONE}.md")), "Gone\n").unwrap();
+    std::fs::write(base.join(format!(".{GONE}.sent")), "Gone\n").unwrap();
+    std::fs::write(base.join(format!("{LEFT}.md")), "Left\n").unwrap();
+    std::fs::write(
+        vault.join("Notes/Left.md"),
+        format!("---\napple-note-id: {LEFT}\n---\n\nLeft\nedited here\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        vault.join("Notes/Kept.md"),
+        format!("---\napple-note-id: {KEPT}\n---\n\nKept\n"),
+    )
+    .unwrap();
+    let mut raw = state(&vault);
+    raw["unshared"] = json!([KEPT, DELETED]);
+    std::fs::write(
+        vault.join(".icloud-notes/state.json"),
+        serde_json::to_string_pretty(&raw).unwrap() + "\n",
+    )
+    .unwrap();
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &differential().join("cassettes/tiny-pull-update.json"),
+        &["--quiet", "pull", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(!base.join(format!("{GONE}.md")).exists());
+    assert!(!base.join(format!(".{GONE}.sent")).exists());
+    assert!(base.join(format!("{LEFT}.md")).exists(), "an untracked file carries it");
+    assert!(base.join(format!("{RECORD}.md")).exists(), "a tracked note's");
+    assert_eq!(state(&vault)["unshared"], json!([KEPT]));
+}

@@ -189,6 +189,26 @@ pub(crate) fn redo_downloads(
 /// (vault-relative paths), listed the first time a run needs them.
 pub(crate) type LeftAnywhere = Option<HashMap<String, Vec<String>>>;
 
+/// The untracked note files of the vault by the id each carries, listed
+/// into `left` the first time a run asks.
+pub(crate) fn left_files<'a>(
+    target_dir: &std::path::Path,
+    left: &'a mut LeftAnywhere,
+    notes: &IndexMap<String, crate::vault::state::NoteEntry>,
+    title_mode: crate::vault::state::TitleMode,
+) -> Result<&'a mut HashMap<String, Vec<String>>, Error> {
+    if left.is_none() {
+        let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
+        for file in push::list_untracked_markdown_files(target_dir, notes)? {
+            if let Some(id) = crate::vault::pairing::note_id_at(target_dir, &file, title_mode)? {
+                by_id.entry(id).or_default().push(file);
+            }
+        }
+        *left = Some(by_id);
+    }
+    Ok(left.get_or_insert_with(HashMap::new))
+}
+
 /// Whether `text`, a file that carries the id of `record_name`, a note
 /// nothing tracks, is what a run that never got to record the note wrote
 /// for it, untouched since. A clone or pull writes a new note's base copy
@@ -232,16 +252,7 @@ pub(crate) fn remove_left_files(
     file_text: &str,
     title_mode: crate::vault::state::TitleMode,
 ) -> Result<Vec<String>, Error> {
-    if left.is_none() {
-        let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
-        for file in push::list_untracked_markdown_files(target_dir, notes)? {
-            if let Some(id) = crate::vault::pairing::note_id_at(target_dir, &file, title_mode)? {
-                by_id.entry(id).or_default().push(file);
-            }
-        }
-        *left = Some(by_id);
-    }
-    let Some(files) = left.as_mut().and_then(|by_id| by_id.get_mut(record_name)) else {
+    let Some(files) = left_files(target_dir, left, notes, title_mode)?.get_mut(record_name) else {
         return Ok(Vec::new());
     };
     let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();

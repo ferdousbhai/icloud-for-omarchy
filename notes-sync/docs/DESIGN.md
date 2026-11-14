@@ -245,6 +245,11 @@ window closes, so a killed run is ordinary.
   it came back as a second note with its older text). A file edited since,
   frontmatter included, is left alone and the note written beside it; push
   then creates that file as a note of its own, so neither text is lost.
+  A pull that ends well removes the base copies (and sent copies, below)
+  of notes nothing tracks whose id no untracked file carries and no
+  `pendingCreates` entry names: what a pull cut short left of a note
+  deleted before (or after) its file was written. One an untracked file
+  still carries is kept, since it is what tells that file untouched.
 - `push` (the first half of the sync that follows such a pull in the
   Notes app) leaves such a file alone: an untracked file whose
   `apple-note-id` no note here is tracked under is looked up first, and
@@ -520,7 +525,8 @@ for this account (`cmd::pull::handle_remote_deletion`):
   synced"), and makes no folder of a directory that is new only because of
   such files. Removing the `apple-note-id` line makes the file a note of
   the user's own. `unshared` is a top-level key an engine without it keeps
-  as it is; an id leaves the list when its note is tracked again.
+  as it is; an id leaves the list when its note is tracked again, or when
+  a pull finds no untracked file that carries it.
 
 Tests: tests/cmd_local_delete.rs (the last five), tests/cmd_pull.rs
 (`clean_absent_note_is_removed_like_a_tombstone`,

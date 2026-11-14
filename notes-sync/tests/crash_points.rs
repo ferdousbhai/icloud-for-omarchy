@@ -851,6 +851,23 @@ fn check(fake: &Fake, place: &Place, expect: &Expect, label: &str) {
         .collect();
     assert!(leftovers.is_empty(), "{label}: left half-written: {leftovers:?}");
 
+    // No base copy (or sent copy) is left of a note nothing tracks.
+    for name in std::fs::read_dir(vault.join(".icloud-notes/base"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let name = name.file_name().to_string_lossy().into_owned();
+        let id = name
+            .trim_start_matches('.')
+            .trim_end_matches(".sent")
+            .trim_end_matches(".md");
+        assert!(
+            state.notes.contains_key(id),
+            "{label}: base/{name} is of no tracked note"
+        );
+    }
+
     // Every note file is a tracked note's: nothing left to be created.
     // (The edited copy of a note no longer shared is kept, and not synced.)
     let unshared: BTreeSet<&str> = raw["unshared"]
