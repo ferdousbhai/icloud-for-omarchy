@@ -214,22 +214,6 @@ pub fn run_pull_with(
     // which is gone) is carried out now.
     let settled = settle_pending_renames(target_dir, &mut tracked.notes, true, title_mode)?;
 
-    let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
-    for entry in tracked.notes.values() {
-        used_names_for(&mut used_file_names, &note_dir_of(&entry.file)).insert(posix::basename(&entry.file).to_owned());
-        if let Some(pending) = pending_rename_target(entry) {
-            used_names_for(&mut used_file_names, &note_dir_of(&pending)).insert(posix::basename(&pending).to_owned());
-        }
-    }
-    let mut used_attachment_file_names: HashMap<String, HashSet<String>> = HashMap::new();
-    for entry in tracked.attachments.values() {
-        used_names_for(
-            &mut used_attachment_file_names,
-            &note_dir_of(&posix::dirname(&entry.file)),
-        )
-        .insert(posix::basename(&entry.file).to_owned());
-    }
-
     let mut summary = PullSummary::default();
     for done in &settled.performed {
         let mut change = PullChange::new(PullChangeKind::Move, done.to.clone());
@@ -350,8 +334,32 @@ pub fn run_pull_with(
         );
         write_clone_state(target_dir, &state)?;
     }
+    // A folder (or a sharer's home) with another directory now: its whole
+    // directory goes there, with what it holds that nothing tracks (an
+    // attachment or a note a pull cut short left), which moved note by note
+    // would keep the old directory for the next push to make a folder of.
+    // Only to a directory announced above (`pendingDirs`, so that a push
+    // after a run killed in between sends nothing); one already there gets
+    // the notes moved one by one, below.
+    let moves = rename_folder_dirs(target_dir, &state, &layout, &pending_dirs)?;
+    let moved_with_dirs = retarget_tracked_paths(target_dir, &moves, &mut tracked);
     for dir in &layout.all_dirs {
         std::fs::create_dir_all(target_dir.join(dir))?;
+    }
+    let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in tracked.notes.values() {
+        used_names_for(&mut used_file_names, &note_dir_of(&entry.file)).insert(posix::basename(&entry.file).to_owned());
+        if let Some(pending) = pending_rename_target(entry) {
+            used_names_for(&mut used_file_names, &note_dir_of(&pending)).insert(posix::basename(&pending).to_owned());
+        }
+    }
+    let mut used_attachment_file_names: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in tracked.attachments.values() {
+        used_names_for(
+            &mut used_attachment_file_names,
+            &note_dir_of(&posix::dirname(&entry.file)),
+        )
+        .insert(posix::basename(&entry.file).to_owned());
     }
 
     // One records/lookup walk per zone for the attachments of every note the
@@ -887,7 +895,7 @@ pub fn run_pull_with(
             failure.get_or_insert(e);
             Vec::new()
         });
-    for relocation in relocations {
+    for relocation in moved_with_dirs.into_iter().chain(relocations) {
         let mut change = PullChange::new(PullChangeKind::Move, relocation.to);
         change.previous_file = Some(relocation.from);
         summary.changes.push(change);
@@ -1124,6 +1132,89 @@ pub fn rename_for_remote_title(
         }
     }
     Ok(posix::join(&[&dir, &wanted]))
+}
+
+/// The directory moves a pull makes for folders (and sharers' homes) whose
+/// directory changed, shallowest first: each `(from, to)` with `from` where
+/// the directory is once the moves before it are made. A move is made when
+/// `from` is a directory, `to` is not there and was announced in
+/// `pending_dirs`; the list holds every move, made by this run or by one cut
+/// short before it, for [`retarget_tracked_paths`].
+fn rename_folder_dirs(
+    target_dir: &Path,
+    state: &CloneState,
+    layout: &VaultLayout,
+    pending_dirs: &IndexMap<String, String>,
+) -> Result<Vec<(String, String)>, Error> {
+    let mut before: Vec<(String, String)> = crate::vault::layout::state_dir_index(PreviousLayout::of(state))
+        .into_iter()
+        .filter_map(|(dir, info)| {
+            let now = match info {
+                crate::vault::layout::StateDirInfo::Folder { folder_record_name, .. } => {
+                    layout.folder_dirs.get(&folder_record_name)
+                }
+                crate::vault::layout::StateDirInfo::SharerHome { shared_zone_owner } => {
+                    layout.sharer_home_dirs.get(&shared_zone_owner)
+                }
+            }?;
+            (!dir.is_empty() && *now != dir).then(|| (dir, now.clone()))
+        })
+        .collect();
+    before.sort_by_key(|(dir, _)| dir.split('/').count());
+    let mut moves: Vec<(String, String)> = Vec::new();
+    for (old, to) in before {
+        let from = moved_path(&moves, &old);
+        if from == to || to.starts_with(&format!("{from}/")) {
+            continue;
+        }
+        let (from_path, to_path) = (target_dir.join(&from), target_dir.join(&to));
+        if from_path.is_dir() && !to_path.exists() && pending_dirs.contains_key(&to) {
+            if let Some(parent) = to_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            rename_no_replace(&from_path, &to_path)?;
+        }
+        moves.push((from, to));
+    }
+    Ok(moves)
+}
+
+/// `path` once the directory `moves` are made.
+fn moved_path(moves: &[(String, String)], path: &str) -> String {
+    let mut path = path.to_owned();
+    for (from, to) in moves {
+        if let Some(rest) = path.strip_prefix(&format!("{from}/")) {
+            path = format!("{to}/{rest}");
+        }
+    }
+    path
+}
+
+/// Every tracked note and attachment file a directory move took along:
+/// tracked where it is now (gone from its path, there at the moved one).
+/// The notes' moves, as a pull reports them (by record name).
+fn retarget_tracked_paths(
+    target_dir: &Path,
+    moves: &[(String, String)],
+    tracked: &mut Tracked,
+) -> Vec<crate::vault::folders::Relocation> {
+    let retarget = |file: &mut String| -> Option<String> {
+        let moved = moved_path(moves, file);
+        (moved != *file && !target_dir.join(&*file).exists() && target_dir.join(&moved).exists())
+            .then(|| std::mem::replace(file, moved))
+    };
+    let mut notes: Vec<(String, crate::vault::folders::Relocation)> = Vec::new();
+    for (record_name, entry) in tracked.notes.iter_mut() {
+        if let Some(from) = retarget(&mut entry.file) {
+            let to = entry.file.clone();
+            notes.push((record_name.clone(), crate::vault::folders::Relocation { from, to }));
+        }
+    }
+    for entry in tracked.attachments.values_mut() {
+        retarget(&mut entry.file);
+    }
+    notes.sort_by(|(a, _), (b, _)| crate::js::locale_compare(a, b));
+    notes.into_iter().map(|(_, relocation)| relocation).collect()
 }
 
 fn drop_tracking(target_dir: &Path, record_name: &str, tracked: &mut Tracked) -> Result<(), Error> {

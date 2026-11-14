@@ -13,6 +13,15 @@
 pub const CRASH_AT_ENV: &str = "ICLOUD_NOTES_SYNC_CRASH_AT";
 /// `ICLOUD_NOTES_SYNC_CRASH_TRACE`.
 pub const CRASH_TRACE_ENV: &str = "ICLOUD_NOTES_SYNC_CRASH_TRACE";
+/// `ICLOUD_NOTES_SYNC_DOWNLOADS_IN_LINE`: attachment downloads run one at a
+/// time, when queued, as over a transport that can't overlap them, so a
+/// test cuts a run short at the same place every time.
+pub const DOWNLOADS_IN_LINE_ENV: &str = "ICLOUD_NOTES_SYNC_DOWNLOADS_IN_LINE";
+
+/// Whether [`DOWNLOADS_IN_LINE_ENV`] is set (a debug build only).
+pub fn downloads_in_line() -> bool {
+    cfg!(debug_assertions) && std::env::var_os(DOWNLOADS_IN_LINE_ENV).is_some_and(|v| !v.is_empty())
+}
 
 /// state.json written (it is not when unchanged).
 pub const STATE: &str = "state";

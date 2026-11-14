@@ -76,6 +76,10 @@ struct Zone {
     /// to answer 503 from then on (0: none).
     lookups: usize,
     fail_lookups_from: usize,
+    /// Runs against it download attachments one at a time, in order
+    /// (`crash::DOWNLOADS_IN_LINE_ENV`), so a run is cut short at the same
+    /// place every time.
+    downloads_in_line: bool,
 }
 
 fn field_type(name: &str, value: &Value) -> &'static str {
@@ -601,6 +605,7 @@ fn run(fake: &Fake, place: &Place, command: &str, crash: &Crash) -> Output {
         .env_remove("ICLOUD_NOTES_SYNC_CASSETTE")
         .env_remove(crash::CRASH_AT_ENV)
         .env_remove(crash::CRASH_TRACE_ENV)
+        .env_remove(crash::DOWNLOADS_IN_LINE_ENV)
         .env_remove("ICLOUD_NOTES_SYNC_DETERMINISTIC")
         .env("ICLOUD_SESSION_MOCK", "1")
         .env("ICLOUD_SESSION_MOCK_URL", &fake.base)
@@ -611,6 +616,9 @@ fn run(fake: &Fake, place: &Place, command: &str, crash: &Crash) -> Output {
     }
     if let Some(trace) = &crash.trace {
         cmd.env(crash::CRASH_TRACE_ENV, trace);
+    }
+    if fake.zone().downloads_in_line {
+        cmd.env(crash::DOWNLOADS_IN_LINE_ENV, "1");
     }
     cmd.output().expect("the binary runs")
 }
@@ -2309,5 +2317,32 @@ fn a_pull_cut_short_before_a_share_it_wrote_a_note_from_was_revoked_is_finished_
     revoke(&mut after);
     start.expect.kept = kept_notes(&after);
     start.expect.between = Some(revoke);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
+/// A note with a photo added on the phone in `Work`, and `Work` renamed
+/// while a pull writing it was cut short: the photo the pull had downloaded
+/// into `Work/attachments/` goes along with the directory, which leaves no
+/// `Work/` behind for the next push to make a folder of.
+#[test]
+fn a_pull_cut_short_before_the_folder_of_a_note_with_a_photo_it_wrote_was_renamed_is_finished_by_the_next_run() {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    let mut zone = account(3);
+    zone.downloads_in_line = true;
+    let photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+    zone.records.get_mut(PHOTO_NOTE).unwrap().deleted = true;
+    let mut start = cloned_from(zone);
+    let mut added = photo_note;
+    let reference = json!({ "recordName": WORK_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+    added["fields"]["Folder"]["value"] = reference.clone();
+    added["fields"]["Folders"]["value"] = json!([reference]);
+    start.zone.put(added);
+    fn rename(zone: &mut Zone) {
+        let mut folder = zone.live(WORK_FOLDER).unwrap().clone();
+        folder["fields"]["TitleEncrypted"]["value"] = json!(base64_encode(b"Office"));
+        zone.put(folder);
+    }
+    start.expect.kept = kept_notes(&start.zone);
+    start.expect.between = Some(rename);
     crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
 }

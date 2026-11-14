@@ -404,7 +404,9 @@ attachment downloads, renames, removals, an atomic write's temporary file,
 `pendingCreates` written and cleared, each step of the 3 → 4 migration)
 and after every `records/modify` and asset upload, and in a debug build only (`ICLOUD_NOTES_SYNC_CRASH_AT=
 <point>[:<n>]`; `ICLOUD_NOTES_SYNC_CRASH_TRACE=<file>` lists the points a
-run reaches). Also tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
+run reaches; `ICLOUD_NOTES_SYNC_DOWNLOADS_IN_LINE=1` runs attachment
+downloads one at a time, so a run is cut short at the same place every
+time). Also tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
 failed and a killed push), tests/cmd_push_guards.rs (a push killed right
 after iCloud created the note or the folder), tests/cmd_clone.rs
 (`a_second_clone_over_an_unfinished_one_adopts_the_files_it_left`,
@@ -435,6 +437,17 @@ for more than text edits). The engine:
   the old path, so the next push pairs the move with a matching change tag.
   Without this the remote edit would be lost: the move would go up, and
   the moved file's older text after it.
+- A folder renamed (or moved) in iCloud has its whole directory renamed by
+  the pull, `attachments/` and all, and every tracked note and attachment
+  file under it is tracked at its new path (`pull::rename_folder_dirs`,
+  `retarget_tracked_paths`). What nothing tracks goes along: a file put
+  in `attachments/` to be attached, or what a pull cut short left there.
+  Moved note by note, as up to 0.11.1, any such file kept the old
+  directory, which the next push made a folder again. The new directory is
+  announced in `pendingDirs` first (a push sends nothing until a pull has
+  finished), and a pull after one cut short in between finds the files at
+  the new paths and tracks them there. When the new directory is already
+  there, the notes are moved one by one as before.
 - A pull never writes or moves a note over a file it doesn't track (a note
   made here and not pushed yet): new notes and folder relocations take the
   names already on disk as used and get a `" 2"` name instead. So do the

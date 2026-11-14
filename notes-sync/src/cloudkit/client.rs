@@ -875,7 +875,11 @@ struct DownloadFailures {
 
 impl<'a, T: Transport> DownloadQueue<'a, T> {
     pub fn new(db: &'a Database<T>) -> Self {
-        let pool = db.transport.shared_downloader().map(|download| {
+        let shared = db
+            .transport
+            .shared_downloader()
+            .filter(|_| !crate::crash::downloads_in_line());
+        let pool = shared.map(|download| {
             let (jobs, receiver) = std::sync::mpsc::channel::<(usize, String, PathBuf)>();
             let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
             let failures: std::sync::Arc<DownloadFailures> = Default::default();
