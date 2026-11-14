@@ -432,6 +432,10 @@ pub struct RemoteMerge {
     /// written only over a file that still reads so.
     pub planned_frontmatter: String,
     pub planned_text: String,
+    /// In a filename-title vault, the note's title in iCloud: the merged
+    /// file takes it as its name, as a pull renames the file of a note
+    /// retitled elsewhere.
+    pub remote_title: Option<String>,
 }
 
 impl RemoteMerge {
@@ -1966,8 +1970,8 @@ pub fn build_push_plan(
         let mut merged: Option<RemoteMerge> = None;
         if record.record_change_tag.clone().unwrap_or_default() != c.entry.record_change_tag {
             let classified = classify_note_record(record, &ClassifyOptions { title_mode });
-            let remote_text = match &classified {
-                NoteDecodeResult::Ok(d) if d.embed_slots.is_empty() => d.markdown_text.clone(),
+            let (remote_text, remote_title) = match &classified {
+                NoteDecodeResult::Ok(d) if d.embed_slots.is_empty() => (d.markdown_text.clone(), d.title_line.clone()),
                 _ => {
                     entries.push(refuse(Refusal::UpdateChangedRemotelyUnmergeable));
                     continue;
@@ -1977,7 +1981,7 @@ pub fn build_push_plan(
                 .record_change_tag
                 .clone()
                 .unwrap_or_else(|| c.entry.record_change_tag.clone());
-            let merge = merge_remote_change(
+            let mut merge = merge_remote_change(
                 target_dir,
                 &c.record_name,
                 &c.frontmatter,
@@ -1985,6 +1989,13 @@ pub fn build_push_plan(
                 &remote_text,
                 &remote_tag,
             )?;
+            // A title a file name can carry (one that can't stays where the
+            // next pull puts it).
+            if crate::md::filename::title_needing_frontmatter(&remote_title, title_mode).is_none()
+                && title_mode == TitleMode::Filename
+            {
+                merge.remote_title = Some(remote_title);
+            }
             if merge.has_conflict {
                 entries.push(ExecutablePlanEntry::with(
                     PlanEntry::refused(PlanEntryKind::Update, file.clone(), Refusal::MergedWithConflicts),
@@ -2297,6 +2308,7 @@ pub fn merge_remote_change(
         has_conflict: outcome.has_conflict,
         planned_frontmatter: frontmatter.to_owned(),
         planned_text: local_text.to_owned(),
+        remote_title: None,
     })
 }
 
@@ -2318,6 +2330,30 @@ pub fn apply_remote_merge(
     updated.record_change_tag = merged.remote_tag.clone();
     state.notes.insert(record_name.to_owned(), updated);
     Ok(())
+}
+
+/// After a merged remote change was written to a filename-title vault's
+/// file: the file takes the note's title in iCloud as its name
+/// ([`RemoteMerge::remote_title`]), and tracking follows. Where it is now.
+fn follow_remote_title(
+    target_dir: &Path,
+    state: &mut CloneState,
+    record_name: &str,
+    file: &str,
+    merged: &RemoteMerge,
+) -> Result<String, Error> {
+    let Some(title) = &merged.remote_title else {
+        return Ok(file.to_owned());
+    };
+    let mut used: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in state.notes.values() {
+        super::used_names_for(&mut used, &note_dir_of(&entry.file)).insert(posix::basename(&entry.file).to_owned());
+    }
+    let renamed = super::pull::rename_for_remote_title(target_dir, file, title, state.mode(), &mut used, true)?;
+    if let Some(entry) = state.notes.get_mut(record_name) {
+        entry.file = renamed.clone();
+    }
+    Ok(renamed)
 }
 
 /// `PreparedCandidate`.
@@ -3808,6 +3844,7 @@ fn execute<T: Transport>(
                 return Ok(ExecuteOutcome::changed_since_planned(&entry.file));
             }
             apply_remote_merge(target_dir, state, record_name, entry, merged)?;
+            follow_remote_title(target_dir, state, record_name, &entry.file, merged)?;
             Ok(ExecuteOutcome::ok(format!(
                 "{}: merged the remote change into your edit",
                 entry.file
@@ -3827,6 +3864,7 @@ fn execute<T: Transport>(
                 if let Some(entry) = state.notes.get_mut(record_name) {
                     entry.record_change_tag = merged.remote_tag.clone();
                 }
+                follow_remote_title(target_dir, state, record_name, file, merged)?;
             }
             write_base_copy(target_dir, record_name, local_text)?;
             Ok(ExecuteOutcome::ok(format!("{file}: no server-side change needed")))
@@ -3895,17 +3933,20 @@ fn execute<T: Transport>(
             }
             track_new_attachments(state, sent.attachments);
             forget_removed_attachments(target_dir, state, &entry.file, removed_attachments)?;
+            let mut file = entry.file.clone();
             if let Some(merged) = merged {
                 write_note_file(&target_dir.join(&entry.file), &merged.file_text)?;
                 if let Some(tracked) = state.notes.get_mut(record_name) {
                     tracked.record_change_tag = merged.remote_tag.clone();
                 }
+                file = follow_remote_title(target_dir, state, record_name, &entry.file, merged)?;
             }
             if *note_text_updated
                 && let Some(RecordUpdateResult::Ok(note)) = results.first()
                 && note.record_name == *record_name
             {
                 let mut updated = entry.clone();
+                updated.file = file.clone();
                 updated.record_change_tag = note.record_change_tag.clone().unwrap_or_default();
                 updated.modification_date = match modification_date_of(note) {
                     0 => *modification_date_ms,
@@ -3915,7 +3956,7 @@ fn execute<T: Transport>(
                     updated.frontmatter_title = requested_title.clone();
                 }
                 state.notes.insert(record_name.clone(), updated);
-                apply_note_file_times(&target_dir.join(&entry.file), note)?;
+                apply_note_file_times(&target_dir.join(&file), note)?;
             }
             write_base_copy(target_dir, record_name, local_text)?;
             record_epoch(target_dir, record_name, &history_record_names(state, record_name))?;

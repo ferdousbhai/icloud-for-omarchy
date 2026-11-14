@@ -545,7 +545,10 @@ Notes (icloud-md 0.6.2 refuses most of these, some forever):
   untracks it and drops its id) instead of delete/modify conflict markers.
 - A remote change is merged in memory and a clean merge goes up in the
   same push (no "re-run push"); a move's edits go up right after the move;
-  a rename within a folder sends nothing to iCloud.
+  a rename within a folder sends nothing to iCloud. In a filename-title
+  vault a merged file takes the note's title in iCloud as its name, as a
+  pull renames the file of a note retitled elsewhere (up to 0.11.1 a note
+  retitled in iCloud and edited here kept its old file name for good).
 - A note with attachments can be edited: the link pull wrote for each file
   attachment stands for it, as an embed marker does. Changing or moving
   the link is still refused. Moving such a note to another folder takes

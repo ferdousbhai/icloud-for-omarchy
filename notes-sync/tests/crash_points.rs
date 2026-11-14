@@ -67,6 +67,11 @@ struct Zone {
     next_upload: u64,
     applied: Vec<Applied>,
     page_size: usize,
+    /// The shared zones, by owner (the shared database; their assets and
+    /// uploads live in the private zone's).
+    shared: indexmap::IndexMap<String, Zone>,
+    /// Shared zones whose owner stopped sharing them.
+    revoked: BTreeSet<String>,
 }
 
 fn field_type(name: &str, value: &Value) -> &'static str {
@@ -188,7 +193,11 @@ impl Zone {
                 }
             })
             .collect();
-        json!({ "zones": [{ "zoneID": { "zoneName": "Notes", "ownerRecordName": "_defaultOwner" },
+        let zone_id = match zone["zoneID"].get("ownerRecordName") {
+            Some(_) => zone["zoneID"].clone(),
+            None => json!({ "zoneName": "Notes", "ownerRecordName": "_defaultOwner" }),
+        };
+        json!({ "zones": [{ "zoneID": zone_id,
             "moreComing": more, "syncToken": format!("t{token}"), "records": records }] })
     }
 
@@ -280,11 +289,67 @@ impl Zone {
         json!({ "records": answers })
     }
 
-    fn creates(&self, record_type: &str) -> Vec<&Applied> {
-        self.applied
+    /// The zones still shared with the account, the private one first.
+    fn zones(&self) -> Vec<&Zone> {
+        let shared = self
+            .shared
             .iter()
+            .filter(|(o, _)| !self.revoked.contains(*o))
+            .map(|(_, z)| z);
+        std::iter::once(self).chain(shared).collect()
+    }
+
+    fn all_applied(&self) -> Vec<&Applied> {
+        std::iter::once(self)
+            .chain(self.shared.values())
+            .flat_map(|z| &z.applied)
+            .collect()
+    }
+
+    fn creates(&self, record_type: &str) -> Vec<&Applied> {
+        self.all_applied()
+            .into_iter()
             .filter(|a| a.op == "create" && a.record_type == record_type)
             .collect()
+    }
+
+    /// Every note iCloud has for the account, in its zones and the ones
+    /// shared with it.
+    fn all_live_notes(&self) -> Vec<&Value> {
+        self.zones().into_iter().flat_map(|z| z.live_notes()).collect()
+    }
+
+    fn find_live(&self, name: &str) -> Option<&Value> {
+        self.zones().into_iter().find_map(|z| z.live(name))
+    }
+
+    /// The shared database's zone list: a listing from scratch has the
+    /// zones still shared, a resumed one the revoked ones too, as deleted.
+    fn shared_listing(&self, body: &Value) -> Value {
+        let resumed = body.get("syncToken").is_some();
+        let zones: Vec<Value> = self
+            .shared
+            .keys()
+            .filter_map(|owner| {
+                let id = json!({ "zoneName": "Notes", "ownerRecordName": owner });
+                match self.revoked.contains(owner) {
+                    false => Some(json!({ "zoneID": id })),
+                    true if resumed => Some(json!({ "zoneID": id, "deleted": true })),
+                    true => None,
+                }
+            })
+            .collect();
+        json!({ "zones": zones, "moreComing": false, "syncToken": format!("s{}", self.counter) })
+    }
+
+    /// The shared zone a request names, if it is still shared.
+    fn shared_zone(&mut self, body: &Value) -> Option<&mut Zone> {
+        let zone_id = body.get("zoneID").or_else(|| body["zones"][0].get("zoneID"))?;
+        let owner = zone_id["ownerRecordName"].as_str()?;
+        if self.revoked.contains(owner) {
+            return None;
+        }
+        self.shared.get_mut(owner)
     }
 }
 
@@ -325,8 +390,21 @@ impl Fake {
                         };
                     }
                     if let Some(op) = path.strip_prefix(SHARED) {
+                        let body = json_body();
+                        if op == "changes/database" {
+                            return reply(zone.shared_listing(&body));
+                        }
+                        let Some(shared) = zone.shared_zone(&body) else {
+                            return match op {
+                                "changes/zone" => reply(json!({ "zones": [{ "zoneID": body["zones"][0]["zoneID"],
+                                    "serverErrorCode": "ZONE_NOT_FOUND", "reason": "no longer shared" }] })),
+                                _ => Err(404),
+                            };
+                        };
                         return match op {
-                            "changes/database" => reply(json!({ "zones": [], "moreComing": false, "syncToken": "s1" })),
+                            "changes/zone" => reply(shared.changes(&body)),
+                            "records/lookup" => reply(shared.lookup(&body)),
+                            "records/modify" => reply(shared.modify(&body, &url)),
                             _ => Err(404),
                         };
                     }
@@ -500,9 +578,14 @@ struct Crash {
 
 fn run(fake: &Fake, place: &Place, command: &str, crash: &Crash) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_icloud-notes-sync"));
-    cmd.arg("--json").arg(command);
-    if command == "clone" {
+    // `clone-filename`: a clone whose notes carry their title in the file name.
+    let filename_mode = command == "clone-filename";
+    cmd.arg("--json").arg(if filename_mode { "clone" } else { command });
+    if command.starts_with("clone") {
         cmd.args(["--account", "mock"]);
+    }
+    if filename_mode {
+        cmd.arg("--filename-as-title");
     }
     cmd.arg(&place.vault)
         .env_remove("ICLOUD_NOTES_SYNC_CASSETTE")
@@ -573,6 +656,9 @@ struct Expect {
     deleted: Vec<String>,
     /// Folders the user deleted here.
     deleted_folders: Vec<String>,
+    /// What happens in iCloud after the run is cut short and before it is
+    /// carried on with (`kept` is what iCloud has after it).
+    between: Option<fn(&mut Zone)>,
     /// How many notes the user made here: each is created once.
     new_notes: usize,
     /// How many attachments the user added here: each is created once.
@@ -582,6 +668,9 @@ struct Expect {
     /// Text the user typed here: (file, text) - in the file, and in the
     /// note iCloud has.
     edits: Vec<(String, String)>,
+    /// A filename-title vault's titles: (file, title) - the note at that
+    /// file has the title in iCloud.
+    titles: Vec<(String, String)>,
 }
 
 fn body_of(record: &Value) -> String {
@@ -647,7 +736,7 @@ fn check(fake: &Fake, place: &Place, expect: &Expect, label: &str) {
         expect.new_attachments,
         "{label}: attachments created in iCloud: {created_attachments:#?}"
     );
-    let live = zone.live_notes();
+    let live = zone.all_live_notes();
     assert_eq!(
         live.len(),
         expect.kept.len() - expect.deleted.len() + expect.new_notes,
@@ -655,7 +744,7 @@ fn check(fake: &Fake, place: &Place, expect: &Expect, label: &str) {
     );
 
     // Nothing the user kept deleted, trashed or untracked.
-    for applied in &zone.applied {
+    for applied in zone.all_applied() {
         let trashed = applied.fields["Folder"]["value"]["recordName"] == TRASH;
         let marked = applied.fields["Deleted"]["value"] == 1 && applied.record_type == "Note";
         if applied.op == "delete" || trashed || marked {
@@ -709,14 +798,43 @@ fn check(fake: &Fake, place: &Place, expect: &Expect, label: &str) {
         assert!(on_disk.contains(text), "{label}: {file} lost {text:?}:\n{on_disk}");
         let id = note_id_of(&on_disk).unwrap_or_else(|| panic!("{label}: {file} has no id"));
         let record = zone
-            .live(&id)
+            .find_live(&id)
             .unwrap_or_else(|| panic!("{label}: {file}'s note {id} is not in iCloud"));
         assert!(body_of(record).contains(text), "{label}: iCloud lost {text:?}");
     }
 
+    for (file, title) in &expect.titles {
+        let id = state
+            .notes
+            .iter()
+            .find(|(_, e)| e.file == *file)
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| panic!("{label}: nothing is tracked at {file}"));
+        let record = zone
+            .find_live(&id)
+            .unwrap_or_else(|| panic!("{label}: {id} is not in iCloud"));
+        let body = body_of(record);
+        assert_eq!(
+            body.lines().next(),
+            Some(title.as_str()),
+            "{label}: {file} in iCloud: {body:?}"
+        );
+    }
+
     // Every note file is a tracked note's: nothing left to be created.
+    // (The edited copy of a note no longer shared is kept, and not synced.)
+    let unshared: BTreeSet<&str> = raw["unshared"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
     let mut files = Vec::new();
     markdown_files(vault, "", &mut files);
+    files.retain(|file| {
+        let text = std::fs::read_to_string(vault.join(file)).unwrap_or_default();
+        !note_id_of(&text).is_some_and(|id| unshared.contains(id.as_str()) && !state.notes.contains_key(&id))
+    });
     let tracked: BTreeSet<&str> = state.notes.values().map(|e| e.file.as_str()).collect();
     for file in &files {
         assert!(tracked.contains(file.as_str()), "{label}: {file} is not tracked");
@@ -768,7 +886,13 @@ fn crash_everywhere(start: &Start, command: &str, thens: &[Then]) {
     let traced = Place::copy_of(&start.place);
     let sites = crash_sites(&fake, &traced, command);
     assert!(!sites.is_empty(), "{command} reached no crash point");
+    if std::env::var_os("CRASH_POINTS_VERBOSE").is_some() {
+        eprintln!("{command}: {} places to cut it short: {sites:?}", sites.len());
+    }
     // The run that is not cut short keeps it all too.
+    if let Some(between) = start.expect.between {
+        between(&mut fake.zone());
+    }
     for then in thens {
         carry_on(&fake, &traced, command, *then);
     }
@@ -838,6 +962,9 @@ fn one_case(start: &Start, command: &str, point: &str, n: u64, then: Then, label
         "{label}: not killed: {}",
         says(&killed)
     );
+    if let Some(between) = start.expect.between {
+        between(&mut fake.zone());
+    }
     let outputs = carry_on(&fake, &place, command, then);
     let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         check(&fake, &place, &start.expect, label)
@@ -878,20 +1005,27 @@ fn cloned(extra: usize) -> Start {
 
 /// `zone` cloned into a vault.
 fn cloned_from(zone: Zone) -> Start {
+    cloned_by(zone, "clone")
+}
+
+/// `zone` cloned into a vault by `clone` (or `clone-filename`).
+fn cloned_by(zone: Zone, clone: &str) -> Start {
     let fake = Fake::start(zone);
     let place = Place::new();
-    succeeded(&run(&fake, &place, "clone", &Crash::default()), "clone");
+    succeeded(&run(&fake, &place, clone, &Crash::default()), clone);
     let zone = fake.zone().clone();
     let kept = zone
-        .live_notes()
+        .all_live_notes()
         .iter()
         .map(|r| r["recordName"].as_str().unwrap().to_owned())
         .collect();
+    let mut zone = zone;
+    zone.applied.clear();
+    for shared in zone.shared.values_mut() {
+        shared.applied.clear();
+    }
     Start {
-        zone: Zone {
-            applied: Vec::new(),
-            ..zone
-        },
+        zone,
         place,
         expect: Expect {
             kept,
@@ -910,7 +1044,7 @@ fn tracked_file(place: &Place, record_name: &str) -> String {
 fn a_clone_cut_short_anywhere_is_finished_by_the_next_run() {
     let zone = account(30);
     let kept = zone
-        .live_notes()
+        .all_live_notes()
         .iter()
         .map(|r| r["recordName"].as_str().unwrap().to_owned())
         .collect();
@@ -926,7 +1060,7 @@ fn a_clone_cut_short_anywhere_is_finished_by_the_next_run() {
 }
 
 fn kept_notes(zone: &Zone) -> Vec<String> {
-    zone.live_notes()
+    zone.all_live_notes()
         .iter()
         .map(|r| r["recordName"].as_str().unwrap().to_owned())
         .collect()
@@ -1291,4 +1425,188 @@ fn a_clone_takes_a_file_in_attachments_that_is_the_attachment_for_it() {
     let entry = &state.attachments.unwrap()["7ED80274-4400-4C02-87EA-F542F056FF02"];
     assert_eq!(entry.file, format!("Notes/attachments/{name}"));
     assert!(!place.vault.join("Notes/attachments/_7130093 2.jpeg").exists());
+}
+
+// --- shared zones -------------------------------------------------------------------
+
+const WRITABLE_OWNER: &str = "_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const READ_ONLY_OWNER: &str = "_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+/// A sharer's zone: a shared folder (`permission` its share's), with two
+/// notes in it.
+fn shared_zone(owner: &str, title: &str, permission: &str, notes: &str) -> Zone {
+    let mut zone = Zone {
+        page_size: 10,
+        ..Default::default()
+    };
+    let folder = format!("SF{}", &owner[1..9]);
+    let share = format!("SH{}", &owner[1..9]);
+    let mut record = folder_record(&folder, title);
+    record["share"] = json!({ "recordName": share });
+    zone.put(record);
+    zone.put(json!({
+        "recordName": share, "recordType": "cloudkit.share", "fields": {},
+        "currentUserParticipant": { "permission": permission },
+        "participants": [{ "type": "OWNER", "userIdentity": { "nameComponents": { "givenName": title, "familyName": "Owner" } } }],
+    }));
+    for i in 0..2 {
+        zone.put(note_record(
+            &format!("{notes}0000000-0000-4000-8000-{i:012}"),
+            &format!("{title} note {i}\nshared line {i}"),
+            &folder,
+        ));
+    }
+    zone
+}
+
+/// The account, with a folder shared with it to write in and one to read.
+fn shared_account() -> Zone {
+    let mut zone = account(3);
+    zone.shared.insert(
+        WRITABLE_OWNER.into(),
+        shared_zone(WRITABLE_OWNER, "Plans", "READ_WRITE", "C"),
+    );
+    zone.shared.insert(
+        READ_ONLY_OWNER.into(),
+        shared_zone(READ_ONLY_OWNER, "Recipes", "READ_ONLY", "D"),
+    );
+    zone
+}
+
+fn writable_file(start: &Start, i: usize) -> String {
+    tracked_file(&start.place, &format!("C0000000-0000-4000-8000-{i:012}"))
+}
+
+/// In the folder shared to write in: a note edited here, a new note made
+/// here, a note edited by its owner and a note the owner added. The
+/// read-only share: a note edited here, and the share revoked (`revoke`).
+fn shares_changed(revoke_between: bool) -> Start {
+    let mut start = cloned_from(shared_account());
+    let vault = start.place.vault.clone();
+    let edited = writable_file(&start, 0);
+    let text = std::fs::read_to_string(vault.join(&edited)).unwrap();
+    std::fs::write(
+        vault.join(&edited),
+        text.replacen("shared line 0", "shared line 0, typed here", 1),
+    )
+    .unwrap();
+    start.expect.edits.push((edited.clone(), "typed here".into()));
+    let new = format!(
+        "{}/Shared new.md",
+        Path::new(&edited).parent().unwrap().to_string_lossy()
+    );
+    std::fs::write(vault.join(&new), "Shared new\n\nmade here in a share\n").unwrap();
+    start.expect.new_notes = 1;
+    start.expect.edits.push((new, "made here in a share".into()));
+    let read_only = tracked_file(&start.place, "D0000000-0000-4000-8000-000000000000");
+    let text = std::fs::read_to_string(vault.join(&read_only)).unwrap();
+    std::fs::write(vault.join(&read_only), text + "\nmy own line\n").unwrap();
+
+    let writable = start.zone.shared.get_mut(WRITABLE_OWNER).unwrap();
+    let mut record = writable.live("C0000000-0000-4000-8000-000000000001").unwrap().clone();
+    record["fields"]["TextDataEncrypted"]["value"] = json!(note_text_field("Plans note 1\nedited by the owner"));
+    writable.put(record);
+    let folder = format!("SF{}", &WRITABLE_OWNER[1..9]);
+    writable.put(note_record(
+        "C0000000-0000-4000-8000-000000000009",
+        "Owner's new\nfrom the owner",
+        &folder,
+    ));
+    fn revoke(zone: &mut Zone) {
+        zone.revoked.insert(READ_ONLY_OWNER.into());
+    }
+    if revoke_between {
+        start.expect.between = Some(revoke);
+    } else {
+        revoke(&mut start.zone);
+    }
+    let mut after = start.zone.clone();
+    revoke(&mut after);
+    start.expect.kept = kept_notes(&after);
+    start
+}
+
+#[test]
+fn a_sync_with_shares_cut_short_anywhere_is_finished_by_the_next_run() {
+    crash_everywhere(&shares_changed(false), "sync", &[Then::Again]);
+}
+
+/// The read-only share revoked while the run was cut short: the sync after
+/// it finds the share gone.
+#[test]
+fn a_sync_cut_short_before_a_share_was_revoked_is_finished_by_the_next_run() {
+    crash_everywhere(&shares_changed(true), "sync", &[Then::Again]);
+}
+
+// --- a vault whose file names are the titles ----------------------------------------
+
+/// Retitled here (a file renamed), retitled in iCloud, and both at once
+/// with an edit on the other side.
+fn retitled_both_sides() -> Start {
+    let mut start = cloned_by(account(8), "clone-filename");
+    let vault = start.place.vault.clone();
+    let rename = |from: &str, to: &str| std::fs::rename(vault.join(from), vault.join(to)).unwrap();
+    rename("Notes/Extra 1.md", "Notes/Extra one.md");
+    rename("Notes/Extra 7.md", "Notes/Extra seven.md");
+    let text = std::fs::read_to_string(vault.join("Notes/Extra 5.md")).unwrap();
+    std::fs::write(
+        vault.join("Notes/Extra 5.md"),
+        text.replacen("line of note 5", "line of note 5, typed here", 1),
+    )
+    .unwrap();
+    let zone = &mut start.zone;
+    for (name, text) in [
+        ("E0000000-0000-4000-8000-000000000004", "Extra four\nline of note 4"),
+        ("E0000000-0000-4000-8000-000000000005", "Extra five\nline of note 5"),
+        (
+            "E0000000-0000-4000-8000-000000000007",
+            "Extra 7\nline of note 7\nremote line",
+        ),
+    ] {
+        let mut record = zone.live(name).unwrap().clone();
+        record["fields"]["TextDataEncrypted"]["value"] = json!(note_text_field(text));
+        zone.put(record);
+    }
+    let expect = &mut start.expect;
+    for (file, title) in [
+        ("Notes/Extra one.md", "Extra one"),
+        ("Notes/Extra four.md", "Extra four"),
+        ("Notes/Extra five.md", "Extra five"),
+        ("Notes/Extra seven.md", "Extra seven"),
+    ] {
+        expect.titles.push((file.into(), title.into()));
+    }
+    expect.edits.push(("Notes/Extra five.md".into(), "typed here".into()));
+    expect.edits.push(("Notes/Extra seven.md".into(), "remote line".into()));
+    start
+}
+
+#[test]
+fn a_sync_of_retitled_notes_cut_short_anywhere_is_finished_by_the_next_run() {
+    crash_everywhere(&retitled_both_sides(), "sync", &[Then::Again]);
+}
+
+/// In a filename-title vault, a note retitled in iCloud and edited here:
+/// the push merges the two and sends the edit, and the file used to keep
+/// its old name for good (the pull after it had nothing to apply). It takes
+/// the new title as its name, as a pull renames the file of a retitled note.
+#[test]
+fn a_note_retitled_in_icloud_and_edited_here_takes_the_new_title_as_its_file_name() {
+    let start = retitled_both_sides();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    succeeded(&run(&fake, &place, "push", &Crash::default()), "push");
+    assert_eq!(
+        tracked_file(&place, "E0000000-0000-4000-8000-000000000005"),
+        "Notes/Extra five.md"
+    );
+    let text = std::fs::read_to_string(place.vault.join("Notes/Extra five.md")).unwrap();
+    assert!(text.contains("typed here"), "{text}");
+    assert!(!place.vault.join("Notes/Extra 5.md").exists());
+    let record = fake
+        .zone()
+        .live("E0000000-0000-4000-8000-000000000005")
+        .unwrap()
+        .clone();
+    assert!(body_of(&record).starts_with("Extra five\n"), "{}", body_of(&record));
 }
