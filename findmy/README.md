@@ -160,4 +160,5 @@ on worker threads, never on the GTK main loop.
 ## Releasing
 
 Released with the other packages from the repository root; see the root
-[README](../README.md#releasing). Its tags are `findmy-v<version>`.
+[README](../README.md#releasing). Releases are tagged `v<version>`: one
+suite version for every package.

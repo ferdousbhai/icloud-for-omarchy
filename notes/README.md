@@ -370,7 +370,6 @@ newer version.
 
 Released with the other packages from the repository root; see the root
 [README](../README.md#releasing), which also covers the package-signing
-key. Its tags are `notes-v<version>` (`notes-v0.3.8` was `v0.3.8` before
-the move into this repository). Releasing icloud-notes releases the sync
-engine too; the `notes-sync-v*` tags are from when it was a package of its
-own.
+key. Releases are tagged `v<version>`: one suite version for every package.
+The `notes-v*` and `notes-sync-v*` tags are historical. The sync engine ships
+inside icloud-notes.
