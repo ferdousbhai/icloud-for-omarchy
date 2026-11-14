@@ -203,23 +203,29 @@ pub struct Context {
 }
 
 pub fn plan(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, context: &Context) -> Plan {
-    let (moves, held) = plan_moves(base, remote, local, context);
-    if !moves.ops.is_empty() {
-        return moves;
+    let moves = plan_moves(base, remote, local, context);
+    if !moves.plan.ops.is_empty() {
+        return moves.plan;
     }
-    plan_content(base, remote, local, context, &held)
+    let mut plan = plan_content(base, remote, local, context, &moves.held);
+    plan.again |= moves.waiting;
+    plan
+}
+
+/// What the move rules came to.
+struct Moves {
+    plan: Plan,
+    /// Paths of rows moved here to somewhere that cannot be seen properly:
+    /// neither moved nor, by the content rules, read as removed here.
+    held: Vec<String>,
+    /// A move in iCloud waits for the content rules to take what is gone
+    /// from iCloud out of its way here: another round follows them.
+    waiting: bool,
 }
 
 /// Moves and renames only. A row whose folder is itself moving waits for the
-/// next round, when its folder's move has carried it along. Also returns the
-/// paths of rows moved here to somewhere that cannot be seen properly: they
-/// are neither moved nor, by the content rules, read as removed here.
-fn plan_moves(
-    base: &[Row],
-    remote: &Snapshot,
-    local: &BTreeMap<String, Entry>,
-    context: &Context,
-) -> (Plan, Vec<String>) {
+/// next round, when its folder's move has carried it along.
+fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, context: &Context) -> Moves {
     let unknown = &context.unknown;
     let unseen = |path: &str| unknown.iter().any(|u| is_under(path, u));
     let tracked_ids: HashMap<&str, &str> = base.iter().map(|r| (r.path.as_str(), r.node.id.as_str())).collect();
@@ -268,6 +274,7 @@ fn plan_moves(
     let mut stuck: Vec<&Row> = Vec::new();
     let mut made: HashSet<String> = HashSet::new();
     let mut held: Vec<String> = Vec::new();
+    let mut waiting = false;
     for row in base {
         if moving.iter().any(|p| is_under(&row.path, p)) || unseen(&row.path) {
             continue;
@@ -320,10 +327,17 @@ fn plan_moves(
                 continue;
             }
             if local.contains_key(rpath) {
-                if tracked.contains(rpath.as_str()) {
-                    // The destination is another item in step, which may be
-                    // about to move away itself: wait.
-                    stuck.push(row);
+                if let Some(holder) = tracked_ids.get(rpath.as_str()) {
+                    if remote.paths.contains_key(*holder) {
+                        // The destination is another item in step, which
+                        // may be about to move away itself: wait.
+                        stuck.push(row);
+                    } else {
+                        // That item is gone from iCloud (removed there, and
+                        // this one given its name): the content rules take
+                        // it out of the way first.
+                        waiting = true;
+                    }
                     continue;
                 }
                 ops.push(Op::SetAside { path: rpath.clone() });
@@ -413,7 +427,7 @@ fn plan_moves(
         ops,
         ..Plan::default()
     };
-    (plan, held)
+    Moves { plan, held, waiting }
 }
 
 /// Everything but moves. `held` are the rows the move rules found here

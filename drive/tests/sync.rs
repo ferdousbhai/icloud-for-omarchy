@@ -1068,3 +1068,30 @@ fn a_half_done_move_of_a_file_moved_again_here_goes_where_it_is_now() {
     assert_eq!(bed.local_paths(), ["Docs", "Other", "Other/c.txt"]);
     assert_eq!(bed.cloud.id_at("Other/c.txt").as_deref(), Some(a.id.as_str()));
 }
+
+#[test]
+fn a_file_renamed_in_icloud_over_one_removed_there_is_not_sent_back_under_its_old_name() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    let b = bed.cloud.file(ROOT_ID, "b.txt", "two", bed.time());
+    bed.settle();
+    bed.cloud.remove(&b.id);
+    bed.cloud.rename_item(&a.id, "b.txt");
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["b.txt"]);
+    assert_eq!(bed.read("b.txt").as_deref(), Some("one"));
+}
+
+#[test]
+fn a_folder_renamed_in_icloud_over_one_removed_there_leaves_no_folder_behind() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    bed.cloud.file(&docs.id, "old.txt", "old", bed.time());
+    let papers = bed.cloud.folder(ROOT_ID, "Papers");
+    bed.cloud.file(&papers.id, "x.txt", "x", bed.time());
+    bed.settle();
+    bed.cloud.remove(&docs.id);
+    bed.cloud.rename_item(&papers.id, "Docs");
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Docs", "Docs/x.txt"]);
+}
