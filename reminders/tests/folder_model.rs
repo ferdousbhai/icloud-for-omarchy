@@ -958,6 +958,8 @@ impl Case {
         }
         for ml in &self.lists {
             if !t.lists.iter().any(|l| l.id == ml.id) {
+                // Its old names are remembered as removed too.
+                expect.removed.extend(ml.was.iter().cloned());
                 if ml.edited {
                     expect.kept.push(ml.file.clone());
                 } else if self.env.folder().join(&ml.file).exists() {
@@ -1258,7 +1260,13 @@ impl Case {
         // iCloud's changes half written to the files, which the user then
         // edits: a reminder moved in iCloud can be in two files.
         if self.rng.chance(20) {
-            let crashed = self.crashed_at(&["tmp-written", "file-written", "renamed", "gone-removed"]);
+            let crashed = self.crashed_at(&[
+                "tmp-written",
+                "file-written",
+                "rename-pending",
+                "renamed",
+                "gone-removed",
+            ]);
             if crashed && self.rebuild_from_state() {
                 self.note("the files as that run left them".to_owned());
                 // iCloud changes again before the next run settles them.

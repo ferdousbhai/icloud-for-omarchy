@@ -50,7 +50,9 @@
 //!   next run (deleted since, its line goes), and one iCloud never heard of
 //!   is sent again. A file about to be written is recorded first
 //!   ([`ListState::writing`]): one found as it says was written, by a run
-//!   killed before it could record so. Nothing else ties a new
+//!   killed before it could record so (its temp file is removed); a
+//!   rename too ([`ListState::renaming`]): done only when the file is at
+//!   its new name and not its old. Nothing else ties a new
 //!   line to a reminder: one made on the phone that reads the same is
 //!   another.
 //! - What a conflict copy added is in iCloud before it is in the file. Until
@@ -100,6 +102,7 @@ pub const CRASH_POINTS: &[&str] = &[
     "file-applied",
     "tmp-written",
     "file-written",
+    "rename-pending",
     "renamed",
     "gone-removed",
 ];
@@ -182,6 +185,10 @@ pub struct ListState {
     /// conflict copy.
     #[serde(default)]
     pub was: Vec<String>,
+    /// The name the file is being renamed to, saved before it is: found
+    /// there and no longer under `file`, it was.
+    #[serde(default)]
+    pub renaming: Option<String>,
 }
 
 /// A file's text and items, recorded before the file is written.
@@ -667,13 +674,17 @@ fn read(path: &Path) -> io::Result<Option<String>> {
 /// empty file that `folder.json` says was written, read as every line removed.
 fn write(path: &Path, text: &str) -> io::Result<()> {
     use std::io::Write;
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("list");
-    let tmp = path.with_file_name(format!(".syncthing.{name}.tmp"));
+    let tmp = tmp_path(path);
     let mut f = fs::File::create(&tmp)?;
     f.write_all(text.as_bytes())?;
     f.sync_all()?;
     crash("tmp-written");
     fs::rename(&tmp, path)
+}
+
+fn tmp_path(path: &Path) -> PathBuf {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("list");
+    path.with_file_name(format!(".syncthing.{name}.tmp"))
 }
 
 /// What the names of `file`'s conflict copies start with.
@@ -840,6 +851,10 @@ fn closer(writing: &Writing, ls: &ListState, text: &str, now: &Zoned) -> bool {
 fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save) -> Result<()> {
     let Run { svc, list, now } = run;
     let path = dir.join(&ls.file);
+    // A write a killed run began: its temp file is this program's own.
+    if ls.writing.is_some() {
+        let _ = fs::remove_file(tmp_path(&path));
+    }
     let on_disk = read(&path)?;
     // Written by a run killed before it recorded so: compared with what it
     // held before, iCloud's changes in it would read as its own (a
@@ -885,7 +900,13 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
                     ls.pending.push(p.clone());
                     known_now(ls, &p.uuid, &made);
                 }
-                Ok(Some(None)) => ls.items.push(Known { id, item: p.item }),
+                Ok(Some(None)) => {
+                    // A copy's: not a line the file lost.
+                    if p.copy {
+                        ls.unwritten.push(id.clone());
+                    }
+                    ls.items.push(Known { id, item: p.item });
+                }
                 Ok(None) => {}
             }
         }
@@ -1008,6 +1029,22 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
     if written { save(ls) } else { Ok(()) }
 }
 
+/// The list's file now at `to`: its conflict copies follow (they are found
+/// by the file's name), and its old name is remembered.
+fn renamed(dir: &Path, ls: &mut ListState, to: String) {
+    let (old, new) = (conflict_prefix(&ls.file), conflict_prefix(&to));
+    for copy in conflict_copies(dir, &ls.file) {
+        let rest = copy.file_name().and_then(|n| n.to_str()).map(|n| &n[old.len()..]);
+        if let Some(to) = rest.map(|rest| dir.join(format!("{new}{rest}")))
+            && !to.exists()
+        {
+            let _ = fs::rename(&copy, &to);
+        }
+    }
+    ls.was.retain(|w| !w.eq_ignore_ascii_case(&to));
+    ls.was.push(std::mem::replace(&mut ls.file, to));
+}
+
 /// Brings the folder and iCloud in step. The cache must be fresh (the
 /// caller syncs first): what it holds is taken as iCloud's state. One list's failure is a warning
 /// and does not stop the others. `state` is saved after each write to iCloud;
@@ -1019,6 +1056,17 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
         return Ok(report);
     }
     fs::create_dir_all(dir)?;
+
+    // A rename a killed run began: done when the file is at its new name
+    // and not its old, else not done (never an old name's file come back).
+    for ls in state.lists.values_mut() {
+        if let Some(to) = ls.renaming.take()
+            && dir.join(&to).exists()
+            && !dir.join(&ls.file).exists()
+        {
+            renamed(dir, ls, to);
+        }
+    }
 
     // A list gone from iCloud: its file goes too, unless it was changed.
     state.left.retain(|file| dir.join(file).exists());
@@ -1066,6 +1114,12 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                 }
             }
         }
+        // Its old names too: one Syncthing brings back is left, as above.
+        for was in ls.was {
+            if !state.removed.contains(&was) {
+                state.removed.push(was);
+            }
+        }
         crash("gone-removed");
     }
     // A removed file back (Syncthing restores one the phone had changed):
@@ -1105,25 +1159,25 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             ls.file = wanted;
         } else if ls.file != wanted {
             // The list was renamed: the file follows, when nothing is in the
-            // way. With the file gone from its old name, one at the new name
-            // is it, moved by a run killed before it recorded so (or by hand).
+            // way. With no file at its old name (removed), there is nothing
+            // to move.
             let (from, to) = (dir.join(&ls.file), dir.join(&wanted));
-            if !from.exists() || (!to.exists() && fs::rename(&from, &to).is_ok()) {
-                crash("renamed");
-                // Its conflict copies too: they are found by the file's name.
-                let (old, new) = (conflict_prefix(&ls.file), conflict_prefix(&wanted));
-                for copy in conflict_copies(dir, &ls.file) {
-                    let rest = copy.file_name().and_then(|n| n.to_str()).map(|n| &n[old.len()..]);
-                    if let Some(to) = rest.map(|rest| dir.join(format!("{new}{rest}")))
-                        && !to.exists()
-                    {
-                        let _ = fs::rename(&copy, &to);
-                    }
+            if !from.exists() {
+                renamed(dir, &mut ls, wanted);
+                state.lists.insert(list.id.clone(), ls.clone());
+                svc.store.save_folder(state)?;
+            } else if !to.exists() {
+                // Recorded before and after: a run killed in between leaves
+                // the next to tell whether the file moved.
+                ls.renaming = Some(wanted.clone());
+                state.lists.insert(list.id.clone(), ls.clone());
+                svc.store.save_folder(state)?;
+                crash("rename-pending");
+                if fs::rename(&from, &to).is_ok() {
+                    crash("renamed");
+                    renamed(dir, &mut ls, wanted);
                 }
-                ls.was.retain(|w| !w.eq_ignore_ascii_case(&wanted));
-                ls.was.push(std::mem::replace(&mut ls.file, wanted));
-                // Recorded at once: the next run would otherwise look for
-                // the file under its old name, and write it there afresh.
+                ls.renaming = None;
                 state.lists.insert(list.id.clone(), ls.clone());
                 svc.store.save_folder(state)?;
             }

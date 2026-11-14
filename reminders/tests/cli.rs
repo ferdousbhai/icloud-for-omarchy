@@ -1600,3 +1600,133 @@ fn a_file_written_by_a_run_ended_before_recording_it_goes_with_its_deleted_list(
     assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
     assert_eq!(file_names(&dir), ["Reminders.md"]);
 }
+
+fn rename_groceries(env: &Env, to: &str) {
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Name"]["value"] = json!(to);
+    env.state.put(list);
+}
+
+fn delete_groceries(env: &Env) -> Value {
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Deleted"]["value"] = json!(1);
+    env.state.put(list.clone());
+    list
+}
+
+#[test]
+fn a_file_renamed_by_a_run_ended_before_recording_it_goes_with_its_deleted_list() {
+    let env = start();
+    let dir = folder(&env);
+    rename_groceries(&env, "Food");
+    env.background_crashing_at("renamed");
+    assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+    delete_groceries(&env);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
+    assert_eq!(file_names(&dir), ["Reminders.md"]);
+}
+
+#[test]
+fn a_rename_a_run_ended_before_making_is_made_by_the_next() {
+    let env = start();
+    let dir = folder(&env);
+    rename_groceries(&env, "Food");
+    env.background_crashing_at("rename-pending");
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
+    assert_eq!(modifies(&env), 0);
+    assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+    let food = std::fs::read_to_string(dir.join("Food.md")).unwrap();
+    assert!(food.starts_with("# Food\n") && food.contains("Eggs"), "{food}");
+}
+
+#[test]
+fn a_deleted_list_s_old_file_brought_back_is_left_and_not_taken_by_a_new_list_of_its_name() {
+    let env = start();
+    let dir = folder(&env);
+    let old = std::fs::read_to_string(dir.join("Groceries.md")).unwrap();
+    rename_groceries(&env, "Food");
+    env.json(&["background", "--sync"]);
+    let mut list = delete_groceries(&env);
+    env.json(&["background", "--sync"]);
+    assert_eq!(file_names(&dir), ["Reminders.md"]);
+    // The phone had added a line to Groceries.md, and Syncthing brings it back.
+    let back = old + "- [ ] Bread\n";
+    std::fs::write(dir.join("Groceries.md"), &back).unwrap();
+    let out = env.json(&["background", "--sync"]);
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1 && warnings[0].as_str().unwrap().starts_with("Groceries.md: came back"),
+        "{out}"
+    );
+    // A new list of that name takes nothing from it.
+    list["recordName"] = json!("List/LIST-NEW");
+    list["fields"]["Name"]["value"] = json!("Groceries");
+    list["fields"]["Deleted"]["value"] = json!(0);
+    list["fields"]["ReminderIDs"]["value"] = json!("[]");
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["added"], 0, "{out}");
+    assert_eq!(file_names(&dir), ["Groceries 2.md", "Groceries.md", "Reminders.md"]);
+    assert_eq!(std::fs::read_to_string(dir.join("Groceries.md")).unwrap(), back);
+}
+
+#[test]
+fn a_write_a_run_ended_before_finishing_leaves_no_temp_file() {
+    let env = start();
+    let dir = folder(&env);
+    let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
+    let title = milk["fields"]["TitleDocument"].clone();
+    milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
+    env.state.put(milk.clone());
+    env.background_crashing_at("tmp-written");
+    let tmp = dir.join(".syncthing.Groceries.md.tmp");
+    assert!(tmp.exists());
+    // Retitled back on the phone: the next run has nothing to write.
+    milk["fields"]["TitleDocument"] = title;
+    env.state.put(milk);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["written"], json!([]), "{out}");
+    assert!(!tmp.exists());
+}
+
+#[test]
+fn a_conflict_copy_s_lines_deleted_in_icloud_do_not_make_a_removal_risky() {
+    let env = start();
+    let dir = folder(&env);
+    // Four lines of a conflict copy were sent and deleted on the phone
+    // before the run heard back.
+    let path = env.data().join("folder.json");
+    let mut state: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for n in 1..=4 {
+        let uuid = format!("GONE-{n}");
+        let mut r = fake::reminder(
+            &uuid,
+            "List/LIST-GROCERIES",
+            &format!("Copy line {n}"),
+            "",
+            None,
+            now_ms(),
+        );
+        r["fields"]["Deleted"] = json!({ "type": "INT64", "value": 1 });
+        env.state.put(r);
+        state["lists"]["List/LIST-GROCERIES"]["pending"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "uuid": uuid, "done": false, "title": format!("Copy line {n}"), "due": null, "notes": "", "copy": true }));
+    }
+    std::fs::write(&path, state.to_string()).unwrap();
+    // One line removed from the file: not most of the list.
+    let file = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, text.replace("- [ ] Eggs\n", "")).unwrap();
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["restored"], json!([]), "{out}");
+    assert_eq!(out["folder"]["deleted"], 1, "{out}");
+    assert_eq!(
+        env.state.record("Reminder/REM-EGGS").unwrap()["fields"]["Deleted"]["value"],
+        1
+    );
+}

@@ -128,8 +128,8 @@ sent: then it stays as it is with its copies, no longer kept in step, and a
 new list of that name gets a file of its own (`Work 2.md`). A file that
 Syncthing brings back after this computer moved or removed it (the phone
 had changed it meanwhile) is never left unread: under a renamed list's old
-name it is read like a conflict copy and removed; a deleted list's stays in
-the folder like one with changes never sent. The journal names each.
+name it is read like a conflict copy and removed; a deleted list's (under
+any name it had) stays in the folder like one with changes never sent. The journal names each.
 
 With Syncthing, share the folder with the phone and one computer only:
 two computers that both sync it with iCloud would each answer the other's
