@@ -305,6 +305,33 @@ for more than text edits). The engine:
 
 Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
 
+### What a push never takes on trust
+
+- An error is not "gone". `records/lookup` answers per record; a record it
+  answers an error for other than `NOT_FOUND` is one iCloud said nothing
+  about. A delete, an update, a move, a folder rename and a folder delete
+  whose record came back that way are refused for this run
+  (`Refusal::DeleteLookupFailed`, `Refusal::LookupFailed`), and so is an
+  edit whose tables or removed attachments did
+  (`PrepareRefusal::LookupFailed`): read as gone, the note would be
+  untracked (and stay in iCloud), or an attachment's records left out of
+  its removal.
+- A copy is not the note. A missing note is paired with the one untracked
+  file of its name only when that file doesn't carry another tracked note's
+  id: such a file is that note's copy, and taking it for the missing note
+  would overwrite a note being deleted with another note's text.
+- The file may have been saved again. A remote change merged into a local
+  edit is planned from the file as the plan read it (`RemoteMerge`'s
+  `planned_frontmatter`, `planned_text`). When the entry runs and the file
+  no longer reads so, nothing is sent or written for it: the outcome is
+  `skipped` ("changed here while it was being pushed"), not a failure, and
+  the next push plans it afresh. Such an update is sent by itself, right
+  after that check, never in the batched write.
+
+Tests: tests/cmd_push_guards.rs, tests/cmd_push_attach.rs
+(`a_removal_whose_lookup_answered_an_error_is_refused`),
+tests/cmd_local_delete.rs (`push_refuses_a_delete_whose_lookup_answered_an_error`).
+
 ### A note that is gone from iCloud
 
 A tracked note that iCloud lists as deleted (or that a listing from scratch
