@@ -101,12 +101,23 @@ pub fn reconcile_note_placements(
             to: to_file.clone(),
         });
 
-        let attachment_names: Vec<String> = attachments.keys().cloned().collect();
+        let attachment_names: Vec<String> = attachments
+            .iter()
+            .filter(|(_, a)| a.note_record_name == *record_name)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if !attachment_names.is_empty() {
+            // What is in the target's `attachments/` stays: a file no note
+            // tracks (put there to be attached), or one of a note that is
+            // itself still to move out.
+            claim_names_on_disk(
+                target_dir,
+                &posix::join(&[to_dir, "attachments"]),
+                used_names_for(&mut claimed_attachment_names, to_dir),
+            )?;
+        }
         for attachment_record_name in attachment_names {
             let attachment = attachments[&attachment_record_name].clone();
-            if attachment.note_record_name != *record_name {
-                continue;
-            }
             let old_base = posix::basename(&attachment.file).to_owned();
             let new_base = unique_file_name(&old_base, used_names_for(&mut claimed_attachment_names, to_dir));
             let to_attachment = posix::join(&[to_dir, "attachments", &new_base]);

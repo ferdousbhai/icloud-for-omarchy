@@ -190,6 +190,66 @@ fn attachment_collision_rewrites_body_and_base_copy_identically() {
 }
 
 #[test]
+fn a_moved_attachment_never_replaces_a_file_already_in_the_target() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    let layout = alpha_beta_layout();
+    let body = "![photo.jpeg](attachments/photo.jpeg)";
+    let mut notes: IndexMap<String, NoteEntry> = IndexMap::new();
+    notes.insert("REC".into(), note("Alpha/Moving.md", "a", 1, "B"));
+    let mut attachments: IndexMap<String, AttachmentEntry> = IndexMap::new();
+    attachments.insert(
+        "ATT".into(),
+        attachment("Alpha/attachments/photo.jpeg", "M", "c", "REC"),
+    );
+    write_vault_file(root, "Alpha/Moving.md", body);
+    write_vault_file(root, "Alpha/attachments/photo.jpeg", "moving-bytes");
+    // Put there to be attached to a note made here and not pushed yet.
+    write_vault_file(root, "Beta/attachments/photo.jpeg", "untracked-bytes");
+
+    reconcile_note_placements(root, &layout, &mut notes, &mut attachments).unwrap();
+
+    assert_eq!(read(root, "Beta/attachments/photo.jpeg"), "untracked-bytes");
+    assert_eq!(attachments["ATT"].file, "Beta/attachments/photo 2.jpeg");
+    assert_eq!(read(root, "Beta/attachments/photo 2.jpeg"), "moving-bytes");
+    assert_eq!(
+        read(root, "Beta/Moving.md"),
+        "![photo.jpeg](attachments/photo%202.jpeg)"
+    );
+}
+
+#[test]
+fn notes_swapping_folders_keep_their_own_attachments() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    let layout = alpha_beta_layout();
+    let body = "![photo.jpeg](attachments/photo.jpeg)";
+    let mut notes: IndexMap<String, NoteEntry> = IndexMap::new();
+    notes.insert("REC-1".into(), note("Alpha/One.md", "a", 1, "B"));
+    notes.insert("REC-2".into(), note("Beta/Two.md", "b", 2, "A"));
+    let mut attachments: IndexMap<String, AttachmentEntry> = IndexMap::new();
+    attachments.insert(
+        "ATT-1".into(),
+        attachment("Alpha/attachments/photo.jpeg", "M1", "c1", "REC-1"),
+    );
+    attachments.insert(
+        "ATT-2".into(),
+        attachment("Beta/attachments/photo.jpeg", "M2", "c2", "REC-2"),
+    );
+    write_vault_file(root, "Alpha/One.md", body);
+    write_vault_file(root, "Alpha/attachments/photo.jpeg", "one-bytes");
+    write_vault_file(root, "Beta/Two.md", body);
+    write_vault_file(root, "Beta/attachments/photo.jpeg", "two-bytes");
+
+    reconcile_note_placements(root, &layout, &mut notes, &mut attachments).unwrap();
+
+    assert_eq!(notes["REC-1"].file, "Beta/One.md");
+    assert_eq!(notes["REC-2"].file, "Alpha/Two.md");
+    assert_eq!(read(root, &attachments["ATT-1"].file), "one-bytes");
+    assert_eq!(read(root, &attachments["ATT-2"].file), "two-bytes");
+}
+
+#[test]
 fn locally_missing_file_left_tracked_at_old_path() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
