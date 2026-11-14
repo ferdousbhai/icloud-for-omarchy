@@ -750,7 +750,16 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     assert!(!env.server.asset_ids().contains(one) && !env.server.asset_ids().contains(two));
     assert_eq!(env.ids(&[]).len(), 8, "gone from the catalog at once");
     assert_eq!(env.json(&["info", one])["deleted"], true);
-    assert_eq!(env.run(&["delete", one, "--yes"]).code, 1, "already deleted");
+    // Again (a delete cut off after iCloud answered, run again): done already.
+    let r = env.styled(&["delete", one, "--yes"]);
+    assert_eq!(
+        (r.code, r.stdout.trim()),
+        (0, format!("{one}\talready deleted").as_str()),
+        "{}",
+        r.stderr
+    );
+    let v = env.json(&["delete", one, "--yes"]);
+    assert_eq!(v, serde_json::json!([{ "id": one, "deleted": true, "already": true }]));
 
     // Edited on another device since the last sync: the stale change tag
     // conflicts, so it syncs and deletes with the fresh one.
@@ -759,12 +768,12 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     assert_eq!(v[0]["deleted"], true, "{v}");
     assert!(!env.server.asset_ids().contains(three));
 
-    // Deleted elsewhere first: reported, exit 1.
+    // Deleted elsewhere first: done already, and the catalog agrees.
     let four = &ids[3];
     env.server.delete_elsewhere(four);
-    let r = env.run(&["--json", "delete", four, "--yes"]);
-    assert_eq!(r.code, 1);
-    assert_eq!(r.json()[0]["deleted"], false);
+    let v = env.json(&["delete", four, "--yes"]);
+    assert_eq!(v, serde_json::json!([{ "id": four, "deleted": true, "already": true }]));
+    assert_eq!(env.json(&["info", four])["deleted"], true);
 
     assert_eq!(env.run(&["delete", "NO-SUCH-ID", "--yes"]).code, 4);
     assert_eq!(env.json(&["sync"])["mode"], "incremental");
@@ -791,7 +800,17 @@ fn restore_undoes_delete() {
     assert_eq!(v[0]["restored"], true, "{v}");
     assert!(env.server.asset_ids().contains(two));
 
-    assert_eq!(env.run(&["restore", one]).code, 1, "not deleted");
+    // Again (a restore cut off part-way, run again): done already, the rest restored.
+    assert_eq!(env.run(&["delete", two, "--yes"]).code, 0);
+    let r = env.styled(&["restore", one, two]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout.trim(), format!("{one}\talready restored\n{two}\trestored"));
+    let v = env.json(&["restore", one]);
+    assert_eq!(v, serde_json::json!([{ "id": one, "restored": true, "already": true }]));
+    // One that was never deleted is a mistake.
+    let r = env.run(&["restore", one, &ids[2]]);
+    assert_eq!(r.code, 1, "never deleted");
+    assert!(r.stdout.contains("is not deleted"), "{}", r.stdout);
     assert_eq!(env.run(&["restore", "NO-SUCH-ID"]).code, 4);
     assert_eq!(env.json(&["sync"])["mode"], "incremental");
     assert_eq!(env.ids(&[]).len(), 6);
@@ -802,10 +821,10 @@ fn an_id_named_twice_is_deleted_and_restored_once() {
     let env = Env::synced("delete-twice", 3);
     let id = env.ids(&[]).remove(0);
     let v = env.json(&["delete", &id, &id, "--yes"]);
-    assert_eq!(v, serde_json::json!([{ "id": id, "deleted": true }]));
+    assert_eq!(v, serde_json::json!([{ "id": id, "deleted": true, "already": false }]));
     assert!(!env.server.asset_ids().contains(&id));
     let v = env.json(&["restore", &id, &id]);
-    assert_eq!(v, serde_json::json!([{ "id": id, "restored": true }]));
+    assert_eq!(v, serde_json::json!([{ "id": id, "restored": true, "already": false }]));
     assert!(env.server.asset_ids().contains(&id));
 }
 
@@ -814,29 +833,31 @@ fn delete_sends_many_in_one_call_and_reports_each() {
     let env = Env::synced("delete-batch", 6);
     let ids = env.ids(&[]);
     // One fine, one edited elsewhere (a conflict, retried after a sync),
-    // one deleted elsewhere (reported).
+    // one deleted elsewhere (done already).
     env.server.edit_elsewhere(&ids[1]);
     env.server.delete_elsewhere(&ids[2]);
     let r = env.run(&["--json", "delete", &ids[0], &ids[1], &ids[2], &ids[3], "--yes"]);
-    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert_eq!(r.code, 0, "{}", r.stderr);
     let v = r.json();
-    let got: Vec<(&str, bool)> = v
+    let got: Vec<(&str, bool, bool)> = v
         .as_array()
         .unwrap()
         .iter()
-        .map(|x| (x["id"].as_str().unwrap(), x["deleted"].as_bool().unwrap()))
+        .map(|x| {
+            let flag = |k: &str| x[k].as_bool().unwrap();
+            (x["id"].as_str().unwrap(), flag("deleted"), flag("already"))
+        })
         .collect();
     assert_eq!(
         got,
         vec![
-            (ids[0].as_str(), true),
-            (ids[1].as_str(), true),
-            (ids[2].as_str(), false),
-            (ids[3].as_str(), true)
+            (ids[0].as_str(), true, false),
+            (ids[1].as_str(), true, false),
+            (ids[2].as_str(), true, true),
+            (ids[3].as_str(), true, false)
         ]
     );
-    assert!(v[2]["error"].as_str().unwrap().contains("another device"), "{v}");
-    for id in [&ids[0], &ids[1], &ids[3]] {
+    for id in [&ids[0], &ids[1], &ids[2], &ids[3]] {
         assert!(!env.server.asset_ids().contains(id));
         assert_eq!(env.json(&["info", id])["deleted"], true);
     }
@@ -1227,8 +1248,11 @@ fn output_modes() {
     let r = env.run(&["download", &ids[2]]);
     assert_eq!(r.doc()["summary"], "Downloaded 1 item");
 
-    env.server.delete_elsewhere(&ids[4]);
+    // Changed elsewhere, and the sync that would bring the change fails.
+    env.server.edit_elsewhere(&ids[4]);
+    env.server.fail_syncs(true);
     let r = env.run(&["delete", &ids[3], &ids[4], "--yes"]);
+    env.server.fail_syncs(false);
     assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(r.stderr.is_empty(), "{}", r.stderr);
     let v = r.doc();
@@ -1243,7 +1267,7 @@ fn output_modes() {
     assert_eq!(env.run(&["prune-cache", "--count"]).stdout.trim(), "0");
     // Without ids, --ids-only falls back to the data with a note.
     let r = env.run(&["status", "--ids-only"]);
-    assert_eq!(r.doc()["assets"], 3);
+    assert_eq!(r.doc()["assets"], 4, "the one that failed is still there");
     assert!(r.stderr.starts_with("note: "), "{}", r.stderr);
 }
 

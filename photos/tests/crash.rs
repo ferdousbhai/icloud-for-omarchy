@@ -317,6 +317,15 @@ fn an_export_killed_at_any_point_only_ever_adds_files() {
     }
 }
 
+/// The report of a `delete` or `restore` (`key`) that did every item, the
+/// ones of `done` found so already.
+fn already(ids: &[&str], key: &str, done: &[bool]) -> Value {
+    let items = ids.iter().zip(done);
+    items
+        .map(|(id, &done)| serde_json::json!({ "id": id, key: true, "already": done }))
+        .collect()
+}
+
 /// The items visible in the catalog after a sync are the ones iCloud has.
 fn in_step_with_icloud(env: &Env) {
     env.run(&["sync"]).ok();
@@ -342,8 +351,9 @@ fn a_delete_killed_after_icloud_answered_leaves_the_catalog_in_step() {
         }
         env.crash(point, &["delete", "--yes", a, b]);
         assert!(!env.server.asset_ids().iter().any(|id| id == a || id == b), "{point}");
-        // Run again: the items are gone from iCloud whatever it reports.
-        env.run(&["delete", "--yes", a, b]);
+        // Run again: both were deleted by the run that was killed.
+        let r = env.run(&["delete", "--yes", a, b]).ok();
+        assert_eq!(r, already(&[a, b], "deleted", &[true, true]), "{point}");
         in_step_with_icloud(&env);
         assert_eq!(std::fs::read(&photo).unwrap(), bytes, "a delete never touches the file");
         // And they come back.
@@ -355,10 +365,10 @@ fn a_delete_killed_after_icloud_answered_leaves_the_catalog_in_step() {
 
 #[test]
 fn a_restore_killed_after_icloud_answered_is_finished_by_the_rerun() {
-    for (point, edited) in [
-        ("restore.sent", false),
-        ("restore.sent:2", false),
-        ("restore.retried", true),
+    for (point, edited, done) in [
+        ("restore.sent", false, [true, false]),
+        ("restore.sent:2", false, [true, true]),
+        ("restore.retried", true, [true, false]),
     ] {
         let env = Env::new("restore", 4);
         env.run(&["sync"]).ok();
@@ -369,18 +379,9 @@ fn a_restore_killed_after_icloud_answered_is_finished_by_the_rerun() {
             env.server.edit_elsewhere(a);
         }
         env.crash(point, &["restore", a, b]);
-        // Run again for what the catalog still has as deleted.
-        let left: Vec<&str> = [a, b]
-            .into_iter()
-            .filter(|id| env.run(&["info", id]).ok()["deleted"] == true)
-            .collect();
-        let mut args = vec!["restore"];
-        args.extend(&left);
-        let r = env.run(&args).ok();
-        assert!(
-            r.as_array().unwrap().iter().all(|i| i["restored"] == true),
-            "{point}: {r}"
-        );
+        // Run again: what the killed run restored is done already.
+        let r = env.run(&["restore", a, b]).ok();
+        assert_eq!(r, already(&[a, b], "restored", &done), "{point}");
         in_step_with_icloud(&env);
         assert_eq!(env.ids().len(), 4, "{point}");
     }

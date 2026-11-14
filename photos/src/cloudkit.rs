@@ -607,6 +607,31 @@ impl<'t> CloudKit<'t> {
             .collect())
     }
 
+    /// Whether iCloud has the asset deleted: in Recently Deleted, expunged,
+    /// or gone altogether (`NOT_FOUND`). A hidden asset is not deleted.
+    /// UNVERIFIED AGAINST APPLE for CPLAsset records: `records/lookup` is
+    /// verified for masters only.
+    pub fn is_deleted(&self, asset_id: &str) -> Result<bool> {
+        let mut v = self.post(
+            "records/lookup",
+            &json!({ "records": [{ "recordName": asset_id }], "zoneID": Self::zone(), "desiredKeys": DESIRED_KEYS }),
+        )?;
+        let first = v.get("records").and_then(Value::as_array).and_then(|a| a.first());
+        if let Some(rec) = first
+            && rec.get("serverErrorCode").and_then(Value::as_str) == Some("NOT_FOUND")
+        {
+            return Ok(true);
+        }
+        if let Some(rec) = first {
+            server_error(rec)?;
+        }
+        let record = records_of(&mut v)
+            .into_iter()
+            .find(|r| r.name == asset_id)
+            .ok_or_else(|| Error::Other(format!("records/lookup returned nothing for {asset_id}")))?;
+        Ok(record.is_deleted())
+    }
+
     /// Move an asset to Recently Deleted: update the CPLAsset with isDeleted=1.
     /// The change tag must be the asset record's current one, or CloudKit
     /// answers a per-record CONFLICT. Shape from a browser capture of

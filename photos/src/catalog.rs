@@ -305,12 +305,23 @@ impl Catalog {
     }
 
     pub fn mark_deleted(&self, asset_id: &str, change_tag: Option<&str>) -> Result<()> {
-        self.set_deleted(asset_id, change_tag, true)
+        self.set_deleted(asset_id, change_tag, true)?;
+        self.set_meta(&restored_key(asset_id), None)
     }
 
-    /// Undo [`mark_deleted`](Self::mark_deleted) after a restore.
+    /// Undo [`mark_deleted`](Self::mark_deleted) after a restore, and
+    /// remember that it was restored ([`was_restored`](Self::was_restored)).
     pub fn mark_restored(&self, asset_id: &str, change_tag: Option<&str>) -> Result<()> {
+        // First, so that a crash in between leaves it deleted, to restore again.
+        self.set_meta(&restored_key(asset_id), Some("1"))?;
         self.set_deleted(asset_id, change_tag, false)
+    }
+
+    /// Whether the asset was brought back from Recently Deleted here
+    /// ([`mark_restored`](Self::mark_restored)) and not deleted here since:
+    /// restoring it again is done already, not a mistake.
+    pub fn was_restored(&self, asset_id: &str) -> Result<bool> {
+        Ok(self.meta(&restored_key(asset_id))?.is_some())
     }
 
     fn set_deleted(&self, asset_id: &str, change_tag: Option<&str>, deleted: bool) -> Result<()> {
@@ -599,6 +610,11 @@ impl Catalog {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(lines.join("\n"))
     }
+}
+
+/// The `meta` key [`Catalog::mark_restored`] sets for an asset.
+fn restored_key(asset_id: &str) -> String {
+    format!("restored:{asset_id}")
 }
 
 type CachedRenditions = (String, Option<PathBuf>, Option<PathBuf>);

@@ -545,7 +545,13 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
   (`--no-sync` skips that); `--album ID` adds them to an album.
 - `delete` moves items to Recently Deleted, on every device. One that
   conflicts with a change made on another device syncs and tries once more,
-  as the app does.
+  as the app does. The data is `[{id, deleted, already, error?}]`: an item
+  iCloud has deleted already (a delete that was cut off, run again) is done,
+  `deleted: true, already: true`, "already deleted" in text mode, exit 0.
+- `restore` undoes `delete`: `[{id, restored, already, error?}]`. An item
+  restored here already (a restore cut off part-way, run again) is done,
+  `already: true`, "already restored" in text mode; the others are
+  restored. An id that was never deleted is an error (exit 1).
 - `delete` and `restore`: when the sign-in lapses part-way through, the
   report of what was done is still printed (each item not done carries the
   error) and the exit code is 3; with nothing done it is the plain

@@ -197,7 +197,9 @@ enum Command {
     ///
     /// Asks in text mode on a terminal (stdin and stdout); anywhere else
     /// --yes is required (a usage error, exit 2, otherwise). The data is
-    /// [{id, deleted, error?}]. Exits 1 if any item failed.
+    /// [{id, deleted, already, error?}]; an item iCloud has deleted already
+    /// (a delete run before) is done, with already true. Exits 1 if any
+    /// item failed.
     #[command(after_help = AFTER_HELP)]
     Delete {
         #[arg(required = true)]
@@ -208,8 +210,10 @@ enum Command {
     },
     /// Bring items back from Recently Deleted: undo `delete`.
     ///
-    /// Takes the ids `delete` printed. The data is [{id, restored, error?}].
-    /// Exits 1 if any item failed (one emptied from Recently Deleted, or
+    /// Takes the ids `delete` printed. The data is [{id, restored, already,
+    /// error?}]; an item restored here already (a restore run before) is
+    /// done, with already true; one never deleted is an error. Exits 1 if
+    /// any item failed (one emptied from Recently Deleted, or
     /// gone after its 30 days, cannot come back).
     #[command(after_help = AFTER_HELP)]
     Restore {
@@ -1160,11 +1164,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     let mut cat = ctx.catalog()?;
     let mut rows = Vec::new();
     for id in distinct(ids) {
-        let r = row_or_fail(&cat, id)?;
-        if r.deleted {
-            return Err(other(format!("{id} is already deleted")));
-        }
-        rows.push(r);
+        rows.push(row_or_fail(&cat, id)?);
     }
     if !yes {
         // Ask only when someone can answer: text mode, stdin and stdout a terminal.
@@ -1186,11 +1186,27 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     }
     let t = ctx.transport()?;
     let ck = CloudKit::connect(&*t)?;
-    // Up to 200 deletions per request, each answered on its own.
-    let first: Vec<(&str, Option<&str>)> = rows.iter().map(|r| (r.id.as_str(), r.change_tag.as_deref())).collect();
-    let mut outcome: Vec<LibResult<Modified>> = ck.delete_assets(&first);
+    // Up to 200 deletions per request, each answered on its own. One the
+    // catalog has as deleted already (a delete run before, here or on
+    // another device) is not sent again: iCloud is asked whether it is.
+    let first: Vec<(&str, Option<&str>)> = rows
+        .iter()
+        .filter(|r| !r.deleted)
+        .map(|r| (r.id.as_str(), r.change_tag.as_deref()))
+        .collect();
+    let mut sent = ck.delete_assets(&first).into_iter();
     crash::point("delete.sent");
-    let code_of = |r: &LibResult<Modified>| match r {
+    let mut outcome: Vec<LibResult<Done>> = rows
+        .iter()
+        .map(|r| match r.deleted {
+            true => already_deleted(&ck, &r.id),
+            false => sent
+                .next()
+                .unwrap_or_else(|| Err(Error::Other("records/modify gave no answer".into())))
+                .map(Done::Changed),
+        })
+        .collect();
+    let code_of = |r: &LibResult<Done>| match r {
         Err(Error::CloudKit { code, .. }) => Some(code.clone()),
         _ => None,
     };
@@ -1214,7 +1230,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
                 }
                 let fresh = row_or_fail(&cat, &rows[i].id)?;
                 if fresh.deleted {
-                    *r = Err(Error::Other("already deleted on another device".into()));
+                    *r = already_deleted(&ck, &fresh.id);
                 } else {
                     retry.push((i, fresh.id, fresh.change_tag));
                 }
@@ -1226,23 +1242,51 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     if !retry.is_empty() {
         let again: Vec<(&str, Option<&str>)> = retry.iter().map(|(_, id, tag)| (id.as_str(), tag.as_deref())).collect();
         for ((i, ..), r) in retry.iter().zip(ck.delete_assets(&again)) {
-            outcome[*i] = r;
+            outcome[*i] = r.map(Done::Changed);
         }
         crash::point("delete.retried");
     }
     cat.transaction(|cat| {
         for (row, r) in rows.iter().zip(&outcome) {
-            if let Ok(m) = r {
-                cat.mark_deleted(&row.id, m.change_tag.as_deref())?;
+            if let Ok(done) = r {
+                cat.mark_deleted(&row.id, done.change_tag())?;
             }
         }
         Ok(())
     })?;
-    let mut report = Changed::new(ctx, "deleted", "moved to Recently Deleted");
+    let mut report = Changed::new(ctx, "deleted", "moved to Recently Deleted", "already deleted");
     for (row, result) in rows.iter().zip(outcome) {
         report.item(&row.id, result);
     }
     report.finish(|items| format!("Moved {items} to Recently Deleted"))
+}
+
+/// What `delete` or `restore` did to one item: changed it in iCloud, or
+/// found it so already (a run killed after iCloud answered, run again).
+enum Done {
+    Changed(Modified),
+    Already,
+}
+
+impl Done {
+    fn change_tag(&self) -> Option<&str> {
+        match self {
+            Done::Changed(m) => m.change_tag.as_deref(),
+            Done::Already => None,
+        }
+    }
+}
+
+/// An item the catalog has as deleted: done already when iCloud has it
+/// deleted too; hidden, or back in the library on another device, it fails.
+fn already_deleted(ck: &CloudKit, id: &str) -> LibResult<Done> {
+    match ck.is_deleted(id)? {
+        true => Ok(Done::Already),
+        false => Err(Error::Other(format!(
+            "{id} is not in the library here, but not deleted in iCloud (hidden, or changed on another device); \
+             run `icloud-photos sync` and try again"
+        ))),
+    }
 }
 
 /// A conflict's re-sync failed: the item fails (a lapsed sign-in as itself).
@@ -1255,39 +1299,46 @@ fn resync_failed(e: &Error) -> Error {
 }
 
 /// What `delete` and `restore` report: a line per item in text mode, else
-/// `[{id, <key>: bool, error?}]` and the ids that went through; exit 1 if
+/// `[{id, <key>: bool, already: bool, error?}]` (`already`: it was so
+/// before this run) and the ids that went through; exit 1 if
 /// any item failed. A sign-in that lapsed before anything was done is the
 /// sign-in error; one that lapsed part-way keeps the report and exits 3.
 struct Changed<'a> {
     ctx: &'a Ctx,
     key: &'static str,
     done: &'static str,
+    already: &'static str,
     results: Vec<Value>,
     ok: Vec<String>,
+    found_done: usize,
     failed: usize,
     signed_out: bool,
 }
 
 impl<'a> Changed<'a> {
-    fn new(ctx: &'a Ctx, key: &'static str, done: &'static str) -> Self {
+    fn new(ctx: &'a Ctx, key: &'static str, done: &'static str, already: &'static str) -> Self {
         Changed {
             ctx,
             key,
             done,
+            already,
             results: Vec::new(),
             ok: Vec::new(),
+            found_done: 0,
             failed: 0,
             signed_out: false,
         }
     }
 
-    fn item(&mut self, id: &str, result: LibResult<Modified>) {
-        let mut entry = json!({ "id": id, self.key: result.is_ok() });
+    fn item(&mut self, id: &str, result: LibResult<Done>) {
+        let already = matches!(result, Ok(Done::Already));
+        let mut entry = json!({ "id": id, self.key: result.is_ok(), "already": already });
         match result {
             Ok(_) => {
                 if self.ctx.text() {
-                    say(&format!("{id}\t{}", self.done));
+                    say(&format!("{id}\t{}", if already { self.already } else { self.done }));
                 }
+                self.found_done += already as usize;
                 self.ok.push(id.to_owned());
             }
             Err(e) => {
@@ -1321,6 +1372,9 @@ impl<'a> Changed<'a> {
             return Ok(Response::silent().exit(code));
         }
         let mut summary = summary(plural(self.ok.len(), "item", "items"));
+        if self.found_done > 0 {
+            summary.push_str(&format!(" ({} already)", self.found_done));
+        }
         if self.failed > 0 {
             summary.push_str(&format!("; {} failed", self.failed));
         }
@@ -1333,21 +1387,26 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
     let mut rows = Vec::new();
     for id in distinct(ids) {
         let r = row_or_fail(&cat, id)?;
-        if !r.deleted {
+        // Restored here before (a run killed part-way, run again) is done.
+        if !r.deleted && !cat.was_restored(id)? {
             return Err(other(format!("{id} is not deleted")));
         }
         rows.push(r);
     }
     let t = ctx.transport()?;
     let ck = CloudKit::connect(&*t)?;
-    let mut report = Changed::new(ctx, "restored", "restored");
+    let mut report = Changed::new(ctx, "restored", "restored", "already restored");
     for row in &rows {
+        if !row.deleted {
+            report.item(&row.id, Ok(Done::Already));
+            continue;
+        }
         // After a lapsed sign-in nothing more is sent.
         if report.signed_out {
             report.item(&row.id, Err(Error::sign_in()));
             continue;
         }
-        let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref());
+        let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref()).map(Done::Changed);
         crash::point("restore.sent");
         // Changed on another device since the last sync: sync, then try
         // again with the fresh change tag, as delete does.
@@ -1360,18 +1419,15 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
                     if fresh.deleted {
                         let again = ck.restore_asset(&fresh.id, fresh.change_tag.as_deref());
                         crash::point("restore.retried");
-                        again
+                        again.map(Done::Changed)
                     } else {
-                        Ok(Modified {
-                            name: fresh.id,
-                            change_tag: fresh.change_tag,
-                        })
+                        Ok(Done::Already)
                     }
                 }
             };
         }
-        if let Ok(m) = &result {
-            cat.mark_restored(&row.id, m.change_tag.as_deref())?;
+        if let Ok(done) = &result {
+            cat.mark_restored(&row.id, done.change_tag())?;
         }
         report.item(&row.id, result);
     }
