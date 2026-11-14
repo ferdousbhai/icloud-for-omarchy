@@ -1207,6 +1207,26 @@ int main(int argc, char *argv[])
                   == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine again and\n\ntwo from iCloud\n"),
               "seam waiting save written under later typing is not merged into a conflict");
     }
+    // A waiting save belongs to its note and its edit: an edit undone, or
+    // another note opened, before the sync ends leaves nothing to write.
+    {
+        const QString q = readFile(QStringLiteral("Q.md"));
+        b.runPull();
+        b.saveCurrentNote(QStringLiteral("# Q\nan edit\n"));
+        b.saveCurrentNote(b.noteBody()); // undone
+        waitForIdle(b);
+        check(readFile(QStringLiteral("Q.md")) == q, "seam a waiting save whose edit was undone is not written");
+        writeFile(QStringLiteral("R.md"), QStringLiteral("---\napple-note-id: id-r\n---\n# R\nother\n"));
+        b.refresh();
+        b.runPull();
+        b.saveCurrentNote(QStringLiteral("# Q\nan edit\n"));
+        b.openNote(QStringLiteral("R.md"));
+        waitForIdle(b);
+        check(readFile(QStringLiteral("Q.md")) == q
+                  && readFile(QStringLiteral("R.md")) == QStringLiteral("---\napple-note-id: id-r\n---\n# R\nother\n"),
+              "seam a waiting save is never written into another note");
+        QFile::remove(testVault() + QStringLiteral("/R.md"));
+    }
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
     QFile::remove(testVault() + QStringLiteral("/Q.md"));
     b.refresh();

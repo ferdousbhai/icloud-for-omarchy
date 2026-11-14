@@ -467,9 +467,12 @@ private:
     } m_lostNote;
     bool m_following = false;
     bool m_merging = false; // keepEditsAsConflict is reloading its merge
-    // A save asked for while a sync ran: the editor body, and the note it
-    // was edited from.
+    // A save asked for while a sync ran: the note (vault-relative), the
+    // editor body, and the note's content it was edited from. Only ever
+    // written to that note: opening another one, or a save that finds the
+    // edit undone, drops it.
     struct QueuedSave {
+        QString note;
         QString base;
         QString body;
         bool valid = false;

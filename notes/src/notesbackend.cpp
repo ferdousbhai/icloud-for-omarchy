@@ -1034,6 +1034,8 @@ bool NotesBackend::followNote(const QString &id)
     }
     m_currentNote = rel.section(u'/', -1);
     m_lostNote = {};
+    if (m_queuedSave.valid)
+        m_queuedSave.note = rel; // its edits go where the note went
     emit currentNoteChanged();
     rebuildNotes();
     loadCurrentNote(); // unsaved edits merge here (keepEditsAsConflict)
@@ -1135,6 +1137,7 @@ void NotesBackend::openNote(const QString &name)
     }
     m_lostNote = {};
     if (m_currentNote != name) {
+        m_queuedSave = {}; // a save waiting on a sync was the other note's
         m_currentNote = name;
         emit currentNoteChanged();
     }
@@ -1148,12 +1151,14 @@ bool NotesBackend::saveCurrentNote(const QString &body)
     if (path.isEmpty()) // the note went away under these edits: keepEditsAsConflict keeps them
         return body.isEmpty();
     const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
-    if (!m_readOnlyReason.isEmpty() || text == m_noteContent)
+    if (!m_readOnlyReason.isEmpty() || text == m_noteContent) {
+        m_queuedSave = {}; // an edit undone since it was queued is not written later
         return true;
+    }
     // Never under a running sync: a pull may be rewriting this very file.
     // Written once it is done and its changes are loaded (writeQueuedSave).
     if (m_syncRunning) {
-        m_queuedSave = { m_noteContent, body, true };
+        m_queuedSave = { vaultRelative(m_currentNote), m_noteContent, body, true };
         return false;
     }
     // A pull (or another program) rewrote the note since it was loaded:
@@ -2231,7 +2236,8 @@ void NotesBackend::finishSyncHalves(int exitCode)
 void NotesBackend::writeQueuedSave()
 {
     const QueuedSave queued = std::exchange(m_queuedSave, {});
-    if (!queued.valid || m_currentNote.isEmpty()) // a note gone keeps its edits through keepEditsAsConflict
+    // A note gone keeps its edits through keepEditsAsConflict; another note is not theirs.
+    if (!queued.valid || m_currentNote.isEmpty() || vaultRelative(m_currentNote) != queued.note)
         return;
     const QString base = SyncModel::editorForm(SyncModel::splitEnvelope(queued.base).body);
     const bool changed = m_noteContent != queued.base;
