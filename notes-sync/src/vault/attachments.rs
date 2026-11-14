@@ -343,11 +343,7 @@ pub fn resolve_note_attachments<T: Transport>(
         .filter(|(_, e)| e.note_record_name == note_record_name)
         .map(|(k, _)| k.clone())
         .collect();
-    let previous_table_for_note: Vec<String> = existing_table_attachments
-        .iter()
-        .filter(|(_, e)| e.note_record_name == note_record_name)
-        .map(|(k, _)| k.clone())
-        .collect();
+    let previous_table_for_note = remove_table_attachments_for_note(note_record_name, existing_table_attachments);
 
     if slots.is_empty() {
         return Ok(AttachmentSyncResult {
@@ -620,9 +616,14 @@ pub fn remove_table_attachments_for_note(
 
 /// `rm`/`unlink` ignoring ENOENT.
 pub fn safe_unlink(path: &Path) -> Result<(), Error> {
+    unlink_if_there(path).map(drop)
+}
+
+/// Removes the file at `path`; whether there was one.
+pub(crate) fn unlink_if_there(path: &Path) -> Result<bool, Error> {
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
     }
 }

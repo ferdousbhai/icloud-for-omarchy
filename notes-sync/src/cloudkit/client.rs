@@ -1093,7 +1093,6 @@ fn parse_participants(value: Option<&Value>) -> Option<Vec<Participant>> {
                 let s = |v: &Value, k: &str| get_str(v, k).map(str::to_owned);
                 Participant {
                     type_: s(participant, "type"),
-                    user_record_name: s(identity, "userRecordName"),
                     given_name: s(names, "givenName"),
                     family_name: s(names, "familyName"),
                     email_address: s(lookup, "emailAddress"),
@@ -1108,10 +1107,7 @@ fn parse_record_stamp(value: Option<&Value>) -> Option<Stamp> {
     let value = value?;
     let timestamp = get(value, "timestamp")?;
     let timestamp = timestamp.as_i64().or_else(|| timestamp.as_f64().map(|f| f as i64))?;
-    Some(Stamp {
-        timestamp,
-        device_id: get_str(value, "deviceID").map(str::to_owned),
-    })
+    Some(Stamp { timestamp })
 }
 
 /// `parseZoneRecord`: a `{recordName, recordType?, deleted: true}` tombstone

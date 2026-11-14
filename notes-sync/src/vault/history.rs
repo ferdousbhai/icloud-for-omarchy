@@ -147,18 +147,8 @@ pub(crate) fn next_seq(names: &[String]) -> usize {
 /// order, the same as byte order for these ASCII names). Capture names
 /// start with a fixed-width millisecond time, so this is oldest first.
 pub(crate) fn json_file_names(dir: &Path) -> Result<Vec<String>, Error> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-    let mut names: Vec<String> = Vec::new();
-    for entry in entries {
-        let name = entry?.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".json") {
-            names.push(name);
-        }
-    }
+    let mut names = super::local::file_names_in(dir)?;
+    names.retain(|name| name.ends_with(".json"));
     names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     Ok(names)
 }
@@ -332,11 +322,7 @@ pub fn prune_history(target_dir: &Path, note_record_name: &str, record_names: &[
 }
 
 fn remove_capture(path: &Path) -> Result<usize, Error> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(1),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(e) => Err(e.into()),
-    }
+    Ok(usize::from(super::attachments::unlink_if_there(path)?))
 }
 
 // --- tracked-file resolution -----------------------------------------------
@@ -430,12 +416,10 @@ pub fn resolve_tracked_note_from(
 pub fn history_record_names(state: &CloneState, record_name: &str) -> Vec<String> {
     let mut names = vec![record_name.to_owned()];
     if let Some(tables) = &state.table_attachments {
-        names.extend(
-            tables
-                .iter()
-                .filter(|(_, e)| e.note_record_name == record_name)
-                .map(|(k, _)| k.clone()),
-        );
+        names.extend(super::attachments::remove_table_attachments_for_note(
+            record_name,
+            tables,
+        ));
     }
     names
 }

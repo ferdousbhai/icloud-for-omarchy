@@ -25,8 +25,6 @@ pub struct FieldValue {
 pub struct Stamp {
     /// ms epoch.
     pub timestamp: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_id: Option<String>,
 }
 
 /// `ShareParticipant`: one participant of a `cloudkit.share` record,
@@ -36,8 +34,6 @@ pub struct Stamp {
 pub struct Participant {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_record_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub given_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

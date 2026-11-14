@@ -68,6 +68,21 @@ pub fn write_note_file(path: &Path, contents: &str) -> Result<(), Error> {
     Ok(write_atomic(&path, contents.as_bytes(), true)?)
 }
 
+/// The name of every entry in `dir`, in the order the directory lists them;
+/// none when there is no such directory.
+pub(crate) fn file_names_in(dir: &Path) -> Result<Vec<String>, Error> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        names.push(entry?.file_name().to_string_lossy().into_owned());
+    }
+    Ok(names)
+}
+
 /// `SplitFrontmatterOptions` for a vault of `mode`.
 pub fn split_options(mode: TitleMode) -> SplitOptions {
     SplitOptions {

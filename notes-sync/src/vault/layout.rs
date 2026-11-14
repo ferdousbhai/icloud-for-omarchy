@@ -25,7 +25,6 @@ pub struct FolderInfo {
     pub title: String,
     pub parent_record_name: Option<String>,
     pub share_record_name: Option<String>,
-    pub permission: Option<String>,
 }
 
 /// `FolderTreeNode` (children as indexes into [`FolderTree::nodes`]).
@@ -76,7 +75,6 @@ pub fn decode_folder_record(record: &CloudKitRecord) -> Option<FolderInfo> {
         parent_record_name: reference_record_name(record.fields.get("ParentFolder").map(|f| &f.value))
             .or_else(|| record.parent_record_name.clone()),
         share_record_name: record.share_record_name.clone(),
-        permission: None,
     })
 }
 
@@ -341,12 +339,7 @@ pub fn sharer_display_name(zone: &SharedZoneRecords) -> Option<String> {
 }
 
 fn claim_top_level_name(candidate: &str, claimed_lower: &mut HashSet<String>) -> String {
-    let mut name = candidate.to_owned();
-    let mut n = 2;
-    while claimed_lower.contains(&name.to_lowercase()) {
-        name = format!("{candidate} {n}");
-        n += 1;
-    }
+    let name = next_free_name(candidate, claimed_lower);
     claimed_lower.insert(name.to_lowercase());
     name
 }
@@ -416,11 +409,7 @@ pub fn build_vault_layout(
         layout.all_dirs.push(node.dir_path.clone());
     }
 
-    let mut top_level_claimed: HashSet<String> = RESERVED_TOP_LEVEL_DIR_NAMES
-        .iter()
-        .chain(RESERVED_SIBLING_DIR_NAMES)
-        .map(|n| n.to_lowercase())
-        .collect();
+    let mut top_level_claimed = reserved_names(true);
     for &root in &own_tree.roots {
         top_level_claimed.insert(own_tree.nodes[root].dir_name.to_lowercase());
     }
@@ -480,8 +469,7 @@ pub fn build_vault_layout(
                     record_name: rn.clone(),
                     title: e.name.clone(),
                     parent_record_name: e.parent_record_name.clone(),
-                    share_record_name: None,
-                    permission: e.permission.clone(),
+                    ..Default::default()
                 })
                 .collect(),
             &zone.records,
