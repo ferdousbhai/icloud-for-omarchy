@@ -56,6 +56,12 @@ impl Error {
     pub fn is_conflict(&self) -> bool {
         matches!(self, Error::CloudKit { code, .. } if code == "CONFLICT")
     }
+
+    /// CloudKit has no such record: it was removed for good (Recently
+    /// Deleted emptied) since it was last read.
+    pub fn is_missing(&self) -> bool {
+        matches!(self, Error::CloudKit { code, .. } if code == "NOT_FOUND")
+    }
 }
 
 /// One record as CloudKit sends it, or a tombstone (`deleted`, no type).

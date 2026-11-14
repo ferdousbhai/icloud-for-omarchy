@@ -131,6 +131,12 @@ impl State {
         z.records.insert(name, Stored { seq, record });
     }
 
+    /// Removes a record for good, as emptying Recently Deleted does: a
+    /// lookup or an update then answers `NOT_FOUND`.
+    pub fn purge(&self, name: &str) {
+        self.zone.lock().unwrap().records.remove(name);
+    }
+
     /// A record as the server holds it now.
     pub fn record(&self, name: &str) -> Option<Value> {
         self.zone.lock().unwrap().records.get(name).map(|s| s.record.clone())

@@ -219,8 +219,9 @@ impl<'a> Service<'a> {
     /// once more over the fresh copy: these are field-level intents (this
     /// title, completed), so they win over what they did not touch; those
     /// the fresh copy already has are dropped, and when none is left
-    /// nothing is written. Returns the reminder as saved; `None` after a
-    /// delete.
+    /// nothing is written. One removed for good meanwhile (`NOT_FOUND`) is
+    /// looked up the same way, and found gone. Returns the reminder as
+    /// saved; `None` after a delete.
     pub fn update(&self, r: &Reminder, changes: &[Change]) -> Result<Saved<Option<Reminder>>> {
         let replica = self.store.replica()?;
         let ck = CloudKit::connect(self.t)?;
@@ -229,7 +230,7 @@ impl<'a> Service<'a> {
             ck.modify(vec![op])
         };
         let records = match write(r, changes) {
-            Err(e) if e.is_conflict() => {
+            Err(e) if e.is_conflict() || e.is_missing() => {
                 let Some(fresh) = self.fetch(&r.id)? else {
                     return if changes.contains(&Change::Deleted) {
                         Ok(Saved {
@@ -278,13 +279,17 @@ fn has(r: &Reminder, change: &Change) -> bool {
 }
 
 /// The reminder `id` among the records CloudKit answered with: `Some` when
-/// live, `None` when deleted. Missing from the answer is an error.
+/// live, `None` when deleted or no longer there (`NOT_FOUND`). Missing from
+/// the answer is an error.
 fn saved_reminder(id: &str, records: &[Record]) -> Result<Option<Reminder>> {
     let rec = records
         .iter()
         .find(|r| r.name == id)
         .ok_or_else(|| Error::Other(format!("CloudKit's answer has no record {id}")))?;
     if let Some((code, reason)) = &rec.error {
+        if code == "NOT_FOUND" {
+            return Ok(None);
+        }
         return Err(Error::CloudKit {
             code: code.clone(),
             reason: reason.clone(),

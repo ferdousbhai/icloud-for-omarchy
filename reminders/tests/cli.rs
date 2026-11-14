@@ -388,6 +388,26 @@ fn a_change_to_a_reminder_deleted_elsewhere_meanwhile_is_not_found() {
 }
 
 #[test]
+fn a_reminder_removed_for_good_elsewhere_meanwhile_is_gone_not_an_error() {
+    let env = start();
+    env.json(&["list"]);
+    // Recently Deleted was emptied on the phone after our last sync: CloudKit
+    // has no such record any more.
+    env.state.purge("Reminder/REM-CALL");
+    let (exit, err) = env.fails(&["--cached", "complete", "dentist"]);
+    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
+    assert_eq!(err["message"], "\"Call the dentist\" has been deleted");
+    // The cache no longer has it.
+    let (exit, _) = env.fails(&["--cached", "show", "dentist"]);
+    assert_eq!(exit, 4);
+    // Deleting one that is already gone is done.
+    env.state.purge("Reminder/REM-EGGS");
+    let out = env.json(&["--cached", "delete", "eggs", "--yes"]);
+    assert_eq!(out["reminder"]["id"], "REM-EGGS");
+    assert!(titles(&env.json(&["--cached", "list"])).iter().all(|t| t != "Eggs"));
+}
+
+#[test]
 fn sync_pages_and_recovers_from_an_expired_token() {
     let env = start();
     *env.state.page.lock().unwrap() = 1;
