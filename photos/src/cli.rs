@@ -1011,7 +1011,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
 
     if !paths.is_empty() {
         let t = ctx.transport()?;
-        let done: RefCell<Vec<(usize, String, LibResult<upload::Uploaded>)>> =
+        let done: RefCell<Vec<(usize, LibResult<upload::Uploaded>)>> =
             RefCell::new(Vec::new());
         // Progress goes to stderr in every mode: it is not the result.
         let summary = upload::upload_batch(&*t, &paths, Duration::from_secs(60), &|| false, &|event| match event {
@@ -1029,13 +1029,13 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
                 };
                 warn(&format!("[{}/{total}] {text}", (index + 1).min(total)));
             }
-            BatchEvent::FileDone { index, name, result } => done.borrow_mut().push((index, name, result)),
-        });
+            BatchEvent::FileDone { index, result, .. } => done.borrow_mut().push((index, result)),
+        })?;
         failed += summary.failed;
         uploaded = summary.uploaded;
         duplicates = summary.duplicates;
 
-        for (index, name, result) in done.into_inner() {
+        for (index, result) in done.into_inner() {
             match result {
                 Ok(u) => {
                     new_ids.push(u.asset_id.clone());
@@ -1043,15 +1043,10 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
                 }
                 Err(e) => {
                     sign_in_lapsed |= e.is_sign_in();
-                    // An error before any file (the service unreachable) has no name.
-                    let file = paths.get(index).filter(|_| !name.is_empty());
                     if ctx.text() {
-                        warn(&format!(
-                            "error: {}: {e}",
-                            file.map_or_else(|| "upload".into(), |p| p.display().to_string())
-                        ));
+                        warn(&format!("error: {}: {e}", paths[index].display()));
                     }
-                    results.push(json!({ "file": file, "error": e.to_string() }));
+                    results.push(json!({ "file": paths[index], "error": e.to_string() }));
                 }
             }
         }
@@ -1190,15 +1185,14 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     // A failed re-sync must not lose the deletions that already went
     // through: report the conflicting items as failed instead.
     let resynced = match conflicts.then(|| sync::sync(&ck, &mut cat, false, &|_| {})) {
-        Some(Err(e)) if e.is_sign_in() => return Err(e.into()),
-        Some(Err(e)) => Err(e.to_string()),
+        Some(Err(e)) => Err(e),
         _ => Ok(()),
     };
     for (i, r) in outcome.iter_mut().enumerate() {
         match code_of(r).as_deref() {
             Some("CONFLICT") => {
                 if let Err(e) = &resynced {
-                    *r = Err(Error::Other(format!("changed on another device; re-sync failed: {e}")));
+                    *r = Err(resync_failed(e));
                     continue;
                 }
                 let fresh = row_or_fail(&cat, &rows[i].id)?;
@@ -1226,38 +1220,94 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
         }
         Ok(())
     })?;
-    let mut results = Vec::new();
-    let mut deleted = Vec::new();
-    let mut failed = 0;
+    let mut report = Changed::new(ctx, "deleted", "moved to Recently Deleted");
     for (row, result) in rows.iter().zip(outcome) {
-        match result {
-            Ok(_) => {
-                if ctx.text() {
-                    say(&format!("{}\tmoved to Recently Deleted", row.id));
-                }
-                deleted.push(row.id.clone());
-                results.push(json!({ "id": row.id, "deleted": true }));
-            }
-            Err(e) if e.is_sign_in() => return Err(e.into()),
-            Err(e) => {
-                failed += 1;
-                if ctx.text() {
-                    warn(&format!("error: {}: {e}", row.id));
-                }
-                results.push(json!({ "id": row.id, "deleted": false, "error": e.to_string() }));
-            }
+        report.item(&row.id, result);
+    }
+    report.finish(|items| format!("Moved {items} to Recently Deleted"))
+}
+
+/// A conflict's re-sync failed: the item fails (a lapsed sign-in as itself).
+fn resync_failed(e: &Error) -> Error {
+    if e.is_sign_in() {
+        Error::SignInRequired
+    } else {
+        Error::Other(format!("changed on another device; re-sync failed: {e}"))
+    }
+}
+
+/// What `delete` and `restore` report: a line per item in text mode, else
+/// `[{id, <key>: bool, error?}]` and the ids that went through; exit 1 if
+/// any item failed. A sign-in that lapsed before anything was done is the
+/// sign-in error; one that lapsed part-way keeps the report and exits 3.
+struct Changed<'a> {
+    ctx: &'a Ctx,
+    key: &'static str,
+    done: &'static str,
+    results: Vec<Value>,
+    ok: Vec<String>,
+    failed: usize,
+    signed_out: bool,
+}
+
+impl<'a> Changed<'a> {
+    fn new(ctx: &'a Ctx, key: &'static str, done: &'static str) -> Self {
+        Changed {
+            ctx,
+            key,
+            done,
+            results: Vec::new(),
+            ok: Vec::new(),
+            failed: 0,
+            signed_out: false,
         }
     }
-    let code = if failed > 0 { EXIT_ERROR } else { 0 };
-    if ctx.text() {
-        // Every line is already out.
-        return Ok(Response::silent().exit(code));
+
+    fn item(&mut self, id: &str, result: LibResult<Modified>) {
+        let mut entry = json!({ "id": id, self.key: result.is_ok() });
+        match result {
+            Ok(_) => {
+                if self.ctx.text() {
+                    say(&format!("{id}\t{}", self.done));
+                }
+                self.ok.push(id.to_owned());
+            }
+            Err(e) => {
+                self.failed += 1;
+                // Said once, with its hint, when the report ends.
+                if e.is_sign_in() {
+                    self.signed_out = true;
+                } else if self.ctx.text() {
+                    warn(&format!("error: {id}: {e}"));
+                }
+                entry["error"] = json!(e.to_string());
+            }
+        }
+        self.results.push(entry);
     }
-    let mut summary = format!("Moved {} to Recently Deleted", plural(deleted.len(), "item", "items"));
-    if failed > 0 {
-        summary.push_str(&format!("; {failed} failed"));
+
+    fn finish(self, summary: impl Fn(String) -> String) -> Res<Response> {
+        if self.signed_out && self.ok.is_empty() {
+            return Err(Error::SignInRequired.into());
+        }
+        let code = match (self.signed_out, self.failed) {
+            (true, _) => EXIT_SIGN_IN,
+            (false, 0) => 0,
+            (false, _) => EXIT_ERROR,
+        };
+        if self.ctx.text() {
+            // Every line is already out.
+            if self.signed_out {
+                classify(Error::SignInRequired.into()).report(self.ctx.mode);
+            }
+            return Ok(Response::silent().exit(code));
+        }
+        let mut summary = summary(plural(self.ok.len(), "item", "items"));
+        if self.failed > 0 {
+            summary.push_str(&format!("; {} failed", self.failed));
+        }
+        Ok(Response::new(self.results, summary).ids(self.ok).exit(code))
     }
-    Ok(Response::new(results, summary).ids(deleted).exit(code))
 }
 
 fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
@@ -1272,18 +1322,20 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
     }
     let t = ctx.transport()?;
     let ck = CloudKit::connect(&*t)?;
-    let mut results = Vec::new();
-    let mut restored = Vec::new();
-    let mut failed = 0;
+    let mut report = Changed::new(ctx, "restored", "restored");
     for row in &rows {
+        // After a lapsed sign-in nothing more is sent.
+        if report.signed_out {
+            report.item(&row.id, Err(Error::SignInRequired));
+            continue;
+        }
         let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref());
         // Changed on another device since the last sync: sync, then try
         // again with the fresh change tag, as delete does.
         // A failed re-sync fails only this item; the others are still tried.
         if matches!(&result, Err(Error::CloudKit { code, .. }) if code == "CONFLICT") {
             result = match sync::sync(&ck, &mut cat, false, &|_| {}) {
-                Err(e) if e.is_sign_in() => return Err(e.into()),
-                Err(e) => Err(Error::Other(format!("changed on another device; re-sync failed: {e}"))),
+                Err(e) => Err(resync_failed(&e)),
                 Ok(_) => {
                     let fresh = row_or_fail(&cat, &row.id)?;
                     if fresh.deleted {
@@ -1297,34 +1349,12 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
                 }
             };
         }
-        match result {
-            Ok(m) => {
-                cat.mark_restored(&row.id, m.change_tag.as_deref())?;
-                if ctx.text() {
-                    say(&format!("{}\trestored", row.id));
-                }
-                restored.push(row.id.clone());
-                results.push(json!({ "id": row.id, "restored": true }));
-            }
-            Err(e) if e.is_sign_in() => return Err(e.into()),
-            Err(e) => {
-                failed += 1;
-                if ctx.text() {
-                    warn(&format!("error: {}: {e}", row.id));
-                }
-                results.push(json!({ "id": row.id, "restored": false, "error": e.to_string() }));
-            }
+        if let Ok(m) = &result {
+            cat.mark_restored(&row.id, m.change_tag.as_deref())?;
         }
+        report.item(&row.id, result);
     }
-    let code = if failed > 0 { EXIT_ERROR } else { 0 };
-    if ctx.text() {
-        return Ok(Response::silent().exit(code));
-    }
-    let mut summary = format!("Restored {}", plural(restored.len(), "item", "items"));
-    if failed > 0 {
-        summary.push_str(&format!("; {failed} failed"));
-    }
-    Ok(Response::new(results, summary).ids(restored).exit(code))
+    report.finish(|items| format!("Restored {items}"))
 }
 
 fn prune(ctx: &Ctx) -> Res<Response> {

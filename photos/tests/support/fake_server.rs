@@ -46,6 +46,8 @@ struct State {
     /// Changed records, in order; the sync token is "tok-<len>".
     log: Vec<Value>,
     signed_out: bool,
+    /// Sign out once this many more `records/modify` requests were answered.
+    sign_out_after_modifies: Option<usize>,
     /// Answer 503 to the listings a sync makes (`changes/zone`, `records/query`).
     listings_down: bool,
     uploads: HashMap<String, Arc<Vec<u8>>>,
@@ -94,6 +96,11 @@ impl FakeServer {
     /// Answer 421 to every Apple call until `/mock/reauthenticate`.
     pub fn sign_out(&self) {
         self.state.lock().unwrap().signed_out = true;
+    }
+
+    /// Answer `n` more `records/modify` requests, then sign out.
+    pub fn sign_out_after_modifies(&self, n: usize) {
+        self.state.lock().unwrap().sign_out_after_modifies = Some(n);
     }
 
     /// Make every sync fail with a 503 (writes still go through) until called with false.
@@ -206,6 +213,7 @@ impl State {
             members,
             log: Vec::new(),
             signed_out: false,
+            sign_out_after_modifies: None,
             listings_down: false,
             uploads: HashMap::new(),
             jpegs: HashMap::new(),
@@ -585,7 +593,16 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
             }
             "changes/zone" => json_ok(s.changes(&body)),
             "records/lookup" => json_ok(s.lookup(&body)),
-            "records/modify" => json_ok(s.modify(&body)),
+            "records/modify" => {
+                let answer = s.modify(&body);
+                if let Some(left) = s.sign_out_after_modifies.as_mut() {
+                    *left = left.saturating_sub(1);
+                    if *left == 0 {
+                        (s.signed_out, s.sign_out_after_modifies) = (true, None);
+                    }
+                }
+                json_ok(answer)
+            }
             _ => (404, "application/json", br#"{"serverErrorCode":"NOT_FOUND"}"#.to_vec()),
         },
         _ => (404, "text/plain", b"not found".to_vec()),

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use icloud_photos::transport::Error;
 use icloud_photos::upload::{Step, Uploader, local_time_zone};
-use serde_json::{Value, json};
+use serde_json::json;
 use support::{FixtureTransport, UPLOAD_ROOT, fixture, temp_dir};
 
 const CLIENT: &str = "11111111-2222-3333-4444-555555555555";
@@ -197,5 +197,37 @@ fn a_missing_reservation_is_an_error() {
         .upload(&photo("noslot"), CLIENT, &|_| {})
         .unwrap_err();
     assert!(err.to_string().contains("upload URL"));
-    let _ = Value::Null;
+}
+
+#[test]
+fn a_batch_that_cannot_reach_the_upload_service_is_that_error() {
+    use icloud_photos::transport::{Result, Transport};
+    use icloud_photos::upload::upload_batch;
+    struct NoUpload;
+    impl Transport for NoUpload {
+        fn service_url(&self, key: &str) -> Result<String> {
+            Err(Error::NotOffered(key.into()))
+        }
+        fn post_json(&self, _: &str, _: &serde_json::Value) -> Result<serde_json::Value> {
+            panic!("nothing may be sent")
+        }
+        fn post_file(&self, _: &str, _: &str, _: &std::path::Path) -> Result<serde_json::Value> {
+            panic!("nothing may be sent")
+        }
+        fn download(&self, _: &str, _: &std::path::Path) -> Result<u64> {
+            panic!("nothing may be sent")
+        }
+    }
+    let file = photo("unreachable");
+    let events = Mutex::new(0);
+    let err = upload_batch(
+        &NoUpload,
+        &[file.to_path_buf()],
+        std::time::Duration::ZERO,
+        &|| false,
+        &|_| *events.lock().unwrap() += 1,
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::NotOffered(_)), "{err:?}");
+    assert_eq!(*events.lock().unwrap(), 0, "no file was started");
 }

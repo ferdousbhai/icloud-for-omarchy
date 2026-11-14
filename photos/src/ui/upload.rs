@@ -15,7 +15,8 @@ use super::window::{App, Msg};
 
 pub enum UploadMsg {
     Event(BatchEvent),
-    Finished(BatchSummary),
+    /// The batch is over; an error is the upload service not reached at all.
+    Finished(icloud_photos::transport::Result<BatchSummary>),
 }
 
 pub struct UploadUi {
@@ -185,19 +186,27 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
                 app.fail("Upload failed", &e);
                 return;
             }
-            ui.errors.push(if name.is_empty() {
-                e.to_string()
-            } else {
-                format!("{name}: {e}")
-            });
+            ui.errors.push(format!("{name}: {e}"));
         }
         UploadMsg::Event(BatchEvent::FileDone { .. }) => {}
-        UploadMsg::Finished(BatchSummary {
-            uploaded,
-            duplicates,
-            failed,
-            stopped,
-        }) => {
+        UploadMsg::Finished(result) => {
+            let mut sign_in = None;
+            let BatchSummary {
+                uploaded,
+                duplicates,
+                failed,
+                stopped,
+            } = result.unwrap_or_else(|e| {
+                if e.is_sign_in() {
+                    sign_in = Some(e);
+                } else {
+                    ui.errors.push(e.to_string());
+                }
+                BatchSummary {
+                    failed: ui.total,
+                    ..Default::default()
+                }
+            });
             ui.progress.set_fraction(1.0);
             let mut lines = vec![match uploaded {
                 1 => "1 item uploaded.".to_owned(),
@@ -225,6 +234,9 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
                 a.upload.borrow_mut().take();
             });
             drop(guard);
+            if let Some(e) = sign_in {
+                app.fail("Upload failed", &e);
+            }
             if uploaded > 0 {
                 // CloudKit takes ~15-20 s to make new assets queryable.
                 app.sync();

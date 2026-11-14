@@ -386,13 +386,11 @@ fn thumb_and_download() {
     assert_eq!(env.json(&["info", &photo])["local_path"], Value::Null);
     // One already in the library is copied out, video and all, and the
     // catalog keeps the library's paths. Again: the same files, no "(2)".
-    let (mut p, mut v) = (PathBuf::new(), PathBuf::new());
+    let mut p = PathBuf::new();
     for _ in 0..2 {
         let r = env.json(&["download", &live, "--out", dir.to_str().unwrap()]);
-        (p, v) = (
-            PathBuf::from(r[0]["path"].as_str().unwrap()),
-            PathBuf::from(r[0]["live_path"].as_str().unwrap()),
-        );
+        p = PathBuf::from(r[0]["path"].as_str().unwrap());
+        let v = PathBuf::from(r[0]["live_path"].as_str().unwrap());
         assert_eq!(p.strip_prefix(&dir).unwrap(), paths[0].strip_prefix(&library).unwrap());
         assert_eq!(v.strip_prefix(&dir).unwrap(), paths[1].strip_prefix(&library).unwrap());
         assert_eq!(std::fs::read(&p).unwrap(), std::fs::read(&paths[0]).unwrap());
@@ -783,6 +781,37 @@ fn a_failed_resync_still_reports_what_was_deleted_or_restored() {
 
     env.server.fail_syncs(false);
     assert_eq!(env.json(&["restore", &ids[0]])[0]["restored"], true);
+}
+
+#[test]
+fn a_sign_in_that_lapses_part_way_keeps_the_report_and_exits_3() {
+    let env = Env::synced("restore-lapse", 4);
+    let ids = env.ids(&[]);
+    env.json(&["delete", &ids[0], &ids[1], &ids[2], "--yes"]);
+    // The first restore goes through, then the account is signed out.
+    env.server.sign_out_after_modifies(1);
+    let r = env.run(&["--json", "restore", &ids[0], &ids[1], &ids[2]]);
+    assert_eq!(r.code, 3, "{}", r.stdout);
+    let v = r.json();
+    let got: Vec<Option<bool>> = (0..3).map(|i| v[i]["restored"].as_bool()).collect();
+    assert_eq!(got, [Some(true), Some(false), Some(false)], "{v}");
+    assert!(v[1]["error"].as_str().unwrap().contains("sign in"), "{v}");
+    assert_eq!(env.json(&["info", &ids[0]])["deleted"], false);
+    assert_eq!(env.json(&["info", &ids[1]])["deleted"], true);
+    // Text mode: the line for what was done, then the sign-in error and its hint.
+    env.run(&["sign-in"]);
+    env.server.sign_out_after_modifies(1);
+    let r = env.styled(&["restore", &ids[1], &ids[2]]);
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert_eq!(r.stdout.trim(), format!("{}\trestored", ids[1]));
+    assert!(
+        r.stderr.starts_with("error:") && r.stderr.contains("\nhint: run `icloud-session sign-in`"),
+        "{}",
+        r.stderr
+    );
+    // Nothing done at all is the sign-in error alone.
+    let r = env.run(&["--json", "restore", &ids[2]]);
+    assert_eq!(error_doc(&r)["error"]["code"], "sign_in_required");
 }
 
 #[test]

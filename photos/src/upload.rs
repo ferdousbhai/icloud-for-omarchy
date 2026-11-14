@@ -274,8 +274,7 @@ pub enum BatchEvent {
         name: String,
         step: Step,
     },
-    /// File `index` is done. When the upload service cannot be reached at
-    /// all, one event with an empty `name` carries that error.
+    /// File `index` is done.
     FileDone {
         index: usize,
         name: String,
@@ -297,28 +296,18 @@ pub struct BatchSummary {
 /// Upload `paths` one after another (each with a fresh client UUID), then
 /// wait up to `ingest_timeout` for iCloud to ingest the new ones. A lapsed
 /// sign-in fails the rest of the batch. `should_stop` is asked before each
-/// file. The app's upload dialog and `icloud-photos upload` both run this.
+/// file. An error is the upload service not reached at all, before any file.
+/// The app's upload dialog and `icloud-photos upload` both run this.
 pub fn upload_batch(
     t: &dyn Transport,
     paths: &[PathBuf],
     ingest_timeout: Duration,
     should_stop: &dyn Fn() -> bool,
     on: &dyn Fn(BatchEvent),
-) -> BatchSummary {
+) -> Result<BatchSummary> {
     let total = paths.len();
     let mut summary = BatchSummary::default();
-    let up = match Uploader::connect(t) {
-        Ok(u) => u,
-        Err(e) => {
-            on(BatchEvent::FileDone {
-                index: 0,
-                name: String::new(),
-                result: Err(e),
-            });
-            summary.failed = total;
-            return summary;
-        }
-    };
+    let up = Uploader::connect(t)?;
     let mut jobs = Vec::new();
     for (index, path) in paths.iter().enumerate() {
         if should_stop() {
@@ -363,7 +352,7 @@ pub fn upload_batch(
             })
         });
     }
-    summary
+    Ok(summary)
 }
 
 /// Is this a file iCloud Photos takes?

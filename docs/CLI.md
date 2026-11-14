@@ -534,6 +534,10 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
 - `delete` moves items to Recently Deleted, on every device. One that
   conflicts with a change made on another device syncs and tries once more,
   as the app does.
+- `delete` and `restore`: when the sign-in lapses part-way through, the
+  report of what was done is still printed (each item not done carries the
+  error) and the exit code is 3; with nothing done it is the plain
+  `sign_in_required` error.
 - `wallpaper` on a video is a usage error.
 - `prune-cache` drops cached previews of deleted items and trims the
   preview cache.
