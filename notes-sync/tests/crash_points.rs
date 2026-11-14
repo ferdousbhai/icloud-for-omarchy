@@ -2257,3 +2257,27 @@ fn a_clone_cut_short_before_notes_it_wrote_were_moved_or_deleted_on_the_phone_is
     };
     crash_everywhere(&start, "clone", &[Then::Again, Then::Sync]);
 }
+
+/// A note the owner of a shared folder added, and the share revoked while a
+/// pull writing it was cut short: nothing of it goes up into the account's
+/// own notes, neither the note nor a folder for the directory it was in.
+#[test]
+fn a_pull_cut_short_before_a_share_it_wrote_a_note_from_was_revoked_is_finished_by_the_next_run() {
+    let mut start = cloned_from(shared_account());
+    let folder = format!("SF{}", &WRITABLE_OWNER[1..9]);
+    start.zone.shared.get_mut(WRITABLE_OWNER).unwrap().put(note_record(
+        "C0000000-0000-4000-8000-000000000009",
+        "Owner's new\nfrom the owner",
+        &folder,
+    ));
+    fn revoke(zone: &mut Zone) {
+        zone.revoked.insert(WRITABLE_OWNER.into());
+    }
+    let mut after = start.zone.clone();
+    revoke(&mut after);
+    start.expect.kept = kept_notes(&after);
+    start.expect.between = Some(revoke);
+    // (A sync straight away fails its push half once, on the lookup in the
+    // zone that is gone; its pull half settles it.)
+    crash_everywhere(&start, "pull", &[Then::Again]);
+}

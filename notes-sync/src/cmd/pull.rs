@@ -893,10 +893,15 @@ pub fn run_pull_with(
         summary.changes.push(change);
     }
     let current: HashSet<String> = layout.all_dirs.iter().cloned().collect();
-    remove_stale_dirs(target_dir, &previous_layout_dirs(PreviousLayout::of(&state)), &current);
     // And what a pull cut short made for a name no folder has now, left
     // empty (left there, the next push would make it a folder).
-    remove_stale_dirs(target_dir, &old_pending.keys().cloned().collect::<Vec<_>>(), &current);
+    let mut stale_dirs = previous_layout_dirs(PreviousLayout::of(&state));
+    stale_dirs.extend(old_pending.keys().cloned());
+    stale_dirs.retain(|dir| !dir.is_empty() && !current.contains(dir));
+    if let Err(e) = remove_left_in_stale_dirs(target_dir, &stale_dirs, &tracked.notes, title_mode) {
+        failure.get_or_insert(e);
+    }
+    remove_stale_dirs(target_dir, &stale_dirs, &current);
 
     let failed = failure.is_some();
     // A shared zone is listed again only from the old listing cursor.
@@ -1463,6 +1468,45 @@ fn handle_remote_deletion(
         let mut change = PullChange::new(PullChangeKind::Untrack, file);
         change.remarks = Some(vec![PullChangeRemark::new("note", remark.clone())]);
         summary.changes.push(change);
+    }
+    Ok(())
+}
+
+/// Removes from `dirs`, directories no folder has now, the note files a
+/// pull cut short wrote that no one touched since: files carrying the id
+/// of a note nothing tracks, whose base copy (which such a pull writes
+/// first) reads as their body. Their note was not written again by this
+/// pull (it would have taken the file up, or removed it as written
+/// elsewhere), so it is gone for this account: deleted, or in a share
+/// revoked since. Left there, the file would keep the directory, which the
+/// next push would make a folder in the account's own notes.
+fn remove_left_in_stale_dirs(
+    target_dir: &Path,
+    dirs: &[String],
+    notes: &IndexMap<String, NoteEntry>,
+    title_mode: TitleMode,
+) -> Result<(), Error> {
+    for dir in dirs {
+        for name in file_names_in(&target_dir.join(dir))? {
+            if !name.ends_with(".md") || super::push::is_sync_conflict_name(&name) {
+                continue;
+            }
+            let path = target_dir.join(dir).join(&name);
+            let Some(text) = read_text(&path)? else {
+                continue;
+            };
+            let envelope = split_frontmatter(&text, split_options(title_mode));
+            let Some(id) = read_note_id(&envelope.frontmatter) else {
+                continue;
+            };
+            if is_plain_record_name(&id)
+                && !notes.contains_key(&id)
+                && read_base_copy(target_dir, &id)?.as_deref() == Some(envelope.body.as_str())
+            {
+                safe_unlink(&path)?;
+                remove_base_copy(target_dir, &id)?;
+            }
+        }
     }
     Ok(())
 }

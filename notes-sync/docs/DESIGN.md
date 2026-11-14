@@ -264,6 +264,12 @@ window closes, so a killed run is ordinary.
   nothing tracks that reads as the file's body says exactly that
   (`push::left_by_a_pull_unchanged`). A file edited since, or put back
   from a backup after the note was deleted from here, is pushed as before.
+  A pull removes such a file too, without asking iCloud, from a directory
+  no folder has any more (the folder deleted or renamed, or the share
+  revoked, since): its note was not written again by that pull, so it is
+  gone for this account, and the file would keep the directory for the
+  next push to make a folder of in the account's own notes
+  (`pull::remove_left_in_stale_dirs`).
 - A pull that lays out a folder new to the vault (or a folder's new name)
   first lists the directories it is about to make in state.json's
   `pendingDirs`, and the state it saves once every note is where the
