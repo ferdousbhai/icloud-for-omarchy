@@ -60,6 +60,7 @@ const QString kOfflineMessage = QStringLiteral("Offline. Notes syncs again once 
 // off PATH, in kSyncToolPath; see NotesBackend::syncToolPath.
 constexpr char kSyncTool[] = "icloud-notes-sync";
 constexpr char kSyncToolPath[] = "/usr/lib/icloud-notes/icloud-notes-sync";
+const QString kChangedOnDiskMessage = QStringLiteral("The note changed on disk. Look it over, then try again.");
 const QString kNotInstalledMessage =
     QStringLiteral("The sync engine (icloud-notes-sync) is missing. Reinstall icloud-notes to sync.");
 
@@ -1470,14 +1471,16 @@ QString NotesBackend::deleteCurrentNote()
 
 QString NotesBackend::renameCurrentNote(const QString &title)
 {
-    const QString clean = sanitized(title);
+    const bool filename = vaultTitleMode() == u"filename";
+    // A file name cannot hold a slash; a title line can ("Q1/Q2 plan").
+    const QString clean = filename ? sanitized(title) : title.trimmed().remove(u'\0');
     if (m_currentNote.isEmpty())
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
         return QStringLiteral("This note is read-only here. Rename it in Apple Notes.");
     if (clean.isEmpty())
         return QStringLiteral("Title is empty.");
-    if (vaultTitleMode() == u"filename") {
+    if (filename) {
         // The file name IS the title: renaming the file retitles the note.
         const QString target = clean.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive)
             ? clean
@@ -1495,6 +1498,8 @@ QString NotesBackend::renameCurrentNote(const QString &title)
         emit currentNoteChanged();
     } else {
         // In-body vaults carry the title in the first line: retitle that line.
+        if (noteChangedOnDisk())
+            return kChangedOnDiskMessage;
         const QString updated = SyncModel::retitleInBody(m_noteContent, clean);
         // A title line that holds an attachment's link: replacing it would
         // remove the attachment in iCloud, which nothing does unasked.
@@ -1537,6 +1542,17 @@ QString NotesBackend::moveCurrentNote(const QString &folder)
     rewatch();
     emit vaultChanged();
     return {};
+}
+
+// Only the version on screen is replaced: when the open note's file holds
+// something else by now (another program, a pull), that is shown first and
+// the caller refuses with kChangedOnDiskMessage.
+bool NotesBackend::noteChangedOnDisk()
+{
+    if (readText(noteAbsolutePath()) == m_noteContent)
+        return false;
+    refresh();
+    return true;
 }
 
 QVariantList NotesBackend::noteConflicts() const
@@ -1613,11 +1629,8 @@ QVariantMap NotesBackend::recoverConflictedNote(const QString &how)
         return fail(QStringLiteral("Wait for the sync to finish, then try again."));
     if (!noteConflictsUnreadable())
         return fail(QStringLiteral("This note has no unreadable conflict markers."));
-    // Only the version on screen is replaced: a newer one is shown first.
-    if (readText(path) != m_noteContent) {
-        refresh();
-        return fail(QStringLiteral("The note changed on disk. Look it over, then try again."));
-    }
+    if (noteChangedOnDisk())
+        return fail(kChangedOnDiskMessage);
     const SyncModel::EnvelopeSplit split = SyncModel::splitEnvelope(m_noteContent);
     QString body;
     if (how == u"strip") {
@@ -1661,6 +1674,8 @@ QString NotesBackend::resolveConflicts(const QStringList &choices)
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
         return QStringLiteral("This note is read-only here. Resolve it in Apple Notes.");
+    if (noteChangedOnDisk())
+        return kChangedOnDiskMessage;
     const QString resolved = SyncModel::resolveConflicts(m_noteContent, choices);
     if (resolved == m_noteContent)
         return QStringLiteral("Choose a version for every change first.");

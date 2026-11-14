@@ -496,6 +496,11 @@ ApplicationWindow {
             titleField.text = titleField.current;
             return;
         }
+        if (backend.syncRunning) { // as the toolbar's buttons: never under a running sync
+            notice = "Wait for the sync to finish, then rename the note.";
+            titleField.text = titleField.current;
+            return;
+        }
         var err = backend.renameCurrentNote(title);
         if (err.length > 0) {
             notice = err;
@@ -1658,7 +1663,7 @@ ApplicationWindow {
     }
 
     Shortcut { sequences: [StandardKey.Save]; onActivated: root.save() }
-    Shortcut { sequence: "Ctrl+N"; onActivated: newNoteDialog.open() }
+    Shortcut { sequence: "Ctrl+N"; enabled: !backend.syncRunning; onActivated: newNoteDialog.open() }
     Shortcut { sequence: "Ctrl+B"; onActivated: root.wrapSelection("**", "**") }
     Shortcut { sequence: "Ctrl+I"; onActivated: root.wrapSelection("*", "*") }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.insertLink() }

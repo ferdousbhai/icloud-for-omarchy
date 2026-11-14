@@ -489,6 +489,17 @@ int main(int argc, char *argv[])
               "backend conflict context");
     }
     check(!b.resolveConflicts({}).isEmpty(), "backend resolve needs a choice");
+    {
+        // Only the version on screen is resolved: a newer one on disk is shown first.
+        const QString loaded = readFile(QStringLiteral("C.md"));
+        const QString newer = QString(loaded).replace(QStringLiteral("theirs"), QStringLiteral("theirs, newer"));
+        writeFile(QStringLiteral("C.md"), newer);
+        check(!b.resolveConflicts({ QStringLiteral("remote") }).isEmpty() && readFile(QStringLiteral("C.md")) == newer
+                  && b.noteContent() == newer,
+              "backend resolve never writes over a change on disk");
+        writeFile(QStringLiteral("C.md"), loaded);
+        b.refresh();
+    }
     check(b.resolveConflicts({ QStringLiteral("remote") }).isEmpty(), "backend resolve ok");
     check(readFile(QStringLiteral("C.md")) == QStringLiteral("# C\nsame\ntheirs\nend\n"), "backend resolve writes the pick");
     check(b.noteConflicts().isEmpty() && !hasFlag(b, QStringLiteral("C.md"), "conflict"), "backend resolve clears the conflict");
@@ -671,6 +682,18 @@ int main(int argc, char *argv[])
 
     // In-body rename retitles the first line, keeping the envelope.
     b.openNote(QStringLiteral("A.md"));
+    {
+        const QString loaded = readFile(QStringLiteral("A.md"));
+        writeFile(QStringLiteral("A.md"), loaded + QStringLiteral("from elsewhere\n"));
+        check(!b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty()
+                  && readFile(QStringLiteral("A.md")) == loaded + QStringLiteral("from elsewhere\n"),
+              "backend rename never writes over a change on disk");
+        writeFile(QStringLiteral("A.md"), loaded);
+        b.refresh();
+        check(b.renameCurrentNote(QStringLiteral("Q1/Q2 plan")).isEmpty()
+                  && b.noteContent().startsWith(QStringLiteral("---\napple-note-id: id-a\n---\n# Q1/Q2 plan\n")),
+              "backend rename keeps a slash in a title line");
+    }
     check(b.renameCurrentNote(QStringLiteral("Renamed")).isEmpty(), "backend rename ok");
     check(b.noteContent().startsWith(QStringLiteral("---\napple-note-id: id-a\n---\n# Renamed\n")),
           "backend rename retitles line");

@@ -250,9 +250,9 @@ public:
     Q_INVOKABLE QString renameCurrentNote(const QString &title);
     // Move the open note to another existing folder (vault-relative, ""
     // for the root), as a mv on disk does: the next push moves it in Notes.
-    // Refused for a read-only note, one with attachments (their links are
-    // relative to its folder) and a name the folder already has. For the
-    // command line; the window has no move.
+    // Refused for a read-only note and a name the folder already has; a
+    // note's attachment files follow it at the next push. For the command
+    // line; the window has no move.
     QString moveCurrentNote(const QString &folder);
     // Keep one side of each conflict block ("local", "remote" or "both").
     Q_INVOKABLE QString resolveConflicts(const QStringList &choices);
@@ -402,6 +402,7 @@ private:
     QString findNoteById(const QString &id) const;
     bool followNote(const QString &id);
     void loseCurrentNote();
+    bool noteChangedOnDisk();
     bool keepEditsAsNewNote(const QString &mine, const QString &why);
     QString syncedCopyPath() const;
     void writeQueuedSave();
