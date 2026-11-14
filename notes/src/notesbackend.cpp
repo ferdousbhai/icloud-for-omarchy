@@ -153,7 +153,7 @@ double readUiScale()
 // A link: its text (brackets in it escaped), then (attachments/...).
 const QRegularExpression &attachmentLinkRe()
 {
-    static const QRegularExpression re(QStringLiteral(R"(!?\[(?:\\.|[^\]\\\n])*\]\((attachments/[^)\s]+)\))"));
+    static const QRegularExpression re(QStringLiteral(R"(!?\[(?:\\.|[^\]\\\n])*\]\((attachments/(?:[^()\s]|\((?:[^()\s]|\([^()\s]*\))*\))+)\))"));
     return re;
 }
 
@@ -1189,9 +1189,20 @@ QString NotesBackend::attachmentLink(const QString &name)
     }
     const int dot = name.lastIndexOf(u'.');
     const bool image = dot > 0 && embedded.contains(name.mid(dot + 1).toLower());
+    // Parentheses that pair up stay as they are ("photo (1).png"); ones
+    // that don't would end the link early, so they are encoded.
+    int depth = 0;
+    bool paired = true;
+    for (const QChar c : name) {
+        if (c == u'(')
+            ++depth;
+        else if (c == u')' && --depth < 0)
+            paired = false;
+    }
+    paired = paired && depth == 0;
     return QStringLiteral("%1[%2](attachments/%3)")
         .arg(image ? QStringLiteral("!") : QString(), text,
-             QString::fromLatin1(QUrl::toPercentEncoding(name, QByteArrayLiteral("!*'()"))));
+             QString::fromLatin1(QUrl::toPercentEncoding(name, paired ? QByteArrayLiteral("!*'()") : QByteArrayLiteral("!*'"))));
 }
 
 QVariantMap NotesBackend::addAttachment(const QString &source)

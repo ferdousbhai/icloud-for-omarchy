@@ -272,10 +272,23 @@ fn scan_attachment_links(units: &[u16]) -> AttachmentLinkScan {
             i += 1;
             continue;
         }
-        let length = units[href_start..]
-            .iter()
-            .position(|&u| u == u16::from(b')') || is_whitespace16(u))
-            .filter(|&length| is(href_start + length, b')'));
+        // The target runs to the `)` that closes the link: parentheses
+        // inside it pair up ("photo (1).png"), as Markdown reads them.
+        let mut depth = 0usize;
+        let mut length = None;
+        for (at, &unit) in units[href_start..].iter().enumerate() {
+            if unit == u16::from(b'(') {
+                depth += 1;
+            } else if unit == u16::from(b')') {
+                if depth == 0 {
+                    length = Some(at);
+                    break;
+                }
+                depth -= 1;
+            } else if is_whitespace16(unit) {
+                break;
+            }
+        }
         let (Some(length), true) = (length, one_line) else {
             scan.unreadable.push(i);
             i = href_start;
@@ -348,16 +361,33 @@ fn unescaped_attachment_markdown(reference: &AttachmentReference, relative_file:
 }
 
 fn attachment_link(reference: &AttachmentReference, relative_file: &str, display_name: &str) -> String {
-    let href = relative_file
+    let mut href = relative_file
         .split('/')
         .map(encode_uri_component)
         .collect::<Vec<_>>()
         .join("/");
+    // Parentheses that don't pair up would end the link early.
+    if !parentheses_pair_up(&href) {
+        href = href.replace('(', "%28").replace(')', "%29");
+    }
     if is_image_uti(&reference.type_uti) {
         format!("![{display_name}]({href})")
     } else {
         format!("[{display_name}]({href})")
     }
+}
+
+fn parentheses_pair_up(text: &str) -> bool {
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 0 => return false,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// `renderPlaceholders`: substitute each U+FFFC in order.
@@ -588,10 +618,19 @@ pub fn plan_embed_representations(
                 // A GIF or WebP pulled before those counted as images is
                 // still linked as a file, without the `!`.
                 let as_file = |link: &str| link.strip_prefix('!').and_then(|link| find(utf16(link)));
+                // A name whose parentheses don't pair up was linked with
+                // them as they are, before they were percent-encoded.
+                let bare_parentheses = |link: &str| {
+                    (link.contains("%28") || link.contains("%29"))
+                        .then(|| link.replace("%28", "(").replace("%29", ")"))
+                        .and_then(|link| find(utf16(&link)))
+                };
                 let Some((start, length)) = find(utf16(&written))
                     .or_else(|| find(utf16(&unescaped)))
                     .or_else(|| as_file(&written))
                     .or_else(|| as_file(&unescaped))
+                    .or_else(|| bare_parentheses(&written))
+                    .or_else(|| bare_parentheses(&unescaped))
                 else {
                     if !links_to(&units, link_path) {
                         // No link to the file is left: the attachment is

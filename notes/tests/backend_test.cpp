@@ -331,6 +331,11 @@ int main(int argc, char *argv[])
         check(readFile(QStringLiteral("G.md")) == g, "backend asking for a warning writes nothing");
 
         // The link's removal as `detach` makes it.
+        check(NotesBackend::withoutAttachmentLink(QStringLiteral("a\n![shot (1).png](attachments/shot%20(1).png)\nb\n"), QStringLiteral("shot (1).png"))
+                      == QStringLiteral("a\nb\n")
+                  && NotesBackend::withoutAttachmentLink(QStringLiteral("a\n[odd).pdf](attachments/odd%29.pdf)\nb\n"), QStringLiteral("odd).pdf"))
+                         == QStringLiteral("a\nb\n"),
+              "detach: a name with parentheses is found and its link taken out");
         check(NotesBackend::withoutAttachmentLink(body, QStringLiteral("pic.png")) == QStringLiteral("# Pics\n") + pdf
                   && NotesBackend::withoutAttachmentLink(body, QStringLiteral("my notes.pdf")) == QStringLiteral("# Pics\n") + pic
                   && NotesBackend::withoutAttachmentLink(body, QStringLiteral("other-note.png")) == body
@@ -1499,6 +1504,9 @@ int main(int argc, char *argv[])
         check(second.value(QStringLiteral("link")).toString() == QStringLiteral("![shot 2.gif](attachments/shot%202.gif)"),
               "attach: a second file of the same name gets a free one");
         check(readFile(QStringLiteral("Att.md")) == note, "attach: the note's text is left to the editor");
+        check(NotesBackend::attachmentLink(QStringLiteral("shot (1).png")) == QStringLiteral("![shot (1).png](attachments/shot%20(1).png)")
+                  && NotesBackend::attachmentLink(QStringLiteral("odd).pdf")) == QStringLiteral("[odd).pdf](attachments/odd%29.pdf)"),
+              "attach: parentheses that pair up stay in the link, others are encoded");
         check(app.addAttachment(scratch.path() + QStringLiteral("/none.pdf")).value(QStringLiteral("code")).toString() == QStringLiteral("not_found"),
               "attach: a missing file is refused");
         check(app.localFile(QUrl::fromLocalFile(source)) == source && app.localFile(QUrl(QStringLiteral("https://example.com/a.png"))).isEmpty(),
