@@ -19,6 +19,7 @@
 #include <QStringList>
 #include <QVariant>
 #include <memory>
+#include <utility>
 
 class QDBusMessage;
 class QDBusServiceWatcher;
@@ -251,6 +252,11 @@ public:
     // The sync guardrails alone: text that adds conflict markers, or an
     // apple-note-id another note of the folder carries.
     QString guardrailWarning(const QString &body);
+    // The class of the last refusal from the calls below that answer with a
+    // message (rename, move, delete, resolve, the folder ones, exportPdf),
+    // for a caller that branches on it (the command line): "read_only",
+    // "exists", "usage" (a name sync skips), else "error". Read once.
+    QString takeRefusal() { return std::exchange(m_refusal, QStringLiteral("error")); }
     Q_INVOKABLE void newNote(const QString &name);
     Q_INVOKABLE QString deleteCurrentNote();
     Q_INVOKABLE QString renameCurrentNote(const QString &title);
@@ -265,7 +271,9 @@ public:
     // A note with unreadable conflict markers: "strip" keeps every line
     // but the markers, "synced" goes back to the last synced text. The
     // file is first copied, byte for byte, under conflictBackupDir();
-    // without that copy nothing is replaced. {ok, message, backup}.
+    // without that copy nothing is replaced. {ok, message, backup}, or
+    // {ok: false, code, message} (code: read_only, no_conflicts,
+    // no_synced_copy or error).
     Q_INVOKABLE QVariantMap recoverConflictedNote(const QString &how);
     static QString conflictBackupDir();
     Q_INVOKABLE void newFolder(const QString &name);
@@ -405,6 +413,11 @@ private:
     void showNote(const QString &folder, const QString &name);
     void loseCurrentNote();
     bool noteChangedOnDisk();
+    QString refuse(const char *code, const QString &message)
+    {
+        m_refusal = QLatin1StringView(code);
+        return message;
+    }
     bool keepEditsAsNewNote(const QString &mine, const QString &why);
     QString syncedCopyPath() const;
     void writeQueuedSave();
@@ -463,6 +476,7 @@ private:
     QVariantMap m_noteDetails;
     QString m_currentNote;
     QString m_noteContent;
+    QString m_refusal = QStringLiteral("error"); // see takeRefusal
     // The open note as it was when its file went away (see loseCurrentNote).
     struct LostNote {
         QString folder;

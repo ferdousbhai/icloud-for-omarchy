@@ -1394,16 +1394,12 @@ Result write(NotesBackend &b, const Args &a)
                  changed ? QStringLiteral("Wrote %1").arg(relPath(b)) : QStringLiteral("%1 unchanged").arg(relPath(b)) };
 }
 
-// A backend error string as a failure with a code a caller can branch on.
-Failure backendFailure(const QString &message)
+// A refusal of the backend's (its message, and the class it gave it) as a
+// failure with a code a caller can branch on.
+Failure backendFailure(const QString &code, const QString &message)
 {
-    if (message.contains(QStringLiteral("skipped by sync")))
+    if (code == u"usage")
         return usageError(message);
-    QString code = QStringLiteral("error");
-    if (message.contains(QStringLiteral("read-only")))
-        code = QStringLiteral("read_only");
-    else if (message.contains(QStringLiteral("already exists")))
-        code = QStringLiteral("exists");
     return { code, message, code == u"exists" ? kExitUsage : kExitError, {} };
 }
 
@@ -1414,7 +1410,7 @@ Result rename(NotesBackend &b, const Args &a)
         return *f;
     const QString err = b.renameCurrentNote(a.positional.at(1));
     if (!err.isEmpty())
-        return backendFailure(err);
+        return backendFailure(b.takeRefusal(), err);
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("rename") },
                               { QStringLiteral("path"), relPath(b) },
                               { QStringLiteral("from"), n.path() },
@@ -1432,7 +1428,7 @@ Result move(NotesBackend &b, const Args &a)
         return *f;
     const QString err = b.moveCurrentNote(folder);
     if (!err.isEmpty())
-        return backendFailure(err);
+        return backendFailure(b.takeRefusal(), err);
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("move") },
                               { QStringLiteral("path"), relPath(b) },
                               { QStringLiteral("from"), n.path() } },
@@ -1450,7 +1446,7 @@ Result deleteNote(NotesBackend &b, const Args &a)
         return *f;
     const QString err = b.deleteCurrentNote();
     if (!err.isEmpty())
-        return backendFailure(err);
+        return backendFailure(b.takeRefusal(), err);
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("delete") }, { QStringLiteral("path"), n.path() } },
                  QStringLiteral("Moved %1 to the trash").arg(n.path()) };
 }
@@ -1465,7 +1461,8 @@ Result toggle(NotesBackend &b, const Args &a)
     if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     if (!b.readOnlyReason().isEmpty())
-        return backendFailure(QStringLiteral("This note is read-only here: it %1").arg(b.readOnlyReason()));
+        return Failure{ QStringLiteral("read_only"), QStringLiteral("This note is read-only here: it %1").arg(b.readOnlyReason()),
+                        kExitError, {} };
     const QString body = b.noteBody();
     const QString toggled = b.toggleCheckbox(body, line - 1);
     if (toggled == body)
@@ -1568,7 +1565,7 @@ Result resolve(NotesBackend &b, const Args &a)
                         kExitUsage, QStringLiteral("`icloud-notes read NOTE --json` lists the blocks.") };
     const QString err = b.resolveConflicts(picked);
     if (!err.isEmpty())
-        return backendFailure(err);
+        return backendFailure(b.takeRefusal(), err);
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("resolve") },
                               { QStringLiteral("path"), relPath(b) },
                               { QStringLiteral("choices"), QJsonArray::fromStringList(picked) } },
@@ -1586,12 +1583,7 @@ Result recover(NotesBackend &b, const Args &a)
     const QVariantMap r = b.recoverConflictedNote(how);
     const QString message = r.value(QStringLiteral("message")).toString();
     if (!r.value(QStringLiteral("ok")).toBool()) {
-        Failure f = backendFailure(message);
-        if (message.contains(QStringLiteral("no unreadable")))
-            f.code = QStringLiteral("no_conflicts");
-        else if (message.contains(QStringLiteral("no last synced")))
-            f.code = QStringLiteral("no_synced_copy");
-        return f;
+        return backendFailure(r.value(QStringLiteral("code")).toString(), message);
     }
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("recover") },
                               { QStringLiteral("path"), relPath(b) },
@@ -1607,11 +1599,8 @@ Result exportPdf(NotesBackend &b, const Args &a)
     if (auto f = resolveAndOpen(b, a.positional.at(0), n))
         return *f;
     const QString err = b.exportPdf();
-    if (!err.isEmpty()) {
-        const bool exists = err.startsWith(QStringLiteral("Already exists"));
-        return Failure{ exists ? QStringLiteral("exists") : QStringLiteral("error"), err, exists ? kExitUsage : kExitError,
-                        {} };
-    }
+    if (!err.isEmpty())
+        return backendFailure(b.takeRefusal(), err);
     const QString pdf = QDir(QDir(NotesBackend::rootPath()).filePath(n.folder)).filePath(n.file.chopped(3) + QStringLiteral(".pdf"));
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("export-pdf") },
                               { QStringLiteral("path"), n.path() },
@@ -1649,7 +1638,7 @@ Result renameFolder(NotesBackend &b, const Args &a)
     b.setCurrentFolder(folder);
     const QString err = b.renameCurrentFolder(a.positional.at(1));
     if (!err.isEmpty())
-        return backendFailure(err);
+        return backendFailure(b.takeRefusal(), err);
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("rename-folder") },
                               { QStringLiteral("folder"), b.currentFolder() },
                               { QStringLiteral("from"), folder } },
@@ -1662,7 +1651,7 @@ Result deleteFolder(NotesBackend &b, const Args &a)
     if (auto f = resolveFolder(b, a.positional.at(0), folder))
         return *f;
     if (folder.isEmpty())
-        return backendFailure(QStringLiteral("All Notes cannot be deleted."));
+        return Failure{ QStringLiteral("error"), QStringLiteral("All Notes cannot be deleted."), kExitError, {} };
     const int count = b.folderNoteCounts().value(folder).toInt();
     if (auto f = confirm(a, QStringLiteral("Move \"%1\" and its %2 note(s) to the trash? The next push moves the notes to "
                                            "Recently Deleted in iCloud.")
@@ -1672,7 +1661,7 @@ Result deleteFolder(NotesBackend &b, const Args &a)
     b.setCurrentFolder(folder);
     const QString err = b.deleteCurrentFolder();
     if (!err.isEmpty())
-        return backendFailure(err);
+        return backendFailure(b.takeRefusal(), err);
     return Done{ QJsonObject{ { QStringLiteral("action"), QStringLiteral("delete-folder") }, { QStringLiteral("folder"), folder } },
                  QStringLiteral("Moved folder %1 to the trash").arg(folder) };
 }

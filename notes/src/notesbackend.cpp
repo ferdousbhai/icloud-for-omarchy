@@ -1482,7 +1482,7 @@ QString NotesBackend::renameCurrentNote(const QString &title)
     if (m_currentNote.isEmpty())
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
-        return QStringLiteral("This note is read-only here. Rename it in Apple Notes.");
+        return refuse("read_only", QStringLiteral("This note is read-only here. Rename it in Apple Notes."));
     if (clean.isEmpty())
         return QStringLiteral("Title is empty.");
     if (filename) {
@@ -1491,12 +1491,12 @@ QString NotesBackend::renameCurrentNote(const QString &title)
             ? clean
             : clean + QStringLiteral(".md");
         if (const QString reason = unsyncedNameReason(target, false); !reason.isEmpty())
-            return reason;
+            return refuse("usage", reason);
         if (target == m_currentNote)
             return {};
         const QString path = QDir(folderAbsolutePath(m_currentFolder)).filePath(target);
         if (QFile::exists(path))
-            return QStringLiteral("A note with that name already exists.");
+            return refuse("exists", QStringLiteral("A note with that name already exists."));
         if (!QFile::rename(noteAbsolutePath(), path))
             return QStringLiteral("Could not rename the file.");
         m_currentNote = target;
@@ -1523,7 +1523,7 @@ QString NotesBackend::moveCurrentNote(const QString &folder)
     if (m_currentNote.isEmpty())
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
-        return QStringLiteral("This note is read-only here. Move it in Apple Notes.");
+        return refuse("read_only", QStringLiteral("This note is read-only here. Move it in Apple Notes."));
     // A note's attachments are files in its folder's attachments/: the next
     // push moves them after the note and rewrites its links.
     if (!m_folders.contains(folder))
@@ -1532,7 +1532,7 @@ QString NotesBackend::moveCurrentNote(const QString &folder)
         return {};
     const QString target = QDir(folderAbsolutePath(folder)).filePath(m_currentNote);
     if (QFile::exists(target))
-        return QStringLiteral("A note with that name already exists in that folder.");
+        return refuse("exists", QStringLiteral("A note with that name already exists in that folder."));
     if (!QFile::rename(noteAbsolutePath(), target))
         return QStringLiteral("Could not move the file.");
     m_lostNote = {};
@@ -1615,18 +1615,19 @@ QString NotesBackend::conflictBackupDir()
 
 QVariantMap NotesBackend::recoverConflictedNote(const QString &how)
 {
-    auto fail = [](const QString &message) {
-        return QVariantMap{ { QStringLiteral("ok"), false }, { QStringLiteral("message"), message } };
+    auto fail = [](const QString &message, const char *code = "error") {
+        return QVariantMap{ { QStringLiteral("ok"), false }, { QStringLiteral("code"), QLatin1StringView(code) },
+                            { QStringLiteral("message"), message } };
     };
     const QString path = noteAbsolutePath();
     if (path.isEmpty())
         return fail(QStringLiteral("No note selected."));
     if (!m_readOnlyReason.isEmpty())
-        return fail(QStringLiteral("This note is read-only here. Resolve it in Apple Notes."));
+        return fail(QStringLiteral("This note is read-only here. Resolve it in Apple Notes."), "read_only");
     if (m_syncRunning)
         return fail(QStringLiteral("Wait for the sync to finish, then try again."));
     if (!noteConflictsUnreadable())
-        return fail(QStringLiteral("This note has no unreadable conflict markers."));
+        return fail(QStringLiteral("This note has no unreadable conflict markers."), "no_conflicts");
     if (noteChangedOnDisk())
         return fail(kChangedOnDiskMessage);
     const SyncModel::EnvelopeSplit split = SyncModel::splitEnvelope(m_noteContent);
@@ -1635,7 +1636,7 @@ QVariantMap NotesBackend::recoverConflictedNote(const QString &how)
         body = SyncModel::stripConflictMarkers(split.body);
     } else if (how == u"synced") {
         if (!noteHasSyncedCopy())
-            return fail(QStringLiteral("There is no last synced version of this note."));
+            return fail(QStringLiteral("There is no last synced version of this note."), "no_synced_copy");
         body = readText(syncedCopyPath());
     } else {
         return fail(QStringLiteral("Unknown choice."));
@@ -1671,7 +1672,7 @@ QString NotesBackend::resolveConflicts(const QStringList &choices)
     if (m_currentNote.isEmpty())
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
-        return QStringLiteral("This note is read-only here. Resolve it in Apple Notes.");
+        return refuse("read_only", QStringLiteral("This note is read-only here. Resolve it in Apple Notes."));
     if (noteChangedOnDisk())
         return kChangedOnDiskMessage;
     const QString resolved = SyncModel::resolveConflicts(m_noteContent, choices);
@@ -1703,13 +1704,13 @@ QString NotesBackend::renameCurrentFolder(const QString &name)
     if (clean.isEmpty())
         return QStringLiteral("Name is empty.");
     if (const QString reason = unsyncedNameReason(clean, true); !reason.isEmpty())
-        return reason;
+        return refuse("usage", reason);
     const QString parent = m_currentFolder.section(u'/', 0, -2);
     const QString target = parent.isEmpty() ? clean : parent + u'/' + clean;
     if (target == m_currentFolder)
         return {};
     if (QDir(folderAbsolutePath(target)).exists())
-        return QStringLiteral("A folder with that name already exists.");
+        return refuse("exists", QStringLiteral("A folder with that name already exists."));
     if (!QDir().rename(folderAbsolutePath(m_currentFolder), folderAbsolutePath(target)))
         return QStringLiteral("Could not rename the folder.");
     m_currentFolder = target;
@@ -1869,7 +1870,7 @@ QString NotesBackend::exportPdf()
     const QString pdf = noteAbsolutePath().chopped(3) + QStringLiteral(".pdf");
     const QString name = QFileInfo(pdf).fileName();
     if (QFile::exists(pdf))
-        return QStringLiteral("Already exists (not overwritten): %1").arg(name);
+        return refuse("exists", QStringLiteral("Already exists (not overwritten): %1").arg(name));
     // In-body notes open with their title line; filename notes gain the
     // title as a heading, the way the editor shows it above the body.
     const QString title = m_noteDetails.value(m_currentNote).toMap().value(QStringLiteral("title")).toString();
