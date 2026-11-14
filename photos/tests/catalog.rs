@@ -175,3 +175,28 @@ fn grid_rows_match_the_full_rows() {
     }
     assert_eq!(slim[0].id, "B", "newest first");
 }
+
+#[test]
+fn a_restore_is_remembered_for_a_rerun_then_forgotten_once_the_item_is_back() {
+    let cat = Catalog::open_in_memory().unwrap();
+    for id in ["A", "B"] {
+        cat.upsert_asset(&asset(id, 1)).unwrap();
+        cat.mark_deleted(id, None).unwrap();
+        cat.mark_restored(id, None).unwrap();
+    }
+    let now = icloud_session::time::now_secs() as i64;
+    // B was deleted again on another device (a sync marks it so).
+    cat.upsert_asset(&Asset {
+        deleted: true,
+        ..asset("B", 1)
+    })
+    .unwrap();
+    // A sync now keeps what a restore just wrote: a rerun still finds it done.
+    let day = icloud_photos::sync::RESTORE_REMEMBERED;
+    assert_eq!(cat.forget_restored(now - day).unwrap(), 0);
+    assert!(cat.was_restored("A").unwrap());
+    // A day later the one back in the library is forgotten; the other is kept.
+    assert_eq!(cat.forget_restored(now + day).unwrap(), 1);
+    assert!(!cat.was_restored("A").unwrap());
+    assert!(cat.was_restored("B").unwrap());
+}

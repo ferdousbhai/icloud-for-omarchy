@@ -71,9 +71,14 @@ pub fn run(t: &dyn Transport, dirs: &Dirs, force_full: bool, progress: &dyn Fn(P
     Ok(report)
 }
 
+/// How long a restore is remembered once the item is back in the library:
+/// far longer than a killed `restore` waits to be run again.
+pub const RESTORE_REMEMBERED: i64 = 24 * 60 * 60;
+
 fn finish(cat: &Catalog, report: Report) -> Result<Report> {
     let now = icloud_session::time::now_secs();
     cat.set_meta(LAST_SYNC_KEY, Some(&now.to_string()))?;
+    cat.forget_restored(now as i64 - RESTORE_REMEMBERED)?;
     Ok(report)
 }
 

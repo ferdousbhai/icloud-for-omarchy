@@ -312,8 +312,10 @@ impl Catalog {
     /// Undo [`mark_deleted`](Self::mark_deleted) after a restore, and
     /// remember that it was restored ([`was_restored`](Self::was_restored)).
     pub fn mark_restored(&self, asset_id: &str, change_tag: Option<&str>) -> Result<()> {
-        // First, so that a crash in between leaves it deleted, to restore again.
-        self.set_meta(&restored_key(asset_id), Some("1"))?;
+        // First, so that a crash in between leaves it deleted, to restore
+        // again. The value is when, for `forget_restored`.
+        let now = icloud_session::time::now_secs().to_string();
+        self.set_meta(&restored_key(asset_id), Some(&now))?;
         self.set_deleted(asset_id, change_tag, false)
     }
 
@@ -322,6 +324,18 @@ impl Catalog {
     /// restoring it again is done already, not a mistake.
     pub fn was_restored(&self, asset_id: &str) -> Result<bool> {
         Ok(self.meta(&restored_key(asset_id))?.is_some())
+    }
+
+    /// Forget the restores ([`mark_restored`](Self::mark_restored)) made
+    /// before `before` (Unix seconds) of assets the catalog has in the
+    /// library, so the marks do not build up: long after its run, restoring
+    /// such an item again is the plain "not deleted" error. Returns how many.
+    pub fn forget_restored(&self, before: i64) -> Result<usize> {
+        Ok(self.conn.execute(
+            "DELETE FROM meta WHERE substr(key, 1, 9) = 'restored:' AND CAST(value AS INTEGER) < ?1
+               AND substr(key, 10) IN (SELECT id FROM assets WHERE deleted = 0)",
+            [before],
+        )?)
     }
 
     fn set_deleted(&self, asset_id: &str, change_tag: Option<&str>, deleted: bool) -> Result<()> {
