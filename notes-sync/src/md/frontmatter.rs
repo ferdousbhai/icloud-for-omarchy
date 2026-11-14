@@ -292,19 +292,56 @@ fn fallback_read(lines: &[String], key: &str) -> Option<String> {
     if rest.starts_with(['[', '{', '&', '*', '!', '|', '>']) {
         return None;
     }
+    // The lines a scalar may continue over: the indented ones that follow,
+    // and the empty ones among them. A title past 80 columns is written
+    // over two (`fold_flow_lines`).
+    let mut end = at + 1;
+    while end < lines.len() && (lines[end].starts_with([' ', '\t']) || lines[end].trim().is_empty()) {
+        end += 1;
+    }
+    let continuation = &lines[at + 1..end];
     if rest.starts_with(['\'', '"']) {
-        let scalar = yaml::parse_document(&format!("k: {rest}"));
-        if let Parsed::Ok(doc) = scalar {
-            return doc.get_str("k").map(str::to_string);
+        let quoted = |text: String| match yaml::parse_document(&text) {
+            Parsed::Ok(doc) => doc.get_str("k").map(str::to_string),
+            _ => None,
+        };
+        return quoted(format!("k: {rest}")).or_else(|| quoted(format!("k: {rest}\n{}", continuation.join("\n"))));
+    }
+    // A comment ends a plain scalar; before one, a line break reads as a
+    // space and each empty line as a line break. A line that holds a key
+    // can't be part of one: YAML that broken reads as its first line.
+    fn uncommented(line: &str) -> (&str, bool) {
+        match line.find(" #") {
+            Some(i) => (line[..i].trim(), true),
+            None => (line.trim(), false),
         }
-        return None;
     }
-    let plain = match rest.find(" #") {
-        Some(i) => &rest[..i],
-        None => rest,
+    let (first, mut ended) = uncommented(rest);
+    let mut plain = first.to_string();
+    let mut empty_lines = 0;
+    for line in continuation {
+        if ended || first.is_empty() || line.trim_start().starts_with('#') {
+            break;
+        }
+        let (text, commented) = uncommented(line);
+        if text.contains(": ") || text.ends_with(':') {
+            plain = first.to_string();
+            break;
+        }
+        if text.is_empty() {
+            empty_lines += 1;
+            continue;
+        }
+        plain.push_str(&if empty_lines > 0 {
+            "\n".repeat(empty_lines)
+        } else {
+            " ".into()
+        });
+        plain.push_str(text);
+        empty_lines = 0;
+        ended = commented;
     }
-    .trim_end();
-    match yaml::resolve_plain(plain) {
+    match yaml::resolve_plain(&plain) {
         Scalar::Str { value, .. } if !value.is_empty() => Some(value),
         _ => None,
     }

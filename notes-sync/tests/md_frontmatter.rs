@@ -293,6 +293,44 @@ fn compose_note_file_cases() {
 }
 
 #[test]
+fn a_title_written_over_two_lines_reads_back_whole() {
+    // Past 80 columns the title is folded onto a second line, as yaml
+    // writes it: plain when nothing in it needs quotes, quoted otherwise.
+    let plain = "Meeting notes from the quarterly planning session with the whole product team and the design leads";
+    let quoted = "Meeting notes: the quarterly planning session with the whole product team and the design leads";
+    for title in [plain, quoted] {
+        for mine in ["", "---\ntags: [a]\n---\n\n", "---\n# mine\ntags: [a]\n---\n\n"] {
+            let file = compose_note_file(mine, "Body", ID, Some(title));
+            let envelope = split_frontmatter(&file, titled()).frontmatter;
+            assert!(envelope.lines().count() > 4, "not folded: {envelope:?}");
+            assert_eq!(read_note_title(&envelope).as_deref(), Some(title), "{envelope:?}");
+            assert_eq!(read_note_id(&envelope).as_deref(), Some(ID));
+            // Written again, nothing changes; cleared, both lines go.
+            assert_eq!(compose_note_file(&envelope, "Body", ID, Some(title)), file);
+            let cleared = clear_note_title(&envelope);
+            assert_eq!(read_note_title(&cleared), None);
+            assert!(!cleared.contains("design leads"), "{cleared:?}");
+            assert_eq!(read_note_id(&cleared).as_deref(), Some(ID));
+        }
+    }
+    // The same in a file someone wrote: lines fold to a space, an empty
+    // line to a line break, and a comment ends the value.
+    for (yaml, title) in [
+        ("apple-note-title: one\n  two\n   three", "one two three"),
+        ("apple-note-title: one\n\n  two", "one\ntwo"),
+        ("apple-note-title: one\n  - two", "one - two"),
+        ("apple-note-title: one # not two\ntags: [a]", "one"),
+        ("apple-note-title: \"one\n  two\"", "one two"),
+        ("apple-note-title: 'one\n  two'", "one two"),
+    ] {
+        for comment in ["", "# mine\n"] {
+            let envelope = format!("---\n{comment}{yaml}\n---\n\n");
+            assert_eq!(read_note_title(&envelope).as_deref(), Some(title), "{envelope:?}");
+        }
+    }
+}
+
+#[test]
 fn a_first_key_outside_the_modelled_yaml_is_still_a_mapping() {
     // A quoted, anchored or non-string first key is valid YAML: the id reads
     // and is stamped the same as when such a key comes later.
