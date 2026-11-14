@@ -4158,6 +4158,13 @@ fi"#,
             let (header, _, _) = session(&self.conn).unwrap();
             let token = cookie_of(&header, "X-APPLE-WEBAUTH-TOKEN").unwrap();
             assert_eq!(owner(&token), dsid, "{case}: {header}");
+            // Read in: no reason it was signed out is kept.
+            let reason = self.env.account_path().with_file_name("sign-out-reason");
+            assert!(
+                !reason.exists(),
+                "{case}: signed in with a sign-out reason: {}",
+                fs::read_to_string(&reason).unwrap_or_default()
+            );
             Some(dsid)
         }
 

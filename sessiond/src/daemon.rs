@@ -1032,9 +1032,12 @@ impl Daemon {
         }
         match result {
             Ok(loaded) => {
+                // Signed in again: no reason it was signed out is kept (a
+                // crash can leave one, written before `account.json` went,
+                // or not yet removed after a sign-in wrote it).
                 let (account, reason) = match loaded {
                     Loaded::Nobody => (None, None),
-                    Loaded::Account(account) => (Some(*account), None),
+                    Loaded::Account(account) => (Some(*account), Some("")),
                     Loaded::SignedOut(reason) => (None, Some(reason)),
                 };
                 written.secret = account.as_ref().map(Account::secret);
