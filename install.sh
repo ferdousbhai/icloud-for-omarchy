@@ -176,7 +176,7 @@ start_timer() {
 # Everything runs from main, called on the last line, so a download cut
 # short while piped into bash runs nothing at all.
 main() {
-  local pkg wanted=("$@")
+  local pkg replaced=() wanted=("$@")
   if ! command -v pacman >/dev/null; then
     echo "pacman not found: this installer is for Omarchy and other Arch Linux systems." >&2
     exit 1
@@ -209,8 +209,8 @@ main() {
   # the two would swap at every update.
   for pkg in "${wanted[@]}"; do
     case $pkg in
-      icloud-reminders) OLD_REPOS+=(cloud-tasks cloud-tasks-aarch64) ;;
-      icloud-contacts) OLD_REPOS+=(cloud-contacts cloud-contacts-aarch64) ;;
+      icloud-reminders) OLD_REPOS+=(cloud-tasks cloud-tasks-aarch64); replaced+=(cloud-tasks) ;;
+      icloud-contacts) OLD_REPOS+=(cloud-contacts cloud-contacts-aarch64); replaced+=(cloud-contacts) ;;
     esac
   done
 
@@ -218,6 +218,18 @@ main() {
 
   echo "Adding the [$REPO] repository"
   add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
+
+  # The packages conflict with the ones they take over from, and pacman
+  # answers its own "Remove cloud-tasks?" with no when nobody is asked, so
+  # the old package goes first. Its settings and data stay where they are.
+  local old as_root=()
+  (( EUID == 0 )) || as_root=(sudo)
+  for old in "${replaced[@]}"; do
+    if pacman -Qq "$old" >/dev/null 2>&1; then
+      echo "Removing $old, which ${wanted[*]} replaces"
+      "${as_root[@]}" pacman -R --noconfirm "$old"
+    fi
+  done
 
   echo "Installing ${wanted[*]}"
   if command -v omarchy-pkg-add >/dev/null; then

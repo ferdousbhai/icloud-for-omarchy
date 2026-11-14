@@ -277,9 +277,13 @@ for pair in reminders:cloud-tasks contacts:cloud-contacts; do
   printf '[%s]\nServer = https://example.invalid\n' "$old" > "/etc/pacman.d/$old.conf"
   bash install.sh icloud-photos >/dev/null 2>&1
   check "installing Photos keeps the [$old] repository" [ -e "/etc/pacman.d/$old.conf" ]
+  check "installing Photos leaves the $old package" not grep -q -- "-R --noconfirm $old" "$PACMAN_LOG"
   bash install.sh "icloud-$app" >"$work/out" 2>&1
   check "installing icloud-$app removes the [$old] repository" [ ! -e "/etc/pacman.d/$old.conf" ]
   check "installing icloud-$app drops the [$old] Include" [ "$(count_include "$old")" = 0 ]
+  # pacman refuses the conflict unasked, so the old package is removed first.
+  check "installing icloud-$app removes the $old package first" \
+    [ "$(grep -n -- "-R --noconfirm $old\|icloud-$app" "$PACMAN_LOG" | grep -v -- '-Qq' | head -1 | grep -c -- "-R --noconfirm $old")" = 1 ]
 done
 
 umount -q /etc/pacman.conf /etc/pacman.d /root 2>/dev/null || true
