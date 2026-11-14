@@ -517,3 +517,37 @@ fn recorded_parses_match_the_parser() {
         assert_eq!(recorded, now, "re-record with ICLOUD_NOTES_SYNC_REGEN=1 if intended");
     }
 }
+
+/// Bolding or unbolding text changes its font's name only: a size the font
+/// carries, which the Markdown doesn't show, stays. Found by
+/// `roundtrip_property` (hidden attributes on generated notes).
+#[test]
+fn bolding_text_keeps_its_font_size() {
+    use icloud_notes_sync::doc::proto::topotext::Font;
+    let sized = |name: Option<&str>, hints: Option<u32>| AttributeRun {
+        length: Some(5),
+        font_hints: hints,
+        font: Some(Font {
+            name: name.map(str::to_string),
+            point_size: Some(24.0f32.to_bits()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    for (run, markdown, name) in [
+        (sized(None, None), "**Hello**", Some("SFUIText-Bold")),
+        (sized(Some("SFUIText-Bold"), Some(1)), "Hello", None),
+    ] {
+        let mut doc = doc_with("Hello", vec![run]);
+        let wanted = icloud_notes_sync::md::parse::parse_note_markdown(markdown)
+            .unwrap()
+            .paragraphs;
+        assert_eq!(
+            reconcile_note_format_with(&mut doc, &wanted, &REPLICA_A, &mut common::counting_uuids()).unwrap(),
+            Ok(true)
+        );
+        let font = doc.attribute_runs[0].font.clone().unwrap();
+        assert_eq!(font.point_size, Some(24.0f32.to_bits()), "{markdown}");
+        assert_eq!(font.name.as_deref(), name, "{markdown}");
+    }
+}

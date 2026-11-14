@@ -490,10 +490,13 @@ fn overlay_inline_style(piece: &mut AttributeRun, current: &InlineStyle, desired
             (false, true) => Some("SFUIText-LightItalic"),
             (false, false) => None,
         };
-        piece.font = font_name.map(|name| Font {
-            name: Some(name.into()),
-            ..Default::default()
-        });
+        // Only the font's name says bold or italic: its size (which the
+        // Markdown doesn't show) stays.
+        let font = Font {
+            name: font_name.map(str::to_string),
+            ..piece.font.take().unwrap_or_default()
+        };
+        piece.font = (font != Font::default()).then_some(font);
     }
     if current.strikethrough != desired.strikethrough {
         piece.strikethrough = Some(u32::from(desired.strikethrough));
