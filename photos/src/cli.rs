@@ -787,7 +787,7 @@ fn thumb(ctx: &Ctx, id: &str, out: Option<&Path>) -> Res<Response> {
 
 /// The viewer's Open: the original (downloaded first when it is not yet),
 /// or with `medium` iCloud's preview, handed to the desktop's default app
-/// (`xdg-open`, or `$ICLOUD_PHOTOS_OPENER`).
+/// (`xdg-open`).
 fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<Response> {
     let cat = ctx.catalog()?;
     let row = row_or_fail(&cat, id)?;
@@ -799,8 +799,8 @@ fn open(ctx: &Ctx, id: &str, medium: bool) -> Res<Response> {
             thumbs::fetch(&*t, &cat, &ctx.targets(None), id, job)?
         }
     };
-    let opener = std::env::var("ICLOUD_PHOTOS_OPENER").unwrap_or_else(|_| "xdg-open".into());
-    let status = std::process::Command::new(&opener)
+    let opener = "xdg-open";
+    let status = std::process::Command::new(opener)
         .arg(&path)
         .stdin(std::process::Stdio::null())
         .status()
@@ -839,7 +839,7 @@ fn copy(ctx: &Ctx, id: &str) -> Res<Response> {
 }
 
 fn wallpaper(ctx: &Ctx, id: &str) -> Res<Response> {
-    if std::env::var_os("ICLOUD_PHOTOS_WALLPAPER_SETTER").is_none() && !still::has_wallpaper_command() {
+    if !still::has_wallpaper_command() {
         return Err(CliError::new(
             "error",
             EXIT_ERROR,

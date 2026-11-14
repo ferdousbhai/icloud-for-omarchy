@@ -1,7 +1,9 @@
 //! The command-line interface, run as the built binary against the fake
 //! CloudKit server (`ICLOUD_SESSION_MOCK=1`), every command end to end.
 //! HOME and the XDG variables point into a temp directory as well, so a
-//! mistake cannot reach the real catalog, cache or ~/Pictures.
+//! mistake cannot reach the real catalog, cache or ~/Pictures; and PATH is
+//! a directory of the test's own stand-ins (`Env::stub`), so the desktop's
+//! `xdg-open`, `wl-copy` and `omarchy-theme-bg-set` never run.
 
 mod support;
 
@@ -45,6 +47,7 @@ impl Run {
 impl Env {
     fn new(name: &str, count: usize) -> Env {
         let tmp = temp_dir(&format!("cli-{name}"));
+        std::fs::create_dir(tmp.path().join("bin")).unwrap();
         Env {
             server: FakeServer::start(0, count),
             root: tmp.path().to_owned(),
@@ -54,6 +57,15 @@ impl Env {
 
     fn data(&self) -> PathBuf {
         self.root.join("data-dir")
+    }
+
+    /// A stand-in for the program `name` on the binary's PATH: a shell
+    /// script with this body (programs it runs need their full path).
+    fn stub(&self, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.root.join("bin").join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     /// The binary with the fake server, a sandboxed HOME/XDG, and no --data-dir.
@@ -74,6 +86,7 @@ impl Env {
             .envs(vars.iter().map(|(k, v)| (*k, *v)))
             .env("ICLOUD_SESSION_MOCK", "1")
             .env("ICLOUD_SESSION_MOCK_URL", url)
+            .env("PATH", self.root.join("bin"))
             .env("HOME", &home)
             .env("XDG_DATA_HOME", home.join("xdg-data"))
             .env("XDG_CACHE_HOME", home.join("xdg-cache"))
@@ -460,14 +473,11 @@ fn open_downloads_then_hands_the_file_to_the_default_app() {
     let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
     // A stand-in for xdg-open that records what it was given.
     let opened = env.root.join("opened");
-    let opener = env.root.join("opener.sh");
-    std::fs::write(&opener, format!("#!/bin/sh\necho \"$1\" >> '{}'\n", opened.display())).unwrap();
-    std::fs::set_permissions(&opener, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let data = env.data();
+    env.stub("xdg-open", &format!("echo \"$1\" >> '{}'", opened.display()));
     let run = |args: &[&str]| {
-        let mut all = vec!["--data-dir", data.to_str().unwrap(), "--json"];
+        let mut all = vec!["--json"];
         all.extend_from_slice(args);
-        env.bare_with(&all, &[("ICLOUD_PHOTOS_OPENER", &opener)])
+        env.run(&all)
     };
 
     // Not downloaded yet: fetched into the library first, then opened.
@@ -489,14 +499,11 @@ fn open_downloads_then_hands_the_file_to_the_default_app() {
     assert!(PathBuf::from(r.json()["path"].as_str().unwrap()).starts_with(env.data().join("cache/medium")));
 
     // An opener that fails is an error; an unknown id is not_found.
-    let r = env.bare_with(
-        &["--data-dir", data.to_str().unwrap(), "--json", "open", &photo],
-        &[("ICLOUD_PHOTOS_OPENER", Path::new("/bin/false"))],
-    );
-    assert_eq!(r.code, 1);
     let r = run(&["open", "NO-SUCH-ID"]);
     let err = error_doc(&r);
     assert_eq!((r.code, err["error"]["code"].as_str()), (4, Some("not_found")));
+    env.stub("xdg-open", "exit 1");
+    assert_eq!(run(&["open", &photo]).code, 1);
 }
 
 #[test]
@@ -504,31 +511,23 @@ fn copy_and_wallpaper_use_the_viewers_image() {
     let env = Env::synced("still", 10);
     let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
     let video = env.ids(&["--kind", "video", "--limit", "1"]).remove(0);
-    // Stand-ins for wl-copy and omarchy-theme-bg-set that record what they got.
-    let script = |name: &str, body: &str| {
-        let path = env.root.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        path
-    };
-    let (copied, set) = (env.root.join("copied"), env.root.join("set"));
-    let copier = script(
-        "copier.sh",
-        &format!("echo \"$2\" > '{0}'; cat >> '{0}'", copied.display()),
-    );
-    let setter = script("setter.sh", &format!("echo \"$1\" >> '{}'", set.display()));
     let data = env.data();
     let run = |args: &[&str]| {
-        let mut all = vec!["--data-dir", data.to_str().unwrap(), "--json"];
+        let mut all = vec!["--json"];
         all.extend_from_slice(args);
-        env.bare_with(
-            &all,
-            &[
-                ("ICLOUD_PHOTOS_COPIER", &copier),
-                ("ICLOUD_PHOTOS_WALLPAPER_SETTER", &setter),
-            ],
-        )
+        env.run(&all)
     };
+    // Without Omarchy's command there is no wallpaper to set, and the hint says so.
+    let r = run(&["wallpaper", &photo]);
+    assert_eq!(r.code, 1);
+    assert!(error_doc(&r)["error"]["hint"].as_str().unwrap().contains("Omarchy"));
+    // Stand-ins for wl-copy and omarchy-theme-bg-set that record what they got.
+    let (copied, set) = (env.root.join("copied"), env.root.join("set"));
+    env.stub(
+        "wl-copy",
+        &format!("echo \"$2\" > '{0}'; /bin/cat >> '{0}'", copied.display()),
+    );
+    env.stub("omarchy-theme-bg-set", &format!("echo \"$1\" >> '{}'", set.display()));
 
     // Nothing local yet: iCloud's preview is fetched, and copied as a JPEG.
     let r = run(&["copy", &photo]);
@@ -563,11 +562,8 @@ fn copy_and_wallpaper_use_the_viewers_image() {
     assert_eq!(std::fs::read_to_string(&set).unwrap().lines().count(), 1);
 
     // A setter that fails is an error.
-    let r = env.bare_with(
-        &["--data-dir", data.to_str().unwrap(), "--json", "wallpaper", &photo],
-        &[("ICLOUD_PHOTOS_WALLPAPER_SETTER", Path::new("/bin/false"))],
-    );
-    assert_eq!(r.code, 1);
+    env.stub("omarchy-theme-bg-set", "exit 1");
+    assert_eq!(run(&["wallpaper", &photo]).code, 1);
 }
 
 #[test]

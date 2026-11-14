@@ -27,8 +27,7 @@ pub fn has_wallpaper_command() -> bool {
         .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(WALLPAPER_COMMAND).is_file()))
 }
 
-/// Make `path` the Omarchy background with `omarchy-theme-bg-set` (or
-/// `$ICLOUD_PHOTOS_WALLPAPER_SETTER`). A rendition from the cache (which is
+/// Make `path` the Omarchy background with `omarchy-theme-bg-set`. A rendition from the cache (which is
 /// pruned) is copied out of it first, into the data folder, which keeps only
 /// the current wallpaper. Returns the file the background now points at.
 pub fn set_wallpaper(path: &Path, dirs: &Dirs) -> Result<PathBuf, String> {
@@ -37,8 +36,8 @@ pub fn set_wallpaper(path: &Path, dirs: &Dirs) -> Result<PathBuf, String> {
     } else {
         path.to_path_buf()
     };
-    let setter = std::env::var("ICLOUD_PHOTOS_WALLPAPER_SETTER").unwrap_or_else(|_| WALLPAPER_COMMAND.into());
-    let out = Command::new(&setter)
+    let setter = WALLPAPER_COMMAND;
+    let out = Command::new(setter)
         .arg(&path)
         .stdin(Stdio::null())
         .output()
@@ -50,8 +49,8 @@ pub fn set_wallpaper(path: &Path, dirs: &Dirs) -> Result<PathBuf, String> {
     }
 }
 
-/// Put the image file on the Wayland clipboard with `wl-copy` (or
-/// `$ICLOUD_PHOTOS_COPIER`), as its own type (JPEG or PNG). Returns that type.
+/// Put the image file on the Wayland clipboard with `wl-copy`, as its own
+/// type (JPEG or PNG). Returns that type.
 pub fn copy_to_clipboard(path: &Path) -> Result<&'static str, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let mime = if bytes.starts_with(b"\x89PNG") {
@@ -59,10 +58,10 @@ pub fn copy_to_clipboard(path: &Path) -> Result<&'static str, String> {
     } else {
         "image/jpeg"
     };
-    let copier = std::env::var("ICLOUD_PHOTOS_COPIER").unwrap_or_else(|_| "wl-copy".into());
+    let copier = "wl-copy";
     // wl-copy keeps serving the clipboard in the background after it exits,
     // so its output is not waited on (that would wait for the next copy).
-    let mut child = Command::new(&copier)
+    let mut child = Command::new(copier)
         .args(["--type", mime])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
