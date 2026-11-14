@@ -1,5 +1,6 @@
 //! The reminders as Markdown checklists in a folder, one file per list, kept
-//! in step with iCloud both ways. Off until `icloud-reminders folder start`.
+//! in step with iCloud both ways by the background timer. Nothing turns it
+//! on: it is `~/Documents/Reminders`, written after the first sync.
 //!
 //! The folder is a working copy: iCloud holds the reminders, and this is the
 //! only code that reads the files. It exists so that something that only
@@ -31,7 +32,9 @@
 //! What keeps a bad file from costing reminders:
 //!
 //! - More than a few removed lines that are also most of the list ([`risky`])
-//!   are not applied: the list is held, said once, until `folder sync --yes`.
+//!   delete nothing: the lines are written back and a notification says so.
+//!   A cut-off or emptied file looks like this. To delete that many, use the
+//!   app, or remove a few lines at a time.
 //! - A file seen for the first time (not yet [`ListState::adopted`]) only
 //!   ever adds.
 //! - Syncthing's conflict copies (`Work.sync-conflict-….md`) are made from an
@@ -44,7 +47,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -95,12 +97,9 @@ pub struct ListState {
     /// file from elsewhere, compared with iCloud as it is, and only adds.
     #[serde(default)]
     pub adopted: bool,
-    /// The text a hold was last announced for (its hash).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub held: Option<u64>,
 }
 
-/// `folder.json` in the data directory: there while the folder is on.
+/// `folder.json` in the data directory: where the folder is, and its files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     pub dir: PathBuf,
@@ -109,14 +108,13 @@ pub struct State {
     pub lists: BTreeMap<String, ListState>,
 }
 
-/// A list whose file would remove most of it, left alone.
+/// A file that would have removed most of its list: its lines were put back.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Held {
+pub struct Restored {
     pub list: String,
     pub file: String,
-    pub removing: usize,
-    /// Not announced before for this text.
-    pub new: bool,
+    /// How many reminders it no longer listed.
+    pub kept: usize,
 }
 
 #[derive(Debug, Default)]
@@ -126,17 +124,14 @@ pub struct Report {
     pub deleted: usize,
     /// Files written, by name.
     pub written: Vec<String>,
-    pub held: Vec<Held>,
+    pub restored: Vec<Restored>,
     pub warnings: Vec<String>,
 }
 
 impl Report {
-    /// Nothing was written either way and nothing new is held.
+    /// Nothing was written either way.
     pub fn quiet(&self) -> bool {
-        self.added + self.edited + self.deleted == 0
-            && self.written.is_empty()
-            && self.warnings.is_empty()
-            && !self.held.iter().any(|h| h.new)
+        self.added + self.edited + self.deleted == 0 && self.written.is_empty() && self.warnings.is_empty()
     }
 }
 
@@ -424,7 +419,7 @@ pub fn diff(base: &[Known], local: &[Item], now: &Zoned) -> Delta {
 }
 
 /// More than a few removed lines that are also most of the list: a cut-off
-/// or emptied file looks like this, and so it is not applied unasked.
+/// or emptied file looks like this, and so its removals are not applied.
 pub fn risky(delta: &Delta, base_len: usize) -> bool {
     delta.deletes.len() > 3 && delta.deletes.len() * 2 > base_len
 }
@@ -453,12 +448,6 @@ fn from_conflict_copy(base: &[Known], copy: &[Item]) -> Delta {
         }
     }
     delta
-}
-
-fn hash(text: &str) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut h);
-    h.finish()
 }
 
 /// A file name for a list: its name, without what a path cannot hold.
@@ -527,13 +516,18 @@ fn conflict_copies(dir: &Path, file: &str) -> Vec<PathBuf> {
     found
 }
 
+/// `~/Documents/Reminders`.
+pub fn default_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Documents/Reminders"))
+}
+
 /// Whether a file has something to send: it differs from what was last
-/// written (and is not a hold already announced), or has a conflict copy.
+/// written, or has a conflict copy.
 /// A background run syncs with iCloud first when this is so.
 pub fn pending(state: &State) -> bool {
     state.lists.values().any(|ls| {
         let changed = match read(&state.dir.join(&ls.file)) {
-            Ok(Some(text)) => text != ls.text && ls.held != Some(hash(&text)),
+            Ok(Some(text)) => text != ls.text,
             _ => false,
         };
         changed || !conflict_copies(&state.dir, &ls.file).is_empty()
@@ -593,19 +587,11 @@ fn apply(
 }
 
 /// One list: the file's changes to iCloud, then iCloud's state to the file.
-fn one(
-    svc: &Service,
-    dir: &Path,
-    list: &List,
-    ls: &mut ListState,
-    now: &Zoned,
-    force: bool,
-    report: &mut Report,
-) -> Result<()> {
+fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, report: &mut Report) -> Result<()> {
     let path = dir.join(&ls.file);
     let on_disk = read(&path).map_err(io_err)?;
-    // Not ours yet: a file already there (from before a `stop`, or from
-    // another computer) is compared with iCloud as it is, and only adds.
+    // Not ours yet: a file already there (from another computer, or from
+    // before the data directory was cleared) is compared with iCloud as it is, and only adds.
     let first = !ls.adopted;
     let mut base = if first {
         let (text, ids) = render(list, &svc.cache()?, now);
@@ -620,16 +606,15 @@ fn one(
         if first {
             delta.deletes.clear();
         }
-        if !force && risky(&delta, base.len()) {
-            let h = hash(text);
-            report.held.push(Held {
+        if risky(&delta, base.len()) {
+            // Too much of the list to take from a file: the lines are
+            // written back below, with the rest of what it asks applied.
+            report.restored.push(Restored {
                 list: list.name.clone(),
                 file: ls.file.clone(),
-                removing: delta.deletes.len(),
-                new: ls.held != Some(h),
+                kept: delta.deletes.len(),
             });
-            ls.held = Some(h);
-            return Ok(());
+            delta.deletes.clear();
         }
         let applied = apply(svc, list, delta, &mut base, now, report);
         // What the file holds, with the reminders made so far: the next run
@@ -641,7 +626,6 @@ fn one(
         }
         applied?;
     }
-    ls.held = None;
 
     for copy in conflict_copies(dir, &ls.file) {
         let Some(text) = read(&copy).map_err(io_err)? else {
@@ -677,10 +661,9 @@ fn one(
 }
 
 /// Brings the folder and iCloud in step. The cache must be fresh (the
-/// caller syncs first): what it holds is taken as iCloud's state. `force`
-/// applies what would otherwise be held. One list's failure is a warning
+/// caller syncs first): what it holds is taken as iCloud's state. One list's failure is a warning
 /// and does not stop the others.
-pub fn sync(svc: &Service, state: &mut State, now: &Zoned, force: bool) -> Result<Report> {
+pub fn sync(svc: &Service, state: &mut State, now: &Zoned) -> Result<Report> {
     let mut report = Report::default();
     let cache = svc.cache()?;
     if cache.synced_ms.is_none() {
@@ -721,7 +704,7 @@ pub fn sync(svc: &Service, state: &mut State, now: &Zoned, force: bool) -> Resul
                 ls.file = wanted;
             }
         }
-        if let Err(e) = one(svc, &state.dir, list, ls, now, force, &mut report) {
+        if let Err(e) = one(svc, &state.dir, list, ls, now, &mut report) {
             report.warnings.push(format!("{}: {e}", ls.file));
         }
     }

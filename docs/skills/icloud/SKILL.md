@@ -140,10 +140,9 @@ REMINDER: ID, title or unique part (open ones first). WHEN: `2026-10-10`
 (all day), `"2026-10-10 17:30"`, `tomorrow 9:00`, `17:30`, `+2h`. Reads sync
 first (`--cached` skips); writes need the network (`offline`). `due.at` is
 UTC; `alerts` > 0 means alarms set on an Apple device that `--due` does not
-move. Notifications are the timer's job, not yours. `folder status` says
-whether the reminders are also Markdown files in a folder (for phones and
-editors, synced by the timer): still change reminders with the commands
-above, and leave `folder start|stop|sync` to the user.
+move. Notifications are the timer's job, not yours. The lists are also
+Markdown files in `~/Documents/Reminders` (for phones and editors, synced by
+the timer): read them freely, but change reminders with the commands above.
 
 ## Contacts: `icloud-contacts`
 

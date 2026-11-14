@@ -6,8 +6,8 @@
 //!   iCloud session is icloud-session's, fetched over D-Bus per request.
 //! - `notified.json`: which reminders have notified, for which due time.
 //! - `replica`: this computer's ID in `ResolutionTokenMap`.
-//! - `folder.json`: there while the Markdown folder is on ([`crate::folder`]):
-//!   where it is, and each list's file as last written. `folder.lock` is
+//! - `folder.json`: the Markdown folder ([`crate::folder`]): where it is, and
+//!   each list's file as last written. `folder.lock` is
 //!   held over a folder run, which takes `lock` itself for each write.
 //! - `lock`: `flock`ed around every read-modify-write of those, so the
 //!   window, the command line and the background timer never interleave.
@@ -162,21 +162,13 @@ impl Store {
         write_json(&self.dir.join("notified.json"), n)
     }
 
-    /// The Markdown folder's state; `None` while it is off.
+    /// The Markdown folder's state; `None` before its first run.
     pub fn folder(&self) -> io::Result<Option<folder::State>> {
         read_json(&self.dir.join("folder.json"))
     }
 
     pub fn save_folder(&self, state: &folder::State) -> io::Result<()> {
         write_json(&self.dir.join("folder.json"), state)
-    }
-
-    /// Turns the folder off. Its files are not touched.
-    pub fn remove_folder(&self) -> io::Result<()> {
-        match fs::remove_file(self.dir.join("folder.json")) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-            _ => Ok(()),
-        }
     }
 
     /// Held over a whole folder run, so two never work on the same files.

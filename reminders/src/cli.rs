@@ -55,7 +55,7 @@ envelope, --styled text, --quiet prints only the data, --ids-only the ids
 (lists: the lists'; list, show, add, edit, complete, uncomplete, delete:
 the reminders'; background: the notified reminders'), --count the number of
 results (lists; reminders; changed records for sync; notified for
-background; reminders changed in iCloud for folder start and sync). Flags combine: ids-only > count > quiet > json > styled. A
+background). Flags combine: ids-only > count > quiet > json > styled. A
 failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout,
 or error:/hint: lines on stderr in text mode.
 
@@ -201,60 +201,23 @@ enum Command {
         full: bool,
     },
     /// What the systemd timer runs every minute: sync when the last one is
-    /// over 4 minutes old, then notify about reminders that just fell due.
+    /// over 4 minutes old, keep ~/Documents/Reminders (the lists as Markdown
+    /// checklists) and iCloud in step, then notify about reminders that
+    /// just fell due.
+    ///
+    /// In a file: tick a box to complete, add a line to add, remove a line
+    /// to delete; the text after 📅 is a WHEN. A changed file is sent at
+    /// once. iCloud stays where the reminders are kept.
     ///
     /// A sync that cannot run (signed out, offline) is reported and the
     /// notifications still come from the cache; that exits 0.
     ///
-    /// JSON: {synced, sync_error, notified: [{id, title}], warning?}
+    /// JSON: {synced, sync_error, notified: [{id, title}], folder: {added, edited, deleted, written, restored, warnings} | null, folder_error, warning?}
     #[command(after_help = AFTER_HELP)]
     Background {
         /// Sync even if the last sync is recent.
         #[arg(long)]
         sync: bool,
-    },
-    /// The reminders as Markdown checklists in a folder, one file per list,
-    /// kept in step with iCloud both ways by the background timer.
-    ///
-    /// For what only carries files: Syncthing to a phone, an editor. Tick a
-    /// box to complete, add a line to add, remove a line to delete; the
-    /// text after 📅 is a WHEN. iCloud stays where the reminders are kept.
-    #[command(after_help = AFTER_HELP)]
-    Folder {
-        #[command(subcommand)]
-        action: FolderCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum FolderCommand {
-    /// Turn the folder on and write the files (default ~/Documents/Reminders).
-    ///
-    /// Files already there are kept: lines iCloud lacks are added to it.
-    ///
-    /// JSON: {on, dir, files: [{list, file}], added, edited, deleted, written, held, warnings}
-    Start {
-        #[arg(value_name = "DIR")]
-        dir: Option<PathBuf>,
-    },
-    /// Turn the folder off. The files stay as they are, no longer synced.
-    ///
-    /// JSON: {on, dir}
-    Stop,
-    /// Whether the folder is on, where, and which files are held.
-    ///
-    /// JSON: {on, dir, files: [{list, file, held}]}
-    Status,
-    /// Sync with iCloud, then bring the files and iCloud in step now.
-    ///
-    /// A file that would delete most of its list is held, not applied
-    /// (exit 2), until this runs with --yes.
-    ///
-    /// JSON: {on, dir, files: [{list, file}], added, edited, deleted, written, held: [{list, file, removing}], warnings}
-    Sync {
-        /// Apply held files too: delete what they no longer list.
-        #[arg(long, short)]
-        yes: bool,
     },
 }
 
@@ -362,32 +325,18 @@ impl Cli<'_> {
             Command::Delete { reminder, yes } => self.delete(&reminder, yes),
             Command::Sync { full } => self.sync(full),
             Command::Background { sync } => self.background(sync),
-            Command::Folder { action } => match action {
-                FolderCommand::Start { dir } => self.folder_start(dir),
-                FolderCommand::Stop => self.folder_stop(),
-                FolderCommand::Status => self.folder_status(),
-                FolderCommand::Sync { yes } => self.folder_sync(yes),
-            },
         }
     }
 
     /// One folder run under its lock: the files' changes to iCloud and
     /// iCloud's state to the files, with the state saved whatever happened.
-    /// `start` gives the folder to turn on when it is off.
-    fn folder_run(
-        &self,
-        start: Option<PathBuf>,
-        force: bool,
-    ) -> Result<Option<(folder::State, folder::Report)>, Failure> {
+    /// `None` without a home directory to keep the folder in.
+    fn folder_run(&self) -> Result<Option<folder::Report>, Failure> {
         let store = &self.svc.store;
         let file = |e: std::io::Error| other(e.to_string());
         let _lock = store.folder_lock().map_err(file)?;
-        let mut state = match (store.folder().map_err(file)?, start) {
-            (Some(on), Some(dir)) if on.dir != dir => {
-                return Err(usage(format!("the folder is already on, in {}", on.dir.display()))
-                    .hint("run `icloud-reminders folder stop` first to move it"));
-            }
-            (Some(on), _) => on,
+        let mut state = match (store.folder().map_err(file)?, folder::default_dir()) {
+            (Some(state), _) => state,
             (None, Some(dir)) => folder::State {
                 dir,
                 ..folder::State::default()
@@ -395,86 +344,9 @@ impl Cli<'_> {
             (None, None) => return Ok(None),
         };
         let now = jiff::Timestamp::now().to_zoned(self.local.clone());
-        let result = folder::sync(&self.svc, &mut state, &now, force);
+        let result = folder::sync(&self.svc, &mut state, &now);
         store.save_folder(&state).map_err(file)?;
-        Ok(Some((state, result.map_err(cloud_error)?)))
-    }
-
-    fn folder_start(&self, dir: Option<PathBuf>) -> Outcome {
-        let dir = match dir {
-            Some(d) if d.is_absolute() => d,
-            Some(d) => std::env::current_dir().map_err(|e| other(e.to_string()))?.join(d),
-            None => std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join("Documents/Reminders"))
-                .ok_or_else(|| usage("no $HOME to put the folder in").hint("name a directory: folder start DIR"))?,
-        };
-        self.fresh()?;
-        let (state, report) = self.folder_run(Some(dir), false)?.expect("started above");
-        let text = format!(
-            "Reminders folder on: {} ({} lists). The background timer keeps it in step.",
-            state.dir.display(),
-            state.lists.len()
-        );
-        Ok(folder_response(&state, &report, text))
-    }
-
-    fn folder_stop(&self) -> Outcome {
-        let store = &self.svc.store;
-        let file = |e: std::io::Error| other(e.to_string());
-        let _lock = store.folder_lock().map_err(file)?;
-        let was = store.folder().map_err(file)?;
-        store.remove_folder().map_err(file)?;
-        let dir = was.map(|s| s.dir);
-        let text = match &dir {
-            Some(d) => format!(
-                "Reminders folder off. The files in {} stay as they are, no longer synced.",
-                d.display()
-            ),
-            None => "The reminders folder was not on.".to_owned(),
-        };
-        Ok(Response::new(json!({ "on": false, "dir": dir }), text))
-    }
-
-    fn folder_status(&self) -> Outcome {
-        let Some(state) = self.svc.store.folder().map_err(|e| other(e.to_string()))? else {
-            return Ok(Response::new(
-                json!({ "on": false, "dir": null, "files": [] }),
-                "The reminders folder is off. Turn it on with: icloud-reminders folder start",
-            ));
-        };
-        let cache = self.cache()?;
-        let files: Vec<Value> = state
-            .lists
-            .iter()
-            .map(|(id, ls)| json!({ "list": cache.list(id).map(|l| l.name.as_str()), "file": ls.file, "held": ls.held.is_some() }))
-            .collect();
-        let held = state.lists.values().filter(|ls| ls.held.is_some()).count();
-        let mut text = format!("Reminders folder on: {} ({} files)", state.dir.display(), files.len());
-        if held > 0 {
-            text.push_str(&format!("; {held} held, see: icloud-reminders folder sync"));
-        }
-        Ok(Response::new(json!({ "on": true, "dir": state.dir, "files": files }), text).count(files.len()))
-    }
-
-    fn folder_sync(&self, yes: bool) -> Outcome {
-        if self.svc.store.folder().map_err(|e| other(e.to_string()))?.is_none() {
-            return Err(
-                CliError::new("not_set_up", cli::EXIT_SIGN_IN, "the reminders folder is off")
-                    .hint("turn it on with: icloud-reminders folder start"),
-            );
-        }
-        self.fresh()?;
-        let (state, report) = self.folder_run(None, yes)?.expect("on, checked above");
-        let mut text = folder_summary(&report);
-        let held = !report.held.is_empty();
-        for h in &report.held {
-            text.push_str(&format!(
-                "\nHeld: {} would delete {} of the list's reminders. To do that: icloud-reminders folder sync --yes",
-                h.file, h.removing
-            ));
-        }
-        let resp = folder_response(&state, &report, text);
-        Ok(if held { resp.exit(EXIT_USAGE) } else { resp })
+        Ok(Some(result.map_err(cloud_error)?))
     }
 
     /// The cache after a sync, or as the last sync left it with `--cached`.
@@ -687,8 +559,7 @@ impl Cli<'_> {
         // A changed file in the folder is sent now, not at the next sync,
         // unless the last sync failed: that waits its turn.
         let last_failed = store.notified().map_err(file)?.sync_attempt_ms > self.cache()?.synced_ms;
-        let folder_on = store.folder().map_err(file)?;
-        let pending = folder_on.as_ref().is_some_and(folder::pending);
+        let pending = store.folder().map_err(file)?.as_ref().is_some_and(folder::pending);
         let attempted = (force_sync || stale || (pending && !last_failed)).then(service::now_ms);
         let mut synced = false;
         let mut sync_error = None;
@@ -709,22 +580,22 @@ impl Cli<'_> {
         // writes lock it themselves. Changed files need the sync just made.
         let mut folder_report = None;
         let mut folder_error = None;
-        if folder_on.is_some() && (synced || !pending) {
-            match self.folder_run(None, false) {
-                Ok(done) => folder_report = done.map(|(_, report)| report),
+        if synced || !pending {
+            match self.folder_run() {
+                Ok(report) => folder_report = report,
                 Err(e) => {
                     warning(&format!("folder not synced: {}", e.message));
                     folder_error = Some(e.message);
                 }
             }
         }
-        for h in folder_report.iter().flat_map(|r| &r.held).filter(|h| h.new) {
+        for r in folder_report.iter().flat_map(|r| &r.restored) {
             let body = format!(
-                "It would delete {} of the list's reminders, so nothing was changed. Check the file, or run: icloud-reminders folder sync --yes",
-                h.removing
+                "It no longer listed {} reminders, most of the list, so they were put back and none was deleted. To delete that many, use the app.",
+                r.kept
             );
-            if let Err(e) = notify::send(&format!("Reminders folder: {} not applied", h.file), &body) {
-                warning(&format!("could not notify about {}: {e}", h.file));
+            if let Err(e) = notify::send(&format!("Reminders: {} restored", r.file), &body) {
+                warning(&format!("could not notify about {}: {e}", r.file));
             }
         }
         let _lock = store.lock().map_err(file)?;
@@ -756,10 +627,8 @@ impl Cli<'_> {
         warn(&mut out, sync_warning);
         let mut text = format!("Notified about {count} reminder(s)");
         let mut quiet = count == 0 && folder_error.is_none();
-        if folder_on.is_some() {
-            out["folder"] = folder_report.as_ref().map_or(Value::Null, folder_json);
-            out["folder_error"] = json!(folder_error);
-        }
+        out["folder"] = folder_report.as_ref().map_or(Value::Null, folder_json);
+        out["folder_error"] = json!(folder_error);
         if let Some(report) = folder_report.as_ref().filter(|r| !r.quiet()) {
             for w in &report.warnings {
                 warning(&format!("folder: {w}"));
@@ -776,19 +645,19 @@ impl Cli<'_> {
     }
 }
 
-/// A folder run as `{added, edited, deleted, written, held, warnings}`.
+/// A folder run as `{added, edited, deleted, written, restored, warnings}`.
 fn folder_json(report: &folder::Report) -> Value {
-    let held: Vec<Value> = report
-        .held
+    let restored: Vec<Value> = report
+        .restored
         .iter()
-        .map(|h| json!({ "list": h.list, "file": h.file, "removing": h.removing }))
+        .map(|r| json!({ "list": r.list, "file": r.file, "kept": r.kept }))
         .collect();
     json!({
         "added": report.added,
         "edited": report.edited,
         "deleted": report.deleted,
         "written": report.written,
-        "held": held,
+        "restored": restored,
         "warnings": report.warnings,
     })
 }
@@ -801,18 +670,6 @@ fn folder_summary(report: &folder::Report) -> String {
         report.deleted,
         report.written.len()
     )
-}
-
-/// A folder command's answer: where it is, its files, and what the run did.
-fn folder_response(state: &folder::State, report: &folder::Report, text: String) -> Response {
-    for w in &report.warnings {
-        warning(&format!("folder: {w}"));
-    }
-    let mut out = folder_json(report);
-    out["on"] = json!(true);
-    out["dir"] = json!(state.dir);
-    out["files"] = state.lists.values().map(|ls| json!({ "file": ls.file })).collect();
-    Response::new(out, text).count(report.added + report.edited + report.deleted)
 }
 
 /// Asks unless `yes`, and only when someone can answer

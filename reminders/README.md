@@ -82,16 +82,11 @@ systemctl --user mask --now icloud-reminders-background.timer      # no notifica
 
 ### Reminders as files
 
-For anything that only carries files (Syncthing to a phone, an editor),
-the reminders can also be Markdown checklists in a folder, one file per
-list. iCloud stays where they are kept; the folder is a working copy.
-
-```console
-$ icloud-reminders folder start               # ~/Documents/Reminders, or name a directory
-$ icloud-reminders folder status
-$ icloud-reminders folder sync [--yes]        # now, instead of at the next timer run
-$ icloud-reminders folder stop                # the files stay, no longer synced
-```
+Your lists are also Markdown checklists in `~/Documents/Reminders`, one
+file per list, for anything that only carries files: Syncthing to a phone,
+an editor. Nothing turns this on: the background timer writes the folder
+after its first sync and keeps it and iCloud in step from then on. iCloud
+stays where the reminders are kept; the folder is a working copy.
 
 ```markdown
 # Work
@@ -102,8 +97,8 @@ $ icloud-reminders folder stop                # the files stay, no longer synced
 - [x] Submit the sitemap
 ```
 
-The background timer keeps the two in step: a changed file is sent within
-a minute, and what changed in iCloud is written at the next sync.
+A changed file is sent within a minute, and what changed in iCloud is
+written at the next sync.
 
 - Tick a box to complete a reminder; untick to reopen it.
 - A new line adds one. A bare line of text is enough; the checkbox is
@@ -119,12 +114,12 @@ a minute, and what changed in iCloud is written at the next sync.
   reminder; one rewritten beyond recognition is one deleted and one added.
   Alerts, priority and flags are never written, so they stay as they are.
 
-What keeps a bad file from costing reminders: a file that would delete
-more than three reminders and most of its list is **held**, with a
-notification, and nothing in it is applied until `icloud-reminders folder
-sync --yes`; a file already in the folder at `start` only ever adds; and
-from one of Syncthing's conflict copies (`Work.sync-conflict-….md`) only
-ticks and unknown lines are taken, after which the copy is removed.
+What keeps a bad file from costing reminders: a file that no longer
+lists more than three reminders that are also most of its list deletes
+none of them; the lines are written back, with a notification (to delete
+that many, use the app). A file found already in the folder only ever
+adds. From one of Syncthing's conflict copies (`Work.sync-conflict-….md`)
+only ticks and unknown lines are taken, after which the copy is removed.
 
 With Syncthing, share the folder with the phone and one computer only:
 two computers that both sync it with iCloud would each answer the other's
@@ -136,8 +131,7 @@ writes. Each computer gets its reminders from iCloud.
 reminders as last synced, and CloudKit's sync token; only a cache, since
 iCloud holds the reminders), `notified.json` (what has notified), and
 `replica` (this computer's ID in the merge tokens Apple keeps per field),
-and `folder.json` while the folder is on (where it is, and each file as
-last written).
+and `folder.json` (the folder's files as last written).
 Delete the directory to start over; the next sync fetches everything.
 
 ## Command line
@@ -159,7 +153,6 @@ $ icloud-reminders uncomplete bread
 $ icloud-reminders delete bread --yes
 $ icloud-reminders sync [--full]
 $ icloud-reminders background                 # what the timer runs
-$ icloud-reminders folder start|status|sync|stop   # reminders as Markdown files
 ```
 
 - A reminder is named by its ID, its title (ignoring case) or a unique

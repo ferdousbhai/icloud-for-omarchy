@@ -740,11 +740,11 @@ fn no_command_runs_the_app_beside_it() {
     assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "0");
 }
 
-/// The folder of a test, turned on: `<tmp>/Reminders`.
+/// The folder of a test, written by a first background run:
+/// `<home>/Documents/Reminders`.
 fn folder(env: &Env) -> PathBuf {
-    let dir = env.dir.path().join("Reminders");
-    env.json(&["folder", "start", dir.to_str().unwrap()]);
-    dir
+    env.json(&["background", "--sync"]);
+    env.dir.path().join("home/Documents/Reminders")
 }
 
 fn modifies(env: &Env) -> usize {
@@ -756,7 +756,7 @@ fn all_titles(env: &Env, list: &str) -> Vec<String> {
 }
 
 #[test]
-fn folder_start_writes_one_checklist_per_list() {
+fn the_timer_writes_one_checklist_per_list() {
     let env = start();
     let dir = folder(&env);
     let groceries = std::fs::read_to_string(dir.join("Groceries.md")).unwrap();
@@ -770,16 +770,6 @@ fn folder_start_writes_one_checklist_per_list() {
     // Completed in the last week: still listed, after the open ones.
     assert!(reminders.trim_end().ends_with("- [x] Buy paint"), "{reminders}");
     assert_eq!(modifies(&env), 0);
-
-    let status = env.json(&["folder", "status"]);
-    assert_eq!(status["on"], true);
-    assert_eq!(status["files"].as_array().unwrap().len(), 2);
-    // Off: the files stay, and nothing reads them any more.
-    env.json(&["folder", "stop"]);
-    assert!(dir.join("Groceries.md").exists());
-    assert_eq!(env.json(&["folder", "status"])["on"], false);
-    let (exit, error) = env.fails(&["folder", "sync"]);
-    assert_eq!((exit, error["code"].as_str()), (3, Some("not_set_up")));
 }
 
 #[test]
@@ -866,7 +856,7 @@ fn icloud_s_changes_reach_the_file_and_a_removed_line_deletes() {
 }
 
 #[test]
-fn a_gutted_file_is_held_until_asked() {
+fn a_gutted_file_deletes_nothing_and_is_put_back() {
     let env = start();
     for n in 0..6 {
         env.state.put(fake::reminder(
@@ -880,41 +870,28 @@ fn a_gutted_file_is_held_until_asked() {
     }
     let dir = folder(&env);
     let path = dir.join("Groceries.md");
-    let before = all_titles(&env, "Groceries").len();
-    assert_eq!(before, 8);
-    // A sync gone wrong leaves only the heading.
-    std::fs::write(&path, "# Groceries\n").unwrap();
-    let sent = modifies(&env);
+    let whole = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(all_titles(&env, "Groceries").len(), 8);
+    // A sync gone wrong leaves only the heading, and one new line.
+    std::fs::write(&path, "# Groceries\n\n- [ ] Bread\n").unwrap();
     let out = env.json(&["background"]);
-    assert_eq!(out["folder"]["held"][0]["file"], "Groceries.md");
-    assert_eq!(out["folder"]["held"][0]["removing"], 8);
-    assert_eq!(modifies(&env), sent, "nothing is deleted");
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "# Groceries\n",
-        "the file is left alone"
+    assert_eq!(out["folder"]["restored"][0]["file"], "Groceries.md");
+    assert_eq!(out["folder"]["restored"][0]["kept"], 8);
+    assert_eq!(out["folder"]["deleted"], 0);
+    assert_eq!(out["folder"]["added"], 1, "the rest of the file still counts");
+    assert_eq!(all_titles(&env, "Groceries").len(), 9);
+    let back = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        back.starts_with(whole.trim_end()) && back.contains("- [ ] Bread"),
+        "{back}"
     );
     let said = env.notifications();
     assert_eq!(said.len(), 1, "{said:?}");
-    assert!(
-        said[0].iter().any(|a| a.contains("Groceries.md not applied")),
-        "{said:?}"
-    );
-    // Said once, and no sync forced every minute while it waits.
-    let ops = env.ops().len();
-    env.json(&["background"]);
-    assert_eq!(env.notifications().len(), 1);
-    assert_eq!(env.ops().len(), ops);
-    assert_eq!(env.json(&["folder", "status"])["files"][0]["held"], true);
-
-    // Asking without --yes says so and exits 2; with it, the lines go.
-    let out = env.run(&["folder", "sync"]);
-    assert_eq!(code(&out), 2);
-    assert_eq!(envelope(&out)["data"]["held"][0]["removing"], 8);
-    assert_eq!(all_titles(&env, "Groceries").len(), before);
-    let out = env.json(&["folder", "sync", "--yes"]);
-    assert_eq!(out["deleted"], 8);
-    assert!(all_titles(&env, "Groceries").is_empty());
+    assert!(said[0].iter().any(|a| a.contains("Groceries.md restored")), "{said:?}");
+    // Put back, so there is nothing more to say or send.
+    let sent = modifies(&env);
+    env.json(&["background", "--sync"]);
+    assert_eq!((env.notifications().len(), modifies(&env)), (1, sent));
 }
 
 #[test]
@@ -964,12 +941,13 @@ fn a_change_made_offline_waits_and_is_sent_once() {
 }
 
 #[test]
-fn starting_again_over_existing_files_only_adds_what_is_new() {
+fn a_file_found_already_there_only_adds_what_is_new() {
     let env = start();
     let dir = folder(&env);
-    env.json(&["folder", "stop"]);
     let path = dir.join("Groceries.md");
-    // While it was off: a line added in the file, one removed, and iCloud gained one.
+    // As on a computer that never wrote this folder: no state, but a file
+    // with a line iCloud lacks and without one it has; iCloud gained one.
+    std::fs::remove_file(env.data().join("folder.json")).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, text.replace("- [ ] Eggs\n", "") + "- [ ] Bread\n").unwrap();
     env.state.put(fake::reminder(
@@ -980,14 +958,14 @@ fn starting_again_over_existing_files_only_adds_what_is_new() {
         None,
         now_ms(),
     ));
-    let out = env.json(&["folder", "start", dir.to_str().unwrap()]);
-    assert_eq!((out["added"].as_i64(), out["deleted"].as_i64()), (Some(1), Some(0)));
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["deleted"].as_i64()),
+        (Some(1), Some(0))
+    );
     let mut titles = all_titles(&env, "Groceries");
     titles.sort();
     assert_eq!(titles, ["Bread", "Eggs", "Milk", "Tea"]);
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("- [ ] Eggs\n") && text.contains("- [ ] Tea\n"), "{text}");
-    // Elsewhere is refused while it is on.
-    let (exit, error) = env.fails(&["folder", "start", "/tmp/elsewhere"]);
-    assert_eq!((exit, error["code"].as_str()), (2, Some("usage")));
 }

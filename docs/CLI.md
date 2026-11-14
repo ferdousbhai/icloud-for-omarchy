@@ -124,7 +124,7 @@ has its command.
 | Edit dialog: Delete | `icloud-reminders delete REMINDER --yes` |
 | Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` |
 | Notifications (the timer, window open or not) | `icloud-reminders background` (the timer runs it with `--styled`, which prints nothing when nothing fell due) |
-| (no window: reminders as Markdown files, for Syncthing and editors) | `icloud-reminders folder start [DIR]`, `status`, `sync [--yes]`, `stop` |
+| (no window: the lists as Markdown checklists in `~/Documents/Reminders`, for Syncthing and editors) | nothing to run: `icloud-reminders background` keeps them in step |
 | Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
 
 ### Contacts (`contacts/src/bin/app`)
@@ -400,8 +400,8 @@ they exit with the engine's codes, below.
 | Exit | Codes |
 |---|---|
 | 1 | `cancelled`, `error` (also a record or zone CloudKit refused), `http` (a 4xx) |
-| 2 | `usage` (also `delete` without `--yes` when nobody can be asked, and `folder start` elsewhere while it is on), `ambiguous` (the hint lists the matches: use the ID); `folder sync` with its data when a file is held |
-| 3 | `sign_in_required`, `session_rejected`, `not_set_up` (`folder sync` while the folder is off) |
+| 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
+| 3 | `sign_in_required`, `session_rejected` |
 | 4 | `not_found` (no such reminder or list; for a list the hint names the lists) |
 | 5 | `offline` (no network; `--cached` reads the last sync), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
@@ -570,10 +570,7 @@ reminders first; LIST an ID or a name. IDs are the records' UUIDs.
 | `delete` | `{action:"delete", reminder:{id, title}}` |
 | (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
 | `sync` | `{lists, reminders, changed, full}` |
-| `background` | `{synced, sync_error, notified:[{id, title}]}`; exit 0 also when the sync failed (`sync_error` says why). While the folder is on, also `folder` (a run as below, or null when it waited for a sync) and `folder_error` |
-| `folder start [DIR]`, `folder sync [--yes]` | `{on, dir, files:[{file}], added, edited, deleted, written:[file], held:[{list, file, removing}], warnings}`: what the files changed in iCloud, which files were written, and the files held because they would delete most of their list (`sync` then exits 2; `--yes` applies them) |
-| `folder status` | `{on, dir, files:[{list, file, held}]}`; no network |
-| `folder stop` | `{on:false, dir}`; the files stay |
+| `background` | `{synced, sync_error, notified:[{id, title}]}`; exit 0 also when the sync failed (`sync_error` says why). Also `folder`: `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, and the files put back because they no longer listed most of their list (null when changed files are waiting for a sync), and `folder_error` |
 | (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; still exit 0 |
 
 ### icloud-contacts

@@ -34,8 +34,8 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`src/bin/app/`), each with a fake Apple server in `examples/`. Reminders speaks CloudKit
   (`cloudkit.rs`, container `com.apple.reminders`) and has the systemd timer that syncs and sends
   due-time notifications (`data/`, `notify.rs`), and `folder.rs` keeps the reminders as Markdown
-  checklists in a folder for what only carries files (Syncthing to a phone), off until
-  `icloud-reminders folder start`: read its header before changing how lines are matched to
+  checklists in `~/Documents/Reminders` for what only carries files (Syncthing to a phone), from
+  the same timer with no command to turn it on: read its header before changing how lines are matched to
   reminders or what a file may delete; Contacts speaks icloud.com's contacts service
   (`api.rs`, `vcard.rs`). They were away from 2026-10-13 to 2026-11-13 as the iCloud halves of
   Cloud Tasks and Cloud Contacts, which also showed Google; the owner brought them back so that
