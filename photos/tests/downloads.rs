@@ -386,6 +386,30 @@ fn files_already_on_disk_are_never_overwritten() {
 }
 
 #[test]
+fn exporting_again_finds_the_numbered_copy_it_made() {
+    let tmp = temp_dir("export-again");
+    let root = tmp.path();
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, root);
+    serve_originals(&t, &cat);
+    // Two photos of one name and month, both in the library.
+    for id in ["ASSET-001", "ASSET-004"] {
+        fetch(&t, &cat, &targets, id, Job::Original).unwrap();
+    }
+    let out = Targets {
+        library: root.join("out"),
+        export: true,
+        ..targets
+    };
+    let export = || ["ASSET-001", "ASSET-004"].map(|id| fetch(&t, &cat, &out, id, Job::Original).unwrap());
+    let month = out.library.join("2025/09");
+    let first = export();
+    assert_eq!(first, [month.join("IMG_0001.HEIC"), month.join("IMG_0001 (2).HEIC")]);
+    assert_eq!(export(), first, "the second photo is not exported again as (3)");
+    assert_eq!(std::fs::read_dir(&month).unwrap().count(), 3, "two photos and a video");
+}
+
+#[test]
 fn a_live_video_never_lands_on_another_assets_file() {
     let tmp = temp_dir("live-collide");
     let root = tmp.path();

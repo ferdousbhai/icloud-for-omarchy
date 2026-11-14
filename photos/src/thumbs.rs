@@ -172,17 +172,25 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, p
 /// `download --out`: the original (and a Live Photo's video) in the export
 /// folder `targets.library`, copied from the library when it is there and
 /// downloaded otherwise. Nothing is replaced, and the catalog is not told:
-/// its paths are the library's. A file of the right name and size already
-/// in the export folder is taken to be an earlier export of the same photo.
+/// its paths are the library's. A file of the right name (numbered or not)
+/// and size already in the export folder is taken to be an earlier export
+/// of the same photo.
 fn export(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, peers: Peers) -> Result<Fetched> {
     let len = |p: &Path| std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len());
     let mut hold = Reservation::default();
     let source = row.local_path.clone().filter(|p| p.exists());
-    let (first, _) = original_names(&targets.library, &row, 1);
     let size = source.as_deref().map_or((row.size > 0).then_some(row.size as u64), len);
-    let reused = size.is_some() && len(&first) == size;
-    let photo = if reused {
-        first
+    // Among the names this photo can have been exported under (its own, then
+    // " (2)" and so on while they are in use), the one holding its bytes.
+    let earlier = size.and_then(|size| {
+        (1..10_000)
+            .map(|n| original_names(&targets.library, &row, n))
+            .take_while(|(photo, live)| [Some(photo), live.as_ref()].into_iter().flatten().any(|p| p.exists()))
+            .find_map(|(photo, _)| (len(&photo) == Some(size)).then_some(photo))
+    });
+    let reused = earlier.is_some();
+    let photo = if let Some(photo) = earlier {
+        photo
     } else {
         let dest = {
             let mut taken = reserved();
