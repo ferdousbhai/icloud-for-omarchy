@@ -982,6 +982,28 @@ fn two_folders_each_moved_into_the_other_follow_icloud() {
 }
 
 #[test]
+fn two_folders_each_moved_into_the_other_with_a_new_one_in_the_place_of_one_still_follow_icloud() {
+    let bed = Bed::new();
+    let q = bed.cloud.folder(ROOT_ID, "Q");
+    bed.cloud.file(&q.id, "q.txt", "in Q", bed.time());
+    let r = bed.cloud.folder(ROOT_ID, "r");
+    bed.cloud.file(&r.id, "r.txt", "in r", bed.time());
+    bed.settle();
+    // Here Q goes into r, and a new Q takes its place; in iCloud r goes
+    // into Q. The move here cannot be undone onto the new Q.
+    fs::rename(bed.root().join("Q"), bed.root().join("r/Q")).unwrap();
+    bed.write("Q/new.txt", "new");
+    move_there(&bed, &r.id, &q.id);
+    bed.sync();
+    bed.settle();
+    let mut texts: Vec<String> = bed.local_tree().into_values().flatten().collect();
+    texts.sort();
+    assert_eq!(texts, ["in Q", "in r", "new"]);
+    assert_eq!(bed.cloud.text("Q/r/r.txt").as_deref(), Some("in r"));
+    assert!(bed.cloud.0.borrow().trashed.is_empty());
+}
+
+#[test]
 fn a_folder_moved_in_icloud_into_one_that_took_its_name_follows_it() {
     let bed = Bed::new();
     let r = bed.cloud.folder(ROOT_ID, "r");

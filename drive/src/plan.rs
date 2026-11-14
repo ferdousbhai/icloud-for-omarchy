@@ -752,16 +752,32 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
     }
     // Waiting on each other (two folders each moved into the other, one
     // here and one in iCloud): iCloud's move wins, as when one item was
-    // moved on both sides, and the move here is undone.
-    let back = waited.into_iter().find(|(row, _)| {
+    // moved on both sides, and the move here is undone: back where it was,
+    // or, when something new here has that name now, beside it under a
+    // name of its own (the next round follows iCloud from there, and sets
+    // the new one aside).
+    let parent_here = |row: &Row| {
         let dir = parent_of(&row.path);
-        !local.contains_key(&row.path) && (dir.is_empty() || local.get(dir).is_some_and(|e| e.is_dir))
-    });
+        dir.is_empty() || local.get(dir).is_some_and(|e| e.is_dir)
+    };
+    let back = waited
+        .iter()
+        .find(|(row, _)| !local.contains_key(&row.path) && parent_here(row))
+        .or_else(|| waited.iter().find(|(row, _)| parent_here(row)));
     if let Some((row, now)) = back.filter(|_| ops.is_empty()) {
+        let to = if local.contains_key(&row.path) {
+            let free = |p: &String| !local.contains_key(p) && !remote.by_path.contains_key(p);
+            (1..)
+                .map(|n| join(parent_of(&row.path), &format!("{} (moving {n})", name_of(&row.path))))
+                .find(free)
+                .unwrap()
+        } else {
+            row.path.clone()
+        };
         ops.push(Op::LocalMove {
             id: row.node.id.clone(),
             from: now.to_string(),
-            to: row.path.clone(),
+            to,
         });
     }
     if ops.is_empty() {
