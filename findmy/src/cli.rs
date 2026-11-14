@@ -320,10 +320,14 @@ impl<T: Transport> Cli<T> {
     }
 
     fn locate(&mut self, query: &str, wait: Duration) -> Outcome {
+        // Before anything is asked: a wait no clock can count to is a
+        // mistake in the command, not a reason to wake the devices.
+        let Some(deadline) = Instant::now().checked_add(wait) else {
+            return Err(usage(format!("--wait {} is too long", wait.as_secs())));
+        };
         let devices = self.fetch(false)?;
         let device = resolve(&devices, query)?.clone();
         let before = device.location.map_or(0, |f| f.ts_ms);
-        let deadline = Instant::now() + wait;
         let mut devices = self.fm.refresh(true).map_err(find_error)?;
         loop {
             self.record(&devices);

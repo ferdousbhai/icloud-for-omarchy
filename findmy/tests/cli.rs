@@ -161,6 +161,16 @@ fn locate_gives_up_on_a_device_with_only_an_old_fix() {
 }
 
 #[test]
+fn locate_refuses_a_wait_too_long_to_count() {
+    let env = start();
+    let out = env.run(&["locate", IPHONE, "--wait", "18446744073709551615"]);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    let err = envelope(&out.stdout);
+    assert_eq!(err["error"]["code"], "usage");
+    assert!(err["error"]["message"].as_str().unwrap().contains("--wait"), "{err}");
+}
+
+#[test]
 fn play_sound_needs_yes_without_a_terminal() {
     let env = start();
     let out = env.styled(&["play-sound", "Test's iPhone"]);
