@@ -30,7 +30,8 @@ pub struct Fix {
     pub lon: f64,
     /// Horizontal accuracy radius in metres.
     pub accuracy: f64,
-    /// Unix milliseconds of the fix.
+    /// Unix milliseconds of the fix; never 0 in one Find My sent (a
+    /// position without a time is no fix).
     pub ts_ms: i64,
     /// Apple marks a fix old when the device has not reported for a while.
     pub is_old: bool,
@@ -140,12 +141,15 @@ impl Device {
             _ => None,
         };
         // pyicloud: location is only usable when LOC is on and it is present.
-        let location = raw.location.filter(|_| loc).map(|l| Fix {
-            lat: l.latitude,
-            lon: l.longitude,
-            accuracy: l.horizontal_accuracy.unwrap_or(0.0),
-            ts_ms: l.time_stamp.unwrap_or(0),
-            is_old: l.is_old.unwrap_or(false),
+        // One that does not say when it was taken is no fix either.
+        let location = raw.location.filter(|_| loc).and_then(|l| {
+            Some(Fix {
+                lat: l.latitude,
+                lon: l.longitude,
+                accuracy: l.horizontal_accuracy.unwrap_or(0.0),
+                ts_ms: l.time_stamp.filter(|&ts| ts > 0)?,
+                is_old: l.is_old.unwrap_or(false),
+            })
         });
         let model_name = raw.device_display_name.unwrap_or_default();
         Some(Device {
@@ -179,8 +183,8 @@ impl Device {
             });
         }
         match &self.location {
-            Some(fix) if fix.ts_ms > 0 => parts.push(last_seen(now_ms, fix.ts_ms)),
-            _ => parts.push("No location".into()),
+            Some(fix) => parts.push(last_seen(now_ms, fix.ts_ms)),
+            None => parts.push("No location".into()),
         }
         parts.join(" · ")
     }
@@ -246,6 +250,23 @@ mod tests {
                 .unwrap()
                 .can_play_sound
         );
+    }
+
+    #[test]
+    fn a_position_without_a_time_is_no_fix() {
+        let device = |location: serde_json::Value| {
+            Device::from_json(&serde_json::json!({"id": "x", "features": {"LOC": true}, "location": location})).unwrap()
+        };
+        let timed = device(serde_json::json!({"latitude": 1.0, "longitude": 2.0, "timeStamp": 1_790_000_000_000_i64}));
+        assert_eq!(timed.location.unwrap().ts_ms, 1_790_000_000_000);
+        for untimed in [
+            serde_json::json!({"latitude": 1.0, "longitude": 2.0}),
+            serde_json::json!({"latitude": 1.0, "longitude": 2.0, "timeStamp": 0}),
+        ] {
+            let d = device(untimed);
+            assert_eq!(d.location, None);
+            assert_eq!(d.summary(0), "No location");
+        }
     }
 
     #[test]

@@ -343,12 +343,12 @@ impl<T: Transport> Cli<T> {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 let last = match now.location {
-                    Some(f) if f.ts_ms > 0 => format!(
+                    Some(f) => format!(
                         "last fix {} ({})",
                         rfc3339(f.ts_ms / 1000),
                         models::last_seen(icloud_session::time::now_ms(), f.ts_ms)
                     ),
-                    _ => "no fix at all".into(),
+                    None => "no fix at all".into(),
                 };
                 return Err(CliError::new(
                     "no_fix",
@@ -539,7 +539,7 @@ fn resolve<'a>(devices: &'a [Device], query: &str) -> Result<&'a Device, Failure
 }
 
 fn device_json(d: &Device, coords: bool, now_ms: i64) -> Value {
-    let fix = d.location.filter(|f| f.ts_ms > 0).map(|f| {
+    let fix = d.location.map(|f| {
         let mut v = json!({
             "time": rfc3339(f.ts_ms / 1000),
             "timestamp_ms": f.ts_ms,
@@ -588,7 +588,7 @@ fn device_text(d: &Device, coords: bool, now_ms: i64) -> String {
         status.push("Lost Mode on");
     }
     out += &format!("  status:   {}\n", status.join(", "));
-    match d.location.filter(|f| f.ts_ms > 0) {
+    match d.location {
         Some(f) => {
             let old = if f.is_old { ", old" } else { "" };
             out += &format!(

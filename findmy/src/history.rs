@@ -180,7 +180,7 @@ impl History {
         let tx = self.conn.unchecked_transaction()?;
         let mut written = 0;
         for d in devices {
-            if let Some(fix) = d.location.as_ref().filter(|f| !f.is_old && f.ts_ms > 0)
+            if let Some(fix) = d.location.as_ref().filter(|f| !f.is_old)
                 && self.record(&d.id, fix, d.battery)?
             {
                 written += 1;
