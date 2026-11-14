@@ -19,7 +19,8 @@
 //!   `kill -9` would: no destructor, no flush) the `n`th time (default 1)
 //!   it passes `<point>`; `trace` logs every point passed instead.
 //! - `ICLOUD_SESSIOND_PAUSE_AT=<point>[:<n>]@<file>` creates `<file>` there
-//!   and waits until it is removed.
+//!   and waits until it is removed; several, separated by `,`, each count
+//!   their own passes.
 
 #[cfg(debug_assertions)]
 pub fn point(op: &str, target: &str) {
@@ -44,26 +45,27 @@ pub fn point(op: &str, target: &str) {
 
     static TRACE: OnceLock<bool> = OnceLock::new();
     static CRASH: OnceLock<Option<(String, u64)>> = OnceLock::new();
-    static PAUSE: OnceLock<Option<((String, u64), String)>> = OnceLock::new();
+    type Pause = (Option<(String, u64)>, AtomicU64, String);
+    static PAUSE: OnceLock<Vec<Pause>> = OnceLock::new();
     static CRASH_HITS: AtomicU64 = AtomicU64::new(0);
-    static PAUSE_HITS: AtomicU64 = AtomicU64::new(0);
 
     let point = format!("{op}:{target}");
     if *TRACE.get_or_init(|| var("ICLOUD_SESSIOND_CRASH_AT").as_deref() == Some("trace")) {
         eprintln!("icloud-sessiond: crash point {point}");
     }
-    let pause = PAUSE.get_or_init(|| {
-        let spec = var("ICLOUD_SESSIOND_PAUSE_AT")?;
-        let (at, file) = spec.split_once('@')?;
-        Some((parse(at)?, file.to_string()))
+    let pauses = PAUSE.get_or_init(|| {
+        let specs = var("ICLOUD_SESSIOND_PAUSE_AT").unwrap_or_default();
+        (specs.split(',').filter_map(|spec| spec.split_once('@')))
+            .map(|(at, file)| (parse(at), AtomicU64::new(0), file.to_string()))
+            .collect()
     });
-    if let Some((at, file)) = pause
-        && hit(&Some(at.clone()), &PAUSE_HITS, &point)
-    {
-        eprintln!("icloud-sessiond: paused at {point}");
-        let _ = std::fs::write(file, "");
-        while std::path::Path::new(file).exists() {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+    for (at, hits, file) in pauses {
+        if hit(at, hits, &point) {
+            eprintln!("icloud-sessiond: paused at {point}");
+            let _ = std::fs::write(file, "");
+            while std::path::Path::new(file).exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         }
     }
     if hit(

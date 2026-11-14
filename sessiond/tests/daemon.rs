@@ -5058,6 +5058,86 @@ fi"#,
         rig.sign_in_and_out_work(case);
     }
 
+    fn merge_on(conn: &Connection, dest: &str, cookie: &str) {
+        let cookies = vec![format!("{cookie}; Domain=.icloud.com; Path=/")];
+        conn.call_method(
+            Some(dest),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "MergeCookiesFor",
+            &(DSID, cookies),
+        )
+        .unwrap();
+    }
+
+    /// Two merges in the overlap: one by the daemon winding down, one by
+    /// the next, held before its write while the first writes. The next
+    /// follows the first's jars, and its own merge, dropped with what it
+    /// held, is made again on them: both are kept.
+    #[test]
+    fn merges_by_both_daemons_in_the_overlap_are_both_kept() {
+        let rig = Rig::idling(false, 1.0);
+        rig.sign_in("a");
+        rig.restart();
+        let winding = rig.env.root().join("winding");
+        let held = rig.env.root().join("held");
+        // The start takes the change lock twice (settling, reading the
+        // account); the first daemon's merge's write is the third.
+        rig.arm(
+            "PAUSE",
+            &format!("release:name@{},lock:change:3@{}", winding.display(), held.display()),
+        );
+        let first = {
+            let c = rig.env.conn();
+            icloud_session::status_on(&c).unwrap();
+            rig.owner()
+        };
+        rig.paused(&winding);
+        assert_eq!(rig.status().dsid.as_deref(), Some(DSID));
+        let next = rig.owner();
+        assert_ne!(next, first);
+
+        // The first holds the change lock for its merge; the next merges
+        // in memory and waits for the lock to write it.
+        let conn = rig.env.conn();
+        let first_merging = {
+            let first = first.clone();
+            thread::spawn(move || merge_on(&conn, &first, "X-APPLE-FIRST=a-first"))
+        };
+        rig.paused(&held);
+        let conn = rig.env.conn();
+        let next_merging = thread::spawn(move || merge_on(&conn, &next, "X-APPLE-NEXT=a-next"));
+        thread::sleep(Duration::from_millis(300));
+        fs::remove_file(&held).unwrap();
+        first_merging.join().unwrap();
+        next_merging.join().unwrap();
+        fs::remove_file(&winding).unwrap();
+        wait_until("the first daemon to exit", Duration::from_secs(30), || {
+            !rig.on_bus(&first)
+        });
+
+        let (header, _, _) = session(&rig.conn).unwrap();
+        assert_eq!(
+            cookie_of(&header, "X-APPLE-FIRST").as_deref(),
+            Some("a-first"),
+            "{header}"
+        );
+        assert_eq!(
+            cookie_of(&header, "X-APPLE-NEXT").as_deref(),
+            Some("a-next"),
+            "{header}"
+        );
+        rig.restart();
+        let case = "merges by both daemons in the overlap";
+        assert_eq!(rig.check(case, false).as_deref(), Some(DSID));
+        let jar = rig.env.session_secret().unwrap()["cookies"].clone();
+        assert!(
+            cookie_named(&jar, "X-APPLE-FIRST").is_some() && cookie_named(&jar, "X-APPLE-NEXT").is_some(),
+            "{jar}"
+        );
+        rig.sign_in_and_out_work(case);
+    }
+
     /// A second daemon starting while the first is between its keyring
     /// write and its `account.json` write, signing in as B: it waits for
     /// that change rather than reading half of it (A's `account.json`, B's

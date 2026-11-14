@@ -263,6 +263,9 @@ struct State {
     /// Bumped by every [`Daemon::save_account`], so the writes done after
     /// the lock is dropped never put an older account over a newer one.
     save_seq: u64,
+    /// Bumped by every [`Daemon::follow_disk`] that followed another
+    /// daemon's change, dropping the writes taken before it.
+    follows: u64,
     /// When the last keyring read for `unread` failed, and why: callers
     /// that were already waiting share that answer rather than each
     /// asking (and prompting) again.
@@ -630,6 +633,7 @@ impl Daemon {
             find_my_last_login: None,
             find_my_last_ok: None,
             save_seq: 0,
+            follows: 0,
             keyring_failed: None,
             sign_out_reason,
         };
@@ -977,6 +981,7 @@ impl Daemon {
         let mut st = lock(&self.state);
         st.save_seq += 1;
         written.seq = st.save_seq;
+        st.follows += 1;
         st.account = None;
         st.unread = stored.map(|stored| {
             Box::new(Unread {
@@ -1417,28 +1422,45 @@ impl Daemon {
     /// With `dsid`, the account the client got them for: `SignInRequired`,
     /// and nothing merged, unless that is the account held now (checked
     /// under the same lock as the merge, so no sign-in comes between).
+    ///
+    /// Another daemon's change followed before the merge was written (see
+    /// [`Daemon::follow_disk`]) drops it with the account it was made on:
+    /// it is made again on the account followed, if that is the same
+    /// sign-in (merging by name, the other daemon's cookies stay, unless
+    /// these replace them).
     fn merge_into(
         &self,
         dsid: Option<&str>,
         set_cookies: &[String],
-        jar: impl FnOnce(&mut Account) -> Option<&mut Vec<Cookie>>,
+        jar: impl Fn(&mut Account) -> Option<&mut Vec<Cookie>>,
     ) -> Result<(), ServiceError> {
-        self.retry_keyring()?;
-        let mut st = lock(&self.state);
-        if let Some(dsid) = dsid
-            && st.account.as_ref().is_none_or(|a| a.dsid != dsid)
-        {
-            return Err(st.sign_in_required());
-        }
-        let changed = st
-            .account
-            .as_mut()
-            .and_then(jar)
-            .is_some_and(|jar| cookies::merge_set_cookies(jar, set_cookies, time::now_secs()));
-        let save = changed.then(|| self.save_account(&mut st));
-        drop(st);
-        if let Some(save) = save {
+        let mut merged_into = None;
+        for _ in 0..3 {
+            self.retry_keyring()?;
+            let mut st = lock(&self.state);
+            let sign_in = st.account.as_ref().map(|a| (a.dsid.clone(), a.captured_at.clone()));
+            if merged_into.is_some() && sign_in != merged_into {
+                break;
+            }
+            if let Some(dsid) = dsid
+                && st.account.as_ref().is_none_or(|a| a.dsid != dsid)
+            {
+                return Err(st.sign_in_required());
+            }
+            let follows = st.follows;
+            let changed = st
+                .account
+                .as_mut()
+                .and_then(&jar)
+                .is_some_and(|jar| cookies::merge_set_cookies(jar, set_cookies, time::now_secs()));
+            let save = changed.then(|| self.save_account(&mut st));
+            drop(st);
+            let Some(save) = save else { break };
             self.write(save);
+            if lock(&self.state).follows == follows {
+                break;
+            }
+            merged_into = sign_in;
         }
         self.announce(false);
         Ok(())
