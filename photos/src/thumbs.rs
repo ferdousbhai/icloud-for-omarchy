@@ -252,7 +252,10 @@ fn export(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, pee
             Some(have) => drop(std::fs::copy(have, &tmp.0)?),
             None => download_fresh(t, cat, &mut row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?,
         }
-        settle(tmp, dest, &mut hold, |taken| plan_live(cat, &row, &photo, taken))
+        crash::point("export.live.fetched");
+        let placed = settle(tmp, dest, &mut hold, |taken| plan_live(cat, &row, &photo, taken))?;
+        crash::point("export.live.placed");
+        Ok(placed)
     })();
     let (live, live_error) = match video {
         Ok(p) => (Some(p), None),
@@ -567,6 +570,7 @@ pub fn sweep_temporaries(library: &Path, older_than: Duration) -> usize {
                     && std::fs::remove_file(file.path()).is_ok()
                 {
                     removed += 1;
+                    crash::point("sweep.removed");
                 }
             }
         }

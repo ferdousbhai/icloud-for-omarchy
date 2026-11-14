@@ -13,6 +13,13 @@
 //! - `download.cache.placed`: [`a_preview_killed_before_its_record_is_fetched_again_into_the_cache`]
 //! - `export.original.fetched`, `export.original.placed`:
 //!   [`an_export_killed_at_any_point_only_ever_adds_files`]
+//! - `export.live.fetched`, `export.live.placed`:
+//!   [`a_live_photo_export_killed_at_any_point_only_ever_adds_its_two_files`]
+//! - `sweep.removed`: [`a_sweep_of_temporary_files_killed_part_way_removes_only_old_ones`]
+//! - taking up files a lost catalog had (`download.original.placed`,
+//!   `download.live.placed`, `download.live.fetched`):
+//!   [`originals_taken_up_after_the_catalog_was_lost_are_taken_up_once_when_killed`],
+//!   [`a_catalog_from_before_live_size_is_upgraded_and_takes_up_the_files_on_disk`]
 //! - `delete.sent`, `delete.retried`: [`a_delete_killed_after_icloud_answered_leaves_the_catalog_in_step`]
 //! - `restore.sent`, `restore.retried`: [`a_restore_killed_after_icloud_answered_is_finished_by_the_rerun`]
 //! - `upload.reserved`, `upload.sent`, `upload.registered`:
@@ -497,14 +504,37 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 
 #[test]
 fn a_catalog_from_before_live_size_is_upgraded_and_takes_up_the_files_on_disk() {
-    let env = Env::new("upgrade", 3);
-    env.run(&["sync"]).ok();
-    let month = env.library().join("2026/09");
-    let users = users_files(&month);
-    env.run(&["download", "--all"]).ok();
-    let library = files(&env.library());
-    // The same rows in a catalog of the old schema, the downloads' paths
-    // lost (a download cut off before its record, or killed mid-way).
+    // Also killed while taking up the video, which is told by its bytes.
+    for point in [None, Some("download.live.fetched"), Some("download.live.placed")] {
+        let env = Env::new("upgrade", 3);
+        env.run(&["sync"]).ok();
+        let month = env.library().join("2026/09");
+        let users = users_files(&month);
+        env.run(&["download", "--all"]).ok();
+        let library = files(&env.library());
+        old_schema_catalog(&env);
+
+        // It opens, gains the column, and the video's size is not known.
+        let live = env.rows().into_iter().find(|r| r["kind"] == "live").unwrap();
+        let id = live["id"].as_str().unwrap();
+        let row = Catalog::open(&env.catalog()).unwrap().asset(id).unwrap().unwrap();
+        assert_eq!((row.live_size, row.live_path.is_none()), (0, true));
+        assert!(row.size > 0);
+
+        // The originals on disk are taken up, the video too: no " (2)" copies.
+        if let Some(point) = point {
+            env.crash(point, &["download", "--all"]);
+        }
+        env.run(&["download", "--all"]).ok();
+        assert_eq!(files(&env.library()), library, "{point:?}");
+        catalog_and_files_agree(&env, &users, &month);
+    }
+}
+
+/// The catalog's rows put in a catalog of the schema before `live_size`,
+/// the downloads' paths lost (a download cut off before its record, or
+/// killed mid-way).
+fn old_schema_catalog(env: &Env) {
     let old = env.root.join("old.db");
     {
         let conn = rusqlite::Connection::open(&old).unwrap();
@@ -526,16 +556,109 @@ fn a_catalog_from_before_live_size_is_upgraded_and_takes_up_the_files_on_disk() 
         let _ = std::fs::remove_file(format!("{}{suffix}", env.catalog().display()));
     }
     std::fs::rename(&old, env.catalog()).unwrap();
+}
 
-    // It opens, gains the column, and the video's size is not known.
-    let live = env.rows().into_iter().find(|r| r["kind"] == "live").unwrap();
-    let id = live["id"].as_str().unwrap();
-    let row = Catalog::open(&env.catalog()).unwrap().asset(id).unwrap().unwrap();
-    assert_eq!((row.live_size, row.live_path.is_none()), (0, true));
-    assert!(row.size > 0);
+/// The catalog deleted: what a sync rebuilds knows no downloads.
+fn lose_catalog(env: &Env) {
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", env.catalog().display()));
+    }
+    env.run(&["sync"]).ok();
+}
 
-    // The originals on disk are taken up, the video too: no " (2)" copies.
+#[test]
+fn originals_taken_up_after_the_catalog_was_lost_are_taken_up_once_when_killed() {
+    for point in [
+        "download.original.placed",
+        "download.original.placed:3",
+        "download.live.placed",
+    ] {
+        let env = Env::new("adopt", 3);
+        env.run(&["sync"]).ok();
+        let month = env.library().join("2026/09");
+        let users = users_files(&month);
+        env.run(&["download", "--all"]).ok();
+        let library = files(&env.library());
+        lose_catalog(&env);
+        env.crash(point, &["download", "--all"]);
+        env.run(&["download", "--all"]).ok();
+        assert_eq!(files(&env.library()), library, "{point}: nothing downloaded again");
+        catalog_and_files_agree(&env, &users, &month);
+    }
+}
+
+#[test]
+fn a_live_photo_export_killed_at_any_point_only_ever_adds_its_two_files() {
+    // From iCloud, and copied from the library where it is downloaded.
+    for (point, downloaded) in [
+        ("export.live.fetched", false),
+        ("export.live.placed", false),
+        ("export.live.fetched", true),
+        ("export.live.placed", true),
+    ] {
+        let env = Env::new("export-live", 3);
+        env.run(&["sync"]).ok();
+        let live = env.rows().into_iter().find(|r| r["kind"] == "live").unwrap();
+        let id = live["id"].as_str().unwrap();
+        if downloaded {
+            env.run(&["download", id]).ok();
+        }
+        let out = env.root.join("export");
+        write(&out.join("notes.txt"), b"notes");
+        let before = files(&out);
+        let args = ["download", "--out", out.to_str().unwrap(), id];
+        env.crash(point, &args);
+        let crashed = files(&out);
+        kept(&before, &crashed, point);
+        let item = env.run(&args).ok()[0].clone();
+        let after = files(&out);
+        kept(&crashed, &after, point);
+        assert_eq!(after.len(), before.len() + 2, "{point}: {:?}", after.keys());
+        let (photo, video) = (item["path"].as_str().unwrap(), item["live_path"].as_str().unwrap());
+        assert!(photo.ends_with(".HEIC") && video.ends_with(".MOV"), "{item}");
+        assert_eq!(std::fs::read(video).unwrap(), b"not really a movie", "{point}");
+        // And once more: nothing new.
+        env.run(&args).ok();
+        assert_eq!(files(&out), after, "{point}");
+    }
+}
+
+/// A download's temporary file, last written two days ago when `stale`.
+fn temporary(dir: &Path, n: u8, stale: bool) -> PathBuf {
+    let p = dir.join(format!(".icloud-photos-{}.part", format!("{n:x}").repeat(32)));
+    write(&p, b"part");
+    if stale {
+        let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(two_days)
+            .unwrap();
+    }
+    p
+}
+
+#[test]
+fn a_sweep_of_temporary_files_killed_part_way_removes_only_old_ones() {
+    let env = Env::new("sweep", 3);
+    env.run(&["sync"]).ok();
+    let month = env.library().join("2026/09");
+    let users = users_files(&month);
+    let old: Vec<PathBuf> = (1..=3).map(|n| temporary(&month, n, true)).collect();
+    // Another process's download, running.
+    let running = temporary(&month, 9, false);
+    env.crash("sweep.removed:2", &["download", "--all"]);
+    assert_eq!(old.iter().filter(|p| p.exists()).count(), 1, "two removed, then killed");
     env.run(&["download", "--all"]).ok();
-    assert_eq!(files(&env.library()), library);
+    // The sweep runs beside the downloads: wait for it to be done.
+    for _ in 0..100 {
+        if old.iter().all(|p| !p.exists()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(old.iter().all(|p| !p.exists()));
+    assert_eq!(std::fs::read(&running).unwrap(), b"part");
     catalog_and_files_agree(&env, &users, &month);
 }
