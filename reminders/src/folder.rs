@@ -851,10 +851,6 @@ fn closer(writing: &Writing, ls: &ListState, text: &str, now: &Zoned) -> bool {
 fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save) -> Result<()> {
     let Run { svc, list, now } = run;
     let path = dir.join(&ls.file);
-    // A write a killed run began: its temp file is this program's own.
-    if ls.writing.is_some() {
-        let _ = fs::remove_file(tmp_path(&path));
-    }
     let on_disk = read(&path)?;
     // Written by a run killed before it recorded so: compared with what it
     // held before, iCloud's changes in it would read as its own (a
@@ -1060,6 +1056,11 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     // A rename a killed run began: done when the file is at its new name
     // and not its old, else not done (never an old name's file come back).
     for ls in state.lists.values_mut() {
+        // A write a killed run began: its temp file is this program's own,
+        // also once the list is renamed or gone.
+        if ls.writing.is_some() {
+            let _ = fs::remove_file(tmp_path(&dir.join(&ls.file)));
+        }
         if let Some(to) = ls.renaming.take()
             && dir.join(&to).exists()
             && !dir.join(&ls.file).exists()

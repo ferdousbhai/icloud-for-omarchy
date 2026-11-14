@@ -1730,3 +1730,28 @@ fn a_conflict_copy_s_lines_deleted_in_icloud_do_not_make_a_removal_risky() {
         1
     );
 }
+
+#[test]
+fn a_write_a_run_ended_before_finishing_leaves_no_temp_file_after_its_list_is_renamed_or_deleted() {
+    for deleted in [false, true] {
+        let env = start();
+        let dir = folder(&env);
+        let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
+        milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
+        env.state.put(milk);
+        env.background_crashing_at("tmp-written");
+        assert!(dir.join(".syncthing.Groceries.md.tmp").exists());
+        if deleted {
+            delete_groceries(&env);
+        } else {
+            rename_groceries(&env, "Food");
+        }
+        env.json(&["background", "--sync"]);
+        let want: &[&str] = if deleted {
+            &["Reminders.md"]
+        } else {
+            &["Food.md", "Reminders.md"]
+        };
+        assert_eq!(file_names(&dir), want, "deleted: {deleted}");
+    }
+}
