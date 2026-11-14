@@ -1129,8 +1129,9 @@ int main(int argc, char *argv[])
         const auto replay = [](const char *cassette) {
             return QHash<QString, QString>{
                 { QStringLiteral("ICLOUD_NOTES_SYNC_BIN"), qEnvironmentVariable("ICLOUD_NOTES_SYNC_REAL") },
-                { QStringLiteral("ICLOUD_NOTES_SYNC_CASSETTE"),
-                  QStringLiteral(NOTES_SYNC_CASSETTES) + QLatin1Char('/') + QLatin1StringView(cassette) },
+                { QStringLiteral("ICLOUD_NOTES_SYNC_CASSETTE"), // one of the engine's, or a path
+                  (*cassette == '/' ? QString() : QStringLiteral(NOTES_SYNC_CASSETTES) + QLatin1Char('/'))
+                      + QString::fromUtf8(cassette) },
                 { QStringLiteral("ICLOUD_NOTES_SYNC_NOW"), QStringLiteral("1790000000000") },
                 { QStringLiteral("ICLOUD_NOTES_SYNC_DETERMINISTIC"), QStringLiteral("1") },
             };
@@ -1218,32 +1219,65 @@ int main(int argc, char *argv[])
                   && noVersion.errorCode() == QStringLiteral("unknown_version_snapshot"),
               "real engine: history answers with its epochs; an unknown version is the engine's error object, exit 4");
 
-        // Most of the vault's note files gone (four more tracked notes, none
-        // with a file): the engine refuses the push, with a hint whose
-        // commands are this tool's, and the preview warns.
+        // Most of the vault's note files gone: four more tracked notes, none
+        // with a file. The guard counts the notes iCloud still has, so the
+        // engine's lookup cassette is extended to answer for the four as
+        // well (its one record, under their names); against the cassette as
+        // recorded they are already gone from iCloud, and nothing is refused.
+        // The engine refuses the push, with a hint whose commands are this
+        // tool's, and the preview warns.
+        const QStringList extra{ QStringLiteral("00000000-0000-4000-8000-000000000000"), QStringLiteral("00000000-0000-4000-8000-000000000001"),
+                                 QStringLiteral("00000000-0000-4000-8000-000000000002"), QStringLiteral("00000000-0000-4000-8000-000000000003") };
+        const QByteArray fiveLive = (g_scratch + QStringLiteral("/five-live-lookup.json")).toUtf8();
         {
             QJsonObject state = QJsonDocument::fromJson(readFile(QStringLiteral(".icloud-notes/state.json"), vault).toUtf8()).object();
             QJsonObject notes = state.value(QStringLiteral("notes")).toObject();
             QJsonObject entry = notes.begin().value().toObject();
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < extra.size(); ++i) {
                 entry.insert(QStringLiteral("file"), QStringLiteral("Notes/Extra %1.md").arg(i));
-                notes.insert(QStringLiteral("00000000-0000-4000-8000-00000000000%1").arg(i), entry);
+                notes.insert(extra.at(i), entry);
             }
             state.insert(QStringLiteral("notes"), notes);
             writeFile(QStringLiteral(".icloud-notes/state.json"), QString::fromUtf8(QJsonDocument(state).toJson()), vault);
             QFile::remove(vault + QLatin1Char('/') + note);
+
+            QFile recorded(QStringLiteral(NOTES_SYNC_CASSETTES) + QStringLiteral("/tiny-lookup.json"));
+            QJsonObject cassette = recorded.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(recorded.readAll()).object() : QJsonObject();
+            QJsonArray interactions = cassette.value(QStringLiteral("interactions")).toArray();
+            QJsonObject lookup = interactions.at(0).toObject();
+            QJsonObject response = lookup.value(QStringLiteral("response")).toObject();
+            QJsonObject body = response.value(QStringLiteral("body")).toObject();
+            QJsonArray records = body.value(QStringLiteral("records")).toArray();
+            QJsonObject record = records.at(0).toObject();
+            for (const QString &name : extra) {
+                record.insert(QStringLiteral("recordName"), name);
+                records.append(record);
+            }
+            body.insert(QStringLiteral("records"), records);
+            response.insert(QStringLiteral("body"), body);
+            lookup.insert(QStringLiteral("response"), response);
+            interactions.replace(0, lookup);
+            cassette.insert(QStringLiteral("interactions"), interactions);
+            QFile written(QString::fromUtf8(fiveLive));
+            if (written.open(QIODevice::WriteOnly))
+                written.write(QJsonDocument(cassette).toJson());
         }
-        const Run guarded = real({ QStringLiteral("--json"), QStringLiteral("push") }, "tiny-lookup.json");
+        const Run guarded = real({ QStringLiteral("--json"), QStringLiteral("push") }, fiveLive.constData());
         const QString guardHint = guarded.error().value(QStringLiteral("hint")).toString();
-        const Run preview = real({ QStringLiteral("--quiet"), QStringLiteral("push"), QStringLiteral("--dry-run") }, "tiny-lookup.json");
+        const Run preview = real({ QStringLiteral("--quiet"), QStringLiteral("push"), QStringLiteral("--dry-run") }, fiveLive.constData());
+        const auto warns = [](const Run &r) {
+            return r.out.contains("refuses to delete that many unless it is run with --yes");
+        };
         check(guarded.code == 2 && guarded.errorCode() == QStringLiteral("too_many_deletions")
                   && guarded.error().value(QStringLiteral("message")).toString().startsWith(QStringLiteral("5 of the 5 notes tracked here"))
                   && guardHint.contains(QStringLiteral("\"icloud-notes push --dry-run\"")) && guardHint.contains(QStringLiteral("\"icloud-notes push --yes\""))
-                  && preview.code == 0 && preview.json().toObject().value(QStringLiteral("entries")).toArray().size() == 5
-                  && preview.json().toObject().value(QStringLiteral("notices")).toArray().at(0).toObject().value(QStringLiteral("message"))
-                         .toString().contains(QStringLiteral("refuses to delete that many unless it is run with --yes")),
+                  && preview.code == 0 && preview.json().toObject().value(QStringLiteral("entries")).toArray().size() == 5 && warns(preview),
               "real engine: a push that would delete most of the vault is too_many_deletions, exit 2; the hint names this tool's "
               "commands, and the dry run lists the deletions with a warning");
+        // Notes iCloud no longer has are not deletions to send: one live note is no reason to refuse.
+        const Run gone = real({ QStringLiteral("--quiet"), QStringLiteral("push"), QStringLiteral("--dry-run") }, "tiny-lookup.json");
+        check(gone.code == 0 && gone.json().toObject().value(QStringLiteral("entries")).isArray() && !warns(gone),
+              "real engine: tracked notes already gone from iCloud do not count towards the deletion guard");
 
         // A vault cloned for another account: the engine fails each half with
         // account_mismatch (exit 3, not a sign-in), inside the sync's answer.
