@@ -195,7 +195,8 @@ impl Env {
             let stored = self.state.record(record["recordName"].as_str()?)?;
             (stored["recordChangeTag"] != record["recordChangeTag"]).then_some(())
         };
-        let mut tries = 0;
+        // A deadline, not a count of tries: a loaded machine runs slowly.
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
         let killed = loop {
             if landed().is_some() {
                 child.kill().unwrap();
@@ -205,8 +206,10 @@ impl Env {
             if child.try_wait().unwrap().is_some() {
                 break false;
             }
-            tries += 1;
-            assert!(tries < 5000, "the held run neither wrote nor finished");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the held run neither wrote nor finished in 2 minutes"
+            );
             std::thread::sleep(Duration::from_millis(2));
         };
         *self.state.hold_modify.lock().unwrap() = None;
@@ -1506,7 +1509,11 @@ fn random_edits_on_both_sides_and_killed_runs_keep_the_folder_and_icloud_in_step
         for _ in 0..workers.min(seeds.len()) {
             s.spawn(|| {
                 while let Some(&seed) = seeds.get(next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) {
-                    run_case(seed);
+                    // Any panic names its seed, not only the model's own
+                    // checks: one in the harness must be reproducible too.
+                    if std::panic::catch_unwind(|| run_case(seed)).is_err() {
+                        panic!("seed {seed} failed (ICLOUD_REMINDERS_MODEL_SEED={seed}): see the panic above");
+                    }
                 }
             });
         }
