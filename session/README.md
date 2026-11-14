@@ -132,20 +132,21 @@ icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconne
 | `Session::mock(base_url)` | What mock mode gives `Session::connect()`. |
 
 Every `Set-Cookie` Apple sends a request goes back to the daemon through
-`MergeCookies`, and the in-process `Session()` cache is dropped so the next
-request uses the merged jar. The daemon merges into the account it holds
-at that moment, and a `Session()` answer is reused for up to 5 minutes, so
-the client first checks that the daemon still holds the session's account
-(and checks the same after fetching `FindMySession()`): after a sign-out and
-a sign-in as someone else nothing is merged, the other account's Find My jar
-is not sent, and the call returns `SignInRequired`. On 421/401 from icloud.com or a service host
+`MergeCookiesFor`, and the in-process `Session()` cache is dropped so the next
+request uses the merged jar. A `Session()` answer is reused for up to 5
+minutes, so the call names the dsid the cookies were set for: after a
+sign-out and a sign-in as someone else the daemon merges nothing and the
+call returns `SignInRequired`. (A daemon from before `MergeCookiesFor` is
+asked who is signed in first, then given `MergeCookies`.) The client checks
+the daemon's account the same way after fetching `FindMySession()`, so the
+other account's Find My jar is not sent. On 421/401 from icloud.com or a service host
 (a content host's 401 is a plain `Http` error) the client calls
 `ReportSignInRequired()`: if the daemon is still signed in it retries the
 request once with the fresh jar (a 421/401 again is `Http`), otherwise it
 returns `SignInRequired`. Requests to the `findme` web service's host
 carry the Find My jar from `FindMySession()` instead (none yet:
 `FindMyAuthRequired`, nothing sent), with its client params, and its
-`Set-Cookie`s go to `MergeFindMyCookies`. A 450 there (or 421/401) retries
+`Set-Cookie`s go to `MergeFindMyCookiesFor`. A 450 there (or 421/401) retries
 once if the Find My jar changed since the request was sent (it was
 authorized again meanwhile), or if `ReportFindMyAuthRequired()` answers
 true (the daemon signed in again with the stored password); otherwise it
@@ -211,12 +212,14 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `FindMyAuthorized` | property | `b`, a Find My jar is held and has `X-APPLE-WEBAUTH-FMIP` |
 | `SignOutReason` | property | `s`, why the account was last signed out, worded for an app's sign-in banner; empty while signed in and before anyone ever signed in, cleared by a sign-in, kept across restarts (`sign-out-reason`, see [Files](#files)). One of: `Signed out of iCloud` (`SignOut()`); `Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)` (a `/validate` answered 421/401); at start, `The iCloud session was removed from the keyring`, `The iCloud session in the keyring was damaged`, `The keyring held another Apple ID's iCloud session` (see below) or `The iCloud account file could not be read` |
 | `Session()` | method | `→ (s cookie_header, a{ss} client_params, a{ss} webservices)`; error `io.github.ferdousbhai.ICloudSession.Error.SignInRequired` when signed out (its message is `SignOutReason`, else "sign in to iCloud required"), `…Error.KeyringUnavailable` when the keyring holding the account's cookies cannot be read (see [Files](#files)). `webservices` is Apple's map as `/validate` gave it, key to `url`. Answers at once when the last validate is within 6 hours, revalidating in the background if it is older than 10 minutes; validates first only when it is older than 6 hours (if Apple is unreachable it answers with what it has) |
-| `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
+| `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received, merged into the account held now; kept for clients from before `MergeCookiesFor` |
+| `MergeCookiesFor(s dsid, as)` | method | the same, for the account `dsid` the client got them for: error `…Error.SignInRequired`, and nothing merged, when the daemon holds another account or none |
 | `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it keeps the fresh jar and answers true (fetch `Session()` and retry once); on 421/401 it signs out and answers false |
 | `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
 | `AuthorizeFindMy()` | method | opens the sign-in window on `www.icloud.com/find` (`--find`) unless a window is open; returns at once. On success the captured one-factor jar is kept, unvalidated, as the Find My jar (not if it names another dsid, or after a sign-out meanwhile); the main jar is untouched. Error `…Error.SignInRequired` when signed out: no window opens |
 | `FindMySession()` | method | `→ (s cookie_header, a{ss} client_params)` of the Find My jar, for the `findme` host; with none, and a password stored, signs in to Find My first; error `io.github.ferdousbhai.ICloudSession.Error.FindMyAuthRequired` when there is still none (`SignInRequired` when signed out) |
 | `MergeFindMyCookies(as)` | method | raw `Set-Cookie` header values a client received from the `findme` host |
+| `MergeFindMyCookiesFor(s dsid, as)` | method | the same, for the account `dsid`, refused as `MergeCookiesFor` is |
 | `ReportFindMyAuthRequired()` | method | `→ b reauthorized`. A client got HTTP 450 from Find My: the Find My jar is forgotten; with a password stored, the daemon signs in to Find My again (see below) and answers true, so the client retries once |
 | `FindMyPasswordStored` | property | `b`, the keyring holds the Apple ID password for the signed-in account (false when signed out) |
 | `SetPassword(s)` | method | signs in to Find My once with the password (the autofill window, below). If Apple refuses it, nothing is stored (`…Error.PasswordRejected`); otherwise it is stored in the keyring, and a sign-in that failed for another reason is reported as `…Error.Failed` ("stored the password, but the Find My sign-in with it failed: …"). Also `…Error.Failed` (keyring), `…Error.SignInRequired` |

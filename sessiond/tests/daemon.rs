@@ -905,6 +905,64 @@ fn merge_cookies_merges_by_name_and_persists() {
     assert_eq!(server.count(VALIDATE), 1);
 }
 
+/// `MergeCookiesFor` and `MergeFindMyCookiesFor` name the account the
+/// cookies were set for: the daemon merges them into that account's jars
+/// and refuses, merging nothing, when it holds another account or none.
+#[test]
+fn merges_that_name_another_account_are_refused() {
+    let server = find_my_server(Arc::new(Mutex::new("fmip1".into())), 0);
+    let dir = tempfile::tempdir().unwrap();
+    let signin = find_window(dir.path(), &find_capture(DSID), "0");
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let watch = changes(&conn);
+    icloud_session::authorize_find_my_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().find_my_authorized);
+    let merge = |method: &str, dsid: &str, cookie: &str| {
+        conn.call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            method,
+            &(dsid, vec![cookie]),
+        )
+        .map(drop)
+    };
+    let refused = |result: zbus::Result<()>| match result {
+        Err(zbus::Error::MethodError(name, _, _)) => name.as_str() == icloud_session::ERROR_SIGN_IN_REQUIRED,
+        _ => false,
+    };
+
+    merge("MergeCookiesFor", DSID, "MINE=1; Path=/").unwrap();
+    merge("MergeFindMyCookiesFor", DSID, "MINE-FM=1; Path=/").unwrap();
+    assert!(refused(merge("MergeCookiesFor", "67890", "THEIRS=1; Path=/")));
+    assert!(refused(merge("MergeFindMyCookiesFor", "67890", "THEIRS-FM=1; Path=/")));
+    let account = env.account().unwrap();
+    assert!(cookie_named(&account["cookies"], "MINE").is_some());
+    assert!(cookie_named(&account["find_my"]["cookies"], "MINE-FM").is_some());
+    assert!(!account.to_string().contains("THEIRS"), "{account}");
+
+    // Signed out, even the account that was signed in is refused, where
+    // `MergeCookies` has nothing to do.
+    icloud_session::sign_out_on(&conn).unwrap();
+    assert!(refused(merge("MergeCookiesFor", DSID, "LATE=1; Path=/")));
+    assert!(refused(merge("MergeFindMyCookiesFor", DSID, "LATE=1; Path=/")));
+    conn.call_method(
+        Some(BUS_NAME),
+        OBJECT_PATH,
+        Some(INTERFACE),
+        "MergeCookies",
+        &(vec!["LATE=1"],),
+    )
+    .unwrap();
+    assert!(env.account().is_none());
+}
+
 #[test]
 fn report_sign_in_required_confirms_with_validate() {
     let expired = Arc::new(AtomicBool::new(false));

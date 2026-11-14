@@ -5,7 +5,7 @@
 //! through its own WebKitGTK window. This crate asks it for the current
 //! cookie header, client parameters and webservices over D-Bus, sends
 //! requests straight to Apple with them, hands rotated cookies back
-//! (`MergeCookies`), and reports a 421/401 (`ReportSignInRequired`) so the
+//! (`MergeCookiesFor`), and reports a 421/401 (`ReportSignInRequired`) so the
 //! daemon can confirm before it signs every app out. Find My wants its own
 //! session: the password entered again on icloud.com/find, a one-factor
 //! sign-in the daemon keeps apart ([`authorize_find_my`]), or makes itself
@@ -196,6 +196,16 @@ impl From<zbus::Error> for Error {
     }
 }
 
+/// The daemon has no such method: it is older than the method.
+fn is_unknown_method(e: &zbus::Error) -> bool {
+    const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
+    match e {
+        zbus::Error::MethodError(name, _, _) => name.as_str() == UNKNOWN_METHOD,
+        zbus::Error::FDO(fdo) => matches!(**fdo, zbus::fdo::Error::UnknownMethod(_)),
+        _ => false,
+    }
+}
+
 fn daemon_detail<'a>(name: &'a str, message: &'a str) -> &'a str {
     if message.is_empty() { name } else { message }
 }
@@ -344,11 +354,13 @@ trait Daemon {
     #[zbus(name = "Session")]
     fn session(&self) -> zbus::Result<SessionReply>;
     fn merge_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
+    fn merge_cookies_for(&self, dsid: &str, set_cookies: &[&str]) -> zbus::Result<()>;
     fn report_sign_in_required(&self) -> zbus::Result<bool>;
     fn report_find_my_auth_required(&self) -> zbus::Result<bool>;
     #[zbus(name = "FindMySession")]
     fn find_my_session(&self) -> zbus::Result<(String, HashMap<String, String>)>;
     fn merge_find_my_cookies(&self, set_cookies: &[&str]) -> zbus::Result<()>;
+    fn merge_find_my_cookies_for(&self, dsid: &str, set_cookies: &[&str]) -> zbus::Result<()>;
     fn sign_in(&self) -> zbus::Result<()>;
     fn authorize_find_my(&self) -> zbus::Result<()>;
     fn sign_out(&self) -> zbus::Result<()>;
@@ -809,6 +821,37 @@ impl Session {
         Ok(now.signed_in && now.dsid.as_deref() == Some(self.inner.dsid.as_str()))
     }
 
+    /// Hands `Set-Cookie`s Apple answered this account with to the daemon
+    /// (`find_my`: for its Find My jar), naming the account. This answer
+    /// was sent with a snapshot that may be minutes old: after a sign-out
+    /// and a sign-in as someone else the daemon merges nothing into their
+    /// jar, and this is `SignInRequired` with the snapshot dropped.
+    fn merge(&self, conn: &Connection, find_my: bool, set_cookies: &[&str]) -> Result<()> {
+        let daemon = proxy(conn)?;
+        let dsid = self.inner.dsid.as_str();
+        let merged = if find_my {
+            daemon.merge_find_my_cookies_for(dsid, set_cookies)
+        } else {
+            daemon.merge_cookies_for(dsid, set_cookies)
+        };
+        let merged = match merged {
+            // A daemon from before the methods that name the account (it
+            // merges into whatever account it holds): ask who that is
+            // first, which leaves only the moment between the two calls.
+            Err(e) if is_unknown_method(&e) => match self.is_the_daemons_account(conn) {
+                Ok(true) if find_my => daemon.merge_find_my_cookies(set_cookies).map_err(Error::from),
+                Ok(true) => daemon.merge_cookies(set_cookies).map_err(Error::from),
+                Ok(false) => Err(Error::SignInRequired),
+                Err(e) => Err(e),
+            },
+            merged => merged.map_err(Error::from),
+        };
+        if matches!(merged, Err(Error::SignInRequired)) {
+            self.forget_snapshot();
+        }
+        merged
+    }
+
     fn forget_snapshot(&self) {
         *self.inner.cached.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.forget_find_my();
@@ -854,7 +897,7 @@ impl Session {
     /// signed out → `SignInRequired`; still signed in → one retry with the
     /// fresh jar. Requests to the `findme` host carry the Find My jar from
     /// `FindMySession()` instead (`FindMyAuthRequired` when there is none),
-    /// its `Set-Cookie`s go to `MergeFindMyCookies`, and its 450 (or
+    /// its `Set-Cookie`s go to `MergeFindMyCookiesFor`, and its 450 (or
     /// 421/401) → `ReportFindMyAuthRequired`: one retry if the daemon signed
     /// in to Find My again with the stored password, else `FindMyAuthRequired`.
     /// Other non-2xx → `Http`.
@@ -1106,19 +1149,10 @@ impl Session {
                     && !set_cookies.is_empty()
                     && let Some(conn) = &self.inner.conn
                 {
-                    // The daemon merges into the account it holds now. This
-                    // answer is for ours, sent with a snapshot that may be
-                    // minutes old: after a sign-out and a sign-in as someone
-                    // else, its cookies must not go into their jar.
-                    if !self.is_the_daemons_account(conn)? {
-                        self.forget_snapshot();
-                        return Err(Error::SignInRequired);
-                    }
+                    self.merge(conn, find_my.is_some(), &set_cookies)?;
                     if find_my.is_some() {
-                        proxy(conn)?.merge_find_my_cookies(&set_cookies)?;
                         self.forget_find_my();
                     } else {
-                        proxy(conn)?.merge_cookies(&set_cookies)?;
                         self.forget_snapshot();
                     }
                 }
@@ -1332,5 +1366,13 @@ mod tests {
         ));
         // Not a D-Bus error reply at all.
         assert!(matches!(Error::from(zbus::Error::InvalidReply), Error::Service(_)));
+        // What an older daemon answers a method it lacks, either way zbus
+        // hands it over.
+        let unknown = "org.freedesktop.DBus.Error.UnknownMethod";
+        assert!(super::is_unknown_method(&method_error(unknown, None)));
+        assert!(super::is_unknown_method(&zbus::Error::from(
+            zbus::fdo::Error::UnknownMethod("x".into())
+        )));
+        assert!(!super::is_unknown_method(&method_error(ERROR_SIGN_IN_REQUIRED, None)));
     }
 }

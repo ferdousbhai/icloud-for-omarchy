@@ -1119,19 +1119,30 @@ impl Daemon {
         ))
     }
 
-    fn merge_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
-        self.merge_into(set_cookies, |a| Some(&mut a.cookies))
+    /// `MergeCookies()`, and `MergeCookiesFor()` with the `dsid` the
+    /// cookies belong to.
+    fn merge_cookies(&self, dsid: Option<&str>, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.merge_into(dsid, set_cookies, |a| Some(&mut a.cookies))
     }
 
     /// Merges `Set-Cookie`s a client got into the jar `jar` picks of the
     /// account (none: nothing to do), and stores the account if it changed.
+    /// With `dsid`, the account the client got them for: `SignInRequired`,
+    /// and nothing merged, unless that is the account held now (checked
+    /// under the same lock as the merge, so no sign-in comes between).
     fn merge_into(
         &self,
+        dsid: Option<&str>,
         set_cookies: &[String],
         jar: impl FnOnce(&mut Account) -> Option<&mut Vec<Cookie>>,
     ) -> Result<(), ServiceError> {
         self.retry_keyring()?;
         let mut st = lock(&self.state);
+        if let Some(dsid) = dsid
+            && st.account.as_ref().is_none_or(|a| a.dsid != dsid)
+        {
+            return Err(st.sign_in_required());
+        }
         let changed = st
             .account
             .as_mut()
@@ -1180,8 +1191,8 @@ impl Daemon {
     }
 
     /// `MergeFindMyCookies()`: `Set-Cookie`s a client got from Find My.
-    fn merge_find_my_cookies(&self, set_cookies: &[String]) -> Result<(), ServiceError> {
-        self.merge_into(set_cookies, |a| a.find_my.as_mut().map(|f| &mut f.cookies))
+    fn merge_find_my_cookies(&self, dsid: Option<&str>, set_cookies: &[String]) -> Result<(), ServiceError> {
+        self.merge_into(dsid, set_cookies, |a| a.find_my.as_mut().map(|f| &mut f.cookies))
     }
 
     /// A client got HTTP 450 from Find My: its session is spent. Forgets
@@ -2267,7 +2278,15 @@ impl Service {
     /// Raw `Set-Cookie` header values a client received from Apple.
     #[zbus(name = "MergeCookies")]
     async fn merge_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
-        self.call(move |d| d.merge_cookies(&set_cookies)).await
+        self.call(move |d| d.merge_cookies(None, &set_cookies)).await
+    }
+
+    /// `MergeCookies` for the account `dsid`, which the client got the
+    /// cookies for: error `SignInRequired`, and nothing merged, when the
+    /// daemon holds another account by now (or none).
+    #[zbus(name = "MergeCookiesFor")]
+    async fn merge_cookies_for(&self, dsid: String, set_cookies: Vec<String>) -> Result<(), ServiceError> {
+        self.call(move |d| d.merge_cookies(Some(&dsid), &set_cookies)).await
     }
 
     /// A client got 421/401 with the current cookie. The daemon confirms
@@ -2308,7 +2327,14 @@ impl Service {
     /// Raw `Set-Cookie` header values a client received from Find My.
     #[zbus(name = "MergeFindMyCookies")]
     async fn merge_find_my_cookies(&self, set_cookies: Vec<String>) -> Result<(), ServiceError> {
-        self.call(move |d| d.merge_find_my_cookies(&set_cookies)).await
+        self.call(move |d| d.merge_find_my_cookies(None, &set_cookies)).await
+    }
+
+    /// `MergeFindMyCookies` for the account `dsid`, as `MergeCookiesFor`.
+    #[zbus(name = "MergeFindMyCookiesFor")]
+    async fn merge_find_my_cookies_for(&self, dsid: String, set_cookies: Vec<String>) -> Result<(), ServiceError> {
+        self.call(move |d| d.merge_find_my_cookies(Some(&dsid), &set_cookies))
+            .await
     }
 
     /// A client got HTTP 450 from Find My: forgets the Find My session and,
