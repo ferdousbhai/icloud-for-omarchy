@@ -1743,7 +1743,13 @@ fn fold_flow_lines(text: &str, indent: &str, mode: FoldMode, indent_at_start: Op
                             }
                         }
                     }
-                    let j = if i > esc_end + 1 { i - 2 } else { esc_start - 1 };
+                    let mut j = if i > esc_end + 1 { i - 2 } else { esc_start - 1 };
+                    // The unit before the escaped break is written on its own:
+                    // never half of a surrogate pair (as the JS does, writing
+                    // two U+FFFD), but the character before the pair.
+                    while j >= 2 && at(j).is_some_and(|c| (0xD800..0xE000).contains(&c)) {
+                        j -= 1;
+                    }
                     if escaped_folds.contains(&j) {
                         return text.to_string();
                     }

@@ -354,6 +354,30 @@ fn a_folded_title_keeps_the_no_break_spaces_at_its_line_edges() {
 }
 
 #[test]
+fn a_quoted_title_folded_in_a_run_of_emoji_keeps_every_one() {
+    // No space to fold a long double-quoted title at: it is folded with an
+    // escaped line break, never between the two halves of an emoji.
+    for lead in 0..16 {
+        let title = format!(
+            "]{}{}",
+            "a".repeat(lead),
+            "=\u{1f469}\u{200d}\u{1f469}![<https://a.b>".repeat(5)
+        );
+        for mine in ["", "---\nflow: {a: 1, b: [c, d]}\n---\n\n"] {
+            let file = compose_note_file(mine, "Body", ID, Some(&title));
+            assert!(!file.contains('\u{fffd}'), "{file:?}");
+            let envelope = split_frontmatter(&file, titled()).frontmatter;
+            assert!(envelope.contains("\\\n"), "not folded: {envelope:?}");
+            assert_eq!(
+                read_note_title(&envelope).as_deref(),
+                Some(title.as_str()),
+                "{envelope:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_first_key_outside_the_modelled_yaml_is_still_a_mapping() {
     // A quoted, anchored or non-string first key is valid YAML: the id reads
     // and is stamped the same as when such a key comes later.
