@@ -906,7 +906,36 @@ pub fn run_pull_with(
     let mut stale_dirs = previous_layout_dirs(PreviousLayout::of(&state));
     stale_dirs.extend(old_pending.keys().cloned());
     stale_dirs.retain(|dir| !dir.is_empty() && !current.contains(dir));
-    if let Err(e) = remove_left_in_stale_dirs(target_dir, &stale_dirs, &tracked.notes, title_mode) {
+    // The stale directories of a share gone: what they hold a pull cut
+    // short wrote, edited here since, is someone else's note.
+    let live = live_owners(&shared);
+    let previous_dirs = crate::vault::layout::state_dir_index(PreviousLayout::of(&state));
+    // A directory's sharer: the state's, or for one a pull cut short laid
+    // out, the key it was announced under when that is a sharer's (an
+    // owner record name, which CloudKit starts with `_`; a folder's is a
+    // UUID), itself or of a directory above it.
+    let gone_sharer = |dir: &str| -> bool {
+        let owner = previous_dirs
+            .get(dir)
+            .and_then(|info| info.shared_zone_owner().map(str::to_owned))
+            .or_else(|| old_pending.get(dir).filter(|key| key.starts_with('_')).cloned());
+        owner.is_some_and(|o| !o.is_empty() && !live.contains(&o))
+    };
+    let unshared_dirs: HashSet<&String> = stale_dirs
+        .iter()
+        .filter(|dir| {
+            failure.is_none()
+                && std::iter::successors(Some(dir.as_str()), |d| d.rsplit_once('/').map(|(up, _)| up)).any(gone_sharer)
+        })
+        .collect();
+    if let Err(e) = remove_left_in_stale_dirs(
+        target_dir,
+        &stale_dirs,
+        &unshared_dirs,
+        &mut tracked,
+        &mut summary,
+        title_mode,
+    ) {
         failure.get_or_insert(e);
     }
     remove_stale_dirs(target_dir, &stale_dirs, &current);
@@ -1005,7 +1034,14 @@ fn reconcile_listings(
         });
     }
 
-    let live_owners: HashSet<String> = shared
+    handle_vanished_shared_zones(target_dir, &live_owners(shared), tracked, summary, title_mode)?;
+    Ok(())
+}
+
+/// The owners of the shared zones this account still has: those listed,
+/// skipped ones included.
+fn live_owners(shared: &SharedNoteRecords) -> HashSet<String> {
+    shared
         .zones
         .iter()
         .filter_map(|z| z.zone_id.owner_record_name.clone())
@@ -1015,9 +1051,7 @@ fn reconcile_listings(
                 .iter()
                 .filter_map(|s| skipped_zone_owner(s).map(str::to_owned)),
         )
-        .collect();
-    handle_vanished_shared_zones(target_dir, &live_owners, tracked, summary, title_mode)?;
-    Ok(())
+        .collect()
 }
 
 /// (docs/DESIGN.md §1) A note
@@ -1571,14 +1605,23 @@ fn handle_remote_deletion(
 /// elsewhere), so it is gone for this account: deleted, or in a share
 /// revoked since. Left there, the file would keep the directory, which the
 /// next push would make a folder in the account's own notes.
+///
+/// Such a file edited since, in `unshared_dirs` (the directories of a share
+/// gone), is someone else's note with edits made here: kept, and its id
+/// listed in `unshared` as a tracked note's file is when its share goes
+/// ([`handle_remote_deletion`]), so that push never uploads it.
 fn remove_left_in_stale_dirs(
     target_dir: &Path,
     dirs: &[String],
-    notes: &IndexMap<String, NoteEntry>,
+    unshared_dirs: &HashSet<&String>,
+    tracked: &mut Tracked,
+    summary: &mut PullSummary,
     title_mode: TitleMode,
 ) -> Result<(), Error> {
     for dir in dirs {
-        for name in file_names_in(&target_dir.join(dir))? {
+        let mut names = file_names_in(&target_dir.join(dir))?;
+        names.sort();
+        for name in names {
             if !name.ends_with(".md") || super::push::is_sync_conflict_name(&name) {
                 continue;
             }
@@ -1590,12 +1633,25 @@ fn remove_left_in_stale_dirs(
             let Some(id) = read_note_id(&envelope.frontmatter) else {
                 continue;
             };
-            if is_plain_record_name(&id)
-                && !notes.contains_key(&id)
-                && read_base_copy(target_dir, &id)?.as_deref() == Some(envelope.body.as_str())
-            {
+            if !is_plain_record_name(&id) || tracked.notes.contains_key(&id) {
+                continue;
+            }
+            let Some(base) = read_base_copy(target_dir, &id)? else {
+                continue;
+            };
+            if base == envelope.body {
                 safe_unlink(&path)?;
                 remove_base_copy(target_dir, &id)?;
+            } else if unshared_dirs.contains(dir) {
+                remove_base_copy(target_dir, &id)?;
+                tracked.unshared.push(id);
+                let file = posix::join(&[dir, &name]);
+                summary.notices.push(SyncNotice {
+                    level: NoticeLevel::Warn,
+                    message: format!(
+                        "{file}: no longer shared with you, but has local edits - kept here as a file that is not synced"
+                    ),
+                });
             }
         }
     }

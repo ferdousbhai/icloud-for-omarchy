@@ -2299,10 +2299,8 @@ fn a_clone_cut_short_before_notes_it_wrote_were_moved_or_deleted_on_the_phone_is
 }
 
 /// A note the owner of a shared folder added, and the share revoked while a
-/// pull writing it was cut short: nothing of it goes up into the account's
-/// own notes, neither the note nor a folder for the directory it was in.
-#[test]
-fn a_pull_cut_short_before_a_share_it_wrote_a_note_from_was_revoked_is_finished_by_the_next_run() {
+/// pull writing it was cut short.
+fn revoked_while_pulled() -> Start {
     let mut start = cloned_from(shared_account());
     let folder = format!("SF{}", &WRITABLE_OWNER[1..9]);
     start.zone.shared.get_mut(WRITABLE_OWNER).unwrap().put(note_record(
@@ -2317,7 +2315,55 @@ fn a_pull_cut_short_before_a_share_it_wrote_a_note_from_was_revoked_is_finished_
     revoke(&mut after);
     start.expect.kept = kept_notes(&after);
     start.expect.between = Some(revoke);
+    start
+}
+
+/// Nothing of that note goes up into the account's own notes, neither the
+/// note nor a folder for the directory it was in.
+#[test]
+fn a_pull_cut_short_before_a_share_it_wrote_a_note_from_was_revoked_is_finished_by_the_next_run() {
+    crash_everywhere(&revoked_while_pulled(), "pull", &[Then::Again, Then::Sync]);
+}
+
+/// The file the pull wrote for the owner's note edited here before the next
+/// run: kept, with the edit, as a file that is not synced (`unshared`), as
+/// an edited note of a share revoked is; never uploaded as the account's own.
+#[test]
+fn a_file_a_pull_cut_short_wrote_from_a_share_revoked_since_and_edited_here_is_kept_and_not_uploaded() {
+    let mut start = revoked_while_pulled();
+    fn type_here(vault: &Path) {
+        let mut files = Vec::new();
+        markdown_files(vault, "", &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(vault.join(&file)).unwrap();
+            if text.contains("from the owner") {
+                std::fs::write(vault.join(&file), text + "\ntyped here\n").unwrap();
+            }
+        }
+    }
+    start.expect.between_here = Some(type_here);
     crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+    for then in [Then::Again, Then::Sync] {
+        let label = format!("pull killed after the owner's note's file, then {then:?}");
+        let place = one_case_place(&start, "pull", crash::NOTE_FILE, 1, then, &label);
+        let mut files = Vec::new();
+        markdown_files(&place.vault, "", &mut files);
+        let kept = files
+            .iter()
+            .find(|file| std::fs::read_to_string(place.vault.join(file)).is_ok_and(|text| text.contains("typed here")));
+        let kept = kept.unwrap_or_else(|| panic!("{label}: the edited file is gone: {files:?}"));
+        let id = note_id_of(&std::fs::read_to_string(place.vault.join(kept)).unwrap());
+        assert_eq!(id.as_deref(), Some("C0000000-0000-4000-8000-000000000009"), "{label}");
+        let raw: Value =
+            serde_json::from_str(&std::fs::read_to_string(place.vault.join(".icloud-notes/state.json")).unwrap())
+                .unwrap();
+        assert!(
+            raw["unshared"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|i| i == id.as_deref().unwrap())),
+            "{label}: {raw:#}"
+        );
+    }
 }
 
 /// A note with a photo added on the phone in `Work`, and `Work` renamed

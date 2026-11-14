@@ -269,7 +269,11 @@ window closes, so a killed run is ordinary.
   revoked, since): its note was not written again by that pull, so it is
   gone for this account, and the file would keep the directory for the
   next push to make a folder of in the account's own notes
-  (`pull::remove_left_in_stale_dirs`).
+  (`pull::remove_left_in_stale_dirs`). Such a file edited here since, in
+  the directory of a share gone, is someone else's note with edits made
+  here, and is treated as a tracked one is when its share goes ("A note
+  that is gone from iCloud", below): kept, its id listed in `unshared`,
+  never uploaded.
 - A pull that lays out a folder new to the vault (or a folder's new name)
   first lists the directories it is about to make in state.json's
   `pendingDirs`, and the state it saves once every note is where the
