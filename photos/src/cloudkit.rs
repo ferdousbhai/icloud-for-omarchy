@@ -706,10 +706,10 @@ impl<'t> CloudKit<'t> {
     }
 
     /// Add assets to an album: one CPLContainerRelation per asset, named
-    /// `<asset>-IN-<album>` like the relations Apple lists. UNVERIFIED
-    /// AGAINST APPLE: the record shape is the one `album_members` reads back
-    /// (fixtures from pyicloud); no capture of icloud.com creating one has
-    /// been made. Returns the relations created; a per-record error fails
+    /// `<asset>-IN-<album>` like the relations Apple lists. The record shape is
+    /// the one `album_members` reads back (fixtures from pyicloud). Verified
+    /// live on 2026-09-30 (an upload with `--album` landed in the album); no
+    /// capture of icloud.com creating one has been made. Returns the relations created; a per-record error fails
     /// the call (the request is atomic).
     pub fn add_to_album(&self, album_id: &str, asset_ids: &[&str]) -> Result<Vec<Relation>> {
         let operations: Vec<Value> = asset_ids

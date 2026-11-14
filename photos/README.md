@@ -161,7 +161,6 @@ item says it was verified live, it has not been run against a real account:
   (the command line can only add new uploads to an existing album).
 - HEIC originals download fine but show in the viewer through iCloud's JPEG
   preview.
-- Packages are built for x86_64 only.
 
 ## Development
 
@@ -214,4 +213,5 @@ PNG after the first sync and quits, so the UI can be checked headless with
 ## Releasing
 
 Released with the other packages from the repository root; see the root
-[README](../README.md#releasing). Its tags are `photos-v<version>`.
+[README](../README.md#releasing). Releases are tagged `v<version>`; the older
+`photos-v<version>` tags are historical.

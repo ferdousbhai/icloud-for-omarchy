@@ -1,9 +1,10 @@
 //! Upload to iCloud Photos.
 //!
-//! UNVERIFIED AGAINST APPLE BY THIS PROJECT. No request/response has been
-//! captured from icloud.com for this app yet; the flow below is ported from
-//! timlaing/pyicloud `services/photos_cloudkit/upload.py` (MIT), whose
-//! fixtures say they were confirmed against a live account. The older
+//! Verified live on 2026-09-30 (`icloud-photos upload --album` landed on a
+//! real account); no request/response has been captured from icloud.com for
+//! this app. The flow below is ported from timlaing/pyicloud
+//! `services/photos_cloudkit/upload.py` (MIT), whose fixtures say they were
+//! confirmed against a live account. The older
 //! single-POST `uploadimagews` endpoint that the icloudpd fork used has
 //! answered HTTP 410 Gone since 2026-08-25, so it is not implemented.
 //!

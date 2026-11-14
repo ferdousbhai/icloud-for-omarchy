@@ -195,7 +195,7 @@ fn usage_help_and_exit_codes() {
     let r = env.styled(&["list", "--kind", "painting"]);
     assert_eq!(r.code, 2);
     assert!(r.stdout.is_empty() && r.stderr.starts_with("error:"), "{}", r.stderr);
-    // Delete never asks without a terminal: --yes or a usage error.
+    // An unknown id is not found before delete asks anything.
     let r = env.run(&["--json", "delete", "NO-SUCH-ID"]);
     assert_eq!(r.code, 4, "the id is checked first: {}", r.stderr);
 }
