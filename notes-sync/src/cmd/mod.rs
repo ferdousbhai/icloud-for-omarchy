@@ -166,6 +166,57 @@ pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     }
 }
 
+/// The note files a directory holds that nothing tracks, by the
+/// `apple-note-id` each carries: what a clone or pull that never got to
+/// record them (killed, or failed on that note) left there. Several files
+/// may carry one id (a copy made since); a Syncthing conflict copy is never
+/// a note file.
+pub(crate) type LeftBehind = HashMap<String, Vec<String>>;
+
+/// The [`LeftBehind`] files among `names` (file names in `dir`).
+pub(crate) fn left_behind_in<'a>(
+    target_dir: &std::path::Path,
+    dir: &str,
+    names: impl IntoIterator<Item = &'a String>,
+    title_mode: crate::vault::state::TitleMode,
+) -> Result<LeftBehind, Error> {
+    let mut names: Vec<&String> = names
+        .into_iter()
+        .filter(|name| name.ends_with(".md") && !push::is_sync_conflict_name(name))
+        .collect();
+    names.sort();
+    let mut ids = LeftBehind::new();
+    for name in names {
+        let file = crate::js::posix::join(&[dir, name]);
+        if let Some(id) = crate::vault::pairing::note_id_at(target_dir, &file, title_mode)? {
+            ids.entry(id).or_default().push(name.clone());
+        }
+    }
+    Ok(ids)
+}
+
+/// The file a run that never recorded it wrote for the note `record_name`:
+/// the note's file, not a name to write beside. Only one that reads exactly
+/// as `file_text`, what this run would write for the note: a file with the
+/// id that differs (edited since, or the note changed in iCloud) is kept as
+/// it is, and the note written beside it.
+pub(crate) fn left_file_of(
+    target_dir: &std::path::Path,
+    dir: &str,
+    left_behind: &LeftBehind,
+    record_name: &str,
+    file_text: &str,
+) -> Option<String> {
+    left_behind
+        .get(record_name)?
+        .iter()
+        .find(|name| {
+            let path = target_dir.join(crate::js::posix::join(&[dir, name]));
+            std::fs::read_to_string(path).is_ok_and(|text| text == file_text)
+        })
+        .cloned()
+}
+
 /// state.json's `unshared`: the ids of notes someone stopped sharing whose
 /// file had edits made here. Pull keeps such a file (with its id) and lists
 /// it here; push leaves a file carrying one of these ids alone instead of

@@ -393,3 +393,39 @@ fn a_tracked_note_that_became_undecodable_stays_tracked_and_is_not_pushed_as_new
     let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
     assert!(entries.is_empty(), "{entries:?}");
 }
+
+/// A pull killed after it wrote note files and before it saved its state
+/// leaves them untracked, each carrying its id. The pull after it takes a
+/// file that reads exactly as it would write the note for the note's file,
+/// instead of writing `X 2.md` beside it for push to create as a new note.
+#[test]
+fn a_pull_adopts_the_files_an_earlier_pull_left_untracked() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    run_clone_with(
+        &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
+        &vault,
+        &mut NoProgress,
+        &CloneOptions::default(),
+    )
+    .unwrap();
+    let state_file = vault.join(".icloud-notes/state.json");
+    let before = std::fs::read(&state_file).unwrap();
+
+    pull(&vault, many_new_notes(3), dir.path().join("first.json")).unwrap();
+    let written = notes_under(&vault);
+    assert_eq!(written.len(), 1 + 3, "{written:?}");
+    // As if the run had been killed before it saved anything.
+    std::fs::write(&state_file, before).unwrap();
+
+    let summary = pull(&vault, many_new_notes(3), dir.path().join("second.json")).unwrap();
+    assert_eq!(summary.added, 3);
+    assert_eq!(notes_under(&vault), written, "no twins");
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    let mut tracked: Vec<String> = state.notes.values().map(|e| e.file.clone()).collect();
+    tracked.sort();
+    assert_eq!(tracked, written);
+    let no_network = FnConnector(|| -> Result<Remote, Error> { panic!("network: the plan found a change") });
+    let plan = build_push_plan(&no_network, &vault, &mut |_| {}).unwrap();
+    assert!(plan.entries.is_empty(), "nothing to create");
+}

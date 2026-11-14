@@ -7,12 +7,11 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::pull::backfill_new_note_bodies;
-use super::push::is_sync_conflict_name;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
-    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
-    attachment_lookup_notice, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, used_names_for,
-    zone_for_owner,
+    Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
+    attachment_lookup_notice, left_behind_in, left_file_of, shared_zone_tokens_and_records, skipped_note_notice,
+    skipped_zone_notice, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::CloudKitRecord;
 use crate::cloudkit::client::DownloadQueue;
@@ -24,7 +23,7 @@ use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy_of;
 use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of, write_note_file};
-use crate::vault::pairing::{claim_names_on_disk, note_id_at};
+use crate::vault::pairing::claim_names_on_disk;
 use crate::vault::state::{
     AttachmentEntry, CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
 };
@@ -121,12 +120,9 @@ pub fn run_clone_with(
     // what is already there, never over it (anything there afterwards is
     // in the set already, so once per directory is enough).
     let mut claimed_dirs: HashSet<String> = HashSet::new();
-    // The note files a directory already held, by the `apple-note-id` each
-    // carries: what a clone that never finished (killed before its state
-    // was written) left there.
-    // Several files may carry one id (a copy made since); a Syncthing
-    // conflict copy is never a note file.
-    let mut left_behind: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+    // What a clone that never finished (killed before its state was written)
+    // left in each directory.
+    let mut left_behind: HashMap<String, LeftBehind> = HashMap::new();
     let (shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     let mut sources: Vec<(&[CloudKitRecord], Option<String>)> = vec![(&changes.records, None)];
     sources.extend(
@@ -235,35 +231,14 @@ pub fn run_clone_with(
                 let used_in_dir = used_names_for(&mut used_file_names, &placement.dir);
                 if claimed_dirs.insert(placement.dir.clone()) {
                     claim_names_on_disk(target_dir, &placement.dir, used_in_dir)?;
-                    let ids = left_behind.entry(placement.dir.clone()).or_default();
-                    let mut names: Vec<&String> = used_in_dir
-                        .iter()
-                        .filter(|name| name.ends_with(".md") && !is_sync_conflict_name(name))
-                        .collect();
-                    names.sort();
-                    for name in names {
-                        let file = posix::join(&[&placement.dir, name]);
-                        if let Some(id) = note_id_at(target_dir, &file, title_mode)? {
-                            ids.entry(id).or_default().push(name.clone());
-                        }
-                    }
+                    let left = left_behind_in(target_dir, &placement.dir, used_in_dir.iter(), title_mode)?;
+                    left_behind.insert(placement.dir.clone(), left);
                 }
                 let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
                 let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                // The file an unfinished clone wrote for this very note is
-                // the note's file, not a name to write beside. Only when it
-                // reads exactly as this clone would write it: one that
-                // differs is kept as it is, beside the note.
                 let adopted = left_behind
                     .get(&placement.dir)
-                    .and_then(|ids| ids.get(&record.record_name))
-                    .and_then(|names| {
-                        names.iter().find(|name| {
-                            let path = target_dir.join(posix::join(&[&placement.dir, name]));
-                            std::fs::read_to_string(path).is_ok_and(|text| text == file_text)
-                        })
-                    })
-                    .cloned();
+                    .and_then(|left| left_file_of(target_dir, &placement.dir, left, &record.record_name, &file_text));
                 let file_name = adopted.clone().unwrap_or_else(|| {
                     unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir)
                 });

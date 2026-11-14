@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, UNSHARED_KEY,
-    attachment_lookup_notice, is_purged, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice,
-    skipped_zone_owner, unshared_note_ids, used_names_for, zone_for_owner,
+    Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
+    UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of, shared_zone_tokens_and_records,
+    skipped_note_notice, skipped_zone_notice, skipped_zone_owner, unshared_note_ids, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -36,8 +36,8 @@ use crate::vault::layout::{
     PreviousLayout, VaultLayout, build_vault_layout, expected_note_dir, note_dir_of, place_note, previous_layout_dirs,
 };
 use crate::vault::local::{
-    LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, rename_no_replace,
-    split_options, write_note_file,
+    LocalFileState, apply_note_file_times, file_names_in, local_file_state, modification_date_of, read_text,
+    rename_no_replace, split_options, write_note_file,
 };
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
@@ -337,6 +337,7 @@ pub fn run_pull_with(
     // left alone because an attachment record could not be looked up: their
     // sync tokens stay where they were, so the next pull lists it again.
     let mut retry_zones: HashSet<Option<String>> = HashSet::new();
+    let mut left_behind: HashMap<String, LeftBehind> = HashMap::new();
     let notes_at_start = tracked.notes.clone();
     let checkpoints = layout_moves_nothing(&state, &layout, &tracked.notes);
     let mut notes_seen = 0usize;
@@ -552,13 +553,33 @@ pub fn run_pull_with(
 
                 let Some(existing) = existing else {
                     let used_in_dir = used_names_for(&mut used_file_names, &note_dir);
+                    // What an earlier pull wrote here and never recorded
+                    // (killed, or failed on that note): the files no note
+                    // tracks, found once per directory.
+                    if !left_behind.contains_key(&note_dir) {
+                        let on_disk = file_names_in(&target_dir.join(&note_dir))?;
+                        let untracked = on_disk.iter().filter(|name| !used_in_dir.contains(*name));
+                        let left = left_behind_in(target_dir, &note_dir, untracked, title_mode)?;
+                        left_behind.insert(note_dir.clone(), left);
+                    }
                     claim_names_on_disk(target_dir, &note_dir, used_in_dir)?;
-                    let file_name = unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir);
+                    let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
+                    let adopted = left_file_of(
+                        target_dir,
+                        &note_dir,
+                        &left_behind[&note_dir],
+                        &record.record_name,
+                        &file_text,
+                    );
+                    let file_name = adopted.clone().unwrap_or_else(|| {
+                        unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir)
+                    });
                     used_in_dir.insert(file_name.clone());
                     let relative_file = posix::join(&[&note_dir, &file_name]);
                     let file_path = target_dir.join(&relative_file);
-                    let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                    write_note_file(&file_path, &file_text)?;
+                    if adopted.is_none() {
+                        write_note_file(&file_path, &file_text)?;
+                    }
                     apply_note_file_times(&file_path, record)?;
                     write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     tracked.notes.insert(
