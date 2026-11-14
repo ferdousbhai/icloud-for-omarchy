@@ -1,6 +1,7 @@
 #ifndef NOTESBACKEND_H
 #define NOTESBACKEND_H
 
+#include <QElapsedTimer>
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QJsonArray>
@@ -367,11 +368,12 @@ private:
     // What `icloud-notes-sync vault-info` says about the vault, so the app
     // never parses the engine's state file: asked once, then again only
     // when the engine, the vault or the state file changes. Defaults (in-body,
-    // nothing tracked) without an engine or a readable state.
+    // nothing tracked) without an engine. An engine that fails to answer
+    // (a crash, a timeout) leaves the last answer standing and is asked
+    // again, a little later: its failure is not "nothing tracked".
     struct VaultInfo {
         QString titleMode = QStringLiteral("in-body");
         QString defaultFolderDir;
-        QString stateFile;
         QSet<QString> tracked; // vault-relative files
         QHash<QString, QString> readOnly; // vault-relative file -> reason
         QHash<QString, QString> baseFiles; // note id -> absolute path of its last-synced body
@@ -379,7 +381,7 @@ private:
     const VaultInfo &vaultInfo() const;
     // The cache key vaultInfo() keeps: the engine, the vault and the state
     // file's mtime and size.
-    QString vaultInfoKey(const QString &stateFile) const;
+    QString vaultInfoKey() const;
     // Takes vault-info's answer (runSync's carries one) as the cached one.
     void adoptVaultInfo(const QJsonObject &answer) const;
     // The engine's state file's mtime and size, "-" without one.
@@ -545,6 +547,7 @@ private:
     QProcess m_syncProcess;
     mutable VaultInfo m_vaultInfo;
     mutable QString m_vaultInfoKey;
+    mutable QElapsedTimer m_vaultInfoFailed; // running since the engine last failed to answer
 };
 
 #endif

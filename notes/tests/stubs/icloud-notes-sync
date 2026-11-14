@@ -117,6 +117,8 @@ refused_lines='["'"$refused_message"'","Pushed 0 note(s)"]'
 if [ "$1" = "vault-info" ]; then
   # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG: a file each vault-info appends a line to.
   [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG:-}" ] && echo "vault-info" >> "$ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG"
+  # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL: vault-info gives no answer (as a crash would).
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL:-}" ] && exit 1
   exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "${orig[@]}"
 elif [ "$1" = "sync" ]; then
   # Push, then pull, in one run: {push, pull, vault_info}, each half

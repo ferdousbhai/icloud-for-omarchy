@@ -67,6 +67,10 @@ const QString kNotInstalledMessage =
 // stop here so a stray huge file cannot stall the list.
 constexpr qsizetype kScanLimit = 2 * 1024 * 1024;
 
+// How long an engine that failed to answer vault-info is left alone before
+// it is asked again (the answer is asked for on every re-read of the vault).
+constexpr int kVaultInfoRetryMs = 2000;
+
 QString readText(const QString &path, qsizetype limit = -1)
 {
     QFile file(path);
@@ -726,9 +730,9 @@ bool NotesBackend::isLoggedStderrLine(const QByteArray &line)
     return !line.trimmed().isEmpty() && !isProgressLine(line) && contractError(line).isEmpty();
 }
 
-QString NotesBackend::vaultInfoKey(const QString &stateFile) const
+QString NotesBackend::vaultInfoKey() const
 {
-    return syncToolPath() + u'\n' + QFileInfo(rootPath()).absoluteFilePath() + u'\n' + fileStamp(stateFile);
+    return syncToolPath() + u'\n' + QFileInfo(rootPath()).absoluteFilePath() + u'\n' + stateFileStamp();
 }
 
 QString NotesBackend::stateFileStamp()
@@ -742,7 +746,6 @@ void NotesBackend::adoptVaultInfo(const QJsonObject &o) const
     if (o.value(QStringLiteral("titleMode")).toString() == u"filename")
         info.titleMode = QStringLiteral("filename");
     info.defaultFolderDir = o.value(QStringLiteral("defaultFolderDir")).toString();
-    info.stateFile = o.value(QStringLiteral("stateFile")).toString();
     const QString vault = o.value(QStringLiteral("vault")).toString();
     for (const QJsonValue &v : o.value(QStringLiteral("notes")).toArray()) {
         const QJsonObject note = v.toObject();
@@ -757,35 +760,38 @@ void NotesBackend::adoptVaultInfo(const QJsonObject &o) const
         if (!base.isEmpty())
             info.baseFiles.insert(note.value(QStringLiteral("id")).toString(), vault + u'/' + base);
     }
-    m_vaultInfoKey = vaultInfoKey(info.stateFile);
+    m_vaultInfoKey = vaultInfoKey();
     m_vaultInfo = info;
+    m_vaultInfoFailed.invalidate();
 }
 
 const NotesBackend::VaultInfo &NotesBackend::vaultInfo() const
 {
     // Taken before asking, so a change while the engine answers asks again.
-    const QString key = vaultInfoKey(m_vaultInfo.stateFile);
+    const QString key = vaultInfoKey();
     if (!m_vaultInfoKey.isEmpty() && key == m_vaultInfoKey)
         return m_vaultInfo;
 
-    QJsonObject answer;
     const QString tool = syncToolPath();
-    if (!tool.isEmpty()) {
-        QProcess engine;
-        engine.start(tool, { QStringLiteral("--quiet"), QStringLiteral("vault-info"),
-                             QFileInfo(rootPath()).absoluteFilePath() });
-        if (engine.waitForFinished(10000) && engine.exitStatus() == QProcess::NormalExit && engine.exitCode() == 0) {
-            answer = QJsonDocument::fromJson(engine.readAllStandardOutput()).object();
-        } else if (engine.state() != QProcess::NotRunning) {
-            engine.kill();
-            engine.waitForFinished();
-        }
+    if (tool.isEmpty()) {
+        adoptVaultInfo({}); // no engine: nothing is known
+        return m_vaultInfo;
     }
-    const QString stateFileBefore = m_vaultInfo.stateFile;
-    adoptVaultInfo(answer);
-    // The first answer names the state file: only then can its change be seen.
-    if (m_vaultInfo.stateFile == stateFileBefore)
+    if (m_vaultInfoFailed.isValid() && m_vaultInfoFailed.elapsed() < kVaultInfoRetryMs)
+        return m_vaultInfo;
+    QProcess engine;
+    engine.start(tool, { QStringLiteral("--quiet"), QStringLiteral("vault-info"), QFileInfo(rootPath()).absoluteFilePath() });
+    if (engine.waitForFinished(10000) && engine.exitStatus() == QProcess::NormalExit && engine.exitCode() == 0) {
+        adoptVaultInfo(QJsonDocument::fromJson(engine.readAllStandardOutput()).object());
         m_vaultInfoKey = key;
+        return m_vaultInfo;
+    }
+    if (engine.state() != QProcess::NotRunning) {
+        engine.kill();
+        engine.waitForFinished();
+    }
+    // No answer: what was known stands, and the engine is asked again later.
+    m_vaultInfoFailed.start();
     return m_vaultInfo;
 }
 

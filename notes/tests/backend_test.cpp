@@ -983,6 +983,18 @@ int main(int argc, char *argv[])
               "seam a sync that pulled a note re-reads the vault once");
         QObject::disconnect(c);
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG");
+        // An engine that fails to answer vault-info is not "nothing tracked":
+        // what was known stands, and it is asked again a little later.
+        qputenv("ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL", "1");
+        writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }) + u"  ");
+        b.refresh();
+        check(b.vaultTitleMode() == QStringLiteral("filename"), "seam a failed vault-info keeps what was known");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL");
+        writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("in-body"), { { "id-a", "A.md" } }));
+        check(waitUntil([&] { return b.vaultTitleMode() == QStringLiteral("in-body"); }),
+              "seam a failed vault-info is asked again");
+        writeFile(QStringLiteral(".icloud-notes/state.json"), stateJson(QStringLiteral("filename"), { { "id-a", "A.md" } }) + u' ');
+        b.refresh();
         QFile::remove(testVault() + QStringLiteral("/FromCloud.md"));
         b.refresh();
     }
