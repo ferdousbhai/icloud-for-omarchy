@@ -1051,3 +1051,20 @@ fn a_file_moved_into_a_folder_whose_rename_icloud_refuses_is_not_removed_in_iclo
     bed.settle();
     assert_eq!(bed.cloud.id_at("Papers/a.txt").as_deref(), Some(a.id.as_str()));
 }
+
+#[test]
+fn a_half_done_move_of_a_file_moved_again_here_goes_where_it_is_now() {
+    let bed = Bed::new();
+    bed.cloud.folder(ROOT_ID, "Docs");
+    bed.cloud.folder(ROOT_ID, "Other");
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Docs/b.txt")).unwrap();
+    bed.cloud.0.borrow_mut().rename_fails_once = true;
+    bed.try_sync(false).unwrap();
+    assert_eq!(bed.cloud.paths(), ["Docs", "Docs/a.txt", "Other"]);
+    fs::rename(bed.root().join("Docs/b.txt"), bed.root().join("Other/c.txt")).unwrap();
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["Docs", "Other", "Other/c.txt"]);
+    assert_eq!(bed.cloud.id_at("Other/c.txt").as_deref(), Some(a.id.as_str()));
+}

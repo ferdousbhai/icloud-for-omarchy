@@ -281,14 +281,15 @@ fn plan_moves(
         // A move made here that an earlier run got half way through in
         // iCloud (into the new folder, not yet under the new name): iCloud
         // has it where neither side meant it to be. That is finished as the
-        // move here it is, not followed here as a move made in iCloud,
+        // move here it is (to wherever the item is here now, if it was
+        // moved again since), not followed here as a move made in iCloud,
         // which would undo the rename.
         let half_done = context.pending_moves.get(&row.node.id).is_some_and(|to| {
             let half_way = match parent_of(to) {
                 "" => name_of(&row.path).to_string(),
                 dir => format!("{dir}/{}", name_of(&row.path)),
             };
-            rpath == &half_way && rpath != to && here(row).is_none() && moved_here(row) == Some(to.as_str())
+            rpath == &half_way && rpath != to && here(row).is_none() && moved_here(row).is_some()
         });
         if rpath != &row.path && !half_done {
             if into(&dests_there, rpath) {
