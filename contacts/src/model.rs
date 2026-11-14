@@ -112,10 +112,11 @@ impl Multi {
     }
 
     /// Whether `stored` is the value `query` names: phone numbers by their
-    /// digits (see [`same_number`]), emails ignoring case, URLs exactly.
+    /// digits (see [`same_number`]) or as written (one with no digits),
+    /// emails ignoring case, URLs exactly.
     pub fn matches(self, stored: &str, query: &str) -> bool {
         match self {
-            Multi::Phone => same_number(stored, query),
+            Multi::Phone => same_number(stored, query) || stored.trim() == query.trim(),
             Multi::Email => stored.trim().eq_ignore_ascii_case(query.trim()),
             Multi::Url => stored.trim() == query.trim(),
         }
@@ -513,6 +514,18 @@ mod tests {
             }]
         );
         assert!(c.apply(&[Change::Remove(Multi::Phone, "999".into())]).is_err());
+    }
+
+    /// A phone iCloud holds with no digits in it (typed on another device)
+    /// can still be named, and so removed, by what it says.
+    #[test]
+    fn a_phone_with_no_digits_is_matched_as_written() {
+        let mut c = card(
+            json!({ "phones": [{"label": "WORK", "field": "ext. office"}, {"label": "HOME", "field": "+1 555"}] }),
+        );
+        c.apply(&[Change::Remove(Multi::Phone, " ext. office".into())]).unwrap();
+        assert_eq!(c.values(Multi::Phone).len(), 1);
+        assert!(!Multi::Phone.matches("ext. office", "ext. home"));
     }
 
     #[test]
