@@ -8,7 +8,9 @@
 //! dates changed on both sides, a list renamed or a reminder moved while a
 //! file has unsent edits, a file removed or emptied, and the whole folder
 //! deleted, a renamed list's old file or a deleted list's file brought back
-//! by Syncthing, and a file line like one a conflict copy adds. A run ended
+//! by Syncthing, a file line like one a conflict copy adds, two copies at
+//! once, notes changed in iCloud, and iCloud changing again after a run
+//! ended at a crash point, before the next run settles it. A run ended
 //! before the user's edits can leave a reminder in two
 //! files (moved in iCloud), and the edits are then made to both. After each
 //! run:
@@ -537,7 +539,7 @@ impl Case {
         let t = truth(&self.env.state);
         let ids: Vec<&Reminder> = t.live.values().collect();
         let pick_list = |rng: &mut Rng| t.lists[rng.below(t.lists.len())].id.clone();
-        match self.rng.below(12) {
+        match self.rng.below(13) {
             0 | 1 if !t.lists.is_empty() => {
                 let list = pick_list(&mut self.rng);
                 let title = self.fresh();
@@ -648,6 +650,19 @@ impl Case {
                         Some(p) => json!({ "type": "REFERENCE", "value": { "recordName": p, "action": "NONE" } }),
                         None => json!({ "type": "REFERENCE", "value": Value::Null }),
                     };
+                });
+            }
+            12 if !ids.is_empty() => {
+                let r = ids[self.rng.below(ids.len())];
+                let notes = if self.rng.chance(30) {
+                    String::new()
+                } else {
+                    format!("Note {}", self.rng.word())
+                };
+                self.note(format!("icloud: notes of {} to {notes:?}", r.id));
+                self.env.edit(&r.id, |rec| {
+                    rec["fields"]["NotesDocument"] =
+                        json!({ "type": "ENCRYPTED_BYTES", "value": topotext::encode(&notes) });
                 });
             }
             _ => {}
@@ -921,7 +936,14 @@ impl Case {
             }));
         }
         std::fs::write(self.env.folder().join(&name), &text).unwrap();
-        ml.copy = Some(Copy { ticks, adds });
+        // A second copy in one step adds to what the first asks for.
+        match &mut ml.copy {
+            Some(c) => {
+                c.ticks.extend(ticks);
+                c.adds.extend(adds);
+            }
+            None => ml.copy = Some(Copy { ticks, adds }),
+        }
         self.note(format!("copy {name}: {text:?}"));
     }
 
@@ -1239,6 +1261,10 @@ impl Case {
             let crashed = self.crashed_at(&["tmp-written", "file-written", "renamed", "gone-removed"]);
             if crashed && self.rebuild_from_state() {
                 self.note("the files as that run left them".to_owned());
+                // iCloud changes again before the next run settles them.
+                for _ in 0..self.rng.below(3) {
+                    self.icloud_op();
+                }
             } else if crashed {
                 // Finished by a run before the user edits.
                 let data = self.env.background().unwrap_or_else(|e| self.fail(&e));
@@ -1256,7 +1282,10 @@ impl Case {
             let li = self.rng.below(self.lists.len());
             self.file_op(li);
         }
-        if self.rng.chance(20) && !self.lists.is_empty() {
+        for _ in 0..usize::from(self.rng.chance(20)) + usize::from(self.rng.chance(5)) {
+            if self.lists.is_empty() {
+                break;
+            }
             let li = self.rng.below(self.lists.len());
             // A copy is read against what the run settles the file was.
             if live.lists.iter().any(|l| l.id == self.lists[li].id) && self.lists[li].before.is_none() {
