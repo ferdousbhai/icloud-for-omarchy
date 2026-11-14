@@ -707,6 +707,18 @@ fn restore_undoes_delete() {
 }
 
 #[test]
+fn an_id_named_twice_is_deleted_and_restored_once() {
+    let env = Env::synced("delete-twice", 3);
+    let id = env.ids(&[]).remove(0);
+    let v = env.json(&["delete", &id, &id, "--yes"]);
+    assert_eq!(v, serde_json::json!([{ "id": id, "deleted": true }]));
+    assert!(!env.server.asset_ids().contains(&id));
+    let v = env.json(&["restore", &id, &id]);
+    assert_eq!(v, serde_json::json!([{ "id": id, "restored": true }]));
+    assert!(env.server.asset_ids().contains(&id));
+}
+
+#[test]
 fn delete_sends_many_in_one_call_and_reports_each() {
     let env = Env::synced("delete-batch", 6);
     let ids = env.ids(&[]);

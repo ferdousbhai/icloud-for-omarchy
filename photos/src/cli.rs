@@ -704,6 +704,12 @@ fn list(
         .ids(rows.iter().map(|r| r.id.clone()).collect()))
 }
 
+/// The ids in the order given, each once: an id named twice is acted on once.
+fn distinct(ids: &[String]) -> Vec<&str> {
+    let mut seen = HashSet::new();
+    ids.iter().map(String::as_str).filter(|id| seen.insert(*id)).collect()
+}
+
 fn row_or_fail(cat: &Catalog, id: &str) -> Res<Row> {
     cat.asset(id)?.ok_or_else(|| {
         not_found(format!("no item {id} in the catalog"))
@@ -862,14 +868,7 @@ fn download(ctx: &Ctx, ids: Vec<String>, all: bool, medium: bool, out: Option<&P
     for id in &ids {
         row_or_fail(&cat, id)?;
     }
-    // An id named twice is fetched once.
-    let mut unique: Vec<&str> = Vec::new();
-    let mut seen = HashSet::new();
-    for id in &ids {
-        if seen.insert(id.as_str()) {
-            unique.push(id);
-        }
-    }
+    let unique = distinct(&ids);
     if unique.is_empty() {
         return Ok(Response::new(json!([]), "Nothing to download").ids(Vec::new()));
     }
@@ -1135,7 +1134,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
 fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     let mut cat = ctx.catalog()?;
     let mut rows = Vec::new();
-    for id in ids {
+    for id in distinct(ids) {
         let r = row_or_fail(&cat, id)?;
         if r.deleted {
             return Err(other(format!("{id} is already deleted")));
@@ -1305,7 +1304,7 @@ impl<'a> Changed<'a> {
 fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
     let mut cat = ctx.catalog()?;
     let mut rows = Vec::new();
-    for id in ids {
+    for id in distinct(ids) {
         let r = row_or_fail(&cat, id)?;
         if !r.deleted {
             return Err(other(format!("{id} is not deleted")));
