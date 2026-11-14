@@ -249,8 +249,10 @@ pub(crate) const UNSHARED_KEY: &str = "unshared";
 /// puts them. A pull killed in between leaves directories, and new notes in
 /// them, that the state names no folder for: a push would make each a
 /// folder in iCloud, a second one beside the folder the pull was laying
-/// out. So a push leaves everything until a pull has finished. An unknown
-/// top-level key to an engine without it, which keeps it.
+/// out. So a push leaves everything until a pull has finished. Each
+/// directory maps to what it is for: a folder's record name, or a sharer's
+/// owner record name for their home. An unknown top-level key to an engine
+/// without it, which keeps it.
 pub(crate) const PENDING_DIRS_KEY: &str = "pendingDirs";
 
 /// The ids state.json lists under [`UNSHARED_KEY`].

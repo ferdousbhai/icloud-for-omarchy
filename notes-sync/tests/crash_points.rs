@@ -1939,3 +1939,36 @@ fn a_sync_that_pushes_twice_lists_each_refusal_once() {
         says(&synced)
     );
 }
+
+/// Notes added on the phone, two of them with one title in one folder and
+/// one of the same title in another: a pull cut short anywhere is finished
+/// by the next run with each note once, in its own file.
+#[test]
+fn a_pull_of_notes_with_one_title_cut_short_anywhere_is_finished_by_the_next_run() {
+    let mut start = cloned(3);
+    for i in 0..3 {
+        start.zone.put(note_record(
+            &format!("A0000000-0000-4000-8000-{i:012}"),
+            &format!("Twin\nwritten on the phone, {i}"),
+            if i == 2 { WORK_FOLDER } else { DEFAULT_FOLDER },
+        ));
+    }
+    start.expect.kept = kept_notes(&start.zone);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
+/// The folder the pull was renaming (`Work` to `Office`) renamed again on
+/// the phone (to `Bureau`) while the pull was cut short: the directory the
+/// pull had made for the first name is no new folder for the next push.
+#[test]
+fn a_pull_cut_short_before_a_folder_it_was_renaming_was_renamed_again_is_finished_by_the_next_run() {
+    let mut start = cloned(6);
+    moved_in_icloud(&mut start);
+    fn rename_again(zone: &mut Zone) {
+        let mut folder = zone.live(WORK_FOLDER).unwrap().clone();
+        folder["fields"]["TitleEncrypted"]["value"] = json!(base64_encode(b"Bureau"));
+        zone.put(folder);
+    }
+    start.expect.between = Some(rename_again);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}

@@ -256,7 +256,12 @@ window closes, so a killed run is ordinary.
   that the state names no folder for; read by a push, each would become a
   new folder in iCloud beside the one the pull was laying out. A push that
   finds `pendingDirs` sends nothing (a warning says why) until a pull has
-  finished. An engine without it keeps the key and ignores it.
+  finished. Each directory is listed with the folder it is for (`{dir:
+  folderRecordName}`, a sharer's home by the owner's record name): when
+  the folder was renamed again in iCloud before the next pull, that pull
+  first renames the directory to the folder's name now, so that it takes
+  up what was written there, and removes one left empty. An engine
+  without it keeps the key and ignores it.
 - A move whose request iCloud took before the push was cut off leaves the
   note tracked at its old file with the old change tag. The next push
   finds the record changed since, which refuses a move; but when iCloud

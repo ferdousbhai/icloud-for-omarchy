@@ -306,19 +306,48 @@ pub fn run_pull_with(
     // Announced before they are made, for a push after a pull killed before
     // it recorded them ([`PENDING_DIRS_KEY`]).
     let known_dirs: HashSet<String> = previous_layout_dirs(PreviousLayout::of(&state)).into_iter().collect();
-    let mut pending_dirs: Vec<String> = state
+    let old_pending: IndexMap<String, String> = state
         .extra
         .get(PENDING_DIRS_KEY)
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
-    let pending_before = pending_dirs.len();
-    for dir in &layout.all_dirs {
-        if !known_dirs.contains(dir) && !pending_dirs.contains(dir) && !target_dir.join(dir).exists() {
-            pending_dirs.push(dir.clone());
+    // Each directory of the layout with what it is for: a folder's record
+    // name, or a sharer's owner record name for their home.
+    let dir_keys: IndexMap<&String, &String> = layout
+        .folder_dirs
+        .iter()
+        .chain(&layout.sharer_home_dirs)
+        .map(|(key, dir)| (dir, key))
+        .collect();
+    // A directory a pull cut short laid out for a folder that has another
+    // name now (renamed again in iCloud since): what that pull wrote in it
+    // goes where the folder is now, so that this pull takes it up there.
+    let mut by_depth: Vec<(&String, &String)> = old_pending.iter().collect();
+    by_depth.sort_by_key(|(dir, _)| dir.split('/').count());
+    for (dir, key) in by_depth {
+        let now = layout.folder_dirs.get(key).or_else(|| layout.sharer_home_dirs.get(key));
+        if let Some(now) = now
+            && now != dir
+            && target_dir.join(dir).is_dir()
+            && !target_dir.join(now).exists()
+        {
+            if let Some(parent) = target_dir.join(now).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            rename_no_replace(&target_dir.join(dir), &target_dir.join(now))?;
         }
     }
-    if pending_dirs.len() > pending_before {
-        state.extra.insert(PENDING_DIRS_KEY.to_owned(), pending_dirs.into());
+    let mut pending_dirs = old_pending.clone();
+    for (dir, key) in &dir_keys {
+        if !known_dirs.contains(*dir) && !pending_dirs.contains_key(*dir) && !target_dir.join(dir).exists() {
+            pending_dirs.insert((*dir).clone(), (*key).clone());
+        }
+    }
+    if pending_dirs.len() > old_pending.len() {
+        state.extra.insert(
+            PENDING_DIRS_KEY.to_owned(),
+            serde_json::to_value(&pending_dirs).expect("directories serialize"),
+        );
         write_clone_state(target_dir, &state)?;
     }
     for dir in &layout.all_dirs {
@@ -851,6 +880,9 @@ pub fn run_pull_with(
     }
     let current: HashSet<String> = layout.all_dirs.iter().cloned().collect();
     remove_stale_dirs(target_dir, &previous_layout_dirs(PreviousLayout::of(&state)), &current);
+    // And what a pull cut short made for a name no folder has now, left
+    // empty (left there, the next push would make it a folder).
+    remove_stale_dirs(target_dir, &old_pending.keys().cloned().collect::<Vec<_>>(), &current);
 
     let failed = failure.is_some();
     // A shared zone is listed again only from the old listing cursor.
