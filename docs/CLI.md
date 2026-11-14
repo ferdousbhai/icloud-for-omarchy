@@ -740,8 +740,7 @@ refused is `{ok:false, exit_code:1, result, lines, error}` with the error
 exited 3, else with the worse half's code. `stateDir` is the engine's state directory,
 `.icloud-notes` (or a layout 3 vault's `.icloud-md`, until a command that
 takes the lock moves it; see notes-sync/docs/DESIGN.md §1). In a machine
-mode progress goes to stderr as `icloud-notes:progress:...` lines (older
-engines: `icloud-md:progress:...`).
+mode progress goes to stderr as `icloud-notes:progress:...` lines.
 
 ### icloud-photos
 
