@@ -7,12 +7,11 @@ use super::embeds::{
     AttachmentReference, EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, UNKNOWN_CONTENT_BANNER, embed_slots_of,
 };
 use super::encode::TRASH_FOLDER_RECORD_NAME;
-use super::format::{FormatParagraph, decode_note_format, formats_round_trip_equal, trim_trailing_whitespace};
+use super::format::{FormatParagraph, decode_note_format, trim_trailing_whitespace};
 use super::text::decode_note_string;
 use crate::cloudkit::{CloudKitRecord, FieldValue};
 use crate::js::{base64_decode, buffer_to_utf8};
-use crate::md::parse::parse_note_markdown;
-use crate::md::render::render_note_markdown;
+use crate::md::render::{projection_survives, render_note_markdown};
 use crate::md::title::split_title_paragraph;
 use crate::vault::state::TitleMode;
 
@@ -180,17 +179,8 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
     }
 
     let rendered = render_note_markdown(&projected);
-    let reparsed = parse_note_markdown(&rendered);
-    let projected_text = projected
-        .iter()
-        .map(|p| trim_trailing_whitespace(p).text)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let survives = match &reparsed {
-        Ok(reparsed) => reparsed.text == projected_text && formats_round_trip_equal(&projected, &reparsed.paragraphs),
-        Err(_) => false,
-    };
-    if !survives {
+    let trimmed: Vec<FormatParagraph> = projected.iter().map(trim_trailing_whitespace).collect();
+    if !projection_survives(&trimmed, &rendered) {
         return unpublishable("the note's formatting doesn't survive this tool's markdown round trip".into());
     }
     NoteDecodeResult::Ok(Box::new(DecodedNote {

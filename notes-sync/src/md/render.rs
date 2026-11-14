@@ -67,8 +67,9 @@ pub fn render_note_markdown(raw_paragraphs: &[FormatParagraph]) -> String {
     render_lines(&paragraphs, CONSERVATIVE_SPELLING)
 }
 
-/// `projectionSurvives`.
-fn projection_survives(paragraphs: &[FormatParagraph], rendered: &str) -> bool {
+/// `projectionSurvives`: whether `rendered` parses back to `paragraphs`
+/// (already without trailing whitespace), text and projection.
+pub(crate) fn projection_survives(paragraphs: &[FormatParagraph], rendered: &str) -> bool {
     match parse_note_markdown(rendered) {
         Ok(back) => back.text == joined_text(paragraphs) && formats_round_trip_equal(paragraphs, &back.paragraphs),
         Err(_) => false,
