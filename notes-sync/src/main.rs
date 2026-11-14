@@ -288,7 +288,7 @@ fn pull_lines(s: &pull::PullSummary, target: &Path) -> Vec<Line> {
         lines.push((
             false,
             format!(
-                "{} shared note(s) no longer shared with you - local copies left in place, untracked",
+                "{} shared note(s) no longer shared with you - removed here (a copy edited here is kept, not synced)",
                 s.unshared_untracked
             ),
         ));

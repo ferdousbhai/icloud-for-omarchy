@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
+    Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME, UNSHARED_KEY,
     attachment_lookup_notice, is_purged, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice,
-    skipped_zone_owner, used_names_for, zone_for_owner,
+    skipped_zone_owner, unshared_note_ids, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -166,6 +166,9 @@ struct Tracked {
     notes: IndexMap<String, NoteEntry>,
     attachments: IndexMap<String, AttachmentEntry>,
     table_attachments: IndexMap<String, TableAttachmentEntry>,
+    /// The notes no longer shared whose edited file this run kept (state's
+    /// `unshared`).
+    unshared: Vec<String>,
 }
 
 /// `runPull` over an explicit connector.
@@ -200,6 +203,7 @@ pub fn run_pull_with(
         notes: state.notes.clone(),
         attachments: state.attachments.clone().unwrap_or_default(),
         table_attachments: state.table_attachments.clone().unwrap_or_default(),
+        unshared: Vec::new(),
     };
     let mut trashed = state.trashed.clone().unwrap_or_default();
     // A rename an older engine's pull left pending (`pull --defer-renames`,
@@ -391,6 +395,7 @@ pub fn run_pull_with(
                                 &mut tracked,
                                 &mut summary,
                                 title_mode,
+                                Gone::Deleted,
                             )?;
                         }
                         return Ok(());
@@ -804,6 +809,17 @@ pub fn run_pull_with(
     let failed = failure.is_some();
     // A shared zone is listed again only from the old listing cursor.
     let shared_held = failed || retry_zones.iter().any(Option::is_some);
+    // A note tracked (again) is no kept copy of one no longer shared.
+    let mut extra = state.extra;
+    let mut unshared = unshared_note_ids(&extra);
+    unshared.extend(std::mem::take(&mut tracked.unshared));
+    unshared.retain(|id| !tracked.notes.contains_key(id));
+    if unshared.is_empty() {
+        extra.remove(UNSHARED_KEY);
+    } else {
+        unshared.dedup();
+        extra.insert(UNSHARED_KEY.to_owned(), unshared.into());
+    }
     let new_state = CloneState {
         account: state.account.clone(),
         // Held back, or not all applied: the next pull walks from the old
@@ -831,7 +847,7 @@ pub fn run_pull_with(
         attachments: Some(tracked.attachments),
         table_attachments: Some(tracked.table_attachments),
         trashed: Some(trashed),
-        extra: state.extra,
+        extra,
         ..Default::default()
     };
     if let Some(e) = failure {
@@ -893,7 +909,7 @@ fn reconcile_listings(
                 .filter_map(|s| skipped_zone_owner(s).map(str::to_owned)),
         )
         .collect();
-    handle_vanished_shared_zones(target_dir, &live_owners, tracked, summary)?;
+    handle_vanished_shared_zones(target_dir, &live_owners, tracked, summary, title_mode)?;
     Ok(())
 }
 
@@ -1023,15 +1039,17 @@ fn drop_tracking(target_dir: &Path, record_name: &str, tracked: &mut Tracked) ->
     Ok(())
 }
 
-/// `handleVanishedSharedZones`: untrack (but keep) the notes of a sharer no
-/// longer sharing with this account.
+/// `handleVanishedSharedZones`: the notes of a sharer no longer sharing with
+/// this account are gone for it, as deleted ones are
+/// ([`handle_remote_deletion`], [`Gone::Unshared`]).
 fn handle_vanished_shared_zones(
     target_dir: &Path,
     live_owners: &HashSet<String>,
     tracked: &mut Tracked,
     summary: &mut PullSummary,
+    title_mode: TitleMode,
 ) -> Result<(), Error> {
-    let vanished: Vec<(String, String)> = tracked
+    let vanished: Vec<(String, NoteEntry)> = tracked
         .notes
         .iter()
         .filter(|(_, e)| {
@@ -1039,16 +1057,18 @@ fn handle_vanished_shared_zones(
                 .as_ref()
                 .is_some_and(|o| !o.is_empty() && !live_owners.contains(o))
         })
-        .map(|(k, e)| (k.clone(), e.file.clone()))
+        .map(|(k, e)| (k.clone(), e.clone()))
         .collect();
-    for (record_name, file) in vanished {
-        summary.notices.push(SyncNotice {
-            level: NoticeLevel::Warn,
-            message: format!(
-                "{file}: no longer shared with you - leaving local copy in place but no longer tracking it"
-            ),
-        });
-        drop_tracking(target_dir, &record_name, tracked)?;
+    for (record_name, entry) in vanished {
+        handle_remote_deletion(
+            target_dir,
+            &record_name,
+            &entry,
+            tracked,
+            summary,
+            title_mode,
+            Gone::Unshared,
+        )?;
         summary.unshared_untracked += 1;
     }
     Ok(())
@@ -1072,7 +1092,15 @@ fn reconcile_notes_after_resync(
         .collect();
     let removed = gone.len();
     for (record_name, entry) in gone {
-        handle_remote_deletion(target_dir, &record_name, &entry, tracked, summary, title_mode)?;
+        handle_remote_deletion(
+            target_dir,
+            &record_name,
+            &entry,
+            tracked,
+            summary,
+            title_mode,
+            Gone::Deleted,
+        )?;
     }
     Ok(removed)
 }
@@ -1093,6 +1121,7 @@ pub fn reconcile_notes_after_resync_in(
         notes: std::mem::take(notes),
         attachments: std::mem::take(attachments),
         table_attachments: std::mem::take(table_attachments),
+        unshared: Vec::new(),
     };
     let result = reconcile_notes_after_resync(target_dir, shared_zone_owner, seen, &mut tracked, summary, title_mode);
     *notes = tracked.notes;
@@ -1198,11 +1227,29 @@ fn note_id_claimants(
     Ok(claimants)
 }
 
-/// `handleRemoteDeletion`: a clean or missing file goes with the note. One
-/// with local edits is kept as a new note: it stops being tracked and loses
-/// its id, so the next push creates it, edits and all. (icloud-md writes
-/// delete/modify conflict markers and keeps tracking a note that no longer
-/// exists, which no push can ever settle.)
+/// Why a tracked note is gone from what iCloud lists for this account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gone {
+    /// Deleted (or moved to Recently Deleted) on another device.
+    Deleted,
+    /// Its owner stopped sharing it with this account.
+    Unshared,
+}
+
+/// `handleRemoteDeletion`: the note's file goes with the note when it still
+/// reads as it did at the last sync. The file is the tracked one, or, when
+/// that is gone, the one the note was renamed or moved to here and not
+/// pushed yet (it carries the note's id): untouched since, a rename is no
+/// reason to bring a deleted note back.
+///
+/// A file with local edits is kept and stops being tracked. Of a deleted
+/// note it loses its id and so becomes a new note, which the next push
+/// creates, edits and all. (icloud-md writes delete/modify conflict markers
+/// and keeps tracking a note that no longer exists, which no push can ever
+/// settle.) Of a note no longer shared it keeps its id, which state's
+/// `unshared` lists: push leaves such a file alone, since someone else's
+/// note is not uploaded as a note of this account just because access to it
+/// ended.
 fn handle_remote_deletion(
     target_dir: &Path,
     record_name: &str,
@@ -1210,27 +1257,49 @@ fn handle_remote_deletion(
     tracked: &mut Tracked,
     summary: &mut PullSummary,
     title_mode: TitleMode,
+    gone: Gone,
 ) -> Result<(), Error> {
-    let local = local_file_state(target_dir, existing, record_name, title_mode)?;
-    if local != LocalFileState::Modified {
-        if local == LocalFileState::Clean {
-            safe_unlink(&target_dir.join(&existing.file))?;
+    let files = match local_file_state(target_dir, existing, record_name, title_mode)? {
+        LocalFileState::Missing => note_id_claimants(target_dir, &tracked.notes, record_name, title_mode)?,
+        _ => vec![existing.file.clone()],
+    };
+    let base = read_base_copy(target_dir, record_name)?;
+    let mut kept: Vec<String> = Vec::new();
+    for file in files {
+        let path = target_dir.join(&file);
+        let text = read_text(&path)?.unwrap_or_default();
+        let envelope = split_frontmatter(&text, split_options(title_mode));
+        if base.as_deref() == Some(envelope.body.as_str()) {
+            safe_unlink(&path)?;
+            continue;
         }
+        if gone == Gone::Deleted {
+            write_note_file(
+                &path,
+                &join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
+            )?;
+        }
+        kept.push(file);
+    }
+    let what = match gone {
+        Gone::Deleted => "deleted on another device",
+        Gone::Unshared => "no longer shared with you",
+    };
+    if kept.is_empty() {
         drop_tracking(target_dir, record_name, tracked)?;
         summary.removed += 1;
         summary
             .changes
             .push(PullChange::new(PullChangeKind::Remove, existing.file.clone()));
+        if gone == Gone::Unshared {
+            summary.notices.push(SyncNotice {
+                level: NoticeLevel::Warn,
+                message: format!("{}: {what} - removed here", existing.file),
+            });
+        }
         return Ok(());
     }
 
-    let path = target_dir.join(&existing.file);
-    let text = read_text(&path)?.unwrap_or_default();
-    let envelope = split_frontmatter(&text, split_options(title_mode));
-    write_note_file(
-        &path,
-        &join_frontmatter(&clear_note_id(&envelope.frontmatter), &envelope.body),
-    )?;
     // Its attachment files stay with the kept text; only tracking goes.
     tracked.notes.shift_remove(record_name);
     remove_base_copy(target_dir, record_name)?;
@@ -1238,14 +1307,22 @@ fn handle_remote_deletion(
     tracked
         .table_attachments
         .retain(|_, a| a.note_record_name != record_name);
-    let remark = "deleted on another device, but has local edits - kept as a new note, which the next push creates";
-    summary.notices.push(SyncNotice {
-        level: NoticeLevel::Warn,
-        message: format!("{}: {remark}", existing.file),
-    });
-    let mut change = PullChange::new(PullChangeKind::Untrack, existing.file.clone());
-    change.remarks = Some(vec![PullChangeRemark::new("note", remark)]);
-    summary.changes.push(change);
+    let remark = match gone {
+        Gone::Deleted => format!("{what}, but has local edits - kept as a new note, which the next push creates"),
+        Gone::Unshared => {
+            tracked.unshared.push(record_name.to_owned());
+            format!("{what}, but has local edits - kept here as a file that is not synced")
+        }
+    };
+    for file in kept {
+        summary.notices.push(SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!("{file}: {remark}"),
+        });
+        let mut change = PullChange::new(PullChangeKind::Untrack, file);
+        change.remarks = Some(vec![PullChangeRemark::new("note", remark.clone())]);
+        summary.changes.push(change);
+    }
     Ok(())
 }
 

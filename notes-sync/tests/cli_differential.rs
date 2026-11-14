@@ -805,23 +805,21 @@ fn shared_pull_unchanged_resumes_the_listing_and_walks_no_zone() {
 }
 
 /// `shared-pull-revoked`: the incremental listing marks the zone deleted;
-/// its note is untracked (file kept) as a full listing without it would.
+/// its note, unchanged here, goes as a deleted note does (file removed, no
+/// longer tracked), as a full listing without the zone would have it.
 #[test]
-fn shared_pull_revoked_untracks_the_zones_notes() {
+fn shared_pull_revoked_removes_the_zones_notes() {
     let (_, zone_walks) = shared_requests("shared-pull-revoked");
     assert_eq!(zone_walks, 0);
     let stdout = read_json(&expected("shared-pull-revoked/stdout.json"));
     assert_eq!(stdout["unsharedUntracked"], 1);
+    assert_eq!(stdout["removed"], 1);
     let state = state_of("shared-pull-revoked");
     assert!(state["notes"].get(SHARED_NOTE).is_none());
+    assert!(state.get("unshared").is_none(), "no edited copy was kept");
     assert_eq!(state["sharedDatabase"]["zones"], serde_json::json!([]));
     assert!(state["sharedZoneSyncTokens"].get(SHARER).is_none());
-    assert!(
-        expected("shared-pull-revoked/vault")
-            .join(SHARER)
-            .join("Shared Big Note.md")
-            .exists()
-    );
+    assert!(!expected("shared-pull-revoked/vault").join(SHARER).exists());
 }
 
 /// A rejected token, an old state without `sharedDatabase`, and a cursor

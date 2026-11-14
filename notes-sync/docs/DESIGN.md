@@ -269,6 +269,38 @@ for more than text edits). The engine:
 
 Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
 
+### A note that is gone from iCloud
+
+A tracked note that iCloud lists as deleted (or that a listing from scratch
+no longer has), and a note whose owner stopped sharing it, are both gone
+for this account (`cmd::pull::handle_remote_deletion`):
+
+- The note's file is removed when its text is still the last synced one
+  (the base copy). The file is the tracked one or, when that is missing, the
+  untracked file that carries the note's id: where the note was renamed or
+  moved to here without a push since. Up to 0.11.1 such a renamed file was
+  left, with an id nothing tracked, and the next push created it: a note
+  deleted on the phone came back as a new one.
+- A file with edits made here is kept and no longer tracked. Of a deleted
+  note it loses its `apple-note-id` and the next push creates it as a new
+  note, edits and all (as before).
+- Of a note no longer shared, an unedited file is removed like a deleted
+  note's (up to 0.11.1 it was left in place, and the next push uploaded it,
+  with a new folder named after the sharer's record id, into the user's own
+  notes: someone else's note, after they took access away). An edited file
+  is kept with its id, and state.json lists the id under `unshared`. Push
+  leaves an untracked file that carries a listed id alone, warns ("is your
+  edited copy of a note that is no longer shared with you, so it is not
+  synced"), and makes no folder of a directory that is new only because of
+  such files. Removing the `apple-note-id` line makes the file a note of
+  the user's own. `unshared` is a top-level key an engine without it keeps
+  as it is; an id leaves the list when its note is tracked again.
+
+Tests: tests/cmd_local_delete.rs (the last five), tests/cmd_pull.rs
+(`clean_absent_note_is_removed_like_a_tombstone`,
+`absent_note_with_local_edits_is_kept_as_a_new_note`), the scenario
+`shared-pull-revoked`.
+
 ### Most of the vault's files gone
 
 Deleting a note's file deletes the note, so a vault whose note files went
@@ -752,7 +784,7 @@ it is walked, answers ZONE_NOT_FOUND, which was already handled).
 
 Recorded: `shared-pull-unchanged` (resumed, nothing changed: no shared
 `changes/zone` at all), `shared-pull-revoked` (the zone reported deleted:
-its note untracked), `shared-pull-token-rejected`, `shared-pull-old-state`
+its note removed), `shared-pull-token-rejected`, `shared-pull-old-state`
 and `shared-pull-stale-cursor` (from scratch). Every pull scenario now sends
 the stored token.
 

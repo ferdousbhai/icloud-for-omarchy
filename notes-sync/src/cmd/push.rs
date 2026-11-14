@@ -15,7 +15,7 @@ use super::plan::{
     TextUpdateRefusal, count_unchanged_notes,
 };
 use super::remote::{Connector, DefaultConnector, Remote, resolve_folder_account};
-use super::{Error, NoticeLevel, SyncNotice, is_in_trash, is_purged};
+use super::{Error, NoticeLevel, SyncNotice, is_in_trash, is_purged, unshared_note_ids};
 use crate::cloudkit::{
     CloudKitRecord, CreateExtras, Database, NoteZone, RecordOp, RecordUpdate, RecordUpdateResult, Transport,
     UpdateFieldValue, UpdateFields, note_zone,
@@ -835,6 +835,34 @@ pub fn build_push_plan(
             local_text: envelope.body,
         });
     }
+    // The edited copy pull kept of a note someone stopped sharing is not a
+    // note of this account: it is left alone (and says so), and a directory
+    // that is there only for such files is no new folder.
+    let unshared: HashSet<String> = unshared_note_ids(&state.extra).into_iter().collect();
+    let mut dirs_on_disk = dirs_on_disk;
+    untracked.retain(|u| {
+        let kept = u
+            .note_id
+            .as_ref()
+            .is_some_and(|id| unshared.contains(id) && !state.notes.contains_key(id));
+        if kept {
+            notices.push(SyncNotice {
+                level: NoticeLevel::Warn,
+                message: format!(
+                    "{} is your edited copy of a note that is no longer shared with you, so it is not synced - \
+                     delete it, or remove its {} line to make it a note of your own",
+                    u.file,
+                    crate::md::frontmatter::NOTE_ID_KEY
+                ),
+            });
+            let mut dir = note_dir_of(&u.file);
+            while !dir.is_empty() && !dir_index.contains_key(&dir) {
+                dirs_on_disk.remove(&dir);
+                dir = note_dir_of(&dir);
+            }
+        }
+        !kept
+    });
     let recorded_titles: HashMap<String, String> = untracked
         .iter()
         .filter_map(|u| u.note_title.clone().map(|t| (u.file.clone(), t)))

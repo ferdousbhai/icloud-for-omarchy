@@ -166,6 +166,22 @@ pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     }
 }
 
+/// state.json's `unshared`: the ids of notes someone stopped sharing whose
+/// file had edits made here. Pull keeps such a file (with its id) and lists
+/// it here; push leaves a file carrying one of these ids alone instead of
+/// creating it as a note of this account. An unknown top-level key to an
+/// engine without it, which keeps it as it is.
+pub(crate) const UNSHARED_KEY: &str = "unshared";
+
+/// The ids state.json lists under [`UNSHARED_KEY`].
+pub(crate) fn unshared_note_ids(extra: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    extra
+        .get(UNSHARED_KEY)
+        .and_then(|v| v.as_array())
+        .map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
 /// Whether the note is in the trash: its Folder reference is the Trash folder.
 pub(crate) fn is_in_trash(record: &CloudKitRecord) -> bool {
     record

@@ -563,3 +563,170 @@ fn the_push_summary_counts_folder_changes_apart_from_notes() {
     );
     assert!(stdout.contains("Pushed 1 folder change(s) from"), "{stdout}");
 }
+
+// --- a note that is gone from iCloud ---------------------------------------------------
+
+/// tiny-pull-update's answers, with the note moved to Recently Deleted on
+/// another device instead of edited.
+fn pull_deleted_cassette(out: &Path) -> PathBuf {
+    let mut cassette: Value =
+        serde_json::from_str(&std::fs::read_to_string(differential().join("cassettes/tiny-pull-update.json")).unwrap())
+            .unwrap();
+    let note = &mut cassette["interactions"][0]["response"]["body"]["zones"][0]["records"][0];
+    assert_eq!(note["recordName"], RECORD);
+    note["fields"]["Folder"] = serde_json::json!({ "value": { "recordName": "TrashFolder-CloudKit", "action": "VALIDATE" }, "type": "REFERENCE" });
+    let path = out.join("deleted.json");
+    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
+    path
+}
+
+/// A note renamed here (not pushed yet) and deleted on another device is
+/// deleted: its file, untouched since the last sync, goes with it. Left in
+/// place it would carry an id nothing tracks, and the next push would send
+/// the deleted note back to iCloud as a new one.
+#[test]
+fn a_note_deleted_remotely_and_only_renamed_here_is_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    let renamed = "Notes/Renamed.md";
+    std::fs::rename(vault.join(FILE), vault.join(renamed)).unwrap();
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &pull_deleted_cassette(&out),
+        &["--quiet", "pull", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["removed"], 1, "{stdout}");
+    assert!(!vault.join(renamed).exists(), "the renamed file went with the note");
+    assert!(state(&vault)["notes"].get(RECORD).is_none());
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &differential().join("cassettes/tiny-lookup.json"),
+        &["--quiet", "push", "--dry-run", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"], serde_json::json!([]), "nothing to create");
+}
+
+/// Renamed and edited here, deleted elsewhere: the edited text is kept as a
+/// new note, as an edited file under its old name is.
+#[test]
+fn a_note_deleted_remotely_and_renamed_and_edited_here_is_kept_as_a_new_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    let renamed = "Notes/Renamed.md";
+    let edited = std::fs::read_to_string(vault.join(FILE)).unwrap() + "\nA line added here.\n";
+    std::fs::write(vault.join(renamed), edited).unwrap();
+    std::fs::remove_file(vault.join(FILE)).unwrap();
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &pull_deleted_cassette(&out),
+        &["--quiet", "pull", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["changes"][0]["kind"], "untrack", "{stdout}");
+    assert_eq!(stdout["changes"][0]["file"], renamed);
+    let text = std::fs::read_to_string(vault.join(renamed)).unwrap();
+    assert!(text.contains("A line added here."), "{text}");
+    assert!(!text.contains(RECORD), "it lost the deleted note's id: {text}");
+}
+
+/// The `asset-clone` vault (it has a note someone shares) pulled with the
+/// share revoked, after `prepare` changed the vault.
+fn pull_revoked(out: &Path, prepare: impl FnOnce(&Path)) -> (PathBuf, Value) {
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/asset-clone/vault"), &vault);
+    prepare(&vault);
+    let (code, stdout, stderr) = run(
+        out,
+        &differential().join("cassettes/shared-pull-revoked.json"),
+        &["--quiet", "pull", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    (vault, stdout)
+}
+
+const SHARED_FILE: &str = "_0123456789abcdef0123456789abcdef/Shared Big Note.md";
+
+/// A note someone stopped sharing is gone for this account. Its file,
+/// unchanged here, is removed like a deleted note's; left in place, the next
+/// push would upload it (and a folder named after the sharer) into this
+/// account's own notes.
+#[test]
+fn a_note_no_longer_shared_is_removed_and_nothing_is_uploaded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let (vault, stdout) = pull_revoked(&out, |_| {});
+    assert_eq!(stdout["unsharedUntracked"], 1, "{stdout}");
+    assert!(!vault.join(SHARED_FILE).exists());
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &differential().join("cassettes/tiny-lookup.json"),
+        &["--quiet", "push", "--dry-run", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(stdout["entries"], serde_json::json!([]), "{stdout}");
+}
+
+/// With edits made here, the file is kept, with its id, as a file that is
+/// not synced: push says so and creates neither a note nor a folder for it.
+/// Without the id line it is a note of the user's own.
+#[test]
+fn an_edited_copy_of_a_note_no_longer_shared_is_kept_and_not_uploaded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let (vault, stdout) = pull_revoked(&out, |vault| {
+        let path = vault.join(SHARED_FILE);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, text + "\nMy own remarks.\n").unwrap();
+    });
+    assert_eq!(stdout["unsharedUntracked"], 1, "{stdout}");
+    assert_eq!(stdout["changes"][0]["kind"], "untrack", "{stdout}");
+    let text = std::fs::read_to_string(vault.join(SHARED_FILE)).unwrap();
+    assert!(text.contains("My own remarks."), "{text}");
+    let pulled = state(&vault);
+    let unshared = pulled["unshared"].as_array().expect("the kept copy is listed");
+    assert_eq!(unshared.len(), 1, "{pulled}");
+    assert!(text.contains(unshared[0].as_str().unwrap()), "it keeps its id: {text}");
+
+    let preview = |out: &Path| {
+        let (code, stdout, stderr) = run(
+            out,
+            &differential().join("cassettes/tiny-lookup.json"),
+            &["--quiet", "push", "--dry-run", vault.to_str().unwrap()],
+        );
+        assert_eq!(code, 0, "{stdout}\n{stderr}");
+        stdout
+    };
+    let stdout = preview(&out);
+    assert_eq!(stdout["entries"], serde_json::json!([]), "{stdout}");
+    let notices = stdout["notices"].to_string();
+    assert!(
+        notices.contains("no longer shared with you, so it is not synced"),
+        "{notices}"
+    );
+
+    // The user makes it their own: now it is a new note (in a new folder).
+    let own: String = text
+        .lines()
+        .filter(|l| !l.starts_with("apple-note-id:"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(vault.join(SHARED_FILE), own).unwrap();
+    let stdout = preview(&out);
+    let kinds: Vec<&str> = stdout["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["createFolder", "create"], "{stdout}");
+}

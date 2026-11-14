@@ -2,18 +2,23 @@
   "added": 0,
   "updated": 0,
   "merged": 0,
-  "removed": 0,
+  "removed": 1,
   "attachmentsDownloaded": 0,
   "unpublishable": 0,
   "skippedNewUnsyncable": 0,
   "droppedUnsyncable": 0,
   "unsharedUntracked": 1,
-  "changes": [],
+  "changes": [
+    {
+      "kind": "remove",
+      "file": "_0123456789abcdef0123456789abcdef/Shared Big Note.md"
+    }
+  ],
   "conflicts": [],
   "notices": [
     {
       "level": "warn",
-      "message": "_0123456789abcdef0123456789abcdef/Shared Big Note.md: no longer shared with you - leaving local copy in place but no longer tracking it"
+      "message": "_0123456789abcdef0123456789abcdef/Shared Big Note.md: no longer shared with you - removed here"
     }
   ]
 }
