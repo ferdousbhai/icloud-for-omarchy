@@ -95,58 +95,34 @@ bool isMachine(Mode mode)
 
 // The five global output flags. They combine; the strongest wins: ids-only
 // > count > quiet > json > styled > (stdout a terminal ? text : envelope).
-struct OutputFlags {
-    bool json = false;
-    bool styled = false;
-    bool quiet = false;
-    bool idsOnly = false;
-    bool count = false;
+const QStringList kOutputFlags{ QStringLiteral("--json"), QStringLiteral("--styled"), QStringLiteral("--quiet"),
+                                QStringLiteral("--ids-only"), QStringLiteral("--count") };
 
+struct OutputFlags {
+    // The flags given, as icloud-notes-sync takes them (the same five).
+    QStringList given;
+
+    // Takes `arg` when it is one of the five.
     bool set(const QString &arg)
     {
-        if (arg == u"--json")
-            json = true;
-        else if (arg == u"--styled")
-            styled = true;
-        else if (arg == u"--quiet")
-            quiet = true;
-        else if (arg == u"--ids-only")
-            idsOnly = true;
-        else if (arg == u"--count")
-            count = true;
-        else
+        if (!kOutputFlags.contains(arg))
             return false;
+        if (!given.contains(arg))
+            given << arg;
         return true;
-    }
-
-    // The flags given, as icloud-notes-sync takes them (the same five).
-    QStringList given() const
-    {
-        QStringList out;
-        if (json)
-            out << QStringLiteral("--json");
-        if (styled)
-            out << QStringLiteral("--styled");
-        if (quiet)
-            out << QStringLiteral("--quiet");
-        if (idsOnly)
-            out << QStringLiteral("--ids-only");
-        if (count)
-            out << QStringLiteral("--count");
-        return out;
     }
 
     Mode mode() const
     {
-        if (idsOnly)
+        if (given.contains(u"--ids-only"))
             return Mode::Ids;
-        if (count)
+        if (given.contains(u"--count"))
             return Mode::Count;
-        if (quiet)
+        if (given.contains(u"--quiet"))
             return Mode::Quiet;
-        if (json)
+        if (given.contains(u"--json"))
             return Mode::Json;
-        if (styled || isatty(STDOUT_FILENO))
+        if (given.contains(u"--styled") || isatty(STDOUT_FILENO))
             return Mode::Human;
         return Mode::Json;
     }
@@ -392,10 +368,8 @@ QString commandHelp(const Spec &s)
 const QSet<QString> kValued{ QStringLiteral("--folder"), QStringLiteral("--flag"),   QStringLiteral("--body"),
                              QStringLiteral("--file"),   QStringLiteral("--in"),     QStringLiteral("--all"),
                              QStringLiteral("--choices"), QStringLiteral("--vault"), QStringLiteral("--wait") };
-const QSet<QString> kOutputSwitches{ QStringLiteral("--json"), QStringLiteral("--styled"), QStringLiteral("--quiet"),
-                                     QStringLiteral("--ids-only"), QStringLiteral("--count") };
-const QSet<QString> kSwitches{ QStringLiteral("--styled"),  QStringLiteral("--quiet"),  QStringLiteral("--ids-only"),
-                               QStringLiteral("--count"),   QStringLiteral("--json"),   QStringLiteral("--yes"),    QStringLiteral("--push"),
+// The switches besides the output flags (kOutputFlags).
+const QSet<QString> kSwitches{ QStringLiteral("--yes"),     QStringLiteral("--push"),
                                QStringLiteral("--append"),  QStringLiteral("--force"),  QStringLiteral("--stdin"),
                                QStringLiteral("--raw"),     QStringLiteral("--dry-run"), QStringLiteral("--strip"),
                                QStringLiteral("--synced"),  QStringLiteral("--records"), QStringLiteral("--help"),
@@ -452,17 +426,15 @@ std::optional<Failure> parseArgs(const QStringList &argv, Args &a)
                 inline_ = argv.at(++i);
             }
             a.values.insert(name, inline_);
-        } else if (kSwitches.contains(name)) {
+        } else if (kSwitches.contains(name) || kOutputFlags.contains(name)) {
             if (hasInline)
                 return usageError(QStringLiteral("%1 takes no value").arg(name));
-            a.switches.insert(name);
+            if (!a.flags.set(name))
+                a.switches.insert(name);
         } else {
             return usageError(QStringLiteral("unknown option %1").arg(name));
         }
     }
-    for (const QString &name : kOutputSwitches)
-        if (a.switches.contains(name))
-            a.flags.set(name);
     a.mode = a.flags.mode();
     return std::nullopt;
 }
@@ -471,7 +443,7 @@ std::optional<Failure> checkArgs(const Spec &spec, const Args &a)
 {
     static const QSet<QString> global{ QStringLiteral("--vault"), QStringLiteral("--wait"), QStringLiteral("--help") };
     for (const QString &name : a.values.keys() + QStringList(a.switches.values()))
-        if (!global.contains(name) && !kOutputSwitches.contains(name) && !spec.options.contains(name))
+        if (!global.contains(name) && !spec.options.contains(name))
             return usageError(QStringLiteral("%1 does not take %2").arg(QLatin1StringView(spec.name), name));
     const qsizetype n = a.positional.size();
     if (n < spec.minArgs || n > spec.maxArgs)
@@ -620,6 +592,16 @@ int report(const Failure &f, Mode mode)
         printErrorText(f);
     }
     return f.exit;
+}
+
+// A result that carries a sync's failure: the result, then in text mode the
+// failure's `error:`/`hint:` lines on stderr too.
+int printResult(const Done &d, const std::optional<Failure> &failure, Mode mode)
+{
+    const int code = printResult(d, mode);
+    if (failure && !isMachine(mode))
+        printErrorText(*failure);
+    return code;
 }
 
 QString plural(qsizetype n, const char *one, const char *many)
@@ -828,11 +810,17 @@ std::optional<Failure> takeLock(NotesBackend &b, const Args &a)
     }
 }
 
-// What icloud-session says, for commands that talk to iCloud.
-std::optional<Failure> needSignIn(NotesBackend &b)
+// Asks icloud-session who is signed in, and waits for its answer.
+void readSignIn(NotesBackend &b)
 {
     b.refreshSignIn();
     waitFor([&] { return !b.signInPending(); }, 20000);
+}
+
+// What icloud-session says, for commands that talk to iCloud.
+std::optional<Failure> needSignIn(NotesBackend &b)
+{
+    readSignIn(b);
     if (!b.signInKnown())
         return Failure{ QStringLiteral("session_service"),
                         QStringLiteral("icloud-session is not available, so the sign-in is unknown"), kExitUnavailable,
@@ -991,7 +979,7 @@ int execEngine(NotesBackend &b, const Args &a, const QStringList &toolArgs)
 {
     if (auto f = needSyncTool(b))
         return report(*f, a.mode);
-    QStringList flags = a.flags.given();
+    QStringList flags = a.flags.given;
     if (flags.isEmpty())
         flags << (isatty(STDOUT_FILENO) ? QStringLiteral("--styled") : QStringLiteral("--json"));
     QStringList args = QStringList{ NotesBackend::syncToolPath() } + flags;
@@ -1111,16 +1099,12 @@ int finish(NotesBackend &b, const Args &a, Result result)
         if (syncFailure)
             done.exit = syncFailure->exit;
     }
-    const int code = printResult(done, a.mode);
-    if (syncFailure && !isMachine(a.mode))
-        printErrorText(*syncFailure);
-    return code;
+    return printResult(done, syncFailure, a.mode);
 }
 
 Done status(NotesBackend &b)
 {
-    b.refreshSignIn();
-    waitFor([&] { return !b.signInPending(); }, 20000);
+    readSignIn(b);
     QString holder;
     switch (b.lockVault()) {
     case VaultLock::Locked:
@@ -1316,9 +1300,7 @@ Result newNote(NotesBackend &b, const Args &a)
     bool given = false;
     if (auto f = readBody(a, body, given))
         return *f;
-    QString title = a.positional.at(0).trimmed();
-    title.remove(u'/');
-    title.remove(QChar(u'\0'));
+    const QString title = NotesBackend::cleanName(a.positional.at(0));
     if (title.isEmpty())
         return usageError(QStringLiteral("the title is empty"));
     if (const QString reason = NotesBackend::unsyncedNameReason(title, false); !reason.isEmpty())
@@ -1643,8 +1625,7 @@ Result newFolder(NotesBackend &b, const Args &a)
     if (const auto p = a.value("--in"))
         if (auto f = resolveFolder(b, *p, parent))
             return *f;
-    QString name = a.positional.at(0).trimmed();
-    name.remove(u'/');
+    const QString name = NotesBackend::cleanName(a.positional.at(0));
     if (name.isEmpty())
         return usageError(QStringLiteral("the folder name is empty"));
     if (const QString reason = NotesBackend::unsyncedNameReason(name, true); !reason.isEmpty())
@@ -1723,10 +1704,7 @@ int syncCommand(NotesBackend &b, const Args &a, const QString &what)
     done.count = sync.json.value(QStringLiteral("runs")).toArray().size();
     if (sync.failure)
         done.exit = sync.failure->exit;
-    const int code = printResult(done, a.mode);
-    if (sync.failure && !isMachine(a.mode))
-        printErrorText(*sync.failure);
-    return code;
+    return printResult(done, sync.failure, a.mode);
 }
 
 int runCommand(const Args &a, const Spec &spec)
@@ -1784,34 +1762,25 @@ int runCommand(const Args &a, const Spec &spec)
     if (auto f = takeLock(b, a))
         return report(*f, a.mode);
     b.refresh();
-    if (cmd == u"new")
-        return finish(b, a, newNote(b, a));
-    if (cmd == u"write")
-        return finish(b, a, write(b, a));
-    if (cmd == u"rename")
-        return finish(b, a, rename(b, a));
-    if (cmd == u"move")
-        return finish(b, a, move(b, a));
-    if (cmd == u"delete")
-        return finish(b, a, deleteNote(b, a));
-    if (cmd == u"toggle")
-        return finish(b, a, toggle(b, a));
-    if (cmd == u"attach")
-        return finish(b, a, attach(b, a));
-    if (cmd == u"detach")
-        return finish(b, a, detach(b, a));
-    if (cmd == u"resolve")
-        return finish(b, a, resolve(b, a));
-    if (cmd == u"recover")
-        return finish(b, a, recover(b, a));
-    if (cmd == u"export-pdf")
-        return finish(b, a, exportPdf(b, a));
-    if (cmd == u"new-folder")
-        return finish(b, a, newFolder(b, a));
-    if (cmd == u"rename-folder")
-        return finish(b, a, renameFolder(b, a));
-    if (cmd == u"delete-folder")
-        return finish(b, a, deleteFolder(b, a));
+    static const QHash<QString, Result (*)(NotesBackend &, const Args &)> changes{
+        { QStringLiteral("new"), newNote },
+        { QStringLiteral("write"), write },
+        { QStringLiteral("rename"), rename },
+        { QStringLiteral("move"), move },
+        { QStringLiteral("delete"), deleteNote },
+        { QStringLiteral("toggle"), toggle },
+        { QStringLiteral("attach"), attach },
+        { QStringLiteral("detach"), detach },
+        { QStringLiteral("resolve"), resolve },
+        { QStringLiteral("recover"), recover },
+        { QStringLiteral("export-pdf"), exportPdf },
+        { QStringLiteral("new-folder"), newFolder },
+        { QStringLiteral("rename-folder"), renameFolder },
+        { QStringLiteral("delete-folder"), deleteFolder },
+    };
+    if (const auto change = changes.value(cmd))
+        return finish(b, a, change(b, a));
+    // A command of specs() that nothing above runs.
     return report(usageError(QStringLiteral("unknown command \"%1\"").arg(cmd)), a.mode);
 }
 
@@ -1822,11 +1791,9 @@ bool isCliInvocation(const char *arg)
     const QString a = QString::fromLocal8Bit(arg);
     if (a == u"--sync")
         return false;
-    static const QSet<QString> starts{ QStringLiteral("help"),     QStringLiteral("-h"),       QStringLiteral("--help"),
-                                       QStringLiteral("-V"),       QStringLiteral("--version"), QStringLiteral("--json"),
-                                       QStringLiteral("--styled"), QStringLiteral("--quiet"),  QStringLiteral("--ids-only"),
-                                       QStringLiteral("--count"),  QStringLiteral("--vault"),  QStringLiteral("--wait") };
-    return starts.contains(a) || a.startsWith(QStringLiteral("--vault=")) || a.startsWith(QStringLiteral("--wait="))
+    static const QSet<QString> starts{ QStringLiteral("help"), QStringLiteral("-h"),      QStringLiteral("--help"), QStringLiteral("-V"),
+                                       QStringLiteral("--version"), QStringLiteral("--vault"), QStringLiteral("--wait") };
+    return starts.contains(a) || kOutputFlags.contains(a) || a.startsWith(QStringLiteral("--vault=")) || a.startsWith(QStringLiteral("--wait="))
         || findSpec(a) != nullptr;
 }
 

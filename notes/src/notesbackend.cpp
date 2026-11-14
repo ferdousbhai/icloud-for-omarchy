@@ -141,14 +141,6 @@ void forEachNoteFile(const QString &dirPath, Fn fn)
     }
 }
 
-QString sanitized(const QString &name)
-{
-    QString clean = name.trimmed();
-    clean.remove(u'/');
-    clean.remove(u'\0');
-    return clean;
-}
-
 // Follow the desktop text size like Omawrite does; 1.0 off GNOME
 // (Omarchy sets text-scaling-factor from its display panel).
 double readUiScale()
@@ -1104,7 +1096,7 @@ void NotesBackend::loseCurrentNote()
 bool NotesBackend::keepEditsAsNewNote(const QString &mine, const QString &why)
 {
     const QString folder = QDir(folderAbsolutePath(m_lostNote.folder)).exists() ? m_lostNote.folder : QString();
-    QString title = sanitized(m_lostNote.title);
+    QString title = cleanName(m_lostNote.title);
     if (title.isEmpty())
         title = QStringLiteral("Untitled");
     const QDir dir(folderAbsolutePath(folder));
@@ -1456,6 +1448,14 @@ QString NotesBackend::guardrailWarning(const QString &body)
     return warnings.join(QStringLiteral("\n\n"));
 }
 
+QString NotesBackend::cleanName(const QString &name)
+{
+    QString clean = name.trimmed();
+    clean.remove(u'/');
+    clean.remove(u'\0');
+    return clean;
+}
+
 QString NotesBackend::unsyncedNameReason(const QString &name, bool folder)
 {
     if (name.startsWith(u'.'))
@@ -1467,7 +1467,7 @@ QString NotesBackend::unsyncedNameReason(const QString &name, bool folder)
 
 void NotesBackend::newNote(const QString &name)
 {
-    QString clean = sanitized(name);
+    QString clean = cleanName(name);
     if (clean.isEmpty() || !unsyncedNameReason(clean, false).isEmpty())
         return;
     if (!clean.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive))
@@ -1500,7 +1500,7 @@ QString NotesBackend::renameCurrentNote(const QString &title)
 {
     const bool filename = vaultTitleMode() == u"filename";
     // A file name cannot hold a slash; a title line can ("Q1/Q2 plan").
-    const QString clean = filename ? sanitized(title) : title.trimmed().remove(u'\0');
+    const QString clean = filename ? cleanName(title) : title.trimmed().remove(u'\0');
     if (m_currentNote.isEmpty())
         return QStringLiteral("No note selected.");
     if (!m_readOnlyReason.isEmpty())
@@ -1709,7 +1709,7 @@ QString NotesBackend::resolveConflicts(const QStringList &choices)
 
 void NotesBackend::newFolder(const QString &name)
 {
-    const QString clean = sanitized(name);
+    const QString clean = cleanName(name);
     if (clean.isEmpty() || !unsyncedNameReason(clean, true).isEmpty())
         return;
     QDir().mkpath(QDir(folderAbsolutePath(m_currentFolder)).filePath(clean));
@@ -1719,7 +1719,7 @@ void NotesBackend::newFolder(const QString &name)
 
 QString NotesBackend::renameCurrentFolder(const QString &name)
 {
-    const QString clean = sanitized(name);
+    const QString clean = cleanName(name);
     if (m_currentFolder.isEmpty())
         return QStringLiteral("All Notes cannot be renamed.");
     if (clean.isEmpty())
