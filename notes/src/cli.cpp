@@ -203,8 +203,8 @@ const QList<Spec> &specs()
           "A note's text as the window shows it (without the ID block), or with --raw the whole file.\n"
           "Also its attachments, why it is read-only if it is, and its conflicts: each block's two\n"
           "versions, this computer's (local) and iCloud's (remote), for `resolve`.\n"
-          "JSON: {path, folder, file, title, id, modified, flags, read_only, body, text?, attachments:\n"
-          "[{name, path, image}], conflicts: [{local: [line], remote: [line], before, after}],\n"
+          "JSON: {path, folder, file, title, id, modified, modified_ms, flags, read_only, body, text?,\n"
+          "attachments: [{name, path, image}], conflicts: [{local: [line], remote: [line], before, after}],\n"
           "conflicts_unreadable, has_synced_copy}",
           { QStringLiteral("--raw") }, 1, 1 },
         { "search", "search QUERY",
