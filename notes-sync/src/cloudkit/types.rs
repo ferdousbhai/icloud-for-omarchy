@@ -298,6 +298,16 @@ pub enum RecordOp {
     },
 }
 
+impl RecordOp {
+    /// The record the operation is for.
+    pub fn record_name(&self) -> &str {
+        match self {
+            RecordOp::Update(update) => &update.record_name,
+            RecordOp::Create { record_name, .. } | RecordOp::Delete { record_name, .. } => record_name,
+        }
+    }
+}
+
 /// `NoteUpdateResult` / `RecordUpdateResult`: per-record outcome of a
 /// `records/modify`. A changeTag conflict is `Rejected { server_error_code:
 /// "CONFLICT", .. }` inside an HTTP 200 - an expected outcome, not an error.

@@ -86,6 +86,8 @@ pub const NOTE_DESIRED_RECORD_TYPES: &[&str] = &[
 ];
 
 const MODIFY_MISSING_RECORDS: &str = "Unexpected response shape from records/modify (missing records array)";
+const MODIFY_OUT_OF_ORDER: &str =
+    "Unexpected response shape from records/modify (a result names another record than the one it answers)";
 const MODIFY_ENTRY_NOT_OBJECT: &str = "Unexpected response shape from records/modify (record entry is not an object)";
 
 /// The ckdatabasews path (with icloud-md's own query parameters) for
@@ -539,6 +541,14 @@ impl<T: Transport> Database<T> {
         if results.len() != ops.len() {
             return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
         }
+        // Results are paired with operations by position: one that names
+        // another record would give that record's outcome to this one.
+        let answered = get(&response, "records").and_then(Value::as_array);
+        for (op, entry) in ops.iter().zip(answered.into_iter().flatten()) {
+            if get_str(entry, "recordName").is_some_and(|name| name != op.record_name()) {
+                return Err(CkError::UnexpectedResponse(MODIFY_OUT_OF_ORDER.into()));
+            }
+        }
         inline_uploaded_text(&mut results, uploaded);
         Ok(results)
     }
@@ -688,6 +698,12 @@ impl<T: Transport> Database<T> {
         };
         let body = self.post_database(zone.database, "records/modify", &modify_body(&[op], &zone.zone_id))?;
         let entry = first_modify_entry(&body)?;
+        if !is_record(entry) {
+            return Err(CkError::UnexpectedResponse(MODIFY_ENTRY_NOT_OBJECT.into()));
+        }
+        if get_str(entry, "recordName").is_some_and(|name| name != record_name) {
+            return Err(CkError::UnexpectedResponse(MODIFY_OUT_OF_ORDER.into()));
+        }
         Ok(get_str(entry, "serverErrorCode").map(|code| {
             get_str(entry, "reason")
                 .filter(|r| !r.is_empty())
@@ -1230,6 +1246,11 @@ fn parse_update_entry(entry: &Value) -> Result<RecordUpdateResult, CkError> {
     Ok(RecordUpdateResult::Ok(Box::new(parse_record(entry)?)))
 }
 
+/// `parseNoteUpdateResponse`: the first entry only.
+pub fn parse_note_update_response(body: &Value) -> Result<RecordUpdateResult, CkError> {
+    parse_update_entry(first_modify_entry(body)?)
+}
+
 /// `parseRecordUpdateResponse`.
 pub fn parse_record_update_response(body: &Value) -> Result<Vec<RecordUpdateResult>, CkError> {
     get(body, "records")
@@ -1245,11 +1266,6 @@ fn first_modify_entry(body: &Value) -> Result<&Value, CkError> {
         .and_then(Value::as_array)
         .and_then(|r| r.first())
         .ok_or_else(|| CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()))
-}
-
-/// `parseNoteUpdateResponse`: the first entry only.
-pub fn parse_note_update_response(body: &Value) -> Result<RecordUpdateResult, CkError> {
-    parse_update_entry(first_modify_entry(body)?)
 }
 
 /// Collapses repeated occurrences of a record in one zone's `changes/zone`

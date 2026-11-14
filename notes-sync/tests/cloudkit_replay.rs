@@ -260,6 +260,48 @@ fn a_modify_answer_with_a_result_missing_is_refused() {
 }
 
 #[test]
+fn a_modify_answer_whose_results_name_other_records_is_refused() {
+    // Both went through, answered the other way round: by position, each
+    // record would take the other's change tag (or the other's refusal).
+    let swapped = json!({ "records": [
+        { "recordName": "n2", "recordType": "Note", "recordChangeTag": "t9", "fields": {} },
+        { "recordName": "n1", "recordType": "Note", "recordChangeTag": "t2", "fields": {} },
+    ] });
+    let transport =
+        ReplayTransport::from_cassette(cassette(vec![post("private/records/modify", 200, swapped)]), None).unwrap();
+    let database = Database::new(transport);
+    let update = |name: &str| RecordUpdate {
+        record_name: name.into(),
+        record_type: "Note".into(),
+        record_change_tag: "t1".into(),
+        fields: UpdateFields::new(),
+        parent_record_name: None,
+    };
+    let err = database
+        .update_records_independently(&note_zone(None), &[update("n1"), update("n2")])
+        .unwrap_err();
+    assert!(matches!(err, CkError::UnexpectedResponse(_)), "{err:?}");
+}
+
+#[test]
+fn a_delete_answer_that_is_no_result_for_the_record_is_not_a_delete() {
+    for (answer, deleted) in [
+        (json!({ "records": [{ "recordName": "f1", "deleted": true }] }), true),
+        (json!({ "records": ["f1"] }), false),
+        (json!({ "records": [{ "recordName": "f2", "deleted": true }] }), false),
+    ] {
+        let transport =
+            ReplayTransport::from_cassette(cassette(vec![post("private/records/modify", 200, answer)]), None).unwrap();
+        let result = Database::new(transport).delete_record(&note_zone(None), "f1", "t1");
+        match result {
+            Ok(None) => assert!(deleted, "read as deleted"),
+            Err(CkError::UnexpectedResponse(_)) => assert!(!deleted),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
 fn folder_create_without_extras_sends_the_bare_shape() {
     let transport = ReplayTransport::from_cassette(
         cassette(vec![post("private/records/modify", 200, modify_ok("f1", "t"))]),
