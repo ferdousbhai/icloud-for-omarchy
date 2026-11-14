@@ -65,7 +65,8 @@
 //!   renamed list's old name ([`ListState::was`]) is read as a conflict copy
 //!   and removed; a deleted list's ([`State::removed`]) is left in the
 //!   folder like one that held changes never sent. Each is named in a
-//!   warning.
+//!   warning. Only names of Syncthing's exact shape are conflict copies
+//!   (`copy_of`).
 //! - A list whose run failed and changed nothing is tried again after the
 //!   next sync or when its file changes, not every minute.
 //! - What a line cannot say (alerts, priority, flags, the due time's zone)
@@ -694,9 +695,31 @@ fn conflict_prefix(file: &str) -> String {
     format!("{}.sync-conflict-", file.strip_suffix(".md").unwrap_or(file))
 }
 
+/// The file a Syncthing conflict copy is of: `Work.md` for
+/// `Work.sync-conflict-<YYYYMMDD>-<HHMMSS>-<device>.md` (the device is 7
+/// letters or digits), and for a copy of that copy. `None` for any other
+/// name: a list may be called `Plan.sync-conflict-draft`.
+fn copy_of(name: &str) -> Option<String> {
+    const MARKER: &str = ".sync-conflict-";
+    let base = name.strip_suffix(".md")?;
+    let at = base.len().checked_sub(23)?;
+    let tail = &base.as_bytes()[at..];
+    let digits = |r: std::ops::Range<usize>| tail[r].iter().all(u8::is_ascii_digit);
+    let shaped = digits(0..8)
+        && tail[8] == b'-'
+        && digits(9..15)
+        && tail[15] == b'-'
+        && tail[16..].iter().all(u8::is_ascii_alphanumeric);
+    if !shaped {
+        return None;
+    }
+    // ASCII from `at` on, so `at` is a character boundary.
+    let file = format!("{}.md", base[..at].strip_suffix(MARKER)?);
+    Some(copy_of(&file).unwrap_or(file))
+}
+
 /// Syncthing's conflict copies of `file`: `Work.sync-conflict-<when>-<device>.md`.
 fn conflict_copies(dir: &Path, file: &str) -> Vec<PathBuf> {
-    let prefix = conflict_prefix(file);
     let mut found: Vec<PathBuf> = fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -705,7 +728,8 @@ fn conflict_copies(dir: &Path, file: &str) -> Vec<PathBuf> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".md"))
+                .and_then(copy_of)
+                .is_some_and(|of| of == file)
         })
         .collect();
     found.sort();
@@ -1175,10 +1199,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             })
             // A conflict copy left keeps its file's name: a list of that name
             // would read it as its own.
-            .chain(state.left.iter().map(|f| match f.split_once(".sync-conflict-") {
-                Some((stem, _)) => format!("{stem}.md"),
-                None => f.clone(),
-            }))
+            .chain(state.left.iter().map(|f| copy_of(f).unwrap_or_else(|| f.clone())))
             .collect();
         let wanted = free_name(&file_stem(&list.name), &others);
         let mut ls = state.lists.get(&list.id).cloned().unwrap_or_default();
@@ -1490,5 +1511,34 @@ mod tests {
         assert_eq!(file_stem("/"), "-");
         assert_eq!(file_stem(""), "List");
         assert_eq!(free_name("Work", &["work.md".into(), "Work 2.md".into()]), "Work 3.md");
+    }
+
+    #[test]
+    fn only_syncthing_s_exact_shape_is_a_conflict_copy() {
+        let of = |n: &str| copy_of(n);
+        assert_eq!(
+            of("Work.sync-conflict-20261114-093000-ABCDEFG.md").as_deref(),
+            Some("Work.md")
+        );
+        // A copy of a copy is of the file.
+        assert_eq!(
+            of("Work.sync-conflict-20261114-093000-ABCDEFG.sync-conflict-20261115-101500-HIJKLMN.md").as_deref(),
+            Some("Work.md")
+        );
+        assert_eq!(
+            of("Plan.sync-conflict-20261114-093000-ABCDEFG.sync-conflict-draft.md"),
+            None
+        );
+        for name in [
+            "Plan.sync-conflict-draft.md",
+            "Work.sync-conflict-20261114-093000-ABCDEF.md",
+            "Work.sync-conflict-2026111-0930001-ABCDEFG.md",
+            "Work.sync-conflict-20261114-093000-ABCDEFG.txt",
+            "Work.md",
+            "é.md",
+            "Wörk-sync-conflict-20261114-093000-ABCDEFG.md",
+        ] {
+            assert_eq!(of(name), None, "{name}");
+        }
     }
 }

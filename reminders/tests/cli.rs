@@ -1629,6 +1629,28 @@ fn a_file_written_by_a_run_ended_before_recording_it_goes_with_its_deleted_list(
     assert_eq!(file_names(&dir), ["Reminders.md"]);
 }
 
+#[test]
+fn a_list_named_like_a_conflict_copy_is_a_list_of_its_own() {
+    let env = start();
+    let dir = folder(&env);
+    rename_groceries(&env, "Reminders.sync-conflict-draft");
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(
+        (&out["folder"]["added"], &out["folder"]["warnings"]),
+        (&json!(0), &json!([])),
+        "{out}"
+    );
+    assert_eq!(file_names(&dir), ["Reminders.md", "Reminders.sync-conflict-draft.md"]);
+    // A line in it goes to its own list.
+    let path = dir.join("Reminders.sync-conflict-draft.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Paprika\n").unwrap();
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["added"], 1, "{out}");
+    assert!(all_titles(&env, "LIST-GROCERIES").contains(&"Paprika".to_owned()));
+    assert!(!all_titles(&env, "Reminders").contains(&"Paprika".to_owned()));
+}
+
 fn rename_groceries(env: &Env, to: &str) {
     let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
     list["fields"]["Name"]["value"] = json!(to);
