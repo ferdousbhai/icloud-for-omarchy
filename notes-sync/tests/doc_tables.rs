@@ -36,6 +36,25 @@ fn revisions(file: &str) -> Vec<(String, String)> {
 // --- decoding table records -----------------------------------------------------
 
 #[test]
+fn a_table_without_the_column_direction_key_is_refused_as_missing_it() {
+    let mut doc = parse("table_first_revision.json");
+    let key_names = &mut doc.document.key_item;
+    let at = key_names
+        .iter()
+        .position(|name| name == "crTableColumnDirection")
+        .unwrap();
+    // Any other name: the key the marker is looked up by is gone, and the
+    // first key name must not stand in for the one after it.
+    key_names[at] = "crSomethingElse".into();
+    let without = encode_table_document(&doc).unwrap();
+    assert_eq!(
+        parse_table_document(&without).unwrap_err().to_string(),
+        "Table's key-name table is missing the column-direction marker's key"
+    );
+    assert!(!table_document_round_trips(&without));
+}
+
+#[test]
 fn decode_table_markdown_renders_a_real_captured_2x2_grid() {
     assert_eq!(
         decode_table_markdown(&common::payload("table_first_revision.json")).unwrap(),

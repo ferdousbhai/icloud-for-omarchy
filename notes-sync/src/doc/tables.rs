@@ -237,8 +237,12 @@ fn require_identity(pool: &crdt::Document, uuid_index: u64) -> Result<()> {
 }
 
 fn assert_left_to_right(pool: &crdt::Document) -> Result<()> {
-    let direction_key_index = (key_index(pool, "crTableColumnDirection") + 1) as usize;
-    let Some(direction_key_name) = pool.key_item.get(direction_key_index) else {
+    // The marker's value is keyed by the name that follows
+    // `crTableColumnDirection` in the key-name table.
+    let direction_key_name = usize::try_from(key_index(pool, "crTableColumnDirection"))
+        .ok()
+        .and_then(|at| pool.key_item.get(at + 1));
+    let Some(direction_key_name) = direction_key_name else {
         return fail("Table's key-name table is missing the column-direction marker's key");
     };
     for object in &pool.object {
