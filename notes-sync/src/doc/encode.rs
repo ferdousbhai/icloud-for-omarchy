@@ -31,12 +31,9 @@ const ECHOED_FIELDS: [&str; 10] = [
     "PaperStyleType",
     "ReplicaIDToUserIDEncrypted",
 ];
+/// Echoed by an update (null when the note has none); emptied by a create,
+/// a move and a trashing.
 const NULL_FIELDS: [&str; 3] = [
-    "FirstAttachmentThumbnail",
-    "FirstAttachmentUTIEncrypted",
-    "TextDataAsset",
-];
-const DELETION_EMPTY_FIELDS: [&str; 3] = [
     "FirstAttachmentThumbnail",
     "FirstAttachmentUTIEncrypted",
     "TextDataAsset",
@@ -124,7 +121,7 @@ fn build_note_relocation_fields(current: &CloudKitRecord, folder_record_name: &s
     // TextDataAsset"). Its text is left alone: neither field is sent, the
     // inline one included, since a reader may have filled it from the asset.
     let text_as_asset = has_text_data_asset(current);
-    for name in DELETION_EMPTY_FIELDS {
+    for name in NULL_FIELDS {
         if text_as_asset && name == "TextDataAsset" {
             continue;
         }
@@ -175,7 +172,7 @@ pub fn build_note_create_fields(
         "SnippetEncrypted".into(),
         UpdateFieldValue::new(json!(utf8_base64(&snippet16(&text)))),
     );
-    for name in DELETION_EMPTY_FIELDS {
+    for name in NULL_FIELDS {
         fields.insert(name.into(), UpdateFieldValue::EMPTY);
     }
     fields.insert(

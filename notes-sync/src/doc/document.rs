@@ -3,6 +3,7 @@
 //! Offsets, lengths and clocks count UTF-16 code units, as in icloud-md and
 //! on the wire; `text` is held as a `String` and converted where needed.
 
+use super::embeds::ORC;
 use super::proto::topotext::vector_timestamp::{Clock, clock::ReplicaClock};
 use super::proto::topotext::{self, AttachmentInfo, AttributeRun, CharID, Substring};
 use super::proto::{Message, versioned_document};
@@ -12,6 +13,9 @@ use crate::diff3::diff_indices;
 use crate::js::{from_utf16, len16, utf16};
 
 const SENTINEL_CLOCK: u32 = 0xffff_ffff;
+
+/// How far past a run's style clock a deletion stamps it, as Apple's does.
+pub(crate) const TOMBSTONE_STYLE_CLOCK_BIAS: u32 = 8;
 
 /// `RunCoord`: a topotext `CharID`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -204,8 +208,6 @@ fn apply_splices(
     validate_document_invariants(doc)
 }
 
-const PLACEHOLDER: u16 = 0xfffc;
-
 /// Puts a new embed in the note: a U+FFFC inserted at `offset` (UTF-16
 /// units) as this replica's edit, carrying `info` as an embed made in Notes
 /// does. Nothing else in the text moves, so the placeholders already there
@@ -221,11 +223,11 @@ pub fn insert_attachment_placeholder(
     if offset > units.len() {
         return Err(invalid("An attachment's place is past the end of the note text"));
     }
-    units.insert(offset, PLACEHOLDER);
+    units.insert(offset, ORC);
     let splice = Splice {
         start: offset,
         delete_length: 0,
-        insert_text: from_utf16(&[PLACEHOLDER]),
+        insert_text: from_utf16(&[ORC]),
     };
     apply_splices(doc, &[splice], &from_utf16(&units), options)?;
     mark_attachment_placeholder(doc, offset, info)
@@ -244,7 +246,7 @@ pub fn delete_attachment_placeholder(
 ) -> Result<()> {
     validate_document_invariants(doc)?;
     let mut units = utf16(&doc.text);
-    if units.get(offset) != Some(&PLACEHOLDER) {
+    if units.get(offset) != Some(&ORC) {
         return Err(invalid("There is no attachment placeholder where one is expected"));
     }
     let mut run_start = 0usize;
@@ -274,7 +276,7 @@ pub fn delete_attachment_placeholder(
 /// gets an attribute run of its own carrying `info`, with the paragraph
 /// style of the run it was part of.
 pub fn mark_attachment_placeholder(doc: &mut NoteDocument, offset: usize, info: AttachmentInfo) -> Result<()> {
-    if utf16(&doc.text).get(offset) != Some(&PLACEHOLDER) {
+    if utf16(&doc.text).get(offset) != Some(&ORC) {
         return Err(invalid("There is no attachment placeholder where one is expected"));
     }
     let mut run_start = 0usize;
@@ -680,7 +682,8 @@ fn tombstone_visible_range(
     }
     let mut max_assigned: i64 = -1;
     for_each_visible_piece(&mut doc.runs, start, end, |target| {
-        let assigned = (i64::from(target.anchor.clock) + 8).max(i64::from(style_clock_floor));
+        let assigned =
+            (i64::from(target.anchor.clock) + i64::from(TOMBSTONE_STYLE_CLOCK_BIAS)).max(i64::from(style_clock_floor));
         target.tombstone = true;
         target.anchor = RunCoord {
             replica: replica_index,

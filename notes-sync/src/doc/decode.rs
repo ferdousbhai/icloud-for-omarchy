@@ -96,10 +96,6 @@ pub const MAX_TEXT_DATA_BASE64: usize = 16 << 20;
 /// it, and is written back like any other: `Database::update_records`
 /// uploads its new text as an asset.
 pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {
-    classify_note_body(record, options)
-}
-
-fn classify_note_body(record: &CloudKitRecord, options: &ClassifyOptions) -> NoteDecodeResult {
     if is_deleted(record) {
         return NoteDecodeResult::Deleted;
     }

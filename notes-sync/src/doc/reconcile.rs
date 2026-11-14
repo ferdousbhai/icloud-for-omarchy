@@ -6,7 +6,8 @@ use std::collections::{BTreeSet, HashSet};
 use super::Result;
 use super::document::{NoteDocument, apply_formatting_op};
 use super::format::{
-    FormatParagraph, InlineStyle, ParagraphKind, decode_note_format, normalize_spans, paragraph_projections_equal,
+    FormatParagraph, InlineStyle, ParagraphKind, decode_note_format, effective_start_number, normalize_spans,
+    paragraph_projections_equal,
 };
 use super::proto::Message;
 use super::proto::topotext::{AttributeRun, Font, ParagraphStyle, Todo};
@@ -277,10 +278,6 @@ fn overlay_piece(piece: &mut AttributeRun, plan: &ParagraphPlan, piece_start: us
     }
 }
 
-fn effective_start(start_number: u32) -> u32 {
-    if start_number == 0 { 1 } else { start_number }
-}
-
 fn done_flag(paragraph: &FormatParagraph) -> u32 {
     u32::from(paragraph.done == Some(true))
 }
@@ -296,7 +293,7 @@ fn overlay_paragraph_style(piece: &mut AttributeRun, plan: &ParagraphPlan) {
     let need_done =
         desired.kind == ParagraphKind::TodoList && current.done.unwrap_or(false) != desired.done.unwrap_or(false);
     let need_start = desired.kind == ParagraphKind::NumberedList
-        && effective_start(current.start_number) != effective_start(desired.start_number);
+        && effective_start_number(current.start_number) != effective_start_number(desired.start_number);
     let need_identity = desired.kind == ParagraphKind::TodoList && plan.force_fresh_todo_uuid;
     let need_start_repair = piece
         .paragraph_style
@@ -317,7 +314,7 @@ fn overlay_paragraph_style(piece: &mut AttributeRun, plan: &ParagraphPlan) {
         ps.block_quote_level = Some(desired.block_quote_level);
     }
     if need_start {
-        ps.starting_list_item_number = if effective_start(desired.start_number) == 1 {
+        ps.starting_list_item_number = if effective_start_number(desired.start_number) == 1 {
             None
         } else {
             Some(desired.start_number)
@@ -373,7 +370,7 @@ fn fresh_paragraph_style(desired: &FormatParagraph, piece: &AttributeRun, plan: 
         todo,
         paragraph_hints: Some(0),
         starting_list_item_number: (desired.kind == ParagraphKind::NumberedList
-            && effective_start(desired.start_number) != 1)
+            && effective_start_number(desired.start_number) != 1)
             .then_some(desired.start_number),
         block_quote_level: Some(desired.block_quote_level),
         uuid: Some(Vec::new()),

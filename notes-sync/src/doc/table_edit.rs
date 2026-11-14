@@ -8,9 +8,11 @@ use serde_json::Value;
 
 use super::Result;
 use super::document::{
-    RunCoord, TextRun, adjust_attribute_runs, compare_bytes, compute_splice16, encode_text_run, find_insert_index,
-    for_each_visible_piece, initial_runs, insert_run_at, parse_text_run, validate_child_edges, visible_length,
+    RunCoord, TOMBSTONE_STYLE_CLOCK_BIAS, TextRun, adjust_attribute_runs, compare_bytes, compute_splice16,
+    encode_text_run, find_insert_index, for_each_visible_piece, initial_runs, insert_run_at, parse_text_run,
+    validate_child_edges, visible_length,
 };
+use super::embeds::OBJECT_REPLACEMENT_CHARACTER;
 use super::proto::crdt::document::custom_object::MapEntry;
 use super::proto::crdt::document::{CustomObject, DocObject};
 use super::proto::crdt::string_array::ArrayAttachment;
@@ -27,8 +29,6 @@ use crate::cloudkit::CloudKitRecord;
 use crate::js::{base64_decode, base64_encode, len16, utf16};
 
 const IDENTITY_TYPE_NAME: &str = "com.apple.CRDT.NSUUID";
-const TOMBSTONE_STYLE_CLOCK_BIAS: u64 = 8;
-const ORC: &str = "\u{FFFC}";
 
 /// A 16-byte random source (`randomBytes(16)`), injectable for tests.
 type RandomSource<'a> = &'a mut dyn FnMut() -> [u8; 16];
@@ -307,7 +307,7 @@ impl TopotextClockSource for SessionClock<'_> {
         let Some(style) = self.entry().replica_clock.get_mut(1) else {
             return fail("Table's topotext clock entry is missing its style clock - refusing to guess");
         };
-        let assigned = (u64::from(previous_clock) + TOMBSTONE_STYLE_CLOCK_BIAS).max(floor);
+        let assigned = (u64::from(previous_clock) + u64::from(TOMBSTONE_STYLE_CLOCK_BIAS)).max(floor);
         style.clock = Some(u64::from(style.clock.unwrap_or(0)).max(assigned + 1) as u32);
         Ok(assigned as u32)
     }
@@ -947,8 +947,9 @@ fn insert_column_at(
 
 fn content_identity_refs_by_row_position(doc: &TableDocument) -> Result<Vec<u32>> {
     let pool = &doc.document;
-    let row_positions = compute_positions(pool, &parse_ordered_set(pool, doc.cr_rows_ref)?)?;
-    let row_count = parse_ordered_set(pool, doc.cr_rows_ref)?.array_uuid_indexes.len();
+    let row_set = parse_ordered_set(pool, doc.cr_rows_ref)?;
+    let row_positions = compute_positions(pool, &row_set)?;
+    let row_count = row_set.array_uuid_indexes.len();
     let mut refs: Vec<Option<u32>> = vec![None; row_count];
     for (_, row_map_ref) in parse_ref_pair_list(pool, doc.cell_columns_ref, "cellColumns")? {
         let row_map = resolve_ref(&row_map_ref, "cellColumns row-map ref")?;
@@ -1008,7 +1009,7 @@ fn edit_mirror(
     let mut mirror = parse_cell_document(&contents)?;
     splice(&mut mirror, &mut session_clock(doc, session))?;
     let visible = visible_length(&mirror.runs) as usize;
-    mirror.text = ORC.repeat(visible);
+    mirror.text = String::from(OBJECT_REPLACEMENT_CHARACTER).repeat(visible);
     mirror.attribute_runs = (0..visible).map(|_| AttributeRun::with_length(1)).collect();
     validate_cell_invariants(&mirror)?;
     if let Some(string_array) = require_ordered_set(doc, ordered_set_ref)?
@@ -1423,7 +1424,9 @@ pub fn validate_table_document_invariants(doc: &TableDocument) -> Result<()> {
                 attachments.len()
             ));
         }
-        if mirror.string.as_deref().unwrap_or("") != ORC.repeat(attachments.len()) {
+        if mirror.string.as_deref().unwrap_or("")
+            != String::from(OBJECT_REPLACEMENT_CHARACTER).repeat(attachments.len())
+        {
             failures.push(format!("{label}: mirror text isn't one U+FFFC per attachment"));
         }
         for (index, attachment) in attachments.iter().enumerate() {

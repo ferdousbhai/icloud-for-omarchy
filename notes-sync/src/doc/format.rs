@@ -408,7 +408,8 @@ pub fn trim_trailing_whitespace(paragraph: &FormatParagraph) -> FormatParagraph 
     }
 }
 
-fn effective_start_number(start_number: u32) -> u32 {
+/// A numbered list's first number: an unset (0) start counts from 1.
+pub(crate) fn effective_start_number(start_number: u32) -> u32 {
     if start_number == 0 { 1 } else { start_number }
 }
 

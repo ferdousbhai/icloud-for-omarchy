@@ -17,7 +17,7 @@ use crate::md::table::{MarkdownTableBlock, find_markdown_table_blocks};
 
 /// U+FFFC, one per embed in a note's visible text.
 pub const OBJECT_REPLACEMENT_CHARACTER: char = '\u{FFFC}';
-const ORC: u16 = 0xfffc;
+pub(crate) const ORC: u16 = OBJECT_REPLACEMENT_CHARACTER as u16;
 
 /// UTI marking an `Attachment` record as a table sub-document.
 const TABLE_UTI: &str = "com.apple.notes.table";
