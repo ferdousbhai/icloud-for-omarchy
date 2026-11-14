@@ -335,7 +335,7 @@ fn refuses_empty_untracked_file_locally() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &empty_state()).unwrap();
     write_vault_file(dir.path(), "Notes/Empty.md", "");
-    let entries: Vec<_> = plan_entries(dir.path()).iter().map(PlanEntry::serialize).collect();
+    let entries: Vec<_> = plan_entries(dir.path());
     let json = serde_json::to_value(&entries).unwrap();
     assert_eq!(
         json,

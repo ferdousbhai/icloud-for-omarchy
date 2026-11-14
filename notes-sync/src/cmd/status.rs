@@ -1,19 +1,18 @@
-//! `status`: the push plan, rendered. Originally derived from icloud-md.
+//! `status`: the push plan (what `push --dry-run` computes), rendered. Originally derived from icloud-md.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::plan::{SerializedPlanEntry, count_unchanged_notes};
-use super::push::build_push_plan;
+use super::plan::PlanEntry;
+use super::push::{PushOptions, run_push_with};
 use super::remote::{Connector, DefaultConnector};
 use super::{Error, SyncNotice};
-use crate::vault::history::without_recording;
 
 /// `StatusResult`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusResult {
-    pub entries: Vec<SerializedPlanEntry>,
+    pub entries: Vec<PlanEntry>,
     pub unchanged: usize,
     pub notices: Vec<SyncNotice>,
 }
@@ -29,11 +28,10 @@ pub fn run_status_with(
     target_dir: &Path,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<StatusResult, Error> {
-    let plan = without_recording(|| build_push_plan(connector, target_dir, on_status))?;
-    let entries: Vec<SerializedPlanEntry> = plan.entries.iter().map(|e| e.entry.serialize()).collect();
+    let preview = run_push_with(connector, target_dir, on_status, &PushOptions { dry_run: true })?;
     Ok(StatusResult {
-        unchanged: count_unchanged_notes(&entries, plan.state.notes.len()),
-        entries,
-        notices: plan.notices,
+        entries: preview.entries.into_iter().map(|e| e.entry).collect(),
+        unchanged: preview.unchanged,
+        notices: preview.notices,
     })
 }

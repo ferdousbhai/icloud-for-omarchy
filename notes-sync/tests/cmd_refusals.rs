@@ -451,7 +451,6 @@ fn every_site_has_its_verbatim_reason_and_resolution() {
         let entry = PlanEntry::refused(PlanEntryKind::Update, FILE, refusal.clone());
         assert_eq!(entry.resolution, resolution);
         assert_eq!(entry.reason.as_deref(), Some(reason.as_str()));
-        assert_eq!(entry.serialize().reason.as_deref(), Some(reason.as_str()));
     }
     for (_, refusal, message) in folder_sites() {
         assert_eq!(refusal.message(), message);

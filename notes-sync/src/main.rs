@@ -31,7 +31,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{error_json, usage_error};
-use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
+use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution, RenderPlanOptions, render_plan};
 use icloud_notes_sync::cmd::{
     self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
     vault_info,
@@ -341,20 +341,26 @@ fn push_lines(r: &push::PushResult, target: &Path) -> Vec<Line> {
         lines.push((false, format!("Pushed {what} from {}", target.display())));
     }
     let entries: Vec<_> = r.entries.iter().map(|e| e.entry.clone()).collect();
-    let options = if r.dry_run {
-        RenderPlanOptions {
-            preview: true,
-            unchanged: Some(r.unchanged),
-        }
-    } else {
-        RenderPlanOptions::default()
-    };
-    lines.extend(
-        render_plan(&entries, &|file| display_path(target, file), options)
-            .into_iter()
-            .map(|line| (false, line)),
-    );
+    let unchanged = r.dry_run.then_some(r.unchanged);
+    lines.extend(plan_lines(&entries, unchanged, target));
     lines
+}
+
+/// The plan's listing: of what a push did, or (with the `unchanged` count)
+/// the preview `status` and `push --dry-run` share.
+fn plan_lines(entries: &[PlanEntry], unchanged: Option<usize>, target: &Path) -> Vec<Line> {
+    let options = RenderPlanOptions {
+        preview: unchanged.is_some(),
+        unchanged,
+    };
+    render_plan(entries, &|file| display_path(target, file), options)
+        .into_iter()
+        .map(|line| (false, line))
+        .collect()
+}
+
+fn preview_summary(changes: usize, unchanged: usize) -> String {
+    format!("{} to push, {unchanged} unchanged", plural(changes, "change", "changes"))
 }
 
 fn push_summary(r: &push::PushResult, target: &Path) -> String {
@@ -364,11 +370,7 @@ fn push_summary(r: &push::PushResult, target: &Path) -> String {
             plural(pushed, "change", "changes"),
             target.display()
         ),
-        None => format!(
-            "{} to push, {} unchanged",
-            plural(r.entries.len(), "change", "changes"),
-            r.unchanged
-        ),
+        None => preview_summary(r.entries.len(), r.unchanged),
     }
 }
 
@@ -539,20 +541,8 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let target = resolve_target_dir(directory)?;
             let r = status::run_status(&target, &mut on_status)?;
             let mut lines = notice_lines(&r.notices);
-            let options = RenderPlanOptions {
-                preview: true,
-                unchanged: Some(r.unchanged),
-            };
-            lines.extend(
-                render_plan(&r.entries, &|file| display_path(&target, file), options)
-                    .into_iter()
-                    .map(|line| (false, line)),
-            );
-            let summary = format!(
-                "{} to push, {} unchanged",
-                plural(r.entries.len(), "change", "changes"),
-                r.unchanged
-            );
+            lines.extend(plan_lines(&r.entries, Some(r.unchanged), &target));
+            let summary = preview_summary(r.entries.len(), r.unchanged);
             let text = human(mode, lines);
             Response::new(&r, summary)
                 .human(text)

@@ -11,8 +11,8 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 
 use super::plan::{
-    PlanEntry, PlanEntryKind, PlanResolution, PrepareRefusal, Refusal, RetitleRefusal, SerializedPlanEntry,
-    SharedWriteRefusal, TextUpdateRefusal, count_unchanged_notes,
+    PlanEntry, PlanEntryKind, PlanResolution, PrepareRefusal, Refusal, RetitleRefusal, SharedWriteRefusal,
+    TextUpdateRefusal, count_unchanged_notes,
 };
 use super::remote::{Connector, DefaultConnector, Remote, resolve_folder_account};
 use super::{Error, NoticeLevel, SyncNotice, is_in_trash, is_purged};
@@ -112,7 +112,7 @@ impl ExecuteOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushEntryResult {
     #[serde(flatten)]
-    pub entry: SerializedPlanEntry,
+    pub entry: PlanEntry,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<ExecuteOutcome>,
 }
@@ -3346,7 +3346,7 @@ pub fn run_push_with(
     } else {
         build_push_plan(connector, target_dir, on_status)?
     };
-    let serialized: Vec<SerializedPlanEntry> = entries.iter().map(|e| e.entry.serialize()).collect();
+    let serialized: Vec<PlanEntry> = entries.iter().map(|e| e.entry.clone()).collect();
     let unchanged = count_unchanged_notes(&serialized, state.notes.len());
 
     if entries.is_empty() {
@@ -3379,7 +3379,7 @@ pub fn run_push_with(
         None => HashMap::new(),
     };
     for plan_entry in &entries {
-        let serialized = plan_entry.entry.serialize();
+        let serialized = plan_entry.entry.clone();
         let (Some(action), Some(remote)) = (&plan_entry.action, &remote) else {
             results.push(PushEntryResult {
                 entry: serialized,

@@ -41,27 +41,6 @@ pub enum PlanResolution {
     Noop,
 }
 
-/// `SerializedPlanEntry`: the JSON shape of `status` / `push --dry-run`
-/// entries, keys in `serializePlanEntry`'s order: kind, file, resolution,
-/// reason, previousFile, pendingRename, folderTitle, remark.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SerializedPlanEntry {
-    pub kind: PlanEntryKind,
-    pub file: String,
-    pub resolution: PlanResolution,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub previous_file: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_rename: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remark: Option<String>,
-}
-
 /// `sharedNoteWriteRefusal`'s two answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SharedWriteRefusal {
@@ -504,20 +483,25 @@ pub struct RenderPlanOptions {
     pub unchanged: Option<usize>,
 }
 
-/// `PlanEntry`: what `buildPushPlan` produces (minus push's `execute`,
-/// which lives in `push.rs`). `refusal` is kept alongside the `reason` it
-/// produced so tests can name the site.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `PlanEntry`: what `buildPushPlan` produces (push's `execute` half lives
+/// in `push.rs`), and the JSON shape of `status` / `push --dry-run` entries,
+/// keys in this order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
     pub kind: PlanEntryKind,
     pub file: String,
     pub resolution: PlanResolution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    pub folder_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_rename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remark: Option<String>,
-    pub refusal: Option<Refusal>,
 }
 
 impl PlanEntry {
@@ -528,11 +512,10 @@ impl PlanEntry {
             file: file.into(),
             resolution,
             reason: None,
-            folder_title: None,
             previous_file: None,
             pending_rename: None,
+            folder_title: None,
             remark: None,
-            refusal: None,
         }
     }
 
@@ -540,22 +523,7 @@ impl PlanEntry {
     pub fn refused(kind: PlanEntryKind, file: impl Into<String>, refusal: Refusal) -> Self {
         let mut entry = PlanEntry::new(kind, file, refusal.resolution());
         entry.reason = Some(refusal.reason());
-        entry.refusal = Some(refusal);
         entry
-    }
-
-    /// `serializePlanEntry`.
-    pub fn serialize(&self) -> SerializedPlanEntry {
-        SerializedPlanEntry {
-            kind: self.kind,
-            file: self.file.clone(),
-            resolution: self.resolution,
-            reason: self.reason.clone(),
-            previous_file: self.previous_file.clone(),
-            pending_rename: self.pending_rename.clone(),
-            folder_title: self.folder_title.clone(),
-            remark: self.remark.clone(),
-        }
     }
 }
 
@@ -577,12 +545,12 @@ const LABEL_WIDTH: usize = 9;
 
 /// The status-style listing of the plan (human text).
 pub fn render_plan(
-    entries: &[SerializedPlanEntry],
+    entries: &[PlanEntry],
     format_path: &dyn Fn(&str) -> String,
     options: RenderPlanOptions,
 ) -> Vec<String> {
     use super::report::{LISTING_INDENT, labelled_line, remark_line};
-    let visible: Vec<&SerializedPlanEntry> = entries
+    let visible: Vec<&PlanEntry> = entries
         .iter()
         .filter(|e| e.resolution != PlanResolution::Noop)
         .collect();
@@ -706,7 +674,7 @@ pub fn render_plan(
 
 /// `countUnchangedNotes`: tracked notes minus the non-create, non-rename,
 /// non-noop entries.
-pub fn count_unchanged_notes(entries: &[SerializedPlanEntry], tracked_notes: usize) -> usize {
+pub fn count_unchanged_notes(entries: &[PlanEntry], tracked_notes: usize) -> usize {
     let touched = entries
         .iter()
         .filter(|e| {

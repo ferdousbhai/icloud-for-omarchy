@@ -2,15 +2,15 @@
 //! and names `icloud-notes-sync`. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cmd::plan::{
-    PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, SerializedPlanEntry, count_unchanged_notes,
+    PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, count_unchanged_notes,
     render_plan,
 };
 
-fn e(kind: K, file: &str, resolution: R) -> SerializedPlanEntry {
-    PlanEntry::new(kind, file, resolution).serialize()
+fn e(kind: K, file: &str, resolution: R) -> PlanEntry {
+    PlanEntry::new(kind, file, resolution)
 }
 
-fn er(kind: K, file: &str, resolution: R, reason: &str) -> SerializedPlanEntry {
+fn er(kind: K, file: &str, resolution: R, reason: &str) -> PlanEntry {
     let mut s = e(kind, file, resolution);
     s.reason = Some(reason.into());
     s
@@ -20,7 +20,7 @@ fn id(f: &str) -> String {
     f.to_owned()
 }
 
-fn render(entries: &[SerializedPlanEntry]) -> Vec<String> {
+fn render(entries: &[PlanEntry]) -> Vec<String> {
     render_plan(entries, &id, RenderPlanOptions::default())
 }
 
@@ -253,10 +253,10 @@ fn serialize_carries_folder_title_only_for_folder_create() {
     let mut folder = PlanEntry::new(K::CreateFolder, "Recipes", R::Ready);
     folder.folder_title = Some("Recipes".into());
     assert_eq!(
-        serde_json::to_value(folder.serialize()).unwrap(),
+        serde_json::to_value(folder).unwrap(),
         serde_json::json!({"kind": "createFolder", "file": "Recipes", "resolution": "ready", "folderTitle": "Recipes"})
     );
-    let plain = serde_json::to_value(PlanEntry::new(K::Create, "Notes/a.md", R::Ready).serialize()).unwrap();
+    let plain = serde_json::to_value(PlanEntry::new(K::Create, "Notes/a.md", R::Ready)).unwrap();
     assert!(plain.get("folderTitle").is_none());
 }
 
@@ -297,11 +297,11 @@ fn serialize_carries_remark_and_omits_it_when_absent() {
     let mut entry = PlanEntry::new(K::Update, "Untitled.md", R::Ready);
     entry.remark = Some("retitled to \"Groceries\"".into());
     assert_eq!(
-        serde_json::to_string(&entry.serialize()).unwrap(),
+        serde_json::to_string(&entry).unwrap(),
         r#"{"kind":"update","file":"Untitled.md","resolution":"ready","remark":"retitled to \"Groceries\""}"#
     );
     assert_eq!(
-        serde_json::to_string(&PlanEntry::new(K::Update, "Edited.md", R::Ready).serialize()).unwrap(),
+        serde_json::to_string(&PlanEntry::new(K::Update, "Edited.md", R::Ready)).unwrap(),
         r#"{"kind":"update","file":"Edited.md","resolution":"ready"}"#
     );
 }
