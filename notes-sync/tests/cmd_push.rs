@@ -288,6 +288,27 @@ fn refuses_locally_deleted_shared_note_without_network() {
     assert!(reason(&entries[0]).contains("restore"));
 }
 
+/// Emptying a file asks for the note's deletion, as deleting the file does:
+/// in a shared folder that can be written to it is refused the same way,
+/// and never looked up in this account's own zone (where it isn't) and
+/// dropped as "already deleted remotely".
+#[test]
+fn refuses_emptied_note_in_writable_shared_folder_without_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = with_notes(
+        empty_state_with_shared_permission("READ_WRITE"),
+        vec![("SH1", shared_note("Pat/Shared Recipes/Theirs.md", Some("F-SHARED")))],
+    );
+    write_clone_state(dir.path(), &s).unwrap();
+    write_base_copy(dir.path(), "SH1", "Hello").unwrap();
+    write_vault_file(dir.path(), "Pat/Shared Recipes/Theirs.md", "");
+    let entries = plan_entries(dir.path());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, PlanEntryKind::Delete);
+    assert_eq!(entries[0].resolution, PlanResolution::Refused);
+    assert!(reason(&entries[0]).contains("deleting notes shared by someone else isn't supported"));
+}
+
 #[test]
 fn pairs_renamed_shared_note_into_refused_move() {
     let dir = tempfile::tempdir().unwrap();

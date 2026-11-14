@@ -992,10 +992,12 @@ pub fn build_push_plan(
         }
     }
     let mut delete_candidates: Vec<(String, NoteEntry)> = Vec::new();
-    for (record_name, entry) in &missing_candidates {
-        if move_pairs.iter().any(|(p, _, _)| p == record_name) || ambiguous_record_names.contains(record_name) {
-            continue;
-        }
+    let missing = missing_candidates.iter().filter(|(record_name, _)| {
+        !move_pairs.iter().any(|(p, _, _)| p == record_name) && !ambiguous_record_names.contains(record_name)
+    });
+    // A file gone and a file emptied both ask for the note's deletion, and
+    // neither can delete a note someone else shares.
+    for (record_name, entry) in missing.chain(&emptied) {
         if entry.shared_zone_owner.is_some() {
             entries.push(
                 PlanEntry::refused(
@@ -1011,7 +1013,6 @@ pub fn build_push_plan(
         }
         delete_candidates.push((record_name.clone(), entry.clone()));
     }
-    delete_candidates.extend(emptied);
 
     // --- folder directories renamed or deleted here
     let dirs_on_disk = list_vault_dirs(target_dir)?;

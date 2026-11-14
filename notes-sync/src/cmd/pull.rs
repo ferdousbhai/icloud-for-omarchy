@@ -806,11 +806,13 @@ pub fn run_pull_with(
         failure = Some(e);
     }
 
-    let relocations = match reconcile_note_placements(target_dir, &layout, &mut tracked.notes, &mut tracked.attachments)
-    {
-        Ok(relocations) => relocations,
-        Err(e) => return Err(failure.unwrap_or(e)),
-    };
+    // A failure here still gets to the state write below, like any other:
+    // what was applied above stays tracked.
+    let relocations = reconcile_note_placements(target_dir, &layout, &mut tracked.notes, &mut tracked.attachments)
+        .unwrap_or_else(|e| {
+            failure.get_or_insert(e);
+            Vec::new()
+        });
     for relocation in relocations {
         let mut change = PullChange::new(PullChangeKind::Move, relocation.to);
         change.previous_file = Some(relocation.from);
