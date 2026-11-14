@@ -267,25 +267,6 @@ bash "$work/truncated.sh" >/dev/null 2>&1 || true
 check "a truncated installer changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
 check "a truncated installer runs no pacman" [ ! -e "$PACMAN_LOG" ]
 
-# Reminders and Contacts take over from Cloud Tasks and Cloud Contacts, whose
-# packages replace them in turn: their repositories go, or the two would
-# swap places at every update. Another app leaves those repositories alone.
-for pair in reminders:cloud-tasks contacts:cloud-contacts; do
-  app=${pair%%:*} old=${pair##*:}
-  setup
-  printf 'Include = /etc/pacman.d/%s.conf\n' "$old" >> /etc/pacman.conf
-  printf '[%s]\nServer = https://example.invalid\n' "$old" > "/etc/pacman.d/$old.conf"
-  bash install.sh icloud-photos >/dev/null 2>&1
-  check "installing Photos keeps the [$old] repository" [ -e "/etc/pacman.d/$old.conf" ]
-  check "installing Photos leaves the $old package" not grep -q -- "-R --noconfirm $old" "$PACMAN_LOG"
-  bash install.sh "icloud-$app" >"$work/out" 2>&1
-  check "installing icloud-$app removes the [$old] repository" [ ! -e "/etc/pacman.d/$old.conf" ]
-  check "installing icloud-$app drops the [$old] Include" [ "$(count_include "$old")" = 0 ]
-  # pacman refuses the conflict unasked, so the old package is removed first.
-  check "installing icloud-$app removes the $old package first" \
-    [ "$(grep -n -- "-R --noconfirm $old\|icloud-$app" "$PACMAN_LOG" | grep -v -- '-Qq' | head -1 | grep -c -- "-R --noconfirm $old")" = 1 ]
-done
-
 umount -q /etc/pacman.conf /etc/pacman.d /root 2>/dev/null || true
 if (( fail )); then
   echo "FAIL install_test" >&2

@@ -144,10 +144,6 @@ package_icloud-drive() {
 package_icloud-reminders() {
   pkgdesc='iCloud Reminders on Omarchy: lists, due dates and desktop notifications'
   depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme')
-  # Cloud Tasks was this app with Google Tasks beside it. Both would notify
-  # for the same reminder, so only one can be installed.
-  replaces=('cloud-tasks')
-  conflicts=('cloud-tasks')
   _package_gtk_app IcloudReminders
   # Sync and due-time notifications every minute, window open or not.
   install -Dm644 reminders/data/icloud-reminders-background.service "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.service"
@@ -161,8 +157,5 @@ package_icloud-reminders() {
 package_icloud-contacts() {
   pkgdesc='iCloud Contacts on Omarchy: browse, search, add, edit and delete contacts'
   depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme')
-  # Cloud Contacts was this app with Google Contacts beside it.
-  replaces=('cloud-contacts')
-  conflicts=('cloud-contacts')
   _package_gtk_app IcloudContacts
 }

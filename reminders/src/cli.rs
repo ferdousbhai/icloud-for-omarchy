@@ -212,7 +212,7 @@ enum Command {
     /// A sync that cannot run (signed out, offline) is reported and the
     /// notifications still come from the cache; that exits 0.
     ///
-    /// JSON: {synced, sync_error, notified: [{id, title}], folder: {added, edited, deleted, written, restored, warnings} | null, folder_error, warning?}
+    /// JSON: {synced, sync_error, notified: [{id, title}], folder: {added, edited, deleted, written, restored, warnings} | null, warning?}
     #[command(after_help = AFTER_HELP)]
     Background {
         /// Sync even if the last sync is recent.
@@ -579,13 +579,15 @@ impl Cli<'_> {
         // The folder, before the cache is locked for the notifications: its
         // writes lock it themselves. Changed files need the sync just made.
         let mut folder_report = None;
-        let mut folder_error = None;
         if synced || !pending {
             match self.folder_run() {
                 Ok(report) => folder_report = report,
+                // A run that failed is a run with one warning.
                 Err(e) => {
-                    warning(&format!("folder not synced: {}", e.message));
-                    folder_error = Some(e.message);
+                    folder_report = Some(folder::Report {
+                        warnings: vec![e.message],
+                        ..folder::Report::default()
+                    })
                 }
             }
         }
@@ -626,9 +628,8 @@ impl Cli<'_> {
         let mut out = json!({ "synced": synced, "sync_error": sync_error, "notified": notified });
         warn(&mut out, sync_warning);
         let mut text = format!("Notified about {count} reminder(s)");
-        let mut quiet = count == 0 && folder_error.is_none();
+        let mut quiet = count == 0;
         out["folder"] = folder_report.as_ref().map_or(Value::Null, folder_json);
-        out["folder_error"] = json!(folder_error);
         if let Some(report) = folder_report.as_ref().filter(|r| !r.quiet()) {
             for w in &report.warnings {
                 warning(&format!("folder: {w}"));

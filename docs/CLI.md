@@ -570,7 +570,7 @@ reminders first; LIST an ID or a name. IDs are the records' UUIDs.
 | `delete` | `{action:"delete", reminder:{id, title}}` |
 | (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
 | `sync` | `{lists, reminders, changed, full}` |
-| `background` | `{synced, sync_error, notified:[{id, title}]}`; exit 0 also when the sync failed (`sync_error` says why). Also `folder`: `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, and the files put back because they no longer listed most of their list (null when changed files are waiting for a sync), and `folder_error` |
+| `background` | `{synced, sync_error, notified:[{id, title}]}`; exit 0 also when the sync failed (`sync_error` says why). Also `folder`: `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, and the files put back because they no longer listed most of their list (null when changed files are waiting for a sync); a folder run that failed is one entry in its `warnings` |
 | (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; still exit 0 |
 
 ### icloud-contacts
