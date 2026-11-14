@@ -1040,6 +1040,34 @@ fn a_file_left_by_a_deleted_list_is_not_taken_by_a_new_list_of_that_name() {
     assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
 }
 
+#[test]
+fn a_conflict_copy_left_beside_a_deleted_list_s_file_is_not_read_by_a_new_list_once_the_file_is_removed() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.clone() + "- [ ] Bread\n").unwrap();
+    let copy = "Groceries.sync-conflict-20261114-093000-ABCDEFG.md";
+    std::fs::write(dir.join(copy), text + "- [ ] Paprika\n").unwrap();
+    let mut list = delete_groceries(&env);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["warnings"].as_array().unwrap().len(), 1, "{out}");
+    assert_eq!(file_names(&dir), ["Groceries.md", copy, "Reminders.md"]);
+    // The leftover file is removed by hand, and a list of that name made:
+    // the copy beside it is the deleted list's, not the new one's.
+    std::fs::remove_file(&path).unwrap();
+    list["recordName"] = json!("List/LIST-NEW");
+    list["fields"]["Deleted"]["value"] = json!(0);
+    list["fields"]["ReminderIDs"]["value"] = json!("[]");
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["added"], 0, "{out}");
+    assert_eq!(file_names(&dir), ["Groceries 2.md", copy, "Reminders.md"]);
+    std::fs::remove_file(dir.join(copy)).unwrap();
+    env.json(&["background", "--sync"]);
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+}
+
 fn count(titles: &[String], title: &str) -> usize {
     titles.iter().filter(|t| *t == title).count()
 }

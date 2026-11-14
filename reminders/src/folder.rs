@@ -1116,6 +1116,9 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             Some(warning) => {
                 report.warnings.push(warning);
                 state.left.push(ls.file);
+                // Its copies stay beside it, and keep its name from a new
+                // list also once the file itself is removed.
+                state.left.extend(names);
             }
             None => {
                 state.removed.push(ls.file.clone());
