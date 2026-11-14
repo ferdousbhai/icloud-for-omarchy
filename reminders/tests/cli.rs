@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 
+use icloud_session::time::now_ms;
 use serde_json::{Value, json};
 
 const MINUTE: i64 = 60_000;
@@ -19,10 +20,6 @@ struct Env {
     base: String,
     state: Arc<fake::State>,
     dir: tempfile::TempDir,
-}
-
-fn now_ms() -> i64 {
-    icloud_session::time::now_ms()
 }
 
 /// A seeded fake server of its own per test; the binary runs with TZ=UTC.
@@ -398,6 +395,25 @@ fn a_change_made_elsewhere_meanwhile_is_written_over_once() {
     let out = env.json(&["--cached", "complete", "eggs"]);
     assert_eq!(out["reminder"]["completed"], true);
     assert_eq!(env.ops()[env.ops().len() - 2..], ["records/modify", "records/lookup"]);
+}
+
+#[test]
+fn a_change_to_a_reminder_deleted_elsewhere_meanwhile_is_not_found() {
+    let env = start();
+    env.json(&["list"]);
+    // The phone deletes it after our last sync: our change tag is stale.
+    let mut phone = env.state.record("Reminder/REM-CALL").unwrap();
+    phone["fields"]["Deleted"]["value"] = json!(1);
+    env.state.put(phone);
+
+    let (exit, err) = env.fails(&["--cached", "complete", "dentist"]);
+    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
+    assert_eq!(err["message"], "\"Call the dentist\" has been deleted");
+    // One CONFLICT and a lookup; nothing is written over a deleted reminder.
+    assert_eq!(env.ops()[env.ops().len() - 2..], ["records/modify", "records/lookup"]);
+    // The cache no longer has it.
+    let (exit, err) = env.fails(&["--cached", "show", "dentist"]);
+    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
 }
 
 #[test]

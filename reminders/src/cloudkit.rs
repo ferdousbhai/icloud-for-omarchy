@@ -6,8 +6,8 @@
 //! The request shapes are timlaing/pyicloud's Reminders service
 //! (`services/reminders/{client,_reads,_writes}.py`), the only public
 //! description of them; Reminders left CalDAV for this store in iOS 13.
-//! All HTTP goes through [`Transport`], which the app backs with
-//! `icloud_session::Session` and the tests with a fake server.
+//! All HTTP goes through [`SessionTransport`], over `icloud_session::Session`;
+//! the tests point that at a fake server with icloud-session's mock mode.
 
 use std::sync::Mutex;
 
@@ -42,6 +42,9 @@ pub enum Error {
     /// `icloud-sessiond` cannot be reached.
     #[error("{0}")]
     Service(String),
+    /// The reminder a write was for has been deleted on another device.
+    #[error("\"{0}\" has been deleted")]
+    Gone(String),
     #[error("{0}")]
     Other(String),
 }
@@ -77,17 +80,8 @@ impl Error {
     }
 }
 
-/// What the Reminders code needs from an HTTP client with an iCloud session.
-pub trait Transport: Send + Sync {
-    /// Base URL of a `webservices` entry (`ckdatabasews`).
-    fn service_url(&self, key: &str) -> Result<String>;
-    fn post_json(&self, url: &str, body: &Value) -> Result<Value>;
-    /// The signed-in account's dsid, so a cache of another account's
-    /// reminders is never shown.
-    fn account(&self) -> Result<String>;
-}
-
-/// [`Transport`] over `icloud-session`. Connects lazily, so a missing
+/// What the Reminders code needs from an HTTP client with an iCloud
+/// session, over `icloud-session`. Connects lazily, so a missing
 /// sign-in surfaces as `SignInRequired` on first use, and drops the
 /// connection on `SignInRequired` or a daemon failure so that a later
 /// sign-in is picked up without restarting.
@@ -108,17 +102,16 @@ impl SessionTransport {
         }
         Ok(result?)
     }
-}
 
-impl Transport for SessionTransport {
-    fn service_url(&self, key: &str) -> Result<String> {
+    /// Base URL of a `webservices` entry (`ckdatabasews`).
+    pub fn service_url(&self, key: &str) -> Result<String> {
         let ws = self.with(|s| s.webservices())?;
         ws.url(key)
             .map(str::to_owned)
             .ok_or_else(|| Error::Other(format!("iCloud did not offer the {key} service for this account")))
     }
 
-    fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
+    pub fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
         let response = self.with(|s| s.post_json(url, body))?;
         // A 200 that isn't JSON is CloudKit misbehaving, not the network:
         // parsed here so it isn't reported as offline.
@@ -130,7 +123,9 @@ impl Transport for SessionTransport {
         })
     }
 
-    fn account(&self) -> Result<String> {
+    /// The signed-in account's dsid, so a cache of another account's
+    /// reminders is never shown.
+    pub fn account(&self) -> Result<String> {
         self.with(|s| Ok(s.dsid().to_owned()))
     }
 }
@@ -215,7 +210,7 @@ pub struct ZoneChanges {
 }
 
 pub struct CloudKit<'t> {
-    t: &'t dyn Transport,
+    t: &'t SessionTransport,
     base: String,
 }
 
@@ -224,7 +219,7 @@ pub fn zone_id() -> Value {
 }
 
 impl<'t> CloudKit<'t> {
-    pub fn connect(t: &'t dyn Transport) -> Result<Self> {
+    pub fn connect(t: &'t SessionTransport) -> Result<Self> {
         let root = t.service_url("ckdatabasews")?;
         Ok(Self {
             t,

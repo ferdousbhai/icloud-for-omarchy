@@ -33,8 +33,23 @@ fn start() -> Env {
 }
 
 impl Env {
+    /// Stdin not a terminal, `--data-dir <tmp>/data`, a home and XDG
+    /// directories in the temp dir, and no session bus.
     fn run(&self, args: &[&str]) -> Output {
-        run_at(&self.base, self.dir.path(), args)
+        let tmp = self.dir.path();
+        Command::new(env!("CARGO_BIN_EXE_icloud-contacts"))
+            .args(args)
+            .arg("--data-dir")
+            .arg(tmp.join("data"))
+            .env("ICLOUD_SESSION_MOCK", "1")
+            .env("ICLOUD_SESSION_MOCK_URL", &self.base)
+            .env("HOME", tmp.join("home"))
+            .env("XDG_DATA_HOME", tmp.join("xdg"))
+            .env("FAKE_CONTACTS_QUIET", "1")
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
     }
 
     fn ok(&self, args: &[&str]) -> String {
@@ -85,30 +100,6 @@ impl Env {
             })
             .collect()
     }
-}
-
-/// Stdin not a terminal, `--data-dir <tmp>/data`, a home and XDG
-/// directories in the temp dir, and no session bus.
-fn run_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_icloud-contacts"))
-        .args(args)
-        .arg("--data-dir")
-        .arg(tmp.join("data"))
-        .env("ICLOUD_SESSION_MOCK", "1")
-        .env("ICLOUD_SESSION_MOCK_URL", base)
-        .env("HOME", tmp.join("home"))
-        .env("XDG_DATA_HOME", tmp.join("xdg"))
-        .env("FAKE_CONTACTS_QUIET", "1")
-        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
-}
-
-fn write_script(path: &Path, text: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn code(out: &Output) -> i32 {
@@ -548,10 +539,13 @@ fn no_command_runs_the_app_beside_it() {
     let cli = tmp.path().join("icloud-contacts");
     std::fs::copy(env!("CARGO_BIN_EXE_icloud-contacts"), &cli).unwrap();
     let marker = tmp.path().join("ran");
-    write_script(
-        &tmp.path().join("icloud-contacts-app"),
-        &format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display()),
-    );
+    let app = tmp.path().join("icloud-contacts-app");
+    std::fs::write(
+        &app,
+        format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&app, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     // A test thread forking while the copy was open for writing holds its
     // fd until that child execs: "Text file busy" (ETXTBSY) for a moment.
     let mut tries = 0;

@@ -416,9 +416,9 @@ impl Cli<'_> {
             yes,
             &format!("Delete {name} from iCloud, on every device?"),
         )?;
-        let saved = self.svc.delete(&c)?;
+        let warning = self.svc.delete(&c)?;
         let mut data = json!({ "action": "delete", "contact": { "id": c.id(), "name": name } });
-        warn(&mut data, saved.warning);
+        warn(&mut data, warning);
         Ok(Response::new(data, format!("Deleted {name}")).ids(vec![c.id().to_owned()]))
     }
 
@@ -481,13 +481,7 @@ fn changes(f: Fields) -> Result<Vec<Change>, Failure> {
     let mut out = Vec::new();
     let birthday = f
         .birthday
-        .map(|b| {
-            if b.trim().is_empty() {
-                Ok(String::new())
-            } else {
-                model::parse_birthday(&b)
-            }
-        })
+        .map(|b| model::parse_birthday(&b))
         .transpose()
         .map_err(usage)?;
     for (field, v) in [
@@ -617,7 +611,7 @@ fn opt(s: &str) -> Value {
 }
 
 /// `me`: whether `c` is the account's "me" card.
-pub fn contact_json(c: &Contact, me: bool) -> Value {
+fn contact_json(c: &Contact, me: bool) -> Value {
     let addresses: Vec<Value> = c
         .addresses()
         .into_iter()

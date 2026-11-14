@@ -1,5 +1,5 @@
 //! Sync and writes: what the window and the command line both do, through
-//! one [`Transport`] and one [`Store`].
+//! one [`SessionTransport`] and one [`Store`].
 //!
 //! A sync fetches every contact (one request after `/co/startup`; a few
 //! thousand cards are a few hundred kilobytes) and replaces the cache.
@@ -12,12 +12,12 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-use crate::api::{Client, Error, Result, Tokens, Transport};
+use crate::api::{Client, Error, Result, SessionTransport, Tokens};
 use crate::model::{Change, Contact};
 use crate::store::{Cache, Store};
 
 pub struct Service<'a> {
-    t: &'a dyn Transport,
+    t: &'a SessionTransport,
     store: Store,
 }
 
@@ -28,10 +28,10 @@ pub struct SyncReport {
     pub changed: usize,
 }
 
-/// What a write saved, and why the local cache may not show it.
+/// The contact a write saved, and why the local cache may not show it.
 #[derive(Debug)]
-pub struct Saved<T> {
-    pub value: T,
+pub struct Saved {
+    pub value: Contact,
     pub warning: Option<String>,
 }
 
@@ -40,7 +40,7 @@ fn io(e: std::io::Error) -> Error {
 }
 
 impl<'a> Service<'a> {
-    pub fn new(t: &'a dyn Transport, store: Store) -> Self {
+    pub fn new(t: &'a SessionTransport, store: Store) -> Self {
         Service { t, store }
     }
 
@@ -102,16 +102,20 @@ impl<'a> Service<'a> {
             .map(|e| format!("saved in iCloud; local cache not updated: {e}"))
     }
 
+    /// Puts the card a write answered in the cache.
+    fn put(&self, (card, tokens): (Map<String, Value>, Tokens)) -> Saved {
+        let value = Contact(card);
+        let warning = self.record(tokens, |cache| cache.put(value.clone()));
+        Saved { value, warning }
+    }
+
     /// Adds a contact made of `changes` (a new card has nothing to remove);
     /// `is_company` shows it by its company name.
-    pub fn add(&self, changes: &[Change], is_company: bool) -> Result<Saved<Contact>> {
+    pub fn add(&self, changes: &[Change], is_company: bool) -> Result<Saved> {
         let mut card = Contact::new(is_company);
         card.apply(changes).map_err(Error::Other)?;
         let client = Client::connect(self.t)?;
-        let (saved, tokens) = self.with_tokens(&client, |t| client.write(t, None, &card.0))?;
-        let value = Contact(saved);
-        let warning = self.record(tokens, |cache| cache.put(value.clone()));
-        Ok(Saved { value, warning })
+        Ok(self.put(self.with_tokens(&client, |t| client.write(t, None, &card.0))?))
     }
 
     /// Writes `changes` to the contact `c` (as cached). When it changed on
@@ -120,14 +124,14 @@ impl<'a> Service<'a> {
     /// intents (this last name, add this number), so what they did not
     /// touch keeps the other device's version. Those the fresh copy already
     /// has are dropped, and when none is left nothing is written.
-    pub fn update(&self, c: &Contact, changes: &[Change]) -> Result<Saved<Contact>> {
+    pub fn update(&self, c: &Contact, changes: &[Change]) -> Result<Saved> {
         let client = Client::connect(self.t)?;
         let write = |base: &Contact, changes: &[Change]| -> Result<(Map<String, Value>, Tokens)> {
             let mut card = base.clone();
             card.apply(changes).map_err(Error::Other)?;
             self.with_tokens(&client, |t| client.write(t, Some("PUT"), &card.0))
         };
-        let (saved, tokens) = match write(c, changes) {
+        let written = match write(c, changes) {
             Err(e) if e.is_conflict() => {
                 let fresh = self
                     .fresh(c)?
@@ -143,31 +147,24 @@ impl<'a> Service<'a> {
             }
             other => other?,
         };
-        let value = Contact(saved);
-        let warning = self.record(tokens, |cache| cache.put(value.clone()));
-        Ok(Saved { value, warning })
+        Ok(self.put(written))
     }
 
     /// Deletes the contact `c`. When it changed on another device since, it
     /// is deleted as it is now; when it is already gone, that is done too.
-    pub fn delete(&self, c: &Contact) -> Result<Saved<()>> {
+    /// Answers why the local cache may still show it, if it may.
+    pub fn delete(&self, c: &Contact) -> Result<Option<String>> {
         let client = Client::connect(self.t)?;
         let tokens = match self.with_tokens(&client, |t| client.delete(t, c.id(), c.etag())) {
             Err(e) if e.is_conflict() => {
                 let Some(fresh) = self.fresh(c)? else {
-                    return Ok(Saved {
-                        value: (),
-                        warning: None,
-                    });
+                    return Ok(None);
                 };
                 self.with_tokens(&client, |t| client.delete(t, fresh.id(), fresh.etag()))?
             }
             other => other?,
         };
-        Ok(Saved {
-            value: (),
-            warning: self.record(tokens, |cache| cache.remove(c.id())),
-        })
+        Ok(self.record(tokens, |cache| cache.remove(c.id())))
     }
 
     /// The contact `c` as iCloud has it now (a sync: there is no call for

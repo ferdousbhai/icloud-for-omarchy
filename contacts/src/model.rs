@@ -142,12 +142,17 @@ pub fn same_number(a: &str, b: &str) -> bool {
 }
 
 /// Whether a card made of `changes` names someone: a contact needs a name,
-/// a company, a phone number or an email address.
+/// a company, a phone number or an email address. `changes` are those of a
+/// new card, so none sets a field to empty (which removes it).
 pub fn names_someone(changes: &[Change]) -> bool {
-    changes.iter().any(|c| match c {
-        Change::Set(Field::First | Field::Middle | Field::Last | Field::Nickname | Field::Company, v) => !v.is_empty(),
-        Change::Add(m, _) => matches!(m, Multi::Phone | Multi::Email),
-        _ => false,
+    changes.iter().any(|c| {
+        matches!(
+            c,
+            Change::Set(
+                Field::First | Field::Middle | Field::Last | Field::Nickname | Field::Company,
+                _
+            ) | Change::Add(Multi::Phone | Multi::Email, _)
+        )
     })
 }
 
@@ -200,9 +205,13 @@ pub fn parse_labeled(s: &str, default: &str) -> Labeled {
 }
 
 /// `YYYY-MM-DD`, or `--MM-DD` / `MM-DD` for a birthday without a year
-/// (stored with Apple's placeholder year 1604, as vCard does).
+/// (stored with Apple's placeholder year 1604, as vCard does). Empty stays
+/// empty: no birthday, which removes the field.
 pub fn parse_birthday(s: &str) -> Result<String, String> {
     let s = s.trim();
+    if s.is_empty() {
+        return Ok(String::new());
+    }
     let bad = || format!("birthday \"{s}\": use YYYY-MM-DD, or MM-DD without a year");
     let parts: Vec<&str> = s.trim_start_matches("--").split('-').collect();
     let (y, m, d) = match parts.as_slice() {
@@ -507,6 +516,8 @@ mod tests {
         assert_eq!(parse_birthday("--02-29").unwrap(), "1604-02-29");
         assert_eq!(birthday_display("1604-02-29"), "02-29");
         assert!(parse_birthday("1990-13-01").is_err());
+        assert_eq!(parse_birthday(" ").unwrap(), "");
+        assert!(parse_birthday("--").is_err());
     }
 
     #[test]

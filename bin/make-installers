@@ -17,11 +17,8 @@ for package in "${pkgname[@]}"; do
   [[ $package != icloud-session ]] || continue
   app=${package#icloud-}
   dest="$out/install-$app.sh"
-  {
-    sed -n '1p' "$src"
-    echo "# Generated from install.sh by bin/make-installers: installs icloud-$app by default."
-    sed '1d' "$src" | sed "s/^DEFAULT_PACKAGES=(.*)\$/DEFAULT_PACKAGES=(icloud-$app)/"
-  } >"$dest"
+  sed -e "1a\\# Generated from install.sh by bin/make-installers: installs icloud-$app by default." \
+    -e "2,\$s/^DEFAULT_PACKAGES=(.*)\$/DEFAULT_PACKAGES=(icloud-$app)/" "$src" >"$dest"
   if [[ $(grep -cx "DEFAULT_PACKAGES=(icloud-$app)" "$dest") != 1 ]]; then
     echo "install.sh has no single DEFAULT_PACKAGES=(...) line to set for $app." >&2
     exit 1

@@ -2,8 +2,8 @@
 # Every check a change must pass, run on this machine. .githooks/pre-push runs it before a push
 # (NO_CHECK=1 skips it); enable the hook once per clone with `git config core.hooksPath .githooks`.
 # Runs the shared-support check (bin/check-shared-support) and its own test, rustfmt, clippy and the Rust
-# workspace suite, the Qt app's tests (notes/bin/test), then install.sh's shared add_signed_repo
-# hash and install.sh and the per-app installers against stubbed pacman
+# workspace suite, the Qt app's tests (notes/bin/test), then the shell scripts' syntax, install.sh's
+# shared add_signed_repo hash and install.sh and the per-app installers against stubbed pacman
 # (tests/install_test.sh), and the packaging and release tests (tests/packaging_test.py).
 # The notes-sync recorded scenarios and golden corpora
 # run with the rest (see notes-sync/tests/differential/README.md).
@@ -29,13 +29,8 @@ fi
 
 notes/bin/test
 
-# One file per call: `bash -n a b` parses only a and passes b to it as $1.
-for f in install.sh packaging/PKGBUILD bin/build bin/build-packages bin/arch-run bin/check bin/collect-packages bin/dev-install bin/dev-uninstall bin/make-installers bin/release bin/verify-release; do
-  bash -n "$f"
-done
 tests/install_test.sh
 
 python3 tests/packaging_test.py
-bash -n .githooks/pre-push
 
 printf '\nAll checks passed.\n'

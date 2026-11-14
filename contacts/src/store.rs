@@ -110,26 +110,19 @@ impl Store {
         serde_json::from_slice(&bytes).map_err(|e| damaged(&path, e))
     }
 
-    /// Saves `cache`, stamped with this version's [`CACHE_VERSION`].
+    /// Saves `cache`, stamped with this version's [`CACHE_VERSION`]: to a
+    /// temp file, then renamed over the old one. Called holding
+    /// [`Store::lock`], which made the directory.
     pub fn save_cache(&self, cache: &mut Cache) -> io::Result<()> {
         cache.version = CACHE_VERSION;
-        write_atomic(
-            &self.dir.join("cache.json"),
-            &serde_json::to_vec(cache).expect("serializable"),
-        )
+        let tmp = self.dir.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
+        let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        f.write_all(&serde_json::to_vec(cache).expect("serializable"))?;
+        f.sync_all()?;
+        fs::rename(&tmp, self.dir.join("cache.json"))
     }
 }
 
 fn damaged(path: &Path, e: impl std::fmt::Display) -> io::Error {
     io::Error::other(format!("{} is damaged ({e}); delete it to start over", path.display()))
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().expect("a file in the data directory");
-    fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
-    let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    fs::rename(&tmp, path)
 }

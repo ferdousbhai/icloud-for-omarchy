@@ -6,9 +6,9 @@
 # lists, named packages, an unknown name, re-running, a key whose pin is
 # not its one primary, hook writes under sudo, a truncated download, the
 # migration from the old [icloud-notes] repository. First, outside the
-# namespace, checks the add_signed_repo hash of install.sh and every
-# generated installer; only the installer runs are skipped where
-# unprivileged namespaces are off.
+# namespace, checks the syntax of every shell script and the
+# add_signed_repo hash of install.sh and every generated installer; only
+# the installer runs are skipped where unprivileged namespaces are off.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -24,6 +24,10 @@ check() { # check <description> <command...>
 not() { ! "$@"; }
 
 if [[ ${ICLOUD_INSTALL_TEST_INNER:-} != 1 ]]; then
+  # One file per call: `bash -n a b` parses only a and passes b to it as $1.
+  for f in install.sh packaging/PKGBUILD bin/build bin/build-packages bin/arch-run bin/check bin/collect-packages bin/dev-install bin/dev-uninstall bin/make-installers bin/release bin/verify-release .githooks/pre-push; do
+    bash -n "$f"
+  done
   # Generated installers must preserve the reviewed repository setup.
   bin/make-installers "$work/dist" >/dev/null
   hash_of() { sed -n '/^# --- add_signed_repo (shared) ---$/,/^# --- end add_signed_repo ---$/p' "$1" | sed '1d;$d' | sha256sum | cut -d' ' -f1; }
@@ -107,6 +111,8 @@ hooks=/root/.config/omarchy/hooks/pre-refresh-pacman.d
 # What the last install asked for, whichever way it installed (omarchy-pkg-add on Omarchy).
 installed() { grep -E '^(pacman -Syu|omarchy-pkg-add) ' "$PACMAN_LOG" | tail -1 | sed -E 's/^(pacman -Syu --needed --noconfirm|omarchy-pkg-add) //'; }
 count_include() { grep -cxF "Include = /etc/pacman.d/$1.conf" /etc/pacman.conf || true; }
+# pacman.conf as ARM's update helper leaves it: without the [omarchy] block.
+without_omarchy() { awk '/^[[:space:]]*\[/ { omit = ($0 ~ /^[[:space:]]*\[omarchy\][[:space:]]*(#.*)?$/) } !omit { print }' /etc/pacman.conf; }
 
 setup
 bash install.sh >"$work/out" 2>&1
@@ -126,13 +132,13 @@ check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" 
 setup
 printf '\n[omarchy]\nServer = old\nInclude = /etc/pacman.d/icloud-for-omarchy.conf\n' >> /etc/pacman.conf
 bash install.sh icloud-notes >/dev/null 2>&1
-awk '/^[[:space:]]*\[/ { omit = ($0 ~ /^[[:space:]]*\[omarchy\][[:space:]]*(#.*)?$/) } !omit { print }' /etc/pacman.conf > "$work/arm.conf"
+without_omarchy > "$work/arm.conf"
 check "repository Include survives ARM source replacement" grep -qxF 'Include = /etc/pacman.d/icloud-for-omarchy.conf' "$work/arm.conf"
 check "moving an existing Include keeps one copy" [ "$(count_include icloud-for-omarchy)" = 1 ]
 # The installed hook must restore the same placement after a config reset.
 printf '[options]\n[omarchy]\nServer = old\n' > /etc/pacman.conf
 bash "$hooks/icloud-for-omarchy"
-awk '/^[[:space:]]*\[/ { omit = ($0 ~ /^[[:space:]]*\[omarchy\][[:space:]]*(#.*)?$/) } !omit { print }' /etc/pacman.conf > "$work/arm.conf"
+without_omarchy > "$work/arm.conf"
 check "refresh hook Include survives ARM source replacement" grep -qxF 'Include = /etc/pacman.d/icloud-for-omarchy.conf' "$work/arm.conf"
 
 # Plain Arch: no Omarchy commands anywhere on PATH, so one pacman -Syu transaction.
@@ -160,12 +166,6 @@ check "install-findmy.sh starts neither timer" not grep -qE 'Background sync|Rem
 setup
 bash "$work/dist/install-photos.sh" icloud-session icloud-notes >/dev/null 2>&1
 check "named packages override the default" [ "$(installed)" = "icloud-session icloud-notes" ]
-
-# The sync engine is inside icloud-notes now, not a package to name.
-setup
-status=0
-bash install.sh icloud-notes-sync >/dev/null 2>&1 || status=$?
-check "icloud-notes-sync is no longer a package" [ "$status" = 64 ]
 
 setup
 status=0

@@ -1,5 +1,5 @@
 //! Sync and writes: what the window, the command line and the background
-//! timer all do, through one [`Transport`] and one [`Store`].
+//! timer all do, through one [`SessionTransport`] and one [`Store`].
 //!
 //! A sync takes every `List` (a full changes/zone for that type: lists are
 //! few, and their changes do not show in the reminders' delta stream, per
@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use crate::cloudkit::{CloudKit, Error, Record, Result, Transport};
+use crate::cloudkit::{CloudKit, Error, Record, Result, SessionTransport};
 use crate::due::Due;
 use crate::model::{self, Change, List, Parsed, Reminder};
 use crate::store::{Cache, Store};
@@ -22,7 +22,7 @@ use crate::store::{Cache, Store};
 pub const SYNC_EVERY: Duration = Duration::from_secs(4 * 60);
 
 pub struct Service<'a> {
-    t: &'a dyn Transport,
+    t: &'a SessionTransport,
     pub store: Store,
 }
 
@@ -60,12 +60,10 @@ impl SyncReport {
     }
 }
 
-pub fn now_ms() -> i64 {
-    icloud_session::time::now_ms()
-}
+pub use icloud_session::time::now_ms;
 
 impl<'a> Service<'a> {
-    pub fn new(t: &'a dyn Transport, store: Store) -> Self {
+    pub fn new(t: &'a SessionTransport, store: Store) -> Self {
         Service { t, store }
     }
 
@@ -239,7 +237,7 @@ impl<'a> Service<'a> {
                             warning: None,
                         })
                     } else {
-                        Err(Error::Other(format!("\"{}\" has been deleted", r.title)))
+                        Err(Error::Gone(r.title.clone()))
                     };
                 };
                 let left: Vec<Change> = changes.iter().filter(|c| !has(&fresh, c)).cloned().collect();

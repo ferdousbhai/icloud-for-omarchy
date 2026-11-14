@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
 
-const DB: &str = "/database/1/com.apple.reminders/production/private";
+use icloud_reminders::cloudkit::DB_PATH;
 
 #[derive(Clone)]
 struct Stored {
@@ -292,7 +292,7 @@ impl State {
         if *self.signed_out.lock().unwrap() {
             return (421, Value::Null);
         }
-        let Some(op) = path.strip_prefix(DB).map(|p| p.trim_start_matches('/')) else {
+        let Some(op) = path.strip_prefix(DB_PATH).map(|p| p.trim_start_matches('/')) else {
             return (404, json!({ "error": "not found" }));
         };
         self.requests.lock().unwrap().push(json!({ "op": op, "body": sent }));

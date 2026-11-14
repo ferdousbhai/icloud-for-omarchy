@@ -62,9 +62,9 @@ pub fn due_now<'c>(
     (fire.into_iter().map(|(_, r)| r).collect(), next)
 }
 
-/// The notification's two lines: the title, then the list (when the cache
-/// knows it) and the time.
-pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> (String, String) {
+/// The notification's second line, under the title: the list (when the
+/// cache knows it) and the time.
+pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> String {
     let when = match &r.due {
         Some(d) if d.all_day => "today".to_owned(),
         Some(d) => d
@@ -75,11 +75,10 @@ pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> (String, String) {
             .to_string(),
         None => String::new(),
     };
-    let body = match cache.list(&r.list_id) {
+    match cache.list(&r.list_id) {
         Some(l) => format!("{} · {when}", l.name),
         None => when,
-    };
-    (r.title.clone(), body)
+    }
 }
 
 /// Shows one notification with Omarchy's `omarchy-notification-send`,

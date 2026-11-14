@@ -26,8 +26,8 @@
 //! `/co/startup` for fresh tokens and tries once more. Tokens are base64 and
 //! must be percent-encoded in the query.
 //!
-//! All HTTP goes through [`Transport`], which the app backs with
-//! `icloud_session::Session` and the tests with a fake server.
+//! All HTTP goes through [`SessionTransport`], over `icloud_session::Session`;
+//! the tests point that at a fake server with icloud-session's mock mode.
 
 use std::sync::Mutex;
 
@@ -92,17 +92,9 @@ impl Error {
     }
 }
 
-/// What the Contacts code needs from an HTTP client with an iCloud session.
-pub trait Transport: Send + Sync {
-    /// Base URL of a `webservices` entry (`contacts`).
-    fn service_url(&self, key: &str) -> Result<String>;
-    fn get_json(&self, url: &str) -> Result<Value>;
-    fn post_json(&self, url: &str, body: &Value) -> Result<Value>;
-}
-
-/// [`Transport`] over `icloud-session`. Connects lazily, so a missing
-/// sign-in surfaces as `SignInRequired` on first use, and drops the
-/// connection on `SignInRequired` or a daemon failure so that a later
+/// HTTP with the iCloud session, over `icloud-session`. Connects lazily, so
+/// a missing sign-in surfaces as `SignInRequired` on first use, and drops
+/// the connection on `SignInRequired` or a daemon failure so that a later
 /// sign-in is picked up without restarting.
 #[derive(Default)]
 pub struct SessionTransport {
@@ -121,24 +113,13 @@ impl SessionTransport {
         }
         Ok(result?)
     }
-}
 
-fn parse(url: &str, body: &[u8]) -> Result<Value> {
-    // A 200 that isn't JSON is the service misbehaving, not the network.
-    serde_json::from_slice(body).map_err(|e| {
-        let endpoint = url.split('?').next().unwrap_or(url);
-        Error::BadResponse(format!(
-            "iCloud answered {endpoint} with something that isn't JSON: {e}"
-        ))
-    })
-}
-
-impl Transport for SessionTransport {
-    fn service_url(&self, key: &str) -> Result<String> {
+    /// Base URL of the `contacts` entry of `webservices`.
+    fn contacts_url(&self) -> Result<String> {
         let ws = self.with(|s| s.webservices())?;
-        ws.url(key)
+        ws.url("contacts")
             .map(str::to_owned)
-            .ok_or_else(|| Error::Other(format!("iCloud did not offer the {key} service for this account")))
+            .ok_or_else(|| Error::Other("iCloud did not offer the contacts service for this account".into()))
     }
 
     fn get_json(&self, url: &str) -> Result<Value> {
@@ -150,6 +131,16 @@ impl Transport for SessionTransport {
         let response = self.with(|s| s.post_json(url, body))?;
         parse(url, &response.body)
     }
+}
+
+fn parse(url: &str, body: &[u8]) -> Result<Value> {
+    // A 200 that isn't JSON is the service misbehaving, not the network.
+    serde_json::from_slice(body).map_err(|e| {
+        let endpoint = url.split('?').next().unwrap_or(url);
+        Error::BadResponse(format!(
+            "iCloud answered {endpoint} with something that isn't JSON: {e}"
+        ))
+    })
 }
 
 /// The pair every call after `/co/startup` carries.
@@ -187,13 +178,13 @@ pub struct Fetched {
 }
 
 pub struct Client<'a> {
-    t: &'a dyn Transport,
+    t: &'a SessionTransport,
     base: String,
 }
 
 impl<'a> Client<'a> {
-    pub fn connect(t: &'a dyn Transport) -> Result<Self> {
-        let base = t.service_url("contacts")?.trim_end_matches('/').to_owned();
+    pub fn connect(t: &'a SessionTransport) -> Result<Self> {
+        let base = t.contacts_url()?.trim_end_matches('/').to_owned();
         Ok(Client { t, base })
     }
 

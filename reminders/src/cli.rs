@@ -263,6 +263,7 @@ fn cloud_error(e: cloudkit::Error) -> Failure {
                 e
             }
         }
+        C::Gone(_) => CliError::new("not_found", EXIT_NOT_FOUND, msg),
         C::CloudKit { .. } | C::Other(_) => other(msg),
     }
 }
@@ -339,16 +340,12 @@ impl Cli<'_> {
     fn folder_run(&self) -> Result<Option<folder::Report>, Failure> {
         let store = &self.svc.store;
         let _lock = store.folder_lock().map_err(file)?;
-        let mut state = match (store.folder().map_err(file)?, folder::default_dir()) {
-            (Some(state), _) => state,
-            (None, Some(dir)) => folder::State {
-                dir,
-                ..folder::State::default()
-            },
-            (None, None) => return Ok(None),
+        let Some(dir) = folder::default_dir() else {
+            return Ok(None);
         };
+        let mut state = store.folder().map_err(file)?.unwrap_or_default();
         let now = jiff::Timestamp::now().to_zoned(self.local.clone());
-        let result = folder::sync(&self.svc, &mut state, &now);
+        let result = folder::sync(&self.svc, &dir, &mut state, &now);
         store.save_folder(&state).map_err(file)?;
         Ok(Some(result.map_err(cloud_error)?))
     }
@@ -438,9 +435,8 @@ impl Cli<'_> {
         let list = match list {
             Some(q) => resolve_list(&cache, q)?,
             None => cache.only_list().ok_or_else(|| {
-                let names: String = cache.lists.iter().map(|l| format!("\n  {}", l.name)).collect();
                 usage("add needs --list LIST (iCloud records no default list)")
-                    .hint(format!("name one of these lists:{names}"))
+                    .hint(format!("name one of these lists:{}", list_names(&cache)))
             })?,
         };
         let saved = self
@@ -574,7 +570,10 @@ impl Cli<'_> {
         // A changed file in the folder is sent now, not at the next sync,
         // unless the last sync failed: that waits its turn.
         let last_failed = attempt > synced_ms;
-        let pending = store.folder().map_err(file)?.as_ref().is_some_and(folder::pending);
+        let pending = match (store.folder().map_err(file)?, folder::default_dir()) {
+            (Some(state), Some(dir)) => folder::pending(&state, &dir),
+            _ => false,
+        };
         let attempted = (force_sync || stale || (pending && !last_failed)).then(service::now_ms);
         let mut synced = false;
         let mut sync_error = None;
@@ -623,8 +622,7 @@ impl Cli<'_> {
         let mut notified = Vec::new();
         let mut ids = Vec::new();
         for r in fire {
-            let (headline, body) = notify::text(r, &cache, &self.local);
-            match notify::send(&headline, &body) {
+            match notify::send(&r.title, &notify::text(r, &cache, &self.local)) {
                 Ok(()) => {
                     notified.push(json!({ "id": bare(&r.id), "title": r.title }));
                     ids.push(r.uuid().to_owned());
@@ -724,7 +722,7 @@ fn warn(out: &mut Value, w: Option<String>) {
 
 /// The reminder was deleted elsewhere before the write could land.
 fn gone(r: &Reminder) -> Failure {
-    CliError::new("not_found", EXIT_NOT_FOUND, format!("\"{}\" has been deleted", r.title))
+    cloud_error(cloudkit::Error::Gone(r.title.clone()))
 }
 
 /// Lowercase, with typographic apostrophes as plain ones.
@@ -779,6 +777,11 @@ fn resolve_prefer<'c>(cache: &'c Cache, query: &str, open: bool) -> Result<&'c R
     }
 }
 
+/// Every list's name, one to a line, for a hint.
+fn list_names(cache: &Cache) -> String {
+    cache.lists.iter().map(|l| format!("\n  {}", l.name)).collect()
+}
+
 fn resolve_list<'c>(cache: &'c Cache, query: &str) -> Result<&'c List, Failure> {
     let q = query.trim();
     if let Some(l) = cache.lists.iter().find(|l| l.id == q || bare(&l.id) == q) {
@@ -789,10 +792,8 @@ fn resolve_list<'c>(cache: &'c Cache, query: &str) -> Result<&'c List, Failure> 
     match matches.as_slice() {
         [l] => Ok(l),
         [] => Err(
-            CliError::new("not_found", EXIT_NOT_FOUND, format!("no list matches \"{query}\"")).hint(format!(
-                "name one of these lists:{}",
-                names(&cache.lists.iter().collect::<Vec<_>>())
-            )),
+            CliError::new("not_found", EXIT_NOT_FOUND, format!("no list matches \"{query}\""))
+                .hint(format!("name one of these lists:{}", list_names(cache))),
         ),
         many => Err(CliError::new(
             "ambiguous",

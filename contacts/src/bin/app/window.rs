@@ -156,14 +156,14 @@ impl Window {
             *this.last_error.borrow_mut() = None;
             this.sync();
         });
-        action("new", |this| this.edit(None));
+        action("new", |this| this.edit_draft(None, None));
         action("find", |this| {
             this.split.set_show_content(false);
             this.search.grab_focus();
         });
         action("edit", |this| {
             if let Some(c) = this.chosen() {
-                this.edit(Some(c));
+                this.edit_draft(Some(c), None);
             }
         });
         action("delete", |this| {
@@ -190,12 +190,19 @@ impl Window {
                 let Some(this) = weak.upgrade() else { return };
                 this.syncing.set(false);
                 match result {
-                    Ok(Ok((report, cache))) => {
+                    Ok(Ok((_, cache))) => {
                         this.banner.hide();
-                        *this.cache.borrow_mut() = cache;
                         *this.last_error.borrow_mut() = None;
-                        // Most syncs change nothing: the rows stay.
-                        if report.changed > 0 {
+                        // Most syncs change nothing: the rows stay. Judged
+                        // by what the window shows, not by the sync's own
+                        // count, which is against the cache on disk: that
+                        // one the command line may have brought up to date.
+                        let shown = this.cache.replace(cache);
+                        let changed = {
+                            let now = this.cache.borrow();
+                            shown.contacts != now.contacts || shown.me != now.me
+                        };
+                        if changed {
                             this.show_list();
                         }
                     }
@@ -277,10 +284,10 @@ impl Window {
             let (c, name) = (c.clone(), name.clone());
             this.write(
                 move |svc| svc.delete(&c),
-                move |this, saved| {
+                move |this, warning| {
                     this.selected.borrow_mut().clear();
                     this.split.set_show_content(false);
-                    this.toast(&saved.warning.unwrap_or_else(|| format!("Deleted {name}")));
+                    this.toast(&warning.unwrap_or_else(|| format!("Deleted {name}")));
                 },
                 |_| {},
             );
@@ -288,13 +295,8 @@ impl Window {
         dialog.present(Some(&self.window));
     }
 
-    /// The add (`None`) or edit dialog.
-    fn edit(self: &Rc<Self>, contact: Option<Contact>) {
-        self.edit_draft(contact, None);
-    }
-
-    /// The dialog filled from the contact's values, or from `draft`: what
-    /// was typed before a save that failed.
+    /// The add (`contact` `None`) or edit dialog, filled from the contact's
+    /// values, or from `draft`: what was typed before a save that failed.
     fn edit_draft(self: &Rc<Self>, contact: Option<Contact>, draft: Option<Draft>) {
         let before = contact.as_ref().map(Draft::of).unwrap_or_default();
         let draft = draft.unwrap_or_else(|| before.clone());
@@ -713,10 +715,7 @@ impl Draft {
 
     /// What is wrong with it, while something is.
     fn problem(&self) -> Option<String> {
-        let birthday = self.scalar(Field::Birthday);
-        if !birthday.trim().is_empty()
-            && let Err(e) = model::parse_birthday(birthday)
-        {
+        if let Err(e) = model::parse_birthday(self.scalar(Field::Birthday)) {
             return Some(e);
         }
         for (m, values) in &self.multis {
@@ -736,7 +735,7 @@ impl Draft {
         for (f, v) in &self.scalars {
             let v = v.trim();
             if v != before.scalar(*f).trim() {
-                let v = if *f == Field::Birthday && !v.is_empty() {
+                let v = if *f == Field::Birthday {
                     model::parse_birthday(v).unwrap_or_else(|_| v.to_owned())
                 } else {
                     v.to_owned()

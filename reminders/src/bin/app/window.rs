@@ -175,7 +175,7 @@ impl Window {
         let weak = Rc::downgrade(self);
         background(
             move || {
-                let svc = Service::new(&*t, store_in(dir)?);
+                let svc = Service::new(&t, store_in(dir)?);
                 let warning = svc.sync(false)?.warning();
                 Ok::<_, Error>((svc.cache()?, warning))
             },
@@ -222,7 +222,7 @@ impl Window {
         let weak = Rc::downgrade(self);
         background(
             move || {
-                let svc = Service::new(&*t, store_in(dir)?);
+                let svc = Service::new(&t, store_in(dir)?);
                 let out = f(&svc)?;
                 // The write happened: a cache that can't be read is shown
                 // as a warning, not as a failed write.
@@ -239,13 +239,11 @@ impl Window {
                         this.show_lists();
                         done(&this, out);
                     }
-                    Ok(Err(Error::SignInRequired)) => {
-                        this.banner.show();
-                        this.show_reminders();
-                        failed(&this);
-                    }
                     Ok(Err(e)) => {
-                        this.toast(&e.to_string());
+                        match e {
+                            Error::SignInRequired => this.banner.show(),
+                            e => this.toast(&e.to_string()),
+                        }
                         this.show_reminders();
                         failed(&this);
                     }
@@ -328,10 +326,15 @@ impl Window {
     fn edit(self: &Rc<Self>, r: Reminder) {
         let draft = Draft {
             title: r.title.clone(),
-            due: r.due.as_ref().map(|d| d.display(&self.local)).unwrap_or_default(),
+            due: self.due_text(&r),
             notes: r.notes.clone(),
         };
         self.edit_draft(r, draft);
+    }
+
+    /// The due date as the edit dialog shows it; empty for none.
+    fn due_text(&self, r: &Reminder) -> String {
+        r.due.as_ref().map(|d| d.display(&self.local)).unwrap_or_default()
     }
 
     /// The edit dialog, filled from `draft`: the reminder's values, or what
@@ -343,7 +346,7 @@ impl Window {
             .css_classes(["boxed-list"])
             .build();
         let title = adw::EntryRow::builder().title("Title").text(&draft.title).build();
-        let due_text = r.due.as_ref().map(|d| d.display(&self.local)).unwrap_or_default();
+        let due_text = self.due_text(&r);
         let due = adw::EntryRow::builder()
             .title("Due (2026-10-10 09:00, tomorrow 9:00, +2h; empty for none)")
             .text(&draft.due)

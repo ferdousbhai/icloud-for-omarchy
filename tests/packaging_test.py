@@ -14,6 +14,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
+# Root in a user namespace that has subordinate uids to switch to.
+NAMESPACE = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork"]
 # The recipe's pkgname is the one list of packages.
 PACKAGES = tuple(subprocess.check_output(
     ["bash", "-c", 'source packaging/PKGBUILD; printf "%s\\n" "${pkgname[@]}"'], cwd=ROOT, text=True,
@@ -46,8 +48,17 @@ class Packaging(unittest.TestCase):
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
 
-    def collect(self):
-        return subprocess.run([str(ROOT / "bin/collect-packages"), str(self.work), COMMIT, str(self.work / "out")], env=self.env, capture_output=True)
+    def collect(self, *more):
+        return subprocess.run([str(ROOT / "bin/collect-packages"), str(self.work), COMMIT, str(self.work / "out"), *more], env=self.env, capture_output=True)
+
+    def copy_scripts(self, root, *names):
+        (root / "bin").mkdir(parents=True)
+        for name in names:
+            shutil.copy2(ROOT / "bin" / name, root / "bin" / name)
+
+    def need_namespace(self):
+        if subprocess.run([*NAMESPACE, "true"], capture_output=True).returncode:
+            self.skipTest("subordinate UID namespaces unavailable")
 
     def populate(self):
         for arch in ("x86_64", "aarch64"):
@@ -117,9 +128,7 @@ class Packaging(unittest.TestCase):
 
     def release_fixture(self):
         root = self.suite_checkout()
-        (root / "bin").mkdir()
-        for name in ("release", "collect-packages", "make-installers"):
-            shutil.copy2(ROOT / "bin" / name, root / "bin" / name)
+        self.copy_scripts(root, "release", "collect-packages", "make-installers")
         (root / "bin/check").write_text("#!/bin/bash\nexit 0\n")
         (root / "bin/check").chmod(0o755)
         (root / "install.sh").write_text("#!/bin/bash\nSIGNING_KEY_FINGERPRINT=test-key\nDEFAULT_PACKAGES=(icloud-notes)\n")
@@ -232,12 +241,9 @@ for arch in ("x86_64", "aarch64"):
         self.assertFalse((self.work / "packages").exists())
 
     def test_native_build_can_clone_a_checkout_owned_by_another_uid(self):
-        probe = subprocess.run(["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork", "true"], capture_output=True)
-        if probe.returncode:
-            self.skipTest("subordinate UID namespaces unavailable")
+        self.need_namespace()
         root = self.suite_checkout()
-        (root / "bin").mkdir()
-        shutil.copy2(ROOT / "bin/build-packages", root / "bin/build-packages")
+        self.copy_scripts(root, "build-packages")
         self.stub("uname", "echo x86_64")
         self.stub("cargo", "exit 0")
         self.stub("rustc", "exit 0")
@@ -245,8 +251,7 @@ for arch in ("x86_64", "aarch64"):
         # A real chroot's builder reads the checkout as a different UID.
         # Restore ownership before leaving the namespace for normal cleanup.
         result = subprocess.run([
-            "unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork",
-            "bash", "-euc", r'''
+            *NAMESPACE, "bash", "-euc", r'''
                 chmod 755 "$1"
                 mkdir "$2"
                 trap 'chown -R 0:0 "$2"' EXIT
@@ -258,12 +263,9 @@ for arch in ("x86_64", "aarch64"):
         self.assertTrue((self.work / "output/source-commit.txt").is_file())
 
     def test_arch_root_hides_host_runtime_and_preserves_dns(self):
-        probe = subprocess.run(["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork", "true"], capture_output=True)
-        if probe.returncode:
-            self.skipTest("subordinate UID namespaces unavailable")
+        self.need_namespace()
         root = self.suite_checkout()
-        (root / "bin").mkdir()
-        shutil.copy2(ROOT / "bin/arch-run", root / "bin/arch-run")
+        self.copy_scripts(root, "arch-run")
         archive = self.work / "bootstrap.tar"
         with tarfile.open(archive, "w") as tar:
             for name in ("root.x86_64", "root.x86_64/etc", "root.x86_64/etc/pacman.d"):
@@ -301,11 +303,10 @@ for arch in ("x86_64", "aarch64"):
                 '
             fi
         ''')
-        result = subprocess.run([
-            "unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--fork",
-            str(root / "bin/arch-run"), "true",
-        ], env=dict(self.env, BOOTSTRAP=str(archive), RESOLVER=str(resolver), LOG=str(self.work / "chroot.log"),
-                    SUDO_USER="ubuntu-runner", SUDO_UID="1001", SUDO_GID="1001"), capture_output=True)
+        result = subprocess.run(
+            [*NAMESPACE, str(root / "bin/arch-run"), "true"],
+            env=dict(self.env, BOOTSTRAP=str(archive), RESOLVER=str(resolver), LOG=str(self.work / "chroot.log"),
+                     SUDO_USER="ubuntu-runner", SUDO_UID="1001", SUDO_GID="1001"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.work / "chroot.log").read_text().splitlines(), ["isolated", "isolated", "proc-matches"])
         self.assertEqual((runtime.st_dev, runtime.st_ino), (os.stat("/run").st_dev, os.stat("/run").st_ino))
@@ -426,10 +427,8 @@ for arch in ("x86_64", "aarch64"):
 
     def verification_fixture(self):
         root = self.work / "repo"
-        (root / "bin").mkdir(parents=True)
+        self.copy_scripts(root, "verify-release", "make-installers")
         (root / "packaging").mkdir()
-        for name in ("verify-release", "make-installers"):
-            shutil.copy2(ROOT / "bin" / name, root / "bin" / name)
         (root / "packaging/PKGBUILD").write_text((ROOT / "packaging/PKGBUILD").read_text())
         (root / "Cargo.toml").write_text((ROOT / "Cargo.toml").read_text())
         (root / "install.sh").write_text('#!/bin/bash\nDEFAULT_PACKAGES=(icloud-notes)\necho "$ICLOUD_RELEASES" >>"$LOG"\n')
@@ -471,8 +470,7 @@ for arch in ("x86_64", "aarch64"):
 
     def test_release_version_must_match_collected_suite(self):
         self.populate()
-        result = subprocess.run([str(ROOT / "bin/collect-packages"), str(self.work), COMMIT, str(self.work / "out"), "9.9.9-1"], env=self.env, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(self.collect("9.9.9-1").returncode, 0)
         self.assertFalse((self.work / "out").exists())
 
     def test_verification_enters_disposable_root_before_installing(self):

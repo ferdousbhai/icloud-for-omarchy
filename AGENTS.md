@@ -69,7 +69,7 @@ without it `bin/check` tests sessiond with `--no-default-features`), qt6-base, q
 make. GitHub's Ubuntu runners use `bin/arch-run` with `arch-install-scripts` to build
 in a disposable native Arch chroot; local package builds run directly as a regular
 Arch user. Release installer checks also use fresh chroots, never the host.
-CI (`.github/workflows/packages.yml`) runs fmt, `bash -n` on the scripts, the installer and
+CI (`.github/workflows/packages.yml`) runs fmt, the installer (which syntax-checks the scripts) and
 packaging tests, then native x86_64/aarch64 package builds.
 
 ## Conventions and gotchas

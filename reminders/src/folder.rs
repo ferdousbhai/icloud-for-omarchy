@@ -97,10 +97,10 @@ pub struct ListState {
     pub adopted: bool,
 }
 
-/// `folder.json` in the data directory: where the folder is, and its files.
+/// `folder.json` in the data directory: the folder's files. The folder
+/// itself is always [`default_dir`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
-    pub dir: PathBuf,
     /// By list ID.
     #[serde(default)]
     pub lists: BTreeMap<String, ListState>,
@@ -481,11 +481,12 @@ fn read(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
-/// Replaces the file whole: a temp file beside it (a dotfile, which
-/// Syncthing does not carry until it has its name), then a rename.
+/// Replaces the file whole: a temp file beside it, then a rename. The temp
+/// file has the name Syncthing gives its own temporaries
+/// (`.syncthing.<name>.tmp`), which it does not sync.
 fn write(path: &Path, text: &str) -> io::Result<()> {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("list");
-    let tmp = path.with_file_name(format!(".{name}.tmp"));
+    let tmp = path.with_file_name(format!(".syncthing.{name}.tmp"));
     fs::write(&tmp, text)?;
     fs::rename(&tmp, path)
 }
@@ -517,13 +518,13 @@ pub fn default_dir() -> Option<PathBuf> {
 /// Whether a file has something to send: it differs from what was last
 /// written, or has a conflict copy.
 /// A background run syncs with iCloud first when this is so.
-pub fn pending(state: &State) -> bool {
+pub fn pending(state: &State, dir: &Path) -> bool {
     state.lists.values().any(|ls| {
-        let changed = match read(&state.dir.join(&ls.file)) {
+        let changed = match read(&dir.join(&ls.file)) {
             Ok(Some(text)) => text != ls.text,
             _ => false,
         };
-        changed || !conflict_copies(&state.dir, &ls.file).is_empty()
+        changed || !conflict_copies(dir, &ls.file).is_empty()
     })
 }
 
@@ -537,8 +538,10 @@ fn apply(
     now: &Zoned,
     report: &mut Report,
 ) -> Result<()> {
+    // Read once: a change tag gone stale meanwhile is `Service::update`'s
+    // conflict to retry.
+    let cache = svc.cache()?;
     for (id, it, changes) in delta.updates {
-        let cache = svc.cache()?;
         // Gone in iCloud meanwhile: the line goes with the next write.
         if let Some(r) = cache.reminders.get(&id) {
             if let Some(w) = svc.update(r, &changes)?.warning {
@@ -569,7 +572,6 @@ fn apply(
         }
     }
     for id in delta.deletes {
-        let cache = svc.cache()?;
         if let Some(r) = cache.reminders.get(&id) {
             svc.update(r, &[Change::Deleted])?;
             report.deleted += 1;
@@ -656,13 +658,13 @@ fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, 
 /// Brings the folder and iCloud in step. The cache must be fresh (the
 /// caller syncs first): what it holds is taken as iCloud's state. One list's failure is a warning
 /// and does not stop the others.
-pub fn sync(svc: &Service, state: &mut State, now: &Zoned) -> Result<Report> {
+pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result<Report> {
     let mut report = Report::default();
     let cache = svc.cache()?;
     if cache.synced_ms.is_none() {
         return Ok(report);
     }
-    fs::create_dir_all(&state.dir)?;
+    fs::create_dir_all(dir)?;
 
     // A list gone from iCloud: its file goes too, unless it was changed.
     let gone: Vec<String> = state
@@ -673,7 +675,7 @@ pub fn sync(svc: &Service, state: &mut State, now: &Zoned) -> Result<Report> {
         .collect();
     for id in gone {
         let ls = state.lists.remove(&id).expect("listed above");
-        let path = state.dir.join(&ls.file);
+        let path = dir.join(&ls.file);
         if read(&path)?.is_some_and(|text| text == ls.text) {
             fs::remove_file(&path)?;
         }
@@ -692,12 +694,12 @@ pub fn sync(svc: &Service, state: &mut State, now: &Zoned) -> Result<Report> {
             ls.file = wanted;
         } else if ls.file != wanted {
             // The list was renamed: the file follows, when nothing is in the way.
-            let (from, to) = (state.dir.join(&ls.file), state.dir.join(&wanted));
+            let (from, to) = (dir.join(&ls.file), dir.join(&wanted));
             if !to.exists() && (!from.exists() || fs::rename(&from, &to).is_ok()) {
                 ls.file = wanted;
             }
         }
-        if let Err(e) = one(svc, &state.dir, list, ls, now, &mut report) {
+        if let Err(e) = one(svc, dir, list, ls, now, &mut report) {
             report.warnings.push(format!("{}: {e}", ls.file));
         }
     }
