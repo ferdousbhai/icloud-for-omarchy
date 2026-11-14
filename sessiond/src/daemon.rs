@@ -897,8 +897,9 @@ impl Daemon {
 
     /// Removes the session and the device trust from the keyring for a
     /// sign-out that could not (see `removal_pending`), unless an account
-    /// was stored since: at start, and on a `SignOut()` with nothing else
-    /// to forget.
+    /// was stored since: at start, on a `SignOut()` with nothing else to
+    /// forget, and before a sign-in window opens (it starts with the stored
+    /// trust, which must not be a signed-out account's).
     fn settle_removal(&self) {
         if !self.cfg.paths.removal_pending.exists() {
             return;
@@ -1554,6 +1555,7 @@ impl Daemon {
     fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), NotKept> {
         let bin = &self.cfg.signin_bin;
         let cancelled = || NotKept::from(WindowError::Cancelled);
+        self.settle_removal();
         let cookies = self.window_cookies();
         let slot = &self.signin_child;
         let args: &[&str] = if find { &["--find", "--cookies"] } else { &["--cookies"] };

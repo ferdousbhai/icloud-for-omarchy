@@ -1352,6 +1352,58 @@ EOF"#,
     assert!(trust_item(&env).is_none(), "signing out forgets this browser");
 }
 
+/// A sign-out the keyring refused still owes the device trust its removal:
+/// a sign-in later in the same daemon's life, with the keyring back, must
+/// not hand the signed-out account's trust to its window.
+#[test]
+fn a_sign_in_after_a_sign_out_the_keyring_refused_starts_without_the_old_trust() {
+    let server = apple();
+    let dir = tempfile::tempdir().unwrap();
+    let capture = json!({
+        "cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null}],
+        "trust": [{"name": "DES6a1b2c", "value": "trusted", "domain": "idmsa.apple.com", "path": "/", "expires": now() + 86400}],
+    });
+    let record = format!(
+        "d='{}'\nn=$(cat \"$d/count\" 2>/dev/null || echo 0); echo $((n + 1)) > \"$d/count\"\ncat > \"$d/stdin-$n\"",
+        dir.path().display()
+    );
+    let signin = printing_window(dir.path(), &record, &capture);
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    let watch = changes(&conn);
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().signed_in);
+    assert_eq!(trust_names(&env), ["DES6a1b2c"]);
+
+    // The keyring stops answering, and the user signs out.
+    let keyring = fs::read(env.secrets_path()).unwrap();
+    fs::remove_file(env.secrets_path()).unwrap();
+    fs::create_dir(env.secrets_path()).unwrap();
+    assert!(matches!(
+        icloud_session::sign_out_on(&conn),
+        Err(Error::KeyringUnavailable(_))
+    ));
+    watch.until("SignedIn false", |s| !s.signed_in);
+
+    // It answers again, the trust still in it, and someone signs in.
+    fs::remove_dir(env.secrets_path()).unwrap();
+    fs::write(env.secrets_path(), &keyring).unwrap();
+    assert!(trust_item(&env).is_some());
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().signed_in);
+    assert_eq!(
+        given_cookies(dir.path(), 1),
+        json!([]),
+        "the window got the signed-out trust"
+    );
+}
+
 /// The cookies.sqlite a v0.9.4 sign-in window left (libsoup's
 /// `moz_cookies`), with `rows` of (name, value, host, expiry).
 fn old_profile(env: &Env, rows: &[(&str, &str, &str, u64)]) -> PathBuf {
