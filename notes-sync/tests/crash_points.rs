@@ -1543,6 +1543,96 @@ fn a_photo_replaced_in_icloud_of_a_note_moved_here_takes_a_free_name_beside_it()
     photo_of_a_note_moved_here_replaced_in_icloud(PhotoNoteMoved::FileMovedNameTaken);
 }
 
+/// The same three, with the pull cut short anywhere (moving the photo
+/// beside the moved file, rewriting its link, downloading the new one).
+#[test]
+fn a_pull_moving_the_photo_of_a_note_moved_here_cut_short_anywhere_is_finished_by_the_next_run() {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    for how in [
+        PhotoNoteMoved::FolderRenamed,
+        PhotoNoteMoved::FileMoved,
+        PhotoNoteMoved::FileMovedNameTaken,
+    ] {
+        let mut zone = account(3);
+        let mut photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+        let reference = json!({ "recordName": WORK_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+        photo_note["fields"]["Folder"]["value"] = reference.clone();
+        photo_note["fields"]["Folders"]["value"] = json!([reference]);
+        zone.put(photo_note);
+        let mut start = cloned_from(zone);
+        let file = tracked_file(&start.place, PHOTO_NOTE);
+        let name = Path::new(&file).file_name().unwrap().to_string_lossy().into_owned();
+        let (photo_name, _) = photo(&start.zone);
+        let vault = start.place.vault.clone();
+        match how {
+            PhotoNoteMoved::FolderRenamed => std::fs::rename(vault.join("Work"), vault.join("Office")).unwrap(),
+            PhotoNoteMoved::FileMoved | PhotoNoteMoved::FileMovedNameTaken => {
+                std::fs::create_dir_all(vault.join("Office/attachments")).unwrap();
+                std::fs::rename(vault.join(&file), vault.join("Office").join(&name)).unwrap();
+                start.expect.new_folders = 1;
+            }
+        }
+        if let PhotoNoteMoved::FileMovedNameTaken = how {
+            std::fs::write(vault.join("Office/attachments").join(&photo_name), "not the photo").unwrap();
+        }
+        let zone = &mut start.zone;
+        zone.downloads_in_line = true;
+        zone.assets.insert("/B/other-image".into(), b"another photo".to_vec());
+        let media_name = "066C8A2E-796F-403F-AD75-A5267CBD0E18";
+        let mut media = zone.live(media_name).unwrap().clone();
+        media["fields"]["Asset"]["value"] = json!({ "fileChecksum": "ck-other", "size": 13,
+            "downloadURL": "https://cvws.icloud-content.com/B/other-image" });
+        zone.put(media);
+        let photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+        zone.put(photo_note);
+        crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+        if let PhotoNoteMoved::FileMovedNameTaken = how {
+            // The file that was in the way is still there, as it was.
+            let fake = Fake::start(start.zone.clone());
+            for (point, n) in distinct_sites(crash_sites(&fake, &Place::copy_of(&start.place), "pull")) {
+                let label = format!("{how:?}: pull killed at {point}:{n}");
+                let place = one_case_place(&start, "pull", &point, n, Then::Again, &label);
+                assert_eq!(
+                    std::fs::read_to_string(place.vault.join("Office/attachments").join(&photo_name)).unwrap(),
+                    "not the photo",
+                    "{label}"
+                );
+            }
+        }
+    }
+}
+
+/// The photo note moved to `Work` on the phone, where a file of the photo's
+/// name is in `attachments/` here: a pull cut short anywhere moving it (the
+/// photo to a free name, its link following) leaves that file as it was
+/// and nothing to push.
+#[test]
+fn a_pull_moving_a_photo_to_a_free_name_cut_short_anywhere_is_finished_by_the_next_run() {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    let mut start = cloned(3);
+    let (photo_name, _) = photo(&start.zone);
+    let in_the_way = start.place.vault.join("Work/attachments").join(&photo_name);
+    std::fs::create_dir_all(in_the_way.parent().unwrap()).unwrap();
+    std::fs::write(&in_the_way, "not the photo").unwrap();
+    let zone = &mut start.zone;
+    let mut photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+    let reference = json!({ "recordName": WORK_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+    photo_note["fields"]["Folder"]["value"] = reference.clone();
+    photo_note["fields"]["Folders"]["value"] = json!([reference]);
+    zone.put(photo_note);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+    let fake = Fake::start(start.zone.clone());
+    for (point, n) in distinct_sites(crash_sites(&fake, &Place::copy_of(&start.place), "pull")) {
+        let label = format!("pull killed at {point}:{n}");
+        let place = one_case_place(&start, "pull", &point, n, Then::Again, &label);
+        assert_eq!(
+            std::fs::read_to_string(place.vault.join("Work/attachments").join(&photo_name)).unwrap(),
+            "not the photo",
+            "{label}"
+        );
+    }
+}
+
 /// A folder directory deleted here with a note whose photo was replaced on
 /// the phone before the pull: the new photo is not downloaded into the
 /// deleted directory, which would bring it back for the push to keep the

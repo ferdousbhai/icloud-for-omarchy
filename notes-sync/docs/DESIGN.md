@@ -478,7 +478,10 @@ for more than text edits). The engine:
   leaves a link to `x.png.pdf` alone). The rename itself refuses a name that is taken
   (`renameat2` with `RENAME_NOREPLACE`, `vault::local::rename_no_replace`),
   so a file a file-sync tool delivers between the look and the rename is
-  not replaced either.
+  not replaced either. The links (in the file and the base copy) follow
+  before the attachment file moves, so a pull cut short after the move
+  finds the file by the name the note links; up to 0.11.1 the next pull
+  took the other file of the old name for the attachment.
 
 - A folder directory deleted or renamed here stays so through a pull
   that runs before the push (`pull::folder_dirs_deleted_here`): the pull

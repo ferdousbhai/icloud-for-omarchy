@@ -16,7 +16,9 @@ use super::state::{AttachmentEntry, NoteEntry};
 use crate::cmd::errors::Error;
 use crate::cmd::plan::FolderRefusal;
 use crate::cmd::used_names_for;
-use crate::doc::embeds::{AttachmentReference, attachment_link_spellings, format_attachment_markdown};
+use crate::doc::embeds::{
+    AttachmentReference, attachment_link_spellings, format_attachment_markdown, has_attachment_link_to,
+};
 use crate::js::{self, posix};
 use crate::md::filename::unique_file_name;
 
@@ -33,13 +35,16 @@ pub struct Relocation {
 /// vault-relative; the directory is made if need be) under `name`, or under
 /// the next `" 2"` name when that one is in `used` or turns out to be taken
 /// on disk: nothing there is ever replaced. The name it got, which joins
-/// `used`; `None` when there is no file at `from`.
+/// `used`; `None` when there is no file at `from`. `naming` is told each
+/// name before the file is renamed to it, and `name` again when there turns
+/// out to be no file to move.
 fn move_to_free_name(
     target_dir: &Path,
     from: &str,
     to_dir: &str,
     name: &str,
     used: &mut HashSet<String>,
+    naming: &mut dyn FnMut(&str) -> Result<(), Error>,
 ) -> Result<Option<String>, Error> {
     let from = target_dir.join(from);
     // Nothing to move makes no directory: one made empty for a note
@@ -51,12 +56,14 @@ fn move_to_free_name(
     loop {
         let candidate = unique_file_name(name, used);
         used.insert(candidate.clone());
+        naming(&candidate)?;
         match rename_no_replace(&from, &target_dir.join(to_dir).join(&candidate)) {
             Ok(()) => return Ok(Some(candidate)),
             // Taken since the names on disk were read: the next name.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 used.remove(&candidate);
+                naming(name)?;
                 return Ok(None);
             }
             Err(e) => return Err(e.into()),
@@ -112,6 +119,7 @@ pub fn reconcile_note_placements(
             to_dir,
             posix::basename(&from_file),
             used_names_for(&mut claimed_names, to_dir),
+            &mut |_| Ok(()),
         )?
         else {
             used_names_for(&mut claimed_names, &note_dir_of(&from_file)).insert(posix::basename(&from_file).to_owned());
@@ -149,14 +157,12 @@ pub fn reconcile_note_placements(
                 &to_attachments,
                 &old_base,
                 used_names_for(&mut claimed_attachment_names, to_dir),
+                &mut links_follow(target_dir, &to_file, record_name, &old_base),
             )?
             else {
                 continue;
             };
             attachments[&attachment_record_name].file = posix::join(&[&to_attachments, &new_base]);
-            if new_base != old_base {
-                rewrite_attachment_link(target_dir, &to_file, record_name, &old_base, &new_base)?;
-            }
         }
     }
     Ok(relocations)
@@ -183,26 +189,79 @@ pub fn relocate_note_attachments(
     for attachment_record_name in mine {
         let attachment = attachments[&attachment_record_name].clone();
         let old_base = posix::basename(&attachment.file).to_owned();
-        // Moved along with a renamed folder directory: already there.
-        // Unless the file of that name there is another attachment's.
-        let already_there = posix::join(&[&to_attachments, &old_base]);
+        // Moved along with a renamed folder directory, or by a run cut short
+        // after the move: already there, under its name or the free name the
+        // note's file links (the links follow before the file moves). Never
+        // a file of that name there that is another attachment's.
         if !target_dir.join(&attachment.file).exists()
-            && target_dir.join(&already_there).exists()
-            && !attachments.values().any(|other| other.file == already_there)
+            && let Some(already_there) = already_moved(target_dir, note_file, &to_attachments, &old_base, attachments)?
         {
             attachments[&attachment_record_name].file = already_there;
             continue;
         }
-        let Some(new_base) = move_to_free_name(target_dir, &attachment.file, &to_attachments, &old_base, &mut used)?
+        let Some(new_base) = move_to_free_name(
+            target_dir,
+            &attachment.file,
+            &to_attachments,
+            &old_base,
+            &mut used,
+            &mut links_follow(target_dir, note_file, record_name, &old_base),
+        )?
         else {
             continue;
         };
         attachments[&attachment_record_name].file = posix::join(&[&to_attachments, &new_base]);
-        if new_base != old_base {
-            rewrite_attachment_link(target_dir, note_file, record_name, &old_base, &new_base)?;
-        }
     }
     Ok(())
+}
+
+/// Where in `to_attachments` an attachment called `old_base` already is,
+/// when its file is gone from where it was tracked: the first of its name
+/// and the free names after it (`name 2.ext`, ...) that `note_file` links
+/// and no other attachment tracks, else its own name when no other
+/// attachment tracks that.
+fn already_moved(
+    target_dir: &Path,
+    note_file: &str,
+    to_attachments: &str,
+    old_base: &str,
+    attachments: &IndexMap<String, AttachmentEntry>,
+) -> Result<Option<String>, Error> {
+    let text = read_text(&target_dir.join(note_file))?.unwrap_or_default();
+    let untracked = |file: &str| target_dir.join(file).exists() && !attachments.values().any(|a| a.file == file);
+    let mut names = HashSet::new();
+    loop {
+        let name = unique_file_name(old_base, &names);
+        let file = posix::join(&[to_attachments, &name]);
+        if !target_dir.join(&file).exists() {
+            break;
+        }
+        if untracked(&file) && has_attachment_link_to(&text, &format!("attachments/{name}")) {
+            return Ok(Some(file));
+        }
+        names.insert(name);
+    }
+    let own_name = posix::join(&[to_attachments, old_base]);
+    Ok(untracked(&own_name).then_some(own_name))
+}
+
+/// For [`move_to_free_name`]: the links to an attachment file in
+/// `note_file` and its base copy follow each name the file is about to get,
+/// so that a run cut short after the move finds the file by its link.
+fn links_follow<'a>(
+    target_dir: &'a Path,
+    note_file: &'a str,
+    record_name: &'a str,
+    old_base: &str,
+) -> impl FnMut(&str) -> Result<(), Error> + 'a {
+    let mut linked_as = old_base.to_owned();
+    move |name: &str| {
+        if name != linked_as {
+            rewrite_attachment_link(target_dir, note_file, record_name, &linked_as, name)?;
+            linked_as = name.to_owned();
+        }
+        Ok(())
+    }
 }
 
 /// `removeStaleDirs`: best-effort rmdir of directories the previous layout
@@ -427,7 +486,7 @@ mod tests {
         std::fs::write(dir.join("Beta/Pie.md"), "delivered since").unwrap();
 
         let mut used = HashSet::new();
-        let name = move_to_free_name(&dir, "Alpha/Pie.md", "Beta", "Pie.md", &mut used).unwrap();
+        let name = move_to_free_name(&dir, "Alpha/Pie.md", "Beta", "Pie.md", &mut used, &mut |_| Ok(())).unwrap();
         assert_eq!(name.as_deref(), Some("Pie 2.md"));
         assert_eq!(
             std::fs::read_to_string(dir.join("Beta/Pie.md")).unwrap(),
@@ -437,7 +496,7 @@ mod tests {
         assert!(used.contains("Pie.md") && used.contains("Pie 2.md"));
 
         assert_eq!(
-            move_to_free_name(&dir, "Alpha/Gone.md", "Beta", "Gone.md", &mut used).unwrap(),
+            move_to_free_name(&dir, "Alpha/Gone.md", "Beta", "Gone.md", &mut used, &mut |_| Ok(())).unwrap(),
             None
         );
         assert!(!used.contains("Gone.md"));
