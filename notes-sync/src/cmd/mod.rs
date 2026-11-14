@@ -236,6 +236,53 @@ pub(crate) fn left_file_of(
         .cloned()
 }
 
+/// The untracked note files of the whole vault by the id each carries
+/// (vault-relative paths), listed the first time a run needs them.
+pub(crate) type LeftAnywhere = Option<HashMap<String, Vec<String>>>;
+
+/// Removes what a run that never recorded the note `record_name` wrote for
+/// it outside `note_dir`, where its file now is: a note moved to another
+/// folder, or whose folder was renamed, on another device before this run.
+/// Left there, the file would carry the id of a note tracked elsewhere, a
+/// copy that the next push creates as a second note. Only a file that
+/// reads exactly as `file_text`, what this run wrote for the note, so
+/// nothing that was edited since (or differs at all) is lost.
+pub(crate) fn remove_left_elsewhere(
+    target_dir: &std::path::Path,
+    left: &mut LeftAnywhere,
+    notes: &IndexMap<String, crate::vault::state::NoteEntry>,
+    record_name: &str,
+    note_dir: &str,
+    file_text: &str,
+    title_mode: crate::vault::state::TitleMode,
+) -> Result<(), Error> {
+    if left.is_none() {
+        let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
+        for file in push::list_untracked_markdown_files(target_dir, notes)? {
+            if let Some(id) = crate::vault::pairing::note_id_at(target_dir, &file, title_mode)? {
+                by_id.entry(id).or_default().push(file);
+            }
+        }
+        *left = Some(by_id);
+    }
+    let Some(files) = left.as_mut().and_then(|by_id| by_id.get_mut(record_name)) else {
+        return Ok(());
+    };
+    let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
+    let mut kept = Vec::new();
+    for file in std::mem::take(files) {
+        let elsewhere = crate::vault::layout::note_dir_of(&file) != note_dir && !tracked.contains(file.as_str());
+        let path = target_dir.join(&file);
+        if elsewhere && std::fs::read_to_string(&path).is_ok_and(|text| text == file_text) {
+            crate::vault::attachments::safe_unlink(&path)?;
+        } else {
+            kept.push(file);
+        }
+    }
+    *files = kept;
+    Ok(())
+}
+
 /// state.json's `unshared`: the ids of notes someone stopped sharing whose
 /// file had edits made here. Pull keeps such a file (with its id) and lists
 /// it here; push leaves a file carrying one of these ids alone instead of

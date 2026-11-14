@@ -240,6 +240,12 @@ window closes, so a killed run is ordinary.
   would write it (what a pull killed before a save, or one that failed
   between writing the file and recording it, left) is taken for the note's
   file instead of `X 2.md` being written beside it.
+- A note that another device moved to another folder (or whose folder it
+  renamed) after a pull or clone cut short wrote its file is written in its
+  directory now, and the file left in the old one, when it reads exactly as
+  the one written, is removed (`cmd::remove_left_elsewhere`). Left there,
+  it would carry the id of a note tracked elsewhere: a copy, which push
+  creates as a note of its own.
 - `push` (the first half of the sync that follows such a pull in the
   Notes app) leaves such a file alone: an untracked file whose
   `apple-note-id` no note here is tracked under is looked up first, and
@@ -253,7 +259,7 @@ window closes, so a killed run is ordinary.
   note, except in a file a pull cut short wrote for a note deleted on
   another device since, untouched: that file is removed, as a remote
   deletion removes a clean file (up to 0.11.1 the deleted note came back
-  as a new one). A pull writes a new note's base copy before its file, and
+  as a new one). A pull (and a clone) writes a new note's base copy before its file, and
   untracking a note removes its base copy, so a base copy of a note
   nothing tracks that reads as the file's body says exactly that
   (`push::left_by_a_pull_unchanged`). A file edited since, or put back
@@ -384,7 +390,7 @@ folders moved), push (notes, attachments, folders), sync, shared zones
 (written in, read only, revoked), a filename-title vault retitled on both
 sides, and migrations from layouts 2 and 3; and runs cut short and then
 met by a change before the next one: a share revoked, a folder renamed
-again or a note edited on the phone, more typed here; and a clone with two
+again or a note edited, moved or deleted on the phone, more typed here; and a clone with two
 attachments of one name, notes of one title. The points are in `src/crash.rs`: one right after every durable
 write (state.json, note files, base copies, history snapshots and epochs,
 attachment downloads, renames, removals, an atomic write's temporary file,

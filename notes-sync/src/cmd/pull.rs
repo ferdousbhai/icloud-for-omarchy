@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, PENDING_DIRS_KEY, SyncNotice, SyncProgress,
+    Error, LeftAnywhere, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, PENDING_DIRS_KEY, SyncNotice, SyncProgress,
     UNSAFE_RECORD_NAME, UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of,
-    redo_downloads, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner,
-    unshared_note_ids, used_names_for, zone_for_owner,
+    redo_downloads, remove_left_elsewhere, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice,
+    skipped_zone_owner, unshared_note_ids, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -389,6 +389,7 @@ pub fn run_pull_with(
     // sync tokens stay where they were, so the next pull lists it again.
     let mut retry_zones: HashSet<Option<String>> = HashSet::new();
     let mut left_behind: HashMap<String, LeftBehind> = HashMap::new();
+    let mut left_anywhere: LeftAnywhere = None;
     let mut claimed_attachment_dirs: HashSet<String> = HashSet::new();
     let notes_at_start = tracked.notes.clone();
     let checkpoints = layout_moves_nothing(&state, &layout, &tracked.notes);
@@ -648,6 +649,15 @@ pub fn run_pull_with(
                         write_note_file(&file_path, &file_text)?;
                     }
                     apply_note_file_times(&file_path, record)?;
+                    remove_left_elsewhere(
+                        target_dir,
+                        &mut left_anywhere,
+                        &tracked.notes,
+                        &record.record_name,
+                        &note_dir,
+                        &file_text,
+                        title_mode,
+                    )?;
                     tracked.notes.insert(
                         record.record_name.clone(),
                         NoteEntry {

@@ -2195,3 +2195,65 @@ fn a_sync_whose_second_push_fails_keeps_what_the_first_one_did() {
     );
     assert!(!push["lines"].as_array().unwrap().is_empty());
 }
+
+/// Notes added on the phone, and while a pull writing them was cut short,
+/// one of them moved to another folder and the folder the others are in
+/// renamed: the files the pull had written for them are not left in their
+/// old directory, for the next push to create a second time.
+#[test]
+fn a_pull_cut_short_before_notes_it_wrote_were_moved_on_the_phone_is_finished_by_the_next_run() {
+    let mut start = cloned(3);
+    for i in 0..4 {
+        start.zone.put(note_record(
+            &format!("A0000000-0000-4000-8000-{i:012}"),
+            &format!("Added {i}\nwritten on the phone"),
+            WORK_FOLDER,
+        ));
+    }
+    fn move_them(zone: &mut Zone) {
+        let mut moved = zone.live("A0000000-0000-4000-8000-000000000000").unwrap().clone();
+        let reference =
+            json!({ "recordName": DEFAULT_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+        moved["fields"]["Folder"]["value"] = reference.clone();
+        moved["fields"]["Folders"]["value"] = json!([reference]);
+        zone.put(moved);
+        let mut folder = zone.live(WORK_FOLDER).unwrap().clone();
+        folder["fields"]["TitleEncrypted"]["value"] = json!(base64_encode(b"Office"));
+        zone.put(folder);
+    }
+    start.expect.kept = kept_notes(&start.zone);
+    start.expect.between = Some(move_them);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
+/// While a clone was cut short, a note it wrote moved to another folder and
+/// another one deleted on the phone: the next run leaves neither file it
+/// wrote for them behind, to be created as a note again.
+#[test]
+fn a_clone_cut_short_before_notes_it_wrote_were_moved_or_deleted_on_the_phone_is_finished_by_the_next_run() {
+    let zone = account(6);
+    fn change_them(zone: &mut Zone) {
+        let mut moved = zone.live("E0000000-0000-4000-8000-000000000000").unwrap().clone();
+        let reference =
+            json!({ "recordName": DEFAULT_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+        moved["fields"]["Folder"]["value"] = reference.clone();
+        moved["fields"]["Folders"]["value"] = json!([reference]);
+        zone.put(moved);
+        let at = zone.tick();
+        let stored = zone.records.get_mut("E0000000-0000-4000-8000-000000000001").unwrap();
+        stored.deleted = true;
+        stored.changed_at = at;
+    }
+    let mut after = zone.clone();
+    change_them(&mut after);
+    let start = Start {
+        zone,
+        place: Place::new(),
+        expect: Expect {
+            kept: kept_notes(&after),
+            between: Some(change_them),
+            ..Default::default()
+        },
+    };
+    crash_everywhere(&start, "clone", &[Then::Again, Then::Sync]);
+}
