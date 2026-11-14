@@ -102,6 +102,14 @@ pub enum Op {
         id: String,
         to: String,
     },
+    /// It was moved here into a new folder of its own old name, `to`: it is
+    /// renamed `name` in iCloud first, and recorded at `to` with its move
+    /// noted, which the next round finishes.
+    RemoteAside {
+        id: String,
+        to: String,
+        name: String,
+    },
     /// Rename the local file to a conflicted copy, freeing its name.
     SetAside {
         path: String,
@@ -180,6 +188,35 @@ fn join(dir: &str, name: &str) -> String {
     } else {
         format!("{dir}/{name}")
     }
+}
+
+/// Whether the folder in step at `path`, removed here, is as it was in
+/// iCloud: everything below it in step there and unchanged, and nothing
+/// there that was never synced (a hidden name, say), which removing the
+/// folder here cannot have meant.
+fn untouched_there(base: &[Row], remote: &Snapshot, path: &str, unknown: &[String]) -> bool {
+    let below: Vec<&Row> = base.iter().filter(|r| is_under(&r.path, path)).collect();
+    let known: HashSet<&str> = below.iter().map(|r| r.node.id.as_str()).collect();
+    !unknown.iter().any(|u| is_under(u, path))
+        && below.iter().all(|r| {
+            remote
+                .nodes
+                .get(&r.node.id)
+                .is_some_and(|n| remote.paths[&n.id] == r.path && (r.local.is_dir || !remote_changed(r, n)))
+        })
+        && remote
+            .by_path
+            .range(path.to_string()..)
+            .take_while(|(p, _)| p.starts_with(path))
+            .filter(|(p, _)| is_under(p, path))
+            .all(|(_, id)| known.contains(id.as_str()))
+}
+
+/// A name [`Op::RemoteAside`] gave an item called `base`.
+fn is_aside_of(name: &str, base: &str) -> bool {
+    name.strip_prefix(base)
+        .and_then(|rest| rest.strip_prefix(" (moving "))
+        .is_some_and(|rest| rest.ends_with(')'))
 }
 
 /// The folder a path is in; empty at the top.
@@ -263,6 +300,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
     // Local entries by inode that are not what is in step at their path:
     // where a tracked one may have gone (onto another's place, too).
     let ino_at: HashMap<&str, u64> = base.iter().map(|r| (r.path.as_str(), r.local.ino)).collect();
+    let inodes: HashSet<u64> = ino_at.values().copied().collect();
     let mut by_ino: HashMap<u64, Vec<&str>> = HashMap::new();
     for (path, entry) in local {
         if ino_at.get(path.as_str()) != Some(&entry.ino) {
@@ -330,6 +368,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
     let all_by_case = case_index(local.keys());
     let mut held: Vec<String> = Vec::new();
     let mut waiting = false;
+    let mut deletions = 0;
     // Moves made here that wait for a folder's move, and where each is now.
     let mut waited: Vec<(&Row, &str)> = Vec::new();
     for row in base {
@@ -359,10 +398,9 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
         // where it was in step. Not when something else in iCloud has that
         // name: then iCloud's place is followed after all.
         let ours = rpath != &row.path
-            && context
-                .pending_moves
-                .get(&row.node.id)
-                .is_some_and(|to| rpath == to || name_of(rpath) == name_of(&row.path));
+            && context.pending_moves.get(&row.node.id).is_some_and(|to| {
+                rpath == to || name_of(rpath) == name_of(&row.path) || is_aside_of(name_of(rpath), name_of(to))
+            });
         let finish = if !ours {
             None
         } else if here(row).is_some() {
@@ -431,6 +469,13 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                     break;
                 }
                 match local.get(dir) {
+                    // A folder in step that was moved here to that name:
+                    // not the new one, which waits for it to be sorted out.
+                    Some(e) if !tracked.contains(dir) && inodes.contains(&e.ino) => {
+                        missing.clear();
+                        later = true;
+                        break;
+                    }
                     Some(e) if e.is_dir && !tracked.contains(dir) => missing.push((
                         dir,
                         Op::Adopt {
@@ -444,7 +489,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                         break;
                     }
                     None => match by_case.get(&case_key(dir)) {
-                        Some(other) if local[*other].is_dir => {
+                        Some(other) if local[*other].is_dir && !inodes.contains(&local[*other].ino) => {
                             missing = vec![(
                                 dir,
                                 Op::Adopt {
@@ -530,15 +575,78 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 held.push(row.path.clone());
                 continue;
             }
-            let other_case = there_by_case
-                .get(&case_key(to))
-                .is_some_and(|p| *p != to && *p != rpath.as_str());
-            if remote.by_path.contains_key(to) || other_case {
-                // Something else took that name in iCloud (in any case): leave
-                // it to the content rules (this one reads as deleted here).
+            if to != row.path && is_under(to, &row.path) {
+                // Into a new folder of its own old name here: renamed in
+                // iCloud first to a name of its own (or kept under the one
+                // an earlier run gave it), so that its old name is free for
+                // the new folder; the next round finishes the move.
+                let base = name_of(&row.path);
+                let name = if is_aside_of(name_of(rpath), base) {
+                    name_of(rpath).to_string()
+                } else {
+                    (1..)
+                        .map(|n| format!("{base} (moving {n})"))
+                        .find(|n| !remote.by_path.contains_key(&join(parent_of(rpath), n)))
+                        .unwrap()
+                };
+                moving.push(&row.path);
+                ops.push(Op::RemoteAside {
+                    id: row.node.id.clone(),
+                    to: to.to_string(),
+                    name,
+                });
                 continue;
             }
-            if into(&dests_here, to) || into(&left_here, to) || into(&left_there, to) {
+            let there = remote.by_path.get(to).or_else(|| {
+                there_by_case
+                    .get(&case_key(to))
+                    .filter(|p| **p != to && **p != rpath.as_str())
+                    .and_then(|p| remote.by_path.get(*p))
+            });
+            if let Some(there) = there {
+                let holder = base.iter().find(|r| &r.node.id == there);
+                match holder {
+                    None => {
+                        // Something new in iCloud took that name (in any
+                        // case): this one is kept under a conflicted name,
+                        // which the next round gives it in iCloud too.
+                        moving.push(&row.path);
+                        ops.push(Op::SetAside { path: to.to_string() });
+                    }
+                    Some(holder)
+                        if case_key(&holder.path) == case_key(to)
+                            && local.get(to).is_some_and(|e| e.ino == row.local.ino)
+                            && moved_here(holder).is_none() =>
+                    {
+                        // Moved here over a file in step, which went: that
+                        // one goes to Recently Deleted, and the next round
+                        // gives this one its name in iCloud. Unless it was
+                        // edited there, which beats the removal: then this
+                        // one is kept under a conflicted name, and that one
+                        // comes back.
+                        moving.push(&row.path);
+                        let changed = if holder.local.is_dir {
+                            !untouched_there(base, remote, &holder.path, unknown)
+                        } else {
+                            remote_changed(holder, &remote.nodes[there])
+                        };
+                        if changed {
+                            ops.push(Op::SetAside { path: to.to_string() });
+                        } else {
+                            deletions += base.iter().filter(|r| is_under(&r.path, &holder.path)).count();
+                            ops.push(Op::TrashRemote {
+                                id: there.clone(),
+                                path: holder.path.clone(),
+                            });
+                        }
+                    }
+                    // Else something in step has it: left to the content
+                    // rules (this one reads as deleted here).
+                    Some(_) => {}
+                }
+                continue;
+            }
+            if into(&dests_here, to) || into(&dests_there, to) || into(&left_here, to) || into(&left_there, to) {
                 waited.push((row, to));
                 continue;
             }
@@ -605,6 +713,27 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             held.push(row.path.clone());
         }
     }
+    // A folder is its id in iCloud and its inode here: one at its path here
+    // that is a new folder, while it is elsewhere here, is never taken for
+    // it by the content rules (which would read its contents as removed
+    // here and send them again from where they are now).
+    for row in base.iter().filter(|r| r.local.is_dir) {
+        let new_in_its_place = local
+            .get(&row.path)
+            .is_some_and(|e| e.is_dir && e.ino != row.local.ino && !inodes.contains(&e.ino));
+        if new_in_its_place && moved_here(row).is_some() {
+            if remote.paths.contains_key(&row.node.id) {
+                held.push(row.path.clone());
+            } else {
+                // Gone from iCloud, and moved here: what it holds is kept,
+                // and both folders meet iCloud as new.
+                ops.push(Op::Forget {
+                    id: row.node.id.clone(),
+                    path: row.path.clone(),
+                });
+            }
+        }
+    }
     // Waiting on each other (two folders each moved into the other, one
     // here and one in iCloud): iCloud's move wins, as when one item was
     // moved on both sides, and the move here is undone.
@@ -632,6 +761,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
     let plan = Plan {
         again: !ops.is_empty(),
         ops,
+        deletions,
         ..Plan::default()
     };
     Moves { plan, held, waiting }
@@ -649,6 +779,7 @@ fn plan_content(
     let (ignored, now_ns) = (&context.ignored, context.now_ns);
     let mut plan = Plan::default();
     let tracked: HashMap<&str, &Row> = base.iter().map(|r| (r.path.as_str(), r)).collect();
+    let inodes: HashSet<u64> = base.iter().map(|r| r.local.ino).collect();
     // Subtrees to leave alone: the ones that could not be seen properly,
     // and then each one a single operation already takes care of.
     let unknown: Vec<String> = context.unknown.iter().chain(held).cloned().collect();
@@ -690,6 +821,10 @@ fn plan_content(
         }
         if row.local.is_dir {
             match (node, entry) {
+                // Made again here under its name (the move rules found it
+                // nowhere else): this one is it from now on, so that a
+                // later rename of it here is seen as one.
+                (Some(_), Some(e)) if e.ino != row.local.ino => plan.ops.push(Op::Adopt { id, path }),
                 (Some(_), Some(_)) => {}
                 (Some(_), None) => {
                     // The folder was removed here. If nothing below it changed
@@ -698,22 +833,10 @@ fn plan_content(
                     // also comes back while iCloud holds something below it
                     // that was never synced (a hidden name, say), which
                     // removing the folder here cannot have meant.
-                    let below: Vec<&Row> = base.iter().filter(|r| is_under(&r.path, &path)).collect();
-                    let known: HashSet<&str> = below.iter().map(|r| r.node.id.as_str()).collect();
-                    let untouched = !holds_unknown(&path)
-                        && below.iter().all(|r| {
-                            remote.nodes.get(&r.node.id).is_some_and(|n| {
-                                remote.paths[&n.id] == r.path && (r.local.is_dir || !remote_changed(r, n))
-                            })
-                        })
-                        && remote
-                            .by_path
-                            .range(path.clone()..)
-                            .take_while(|(p, _)| p.starts_with(&path))
-                            .filter(|(p, _)| is_under(p, &path))
-                            .all(|(_, id)| known.contains(id.as_str()));
+                    let below = base.iter().filter(|r| is_under(&r.path, &path)).count();
+                    let untouched = untouched_there(base, remote, &path, &unknown);
                     if untouched {
-                        plan.deletions += below.len();
+                        plan.deletions += below;
                         plan.ops.push(Op::TrashRemote { id, path: path.clone() });
                         done.push(path);
                     } else {
@@ -803,6 +926,9 @@ fn plan_content(
     };
     let known: HashSet<&str> = base.iter().map(|r| r.node.id.as_str()).collect();
     let mut claimed: HashSet<&str> = HashSet::new();
+    // Local paths this plan sets aside: what is below them goes up next
+    // round, under the name they are given.
+    let mut aside: Vec<String> = Vec::new();
     let all_by_case = case_index(local.keys());
     let by_case = case_index(
         local
@@ -847,7 +973,7 @@ fn plan_content(
             claimed.insert(other);
             let e = &local[other];
             let same = if e.is_dir {
-                node.kind == Kind::Folder
+                node.kind == Kind::Folder && !inodes.contains(&e.ino)
             } else {
                 same_file(e, node)
             };
@@ -862,13 +988,17 @@ fn plan_content(
             plan.ops.push(Op::SetAside {
                 path: other.to_string(),
             });
+            aside.push(other.to_string());
         }
         let (id, path) = (id.clone(), path.clone());
         if node.kind == Kind::Folder {
             match entry {
-                Some(e) if e.is_dir => plan.ops.push(Op::Adopt { id, path: path.clone() }),
+                // Not a folder in step moved here to that name, which is
+                // another folder: set aside, as anything else there.
+                Some(e) if e.is_dir && !inodes.contains(&e.ino) => plan.ops.push(Op::Adopt { id, path: path.clone() }),
                 Some(_) => {
                     plan.ops.push(Op::SetAside { path: path.clone() });
+                    aside.push(path.clone());
                     plan.ops.push(Op::MkdirLocal { id, path: path.clone() });
                 }
                 None => plan.ops.push(Op::MkdirLocal { id, path: path.clone() }),
@@ -896,10 +1026,17 @@ fn plan_content(
     for (path, entry) in local {
         if tracked.contains_key(path.as_str())
             || claimed.contains(path.as_str())
+            || under(&aside, path)
             || under(&done, path)
             || deferred.contains(path)
             || !parent_ready(&ready, path)
         {
+            continue;
+        }
+        if remote.by_path.contains_key(path) {
+            // iCloud has something in step elsewhere under this name (half
+            // way through a move here that it refused the rest of, say):
+            // sent once that has moved on.
             continue;
         }
         let taken = there_by_case

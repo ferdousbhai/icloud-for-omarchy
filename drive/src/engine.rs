@@ -126,6 +126,7 @@ fn describe(op: &Op) -> String {
     match op {
         Op::LocalMove { from, to, .. } => format!("move {from} to {to} (as in iCloud)"),
         Op::RemoteMove { to, .. } => format!("move to {to} in iCloud"),
+        Op::RemoteAside { to, name, .. } => format!("rename to {name} in iCloud, on the way to {to}"),
         Op::SetAside { path } => format!("keep {path} as a conflicted copy"),
         Op::KeepBoth { path, .. } => format!("download {path}, keeping this one as a conflicted copy if it differs"),
         Op::MkdirLocal { path, .. } => format!("create folder {path}"),
@@ -277,6 +278,11 @@ impl<R: Remote> Engine<'_, R> {
             } else {
                 Default::default()
             };
+            let base = if self.recover_placed(&entries)? | self.recover_sending(&base, &snapshot, &entries)? {
+                self.state.rows()?
+            } else {
+                base
+            };
             unseen = skipped
                 .iter()
                 .map(|s| (s.path.clone(), s.reason.to_string()))
@@ -416,7 +422,7 @@ impl<R: Remote> Engine<'_, R> {
                 (Err(e), _) => return Err(e),
             };
             match op {
-                Op::RemoteMove { id, to } => {
+                Op::RemoteMove { id, to } | Op::RemoteAside { id, to, .. } => {
                     let from = self.state.row(id)?.map(|row| row.path);
                     applied.stuck.push(Stuck {
                         paths: from.into_iter().chain([to.clone()]).collect(),
@@ -604,6 +610,22 @@ impl<R: Remote> Engine<'_, R> {
                 self.put_moved(node, to, &row)?;
                 self.state.clear_pending_move(id)?;
             }
+            Op::RemoteAside { id, to, name } => {
+                let Some(row) = self.state.row(id)? else {
+                    return Ok(false);
+                };
+                self.need_stat(to)?;
+                let mut node = snapshot.nodes.get(id).cloned().unwrap_or_else(|| row.node.clone());
+                self.state.set_pending_move(id, to)?;
+                if &node.name != name {
+                    let untouched = node.parent == row.node.parent && node.name == row.node.name;
+                    node = self.unless_refused(self.remote.rename(&node, name), id, untouched)?;
+                    crash::point("remote.rename");
+                }
+                // Where it is here, with the move to finish noted.
+                self.state.move_paths(&row.path, to)?;
+                self.put_moved(node, to, &row)?;
+            }
             Op::SetAside { path } => {
                 if !self.abs(path).exists() {
                     return Ok(false);
@@ -616,16 +638,25 @@ impl<R: Remote> Engine<'_, R> {
                     return Ok(false);
                 }
                 fs::create_dir_all(self.abs(path))?;
-                crash::point("local.mkdir");
                 let local = self.need_stat(path)?;
-                self.put(node, path, local)?;
+                let row = Row {
+                    node,
+                    path: path.to_string(),
+                    local,
+                };
+                self.state.set_placed(&row)?;
+                crash::point("local.mkdir");
+                self.state.put(&row)?;
+                self.state.clear_placed(&row.node.id)?;
             }
             Op::MkdirRemote { path } => {
                 let local = self.need_stat(path)?;
                 let parent = self.parent_node(path)?;
+                self.state.set_sending(path, "", &local)?;
                 let node = self.remote.create_folder(&parent.id, name_of(path))?;
                 crash::point("remote.create_folder");
                 self.put(node, path, local)?;
+                self.state.clear_sending(path)?;
             }
             Op::Download { id, path } => {
                 let node = node_of(id)?;
@@ -650,9 +681,7 @@ impl<R: Remote> Engine<'_, R> {
                     let _ = fs::remove_file(&temp);
                     return Ok(false);
                 }
-                self.put_in_place(&temp, path)?;
-                let local = self.need_stat(path)?;
-                self.put(node, path, local)?;
+                self.place(&temp, path, node)?;
             }
             Op::KeepBoth { id, path } => {
                 let node = node_of(id)?;
@@ -679,13 +708,12 @@ impl<R: Remote> Engine<'_, R> {
                     let _ = fs::remove_file(&temp);
                     return Err(e.into());
                 }
-                self.put_in_place(&temp, path)?;
-                let local = self.need_stat(path)?;
-                self.put(node, path, local)?;
+                self.place(&temp, path, node)?;
             }
             Op::Upload { path } => {
                 let before = self.need_stat(path)?;
                 let parent = self.parent_node(path)?;
+                self.state.set_sending(path, "", &before)?;
                 let sent = self.remote.upload_new(
                     &parent,
                     name_of(path),
@@ -697,12 +725,14 @@ impl<R: Remote> Engine<'_, R> {
                 // Recorded as it was before the upload: a change made while
                 // it was going up shows as a change next time.
                 self.put(node, path, before)?;
+                self.state.clear_sending(path)?;
             }
             Op::Replace { id, path } => {
                 let Some(row) = self.state.row(id)? else {
                     return Ok(false);
                 };
                 let before = self.need_stat(path)?;
+                self.state.set_sending(path, id, &before)?;
                 let sent = self
                     .remote
                     .replace(&row.node, &self.abs(path), before.mtime_ns / 1_000_000_000 * 1000)?;
@@ -716,6 +746,7 @@ impl<R: Remote> Engine<'_, R> {
                     ..row.node.clone()
                 };
                 self.put(answered, path, before)?;
+                self.state.clear_sending(path)?;
                 let node = self.listed(&row.node.parent, &sent.id)?;
                 self.put(node, path, before)?;
             }
@@ -754,7 +785,7 @@ impl<R: Remote> Engine<'_, R> {
                 let Some(row) = self.state.row(id)? else {
                     return Ok(false);
                 };
-                if self.stat(path)?.is_some() {
+                if self.stat(path)?.is_some_and(|e| e.ino == row.local.ino) {
                     // It is back.
                     return Ok(false);
                 }
@@ -802,14 +833,117 @@ impl<R: Remote> Engine<'_, R> {
         }
     }
 
-    /// Gives a fetched temp file its name.
-    fn put_in_place(&self, temp: &Path, path: &str) -> Result<()> {
+    /// Gives a fetched temp file its name and records it, noted first as
+    /// placed (a rename keeps its inode, size and date).
+    fn place(&self, temp: &Path, path: &str, node: Node) -> Result<()> {
+        let row = Row {
+            node,
+            path: path.to_string(),
+            local: local::stat(temp)?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the download is gone"))?,
+        };
+        self.state.set_placed(&row)?;
         if let Err(e) = fs::rename(temp, self.abs(path)) {
             let _ = fs::remove_file(temp);
+            self.state.clear_placed(&row.node.id)?;
             return Err(e.into());
         }
         crash::point("local.download_rename");
+        self.state.put(&row)?;
+        self.state.clear_placed(&row.node.id)?;
         Ok(())
+    }
+
+    /// What a run that stopped sent to iCloud as new but did not record:
+    /// the one new item in iCloud of its name (and, for a file, its size and
+    /// date) is it, recorded where it was sent from if the item here is
+    /// found, as it was, anywhere here; moved since on either side, the next
+    /// plan follows the moves. Anything less certain is dropped, and the two
+    /// sides meet again as strangers.
+    fn recover_sending(
+        &self,
+        base: &[Row],
+        snapshot: &Snapshot,
+        entries: &std::collections::BTreeMap<String, Entry>,
+    ) -> Result<bool> {
+        let sending = self.state.sending()?;
+        let known: std::collections::HashSet<&str> = base.iter().map(|r| r.node.id.as_str()).collect();
+        let found = |sent: &Entry| {
+            entries
+                .iter()
+                .find(|(_, e)| {
+                    e.ino == sent.ino
+                        && e.is_dir == sent.is_dir
+                        && (e.is_dir || (e.size, e.mtime_ns) == (sent.size, sent.mtime_ns))
+                })
+                .map(|(p, _)| p.clone())
+        };
+        for (path, id, sent) in &sending {
+            if !id.is_empty() {
+                // New content of an item in step, and the file moved here
+                // since: recorded as sent if iCloud has those very bytes
+                // (else the next plan keeps both, as for any edit).
+                let row = base.iter().find(|r| &r.node.id == id);
+                if let (Some(row), Some(now), Some(node)) = (row, found(sent), snapshot.nodes.get(id))
+                    && row.local != *sent
+                    && now != row.path
+                    && let Some(temp) = self.fetch(node, &now)?
+                {
+                    let same = same_bytes(&temp, &self.abs(&now));
+                    let _ = fs::remove_file(&temp);
+                    if same? {
+                        self.state.put(&Row {
+                            node: node.clone(),
+                            path: row.path.clone(),
+                            local: *sent,
+                        })?;
+                    }
+                }
+                self.state.clear_sending(path)?;
+                continue;
+            }
+            let recorded = base
+                .iter()
+                .any(|r| r.local.ino == sent.ino && r.local.is_dir == sent.is_dir);
+            let here = found(sent).is_some();
+            let candidates: Vec<&Node> = snapshot
+                .nodes
+                .values()
+                .filter(|n| !known.contains(n.id.as_str()) && (n.kind == Kind::Folder) == sent.is_dir)
+                .filter(|n| n.name == name_of(path))
+                .filter(|n| {
+                    sent.is_dir || (n.size == sent.size && (n.mtime_ms - sent.mtime_ns / 1_000_000).abs() <= 2_000)
+                })
+                .collect();
+            if let ([node], false, true) = (candidates.as_slice(), recorded, here) {
+                self.state.put(&Row {
+                    node: (*node).clone(),
+                    path: path.clone(),
+                    local: *sent,
+                })?;
+            }
+            self.state.clear_sending(path)?;
+        }
+        Ok(!sending.is_empty())
+    }
+
+    /// What a run that stopped put in place here but did not record: each
+    /// is recorded where it was put if it is found, as it was, anywhere
+    /// here (moved since, the next plan moves it in iCloud too); one not
+    /// found is dropped, and the two sides meet again as strangers.
+    fn recover_placed(&self, entries: &std::collections::BTreeMap<String, Entry>) -> Result<bool> {
+        let placed = self.state.placed()?;
+        for row in &placed {
+            let found = entries.values().any(|e| {
+                e.ino == row.local.ino
+                    && e.is_dir == row.local.is_dir
+                    && (e.is_dir || (e.size == row.local.size && e.mtime_ns == row.local.mtime_ns))
+            });
+            if found {
+                self.state.put(row)?;
+            }
+            self.state.clear_placed(&row.node.id)?;
+        }
+        Ok(!placed.is_empty())
     }
 
     fn trash(&self, path: &str) -> Result<()> {

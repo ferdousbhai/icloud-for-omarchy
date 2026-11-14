@@ -7,13 +7,11 @@
 //! After every sync that ran to the end, with nothing refused:
 //! - both sides hold the same paths with the same texts, no text twice;
 //! - every text that was never removed or replaced by an edit is there;
-//! - neither trash holds a text that was not removed or replaced, unless
-//!   it is also kept;
+//! - neither trash holds a text that was not removed or replaced;
 //! - another sync has nothing to do.
 //!
 //! After one that was refused something or stopped, the last two hold, and
-//! every such text is still on one side or the other; a stopped one is run
-//! again at once, which must end as one that ran to the end.
+//! every such text is still on one side or the other.
 //!
 //! Seeded and bounded; a failure prints its seed and the steps.
 //! `ICLOUD_DRIVE_MODEL_CASES=n` runs more cases, `ICLOUD_DRIVE_MODEL_SEED=s`
@@ -375,12 +373,7 @@ impl Model {
             ("the trash here", self.bed.trashed_here()),
             ("Recently Deleted", self.bed.cloud.trashed_texts()),
         ] {
-            // Unless it is kept as well (a file iCloud gave another's name
-            // to, kept as a conflicted copy).
-            if let Some(text) = trashed
-                .iter()
-                .find(|t| !self.removed.contains(*t) && !present.contains(*t))
-            {
+            if let Some(text) = trashed.iter().find(|t| !self.removed.contains(*t)) {
                 return Err(format!("{text} is in {side}, and was never removed"));
             }
         }
@@ -475,22 +468,7 @@ impl Model {
         if !unsettled {
             return self.check_settled();
         }
-        let stopped = kind == 2 || kind == 3;
-        self.check_always(stopped)?;
-        if stopped {
-            // Synced again before anything else changes, as the service
-            // does: a file a stopped sync put in place but did not record,
-            // moved here before the next sync, would be sent up again as
-            // new (a known window, and a copy, not a loss).
-            self.log.push("sync again".into());
-            let outcome = self.bed.try_sync(true);
-            self.log_started();
-            let outcome = outcome.map_err(|e| format!("the sync failed: {e}"))?;
-            if !outcome.problems.is_empty() {
-                return Err(format!("problems: {:?}", outcome.problems));
-            }
-            return self.check_settled();
-        }
+        self.check_always(kind == 2 || kind == 3)?;
         Ok(())
     }
 }
@@ -573,4 +551,43 @@ fn random_changes_on_both_sides_always_sync_to_the_same_files_2() {
 #[test]
 fn random_changes_on_both_sides_always_sync_to_the_same_files_3() {
     run_part(3);
+}
+
+/// Seeds that found a folder taken for another of its path: one renamed
+/// here to the name of a folder new in iCloud, or moved here into a new
+/// folder of its own old name.
+fn regression(seed: u64) {
+    if let Err((why, log)) = run_case(seed) {
+        panic!("seed {seed}: {why}\n  {}", log.join("\n  "));
+    }
+}
+
+#[test]
+fn seed_5216_a_folder_moved_here_into_a_new_folder_of_its_old_name() {
+    regression(5216);
+}
+
+#[test]
+fn seed_5507_a_folder_renamed_here_to_the_name_of_one_new_in_icloud() {
+    regression(5507);
+}
+
+#[test]
+fn seed_6428_a_folder_renamed_here_to_the_name_of_one_new_in_icloud() {
+    regression(6428);
+}
+
+#[test]
+fn seed_9476_a_folder_renamed_here_to_the_name_of_one_new_in_icloud() {
+    regression(9476);
+}
+
+#[test]
+fn seed_11883_a_folder_moved_here_into_one_renamed_to_its_old_name() {
+    regression(11883);
+}
+
+#[test]
+fn seed_20614_a_folder_moved_here_into_a_new_folder_of_its_old_name() {
+    regression(20614);
 }

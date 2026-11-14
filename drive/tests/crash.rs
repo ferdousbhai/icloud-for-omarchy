@@ -344,3 +344,74 @@ fn a_download_stopped_beside_a_name_of_another_case_leaves_no_pair_of_names() {
     assert_eq!(bed.cloud.text("b.txt").as_deref(), Some("theirs"));
     assert_eq!(bed.local_paths().len(), 2, "{:?}", bed.local_paths());
 }
+
+#[test]
+fn a_download_stopped_before_it_was_recorded_and_then_moved_here_is_not_sent_again() {
+    for point in ["local.download_rename", "local.mkdir"] {
+        let bed = Bed::new();
+        let docs = bed.cloud.folder(ROOT_ID, "Docs");
+        let a = bed.cloud.file(&docs.id, "a.txt", "from icloud", bed.time());
+        stop_at_first(&bed, point);
+        // Moved here before the next sync.
+        fs::create_dir_all(bed.root().join("Docs")).unwrap();
+        let moved = if point == "local.mkdir" { "Papers" } else { "Docs/b.txt" };
+        let from = if point == "local.mkdir" { "Docs" } else { "Docs/a.txt" };
+        if bed.root().join(from).exists() {
+            fs::rename(bed.root().join(from), bed.root().join(moved)).unwrap();
+        }
+        let uploads = bed.cloud.0.borrow().uploads;
+        settle(&bed, point);
+        assert_eq!(bed.cloud.0.borrow().uploads, uploads, "{point}: nothing sent again");
+        assert!(bed.cloud.0.borrow().trashed.is_empty(), "{point}");
+        assert_eq!(bed.local_paths(), bed.cloud.paths(), "{point}");
+        let texts: Vec<_> = bed.cloud.tree().into_values().flatten().collect();
+        assert_eq!(texts, ["from icloud"], "{point}: once");
+        let _ = a;
+    }
+}
+
+#[test]
+fn an_upload_stopped_before_it_was_recorded_and_then_moved_here_is_not_sent_again() {
+    for point in ["remote.upload_new", "remote.create_folder"] {
+        let bed = Bed::new();
+        bed.cloud.folder(ROOT_ID, "Docs");
+        bed.settle();
+        bed.write("New/a.txt", "from here");
+        if point == "remote.upload_new" {
+            bed.sync();
+            bed.write("Docs/b.txt", "from here too");
+        }
+        stop_at_first(&bed, point);
+        if point == "remote.upload_new" {
+            fs::rename(bed.root().join("Docs/b.txt"), bed.root().join("b.txt")).unwrap();
+        } else {
+            fs::rename(bed.root().join("New"), bed.root().join("Newer")).unwrap();
+        }
+        settle(&bed, point);
+        assert!(bed.cloud.0.borrow().trashed.is_empty(), "{point}");
+        assert_eq!(bed.local_paths(), bed.cloud.paths(), "{point}");
+        let mut texts: Vec<_> = bed.cloud.tree().into_values().flatten().collect();
+        texts.sort();
+        let want: &[&str] = if point == "remote.upload_new" {
+            &["from here", "from here too"]
+        } else {
+            &["from here"]
+        };
+        assert_eq!(texts, want, "{point}: once each");
+    }
+}
+
+#[test]
+fn a_replace_stopped_before_it_was_recorded_and_then_moved_here_is_kept_once() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    bed.write("a.txt", "two from here");
+    stop_at_first(&bed, "remote.replace");
+    fs::rename(bed.root().join("a.txt"), bed.root().join("b.txt")).unwrap();
+    settle(&bed, "after the stop");
+    assert_eq!(bed.cloud.paths(), ["b.txt"]);
+    assert_eq!(bed.cloud.id_at("b.txt").as_deref(), Some(a.id.as_str()));
+    assert_eq!(bed.cloud.text("b.txt").as_deref(), Some("two from here"));
+    assert!(bed.cloud.0.borrow().trashed.is_empty());
+}

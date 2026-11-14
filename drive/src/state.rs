@@ -55,6 +55,16 @@ CREATE TABLE IF NOT EXISTS remote_cache (
 CREATE TABLE IF NOT EXISTS ignored (id TEXT PRIMARY KEY, etag TEXT NOT NULL, path TEXT NOT NULL, reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS not_synced (path TEXT NOT NULL, reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pending_moves (id TEXT PRIMARY KEY, dest TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sending (
+  path TEXT PRIMARY KEY, id TEXT NOT NULL, is_dir INTEGER NOT NULL, l_size INTEGER NOT NULL, l_mtime_ns INTEGER NOT NULL,
+  l_ino INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS placed (
+  id TEXT PRIMARY KEY, docwsid TEXT NOT NULL, zone TEXT NOT NULL, parent TEXT NOT NULL,
+  name TEXT NOT NULL, is_dir INTEGER NOT NULL, etag TEXT NOT NULL, size INTEGER NOT NULL,
+  mtime_ms INTEGER NOT NULL, path TEXT NOT NULL,
+  l_size INTEGER NOT NULL, l_mtime_ns INTEGER NOT NULL, l_ino INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
@@ -111,8 +121,12 @@ impl State {
     }
 
     fn select(&self, filter: &str, params: impl rusqlite::Params) -> rusqlite::Result<Vec<Row>> {
+        self.select_from("items", filter, params)
+    }
+
+    fn select_from(&self, table: &str, filter: &str, params: impl rusqlite::Params) -> rusqlite::Result<Vec<Row>> {
         let mut stmt = self.db.prepare(&format!(
-            "SELECT id, docwsid, zone, parent, name, is_dir, etag, size, mtime_ms, path, l_size, l_mtime_ns, l_ino FROM items {filter}"
+            "SELECT id, docwsid, zone, parent, name, is_dir, etag, size, mtime_ms, path, l_size, l_mtime_ns, l_ino FROM {table} {filter}"
         ))?;
         stmt.query_map(params, |r| {
             let is_dir = r.get::<_, i64>(5)? != 0;
@@ -143,10 +157,81 @@ impl State {
     /// Records an item as in step. A row that held the path for another id
     /// (the file was replaced by a new one in iCloud) gives way.
     pub fn put(&self, row: &Row) -> rusqlite::Result<()> {
-        // One statement: REPLACE drops whichever row holds the id or, by
-        // the path's UNIQUE, the path.
+        self.insert("items", row)?;
+        crate::crash::point("state.put");
+        Ok(())
+    }
+
+    /// Notes what a file or folder about to be put in place here will be
+    /// recorded as, so that if the run stops before that, the next finds it
+    /// (by its inode) wherever it has been moved since, and records it.
+    pub fn set_placed(&self, row: &Row) -> rusqlite::Result<()> {
+        self.insert("placed", row)?;
+        crate::crash::point("state.set_placed");
+        Ok(())
+    }
+
+    /// Notes that what is at `path` here is being sent to iCloud, as new or
+    /// (with `id`) as that item's content: if the run stops before
+    /// recording it, the next finds what iCloud made of it rather than
+    /// sending it again or keeping it twice.
+    pub fn set_sending(&self, path: &str, id: &str, local: &Entry) -> rusqlite::Result<()> {
         self.db.execute(
-            "INSERT OR REPLACE INTO items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO sending VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                path,
+                id,
+                local.is_dir as i64,
+                local.size as i64,
+                local.mtime_ns,
+                local.ino as i64
+            ],
+        )?;
+        crate::crash::point("state.set_sending");
+        Ok(())
+    }
+
+    /// `(path, id or empty, what was sent)`.
+    pub fn sending(&self) -> rusqlite::Result<Vec<(String, String, Entry)>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT path, id, is_dir, l_size, l_mtime_ns, l_ino FROM sending")?;
+        stmt.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                Entry {
+                    is_dir: r.get::<_, i64>(2)? != 0,
+                    size: r.get::<_, i64>(3)? as u64,
+                    mtime_ns: r.get(4)?,
+                    ino: r.get::<_, i64>(5)? as u64,
+                },
+            ))
+        })?
+        .collect()
+    }
+
+    pub fn clear_sending(&self, path: &str) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM sending WHERE path = ?1", [path])?;
+        crate::crash::point("state.clear_sending");
+        Ok(())
+    }
+
+    pub fn placed(&self) -> rusqlite::Result<Vec<Row>> {
+        self.select_from("placed", "", [])
+    }
+
+    pub fn clear_placed(&self, id: &str) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM placed WHERE id = ?1", [id])?;
+        crate::crash::point("state.clear_placed");
+        Ok(())
+    }
+
+    /// One statement: REPLACE drops whichever row holds the id or, by the
+    /// path's UNIQUE, the path.
+    fn insert(&self, table: &str, row: &Row) -> rusqlite::Result<()> {
+        self.db.execute(
+            &format!("INSERT OR REPLACE INTO {table} VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"),
             params![
                 row.node.id,
                 row.node.docwsid,
@@ -163,7 +248,6 @@ impl State {
                 row.local.ino as i64,
             ],
         )?;
-        crate::crash::point("state.put");
         Ok(())
     }
 
@@ -184,18 +268,24 @@ impl State {
     /// After a move: the rows at and below `from` now live at and below `to`.
     pub fn move_paths(&self, from: &str, to: &str) -> rusqlite::Result<()> {
         let tx = self.db.unchecked_transaction()?;
-        // Anything a stale row still claims at the destination gives way.
-        let under_from = UNDER_1.replace("?1", "?2");
-        tx.execute(
-            &format!("DELETE FROM items WHERE {UNDER_1} AND NOT {under_from}"),
-            [to, from],
-        )?;
-        // Parents first, so no row takes a path another still holds.
-        for row in self.rows()? {
-            if is_under(&row.path, from) {
-                let moved = format!("{to}{}", &row.path[from.len()..]);
-                tx.execute("UPDATE items SET path = ?1 WHERE id = ?2", params![moved, row.node.id])?;
+        let rows = self.rows()?;
+        let moved: Vec<(&Row, String)> = rows
+            .iter()
+            .filter(|r| is_under(&r.path, from))
+            .map(|r| (r, format!("{to}{}", &r.path[from.len()..])))
+            .collect();
+        // A stale row still claiming the destination gives way, with what
+        // is below it, and so does any other on a path the move takes;
+        // others below the destination (moved there already) stay.
+        let holder = rows.iter().any(|r| r.path == to && !is_under(&r.path, from));
+        for row in rows.iter().filter(|r| !is_under(&r.path, from)) {
+            if (holder && is_under(&row.path, to)) || moved.iter().any(|(_, p)| *p == row.path) {
+                tx.execute("DELETE FROM items WHERE id = ?1", [&row.node.id])?;
             }
+        }
+        // Parents first, so no row takes a path another still holds.
+        for (row, path) in &moved {
+            tx.execute("UPDATE items SET path = ?1 WHERE id = ?2", params![path, row.node.id])?;
         }
         tx.commit()?;
         crate::crash::point("state.move_paths");
@@ -458,6 +548,18 @@ mod tests {
         state.clear_pending_move("1").unwrap();
         state.forget("2").unwrap();
         assert!(state.pending_moves().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_move_onto_a_path_keeps_what_was_moved_below_it_already() {
+        let state = State::in_memory();
+        for (id, path, dir) in [("1", "r/r", true), ("2", "r/r/a.txt", false), ("3", "s", true)] {
+            state.put(&row(id, path, dir)).unwrap();
+        }
+        state.move_paths("s", "r").unwrap();
+        let rows: Vec<_> = state.rows().unwrap().into_iter().map(|r| (r.node.id, r.path)).collect();
+        let want = [("3", "r"), ("1", "r/r"), ("2", "r/r/a.txt")].map(|(id, path)| (id.to_string(), path.to_string()));
+        assert_eq!(rows, want);
     }
 
     #[test]
