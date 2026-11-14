@@ -561,101 +561,90 @@ pub fn plan_embed_representations(
 
     for (slot_index, slot) in slots.iter().enumerate() {
         let marker_content = match slot {
-            EmbedSlot::Unknown { type_uti } => Some(EmbedMarkerContent {
+            EmbedSlot::Unknown { type_uti } => EmbedMarkerContent {
                 type_uti: type_uti.clone(),
                 attachment_identifier: None,
-            }),
+            },
             EmbedSlot::Attachment(reference) if marker_ids.contains(reference.attachment_identifier.as_str()) => {
-                Some(EmbedMarkerContent {
+                EmbedMarkerContent {
                     type_uti: Some(reference.type_uti.clone()),
                     attachment_identifier: Some(reference.attachment_identifier.clone()),
-                })
+                }
             }
-            EmbedSlot::Attachment(_) => None,
-        };
-
-        let Some(marker_content) = marker_content else {
-            let EmbedSlot::Attachment(reference) = slot else {
-                continue;
-            };
-            if is_table_uti(&reference.type_uti) {
-                let Some(block) = table_blocks.get(table_cursor) else {
-                    return Err(format!(
-                        "can't tell which table(s) changed (found {} table-shaped block(s) locally, expected more)",
-                        table_blocks.len()
-                    ));
-                };
-                table_cursor += 1;
-                let start = line_start_offsets.get(block.start_line).copied().unwrap_or(units.len());
-                let end = if block.end_line < line_start_offsets.len() {
-                    line_start_offsets
+            EmbedSlot::Attachment(reference) => {
+                if is_table_uti(&reference.type_uti) {
+                    let Some(block) = table_blocks.get(table_cursor) else {
+                        return Err(format!(
+                            "can't tell which table(s) changed (found {} table-shaped block(s) locally, expected more)",
+                            table_blocks.len()
+                        ));
+                    };
+                    table_cursor += 1;
+                    let start = line_start_offsets.get(block.start_line).copied().unwrap_or(units.len());
+                    let end = line_start_offsets
                         .get(block.end_line)
-                        .copied()
-                        .unwrap_or(units.len() + 1)
-                        - 1
-                } else {
-                    units.len()
-                };
-                representations.push(LocalRepresentation {
-                    start,
-                    end,
-                    table: Some(MatchedTableBlock {
-                        reference: reference.clone(),
-                        block: block.clone(),
-                    }),
-                });
-                continue;
-            }
-            if let Some(link_path) = tracked_file_attachments.get(&reference.attachment_identifier) {
-                let from = representations.last().map_or(0, |r| r.end);
-                let find = |link: Vec<u16>| {
-                    (from..=units.len().saturating_sub(link.len()))
-                        .find(|&i| units.len() >= link.len() && units[i..i + link.len()] == link[..])
-                        .map(|start| (start, link.len()))
-                };
-                let written = format_attachment_markdown(reference, link_path);
-                let unescaped = unescaped_attachment_markdown(reference, link_path);
-                // A GIF or WebP pulled before those counted as images is
-                // still linked as a file, without the `!`.
-                let as_file = |link: &str| link.strip_prefix('!').and_then(|link| find(utf16(link)));
-                // A name whose parentheses don't pair up was linked with
-                // them as they are, before they were percent-encoded.
-                let bare_parentheses = |link: &str| {
-                    (link.contains("%28") || link.contains("%29"))
-                        .then(|| link.replace("%28", "(").replace("%29", ")"))
-                        .and_then(|link| find(utf16(&link)))
-                };
-                let Some((start, length)) = find(utf16(&written))
-                    .or_else(|| find(utf16(&unescaped)))
-                    .or_else(|| as_file(&written))
-                    .or_else(|| as_file(&unescaped))
-                    .or_else(|| bare_parentheses(&written))
-                    .or_else(|| bare_parentheses(&unescaped))
-                else {
-                    if !links_to(&units, link_path) {
-                        // No link to the file is left: the attachment is
-                        // taken out of the note.
-                        removed_slots.push(slot_index);
-                        continue;
-                    }
-                    return Err(format!(
-                        "the link to the attachment \"{}\" was changed or moved - attachments can only be moved in \
+                        .map_or(units.len(), |next_line| next_line - 1);
+                    representations.push(LocalRepresentation {
+                        start,
+                        end,
+                        table: Some(MatchedTableBlock {
+                            reference: reference.clone(),
+                            block: block.clone(),
+                        }),
+                    });
+                    continue;
+                }
+                if let Some(link_path) = tracked_file_attachments.get(&reference.attachment_identifier) {
+                    let from = representations.last().map_or(0, |r| r.end);
+                    let find = |link: Vec<u16>| {
+                        (from..=units.len().saturating_sub(link.len()))
+                            .find(|&i| units.len() >= link.len() && units[i..i + link.len()] == link[..])
+                            .map(|start| (start, link.len()))
+                    };
+                    let written = format_attachment_markdown(reference, link_path);
+                    let unescaped = unescaped_attachment_markdown(reference, link_path);
+                    // A GIF or WebP pulled before those counted as images is
+                    // still linked as a file, without the `!`.
+                    let as_file = |link: &str| link.strip_prefix('!').and_then(|link| find(utf16(link)));
+                    // A name whose parentheses don't pair up was linked with
+                    // them as they are, before they were percent-encoded.
+                    let bare_parentheses = |link: &str| {
+                        (link.contains("%28") || link.contains("%29"))
+                            .then(|| link.replace("%28", "(").replace("%29", ")"))
+                            .and_then(|link| find(utf16(&link)))
+                    };
+                    let Some((start, length)) = find(utf16(&written))
+                        .or_else(|| find(utf16(&unescaped)))
+                        .or_else(|| as_file(&written))
+                        .or_else(|| as_file(&unescaped))
+                        .or_else(|| bare_parentheses(&written))
+                        .or_else(|| bare_parentheses(&unescaped))
+                    else {
+                        if !links_to(&units, link_path) {
+                            // No link to the file is left: the attachment is
+                            // taken out of the note.
+                            removed_slots.push(slot_index);
+                            continue;
+                        }
+                        return Err(format!(
+                            "the link to the attachment \"{}\" was changed or moved - attachments can only be moved in \
                          Notes itself; put the link back as it was, or remove it entirely to remove the attachment \
                          from the note",
-                        posix::basename(link_path)
-                    ));
-                };
-                representations.push(LocalRepresentation {
-                    start,
-                    end: start + length,
-                    table: None,
-                });
-                continue;
+                            posix::basename(link_path)
+                        ));
+                    };
+                    representations.push(LocalRepresentation {
+                        start,
+                        end: start + length,
+                        table: None,
+                    });
+                    continue;
+                }
+                return Err(format!(
+                    "the embed marker for \"{}\" ({}) is missing - markers must be left exactly as this tool wrote them",
+                    reference.type_uti, reference.attachment_identifier
+                ));
             }
-            return Err(format!(
-                "the embed marker for \"{}\" ({}) is missing - markers must be left exactly as this tool wrote them",
-                reference.type_uti, reference.attachment_identifier
-            ));
         };
 
         let expected = format_embed_marker(&marker_content);
