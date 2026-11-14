@@ -21,12 +21,16 @@ pub fn render_markdown_table(grid: &[Vec<String>]) -> Result<String, String> {
         return Err("Table has no rows - refusing to guess at its structure".into());
     }
     let conservative = stringify_grid(grid, CONSERVATIVE_SPELLING);
-    for spelling in spelling_candidates(grid.iter().flatten().map(String::as_str)) {
-        let candidate = stringify_grid(grid, spelling);
-        if let (Ok(a), Ok(b)) = (parse_markdown_table(&candidate), parse_markdown_table(&conservative))
-            && a == b
-        {
-            return Ok(candidate);
+    let candidates = spelling_candidates(grid.iter().flatten().map(String::as_str));
+    if candidates.is_empty() {
+        return Ok(conservative);
+    }
+    if let Ok(wanted) = parse_markdown_table(&conservative) {
+        for spelling in candidates {
+            let candidate = stringify_grid(grid, spelling);
+            if parse_markdown_table(&candidate).as_ref() == Ok(&wanted) {
+                return Ok(candidate);
+            }
         }
     }
     Ok(conservative)
