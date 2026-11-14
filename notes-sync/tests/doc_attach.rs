@@ -287,6 +287,16 @@ fn attachment_links_are_found_where_they_are() {
     // A `!` before a file that isn't an image is the note's own text.
     let links = find_attachment_links("Wow![plan.pdf](attachments/plan.pdf)");
     assert_eq!((links[0].start, links[0].bracket), (4, 4));
+    // So is an escaped `!` before an image: the link starts at its bracket,
+    // and the escape stays whole in the text around it.
+    let links = find_attachment_links("\\![p.png](attachments/p.png)");
+    assert_eq!((links[0].start, links[0].bracket), (2, 2));
+    assert_eq!(links[0].text, "[p.png](attachments/p.png)");
+    let plan = plan_new_attachment_links("Title\n\\![p.png](attachments/p.png)\n").unwrap();
+    assert_eq!(plan.reconstructed_body_text, "Title\n\\!\u{fffc}\n");
+    // An escaped backslash before the `!` escapes nothing after it.
+    let links = find_attachment_links("\\\\![p.png](attachments/p.png)");
+    assert_eq!((links[0].start, links[0].bracket), (2, 3));
     // Offsets count UTF-16 units.
     let links = find_attachment_links("😀 [a.txt](attachments/a.txt)");
     assert_eq!(links[0].start, 3);

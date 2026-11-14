@@ -246,9 +246,13 @@ fn scan_attachment_links(units: &[u16]) -> AttachmentLinkScan {
         links: Vec::new(),
         unreadable: Vec::new(),
     };
+    // Where the last backslash-escaped character is: it is the note's own
+    // text, whatever follows it.
+    let mut escaped = None;
     let mut i = 0usize;
     while i < units.len() {
         if is(i, b'\\') {
+            escaped = Some(i + 1);
             i += 2;
             continue;
         }
@@ -297,8 +301,8 @@ fn scan_attachment_links(units: &[u16]) -> AttachmentLinkScan {
         let end = href_start + length + 1;
         let href = from_utf16(&units[close + 2..end - 1]);
         // Only an image's link is written with a `!`: before any other
-        // file's, it is the note's own text.
-        let embedded = i > 0 && is(i - 1, b'!') && is_image_uti(uti_for_file_name(&href));
+        // file's, or escaped (`\\!`), it is the note's own text.
+        let embedded = i > 0 && is(i - 1, b'!') && escaped != Some(i - 1) && is_image_uti(uti_for_file_name(&href));
         let start = if embedded { i - 1 } else { i };
         scan.links.push(AttachmentLink {
             start,
