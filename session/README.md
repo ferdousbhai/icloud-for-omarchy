@@ -415,7 +415,7 @@ never yields and `watch_forever` returns at once.
 | `ICLOUD_SESSION_SIGNIN_TRACE` | sign-in window | off; `1` reports the page's form fields, buttons and requests (never values) on stderr |
 | `ICLOUD_SESSION_SIGNIN_UA` | sign-in window | WebKitGTK's own user agent; `safari` for a macOS Safari one, anything else verbatim |
 | `ICLOUD_SESSION_SETUP_URL` | daemon (tests) | `https://setup.icloud.com` |
-| `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring. While `<file>.empty-session-writes` holds a number N > 0, the next session write stores an empty secret and N goes down by one (a keyring losing a write, for the read-back tests) |
+| `ICLOUD_SESSION_TEST_SECRET_FILE` | daemon (tests only) | unset: the Secret Service. Set: a JSON file stands in for the keyring |
 | `ICLOUD_SESSIOND_IDLE_SECS`, `ICLOUD_SESSIOND_VALIDATE_SECS`, `ICLOUD_SESSIOND_HANDOUT_SECS`, `ICLOUD_SESSIOND_RETRY_SECS` | daemon (tests) | 300, 600, 21600, 60 |
 
 ## The sign-in spike
@@ -431,9 +431,9 @@ Sign in (password, 2FA, "Trust this browser"). When the page has signed in
 the window closes by itself and the captured session is printed as JSON:
 cookies for `.icloud.com` including `X-APPLE-WEBAUTH-TOKEN` with an
 `expires`, the device-trust cookies as `trust`, plus `clientId`,
-`clientBuildNumber`, `clientMasteringNumber` (`null` when the page's setup
-call did not carry them; the daemon then uses icloud-md's defaults and a
-fresh clientId). Progress goes to stderr. Nothing is written to disk: run
+`clientBuildNumber`, `clientMasteringNumber` (the default build numbers and
+the clientId the window generated; for a capture without them the daemon
+uses the same defaults and a fresh clientId). Progress goes to stderr. Nothing is written to disk: run
 by hand, without `--cookies`, it starts with an empty jar, so Apple asks
 for 2FA. If Apple refuses the browser, retry with
 `ICLOUD_SESSION_SIGNIN_UA=safari`.
