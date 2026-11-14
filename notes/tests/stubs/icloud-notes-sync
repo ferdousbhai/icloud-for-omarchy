@@ -222,11 +222,15 @@ elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_EXIT:-}" ]; then
   stub_fail
 elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
   # A clone into the last argument: the state file and one note.
+  # ICLOUD_NOTES_SYNC_STUB_CLONE=partial then fails (cloudkit_request_failed,
+  # exit 1), as the real clone that fails part way does: what it wrote is
+  # recorded, for a pull to finish.
   dir="${@: -1}"
   mkdir -p "$dir/.icloud-notes" "$dir/Notes"
   echo '{"layoutVersion":4,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-notes/state.json"
   printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
   progress 3
+  [ "$ICLOUD_NOTES_SYNC_STUB_CLONE" = partial ] && fail cloudkit_request_failed "Attachment download failed: HTTP 410" "" 1
   result '{"written":1}' "Cloned 1 notes" '{"lines":["Cloned 1 notes"]}'
 elif [ "$1" = "diff" ]; then
   # The diff's text is only in meta.text (the real engine's epoch diff,

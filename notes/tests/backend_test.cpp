@@ -1839,6 +1839,27 @@ int main(int argc, char *argv[])
                   && first.syncLog().contains(QStringLiteral("clone failed: stub failure"))
                   && !first.syncLog().contains(QStringLiteral(":progress:")),
               "clone exiting 3 with account_mismatch is a failure, not a sign-in");
+        // A clone that fails part way leaves what it wrote recorded: the
+        // vault is cloned from then on, and a sync follows at once to finish it.
+        cloneOk = true;
+        cloneDone = false;
+        const auto c2 = QObject::connect(&first, &NotesBackend::cloneFinished, &first, [&](bool ok) {
+            cloneOk = ok;
+            cloneDone = true;
+        });
+        qputenv("ICLOUD_NOTES_SYNC_STUB_CLONE", "partial");
+        first.clearLog();
+        first.runClone();
+        waitUntil([&] { return cloneDone; });
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_CLONE");
+        waitForIdle(first);
+        QObject::disconnect(c2);
+        check(cloneDone && !cloneOk && first.cloned() && first.syncLog().contains(QStringLiteral("$ icloud-notes-sync --quiet sync"))
+                  && first.syncLog().contains(QStringLiteral("clone failed: Attachment download failed"))
+                  && first.syncMessage() == QStringLiteral("Pull done.") && first.folders().contains(QStringLiteral("Notes")),
+              "clone failing part way leaves a cloned vault, and a sync follows at once");
+        QDir(fresh + QStringLiteral("/.icloud-notes")).removeRecursively();
+        QDir(fresh + QStringLiteral("/Notes")).removeRecursively();
     }
     // Signed out: sign in through icloud-session first, then clone.
     fake.set({ { QStringLiteral("SignedIn"), false }, { QStringLiteral("Dsid"), QString() } });

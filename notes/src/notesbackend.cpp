@@ -2137,8 +2137,15 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     case Mode::Plain:
         setPushPreview({}, {}); // a pull or push makes the last preview stale
         refresh(); // a pull or clone changes files behind our back
-        if (label == u"Clone")
+        if (label == u"Clone") {
+            // A clone that failed part way records what it wrote, and the
+            // vault counts as cloned from then on: a pull finishes it, so
+            // the window syncs at once (unless the sign-in is what failed)
+            // and does not wait for its next poll.
+            if (!ok && m_role == Role::App && cloned())
+                m_syncWhenIdle = true;
             emit cloneFinished(ok);
+        }
         break;
     case Mode::Sync:
         break; // re-read once both halves are in (finishSyncHalves)

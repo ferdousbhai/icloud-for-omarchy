@@ -101,7 +101,9 @@ and click **Trust** when asked: that sign-in lasts about 30 days, while a
 QR sign-in lapses within hours of going unused. All your notes download into `~/Documents/Notes`,
 one Markdown file per note with the title as its first line, just like
 in Notes (the sync engine clones icloud-session's account; from a
-terminal, `icloud-notes clone`). If the vault is ever missing while the computer is
+terminal, `icloud-notes clone`). A download that stops part way keeps what
+arrived, and the app syncs at once to fetch the rest (from a terminal,
+`icloud-notes pull`). If the vault is ever missing while the computer is
 signed in (a reinstall, say), the app downloads it again on its own,
 without asking.
 
