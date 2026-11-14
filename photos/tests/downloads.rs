@@ -7,11 +7,11 @@ use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
 use icloud_photos::thumbs::{
     Downloader, Job, MAX_NOW_JOBS, Priority, Targets, fetch, fetch_detailed_with, live_ext, prune_cache,
-    rename_noreplace,
+    rename_noreplace, sweep_temporaries,
 };
 use icloud_photos::transport::{Result, Transport};
 use serde_json::Value;
-use support::{FixtureTransport, fixture, library, temp_dir};
+use support::{FixtureTransport, fixture, library, library as library_fixture, temp_dir};
 
 fn synced(t: &FixtureTransport, root: &std::path::Path) -> (Catalog, Targets) {
     let dirs = Dirs::under(root);
@@ -628,4 +628,70 @@ fn prune_drops_removed_assets_and_the_oldest_mediums() {
     cat.mark_deleted("ASSET-002", None).unwrap();
     assert_eq!(prune_cache(&cat, &targets.dirs, 150).unwrap(), 0);
     assert_eq!(cat.asset("ASSET-002").unwrap().unwrap().thumb_path, None);
+}
+
+#[test]
+fn the_temporaries_of_killed_downloads_are_swept_once_stale() {
+    let tmp = temp_dir("sweep");
+    let root = tmp.path();
+    let library = root.join("Pictures");
+    let month = library.join("2025/09");
+    std::fs::create_dir_all(&month).unwrap();
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    let put = |path: &std::path::Path, age: std::time::Duration| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"partial").unwrap();
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_modified(std::time::SystemTime::now() - age).unwrap();
+    };
+    let ours = ".icloud-photos-0123456789abcdef0123456789abcdef.part";
+    let sessions = format!(".{ours}.4242.7.tmp");
+    let old = day + std::time::Duration::from_secs(60);
+    let fresh = std::time::Duration::from_secs(60);
+    // Left by killed downloads, long ago.
+    let stale = [month.join(ours), month.join(&sessions)];
+    // A running download's (written a minute ago), and everything that is
+    // not this app's temporary file or not where downloads go, however old.
+    let kept = [
+        library.join("2025/10").join(ours),
+        library.join("2025/10").join(&sessions),
+        month.join("IMG_0001.HEIC"),
+        month.join(".icloud-photos-notes.part"),
+        month.join(".icloud-photos-0123456789abcdef0123456789abcdef.part.jpg"),
+        month.join(format!(".{ours}.tmp")),
+        month.join(".hidden.4242.7.tmp"),
+        library.join(ours),
+        library.join("2025").join(ours),
+        library.join("holiday/09").join(ours),
+        month.join("deeper").join(ours),
+    ];
+    for p in &stale {
+        put(p, old);
+    }
+    for (i, p) in kept.iter().enumerate() {
+        put(p, if i < 2 { fresh } else { old });
+    }
+    // A link to a folder is not followed.
+    put(&root.join("elsewhere/09").join(ours), old);
+    std::os::unix::fs::symlink(root.join("elsewhere"), library.join("2024")).unwrap();
+
+    assert_eq!(sweep_temporaries(&library, day), 2);
+    assert!(stale.iter().all(|p| !p.exists()));
+    for p in &kept {
+        assert!(p.exists(), "{}", p.display());
+    }
+    assert!(root.join("elsewhere/09").join(ours).exists());
+    assert_eq!(sweep_temporaries(&library, day), 0);
+    assert_eq!(sweep_temporaries(&root.join("no-such-folder"), day), 0);
+
+    // Starting a download run sweeps the library folder.
+    put(&month.join(ours), old);
+    let t = FixtureTransport::new(library_fixture);
+    let (_cat, targets) = synced(&t, root);
+    let _pool = Downloader::start(std::sync::Arc::new(t), targets, 1, Box::new(|_| {}));
+    let gone = (0..500).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        !month.join(ours).exists()
+    });
+    assert!(gone, "swept when the pool starts");
 }

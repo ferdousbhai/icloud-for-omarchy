@@ -113,6 +113,9 @@ Originals already in the folder are not downloaded a second time: a file
 with the photo's name and exactly the size iCloud reports is taken to be
 its download and recorded again. A file of that name with any other size is
 left alone, and the download goes beside it as `IMG_0001 (2).HEIC`.
+A download that was cut off (the app quit, the machine went down) can leave
+a hidden `.icloud-photos-….part` file in a `<year>/<month>` folder; these
+are removed, a day old, the next time downloads start.
 
 **Upgrading**: originals used to go to
 `~/Pictures/icloud-photos/`. The first start after the update (app or

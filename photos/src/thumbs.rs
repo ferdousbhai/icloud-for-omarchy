@@ -9,13 +9,13 @@
 //! the disk, and a file that appears meanwhile only moves ours to the next name.
 //! A file already there under the original's name and of its exact size,
 //! which the catalog has for no asset, is an earlier download the catalog
-//! lost: it is recorded, not downloaded again ([`unrecorded`]).
+//! lost: it is recorded, not downloaded again (`unrecorded`).
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::catalog::{Catalog, PathKind, Row};
 use crate::cloudkit::{CloudKit, extension_for, sanitize};
@@ -458,6 +458,80 @@ impl Drop for Temp {
     }
 }
 
+/// How long a download's temporary file must have gone unwritten before
+/// [`sweep_temporaries`] removes it: far longer than a running download
+/// leaves its file untouched (the connection times out long before).
+pub const STALE_TEMPORARY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Is `name` a temporary file of a download of an original: ours
+/// (`.icloud-photos-<32 hex>.part`, [`Temp`]), or the one icloud-session
+/// writes beside it before renaming it there (`.<ours>.<pid>.<n>.tmp`)?
+fn is_temporary(name: &str) -> bool {
+    let Some((id, rest)) = name
+        .strip_prefix(".icloud-photos-")
+        .or_else(|| name.strip_prefix("..icloud-photos-"))
+        .and_then(|rest| rest.split_once(".part"))
+    else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let session = || {
+        let numbers = rest.strip_prefix('.').and_then(|r| r.strip_suffix(".tmp"));
+        numbers
+            .and_then(|n| n.split_once('.'))
+            .is_some_and(|(pid, n)| digits(pid) && digits(n))
+    };
+    id.len() == 32
+        && id.bytes().all(|b| b.is_ascii_hexdigit())
+        && if name.starts_with("..") {
+            session()
+        } else {
+            rest.is_empty()
+        }
+}
+
+/// Remove the temporary files that downloads which were killed (the app
+/// quit, the machine went down) left in the library's `<year>/<month>`
+/// folders: only files with this app's own temporary names, and only ones
+/// not written to for `older_than`, so never the file of a download that is
+/// running, here or in another process. Returns the files removed.
+pub fn sweep_temporaries(library: &Path, older_than: Duration) -> usize {
+    let digits = |name: &std::ffi::OsStr, n: usize| {
+        name.to_str()
+            .is_some_and(|s| s.len() == n && s.bytes().all(|b| b.is_ascii_digit()))
+    };
+    // The entries of `dir` (itself a folder, not a link to one) that are of `kind`.
+    let entries = |dir: &Path, folders: bool| -> Vec<std::fs::DirEntry> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| {
+                e.file_type()
+                    .is_ok_and(|t| if folders { t.is_dir() } else { t.is_file() })
+            })
+            .collect()
+    };
+    let mut removed = 0;
+    for year in entries(library, true).iter().filter(|e| digits(&e.file_name(), 4)) {
+        for month in entries(&year.path(), true).iter().filter(|e| digits(&e.file_name(), 2)) {
+            for file in entries(&month.path(), false) {
+                let stale = file
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|at| at.elapsed().is_ok_and(|age| age >= older_than));
+                if stale
+                    && file.file_name().to_str().is_some_and(is_temporary)
+                    && std::fs::remove_file(file.path()).is_ok()
+                {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    removed
+}
+
 /// Move the download into place without replacing anything; if a file
 /// appeared at `dest` meanwhile, take the next free name.
 fn settle(
@@ -726,7 +800,14 @@ pub struct Downloader {
 }
 
 impl Downloader {
+    /// Starts the threads, and first clears the library folder of the
+    /// temporary files killed downloads left ([`sweep_temporaries`]), off
+    /// the caller's thread.
     pub fn start(transport: Arc<dyn Transport>, targets: Targets, workers: usize, notify: Notify) -> Downloader {
+        let library = targets.library.clone();
+        let _ = std::thread::Builder::new().name("sweep".into()).spawn(move || {
+            sweep_temporaries(&library, STALE_TEMPORARY);
+        });
         let inner = Arc::new(Inner {
             queues: Mutex::new(Queues {
                 now: VecDeque::new(),
