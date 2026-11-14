@@ -20,6 +20,10 @@
 //!   `allow_conflict: false` and an etag that is no longer the file's, it
 //!   is refused (409 `OP_LOCK_FAILURE`), so a replace cannot overwrite a
 //!   version this computer has not seen.
+//!   A file's own etag changes with its content, then; whether it also
+//!   changes for a rename or a move was not measured, so it is not used
+//!   to tell an edit that kept the size and date (only a replace from here
+//!   meets one, as a stale etag).
 //! - The `mtime` sent with a new file is kept as its `dateModified`; a
 //!   replaced file gets the time of the replacement instead.
 //! - The upload URL is on a content host, which takes no cookies.

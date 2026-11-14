@@ -63,6 +63,14 @@ impl Cloud {
         Ok(())
     }
 
+    /// iCloud refuses to put anything in a folder that is gone.
+    pub fn parent_exists(&self, parent_id: &str) -> remote::Result<()> {
+        if parent_id != ROOT_ID && !self.nodes.contains_key(parent_id) {
+            return Err(remote::Error::Refused("refused: ID_INVALID".into()));
+        }
+        Ok(())
+    }
+
     pub fn may_name(&self, name: &str) -> remote::Result<()> {
         if self.refused_names.iter().any(|n| n == name) {
             return Err(remote::Error::Refused("refused: NAME_NOT_ALLOWED".into()));
@@ -307,6 +315,7 @@ impl Remote for Fake {
     fn create_folder(&self, parent_id: &str, name: &str) -> remote::Result<Node> {
         let mut c = self.0.borrow_mut();
         c.may_name(name)?;
+        c.parent_exists(parent_id)?;
         Ok(c.add(parent_id, name, Kind::Folder, b"", 0))
     }
     fn upload_new(&self, parent: &Node, name: &str, path: &Path, mtime_ms: i64) -> remote::Result<Node> {
@@ -315,6 +324,7 @@ impl Remote for Fake {
         if c.refused_names.iter().any(|n| n == name) {
             return Err(remote::Error::Api("upload refused: NAME_NOT_ALLOWED".into()));
         }
+        c.parent_exists(&parent.id)?;
         c.uploads += 1;
         Ok(c.add(&parent.id, name, Kind::File, &bytes, mtime_ms))
     }

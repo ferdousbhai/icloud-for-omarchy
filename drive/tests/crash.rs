@@ -415,3 +415,15 @@ fn a_replace_stopped_before_it_was_recorded_and_then_moved_here_is_kept_once() {
     assert_eq!(bed.cloud.text("b.txt").as_deref(), Some("two from here"));
     assert!(bed.cloud.0.borrow().trashed.is_empty());
 }
+
+#[test]
+fn an_upload_stopped_before_it_was_recorded_and_then_renamed_in_icloud_is_not_sent_again() {
+    let bed = Bed::new();
+    bed.write("c.md", "from here");
+    stop_at_first(&bed, "remote.upload_new");
+    let id = bed.cloud.id_at("c.md").unwrap();
+    bed.cloud.rename_item(&id, "d.md");
+    settle(&bed, "after the stop");
+    assert_eq!(bed.cloud.paths(), ["d.md"]);
+    assert_eq!(bed.local_paths(), ["d.md"]);
+}

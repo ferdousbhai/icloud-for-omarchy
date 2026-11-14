@@ -492,6 +492,16 @@ impl<R: Remote> Engine<'_, R> {
         Ok(answer?)
     }
 
+    /// The answer to a request noted as sending `path`: when iCloud said no,
+    /// the note goes (nothing of it is in iCloud to find later). It stays
+    /// for an answer lost on the way, which may have been a yes.
+    fn unsent(&self, answer: remote::Result<Node>, path: &str) -> Result<Node> {
+        if let Err(remote::Error::Refused(_) | remote::Error::Api(_) | remote::Error::Stale(_)) = &answer {
+            self.state.clear_sending(path)?;
+        }
+        Ok(answer?)
+    }
+
     /// The folder in iCloud that holds `path`, once it is in step.
     fn parent_node(&self, path: &str) -> Result<Node> {
         let parent = parent_of(path);
@@ -653,7 +663,7 @@ impl<R: Remote> Engine<'_, R> {
                 let local = self.need_stat(path)?;
                 let parent = self.parent_node(path)?;
                 self.state.set_sending(path, "", &local)?;
-                let node = self.remote.create_folder(&parent.id, name_of(path))?;
+                let node = self.unsent(self.remote.create_folder(&parent.id, name_of(path)), path)?;
                 crash::point("remote.create_folder");
                 self.put(node, path, local)?;
                 self.state.clear_sending(path)?;
@@ -714,11 +724,14 @@ impl<R: Remote> Engine<'_, R> {
                 let before = self.need_stat(path)?;
                 let parent = self.parent_node(path)?;
                 self.state.set_sending(path, "", &before)?;
-                let sent = self.remote.upload_new(
-                    &parent,
-                    name_of(path),
-                    &self.abs(path),
-                    before.mtime_ns / 1_000_000_000 * 1000,
+                let sent = self.unsent(
+                    self.remote.upload_new(
+                        &parent,
+                        name_of(path),
+                        &self.abs(path),
+                        before.mtime_ns / 1_000_000_000 * 1000,
+                    ),
+                    path,
                 )?;
                 crash::point("remote.upload_new");
                 let node = self.listed(&parent.id, &sent.id)?;
@@ -733,9 +746,11 @@ impl<R: Remote> Engine<'_, R> {
                 };
                 let before = self.need_stat(path)?;
                 self.state.set_sending(path, id, &before)?;
-                let sent = self
-                    .remote
-                    .replace(&row.node, &self.abs(path), before.mtime_ns / 1_000_000_000 * 1000)?;
+                let sent = self.unsent(
+                    self.remote
+                        .replace(&row.node, &self.abs(path), before.mtime_ns / 1_000_000_000 * 1000),
+                    path,
+                )?;
                 crash::point("remote.replace");
                 // Recorded at once from the answer, so a listing that fails
                 // now does not leave the old row to read as a conflict.
@@ -854,8 +869,8 @@ impl<R: Remote> Engine<'_, R> {
     }
 
     /// What a run that stopped sent to iCloud as new but did not record:
-    /// the one new item in iCloud of its name (and, for a file, its size and
-    /// date) is it, recorded where it was sent from if the item here is
+    /// the one new item in iCloud of its size and date (a folder: of its
+    /// name) is it, recorded where it was sent from if the item here is
     /// found, as it was, anywhere here; moved since on either side, the next
     /// plan follows the moves. Anything less certain is dropped, and the two
     /// sides meet again as strangers.
@@ -909,7 +924,9 @@ impl<R: Remote> Engine<'_, R> {
                 .nodes
                 .values()
                 .filter(|n| !known.contains(n.id.as_str()) && (n.kind == Kind::Folder) == sent.is_dir)
-                .filter(|n| n.name == name_of(path))
+                // Renamed or moved in iCloud since (by another device), a
+                // file is still known by its size and date.
+                .filter(|n| !sent.is_dir || n.name == name_of(path))
                 .filter(|n| {
                     sent.is_dir || (n.size == sent.size && (n.mtime_ms - sent.mtime_ns / 1_000_000).abs() <= 2_000)
                 })

@@ -1343,3 +1343,21 @@ fn a_file_moved_here_over_one_removed_under_another_case_edited_in_icloud_keeps_
     assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("a edited there"));
     assert!(bed.cloud.0.borrow().nodes[&b.id].name.contains("conflicted copy"));
 }
+
+#[test]
+fn a_folder_icloud_refused_to_make_is_not_taken_for_one_another_device_makes_later() {
+    let bed = Bed::new();
+    bed.settle();
+    fs::create_dir(bed.root().join("P")).unwrap();
+    bed.write("P/mine.txt", "mine");
+    bed.cloud.0.borrow_mut().refused_names = vec!["P".into()];
+    bed.try_sync(false).unwrap();
+    bed.cloud.0.borrow_mut().refused_names.clear();
+    // Another device makes its own P; here P is renamed.
+    let theirs = bed.cloud.folder(ROOT_ID, "P");
+    bed.cloud.file(&theirs.id, "theirs.txt", "theirs", bed.time());
+    fs::rename(bed.root().join("P"), bed.root().join("Mine")).unwrap();
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Mine", "Mine/mine.txt", "P", "P/theirs.txt"]);
+    assert_eq!(bed.cloud.id_at("P").as_deref(), Some(theirs.id.as_str()));
+}
