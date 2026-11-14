@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Every check a change must pass, run on this machine. .githooks/pre-push runs it before a push
 # (NO_CHECK=1 skips it); enable the hook once per clone with `git config core.hooksPath .githooks`.
-# Runs the shared-support check (bin/check-shared-support), rustfmt, clippy and the Rust
+# Runs the shared-support check (bin/check-shared-support) and its own test, rustfmt, clippy and the Rust
 # workspace suite, the Qt app's tests (notes/bin/test), then install.sh's shared add_signed_repo
 # hash and install.sh and the per-app installers against stubbed pacman
 # (tests/install_test.sh), and the packaging and release tests (tests/packaging_test.py).
@@ -13,6 +13,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 # Validate vendored support before the more expensive product checks.
 python3 bin/check-shared-support
+python3 tests/test_shared_support.py
 
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings

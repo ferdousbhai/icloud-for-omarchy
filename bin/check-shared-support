@@ -8,8 +8,6 @@ import sys
 
 # First member owns the implementation; only these exact files are shared.
 GROUPS = {
-    **{name: [f'cloud-contacts/cloud_contacts/{name}', f'cloud-tasks/cloud_tasks/{name}']
-       for name in ('common.py', 'cli_output.py', 'theme.py', 'recall_client.py', 'agent_skill.py')},
     'agent_skill.rs': [
         'icloud-for-omarchy/sessiond/src/agent_skill.rs',
         'cloud-mail/crates/cloudmail/src/agent_skill.rs',

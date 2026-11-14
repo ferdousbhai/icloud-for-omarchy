@@ -21,8 +21,7 @@
 //! }
 //! ```
 //!
-//! Mirrors cloud-mail's `crates/cloudmail/src/output.rs` and
-//! cloud-contacts' `cli_output.py`.
+//! Mirrors cloud-mail's `crates/cloudmail/src/output.rs`.
 
 use std::io::{IsTerminal, Write};
 
