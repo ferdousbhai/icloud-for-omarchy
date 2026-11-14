@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use common::Bed;
-use icloud_drive::crash::{self, Crash};
+use common::{Bed, crash_at, quiet};
+use icloud_drive::crash;
 use icloud_drive::remote::ROOT_ID;
 use icloud_drive::state::State;
 
@@ -34,39 +34,6 @@ fn view(bed: &Bed) -> View {
         there: bed.cloud.tree(),
         trashed_here: bed.trashed_here(),
         trashed_there: bed.cloud.trashed_texts(),
-    }
-}
-
-/// A stop at a point is a panic; it is expected, so it is not printed.
-fn quiet() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let default = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            if info.payload().downcast_ref::<Crash>().is_none() {
-                default(info)
-            }
-        }));
-    });
-}
-
-/// Runs a sync with the hook `arm`ed; the point it stopped at.
-fn crash_at(bed: &Bed, arm: impl FnOnce()) -> Option<&'static str> {
-    quiet();
-    arm();
-    let result = catch_unwind(AssertUnwindSafe(|| bed.try_sync(false)));
-    crash::disarm();
-    match result {
-        Ok(done) => {
-            done.unwrap();
-            None
-        }
-        Err(payload) => Some(
-            payload
-                .downcast_ref::<Crash>()
-                .expect("a stop at a point, not a failure")
-                .0,
-        ),
     }
 }
 
@@ -107,7 +74,7 @@ fn check(setup: fn(&Bed)) {
         let bed = Bed::new();
         setup(&bed);
         assert_eq!(
-            crash_at(&bed, || crash::arm(Some(at))),
+            crash_at(&bed, false, || crash::arm(Some(at))),
             Some(*name),
             "{what}: the run did not replay"
         );
@@ -275,7 +242,7 @@ fn a_half_done_move(bed: &Bed) {
 
 /// Runs a sync stopped at the first point of this name.
 fn stop_at_first(bed: &Bed, name: &'static str) {
-    assert_eq!(crash_at(bed, || crash::arm_named(name)), Some(name));
+    assert_eq!(crash_at(bed, false, || crash::arm_named(name)), Some(name));
 }
 
 const SCENARIOS: &[fn(&Bed)] = &[
@@ -342,4 +309,38 @@ fn a_sync_stopped_after_dropping_a_void_move_note() {
 #[test]
 fn a_sync_stopped_while_finishing_a_half_done_move() {
     check(a_half_done_move);
+}
+
+#[test]
+fn a_move_stopped_after_making_its_folder_here_follows_a_rename_of_that_folder_by_case() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    let q = bed.cloud.folder(ROOT_ID, "Q");
+    let node = bed.cloud.0.borrow().nodes[&a.id].clone();
+    use icloud_drive::remote::Remote;
+    bed.cloud.move_to(&node, &q.id).unwrap();
+    // Stopped once the folder is made here, before it is recorded.
+    stop_at_first(&bed, "local.mkdir");
+    bed.cloud.rename_item(&q.id, "q");
+    settle(&bed, "after the stop");
+    assert_eq!(bed.cloud.paths(), ["q", "q/a.txt"]);
+    assert_eq!(bed.local_paths(), ["q", "q/a.txt"], "not Q beside q");
+}
+
+#[test]
+fn a_download_stopped_beside_a_name_of_another_case_leaves_no_pair_of_names() {
+    let bed = Bed::new();
+    let b = bed.cloud.file(ROOT_ID, "b.txt", "one", bed.time());
+    bed.settle();
+    // Edited on both sides, and renamed here by case: iCloud's comes back
+    // under its name, and this one must not stay beside it.
+    bed.write("b.txt", "mine");
+    bed.cloud.edit(&b.id, "theirs", bed.time());
+    fs::rename(bed.root().join("b.txt"), bed.root().join("B.TXT")).unwrap();
+    stop_at_first(&bed, "local.download_rename");
+    settle(&bed, "after the stop");
+    assert_eq!(bed.local_paths(), bed.cloud.paths());
+    assert_eq!(bed.cloud.text("b.txt").as_deref(), Some("theirs"));
+    assert_eq!(bed.local_paths().len(), 2, "{:?}", bed.local_paths());
 }

@@ -1,0 +1,576 @@
+//! Random sequences of what people do on both sides (create, edit, remove,
+//! rename, move files and folders, rename by case alone, move into a new
+//! folder, edit both copies), interleaved with syncs: some where iCloud
+//! refuses moves or a name, some stopped at a random crash point. Every file
+//! holds a text no other file ever held, so where each one went can be told.
+//!
+//! After every sync that ran to the end, with nothing refused:
+//! - both sides hold the same paths with the same texts, no text twice;
+//! - every text that was never removed or replaced by an edit is there;
+//! - neither trash holds a text that was not removed or replaced, unless
+//!   it is also kept;
+//! - another sync has nothing to do.
+//!
+//! After one that was refused something or stopped, the last two hold, and
+//! every such text is still on one side or the other; a stopped one is run
+//! again at once, which must end as one that ran to the end.
+//!
+//! Seeded and bounded; a failure prints its seed and the steps.
+//! `ICLOUD_DRIVE_MODEL_CASES=n` runs more cases, `ICLOUD_DRIVE_MODEL_SEED=s`
+//! one case.
+#![cfg(debug_assertions)]
+
+mod common;
+
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use common::Bed;
+use icloud_drive::crash;
+use icloud_drive::remote::{ROOT_ID, Remote};
+
+const CASES: u64 = 1000;
+const STEPS: usize = 40;
+
+/// splitmix64.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+    fn pick<'a, T>(&mut self, items: &'a [T]) -> Option<&'a T> {
+        (!items.is_empty()).then(|| &items[self.below(items.len())])
+    }
+}
+
+const FILE_NAMES: &[&str] = &["a.txt", "b.txt", "c.md", "d"];
+const FOLDER_NAMES: &[&str] = &["P", "Q", "r", "s s"];
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Side {
+    Here,
+    There,
+}
+
+type Tree = BTreeMap<String, Option<String>>;
+
+fn parent(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(p, _)| p)
+}
+
+fn name_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or(path, |(_, n)| n)
+}
+
+fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+fn is_under(path: &str, dir: &str) -> bool {
+    path == dir || path.starts_with(&format!("{dir}/"))
+}
+
+struct Model {
+    bed: Bed,
+    rng: Rng,
+    texts: u32,
+    /// Every text ever written.
+    written: Vec<String>,
+    /// Texts removed, or replaced by an edit, by the person.
+    removed: HashSet<String>,
+    log: Vec<String>,
+}
+
+impl Model {
+    fn tree(&self, side: Side) -> Tree {
+        match side {
+            // Not the temp files of a stopped download, which are no one's.
+            Side::Here => {
+                let mut tree = self.bed.local_tree();
+                tree.retain(|p, _| !p.split('/').any(|n| n.starts_with('.')));
+                tree
+            }
+            Side::There => self.bed.cloud.tree(),
+        }
+    }
+
+    fn text(&mut self) -> String {
+        self.texts += 1;
+        // Mostly one size, so edits of the same size are common.
+        let pad = if self.rng.below(4) == 0 { "++" } else { "" };
+        let text = format!("t{:04}{pad}", self.texts);
+        self.written.push(text.clone());
+        text
+    }
+
+    /// Whether `paths` (to be created, from `old` if moved) would differ
+    /// from something on either side by case alone: iCloud takes such names
+    /// as one, which the model does not follow.
+    fn clashes(&self, paths: &[(String, String)]) -> bool {
+        let all: Vec<String> = [Side::Here, Side::There]
+            .into_iter()
+            .flat_map(|s| self.tree(s).into_keys())
+            .collect();
+        paths.iter().any(|(new, old)| {
+            all.iter()
+                .any(|q| q != new && q != old && q.to_lowercase() == new.to_lowercase())
+        })
+    }
+
+    /// A name for something new in `dir`, free on `side`.
+    fn free_name(&mut self, side: Side, dir: &str, names: &[&str]) -> Option<String> {
+        let tree = self.tree(side);
+        let name = self.rng.pick(names)?.to_string();
+        let path = join(dir, &name);
+        (!tree.contains_key(&path) && !self.clashes(&[(path.clone(), path.clone())])).then_some(path)
+    }
+
+    fn dirs(&self, side: Side) -> Vec<String> {
+        let mut dirs = vec![String::new()];
+        dirs.extend(self.tree(side).into_iter().filter(|(_, t)| t.is_none()).map(|(p, _)| p));
+        dirs
+    }
+
+    fn files(&self, side: Side) -> Vec<String> {
+        self.tree(side)
+            .into_iter()
+            .filter(|(_, t)| t.is_some())
+            .map(|(p, _)| p)
+            .collect()
+    }
+
+    fn texts_below(&self, side: Side, path: &str) -> Vec<String> {
+        self.tree(side)
+            .into_iter()
+            .filter(|(p, _)| is_under(p, path))
+            .filter_map(|(_, t)| t)
+            .collect()
+    }
+
+    fn id(&self, path: &str) -> String {
+        if path.is_empty() {
+            ROOT_ID.to_string()
+        } else {
+            self.bed.cloud.id_at(path).unwrap()
+        }
+    }
+
+    fn create_file(&mut self, side: Side) -> Option<String> {
+        let dir = self.rng.pick(&self.dirs(side))?.clone();
+        let path = self.free_name(side, &dir, FILE_NAMES)?;
+        let text = self.text();
+        match side {
+            Side::Here => self.bed.write(&path, &text),
+            Side::There => {
+                let parent = self.id(&dir);
+                self.bed.cloud.file(&parent, name_of(&path), &text, self.bed.time());
+            }
+        }
+        Some(format!("create {path} = {text}"))
+    }
+
+    fn create_folder(&mut self, side: Side) -> Option<String> {
+        let dir = self.rng.pick(&self.dirs(side))?.clone();
+        let path = self.free_name(side, &dir, FOLDER_NAMES)?;
+        self.mkdir(side, &path);
+        Some(format!("mkdir {path}"))
+    }
+
+    fn mkdir(&self, side: Side, path: &str) {
+        match side {
+            Side::Here => {
+                fs::create_dir_all(self.bed.root()).unwrap();
+                fs::create_dir(self.bed.root().join(path)).unwrap()
+            }
+            Side::There => {
+                self.bed.cloud.folder(&self.id(parent(path)), name_of(path));
+            }
+        }
+    }
+
+    fn edit(&mut self, side: Side, path: &str) {
+        let old = self.tree(side)[path].clone().unwrap();
+        self.removed.insert(old);
+        let text = self.text();
+        match side {
+            Side::Here => self.bed.write(path, &text),
+            Side::There => self.bed.cloud.edit(&self.id(path), &text, self.bed.time()),
+        }
+    }
+
+    fn edit_one(&mut self, side: Side) -> Option<String> {
+        let path = self.rng.pick(&self.files(side))?.clone();
+        self.edit(side, &path);
+        Some(format!("edit {path}"))
+    }
+
+    fn edit_both(&mut self) -> Option<String> {
+        let there: HashSet<String> = self.files(Side::There).into_iter().collect();
+        let both: Vec<String> = self
+            .files(Side::Here)
+            .into_iter()
+            .filter(|p| there.contains(p))
+            .collect();
+        let path = self.rng.pick(&both)?.clone();
+        self.edit(Side::Here, &path);
+        self.edit(Side::There, &path);
+        Some(format!("edit {path} on both sides"))
+    }
+
+    fn remove(&mut self, side: Side) -> Option<String> {
+        let tree = self.tree(side);
+        let paths: Vec<String> = tree.keys().cloned().collect();
+        let path = self.rng.pick(&paths)?.clone();
+        let gone = self.texts_below(side, &path);
+        self.removed.extend(gone);
+        match side {
+            Side::Here => {
+                let full = self.bed.root().join(&path);
+                if tree[&path].is_none() {
+                    fs::remove_dir_all(full).unwrap()
+                } else {
+                    fs::remove_file(full).unwrap()
+                }
+            }
+            Side::There => self.bed.cloud.remove(&self.id(&path)),
+        }
+        Some(format!("remove {path}"))
+    }
+
+    /// Renames or moves `from` to `to` on `side`, unless that cannot be.
+    fn move_item(&mut self, side: Side, from: &str, to: &str) -> bool {
+        let tree = self.tree(side);
+        if tree.contains_key(to) || is_under(to, from) {
+            return false;
+        }
+        let moved: Vec<(String, String)> = tree
+            .keys()
+            .filter(|p| is_under(p, from))
+            .map(|p| (format!("{to}{}", &p[from.len()..]), p.clone()))
+            .collect();
+        if self.clashes(&moved) {
+            return false;
+        }
+        match side {
+            Side::Here => fs::rename(self.bed.root().join(from), self.bed.root().join(to)).unwrap(),
+            Side::There => {
+                let id = self.id(from);
+                if parent(from) != parent(to) {
+                    let node = self.bed.cloud.0.borrow().nodes[&id].clone();
+                    self.bed.cloud.move_to(&node, &self.id(parent(to))).unwrap();
+                }
+                if name_of(from) != name_of(to) {
+                    self.bed.cloud.rename_item(&id, name_of(to));
+                }
+            }
+        }
+        true
+    }
+
+    fn some_item(&mut self, side: Side) -> Option<(String, bool)> {
+        let items: Vec<(String, bool)> = self.tree(side).into_iter().map(|(p, t)| (p, t.is_none())).collect();
+        self.rng.pick(&items).cloned()
+    }
+
+    fn rename(&mut self, side: Side) -> Option<String> {
+        let (from, is_dir) = self.some_item(side)?;
+        let names = if is_dir { FOLDER_NAMES } else { FILE_NAMES };
+        let to = join(parent(&from), self.rng.pick(names)?);
+        self.move_item(side, &from, &to)
+            .then(|| format!("rename {from} to {to}"))
+    }
+
+    fn rename_case(&mut self, side: Side) -> Option<String> {
+        let (from, _) = self.some_item(side)?;
+        let name = name_of(&from);
+        let flipped: String = name
+            .chars()
+            .map(|c| {
+                if c.is_uppercase() {
+                    c.to_ascii_lowercase()
+                } else {
+                    c.to_ascii_uppercase()
+                }
+            })
+            .collect();
+        let to = join(parent(&from), &flipped);
+        (to != from && self.move_item(side, &from, &to)).then(|| format!("rename {from} to {to}"))
+    }
+
+    fn move_into(&mut self, side: Side, new_folder: bool) -> Option<String> {
+        let (from, _) = self.some_item(side)?;
+        let dir = if new_folder {
+            let base = self.rng.pick(&self.dirs(side))?.clone();
+            let dir = self.free_name(side, &base, FOLDER_NAMES)?;
+            if is_under(&dir, &from) {
+                return None;
+            }
+            self.mkdir(side, &dir);
+            self.log.push(format!("  {side:?}: mkdir {dir}"));
+            dir
+        } else {
+            self.rng.pick(&self.dirs(side))?.clone()
+        };
+        let to = join(&dir, name_of(&from));
+        (parent(&from) != dir && self.move_item(side, &from, &to)).then(|| format!("move {from} to {to}"))
+    }
+
+    fn step(&mut self) -> Option<String> {
+        let side = if self.rng.below(2) == 0 {
+            Side::Here
+        } else {
+            Side::There
+        };
+        let what = match self.rng.below(12) {
+            0 | 1 => self.create_file(side),
+            2 => self.create_folder(side),
+            3 | 4 => self.edit_one(side),
+            5 => self.edit_both().map(|s| format!("{s} (both)")),
+            6 => self.remove(side),
+            7 => self.rename(side),
+            8 => self.rename_case(side),
+            9 => self.move_into(side, false),
+            10 => self.move_into(side, true),
+            _ => self.create_file(side),
+        }?;
+        Some(format!("{side:?}: {what}"))
+    }
+
+    fn present(&self) -> Vec<(Side, String, String)> {
+        [Side::Here, Side::There]
+            .into_iter()
+            .flat_map(|s| self.tree(s).into_iter().filter_map(move |(p, t)| t.map(|t| (s, p, t))))
+            .collect()
+    }
+
+    /// What the last sync set out to do, shown with the steps of a failure.
+    fn log_started(&mut self) {
+        let started = std::mem::take(&mut *self.bed.started.borrow_mut());
+        self.log.extend(started.iter().map(|l| format!("    > {l}")));
+    }
+
+    /// What holds after any sync; no text twice on a side unless it was
+    /// `stopped` (between sending a file and removing the old one, say).
+    fn check_always(&self, stopped: bool) -> Result<(), String> {
+        let present: HashSet<String> = self.present().into_iter().map(|(_, _, t)| t).collect();
+        for text in &self.written {
+            if !self.removed.contains(text) && !present.contains(text) {
+                return Err(format!("{text} is on neither side"));
+            }
+        }
+        for (side, trashed) in [
+            ("the trash here", self.bed.trashed_here()),
+            ("Recently Deleted", self.bed.cloud.trashed_texts()),
+        ] {
+            // Unless it is kept as well (a file iCloud gave another's name
+            // to, kept as a conflicted copy).
+            if let Some(text) = trashed
+                .iter()
+                .find(|t| !self.removed.contains(*t) && !present.contains(*t))
+            {
+                return Err(format!("{text} is in {side}, and was never removed"));
+            }
+        }
+        let mut seen = HashSet::new();
+        for (side, path, text) in self.present().into_iter().filter(|_| !stopped) {
+            if !seen.insert((side, text.clone())) {
+                return Err(format!("{text} is twice on {side:?} (once at {path})"));
+            }
+        }
+        Ok(())
+    }
+
+    /// What holds after a sync that ran to the end with nothing refused.
+    fn check_settled(&self) -> Result<(), String> {
+        self.check_always(false)?;
+        let (here, there) = (self.tree(Side::Here), self.tree(Side::There));
+        if here != there {
+            let diff: Vec<String> = here
+                .iter()
+                .filter(|(p, t)| there.get(*p) != Some(t))
+                .map(|(p, t)| format!("here {p} = {t:?}, there {:?}", there.get(p)))
+                .chain(
+                    there
+                        .iter()
+                        .filter(|(p, _)| !here.contains_key(*p))
+                        .map(|(p, t)| format!("there only {p} = {t:?}")),
+                )
+                .collect();
+            return Err(format!("the sides differ: {diff:#?}"));
+        }
+        let again = self.bed.try_sync(true).map_err(|e| format!("the sync after: {e}"))?;
+        self.bed.started.borrow_mut().clear();
+        if !again.done.is_empty() || !again.problems.is_empty() {
+            return Err(format!(
+                "the sync after did {:?}, failed {:?}",
+                again.done, again.problems
+            ));
+        }
+        Ok(())
+    }
+
+    fn sync(&mut self) -> Result<(), String> {
+        let kind = self.rng.below(8);
+        let (what, refused) = match kind {
+            0 => {
+                self.bed.cloud.0.borrow_mut().refuses_moves = true;
+                ("sync, iCloud refusing moves", true)
+            }
+            1 => {
+                let name = self.rng.pick(&[FILE_NAMES, FOLDER_NAMES].concat()).unwrap().to_string();
+                self.bed.cloud.0.borrow_mut().refused_names = vec![name];
+                ("sync, iCloud refusing a name", true)
+            }
+            2 | 3 => ("sync, stopped", true),
+            _ => ("sync", false),
+        };
+        let at = self.rng.below(80);
+        let result = if kind == 2 || kind == 3 {
+            let stopped = common::crash_at(&self.bed, true, || crash::arm(Some(at)));
+            self.log.push(match stopped {
+                Some(point) => format!("sync, stopped at {point} (point {at})"),
+                None => format!("sync (point {at} not reached)"),
+            });
+            Ok(stopped.is_some())
+        } else {
+            self.log.push(format!(
+                "{what}{}",
+                match kind {
+                    1 => format!(" {:?}", self.bed.cloud.0.borrow().refused_names),
+                    _ => String::new(),
+                }
+            ));
+            let outcome = self.bed.try_sync(true);
+            if let Ok(outcome) = &outcome {
+                self.log.extend(outcome.problems.iter().map(|l| format!("    ! {l}")));
+            }
+            match outcome {
+                Ok(outcome) if !refused && !outcome.problems.is_empty() => {
+                    Err(format!("problems: {:?}", outcome.problems))
+                }
+                Ok(_) => Ok(refused),
+                Err(e) => Err(format!("the sync failed: {e}")),
+            }
+        };
+        self.log_started();
+        {
+            let mut c = self.bed.cloud.0.borrow_mut();
+            c.refuses_moves = false;
+            c.refused_names.clear();
+        }
+        let unsettled = result?;
+        if !unsettled {
+            return self.check_settled();
+        }
+        let stopped = kind == 2 || kind == 3;
+        self.check_always(stopped)?;
+        if stopped {
+            // Synced again before anything else changes, as the service
+            // does: a file a stopped sync put in place but did not record,
+            // moved here before the next sync, would be sent up again as
+            // new (a known window, and a copy, not a loss).
+            self.log.push("sync again".into());
+            let outcome = self.bed.try_sync(true);
+            self.log_started();
+            let outcome = outcome.map_err(|e| format!("the sync failed: {e}"))?;
+            if !outcome.problems.is_empty() {
+                return Err(format!("problems: {:?}", outcome.problems));
+            }
+            return self.check_settled();
+        }
+        Ok(())
+    }
+}
+
+fn run_case(seed: u64) -> Result<(), (String, Vec<String>)> {
+    let mut model = Model {
+        bed: Bed::new(),
+        rng: Rng(seed),
+        texts: 0,
+        written: Vec::new(),
+        removed: HashSet::new(),
+        log: Vec::new(),
+    };
+    let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+        for _ in 0..STEPS {
+            if model.rng.below(4) == 0 {
+                model.sync()?;
+            } else if let Some(step) = model.step() {
+                model.log.push(step);
+            }
+        }
+        model.log.push("sync".into());
+        let last = model.bed.try_sync(true);
+        model.log_started();
+        last.map_err(|e| e.to_string())?;
+        model.check_settled()
+    }));
+    match outcome {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(why)) => Err((why, model.log)),
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "a panic".into());
+            Err((format!("panicked: {why}"), model.log))
+        }
+    }
+}
+
+/// The cases of one test: every fourth seed, so four run side by side.
+fn run_part(part: u64) {
+    let seeds: Vec<u64> = match std::env::var("ICLOUD_DRIVE_MODEL_SEED") {
+        Ok(seed) if part == 0 => vec![seed.parse().unwrap()],
+        Ok(_) => Vec::new(),
+        Err(_) => {
+            let cases = std::env::var("ICLOUD_DRIVE_MODEL_CASES")
+                .ok()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(CASES);
+            (0..cases).filter(|s| s % 4 == part).collect()
+        }
+    };
+    let mut failed = Vec::new();
+    for seed in seeds {
+        if let Err((why, log)) = run_case(seed) {
+            eprintln!("seed {seed}: {why}\n  {}", log.join("\n  "));
+            failed.push(seed);
+        }
+    }
+    assert!(failed.is_empty(), "failing seeds: {failed:?}");
+}
+
+#[test]
+fn random_changes_on_both_sides_always_sync_to_the_same_files_0() {
+    run_part(0);
+}
+
+#[test]
+fn random_changes_on_both_sides_always_sync_to_the_same_files_1() {
+    run_part(1);
+}
+
+#[test]
+fn random_changes_on_both_sides_always_sync_to_the_same_files_2() {
+    run_part(2);
+}
+
+#[test]
+fn random_changes_on_both_sides_always_sync_to_the_same_files_3() {
+    run_part(3);
+}

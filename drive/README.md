@@ -54,7 +54,10 @@ After that it syncs every half minute while you are signed in.
 - Hidden names (starting with a dot), links, and names iCloud does not take
   (containing `:` or a line break). A folder removed in iCloud goes to the
   trash here whole, with any hidden files in it.
-- Two names in one folder that differ only by case: neither is synced.
+- Two names in one folder here that differ only by case: neither is synced.
+  (iCloud takes such names as one: a folder or file made here and one made
+  in iCloud under names that differ only by case are one item, named as in
+  iCloud, or both kept if they differ.)
 - Folders shared with you by other people.
 
 A folder removed here stays in iCloud (and comes back here) while it holds

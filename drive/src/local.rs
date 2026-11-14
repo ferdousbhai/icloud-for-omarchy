@@ -186,18 +186,28 @@ pub fn set_mtime(path: &Path, mtime_ms: i64) -> io::Result<()> {
     fs::File::options().write(true).open(path)?.set_modified(time)
 }
 
-/// `name (conflicted copy <host> <date>).ext`, a name not in use beside `path`.
+/// `name (conflicted copy <host> <date>).ext`, a name not in use beside
+/// `path`, in any case (iCloud takes names of another case as the same).
 pub fn conflict_path(path: &Path, host: &str, date: &str) -> PathBuf {
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let ext = path
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
+    let beside: std::collections::HashSet<String> = path
+        .parent()
+        .and_then(|dir| fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_lowercase())
+        .collect();
     let mut n = 1;
     loop {
         let suffix = if n == 1 { String::new() } else { format!(" {n}") };
-        let candidate = path.with_file_name(format!("{stem} (conflicted copy {host} {date}{suffix}){ext}"));
-        if !candidate.exists() {
+        let name = format!("{stem} (conflicted copy {host} {date}{suffix}){ext}");
+        let candidate = path.with_file_name(&name);
+        if !beside.contains(&name.to_lowercase()) && !candidate.exists() {
             return candidate;
         }
         n += 1;
@@ -330,6 +340,16 @@ mod tests {
         assert_eq!(
             second.file_name().unwrap().to_str().unwrap(),
             "report (conflicted copy desk 2026-11-11 2).pdf"
+        );
+        // Nor with one of another case, which iCloud takes as the same.
+        fs::write(dir.path().join("REPORT (CONFLICTED COPY desk 2026-11-11 2).PDF"), "x").unwrap();
+        assert_eq!(
+            conflict_path(&path, "desk", "2026-11-11")
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "report (conflicted copy desk 2026-11-11 3).pdf"
         );
     }
 

@@ -509,6 +509,28 @@ impl<R: Remote> Engine<'_, R> {
             .ok_or_else(|| Error::Remote(remote::Error::Api("the item is not in its folder's listing".into())))
     }
 
+    /// Whether something beside `path` (but `except`) has its name in
+    /// another case, which iCloud takes as the same name: nothing is put
+    /// there then, and the next round sorts the two out.
+    fn other_case_here(&self, path: &str, except: Option<&str>) -> Result<bool> {
+        let except = except.filter(|f| parent_of(f) == parent_of(path)).map(name_of);
+        let name = name_of(path);
+        let dir = self.abs(parent_of(path));
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
+            let other = entry?.file_name();
+            let other = other.to_string_lossy();
+            if other != name && Some(&*other) != except && other.to_lowercase() == name.to_lowercase() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn stat(&self, path: &str) -> Result<Option<Entry>> {
         Ok(local::stat(&self.abs(path))?)
     }
@@ -535,7 +557,7 @@ impl<R: Remote> Engine<'_, R> {
                     return Ok(false);
                 };
                 if from != to {
-                    if self.stat(to)?.is_some() || self.stat(from)?.is_none() {
+                    if self.stat(to)?.is_some() || self.stat(from)?.is_none() || self.other_case_here(to, Some(from))? {
                         return Ok(false);
                     }
                     if let Some(parent) = self.abs(to).parent() {
@@ -590,6 +612,9 @@ impl<R: Remote> Engine<'_, R> {
             }
             Op::MkdirLocal { id, path } => {
                 let node = node_of(id)?;
+                if self.other_case_here(path, None)? {
+                    return Ok(false);
+                }
                 fs::create_dir_all(self.abs(path))?;
                 crash::point("local.mkdir");
                 let local = self.need_stat(path)?;
@@ -613,7 +638,7 @@ impl<R: Remote> Engine<'_, R> {
                     (Some(now), Some(then)) => !now.is_dir && now.size == then.size && now.mtime_ns == then.mtime_ns,
                     (Some(_), None) => false,
                 };
-                if !safe {
+                if !safe || self.other_case_here(path, None)? {
                     return Ok(false);
                 }
                 let Some(temp) = self.fetch(&node, path)? else {

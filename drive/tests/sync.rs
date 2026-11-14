@@ -813,3 +813,311 @@ fn a_file_put_here_that_icloud_has_with_another_date_is_one_file() {
     assert_eq!(bed.read(&copies[0]).as_deref(), Some("mine!!!!"));
     assert_eq!(bed.read("b.txt").as_deref(), Some("theirs!!"));
 }
+
+#[test]
+fn a_file_moved_in_icloud_into_a_folder_renamed_here_lands_in_it_once() {
+    for renamed in ["Papers", "docs"] {
+        let bed = Bed::new();
+        let docs = bed.cloud.folder(ROOT_ID, "Docs");
+        let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+        bed.settle();
+        fs::rename(bed.root().join("Docs"), bed.root().join(renamed)).unwrap();
+        let node = bed.cloud.0.borrow().nodes[&a.id].clone();
+        bed.cloud.move_to(&node, &docs.id).unwrap();
+        bed.settle();
+        let inside = format!("{renamed}/a.txt");
+        assert_eq!(bed.cloud.paths(), [renamed, inside.as_str()], "no second folder");
+        assert_eq!(bed.read(&inside).as_deref(), Some("one"));
+    }
+}
+
+#[test]
+fn a_file_renamed_here_with_a_new_one_in_its_place_keeps_its_identity() {
+    for moved_there in [false, true] {
+        let bed = Bed::new();
+        let docs = bed.cloud.folder(ROOT_ID, "Docs");
+        let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+        bed.settle();
+        fs::rename(bed.root().join("a.txt"), bed.root().join("b.txt")).unwrap();
+        bed.write("a.txt", "a new file");
+        if moved_there {
+            // iCloud's move wins over the rename here, as when nothing new
+            // took the old name.
+            let node = bed.cloud.0.borrow().nodes[&a.id].clone();
+            bed.cloud.move_to(&node, &docs.id).unwrap();
+        }
+        bed.settle();
+        let (moved, at) = if moved_there {
+            (["Docs", "Docs/a.txt", "a.txt"], "Docs/a.txt")
+        } else {
+            (["Docs", "a.txt", "b.txt"], "b.txt")
+        };
+        assert_eq!(bed.cloud.paths(), moved);
+        assert_eq!(bed.cloud.id_at(at).as_deref(), Some(a.id.as_str()), "{at}");
+        assert_eq!(bed.cloud.text(at).as_deref(), Some("one"));
+        assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("a new file"));
+    }
+}
+
+#[test]
+fn a_folder_made_on_both_sides_under_names_of_another_case_is_one_folder() {
+    let bed = Bed::new();
+    bed.write("keep.txt", "k");
+    bed.settle();
+    let q = bed.cloud.folder(ROOT_ID, "photos");
+    bed.cloud.file(&q.id, "there.txt", "from icloud", bed.time());
+    bed.write("Photos/here.txt", "from here");
+    bed.settle();
+    assert_eq!(
+        bed.cloud.paths(),
+        ["keep.txt", "photos", "photos/here.txt", "photos/there.txt"]
+    );
+    assert_eq!(bed.cloud.id_at("photos").as_deref(), Some(q.id.as_str()));
+}
+
+#[test]
+fn a_file_renamed_here_by_case_and_edited_on_both_sides_keeps_both_under_two_names() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "c.md", "one", bed.time());
+    bed.settle();
+    bed.write("c.md", "mine");
+    bed.cloud.edit(&a.id, "theirs", bed.time());
+    fs::rename(bed.root().join("c.md"), bed.root().join("C.MD")).unwrap();
+    bed.settle();
+    // Not "c.md" and "C.MD", which iCloud takes as one name.
+    let paths = bed.cloud.paths();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert_eq!(bed.cloud.text("c.md").as_deref(), Some("theirs"));
+    let copy = paths
+        .iter()
+        .find(|p| p.contains("conflicted copy"))
+        .expect("a conflicted copy");
+    assert_eq!(bed.cloud.text(copy).as_deref(), Some("mine"));
+}
+
+fn move_there(bed: &Bed, id: &str, parent: &str) {
+    let node = bed.cloud.0.borrow().nodes[id].clone();
+    bed.cloud.move_to(&node, parent).unwrap();
+}
+
+#[test]
+fn a_file_moved_here_into_a_folder_icloud_renamed_meanwhile_follows_it() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Docs/a.txt")).unwrap();
+    bed.cloud.rename_item(&docs.id, "Papers");
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Papers", "Papers/a.txt"]);
+    assert_eq!(bed.cloud.id_at("Papers/a.txt").as_deref(), Some(a.id.as_str()));
+}
+
+#[test]
+fn a_file_moved_here_into_a_new_folder_where_one_moved_away_reports_no_failure() {
+    let bed = Bed::new();
+    bed.cloud.folder(ROOT_ID, "Q");
+    let c = bed.cloud.file(ROOT_ID, "c.md", "one", bed.time());
+    bed.settle();
+    fs::create_dir(bed.root().join("r")).unwrap();
+    fs::rename(bed.root().join("Q"), bed.root().join("r/Q")).unwrap();
+    fs::create_dir(bed.root().join("Q")).unwrap();
+    fs::rename(bed.root().join("c.md"), bed.root().join("Q/c.md")).unwrap();
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Q", "Q/c.md", "r", "r/Q"]);
+    assert_eq!(bed.cloud.id_at("Q/c.md").as_deref(), Some(c.id.as_str()));
+}
+
+#[test]
+fn a_file_renamed_in_icloud_onto_a_name_of_another_case_here_keeps_both() {
+    let bed = Bed::new();
+    let d = bed.cloud.file(ROOT_ID, "d", "one", bed.time());
+    bed.settle();
+    bed.write("A.TXT", "made here");
+    bed.cloud.rename_item(&d.id, "a.txt");
+    bed.settle();
+    assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("one"));
+    assert_eq!(bed.cloud.id_at("a.txt").as_deref(), Some(d.id.as_str()));
+    let paths = bed.cloud.paths();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    let copy = paths
+        .iter()
+        .find(|p| p.contains("conflicted copy"))
+        .expect("a conflicted copy");
+    assert_eq!(bed.cloud.text(copy).as_deref(), Some("made here"));
+}
+
+#[test]
+fn a_file_renamed_here_onto_a_name_of_another_case_in_icloud_is_not_sent_beside_it() {
+    let bed = Bed::new();
+    bed.cloud.file(ROOT_ID, "d", "one", bed.time());
+    bed.settle();
+    bed.cloud.file(ROOT_ID, "a.txt", "made there", bed.time());
+    fs::rename(bed.root().join("d"), bed.root().join("A.TXT")).unwrap();
+    bed.settle();
+    let paths = bed.cloud.paths();
+    assert!(!paths.iter().any(|p| p == "A.TXT"), "{paths:?}");
+    assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("made there"));
+    assert_eq!(bed.local_paths(), paths);
+    assert!(
+        paths.iter().any(|p| bed.cloud.text(p).as_deref() == Some("one")),
+        "{paths:?}"
+    );
+}
+
+#[test]
+fn two_folders_each_moved_into_the_other_follow_icloud() {
+    let bed = Bed::new();
+    let q = bed.cloud.folder(ROOT_ID, "Q");
+    bed.cloud.file(&q.id, "q.txt", "in Q", bed.time());
+    let r = bed.cloud.folder(ROOT_ID, "r");
+    bed.cloud.file(&r.id, "r.txt", "in r", bed.time());
+    bed.settle();
+    // Here Q goes into r; in iCloud r goes into Q.
+    fs::rename(bed.root().join("Q"), bed.root().join("r/Q")).unwrap();
+    move_there(&bed, &r.id, &q.id);
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Q", "Q/q.txt", "Q/r", "Q/r/r.txt"]);
+    assert!(bed.cloud.0.borrow().trashed.is_empty());
+}
+
+#[test]
+fn a_folder_moved_in_icloud_into_one_that_took_its_name_follows_it() {
+    let bed = Bed::new();
+    let r = bed.cloud.folder(ROOT_ID, "r");
+    bed.cloud.file(&r.id, "in.txt", "inside", bed.time());
+    let s = bed.cloud.folder(ROOT_ID, "s");
+    bed.settle();
+    // In iCloud r goes into s, and s takes the name r: r/r here.
+    move_there(&bed, &r.id, &s.id);
+    bed.cloud.rename_item(&s.id, "r");
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["r", "r/r", "r/r/in.txt"]);
+    assert_eq!(bed.cloud.id_at("r/r").as_deref(), Some(r.id.as_str()));
+}
+
+#[test]
+fn a_file_moved_here_over_a_removed_one_follows_a_move_in_icloud() {
+    let bed = Bed::new();
+    bed.cloud.file(ROOT_ID, "a.txt", "a", bed.time());
+    let d = bed.cloud.file(ROOT_ID, "d", "d", bed.time());
+    let q = bed.cloud.folder(ROOT_ID, "Q");
+    bed.settle();
+    // Here d replaces a.txt; in iCloud d goes into Q.
+    fs::remove_file(bed.root().join("a.txt")).unwrap();
+    fs::rename(bed.root().join("d"), bed.root().join("a.txt")).unwrap();
+    move_there(&bed, &d.id, &q.id);
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Q", "Q/d"], "d once, a.txt removed");
+    assert_eq!(bed.cloud.id_at("Q/d").as_deref(), Some(d.id.as_str()));
+}
+
+#[test]
+fn a_file_moved_out_of_a_folder_whose_rename_icloud_refuses_is_not_sent_twice() {
+    let bed = Bed::new();
+    let r = bed.cloud.folder(ROOT_ID, "r");
+    let a = bed.cloud.file(&r.id, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("r"), bed.root().join("P")).unwrap();
+    fs::rename(bed.root().join("P/a.txt"), bed.root().join("a.txt")).unwrap();
+    bed.cloud.0.borrow_mut().refuses_moves = true;
+    bed.try_sync(false).unwrap();
+    assert_eq!(bed.cloud.paths(), ["r", "r/a.txt"], "a.txt not sent as new");
+    bed.cloud.0.borrow_mut().refuses_moves = false;
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["P", "a.txt"]);
+    assert_eq!(bed.cloud.id_at("a.txt").as_deref(), Some(a.id.as_str()));
+}
+
+#[test]
+fn a_folder_icloud_removed_and_made_again_comes_back_in_the_same_sync() {
+    let bed = Bed::new();
+    let q = bed.cloud.folder(ROOT_ID, "Q");
+    let r = bed.cloud.folder(&q.id, "r");
+    bed.settle();
+    bed.cloud.remove(&r.id);
+    bed.cloud.folder(&q.id, "r");
+    bed.sync();
+    assert_eq!(bed.local_paths(), ["Q", "Q/r"]);
+}
+
+#[test]
+fn a_file_moved_here_into_a_new_folder_icloud_has_in_another_case_goes_into_that_one() {
+    let bed = Bed::new();
+    let c = bed.cloud.file(ROOT_ID, "c.md", "one", bed.time());
+    bed.settle();
+    let made = bed.cloud.folder(ROOT_ID, "s s");
+    fs::create_dir(bed.root().join("S S")).unwrap();
+    fs::rename(bed.root().join("c.md"), bed.root().join("S S/c.md")).unwrap();
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["s s", "s s/c.md"]);
+    assert_eq!(bed.cloud.id_at("s s").as_deref(), Some(made.id.as_str()));
+    assert_eq!(bed.cloud.id_at("s s/c.md").as_deref(), Some(c.id.as_str()));
+}
+
+#[test]
+fn a_folder_icloud_replaced_under_another_case_while_edited_here_is_one_folder() {
+    let bed = Bed::new();
+    let s = bed.cloud.folder(ROOT_ID, "s s");
+    bed.cloud.file(&s.id, "c.md", "one", bed.time());
+    bed.settle();
+    bed.cloud.remove(&s.id);
+    let again = bed.cloud.folder(ROOT_ID, "S S");
+    bed.write("s s/c.md", "edited here");
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["S S", "S S/c.md"]);
+    assert_eq!(bed.cloud.id_at("S S").as_deref(), Some(again.id.as_str()));
+    assert_eq!(bed.cloud.text("S S/c.md").as_deref(), Some("edited here"));
+}
+
+#[test]
+fn a_conflicted_copy_named_like_one_in_icloud_in_another_case_is_not_put_beside_it() {
+    let bed = Bed::new();
+    let c = bed.cloud.file(ROOT_ID, "c.md", "one", bed.time());
+    bed.settle();
+    // Both sides edit c.md; iCloud already has an earlier conflicted copy
+    // under the name this one would take, in another case.
+    bed.cloud
+        .file(ROOT_ID, "C (conflicted copy desk DATE).MD", "older copy", bed.time());
+    bed.cloud.edit(&c.id, "theirs", bed.time());
+    bed.write("c.md", "mine");
+    let date = &icloud_session::time::rfc3339(icloud_session::time::now_ms() / 1000)[..10];
+    let older = bed.cloud.id_at("C (conflicted copy desk DATE).MD").unwrap();
+    bed.cloud
+        .rename_item(&older, &format!("C (conflicted copy desk {date}).MD"));
+    bed.settle();
+    let paths = bed.cloud.paths();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert_eq!(bed.local_paths(), paths);
+}
+
+#[test]
+fn a_file_renamed_in_icloud_onto_a_removed_ones_name_and_moved_here_is_not_sent_twice() {
+    let bed = Bed::new();
+    bed.cloud.file(ROOT_ID, "b.txt", "b", bed.time());
+    let c = bed.cloud.file(ROOT_ID, "c.md", "c", bed.time());
+    bed.settle();
+    // In iCloud b.txt goes and c.md takes its name; here c.md goes into a new folder.
+    let b = bed.cloud.id_at("b.txt").unwrap();
+    bed.cloud.remove(&b);
+    bed.cloud.rename_item(&c.id, "b.txt");
+    fs::create_dir(bed.root().join("P")).unwrap();
+    fs::rename(bed.root().join("c.md"), bed.root().join("P/c.md")).unwrap();
+    bed.settle();
+    let texts: Vec<_> = bed.cloud.tree().into_values().flatten().collect();
+    assert_eq!(texts, ["c"], "{:?}", bed.cloud.paths());
+}
+
+#[test]
+fn a_file_moved_here_into_a_folder_renamed_on_both_sides_follows_icloud_with_no_failure() {
+    let bed = Bed::new();
+    let r = bed.cloud.folder(ROOT_ID, "r");
+    let s = bed.cloud.file(ROOT_ID, "s.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("r"), bed.root().join("Q")).unwrap();
+    fs::rename(bed.root().join("s.txt"), bed.root().join("Q/s.txt")).unwrap();
+    bed.cloud.rename_item(&r.id, "P");
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["P", "P/s.txt"]);
+    assert_eq!(bed.cloud.id_at("P/s.txt").as_deref(), Some(s.id.as_str()));
+}

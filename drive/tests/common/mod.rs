@@ -366,6 +366,14 @@ impl Remote for Fake {
         if parent_id != ROOT_ID && !c.nodes.contains_key(parent_id) {
             return Err(remote::Error::Refused("the move refused: ID_INVALID".into()));
         }
+        // Not into itself or below it.
+        let mut at = parent_id.to_string();
+        while let Some(n) = c.nodes.get(&at) {
+            if n.id == node.id {
+                return Err(remote::Error::Refused("the move refused: INVALID_DESTINATION".into()));
+            }
+            at = n.parent.clone();
+        }
         let old = c.nodes[&node.id].parent.clone();
         c.nodes.get_mut(&node.id).unwrap().parent = parent_id.to_string();
         c.touch(&old);
@@ -390,6 +398,8 @@ pub struct Bed {
     pub dir: tempfile::TempDir,
     pub cloud: Fake,
     pub clock: RefCell<i64>,
+    /// Each operation a sync started, in order.
+    pub started: RefCell<Vec<String>>,
 }
 
 impl Bed {
@@ -398,6 +408,7 @@ impl Bed {
             dir: tempfile::tempdir().unwrap(),
             cloud: Fake::default(),
             clock: RefCell::new(1_600_000_000_000),
+            started: RefCell::default(),
         }
     }
     pub fn root(&self) -> PathBuf {
@@ -447,7 +458,7 @@ impl Bed {
             top: engine::top_node(ROOT_ID),
             trash_dir: self.dir.path().join("Trash"),
             host: "desk".into(),
-            progress: Box::new(|_| {}),
+            progress: Box::new(|line| self.started.borrow_mut().push(line.to_string())),
         };
         engine.sync(dry_run, allow_deletes)
     }
@@ -496,5 +507,38 @@ fn walk_texts(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Option<String
         } else {
             out.insert(path, Some(fs::read_to_string(entry.path()).unwrap_or_default()));
         }
+    }
+}
+
+/// A stop at a crash point is a panic; it is expected, so it is not printed.
+pub fn quiet() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if info.payload().downcast_ref::<icloud_drive::crash::Crash>().is_none() {
+                default(info)
+            }
+        }));
+    });
+}
+
+/// Runs a sync with the crash hook `arm`ed; the point it stopped at.
+pub fn crash_at(bed: &Bed, allow_deletes: bool, arm: impl FnOnce()) -> Option<&'static str> {
+    quiet();
+    arm();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bed.try_sync(allow_deletes)));
+    icloud_drive::crash::disarm();
+    match result {
+        Ok(done) => {
+            done.unwrap();
+            None
+        }
+        Err(payload) => Some(
+            payload
+                .downcast_ref::<icloud_drive::crash::Crash>()
+                .expect("a stop at a crash point, not a failure")
+                .0,
+        ),
     }
 }
