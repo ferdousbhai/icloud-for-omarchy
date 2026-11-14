@@ -447,7 +447,15 @@ for more than text edits). The engine:
   change into that file (diff3 against the old base) and keeps tracking at
   the old path, so the next push pairs the move with a matching change tag.
   Without this the remote edit would be lost: the move would go up, and
-  the moved file's older text after it.
+  the moved file's older text after it. The note's attachments go to the
+  `attachments/` beside that file (when the files carrying its id are all
+  in one directory), where the push's move would take them: a copy left in
+  the old directory moves along, one already there (the folder's directory
+  renamed here) is taken, a name held by another file there gives a free
+  one (the links in the file and the base copy follow it), and a changed
+  attachment is downloaded there. Up to 0.11.1 it was downloaded into the
+  old directory, which made a folder directory renamed here again, so the
+  push made the new one a second folder instead of renaming the first.
 - A folder renamed (or moved) in iCloud has its whole directory renamed by
   the pull, `attachments/` and all, and every tracked note and attachment
   file under it is tracked at its new path (`pull::rename_folder_dirs`,

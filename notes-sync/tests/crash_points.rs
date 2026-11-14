@@ -1420,6 +1420,129 @@ fn a_folder_deleted_here_and_renamed_in_icloud_is_pushed_so_after_a_pull() {
     );
 }
 
+/// How the photo note's file left `Work` here before its photo was replaced
+/// on the phone.
+#[derive(Debug, Clone, Copy)]
+enum PhotoNoteMoved {
+    /// `Work` renamed to `Office`, `attachments/` and all.
+    FolderRenamed,
+    /// Only the note's file moved to a new `Office`; its photo stayed.
+    FileMoved,
+    /// The same, with another file of the photo's name in `Office/attachments`.
+    FileMovedNameTaken,
+}
+
+/// The photo note in `Work`, moved out of it here as `how` says, its photo
+/// replaced on the phone, then a pull and a sync: the new photo is
+/// downloaded beside the moved file (the old copy moved along, or a free
+/// name taken), `Work` is not made again, and the push renames the folder
+/// or moves the note, as was done here.
+fn photo_of_a_note_moved_here_replaced_in_icloud(how: PhotoNoteMoved) {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    let mut zone = account(3);
+    let mut photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+    let reference = json!({ "recordName": WORK_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+    photo_note["fields"]["Folder"]["value"] = reference.clone();
+    photo_note["fields"]["Folders"]["value"] = json!([reference]);
+    zone.put(photo_note);
+    let mut start = cloned_from(zone);
+    let file = tracked_file(&start.place, PHOTO_NOTE);
+    let name = Path::new(&file).file_name().unwrap().to_string_lossy().into_owned();
+    assert!(file.starts_with("Work/"), "{file}");
+    let (photo_name, _) = photo(&start.zone);
+    let vault = start.place.vault.clone();
+    match how {
+        PhotoNoteMoved::FolderRenamed => {
+            std::fs::rename(vault.join("Work"), vault.join("Office")).unwrap();
+        }
+        PhotoNoteMoved::FileMoved | PhotoNoteMoved::FileMovedNameTaken => {
+            std::fs::create_dir_all(vault.join("Office/attachments")).unwrap();
+            std::fs::rename(vault.join(&file), vault.join("Office").join(&name)).unwrap();
+            start.expect.new_folders = 1;
+        }
+    }
+    if let PhotoNoteMoved::FileMovedNameTaken = how {
+        std::fs::write(vault.join("Office/attachments").join(&photo_name), "not the photo").unwrap();
+    }
+    let fake = Fake::start(start.zone.clone());
+    {
+        let mut zone = fake.zone();
+        zone.assets.insert("/B/other-image".into(), b"another photo".to_vec());
+        let media_name = "066C8A2E-796F-403F-AD75-A5267CBD0E18";
+        let mut media = zone.live(media_name).unwrap().clone();
+        media["fields"]["Asset"]["value"] = json!({ "fileChecksum": "ck-other", "size": 13,
+            "downloadURL": "https://cvws.icloud-content.com/B/other-image" });
+        zone.put(media);
+        let photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+        zone.put(photo_note);
+    }
+    let place = Place::copy_of(&start.place);
+    let label = format!("{how:?}");
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    let state = read_clone_state(&place.vault).unwrap().unwrap();
+    let attachments = state.attachments.clone().unwrap_or_default();
+    let entry = attachments
+        .values()
+        .find(|a| a.note_record_name == PHOTO_NOTE)
+        .unwrap_or_else(|| panic!("{label}: the photo is not tracked"));
+    assert!(entry.file.starts_with("Office/attachments/"), "{label}: {}", entry.file);
+    assert_eq!(
+        std::fs::read(place.vault.join(&entry.file)).unwrap(),
+        b"another photo",
+        "{label}"
+    );
+    match how {
+        PhotoNoteMoved::FolderRenamed => assert!(!place.vault.join("Work").exists(), "{label}: {}", says(&pull)),
+        _ => assert!(
+            !place.vault.join("Work/attachments").join(&photo_name).exists(),
+            "{label}: the old photo was left in Work"
+        ),
+    }
+    if let PhotoNoteMoved::FileMovedNameTaken = how {
+        assert_ne!(entry.file, format!("Office/attachments/{photo_name}"), "{label}");
+        assert_eq!(
+            std::fs::read_to_string(place.vault.join("Office/attachments").join(&photo_name)).unwrap(),
+            "not the photo",
+            "{label}"
+        );
+    }
+    let text = std::fs::read_to_string(place.vault.join("Office").join(&name)).unwrap();
+    assert!(!text.contains("<<<<<<<"), "{label}: {text}");
+    let link = format!(
+        "](attachments/{}",
+        Path::new(&entry.file).file_name().unwrap().to_string_lossy()
+    );
+    assert!(
+        text.contains(&link) || text.contains(&link.replace(' ', "%20")),
+        "{label}: {text}"
+    );
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(&fake, &place, &start.expect, &label);
+    assert_eq!(tracked_file(&place, PHOTO_NOTE), format!("Office/{name}"), "{label}");
+    if let PhotoNoteMoved::FolderRenamed = how {
+        let zone = fake.zone();
+        let folder = zone.live(WORK_FOLDER).unwrap();
+        let title = folder["fields"]["TitleEncrypted"]["value"].as_str().unwrap();
+        assert_eq!(base64_decode(title), b"Office", "{label}: the folder was not renamed");
+    }
+}
+
+#[test]
+fn a_photo_replaced_in_icloud_of_a_note_whose_folder_was_renamed_here_goes_beside_it() {
+    photo_of_a_note_moved_here_replaced_in_icloud(PhotoNoteMoved::FolderRenamed);
+}
+
+#[test]
+fn a_photo_replaced_in_icloud_of_a_note_moved_here_goes_beside_it() {
+    photo_of_a_note_moved_here_replaced_in_icloud(PhotoNoteMoved::FileMoved);
+}
+
+#[test]
+fn a_photo_replaced_in_icloud_of_a_note_moved_here_takes_a_free_name_beside_it() {
+    photo_of_a_note_moved_here_replaced_in_icloud(PhotoNoteMoved::FileMovedNameTaken);
+}
+
 /// A folder directory deleted here with a note whose photo was replaced on
 /// the phone before the pull: the new photo is not downloaded into the
 /// deleted directory, which would bring it back for the push to keep the

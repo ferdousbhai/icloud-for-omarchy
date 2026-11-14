@@ -31,7 +31,7 @@ use crate::vault::attachments::{
 };
 use crate::vault::base::{merge_base, read_base_copy, remove_base_copy, write_base_copy_of};
 use crate::vault::epoch::record_epoch;
-use crate::vault::folders::{reconcile_note_placements, remove_stale_dirs};
+use crate::vault::folders::{reconcile_note_placements, relocate_note_attachments, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
 use crate::vault::layout::{
     PreviousLayout, VaultLayout, build_vault_layout, expected_note_dir, note_dir_of, place_note, previous_layout_dirs,
@@ -578,20 +578,55 @@ pub fn run_pull_with(
                         .table_attachments
                         .values()
                         .any(|t| t.note_record_name == record.record_name);
+                // A note whose file is gone here, and which files carry
+                // elsewhere (moved or renamed here, its folder's directory
+                // renamed, not pushed yet): the files carrying its id.
+                let own_file_gone = existing
+                    .as_ref()
+                    .is_some_and(|e| e.shared_zone_owner.is_none() && !target_dir.join(&e.file).exists());
+                let claimants = if own_file_gone && (!decoded.embed_slots.is_empty() || tracks_embeds) {
+                    note_id_claimants(target_dir, &tracked.notes, &record.record_name, title_mode)?
+                } else {
+                    Vec::new()
+                };
+                // Its attachments go beside the file that carries it (all of
+                // them in one directory), where the push's move would take
+                // them: the old copies there move along, a name taken there
+                // gives another, and a changed one is downloaded there. Into
+                // the old directory, a download would make it again for the
+                // push to keep the folder, not rename it.
+                let claimant_dirs: HashSet<String> = claimants.iter().map(|f| note_dir_of(f)).collect();
+                let attachment_dir = match claimant_dirs.iter().next() {
+                    Some(dir) if claimant_dirs.len() == 1 && *dir != note_dir => {
+                        relocate_note_attachments(
+                            target_dir,
+                            &record.record_name,
+                            &claimants[0],
+                            &mut tracked.attachments,
+                        )?;
+                        let moved: Vec<String> = tracked
+                            .attachments
+                            .values()
+                            .filter(|a| a.note_record_name == record.record_name)
+                            .map(|a| posix::basename(&a.file).to_owned())
+                            .collect();
+                        used_names_for(&mut used_attachment_file_names, dir).extend(moved);
+                        dir.clone()
+                    }
+                    _ => note_dir.clone(),
+                };
                 // Nothing is downloaded into the directory of a note whose
                 // directory is gone here with its file, which no other file
                 // carries (deleted with its folder's, for the next push to
                 // delete): made again, it would keep the folder in iCloud.
-                let into_gone_dir = existing.as_ref().is_some_and(|e| e.shared_zone_owner.is_none())
-                    && !target_dir.join(&note_dir).is_dir()
-                    && note_id_claimants(target_dir, &tracked.notes, &record.record_name, title_mode)?.is_empty();
+                let into_gone_dir = own_file_gone && claimants.is_empty() && !target_dir.join(&note_dir).is_dir();
                 if !decoded.embed_slots.is_empty() || tracks_embeds {
-                    if claimed_attachment_dirs.insert(note_dir.clone()) {
+                    if claimed_attachment_dirs.insert(attachment_dir.clone()) {
                         claim_untracked_attachment_names(
                             target_dir,
-                            &note_dir,
+                            &attachment_dir,
                             &tracked,
-                            used_names_for(&mut used_attachment_file_names, &note_dir),
+                            used_names_for(&mut used_attachment_file_names, &attachment_dir),
                             title_mode,
                         )?;
                     }
@@ -606,9 +641,9 @@ pub fn run_pull_with(
                         &decoded.embed_slots,
                         &tracked.attachments,
                         &tracked.table_attachments,
-                        used_names_for(&mut used_attachment_file_names, &note_dir),
+                        used_names_for(&mut used_attachment_file_names, &attachment_dir),
                         None,
-                        &note_dir,
+                        &attachment_dir,
                     )?;
                     body_text = resolved.body_text;
                     for stale in &resolved.stale_attachment_record_names {
