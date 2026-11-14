@@ -191,6 +191,23 @@ impl<'a> Service<'a> {
         Ok(live)
     }
 
+    /// Whether iCloud has ever had the reminder `id`: `None` when it has
+    /// not (`NOT_FOUND`), `Some(None)` when it is deleted, else the
+    /// reminder, now in the cache too.
+    pub fn look_up(&self, id: &str) -> Result<Option<Option<Reminder>>> {
+        let ck = CloudKit::connect(self.t)?;
+        let records = ck.lookup(&[id])?;
+        if records
+            .iter()
+            .any(|r| r.name == id && r.error.as_ref().is_some_and(|(code, _)| code == "NOT_FOUND"))
+        {
+            return Ok(None);
+        }
+        let live = saved_reminder(id, &records)?;
+        self.store_one(id, live.as_ref())?;
+        Ok(Some(live))
+    }
+
     /// Folds a successful write's answer into the cache. The write
     /// happened, so a failure here is a warning, not an error: reporting
     /// it as failed would invite writing it again.

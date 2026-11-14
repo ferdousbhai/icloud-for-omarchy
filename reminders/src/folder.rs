@@ -47,7 +47,8 @@
 //!   to add is recorded with the ID its reminder will have before it is sent
 //!   ([`ListState::pending`]), so one that reached iCloud without the run
 //!   hearing so (killed, or the answer lost) is that line's reminder at the
-//!   next run, and one that did not is sent again. Nothing else ties a new
+//!   next run (deleted since, its line goes), and one iCloud never heard of
+//!   is sent again. Nothing else ties a new
 //!   line to a reminder: one made on the phone that reads the same is
 //!   another.
 //! - What a conflict copy added is in iCloud before it is in the file. Until
@@ -758,18 +759,34 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         ls.pending.clear();
     }
     // Lines a run sent without hearing back: the reminder iCloud has is
-    // that line's; one it lacks never got there, and the line is sent
-    // again (the file, or the copy, still has it).
+    // that line's, and one deleted since is too (its line goes with the
+    // next write, not sent again); only one iCloud never heard of is sent
+    // again (the file, or the copy, still has it). Without an answer the
+    // entry waits, and nothing of this list is sent.
     if !ls.pending.is_empty() {
         let cache = svc.cache()?;
+        let mut failed = None;
         for p in std::mem::take(&mut ls.pending) {
             let id = format!("Reminder/{}", p.uuid);
-            if let Some(made) = cache.reminders.get(&id) {
-                ls.pending.push(p.clone());
-                known_now(ls, &p.uuid, made);
+            let found = match cache.reminders.get(&id) {
+                Some(r) => Ok(Some(Some(r.clone()))),
+                None if failed.is_some() => Err(()),
+                None => svc.look_up(&id).map_err(|e| failed = Some(e)),
+            };
+            match found {
+                Err(()) => ls.pending.push(p),
+                Ok(Some(Some(made))) => {
+                    ls.pending.push(p.clone());
+                    known_now(ls, &p.uuid, &made);
+                }
+                Ok(Some(None)) => ls.items.push(Known { id, item: p.item }),
+                Ok(None) => {}
             }
         }
         save(ls)?;
+        if let Some(e) = failed {
+            return Err(e);
+        }
     }
 
     // Before the file: a copy is compared with the file as last written, so

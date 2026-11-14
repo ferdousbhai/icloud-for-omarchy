@@ -1361,3 +1361,31 @@ fn a_deleted_list_s_conflict_copies_go_with_its_file_or_stay_with_it() {
     );
     assert_eq!(file_names(&dir), ["Groceries.md", copy, "Reminders.md"]);
 }
+
+#[test]
+fn a_line_whose_reminder_was_deleted_before_the_run_heard_back_is_not_made_again() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Bread\n").unwrap();
+    // The add reaches iCloud; the run is killed before it hears so.
+    let mut child = env.background_held_at_write(1);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    env.release_writes();
+    // Deleted on the phone before the next run.
+    let made = env.sent("records/modify")[0]["operations"][0]["record"]["recordName"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut bread = env.state.record(&made).unwrap();
+    bread["fields"]["Deleted"] = json!({ "type": "INT64", "value": 1 });
+    env.state.put(bread);
+
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["added"], 0, "{out}");
+    assert_eq!(env.creates(), 1, "not made again");
+    assert!(!all_titles(&env, "Groceries").contains(&"Bread".to_owned()));
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("Bread"));
+}
