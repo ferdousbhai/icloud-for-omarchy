@@ -1004,8 +1004,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
 
     if !paths.is_empty() {
         let t = ctx.transport()?;
-        let done: RefCell<Vec<(usize, LibResult<upload::Uploaded>)>> =
-            RefCell::new(Vec::new());
+        let done: RefCell<Vec<(usize, LibResult<upload::Uploaded>)>> = RefCell::new(Vec::new());
         // Progress goes to stderr in every mode: it is not the result.
         let summary = upload::upload_batch(&*t, &paths, Duration::from_secs(60), &|| false, &|event| match event {
             BatchEvent::Step {
@@ -1459,7 +1458,10 @@ mod exit_tests {
             message: "x".into(),
         };
         assert_eq!(exit_and_code(daemon), t(1, "error", false));
-        assert_eq!(exit_and_code(S::FindMyAuthRequired), t(3, "find_my_auth_required", true));
+        assert_eq!(
+            exit_and_code(S::FindMyAuthRequired),
+            t(3, "find_my_auth_required", true)
+        );
         assert_eq!(
             exit_and_code(Error::CloudKit {
                 code: "CONFLICT".into(),

@@ -6,8 +6,8 @@ use icloud_photos::cloudkit::CloudKit;
 use icloud_photos::config::Dirs;
 use icloud_photos::sync::sync;
 use icloud_photos::thumbs::{
-    Downloader, Job, MAX_NOW_JOBS, Priority, Targets, fetch, fetch_detailed_with, live_ext,
-    prune_cache, rename_noreplace,
+    Downloader, Job, MAX_NOW_JOBS, Priority, Targets, fetch, fetch_detailed_with, live_ext, prune_cache,
+    rename_noreplace,
 };
 use icloud_photos::transport::{Result, Transport};
 use serde_json::Value;

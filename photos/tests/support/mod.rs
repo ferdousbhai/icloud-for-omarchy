@@ -115,7 +115,13 @@ impl Transport for FixtureTransport {
         if url.contains("/expired/") {
             return Err(Error::http(403, "expired"));
         }
-        let bytes = self.files.lock().unwrap().get(url).cloned().ok_or(Error::http(404, url))?;
+        let bytes = self
+            .files
+            .lock()
+            .unwrap()
+            .get(url)
+            .cloned()
+            .ok_or(Error::http(404, url))?;
         // Like icloud-session: a temp file next to `dest`, then a rename
         // over it. No directory is created, so a missing one shows.
         let tmp = dest.with_extension(format!("part-{}", std::process::id()));
