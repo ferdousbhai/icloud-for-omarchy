@@ -3386,6 +3386,10 @@ pub fn run_push_with(
                 return Err(e);
             }
         };
+        // Saved entry by entry (an unchanged state is not rewritten): a run
+        // that is killed never gets to the write below, and a note it
+        // created would be created again by the next push.
+        write_clone_state(target_dir, &state)?;
         if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded {
             pushed += 1;
         }
