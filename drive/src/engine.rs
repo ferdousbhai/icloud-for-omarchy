@@ -664,6 +664,18 @@ impl<R: Remote> Engine<'_, R> {
                 // where it was in step: then nothing is this move's doing.
                 let mut untouched = node.parent == row.node.parent && node.name == row.node.name;
                 self.state.set_pending_move(id, to)?;
+                // Renamed first when the folder it goes to holds something
+                // of its old name, so that it is never moved onto that.
+                let taken = |node: &Node| {
+                    snapshot.nodes.values().any(|n| {
+                        n.parent == parent.id && n.id != node.id && n.name.to_lowercase() == node.name.to_lowercase()
+                    })
+                };
+                if node.parent != parent.id && node.name != name_of(to) && taken(&node) {
+                    node = self.unless_refused(self.remote.rename(&node, name_of(to)), id, untouched)?;
+                    crash::point("remote.rename");
+                    untouched = false;
+                }
                 if node.parent != parent.id {
                     node = self.unless_refused(self.remote.move_to(&node, &parent.id), id, untouched)?;
                     crash::point("remote.move_to");
@@ -860,12 +872,17 @@ impl<R: Remote> Engine<'_, R> {
                     return Ok(false);
                 }
                 // As iCloud has it now, not when it was listed: an edit made
-                // there since (its etag, or for a folder something added,
-                // removed or resized below it) beats the removal, which the
-                // next round sees. So does a move.
+                // there since beats the removal, which the next round sees.
+                // So does a move. A file's etag tells; a folder's does not
+                // change for a rename or same-size content below it, so for
+                // a folder the change feed is asked whether anything in it
+                // changed since the listing.
                 let node = node_of(id).unwrap_or(row.node);
                 let (_, kids) = self.remote.list(&node.parent)?;
                 if !kids.iter().any(|k| k.id == node.id && k.etag == node.etag) {
+                    return Ok(false);
+                }
+                if node.kind == Kind::Folder && self.changed_below(snapshot, &node)? {
                     return Ok(false);
                 }
                 self.remote.trash(&node)?;
@@ -880,6 +897,33 @@ impl<R: Remote> Engine<'_, R> {
             Op::Forget { id, .. } => self.state.forget(id)?,
         }
         Ok(true)
+    }
+
+    /// Whether the change feed names the folder `node`, or anything below
+    /// it in `snapshot`, as changed since the listing (or cannot say).
+    fn changed_below(&self, snapshot: &Snapshot, node: &Node) -> Result<bool> {
+        let Some(token) = self.state.meta("feed_token")? else {
+            return Ok(true);
+        };
+        let changes = match self.remote.changes(Some(&token)) {
+            Ok(changes) => changes,
+            Err(remote::Error::FeedReset) => return Ok(true),
+            Err(e) => return Err(e.into()),
+        };
+        let Some(top) = snapshot.paths.get(&node.id) else {
+            return Ok(true);
+        };
+        let below: HashSet<&str> = snapshot
+            .paths
+            .iter()
+            .filter(|(_, p)| crate::state::is_under(p, top))
+            .filter_map(|(id, _)| snapshot.nodes.get(id).map(|n| n.docwsid.as_str()))
+            .collect();
+        Ok(changes
+            .files
+            .iter()
+            .chain(&changes.folders)
+            .any(|d| below.contains(d.rsplit("::").next().unwrap_or_default())))
     }
 
     /// iCloud's file, dated as there, in a temp file beside `path`. `None`

@@ -389,8 +389,9 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             continue;
         };
         // A move made here that an earlier run did not finish in iCloud
-        // (a move there is the folder, then the name: under its old name it
-        // is half way, at the noted destination it is done and was not
+        // (a move there is the folder, then the name, or the other way
+        // round: under its old name or in its old folder it is half way, at
+        // the noted destination it is done and was not
         // recorded): where iCloud has it is that move's doing, not a move
         // made in iCloud to follow here, which would undo what was done
         // here. It is finished as a move made here, to where the item is
@@ -399,7 +400,11 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
         // name: then iCloud's place is followed after all.
         let ours = rpath != &row.path
             && context.pending_moves.get(&row.node.id).is_some_and(|to| {
-                rpath == to || name_of(rpath) == name_of(&row.path) || is_aside_of(name_of(rpath), name_of(to))
+                rpath == to
+                    || name_of(rpath) == name_of(&row.path)
+                    || is_aside_of(name_of(rpath), name_of(to))
+                    // Renamed first, where the folder it goes to held its name.
+                    || (parent_of(rpath) == parent_of(&row.path) && name_of(rpath) == name_of(to))
             });
         let finish = if !ours {
             None

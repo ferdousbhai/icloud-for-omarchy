@@ -1470,3 +1470,41 @@ fn a_file_renamed_here_to_the_name_of_one_moved_away_on_both_sides_leaves_one_co
     assert_eq!(texts, ["first", "second"]);
     assert_eq!(bed.local_paths(), ["Here", "There", "There/c.md", "c.md"]);
 }
+
+#[test]
+fn a_folder_removed_here_whose_file_icloud_edits_while_a_sync_runs_comes_back() {
+    let bed = Bed::new();
+    bed.write("F/f.txt", "aaa");
+    bed.settle();
+    fs::remove_dir_all(bed.root().join("F")).unwrap();
+    // Same size: the folder's etag does not change for it.
+    let at = bed.cloud.0.borrow().listings + 1;
+    let edit = MidOp::Edit {
+        id: bed.cloud.id_at("F/f.txt").unwrap(),
+        text: "bbb".into(),
+        mtime_ms: bed.time(),
+    };
+    bed.cloud.0.borrow_mut().mid_listing = Some((at, edit));
+    bed.try_sync(true).unwrap();
+    assert!(bed.cloud.0.borrow().mid_fired.is_some());
+    bed.settle();
+    assert!(bed.cloud.trashed_texts().is_empty(), "{:?}", bed.cloud.trashed_texts());
+    assert_eq!(bed.read("F/f.txt").as_deref(), Some("bbb"));
+}
+
+#[test]
+fn a_file_moved_here_into_a_folder_holding_its_old_name_is_renamed_first() {
+    let bed = Bed::new();
+    bed.write("d", "mine");
+    bed.write("P/d", "other");
+    bed.settle();
+    fs::rename(bed.root().join("d"), bed.root().join("P/e")).unwrap();
+    // Stopped after the first request, the next sync finishes the move.
+    let stopped = common::crash_at(&bed, false, || icloud_drive::crash::arm_named("remote.rename"));
+    assert_eq!(stopped, Some("remote.rename"));
+    assert_eq!(bed.cloud.paths(), ["P", "P/d", "e"]);
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["P", "P/d", "P/e"]);
+    assert_eq!(bed.cloud.text("P/e").as_deref(), Some("mine"));
+    assert_eq!(bed.local_paths(), ["P", "P/d", "P/e"]);
+}

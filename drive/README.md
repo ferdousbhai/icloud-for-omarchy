@@ -86,7 +86,7 @@ The folder is scanned, and the plan is made by a pure function
 Moves are found by item id in iCloud and by inode here. Each operation
 records its result as it finishes, so a run that stops half way is picked
 up by the next from wherever both sides stand. A move made here that also
-renames takes two requests to iCloud (the folder, then the name); the
+renames takes two requests to iCloud (the folder and the name); the
 state notes where it is heading before the first, so a run that stops
 between them is finished by the next, not read as a move made in iCloud.
 
