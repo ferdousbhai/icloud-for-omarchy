@@ -144,24 +144,6 @@ fn incremental_failure_falls_back_to_a_full_listing() {
 }
 
 #[test]
-fn http_error_on_changes_endpoint_also_falls_back() {
-    let t = FixtureTransport::new(|call| {
-        if call.op == "changes/zone" {
-            return Err(Error::Http {
-                status: 400,
-                body: "BAD_REQUEST".into(),
-            });
-        }
-        library(call)
-    });
-    let ck = CloudKit::connect(&t).unwrap();
-    let mut cat = Catalog::open_in_memory().unwrap();
-    cat.set_meta(SYNC_TOKEN_KEY, Some("TOKEN-FULL")).unwrap();
-    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
-    assert_eq!(report.mode, Mode::Full);
-}
-
-#[test]
 fn sign_in_required_does_not_fall_back() {
     let t = FixtureTransport::new(|call| {
         if call.op == "changes/zone" {

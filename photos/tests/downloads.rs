@@ -31,6 +31,23 @@ fn url(cat: &Catalog, id: &str, f: impl Fn(&icloud_photos::catalog::Row) -> Opti
     f(&cat.asset(id).unwrap().unwrap()).unwrap()
 }
 
+/// The asset's master as the catalog has it, with no renditions.
+fn master_of(cat: &Catalog, id: &str) -> icloud_photos::cloudkit::MasterInfo {
+    let row = cat.asset(id).unwrap().unwrap();
+    icloud_photos::cloudkit::MasterInfo {
+        master_id: row.master_id,
+        filename: row.filename,
+        size: row.size,
+        width: row.w,
+        height: row.h,
+        kind: row.kind,
+        original: None,
+        thumb: None,
+        medium: None,
+        live: None,
+    }
+}
+
 #[test]
 fn thumb_comes_from_apples_derivative_into_the_cache() {
     let tmp = temp_dir("thumb");
@@ -94,24 +111,13 @@ fn a_small_original_with_no_preview_stands_in_for_it() {
     let t = FixtureTransport::new(library);
     let (cat, targets) = synced(&t, root);
     // iCloud makes no resJPEGMedRes for a small JPEG or PNG (a screenshot).
-    let row = cat.asset("ASSET-002").unwrap().unwrap();
     let resource = |url: &str, uti: &str| icloud_photos::cloudkit::Resource {
         url: url.into(),
         size: 1,
         file_type: Some(uti.into()),
     };
-    let mut m = icloud_photos::cloudkit::MasterInfo {
-        master_id: row.master_id.clone(),
-        filename: row.filename.clone(),
-        size: row.size,
-        width: row.w,
-        height: row.h,
-        kind: row.kind,
-        original: Some(resource("https://cvws.icloud-content.com/orig/png", "public.png")),
-        thumb: None,
-        medium: None,
-        live: None,
-    };
+    let mut m = master_of(&cat, "ASSET-002");
+    m.original = Some(resource("https://cvws.icloud-content.com/orig/png", "public.png"));
     cat.update_master(&m).unwrap();
     t.serve("https://cvws.icloud-content.com/orig/png", b"\x89PNG small");
 
@@ -126,49 +132,6 @@ fn a_small_original_with_no_preview_stands_in_for_it() {
     m.original = Some(resource("https://cvws.icloud-content.com/orig/heic", "public.heic"));
     cat.update_master(&m).unwrap();
     assert!(fetch(&t, &cat, &targets, "ASSET-002", Job::Medium).is_err());
-}
-
-#[test]
-fn an_expired_url_is_refreshed_once() {
-    let tmp = temp_dir("expired");
-    let root = tmp.path();
-    let t = FixtureTransport::new(library);
-    let (cat, targets) = synced(&t, root);
-    // Make the stored URL look expired; lookup_m002_fresh.json has /B2/ URLs.
-    let row = cat.asset("ASSET-002").unwrap().unwrap();
-    let mut m = icloud_photos::cloudkit::MasterInfo {
-        master_id: row.master_id.clone(),
-        filename: row.filename.clone(),
-        size: row.size,
-        width: row.w,
-        height: row.h,
-        kind: row.kind,
-        original: None,
-        thumb: None,
-        medium: None,
-        live: None,
-    };
-    m.medium = Some(icloud_photos::cloudkit::Resource {
-        url: "https://cvws.icloud-content.com/expired/med".into(),
-        size: 1,
-        file_type: None,
-    });
-    cat.update_master(&m).unwrap();
-    let fresh = fixture("lookup_m002_fresh.json");
-    let fresh_url = fresh
-        .pointer("/records/0/fields/resJPEGMedRes/value/downloadURL")
-        .and_then(Value::as_str)
-        .unwrap();
-    assert!(fresh_url.contains("/B2/"));
-    t.serve(fresh_url, b"medium");
-
-    let path = fetch(&t, &cat, &targets, "ASSET-002", Job::Medium).unwrap();
-    assert_eq!(std::fs::read(path).unwrap(), b"medium");
-    assert!(t.ops().contains(&"records/lookup".to_string()));
-    assert_eq!(
-        cat.asset("ASSET-002").unwrap().unwrap().medium_url.as_deref(),
-        Some(fresh_url)
-    );
 }
 
 #[test]
@@ -215,19 +178,8 @@ fn an_expired_url_refreshes_the_queued_peers_in_the_same_lookup() {
     let root = tmp.path();
     let t = FixtureTransport::new(library);
     let (cat, targets) = synced(&t, root);
-    let row = cat.asset("ASSET-002").unwrap().unwrap();
-    let mut m = icloud_photos::cloudkit::MasterInfo {
-        master_id: row.master_id.clone(),
-        filename: row.filename.clone(),
-        size: row.size,
-        width: row.w,
-        height: row.h,
-        kind: row.kind,
-        original: None,
-        thumb: None,
-        medium: None,
-        live: None,
-    };
+    // Make the stored URL look expired; lookup_m002_fresh.json has /B2/ URLs.
+    let mut m = master_of(&cat, "ASSET-002");
     m.medium = Some(icloud_photos::cloudkit::Resource {
         url: "https://cvws.icloud-content.com/expired/med".into(),
         size: 1,
@@ -239,6 +191,7 @@ fn an_expired_url_refreshes_the_queued_peers_in_the_same_lookup() {
         .pointer("/records/0/fields/resJPEGMedRes/value/downloadURL")
         .and_then(Value::as_str)
         .unwrap();
+    assert!(fresh_url.contains("/B2/"));
     t.serve(fresh_url, b"medium");
 
     // ASSET-002 itself, an unknown id and a duplicate are skipped; the
@@ -264,6 +217,11 @@ fn an_expired_url_refreshes_the_queued_peers_in_the_same_lookup() {
     assert_eq!(
         names,
         vec![master("ASSET-002"), master("ASSET-001"), master("ASSET-003")]
+    );
+    // The fresh URL is kept for next time.
+    assert_eq!(
+        cat.asset("ASSET-002").unwrap().unwrap().medium_url.as_deref(),
+        Some(fresh_url)
     );
 }
 
