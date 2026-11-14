@@ -228,6 +228,25 @@ window closes, so a killed run is ordinary.
   beside it; push then creates that file as a note of its own, so neither
   text is lost.
 
+- `pull` does the same for a note new to the vault: an untracked file in
+  the note's directory that carries its id and reads exactly as the pull
+  would write it (what a pull killed before a save, or one that failed
+  between writing the file and recording it, left) is taken for the note's
+  file instead of `X 2.md` being written beside it.
+- A note whose attachment downloads a failed run may not have finished
+  keeps its attachments' entries without their checksum, and forgets its
+  change tag (`cmd::redo_downloads`): the next pull applies it again and
+  fetches each file again under the name it has.
+- A download never replaces a file in `attachments/` that no attachment
+  tracks (a file put there to be attached): pull takes those names as used,
+  and the download gets `name 2.ext`
+  (`cmd::pull::claim_untracked_attachment_names`). The exception is what a
+  killed pull left: a file linked from a note file that is itself untracked
+  and carries an id nothing tracks is fetched again under its name, so that
+  the note file reads as the pull would write it and is adopted (above).
+  Whether a file there is byte-identical to the download is not compared:
+  the name is chosen before the download runs.
+
 Tests: tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
 failed and a killed push), tests/cmd_clone.rs
 (`a_second_clone_over_an_unfinished_one_adopts_the_files_it_left`,

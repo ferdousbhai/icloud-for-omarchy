@@ -96,15 +96,16 @@ fn a_note_written_before_the_pull_failed_stays_tracked() {
     assert!(vault.join(&audio.file).exists());
     assert!(!state.notes.contains_key(IMAGE_NOTE));
     // Its download may not have run (downloads stop at the first failure):
-    // the next pull applies it again and fetches its attachment.
+    // the next pull applies it again and fetches its attachment again,
+    // under the same name.
     assert_eq!(audio.record_change_tag, "");
-    assert!(
-        state
-            .attachments
-            .unwrap_or_default()
-            .values()
-            .all(|a| a.note_record_name != AUDIO_NOTE)
-    );
+    let attachments = state.attachments.unwrap_or_default();
+    let audio_file = attachments
+        .values()
+        .find(|a| a.note_record_name == AUDIO_NOTE)
+        .expect("its attachment keeps its name");
+    assert_eq!(audio_file.media_file_checksum, "");
+    let audio_file = audio_file.file.clone();
     let no_network = FnConnector(|| -> Result<Remote, Error> { panic!("network: the plan found a change") });
     let plan = build_push_plan(&no_network, &vault, &mut |_| {}).unwrap();
     let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
@@ -114,6 +115,9 @@ fn a_note_written_before_the_pull_failed_stays_tracked() {
     assert_eq!(summary.added, 1);
     let state = read_clone_state(&vault).unwrap().unwrap();
     let attachments = state.attachments.unwrap();
+    let audio = attachments.values().find(|a| a.note_record_name == AUDIO_NOTE).unwrap();
+    assert_eq!(audio.file, audio_file, "fetched again under the same name");
+    assert_ne!(audio.media_file_checksum, "");
     for note in [AUDIO_NOTE, IMAGE_NOTE] {
         let attachment = attachments
             .values()
@@ -428,4 +432,71 @@ fn a_pull_adopts_the_files_an_earlier_pull_left_untracked() {
     let no_network = FnConnector(|| -> Result<Remote, Error> { panic!("network: the plan found a change") });
     let plan = build_push_plan(&no_network, &vault, &mut |_| {}).unwrap();
     assert!(plan.entries.is_empty(), "nothing to create");
+}
+
+/// Every file under `Notes/attachments`, sorted.
+fn attachment_files(vault: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(vault.join("Notes/attachments"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A file in a folder's `attachments/` that no attachment tracks (put there
+/// to be attached to a note, say) is never replaced by a download that
+/// happens to have its name: the download takes a free one.
+#[test]
+fn a_download_never_replaces_an_untracked_file_in_attachments() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    run_clone_with(
+        &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
+        &vault,
+        &mut NoProgress,
+        &CloneOptions::default(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(vault.join("Notes/attachments")).unwrap();
+    let mine = vault.join("Notes/attachments/_7130093.jpeg");
+    std::fs::write(&mine, b"my own picture, to be attached").unwrap();
+
+    pull(&vault, cassette("attach-clone.json"), dir.path().join("pull.json")).unwrap();
+    assert_eq!(std::fs::read(&mine).unwrap(), b"my own picture, to be attached");
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    let image = state
+        .attachments
+        .unwrap()
+        .into_values()
+        .find(|a| a.note_record_name == IMAGE_NOTE)
+        .unwrap();
+    assert_eq!(image.file, "Notes/attachments/_7130093 2.jpeg");
+    assert!(vault.join(&image.file).exists());
+}
+
+/// What a pull that was killed left (note files and the attachments they
+/// link to, none of them recorded) is taken over by the pull after it: the
+/// attachments are fetched under the same names, the notes adopted.
+#[test]
+fn a_pull_after_a_killed_one_reuses_the_attachment_names_it_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    run_clone_with(
+        &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
+        &vault,
+        &mut NoProgress,
+        &CloneOptions::default(),
+    )
+    .unwrap();
+    let state_file = vault.join(".icloud-notes/state.json");
+    let before = std::fs::read(&state_file).unwrap();
+    pull(&vault, cassette("attach-clone.json"), dir.path().join("first.json")).unwrap();
+    let (notes, attachments) = (notes_under(&vault), attachment_files(&vault));
+    assert_eq!(attachments.len(), 2);
+    std::fs::write(&state_file, before).unwrap();
+
+    pull(&vault, cassette("attach-clone.json"), dir.path().join("second.json")).unwrap();
+    assert_eq!(attachment_files(&vault), attachments);
+    assert_eq!(notes_under(&vault), notes, "no twins");
 }

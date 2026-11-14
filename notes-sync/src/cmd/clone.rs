@@ -10,8 +10,8 @@ use super::pull::backfill_new_note_bodies;
 use super::remote::{Connector, DefaultConnector, bind_account};
 use super::{
     Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
-    attachment_lookup_notice, left_behind_in, left_file_of, shared_zone_tokens_and_records, skipped_note_notice,
-    skipped_zone_notice, used_names_for, zone_for_owner,
+    attachment_lookup_notice, left_behind_in, left_file_of, redo_downloads, shared_zone_tokens_and_records,
+    skipped_note_notice, skipped_zone_notice, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::CloudKitRecord;
 use crate::cloudkit::client::DownloadQueue;
@@ -290,15 +290,7 @@ pub fn run_clone_with(
         failure.get_or_insert(e.into());
     }
     if failure.is_some() {
-        // Once one download fails the rest are not started: these notes
-        // forget their attachments and their version, so the first pull
-        // applies them again and fetches what is missing.
-        for record_name in &downloading {
-            attachments.retain(|_, a: &mut AttachmentEntry| a.note_record_name != *record_name);
-            if let Some(entry) = notes.get_mut(record_name) {
-                entry.record_change_tag.clear();
-            }
-        }
+        redo_downloads(&mut notes, &mut attachments, &downloading);
     }
     let failed = failure.is_some();
     let shared_held = failed || retry_zones.iter().any(Option::is_some);

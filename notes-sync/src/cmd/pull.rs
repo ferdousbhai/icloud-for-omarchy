@@ -10,8 +10,9 @@ use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
     Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
-    UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of, shared_zone_tokens_and_records,
-    skipped_note_notice, skipped_zone_notice, skipped_zone_owner, unshared_note_ids, used_names_for, zone_for_owner,
+    UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of, redo_downloads,
+    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner, unshared_note_ids,
+    used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -338,6 +339,7 @@ pub fn run_pull_with(
     // sync tokens stay where they were, so the next pull lists it again.
     let mut retry_zones: HashSet<Option<String>> = HashSet::new();
     let mut left_behind: HashMap<String, LeftBehind> = HashMap::new();
+    let mut claimed_attachment_dirs: HashSet<String> = HashSet::new();
     let notes_at_start = tracked.notes.clone();
     let checkpoints = layout_moves_nothing(&state, &layout, &tracked.notes);
     let mut notes_seen = 0usize;
@@ -496,6 +498,15 @@ pub fn run_pull_with(
                         .values()
                         .any(|t| t.note_record_name == record.record_name);
                 if !decoded.embed_slots.is_empty() || tracks_embeds {
+                    if claimed_attachment_dirs.insert(note_dir.clone()) {
+                        claim_untracked_attachment_names(
+                            target_dir,
+                            &note_dir,
+                            &tracked,
+                            used_names_for(&mut used_attachment_file_names, &note_dir),
+                            title_mode,
+                        )?;
+                    }
                     let resolved = resolve_note_attachments(
                         db,
                         &mut attachment_records,
@@ -795,15 +806,7 @@ pub fn run_pull_with(
         failure.get_or_insert(e.into());
     }
     if failure.is_some() {
-        // Once one download fails the rest are not started: these notes
-        // forget their attachments and their version, so the next pull
-        // applies them again and fetches what is missing.
-        for record_name in &downloading {
-            tracked.attachments.retain(|_, a| a.note_record_name != *record_name);
-            if let Some(entry) = tracked.notes.get_mut(record_name) {
-                entry.record_change_tag.clear();
-            }
-        }
+        redo_downloads(&mut tracked.notes, &mut tracked.attachments, &downloading);
     }
 
     if failure.is_none()
@@ -1180,7 +1183,7 @@ fn layout_moves_nothing(state: &CloneState, layout: &VaultLayout, notes: &IndexM
 /// records the note would leave the file untracked, for the next push to
 /// send to iCloud as a new note. It is what a pull that failed here would
 /// save - the old sync tokens, so everything is listed again; the notes
-/// with downloads queued forgetting their attachments and their version -
+/// with downloads queued forgetting their version ([`redo_downloads`]) -
 /// with one difference: a note this pull gave another folder is still in
 /// its old directory (notes move once all are applied), so it is saved as it
 /// was when the pull started, and the next pull applies it again.
@@ -1205,12 +1208,7 @@ fn checkpoint_state(
         })
         .collect();
     let mut attachments = tracked.attachments.clone();
-    for record_name in downloading {
-        attachments.retain(|_, a| a.note_record_name != *record_name);
-        if let Some(entry) = notes.get_mut(record_name) {
-            entry.record_change_tag.clear();
-        }
-    }
+    redo_downloads(&mut notes, &mut attachments, downloading);
     CloneState {
         account: state.account.clone(),
         sync_token: state.sync_token.clone(),
@@ -1227,6 +1225,53 @@ fn checkpoint_state(
         extra: state.extra.clone(),
         ..Default::default()
     }
+}
+
+/// Adds to `used` the names of the files in `note_dir`'s `attachments/` that
+/// no attachment tracks, so a download never replaces one: a file put there
+/// to be attached, linked from a note not pushed yet or from none so far.
+///
+/// Not the files a pull that was killed left: those are linked from a note
+/// file it wrote and never recorded (untracked, with an id nothing tracks).
+/// The pull after it fetches them again under the same names, so that the
+/// note file it writes reads as the one left, and is taken for the note
+/// instead of being written a second time beside it.
+fn claim_untracked_attachment_names(
+    target_dir: &Path,
+    note_dir: &str,
+    tracked: &Tracked,
+    used: &mut HashSet<String>,
+    title_mode: TitleMode,
+) -> Result<(), Error> {
+    const ATTACHMENTS_DIR: &str = "attachments";
+    let attachments_dir = posix::join(&[note_dir, ATTACHMENTS_DIR]);
+    let tracked_files: HashSet<&str> = tracked.attachments.values().map(|a| a.file.as_str()).collect();
+    let mut untracked: Vec<String> = file_names_in(&target_dir.join(&attachments_dir))?
+        .into_iter()
+        .filter(|name| !tracked_files.contains(posix::join(&[&attachments_dir, name]).as_str()))
+        .collect();
+    if untracked.is_empty() {
+        return Ok(());
+    }
+    let tracked_notes: HashSet<&str> = tracked.notes.values().map(|e| e.file.as_str()).collect();
+    for name in file_names_in(&target_dir.join(note_dir))? {
+        let file = posix::join(&[note_dir, &name]);
+        if !name.ends_with(".md") || super::push::is_sync_conflict_name(&name) || tracked_notes.contains(file.as_str())
+        {
+            continue;
+        }
+        let Some(text) = read_text(&target_dir.join(&file))? else {
+            continue;
+        };
+        let frontmatter = split_frontmatter(&text, split_options(title_mode)).frontmatter;
+        if read_note_id(&frontmatter).is_some_and(|id| !tracked.notes.contains_key(&id)) {
+            untracked.retain(|attachment| {
+                !crate::doc::embeds::has_attachment_link_to(&text, &posix::join(&[ATTACHMENTS_DIR, attachment]))
+            });
+        }
+    }
+    used.extend(untracked);
+    Ok(())
 }
 
 /// Untracked files whose `apple-note-id` names `record_name`: where a note

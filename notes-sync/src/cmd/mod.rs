@@ -166,6 +166,25 @@ pub(crate) fn skipped_zone_owner(skipped: &SkippedSharedZone) -> Option<&str> {
     }
 }
 
+/// Once one download fails the rest are not started. The notes that queued
+/// downloads (`downloading`) forget their version, so the next pull applies
+/// them again, and their attachments forget their checksum, so each file is
+/// fetched again, under the name it has.
+pub(crate) fn redo_downloads(
+    notes: &mut IndexMap<String, crate::vault::state::NoteEntry>,
+    attachments: &mut IndexMap<String, crate::vault::state::AttachmentEntry>,
+    downloading: &[String],
+) {
+    for record_name in downloading {
+        for attachment in attachments.values_mut().filter(|a| a.note_record_name == *record_name) {
+            attachment.media_file_checksum.clear();
+        }
+        if let Some(entry) = notes.get_mut(record_name) {
+            entry.record_change_tag.clear();
+        }
+    }
+}
+
 /// The note files a directory holds that nothing tracks, by the
 /// `apple-note-id` each carries: what a clone or pull that never got to
 /// record them (killed, or failed on that note) left there. Several files
