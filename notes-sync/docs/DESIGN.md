@@ -262,7 +262,10 @@ for more than text edits). The engine:
   made here and not pushed yet): new notes and folder relocations take the
   names already on disk as used and get a `" 2"` name instead. So do the
   attachment files of a note moved to another folder, in that folder's
-  `attachments/`.
+  `attachments/`. The rename itself refuses a name that is taken
+  (`renameat2` with `RENAME_NOREPLACE`, `vault::local::rename_no_replace`),
+  so a file a file-sync tool delivers between the look and the rename is
+  not replaced either.
 
 Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
 

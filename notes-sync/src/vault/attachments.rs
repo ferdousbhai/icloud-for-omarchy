@@ -78,9 +78,11 @@ pub fn decode_attachment_filename(field: Option<&FieldValue>, record_name: &str,
     }
 }
 
-/// The longest attachment file name: a file name holds 255 bytes, and this
+/// The longest attachment file name. A file name holds 255 bytes, and this
 /// one may still take [`unique_file_name`]'s ` N` and, while it downloads,
-/// a `.<pid>.tmp` suffix.
+/// icloud-session's temporary name around it, `.<name>.<pid>.<n>.tmp`: 7
+/// bytes of punctuation and suffix, a pid of up to 10 digits and a counter
+/// of up to 20, so 37 bytes at the very most, which leaves 18 for the ` N`.
 const MAX_ATTACHMENT_NAME_BYTES: usize = 200;
 
 /// `name` as one file name: `/` and control characters (NUL among them)
