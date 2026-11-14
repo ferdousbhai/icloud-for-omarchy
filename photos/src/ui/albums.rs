@@ -65,13 +65,4 @@ impl Albums {
         let name = row.widget_name();
         (!name.is_empty()).then(|| name.to_string())
     }
-
-    pub fn title_of(row: &gtk::ListBoxRow) -> String {
-        row.child()
-            .and_then(|b| b.first_child())
-            .and_then(|i| i.next_sibling())
-            .and_downcast::<gtk::Label>()
-            .map(|l| l.label().to_string())
-            .unwrap_or_else(|| "Photos".into())
-    }
 }

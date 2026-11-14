@@ -121,6 +121,8 @@ pub struct App {
     pub tx: async_channel::Sender<Msg>,
     pub transport: RefCell<Option<Arc<dyn Transport>>>,
     pub downloader: RefCell<Option<Downloader>>,
+    /// `load_transport` is running: one connection, one download pool.
+    connecting: Cell<bool>,
     syncing: Cell<bool>,
     sync_again: Cell<bool>,
     pub last_sync: Cell<Option<Instant>>,
@@ -294,6 +296,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         tx,
         transport: RefCell::new(None),
         downloader: RefCell::new(None),
+        connecting: Cell::new(false),
         syncing: Cell::new(false),
         sync_again: Cell::new(false),
         last_sync: Cell::new(None),
@@ -349,8 +352,8 @@ impl App {
             if a.reloading.get() {
                 return;
             }
+            // The snapshot sets the page title along with the grid.
             *a.album.borrow_mut() = Albums::id_of(row);
-            a.grid_page.set_title(&Albums::title_of(row));
             a.nav.pop_to_tag("grid");
             a.load_snapshot();
             a.split.set_show_content(true);
@@ -479,6 +482,9 @@ impl App {
     }
 
     pub(super) fn load_transport(&self) {
+        if self.connecting.replace(true) {
+            return;
+        }
         let tx = self.tx.clone();
         self.set_busy(true, "Connecting to iCloud…");
         std::thread::spawn(move || {
@@ -487,6 +493,9 @@ impl App {
     }
 
     fn handle(self: &Rc<Self>, msg: Msg) {
+        if matches!(msg, Msg::TransportReady(_)) {
+            self.connecting.set(false);
+        }
         match msg {
             Msg::TransportReady(Ok(t)) => {
                 let tx = self.tx.clone();
@@ -586,7 +595,12 @@ impl App {
     }
 
     pub fn sync(self: &Rc<Self>) {
-        let Some(t) = self.transport() else { return };
+        // Not connected (the first try failed: keyring locked, daemon not
+        // up yet): connect again; a sync follows once that works.
+        let Some(t) = self.transport() else {
+            self.load_transport();
+            return;
+        };
         if self.syncing.replace(true) {
             self.sync_again.set(true);
             return;
@@ -664,10 +678,8 @@ impl App {
             let (snap, notice) = snap.unwrap_or_else(|| {
                 let mut snap = snapshot(&a.cat, a.album.borrow().clone(), columns);
                 // Do not run inference on the main loop for an in-memory catalog.
-                let q = a.search_query.borrow().trim_start_matches('~').trim().to_lowercase();
-                snap.tiles.retain(|tile| tile.filename.to_lowercase().contains(&q));
-                snap.rows = super::grid::rows_of(&snap.tiles, columns);
-                (snap, "Filename matches".to_owned())
+                let notice = filter_snapshot_with(&mut snap, &a.search_query.borrow(), |_, _| None);
+                (snap, notice)
             });
             a.search_hint.set_text(&notice);
             a.apply_snapshot(snap);
