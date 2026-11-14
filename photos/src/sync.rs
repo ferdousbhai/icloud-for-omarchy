@@ -227,10 +227,12 @@ fn apply_changes(ck: &CloudKit, cat: &mut Catalog, all: Vec<Record>, new_token: 
             albums: 0,
             fell_back: None,
         };
+        // `removed` counts the assets that were in the library until now.
         for a in &paired {
+            let was_visible = a.deleted && cat.is_visible(&a.id)?;
             cat.upsert_asset(a)?;
             if a.deleted {
-                report.removed += 1
+                report.removed += was_visible as usize
             } else {
                 report.assets += 1
             }
@@ -239,9 +241,10 @@ fn apply_changes(ck: &CloudKit, cat: &mut Catalog, all: Vec<Record>, new_token: 
             cat.update_master(m)?;
         }
         for o in &orphans {
+            let was_visible = o.deleted && cat.is_visible(&o.id)?;
             if cat.update_asset_part(o)? {
                 if o.deleted {
-                    report.removed += 1
+                    report.removed += was_visible as usize
                 } else {
                     report.assets += 1
                 }
@@ -252,10 +255,7 @@ fn apply_changes(ck: &CloudKit, cat: &mut Catalog, all: Vec<Record>, new_token: 
         }
         for r in &records {
             match r.record_type.as_deref() {
-                None => {
-                    cat.apply_tombstone(&r.name)?;
-                    report.removed += 1;
-                }
+                None => report.removed += cat.apply_tombstone(&r.name)?,
                 Some("CPLAlbum") => {
                     if let Some(album) = Album::from_record(r) {
                         cat.upsert_album(&album)?;
@@ -267,7 +267,7 @@ fn apply_changes(ck: &CloudKit, cat: &mut Catalog, all: Vec<Record>, new_token: 
                         cat.apply_relation(&rel)?;
                     }
                 }
-                _ if r.deleted => cat.apply_tombstone(&r.name)?,
+                _ if r.deleted => report.removed += cat.apply_tombstone(&r.name)?,
                 _ => {}
             }
         }

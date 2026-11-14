@@ -66,6 +66,8 @@ fn incremental_sync_applies_changes_and_advances_the_token() {
     let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.mode, Mode::Incremental);
     assert!(report.fell_back.is_none());
+    // ASSET-002 deleted, ASSET-003 tombstoned, ASSET-004 hidden: each once.
+    assert_eq!(report.removed, 3);
     let ops: Vec<String> = t.ops()[before..].to_vec();
     assert_eq!(
         ops,

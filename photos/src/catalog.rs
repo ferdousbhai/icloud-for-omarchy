@@ -296,10 +296,12 @@ impl Catalog {
     }
 
     /// A CloudKit tombstone: the record is gone for good. Downloaded files stay
-    /// on disk; the catalog forgets the record.
-    pub fn apply_tombstone(&self, record_name: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE assets SET deleted = 1 WHERE id = ?1 OR master_id = ?1",
+    /// on disk; the catalog forgets the record. Returns the assets that left
+    /// the library with it (none for an album, a relation, or an asset
+    /// already deleted).
+    pub fn apply_tombstone(&self, record_name: &str) -> Result<usize> {
+        let left = self.conn.execute(
+            "UPDATE assets SET deleted = 1 WHERE (id = ?1 OR master_id = ?1) AND deleted = 0",
             [record_name],
         )?;
         self.conn.execute("DELETE FROM albums WHERE id = ?1", [record_name])?;
@@ -307,7 +309,15 @@ impl Catalog {
             "DELETE FROM album_assets WHERE album_id = ?1 OR relation_id = ?1",
             [record_name],
         )?;
-        Ok(())
+        Ok(left)
+    }
+
+    /// Whether the asset is in the library now (known and not deleted).
+    pub fn is_visible(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM assets WHERE id = ?1 AND deleted = 0)")?
+            .query_row([id], |r| r.get(0))?)
     }
 
     /// After a full listing: anything not seen is no longer in the library.
