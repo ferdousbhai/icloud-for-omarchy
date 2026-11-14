@@ -53,7 +53,7 @@ impl Env {
 
     /// The `data` of the JSON envelope on stdout (the default when piped).
     fn json(&self, args: &[&str]) -> Value {
-        let v = envelope(&self.ok(args));
+        let v = envelope(self.ok(args));
         assert_eq!(v["ok"], true, "{v}");
         v["data"].clone()
     }
@@ -68,7 +68,7 @@ impl Env {
     /// A failing run: its exit code and the error object of the envelope.
     fn fails(&self, args: &[&str]) -> (i32, Value) {
         let out = self.run(args);
-        let v = envelope(&stdout(&out));
+        let v = envelope(&out.stdout);
         assert_eq!(v["ok"], false, "{args:?}: {v}");
         (code(&out), v["error"].clone())
     }
@@ -174,7 +174,7 @@ fn errors_go_to_stderr_as_text_and_to_stdout_as_json() {
     assert!(err.starts_with("error: no contact matches \"zed\"\nhint: "), "{err}");
     for flag in ["--json", "--quiet", "--ids-only", "--count"] {
         let out = env.run(&["show", "zed", "--cached", flag]);
-        let v = envelope(&stdout(&out));
+        let v = envelope(&out.stdout);
         assert_eq!((code(&out), v["ok"].as_bool()), (4, Some(false)), "{flag}");
         assert_eq!(v["error"]["code"], "not_found", "{flag}");
         assert_eq!(stderr(&out), "", "{flag}");
@@ -188,15 +188,15 @@ fn errors_go_to_stderr_as_text_and_to_stdout_as_json() {
 #[test]
 fn the_envelope_ids_and_counts() {
     let env = start();
-    let v = envelope(&env.ok(&["list"]));
+    let v = envelope(env.ok(&["list"]));
     assert_eq!(
         (v["ok"].as_bool(), v["summary"].as_str()),
         (Some(true), Some("4 contacts"))
     );
     assert_eq!(v["data"].as_array().unwrap().len(), 4);
     // `--json` is the same when piped; `--quiet` is only the data.
-    assert_eq!(envelope(&env.ok(&["list", "--cached", "--json"])), v);
-    assert_eq!(envelope(&env.ok(&["list", "--cached", "--quiet"])), v["data"]);
+    assert_eq!(envelope(env.ok(&["list", "--cached", "--json"])), v);
+    assert_eq!(envelope(env.ok(&["list", "--cached", "--quiet"])), v["data"]);
     assert_eq!(
         env.ok(&["list", "--cached", "--ids-only"]),
         "ACME-CO\nBOB-BERG\nANN-LEE\nME-CARD\n"

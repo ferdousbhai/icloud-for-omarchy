@@ -199,10 +199,11 @@ on aarch64), its `Include` line in `/etc/pacman.conf`, and
 ## Layout
 
 ```
-Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, photos, findmy, drive, reminders, contacts
+Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, app, app/ui, photos, findmy, drive, reminders, contacts
 session/  sessiond/      icloud-session: client crate / daemon, sign-in window, CLI
 notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
 notes-sync/              icloud-notes-sync, the sync engine the icloud-notes package ships
+app/  app/ui/            icloud-app, icloud-app-ui: what the GTK apps share (internal: no binary, in no package)
 photos/  findmy/         icloud-photos, icloud-findmy
 drive/                   icloud-drive: the sync of ~/iCloud Drive and its service
 reminders/               icloud-reminders (its systemd timer in reminders/data/)

@@ -140,7 +140,7 @@ minute; removals go to a trash on the other side. `too_many_deletions`
 `complete|uncomplete REMINDER` · `delete REMINDER --yes` · `sync`.
 REMINDER: ID, title or unique part (open ones first). WHEN: `2026-10-10`
 (all day), `"2026-10-10 17:30"`, `tomorrow 9:00`, `17:30`, `+2h`. Reads sync
-first (`--cached` skips); writes need the network (`offline`). `due.at` is
+first (`--cached` skips); writes need the network (`offline`/`network`). `due.at` is
 UTC; `alerts` > 0 means alarms set on an Apple device that `--due` does not
 move. Notifications are the timer's job, not yours. The lists are also
 Markdown files in `~/Documents/Reminders` (for phones and editors, synced by

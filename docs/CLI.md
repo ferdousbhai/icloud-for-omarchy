@@ -403,11 +403,11 @@ they exit with the engine's codes, below.
 
 | Exit | Codes |
 |---|---|
-| 1 | `cancelled`, `error` (also a record or zone CloudKit refused), `http` (a 4xx) |
+| 1 | `cancelled`, `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx) |
 | 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
 | 3 | `sign_in_required`, `session_rejected` |
 | 4 | `not_found` (no such reminder or list; for a list the hint names the lists) |
-| 5 | `offline` (no network; `--cached` reads the last sync), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| 5 | `offline` (no network; `--cached` reads the last sync), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 `background` exits 0 when its sync fails and says so in `sync_error`: a
 timer that fails every minute while signed out would only fill the journal.
@@ -416,11 +416,11 @@ timer that fails every minute while signed out would only fill the journal.
 
 | Exit | Codes |
 |---|---|
-| 1 | `cancelled`, `error` (also a card iCloud refused, or removing a value the contact does not have), `http` (a 4xx) |
+| 1 | `cancelled`, `io`, `error` (also a card iCloud refused, or removing a value the contact does not have), `http` (a 4xx) |
 | 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists up to 20 matches with their IDs) |
 | 3 | `sign_in_required`, `session_rejected` |
 | 4 | `not_found` (no contact matches, or there is no My Card for `me`) |
-| 5 | `offline` (no network; `--cached` reads the last sync), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| 5 | `offline` (no network; `--cached` reads the last sync), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 **icloud-drive**
 
@@ -605,7 +605,8 @@ $ icloud-reminders --quiet complete "dentist"
 
 - Reading commands sync first; `--cached` skips that and reads what the
   last sync left. Without a network every command but a `--cached` read
-  fails with `offline`; nothing is queued.
+  fails with `offline` (or `network`, for a connection that broke); nothing
+  is queued.
 - `list` shows open reminders, soonest due first.
 - `add`: `--list` is required unless the account has one list (iCloud
   records no default list).
@@ -631,7 +632,8 @@ $ icloud-contacts --quiet edit "cleo park" --job-title Designer --remove-phone "
 
 - Reading commands sync first; `--cached` skips that and reads what the
   last sync left. Without a network every command but a `--cached` read
-  fails with `offline`; nothing is queued.
+  fails with `offline` (or `network`, for a connection that broke); nothing
+  is queued.
 - A phone number names a contact by its digits: `555-0100` finds
   `+1 555 0100`.
 - `add` needs a name, company, phone or email; `--is-company` (with

@@ -993,6 +993,7 @@ dependencies = [
  "base64",
  "clap",
  "gtk4",
+ "icloud-app",
  "icloud-session",
  "jpeg-encoder",
  "libadwaita",

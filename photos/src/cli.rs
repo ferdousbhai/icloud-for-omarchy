@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use icloud_app::cli::{usage, with_sign_in_hint};
 use icloud_photos::catalog::{Catalog, LAST_SYNC_KEY, Row, SYNC_TOKEN_KEY};
 use icloud_photos::cloudkit::{CloudKit, Kind, Modified, sanitize};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
@@ -35,7 +36,7 @@ use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_USAGE};
+use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN};
 use icloud_session::output::{self, CliError, Mode as OutMode, OutputFlags, Response, SIGN_IN_HINT};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
@@ -273,10 +274,6 @@ fn other(msg: impl Into<String>) -> Fail {
     Fail::Err(Error::Other(msg.into()))
 }
 
-fn usage(msg: impl Into<String>) -> CliError {
-    CliError::new("usage", EXIT_USAGE, msg)
-}
-
 fn not_found(msg: impl Into<String>) -> CliError {
     CliError::new("not_found", EXIT_NOT_FOUND, msg)
 }
@@ -312,14 +309,7 @@ fn classify(fail: Fail) -> CliError {
         Fail::Err(e) => e,
     };
     match e.into_session() {
-        Ok(session) => {
-            let e = output::session_failure(&session);
-            if e.hint.as_deref() == Some(SIGN_IN_HINT) {
-                e.hint(sign_in_hint())
-            } else {
-                e
-            }
-        }
+        Ok(session) => with_sign_in_hint(output::session_failure(&session), sign_in_hint()),
         Err(e @ Error::NotOffered(_)) => CliError::new("photos_unavailable", EXIT_SIGN_IN, e.to_string())
             .hint("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
         Err(e) => CliError::new("error", EXIT_ERROR, e.to_string()),

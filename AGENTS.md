@@ -24,6 +24,20 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   icloud-notes-sync`. Ships inside the icloud-notes package, not on its own.
 - `notes/` — `icloud-notes`, the Qt6/QML app and CLI (C++ in `src/`, QML in `qml/`,
   `notes/bin/build`, `notes/bin/test`).
+- `app/` — `icloud-app`, what the four GTK apps share, with no GTK in it: the command lines'
+  helpers on top of `icloud_session::output` (`cli.rs`: confirm, the "or Sign In in the app" hint,
+  `session_failure`, warnings, name folding, the launcher that turns `icloud-<app>` with no command
+  into `icloud-<app>-app`), an app's data directory, its `flock` and JSON files replaced whole
+  (`store.rs`), the lazily connected `SessionTransport` (`transport.rs`), and what the apps'
+  `tests/cli.rs` share (`testing.rs`, feature `testing`, dev-dependencies only). `app/ui/` —
+  `icloud-app-ui`, the GTK half: the sign-in banner (`banner.rs`, with Find My's password ask),
+  `background`, and the `*-app` binaries' `main`/`application`. Both are internal: no binary, in
+  no package. Put here what two or more of the apps would otherwise copy. Not here: anything
+  every iCloud tool shares, GTK app or not (that is `icloud-session`, whose API is frozen), what
+  one app alone needs (it stays in that app), and any GTK in `icloud-app` itself, not even
+  behind a feature: the command lines link it, a debug build shares generic code between the
+  modules of one crate, and each app's `the_command_line_binary_does_not_link_gtk` test fails
+  when GTK reaches them. Only the `*-app` binaries use `icloud-app-ui`.
 - `photos/`, `findmy/`, `reminders/`, `contacts/` — one crate per app: a library, a GTK-free CLI
   binary (`src/main.rs` + `cli.rs`), and the GTK/libadwaita window as a separate `*-app` binary
   (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`). Each has a fake Apple server

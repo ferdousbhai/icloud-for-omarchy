@@ -31,6 +31,8 @@ ui = ["dep:gtk", "dep:adw", "dep:async-channel"]
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
 icloud-session = { workspace = true, features = ["clap"] }
+# What the iCloud GTK apps share (app/).
+icloud-app.workspace = true
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
 async-channel = { workspace = true, optional = true }
