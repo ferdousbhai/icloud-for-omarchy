@@ -31,7 +31,7 @@ use crate::vault::attachments::{
 };
 use crate::vault::base::{merge_base, read_base_copy, remove_base_copy, write_base_copy_of};
 use crate::vault::epoch::record_epoch;
-use crate::vault::folders::{reconcile_note_placements, relocate_note_attachments, remove_stale_dirs};
+use crate::vault::folders::{reconcile_note_placements, relocate_note_attachments_among, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
 use crate::vault::layout::{
     PreviousLayout, VaultLayout, build_vault_layout, expected_note_dir, note_dir_of, place_note, previous_layout_dirs,
@@ -459,6 +459,7 @@ pub fn run_pull_with(
                                 &mut summary,
                                 title_mode,
                                 Gone::Deleted,
+                                &mut used_attachment_file_names,
                             )?;
                         }
                         return Ok(());
@@ -598,19 +599,15 @@ pub fn run_pull_with(
                 let claimant_dirs: HashSet<String> = claimants.iter().map(|f| note_dir_of(f)).collect();
                 let attachment_dir = match claimant_dirs.iter().next() {
                     Some(dir) if claimant_dirs.len() == 1 && *dir != note_dir => {
-                        relocate_note_attachments(
+                        // Never onto a name a download still in flight is
+                        // about to land on.
+                        relocate_note_attachments_among(
                             target_dir,
                             &record.record_name,
                             &claimants[0],
                             &mut tracked.attachments,
+                            used_names_for(&mut used_attachment_file_names, dir),
                         )?;
-                        let moved: Vec<String> = tracked
-                            .attachments
-                            .values()
-                            .filter(|a| a.note_record_name == record.record_name)
-                            .map(|a| posix::basename(&a.file).to_owned())
-                            .collect();
-                        used_names_for(&mut used_attachment_file_names, dir).extend(moved);
                         dir.clone()
                     }
                     _ => note_dir.clone(),
@@ -1428,6 +1425,8 @@ fn handle_vanished_shared_zones(
             summary,
             title_mode,
             Gone::Unshared,
+            // After the downloads are drained: what is on disk is all.
+            &mut HashMap::new(),
         )?;
         summary.unshared_untracked += 1;
     }
@@ -1460,6 +1459,8 @@ fn reconcile_notes_after_resync(
             summary,
             title_mode,
             Gone::Deleted,
+            // After the downloads are drained: what is on disk is all.
+            &mut HashMap::new(),
         )?;
     }
     Ok(removed)
@@ -1656,6 +1657,7 @@ enum Gone {
 /// `unshared` lists: push leaves such a file alone, since someone else's
 /// note is not uploaded as a note of this account just because access to it
 /// ended.
+#[allow(clippy::too_many_arguments)]
 fn handle_remote_deletion(
     target_dir: &Path,
     record_name: &str,
@@ -1664,6 +1666,7 @@ fn handle_remote_deletion(
     summary: &mut PullSummary,
     title_mode: TitleMode,
     gone: Gone,
+    used_attachment_names: &mut HashMap<String, HashSet<String>>,
 ) -> Result<(), Error> {
     let files = match local_file_state(target_dir, existing, record_name, title_mode)? {
         LocalFileState::Missing => note_id_claimants(target_dir, &tracked.notes, record_name, title_mode)?,
@@ -1673,7 +1676,13 @@ fn handle_remote_deletion(
     // beside the files carrying it, where they go or stay with them.
     let dirs: HashSet<String> = files.iter().map(|f| note_dir_of(f)).collect();
     if existing.shared_zone_owner.is_none() && dirs.len() == 1 && !dirs.contains(&note_dir_of(&existing.file)) {
-        relocate_note_attachments(target_dir, record_name, &files[0], &mut tracked.attachments)?;
+        relocate_note_attachments_among(
+            target_dir,
+            record_name,
+            &files[0],
+            &mut tracked.attachments,
+            used_names_for(used_attachment_names, &note_dir_of(&files[0])),
+        )?;
     }
     let base = read_base_copy(target_dir, record_name)?;
     let mut kept: Vec<String> = Vec::new();

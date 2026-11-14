@@ -177,10 +177,23 @@ pub fn relocate_note_attachments(
     note_file: &str,
     attachments: &mut IndexMap<String, AttachmentEntry>,
 ) -> Result<(), Error> {
+    relocate_note_attachments_among(target_dir, record_name, note_file, attachments, &mut HashSet::new())
+}
+
+/// [`relocate_note_attachments`] where `used` holds the names already given
+/// in that `attachments/` that may not be on disk yet (a pull's downloads
+/// still in flight, which land there by a rename that replaces); the names
+/// the attachments end up with join it.
+pub fn relocate_note_attachments_among(
+    target_dir: &Path,
+    record_name: &str,
+    note_file: &str,
+    attachments: &mut IndexMap<String, AttachmentEntry>,
+    used: &mut HashSet<String>,
+) -> Result<(), Error> {
     let to_dir = note_dir_of(note_file);
     let to_attachments = posix::join(&[&to_dir, "attachments"]);
-    let mut used = HashSet::new();
-    claim_names_on_disk(target_dir, &to_attachments, &mut used)?;
+    claim_names_on_disk(target_dir, &to_attachments, used)?;
     let mine: Vec<String> = attachments
         .iter()
         .filter(|(_, a)| a.note_record_name == record_name && note_dir_of(&posix::dirname(&a.file)) != to_dir)
@@ -196,6 +209,7 @@ pub fn relocate_note_attachments(
         if !target_dir.join(&attachment.file).exists()
             && let Some(already_there) = already_moved(target_dir, note_file, &to_attachments, &old_base, attachments)?
         {
+            used.insert(posix::basename(&already_there).to_owned());
             attachments[&attachment_record_name].file = already_there;
             continue;
         }
@@ -204,7 +218,7 @@ pub fn relocate_note_attachments(
             &attachment.file,
             &to_attachments,
             &old_base,
-            &mut used,
+            used,
             &mut links_follow(target_dir, note_file, record_name, &old_base, attachments)?,
         )?
         else {

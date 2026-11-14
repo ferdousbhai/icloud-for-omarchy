@@ -80,6 +80,9 @@ struct Zone {
     /// (`crash::DOWNLOADS_IN_LINE_ENV`), so a run is cut short at the same
     /// place every time.
     downloads_in_line: bool,
+    /// Asset paths answered only after a pause: a download still in flight
+    /// while the run goes on with the notes after it.
+    slow_assets: BTreeSet<String>,
 }
 
 fn field_type(name: &str, value: &Value) -> &'static str {
@@ -432,7 +435,11 @@ impl Fake {
                     }
                     zone.assets.get(&path).cloned().ok_or(404)
                 })();
+                let slow = zone.slow_assets.contains(&path);
                 drop(zone);
+                if slow {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                }
                 let response = match answer {
                     Ok(body) => tiny_http::Response::from_data(body),
                     Err(status) => {
@@ -1668,6 +1675,105 @@ fn a_note_deleted_in_icloud_takes_its_photo_along_from_its_folder_renamed_here()
     succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
     check(&fake, &place, &start.expect, "a pull after the note was deleted");
     crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
+/// The photo note moved here from `Work` to `Notes`, and in iCloud a note
+/// new to the vault in `Notes` with an attachment of the photo's name, then
+/// the photo note changed (or, `deleted`, deleted there and edited here):
+/// the pull queues the new note's download first, and while it is still in
+/// flight moves the photo beside the moved file. The photo took the name
+/// the download was about to land on, which then replaced it: two
+/// attachments at one file, holding the other note's bytes.
+fn photo_moved_beside_its_note_with_a_download_in_flight(deleted: bool) {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    const CALL_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000a0d1";
+    const MOVED: &str = "Notes/Photo here.md";
+    let mut zone = same_attachment_names();
+    let mut photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+    let reference = json!({ "recordName": WORK_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+    photo_note["fields"]["Folder"]["value"] = reference.clone();
+    photo_note["fields"]["Folders"]["value"] = json!([reference]);
+    zone.put(photo_note);
+    zone.records.get_mut(CALL_NOTE).unwrap().deleted = true;
+    let mut start = cloned_from(zone);
+    let file = tracked_file(&start.place, PHOTO_NOTE);
+    assert!(file.starts_with("Work/"), "{file}");
+    let (photo_name, photo_bytes) = photo(&start.zone);
+    let vault = start.place.vault.clone();
+    std::fs::rename(vault.join(&file), vault.join(MOVED)).unwrap();
+    assert!(!vault.join("Notes/attachments").join(&photo_name).exists());
+    let zone = &mut start.zone;
+    let call_note = zone.records[CALL_NOTE].record.clone();
+    zone.put(call_note);
+    if deleted {
+        let text = std::fs::read_to_string(vault.join(MOVED)).unwrap();
+        std::fs::write(vault.join(MOVED), format!("{text}typed here\n")).unwrap();
+        let at = zone.tick();
+        let stored = zone.records.get_mut(PHOTO_NOTE).unwrap();
+        stored.deleted = true;
+        stored.changed_at = at;
+        start.expect.new_notes = 1;
+        start.expect.new_attachments = 1;
+        start.expect.edits.push((MOVED.into(), "typed here".into()));
+    } else {
+        let photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+        zone.put(photo_note);
+    }
+    zone.slow_assets.insert("/B/audio-asset".into());
+    let call_bytes = zone.assets["/B/audio-asset"].clone();
+    start.expect.kept = kept_notes(zone);
+
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    let state = read_clone_state(&place.vault).unwrap().unwrap();
+    let attachments = state.attachments.unwrap_or_default();
+    let of = |note: &str| {
+        attachments
+            .values()
+            .find(|a| a.note_record_name == note)
+            .map(|a| a.file.clone())
+            .unwrap_or_else(|| panic!("{note}'s attachment is not tracked: {}", says(&pull)))
+    };
+    let call_file = of(CALL_NOTE);
+    let photo_file = if deleted {
+        // Kept, untracked, with the edited file that links it.
+        let text = std::fs::read_to_string(place.vault.join(MOVED)).unwrap();
+        let link = text
+            .split("](attachments/")
+            .nth(1)
+            .expect("the photo's link")
+            .split(')')
+            .next()
+            .unwrap();
+        format!("Notes/attachments/{}", link.replace("%20", " "))
+    } else {
+        of(PHOTO_NOTE)
+    };
+    assert_ne!(photo_file, call_file, "two attachments at one file");
+    assert_eq!(
+        std::fs::read(place.vault.join(&photo_file)).unwrap(),
+        photo_bytes,
+        "{photo_file}"
+    );
+    assert_eq!(
+        std::fs::read(place.vault.join(&call_file)).unwrap(),
+        call_bytes,
+        "{call_file}"
+    );
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(&fake, &place, &start.expect, "a pull with a download in flight");
+}
+
+#[test]
+fn a_photo_moved_beside_its_note_never_takes_the_name_of_a_download_still_in_flight() {
+    photo_moved_beside_its_note_with_a_download_in_flight(false);
+}
+
+#[test]
+fn a_photo_kept_beside_a_note_deleted_in_icloud_never_takes_the_name_of_a_download_still_in_flight() {
+    photo_moved_beside_its_note_with_a_download_in_flight(true);
 }
 
 /// A push whose delete of a note iCloud took fails here removing the note's
