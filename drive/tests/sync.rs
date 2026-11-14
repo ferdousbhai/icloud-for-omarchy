@@ -54,7 +54,7 @@ impl Cloud {
             return Err(icloud_session::Error::Offline("no network".into()).into());
         }
         if self.refuses_moves {
-            return Err(remote::Error::Api("the rename refused: NAME_NOT_ALLOWED".into()));
+            return Err(remote::Error::Refused("the rename refused: NAME_NOT_ALLOWED".into()));
         }
         Ok(())
     }
@@ -299,7 +299,7 @@ impl Remote for Fake {
         let mut c = self.0.borrow_mut();
         c.may_move()?;
         if std::mem::take(&mut c.rename_fails_once) {
-            return Err(remote::Error::Api("the rename refused: UNKNOWN".into()));
+            return Err(remote::Error::Refused("the rename refused: UNKNOWN".into()));
         }
         c.nodes
             .get_mut(&node.id)
@@ -312,7 +312,7 @@ impl Remote for Fake {
         let mut c = self.0.borrow_mut();
         c.may_move()?;
         if parent_id != ROOT_ID && !c.nodes.contains_key(parent_id) {
-            return Err(remote::Error::Api("the move refused: ID_INVALID".into()));
+            return Err(remote::Error::Refused("the move refused: ID_INVALID".into()));
         }
         let old = c.nodes[&node.id].parent.clone();
         c.nodes.get_mut(&node.id).unwrap().parent = parent_id.to_string();
@@ -1117,4 +1117,39 @@ fn a_file_removed_here_while_its_stale_replace_is_refused_comes_back_as_icloud_h
         bed.cloud.0.borrow().trashed
     );
     assert_eq!(bed.read("a.txt").as_deref(), Some("ONE"));
+}
+
+#[test]
+fn a_half_done_move_of_a_file_moved_back_here_is_moved_back_in_icloud() {
+    let bed = Bed::new();
+    bed.cloud.folder(ROOT_ID, "Docs");
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Docs/b.txt")).unwrap();
+    bed.cloud.0.borrow_mut().rename_fails_once = true;
+    bed.try_sync(false).unwrap();
+    fs::rename(bed.root().join("Docs/b.txt"), bed.root().join("a.txt")).unwrap();
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["Docs", "a.txt"]);
+    assert_eq!(bed.cloud.id_at("a.txt").as_deref(), Some(a.id.as_str()));
+}
+
+#[test]
+fn a_move_icloud_refused_leaves_no_note_to_undo_a_later_move_made_in_icloud() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    // A move here that iCloud refuses outright, then given up on here.
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Docs/b.txt")).unwrap();
+    bed.cloud.0.borrow_mut().refuses_moves = true;
+    bed.try_sync(false).unwrap();
+    bed.cloud.0.borrow_mut().refuses_moves = false;
+    fs::rename(bed.root().join("Docs/b.txt"), bed.root().join("a.txt")).unwrap();
+    // Before any sync sees that, a phone moves the file into the folder.
+    let node = bed.cloud.0.borrow().nodes[&a.id].clone();
+    bed.cloud.move_to(&node, &docs.id).unwrap();
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Docs", "Docs/a.txt"], "the phone's move stands");
+    assert_eq!(bed.local_paths(), ["Docs", "Docs/a.txt"]);
 }

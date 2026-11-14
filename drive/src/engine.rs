@@ -143,7 +143,11 @@ fn describe(op: &Op) -> String {
 fn is_item_problem(e: &Error) -> bool {
     match e {
         Error::Remote(
-            remote::Error::Api(_) | remote::Error::Stale(_) | remote::Error::Package(_) | remote::Error::Listing { .. },
+            remote::Error::Api(_)
+            | remote::Error::Refused(_)
+            | remote::Error::Stale(_)
+            | remote::Error::Package(_)
+            | remote::Error::Listing { .. },
         ) => true,
         Error::Remote(remote::Error::Session(icloud_session::Error::Http { status, .. })) => {
             (400..500).contains(status) && !matches!(status, 401 | 421 | 423 | 429)
@@ -288,7 +292,7 @@ impl<R: Remote> Engine<'_, R> {
                     .map(|(path, _)| path.clone())
                     .chain(stuck.iter().flat_map(|s| s.paths.iter().cloned()))
                     .collect(),
-                pending_moves: self.state.pending_moves()?,
+                pending_moves: self.pending_moves(&base, &snapshot, &entries)?,
                 now_ns: now_ms() * 1_000_000,
             };
             unseen.extend(stuck.iter().map(|s| s.shown.clone()));
@@ -344,6 +348,27 @@ impl<R: Remote> Engine<'_, R> {
         self.state.set_not_synced(&unseen)?;
         self.state.set_meta("last_sync_ms", &now_ms().to_string())?;
         Ok(outcome)
+    }
+
+    /// The moves in iCloud noted as not finished. A note whose item is
+    /// where it was in step on both sides is void (the run stopped before
+    /// iCloud was asked, and the file here was since put back): it is
+    /// dropped, so it cannot later claim a move made in iCloud.
+    fn pending_moves(
+        &self,
+        base: &[Row],
+        snapshot: &Snapshot,
+        entries: &std::collections::BTreeMap<String, Entry>,
+    ) -> Result<HashMap<String, String>> {
+        let mut pending = self.state.pending_moves()?;
+        for row in base {
+            let at_rest = snapshot.paths.get(&row.node.id) == Some(&row.path)
+                && entries.get(&row.path).is_some_and(|e| e.is_dir == row.local.is_dir);
+            if at_rest && pending.remove(&row.node.id).is_some() {
+                self.state.clear_pending_move(&row.node.id)?;
+            }
+        }
+        Ok(pending)
     }
 
     fn apply(&mut self, plan: &Plan, snapshot: &Snapshot, outcome: &mut Outcome) -> Result<Applied> {
@@ -447,6 +472,15 @@ impl<R: Remote> Engine<'_, R> {
         self.put(node, to, row.local)
     }
 
+    /// The answer to one request of a move. When iCloud refused it and the
+    /// move has `untouched` the item so far, the note of the move is dropped.
+    fn unless_refused(&self, answer: remote::Result<Node>, id: &str, untouched: bool) -> Result<Node> {
+        if untouched && matches!(answer, Err(remote::Error::Refused(_))) {
+            self.state.clear_pending_move(id)?;
+        }
+        Ok(answer?)
+    }
+
     /// The folder in iCloud that holds `path`, once it is in step.
     fn parent_node(&self, path: &str) -> Result<Node> {
         let parent = parent_of(path);
@@ -523,13 +557,17 @@ impl<R: Remote> Engine<'_, R> {
                 let mut node = snapshot.nodes.get(id).cloned().unwrap_or_else(|| row.node.clone());
                 // Noted first: until both halves are done and recorded,
                 // where iCloud has it is this move's doing, not a move made
-                // in iCloud to be followed here.
+                // in iCloud to be followed here. The note goes again when
+                // iCloud refuses the first request with the item still
+                // where it was in step: then nothing is this move's doing.
+                let mut untouched = node.parent == row.node.parent && node.name == row.node.name;
                 self.state.set_pending_move(id, to)?;
                 if node.parent != parent.id {
-                    node = self.remote.move_to(&node, &parent.id)?;
+                    node = self.unless_refused(self.remote.move_to(&node, &parent.id), id, untouched)?;
+                    untouched = false;
                 }
                 if node.name != name_of(to) {
-                    node = self.remote.rename(&node, name_of(to))?;
+                    node = self.unless_refused(self.remote.rename(&node, name_of(to)), id, untouched)?;
                 }
                 self.state.move_paths(&row.path, to)?;
                 self.put_moved(node, to, &row)?;

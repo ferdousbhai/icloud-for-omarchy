@@ -285,20 +285,29 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
         if unseen(rpath) {
             continue;
         }
-        // A move made here that an earlier run got half way through in
-        // iCloud (into the new folder, not yet under the new name): iCloud
-        // has it where neither side meant it to be. That is finished as the
-        // move here it is (to wherever the item is here now, if it was
-        // moved again since), not followed here as a move made in iCloud,
-        // which would undo the rename.
-        let half_done = context.pending_moves.get(&row.node.id).is_some_and(|to| {
-            let half_way = match parent_of(to) {
-                "" => name_of(&row.path).to_string(),
-                dir => format!("{dir}/{}", name_of(&row.path)),
-            };
-            rpath == &half_way && rpath != to && here(row).is_none() && moved_here(row).is_some()
-        });
-        if rpath != &row.path && !half_done {
+        // A move made here that an earlier run did not finish in iCloud
+        // (a move there is the folder, then the name: under its old name it
+        // is half way, at the noted destination it is done and was not
+        // recorded): where iCloud has it is that move's doing, not a move
+        // made in iCloud to follow here, which would undo what was done
+        // here. It is finished as a move made here, to where the item is
+        // here now: where it was moved to, or since moved on to, or back
+        // where it was in step. Not when something else in iCloud has that
+        // name: then iCloud's place is followed after all.
+        let ours = rpath != &row.path
+            && context
+                .pending_moves
+                .get(&row.node.id)
+                .is_some_and(|to| rpath == to || name_of(rpath) == name_of(&row.path));
+        let finish = if !ours {
+            None
+        } else if here(row).is_some() {
+            Some(row.path.as_str())
+        } else {
+            moved_here(row)
+        }
+        .filter(|to| to != rpath && !remote.by_path.contains_key(*to));
+        if rpath != &row.path && finish.is_none() {
             if into(&dests_there, rpath) {
                 continue;
             }
@@ -347,9 +356,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 from: from.to_string(),
                 to: rpath.clone(),
             });
-        } else if here(row).is_none()
-            && let Some(to) = moved_here(row)
-        {
+        } else if let Some(to) = finish.or_else(|| moved_here(row).filter(|_| here(row).is_none())) {
             // Moved here; iCloud still has it at the old place.
             if unseen(to) {
                 // Moved to where nothing is touched (into a folder whose
@@ -1145,6 +1152,38 @@ mod tests {
             [Op::LocalMove {
                 id: "f".into(),
                 from: "Docs/b.txt".into(),
+                to: "Docs/a.txt".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_unfinished_move_of_a_file_put_back_here_is_sent_back_in_icloud() {
+        // a.txt was moved here to Docs/b.txt, which iCloud did in full or
+        // in part without it being recorded; the file is back at a.txt.
+        let d = node("d", "", "Docs", true, 0, 0);
+        let f = node("f", "", "a.txt", false, 5, 100);
+        let base = [row(&d, "Docs", dir(1)), row(&f, "a.txt", file(5, 7, 2))];
+        let local: BTreeMap<String, Entry> =
+            [("Docs".to_string(), dir(1)), ("a.txt".to_string(), file(5, 7, 2))].into();
+        let mut context = context();
+        context.pending_moves.insert("f".into(), "Docs/b.txt".into());
+        let back = [Op::RemoteMove {
+            id: "f".into(),
+            to: "a.txt".into(),
+        }];
+        for there in ["a.txt", "b.txt"] {
+            let remote = snapshot(&[d.clone(), node("f", "d", there, false, 5, 100)]);
+            assert_eq!(plan(&base, &remote, &local, &context).ops, back, "{there}");
+        }
+        // Another file has taken the name in iCloud: iCloud's place is followed.
+        let taken = node("g", "", "a.txt", false, 9, 300);
+        let remote = snapshot(&[d.clone(), node("f", "d", "a.txt", false, 5, 100), taken]);
+        assert_eq!(
+            plan(&base, &remote, &local, &context).ops,
+            [Op::LocalMove {
+                id: "f".into(),
+                from: "a.txt".into(),
                 to: "Docs/a.txt".into()
             }]
         );

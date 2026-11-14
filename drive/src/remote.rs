@@ -39,6 +39,10 @@ pub enum Error {
     /// iCloud answered, but refused or flagged the operation.
     #[error("iCloud Drive: {0}")]
     Api(String),
+    /// iCloud answered a rename, a move or a new folder with a status that
+    /// is not `OK`: it was not done.
+    #[error("iCloud Drive: {0}")]
+    Refused(String),
     /// A listing was not `OK` (the folder is gone, or the answer partial).
     #[error("iCloud Drive could not list {id}: {status}")]
     Listing { id: String, status: String },
@@ -280,7 +284,8 @@ fn parse_changed(answer: &Value, list: &str, what: &str) -> Result<Node> {
     let item = &answer[list][0];
     match item["status"].as_str() {
         Some("OK") => parse_item(item),
-        other => Err(Error::Api(format!("{what} refused: {}", other.unwrap_or("no status")))),
+        Some(status) => Err(Error::Refused(format!("{what} refused: {status}"))),
+        None => Err(Error::Api(format!("{what} answered with no status"))),
     }
 }
 
