@@ -69,6 +69,11 @@ class NotesBackend : public QObject
     // is none (a phone QR sign-in, say, lasts only hours), or -2 while
     // unknown or signed out.
     Q_PROPERTY(int signInDaysLeft READ signInDaysLeft NOTIFY signInChanged)
+    // The last push was refused because it would delete most of the vault
+    // (too_many_deletions: the note files are gone, by accident or not):
+    // the engine's message, which says how many notes and that nothing was
+    // pushed. Empty again once a push goes through.
+    Q_PROPERTY(QString deletionsRefused READ deletionsRefused NOTIFY deletionsRefusedChanged)
     Q_PROPERTY(QVariantList statusEntries READ statusEntries NOTIFY pushPreviewChanged)
     Q_PROPERTY(int statusUnchanged READ statusUnchanged NOTIFY pushPreviewChanged)
     Q_PROPERTY(QStringList statusNotices READ statusNotices NOTIFY pushPreviewChanged)
@@ -175,6 +180,7 @@ public:
     QString syncLog() const { return m_syncLog; }
     bool syncRunning() const { return m_syncRunning; }
     bool authExpired() const { return m_authExpired; }
+    QString deletionsRefused() const { return m_deletionsRefused; }
     // False while icloud-session is missing or has not answered.
     bool signInKnown() const { return m_signInKnown; }
     bool signInPending() const { return m_signInReads > 0; }
@@ -306,7 +312,11 @@ public:
     // without icloud-notes-sync ever opening a window of its own.
     Q_INVOKABLE void runClone();
     void runPull(); // the CLI's `pull`; the window only syncs
-    Q_INVOKABLE void runPush();
+    // deleteMissing (`push --yes`): also when most of the vault's note
+    // files are gone, which a push otherwise refuses (too_many_deletions)
+    // rather than move that many notes to Recently Deleted. Only ever on a
+    // person's explicit say-so: nothing that syncs on its own passes it.
+    Q_INVOKABLE void runPush(bool deleteMissing = false);
     // Push whatever changed locally, then pull: the periodic sync, and what
     // launch does, so edits made while the app was closed or by another
     // program in any folder reach iCloud without a click. One engine run
@@ -315,7 +325,8 @@ public:
     // vault is re-read once, after it, and only when something changed.
     // iCloud out of reach (no network) is a quiet skip: one log line, a
     // plain status, and the next sync tries again.
-    Q_INVOKABLE void runSync();
+    // deleteMissing (`sync --yes`): as for runPush.
+    Q_INVOKABLE void runSync(bool deleteMissing = false);
     // Asks icloud-session to open its sign-in window; returns at once.
     // Syncing resumes when the daemon reports the sign-in.
     Q_INVOKABLE void signIn();
@@ -363,6 +374,7 @@ signals:
     void syncLogChanged();
     void syncRunningChanged();
     void authExpiredChanged();
+    void deletionsRefusedChanged();
     // Any icloud-session property changed, or a read of them finished.
     void signInChanged();
     void pushPreviewChanged();
@@ -533,6 +545,7 @@ private:
     bool m_vaultTouched = false;
     QByteArray m_errLine; // the run's stderr up to the next newline
     bool m_authExpired = false;
+    QString m_deletionsRefused;
     // A sign-in came back while a sync ran: sync once it finishes.
     bool m_syncWhenIdle = false;
     // Sign-ins seen (applySignIn's signedInAnew), and their count when the

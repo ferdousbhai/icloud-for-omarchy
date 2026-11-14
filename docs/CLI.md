@@ -63,6 +63,7 @@ timer's sync). All of it is new, in the app binary: see
 | Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull, in one engine run) | added |
 | (not in the window) pull or push only | `icloud-notes pull` / `icloud-notes push` | added (the engine's `pull` existed) |
 | Sync status, then Sync now | `icloud-notes push --dry-run`, then `icloud-notes sync` | added |
+| The banner when most of the notes' files are gone: Show them, Delete them… (confirmed, keeping them by default) | `icloud-notes push --dry-run`, then `icloud-notes sync --yes` (or `push --yes`) | added |
 | Note history, diffs | `icloud-notes history NOTE [--records]`, `icloud-notes diff NOTE REF` | added (the engine's existed) |
 | Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (the engine's `restore` existed) |
 | Link your Apple Notes: Clone my notes | `icloud-notes clone` | added |
@@ -360,7 +361,7 @@ Every code each tool can emit, by exit.
 | Exit | Codes |
 |---|---|
 | 1 | `read_only`, `error` (also an `attach` FILE that cannot be read, is not a regular file, is empty or is larger than 100 MB), `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
-| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `detach`, or a `write` that would leave the note empty or drop the link of one of its attachments, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch` |
+| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `detach`, or a `write` that would leave the note empty or drop the link of one of its attachments, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch`, and the engine's `too_many_deletions` passed through as it is (a `sync`, `push` or a change's `--push` found most of the vault's note files gone, more than 3 of them: nothing was pushed, a `sync`'s pull still ran; `icloud-notes push --dry-run` lists them, and `icloud-notes push --yes` or `sync --yes` moves them to Recently Deleted) |
 | 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder, no such FILE for `attach`, or no attachment of the note named FILE for `detach`) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
@@ -477,6 +478,15 @@ Work/Plan.md
   what would go, and an entry with `resolution: "refused"` what will not and
   why. In a sync's data, `log` holds the engine's report and warnings, never
   its progress lines.
+- `sync --yes` and `push --yes` are the only way a push deletes most of the
+  vault: without it, more than 3 tracked notes without a file, when they
+  are most of the notes, fail the push with `too_many_deletions` (exit 2)
+  before anything is sent. A change's `--push`, the background timer and
+  the window's own syncs never pass it; the window shows a banner with
+  **Delete them…**, whose confirmation defaults to keeping them.
+- A push entry whose `outcome` has `skipped: true` (the file was saved again
+  while the push ran) was neither sent nor refused: the push still counts
+  as worked, and the next one takes the change up.
 - `new TITLE [--folder F] [--body T | --file P | --stdin]`: the default
   folder is the account's "Notes"; the body goes below the title line.
 - `write NOTE (--body T | --file P | --stdin) [--append]` replaces the text

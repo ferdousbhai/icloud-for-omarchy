@@ -1968,14 +1968,20 @@ void NotesBackend::runPull()
     startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("pull") }, QStringLiteral("Pull"));
 }
 
-void NotesBackend::runPush()
+void NotesBackend::runPush(bool deleteMissing)
 {
-    startSync(Mode::Plain, { QStringLiteral("--json"), QStringLiteral("push") }, QStringLiteral("Push"));
+    QStringList args{ QStringLiteral("--json"), QStringLiteral("push") };
+    if (deleteMissing)
+        args << QStringLiteral("--yes");
+    startSync(Mode::Plain, args, QStringLiteral("Push"));
 }
 
-void NotesBackend::runSync()
+void NotesBackend::runSync(bool deleteMissing)
 {
-    startSync(Mode::Sync, { QStringLiteral("--quiet"), QStringLiteral("sync") }, QStringLiteral("Sync"));
+    QStringList args{ QStringLiteral("--quiet"), QStringLiteral("sync") };
+    if (deleteMissing)
+        args << QStringLiteral("--yes");
+    startSync(Mode::Sync, args, QStringLiteral("Sync"));
 }
 
 void NotesBackend::refreshPushPreview()
@@ -2133,6 +2139,13 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // session; a push with nothing to send never checks it.
     // Only that re-arms the retry: a push that sent nothing proves nothing,
     // and clearing it there let push-ok, pull-refused retry forever.
+    // A push refused for deleting most of the vault is for a person to
+    // decide (deletionsRefused); one that went through settles it.
+    const bool tooManyDeletions = !ok && code == u"too_many_deletions";
+    if (label == u"Push" && (ok || tooManyDeletions) && m_deletionsRefused != (ok ? QString() : message)) {
+        m_deletionsRefused = ok ? QString() : message;
+        emit deletionsRefusedChanged();
+    }
     const bool sessionWorks = ok && (label == u"Pull" || label == u"Clone");
     if (sessionWorks)
         m_retriedAfterReport = false;
@@ -2176,6 +2189,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // The sign-in banner already says what went wrong and how to fix it.
     setSyncMessage(sessionExpired || sessionRejected ? kPausedMessage
                    : offline                         ? kOfflineMessage
+                   : tooManyDeletions                ? QStringLiteral("Nothing pushed: most of the notes' files are gone.")
                                                      : label + (error.isEmpty() ? QStringLiteral(" done.")
                                                                                 : QStringLiteral(" failed. See log.")));
 }

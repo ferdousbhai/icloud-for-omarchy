@@ -187,6 +187,14 @@ Sync is automatic, like Notes:
   would be created, updated, moved, or deleted, plus anything refused and
   why — with **Sync now** to sync at once instead of waiting. **Sync log**
   holds the details.
+- A sync never deletes most of your notes by itself. When more than three
+  note files, and most of them, are gone from the folder (a folder moved,
+  a disk not mounted, another sync tool's mistake look just like deleting
+  them), nothing is pushed and a banner says how many notes that would
+  delete. Put the files back and syncing carries on; **Show them** lists
+  them, and **Delete them…** moves them to Recently Deleted in iCloud
+  once you confirm (the default keeps them). From a terminal:
+  `icloud-notes push --dry-run`, then `icloud-notes sync --yes`.
 - Apple ends a web session now and then. Syncing then pauses and a
   banner offers **Sign in**: icloud-session opens Apple's window, which
   skips 2FA for a browser you trusted; syncing resumes on its own once
@@ -245,7 +253,7 @@ icloud-notes new "Groceries" --body "bread" [--folder Notes] [--push]
 icloud-notes write Groceries --append --body "- [ ] jam" [--push]
 icloud-notes attach Groceries receipt.png [--push]  # add a file to a note
 icloud-notes resolve NOTE --all local|remote|both   # or --choices local,both,...
-icloud-notes sync | pull | push [--dry-run] | clone
+icloud-notes sync [--yes] | pull | push [--dry-run] [--yes] | clone
 icloud-notes history NOTE | diff NOTE REF | restore NOTE --yes
 ```
 

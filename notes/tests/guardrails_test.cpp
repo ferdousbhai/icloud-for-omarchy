@@ -519,6 +519,23 @@ int main()
             onlyPlain = onlyPlain && m.captured(1).trimmed().endsWith(QStringLiteral(".PlainText"));
         check(qml.contains(QStringLiteral("ApplicationWindow")) && offenders.isEmpty() && onlyPlain,
               "qml labels showing note, folder or engine text are plain text");
+        // Only the confirmation dialog tells a sync to delete most of the
+        // vault (runSync(true), `sync --yes`): never a timer, a focus, a button
+        // of the toolbar. And Enter in it keeps the notes; deleting is a click.
+        static const QRegularExpression confirming(QStringLiteral(R"(backend\.run(Sync|Push)\s*\(\s*[^)\s])"));
+        const qsizetype dialog = qml.indexOf(QStringLiteral("id: deleteMissingDialog"));
+        const qsizetype dialogEnd = qml.indexOf(QStringLiteral("\n    AppDialog {"), dialog);
+        qsizetype calls = 0, inDialog = 0;
+        for (const QRegularExpressionMatch &m : confirming.globalMatch(qml)) {
+            ++calls;
+            inDialog += m.capturedStart(0) > dialog && m.capturedStart(0) < dialogEnd;
+        }
+        const QString dialogText = qml.mid(dialog, dialogEnd - dialog);
+        check(dialog > 0 && dialogEnd > dialog && calls == 1 && inDialog == 1
+                  && dialogText.contains(QStringLiteral("onAccepted")) && dialogText.contains(QStringLiteral("backend.runSync(true)"))
+                  && dialogText.contains(QStringLiteral("Keys.onReturnPressed: deleteMissingDialog.reject()"))
+                  && dialogText.contains(QStringLiteral("focusPolicy: Qt.NoFocus")),
+              "qml only the delete confirmation runs a sync with --yes");
     }
 
     return report();

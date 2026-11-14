@@ -1008,6 +1008,89 @@ int main(int argc, char *argv[])
               "seam sync reports each half with its own result");
     }
     {
+        // A push that would delete most of the vault is refused by the
+        // engine. The window is told (deletionsRefused: how many notes, and
+        // that nothing was pushed), the pull still runs, and no sync that
+        // starts on its own ever passes --yes: only runSync(true) does,
+        // which the window calls from its confirmation alone.
+        const QString engineLog = scratch.path() + QStringLiteral("/too-many.log");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_LOG", engineLog.toUtf8());
+        qputenv("ICLOUD_NOTES_SYNC_STUB_TOO_MANY", "1");
+        int told = 0;
+        QStringList runs;
+        const auto c1 = QObject::connect(&b, &NotesBackend::deletionsRefusedChanged, &b, [&] { ++told; });
+        const auto c2 = QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
+            runs << label + (ok ? QStringLiteral("+") : QStringLiteral("-")) + QString::number(b.lastExitCode());
+        });
+        b.clearLog();
+        b.runSync();
+        waitForIdle(b);
+        const QString message = b.deletionsRefused();
+        check(runs == QStringList{ QStringLiteral("Push-2"), QStringLiteral("Pull+0") } && told == 1
+                  && message.startsWith(QStringLiteral("5 of the 6 notes tracked here have no file any more"))
+                  && message.endsWith(QStringLiteral("so nothing was pushed.")) && !b.authExpired()
+                  && b.syncLog().contains(QStringLiteral("icloud-notes push --yes")),
+              "seam a push refused for deleting most of the vault: the window is told, the pull still runs");
+        // The syncs that start on their own: the poll's and the focus's sync,
+        // the push after an edit, a sync resumed by a sign-in.
+        b.runSync();
+        waitForIdle(b);
+        b.runPush();
+        waitForIdle(b);
+        const bool pushSaysSo = b.syncMessage() == QStringLiteral("Nothing pushed: most of the notes' files are gone.")
+            && b.lastError().value(QStringLiteral("code")).toString() == QStringLiteral("too_many_deletions");
+        fake.set({ { QStringLiteral("SigningIn"), true } });
+        waitUntil([&] { return b.signingIn(); });
+        fake.set({ { QStringLiteral("SigningIn"), false } });
+        waitUntil([] { return false; }, 300);
+        waitForIdle(b);
+        const QStringList unasked = readFile(QStringLiteral("too-many.log"), scratch.path()).split(u'\n', Qt::SkipEmptyParts);
+        check(pushSaysSo && unasked.size() >= 3 && unasked.contains(QStringLiteral("push")) && unasked.contains(QStringLiteral("sync"))
+                  && !unasked.join(u' ').contains(QStringLiteral("--yes")) && !b.syncLog().contains(QStringLiteral("sync --yes\n"))
+                  && !b.syncLog().contains(QStringLiteral("--json push --yes")) && told == 1 && b.deletionsRefused() == message,
+              "seam syncs and pushes that start on their own never pass --yes, and the refusal stands");
+        // The person's say-so: sync --yes, and the refusal is settled.
+        QFile::remove(engineLog);
+        b.runSync(true);
+        waitForIdle(b);
+        check(readFile(QStringLiteral("too-many.log"), scratch.path()) == QStringLiteral("sync --yes\n")
+                  && b.syncLog().contains(QStringLiteral("$ icloud-notes-sync --quiet sync --yes")) && told == 2
+                  && b.deletionsRefused().isEmpty() && b.syncMessage() == QStringLiteral("Pull done."),
+              "seam confirming runs sync --yes, and a push that went through clears the refusal");
+        QFile::remove(engineLog);
+        b.runPush(true);
+        waitForIdle(b);
+        check(readFile(QStringLiteral("too-many.log"), scratch.path()) == QStringLiteral("push --yes\n"), "seam push --yes is passed on");
+        QObject::disconnect(c1);
+        QObject::disconnect(c2);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_TOO_MANY");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_LOG");
+    }
+    {
+        // A change the push left for the next one (the file was saved while
+        // it ran) is neither a failure nor a refusal: the push worked.
+        qputenv("ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED", "1");
+        QStringList runs;
+        const auto c = QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
+            runs << label + (ok ? QStringLiteral("+") : QStringLiteral("-")) + QString::number(b.lastExitCode());
+        });
+        b.clearLog();
+        b.runSync();
+        waitForIdle(b);
+        const bool syncOk = runs == QStringList{ QStringLiteral("Push+0"), QStringLiteral("Pull+0") }
+            && b.syncLog().contains(QStringLiteral("left for the next push")) && !b.syncLog().contains(QStringLiteral("failed"));
+        runs.clear();
+        b.runPush();
+        waitForIdle(b);
+        check(syncOk && runs == QStringList{ QStringLiteral("Push+0") } && b.lastError().isEmpty()
+                  && b.syncMessage() == QStringLiteral("Push done.")
+                  && QJsonDocument::fromJson(b.lastOutput()).object().value(QStringLiteral("entries")).toArray().at(0).toObject()
+                         .value(QStringLiteral("outcome")).toObject().value(QStringLiteral("skipped")).toBool(),
+              "seam a change a push left for the next push is not a failure");
+        QObject::disconnect(c);
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED");
+    }
+    {
         // A sync that changed nothing re-reads nothing: no vault walk, and
         // the vault-info the engine's answer carries is taken as it is (no
         // second engine run, not even with the state file changed).

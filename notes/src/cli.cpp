@@ -163,7 +163,8 @@ const char *const kFooter =
     "Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to\n"
     "wait for the vault's lock; 30 when a background sync holds it, none while the Notes window\n"
     "holds it). Nothing asks without a terminal: delete, delete-folder, restore, detach and a write\n"
-    "that empties a note or drops an attachment's link need --yes.\n"
+    "that empties a note or drops an attachment's link need --yes, and so does a push or sync that\n"
+    "would delete most of the vault.\n"
     "Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,\n"
     "session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),\n"
     "4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,\n"
@@ -295,23 +296,28 @@ const QList<Spec> &specs()
           "and deletes the folder in iCloud. Asks on a terminal; without one, --yes is required.\n"
           "JSON: {action, folder, sync?}",
           { QStringLiteral("--yes"), QStringLiteral("--push") }, 1, 1 },
-        { "sync", "sync",
+        { "sync", "sync [--yes]",
           "What the window does on its own: push what changed here, then pull what changed in iCloud,\n"
           "in one icloud-notes-sync run with the vault's lock held. A refused sign-in is reported to\n"
           "icloud-session, which checks it with Apple (one retry if it still works). No network is the\n"
           "error offline (or network), exit 5. A sync that ran but failed still prints its result, with\n"
-          "error in it, and exits with the failure's code.\n"
+          "error in it, and exits with the failure's code. When more than 3 tracked notes, and most of\n"
+          "them, have no file any more (or an empty one), the push is refused (too_many_deletions, exit\n"
+          "2: files gone by accident look like this) and the pull still runs; --yes pushes anyway, which\n"
+          "moves those notes to Recently Deleted in iCloud.\n"
           "JSON: {ok, runs: [{command, ok, exit_code, result}], log, error?} (result: icloud-notes-sync's\n"
           "data for that half, or {error: {code, message, ...}} when it failed; error: why it failed)",
-          {}, 0, 0 },
+          { QStringLiteral("--yes") }, 0, 0 },
         { "pull", "pull", "Fetch what changed in iCloud (as sync, pull only).\nJSON: as for sync", {}, 0, 0 },
-        { "push", "push [--dry-run]",
+        { "push", "push [--dry-run] [--yes]",
           "Send what changed here to iCloud (as sync, push only). --dry-run previews it instead (exit 0,\n"
           "the changes in the result): icloud-notes-sync's own push --dry-run output (it takes no lock,\n"
           "so it works while the Notes window is open; the output flags are its own: --ids-only lists\n"
-          "the files, --count counts them).\n"
+          "the files, --count counts them). A push that would delete most of the vault (more than 3\n"
+          "tracked notes, and most of them, without a file) is refused: too_many_deletions, exit 2,\n"
+          "nothing sent; --dry-run lists them, and --yes pushes anyway (they go to Recently Deleted).\n"
           "JSON: as for sync; with --dry-run icloud-notes-sync's {entries, unchanged, notices, ...}",
-          { QStringLiteral("--dry-run") }, 0, 0 },
+          { QStringLiteral("--dry-run"), QStringLiteral("--yes") }, 0, 0 },
         { "clone", "clone",
           "Download every note into the (empty) vault, as the window's Clone my notes, for the account\n"
           "icloud-session is signed in to. Never opens a sign-in window: signed out exits 3.\n"
@@ -860,7 +866,8 @@ struct SyncOutcome {
 // `what`: "sync" (push, then pull, in one engine run), "pull", "push" or
 // "clone", through the backend with its lock held, as the window runs them.
 // A sync still reports two runs, one per half.
-SyncOutcome runSync(NotesBackend &b, const QString &what)
+// `deleteMissing` is push's and sync's --yes (NotesBackend::runPush).
+SyncOutcome runSync(NotesBackend &b, const QString &what, bool deleteMissing = false)
 {
     SyncOutcome result;
     if (auto f = needSyncTool(b)) {
@@ -918,11 +925,11 @@ SyncOutcome runSync(NotesBackend &b, const QString &what)
     const QMetaObject::Connection cloned =
         QObject::connect(&b, &NotesBackend::cloneFinished, &b, [&] { cloneDone = true; });
     if (what == u"sync")
-        b.runSync();
+        b.runSync(deleteMissing);
     else if (what == u"pull")
         b.runPull();
     else if (what == u"push")
-        b.runPush();
+        b.runPush(deleteMissing);
     else
         b.runClone();
     waitFor([&] { return b.idle() && (what != u"clone" || cloneDone); });
@@ -1682,7 +1689,7 @@ int syncCommand(NotesBackend &b, const Args &a, const QString &what)
         return report(*f, a.mode);
     if (auto f = takeLock(b, a))
         return report(*f, a.mode);
-    const SyncOutcome sync = runSync(b, what);
+    const SyncOutcome sync = runSync(b, what, a.has("--yes"));
     if (sync.json.isEmpty() && sync.failure)
         return report(*sync.failure, a.mode);
     // It ran: its result (the runs and the log) whether or not it worked,
@@ -1715,8 +1722,9 @@ int runCommand(const Args &a, const Spec &spec)
         return report(*f, a.mode);
 
     // icloud-notes-sync's own commands, on a resolved note.
-    if (cmd == u"push")
-        return execEngine(b, a, { QStringLiteral("push"), QStringLiteral("--dry-run") });
+    if (cmd == u"push") // --yes with it: the preview of what push --yes would send
+        return execEngine(b, a, QStringList{ QStringLiteral("push"), QStringLiteral("--dry-run") }
+                                    + (a.has("--yes") ? QStringList{ QStringLiteral("--yes") } : QStringList()));
     if (cmd == u"history" || cmd == u"diff" || cmd == u"restore") {
         Note n;
         if (auto f = resolveNote(b, a.positional.at(0), n))

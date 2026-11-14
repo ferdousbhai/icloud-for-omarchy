@@ -33,11 +33,18 @@
 # ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED=1: a push (alone, or as a sync's half)
 # runs but has a change refused by iCloud: its result with the failed entry,
 # exit 1, and in a sync the half's error `push_rejected` beside the result.
+# ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED=1: a push (alone, or as a sync's half)
+# that left one change for the next push (outcome.skipped): it worked.
+# ICLOUD_NOTES_SYNC_STUB_TOO_MANY=1: a push (alone, or as a sync's half)
+# refuses to delete most of the vault (too_many_deletions, exit 2, with the
+# engine's message and hint) unless it is run with --yes; a sync's pull runs
+# all the same. --yes is taken by push and sync, and logged ("sync --yes").
 orig=("$@")
-quiet="" json="" styled="" ids="" count=""
+quiet="" json="" styled="" ids="" count="" yes=""
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --yes) yes=1 ;;
     --quiet) quiet=1 ;;
     --json) json=1 ;;
     --styled) styled=1 ;;
@@ -113,6 +120,11 @@ rejected_message='Apple refused the iCloud session although icloud-sessiond stil
 refused_message='Notes/Big.md: server rejected the delete: BAD_REQUEST'
 refused_result='{"dryRun":false,"pushed":0,"entries":[{"kind":"delete","file":"Notes/Big.md","resolution":"ready","outcome":{"succeeded":false,"message":"'"$refused_message"'"}}],"unchanged":1,"notices":[]}'
 refused_lines='["'"$refused_message"'","Pushed 0 note(s)"]'
+skipped_message='Notes/Alpha.md: changed here while it was being pushed - left for the next push'
+skipped_result='{"dryRun":false,"pushed":0,"entries":[{"kind":"update","file":"Notes/Alpha.md","resolution":"ready","outcome":{"succeeded":true,"message":"'"$skipped_message"'","skipped":true}}],"unchanged":1,"notices":[]}'
+skipped_lines='["'"$skipped_message"'","Pushed 0 note(s)"]'
+too_many_message='5 of the 6 notes tracked here have no file any more (or an empty one). Pushing that would move them all to Recently Deleted, so nothing was pushed.'
+too_many_hint='If the files went missing by accident (a folder moved, a disk not mounted, a sync tool'"'"'s mistake), put them back and sync again; \"icloud-notes push --dry-run\" lists what would be deleted. To delete them, run \"icloud-notes push --yes\".'
 
 if [ "$1" = "vault-info" ]; then
   # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG: a file each vault-info appends a line to.
@@ -133,7 +145,7 @@ elif [ "$1" = "sync" ]; then
   # and exit; the run exits by the engine's worse-half rule (3 if either
   # half exited 3, else the higher), and a push failing sign_in_required,
   # session_rejected, offline or network leaves the pull out.
-  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "sync" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "sync${yes:+ --yes}" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
   stub_fail
   code=0
@@ -152,6 +164,14 @@ elif [ "$1" = "sync" ]; then
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED:-}" ]; then
       printf '{"ok":false,"exit_code":1,"result":%s,"lines":%s,"error":{"code":"push_rejected","message":"%s"}}' \
         "$refused_result" "$refused_lines" "$refused_message"
+      return
+    fi
+    if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_TOO_MANY:-}" ] && [ -z "$yes" ]; then
+      printf '{"ok":false,"exit_code":2,"error":{"code":"too_many_deletions","message":"%s","hint":"%s"}}' "$too_many_message" "$too_many_hint"
+      return
+    fi
+    if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED:-}" ]; then
+      printf '{"ok":true,"exit_code":0,"result":%s,"lines":%s}' "$skipped_result" "$skipped_lines"
       return
     fi
     if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
@@ -247,7 +267,7 @@ elif [ "$1" = "diff" ]; then
   exit 0
 elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   # ICLOUD_NOTES_SYNC_STUB_LOG: a file each pull/push appends its verb to.
-  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "$1" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "$1${yes:+ --yes}" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   # ICLOUD_NOTES_SYNC_STUB_SLEEP: seconds a run takes.
   # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
   # only that one (a push with nothing to send never asks iCloud).
@@ -293,6 +313,13 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED:-}" ]; then
     result "$refused_result" "$refused_message" "{\"lines\":$refused_lines}"
     exit 1
+  fi
+  if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_TOO_MANY:-}" ] && [ -z "$yes" ]; then
+    fail too_many_deletions "$too_many_message" "$too_many_hint" 2
+  fi
+  if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED:-}" ]; then
+    result "$skipped_result" "$skipped_message" "{\"lines\":$skipped_lines}"
+    exit 0
   fi
   result "{\"stub\":\"$1\",\"ok\":true}" "stub $1 ok" "{\"lines\":[\"stub $1 ok\"]}"
 else

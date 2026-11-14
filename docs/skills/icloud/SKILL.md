@@ -98,6 +98,9 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
 - Sync: changes stay local until `sync` (push then pull) or `--push` on the
   change. Preview first: `push --dry-run` (`.entries`). Also `pull`,
   `clone`, `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`.
+- `too_many_deletions` (exit 2) from `sync`, `push` or `--push`: most of the
+  note files are gone, and nothing was pushed. Show the user
+  `push --dry-run`, and only with their yes run `sync --yes`.
 - `vault_busy` (exit 1) = the Notes window is open and owns the vault: ask
   the user to make the change there or quit Notes. Reads always work.
 - `read_only` notes cannot be changed here; `guardrail` = the text would add

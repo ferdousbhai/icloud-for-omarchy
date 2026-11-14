@@ -1061,6 +1061,52 @@ int main(int argc, char *argv[])
               "cli push with a change iCloud refused: push_rejected, exit 1");
     }
 
+    // ---- a push that would delete most of the vault; a change left for the next push ----
+    {
+        const QHash<QString, QString> tooMany{ { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_TOO_MANY"), QStringLiteral("1") } };
+        const auto hintWorks = [](const Run &r) {
+            const QString hint = r.error().value(QStringLiteral("hint")).toString();
+            return hint.contains(QStringLiteral("\"icloud-notes push --dry-run\"")) && hint.contains(QStringLiteral("\"icloud-notes push --yes\""));
+        };
+        // Without --yes the engine's refusal comes through as it is: its code,
+        // message, hint and exit 2. The hint's commands are this tool's.
+        QFile::remove(g_scratch + QStringLiteral("/stub.log"));
+        const Run sync = cliJson({ QStringLiteral("sync") }, tooMany);
+        const QJsonArray runs = sync.json().toObject().value(QStringLiteral("runs")).toArray();
+        check(sync.code == 2 && sync.errorCode() == QStringLiteral("too_many_deletions") && hintWorks(sync)
+                  && sync.error().value(QStringLiteral("message")).toString().startsWith(QStringLiteral("5 of the 6 notes tracked here"))
+                  && runs.size() == 2 && !runs.at(0).toObject().value(QStringLiteral("ok")).toBool()
+                  && runs.at(1).toObject().value(QStringLiteral("ok")).toBool() && stubLog() == QStringList{ QStringLiteral("sync") },
+              "cli sync that would delete most of the vault: too_many_deletions, exit 2, the engine's hint, the pull still run");
+        const Run push = cliJson({ QStringLiteral("push") }, tooMany);
+        const Run pushText = cliText({ QStringLiteral("push") }, tooMany);
+        check(push.code == 2 && push.errorCode() == QStringLiteral("too_many_deletions") && hintWorks(push) && pushText.code == 2
+                  && pushText.err.contains("error: 5 of the 6 notes") && pushText.err.contains("hint: If the files went missing"),
+              "cli push that would delete most of the vault: too_many_deletions, exit 2, in JSON and in text");
+        const Run changed = cliJson({ QStringLiteral("toggle"), QStringLiteral("alpha"), QStringLiteral("2"), QStringLiteral("--push") }, tooMany);
+        check(changed.code == 2 && changed.json().toObject().value(QStringLiteral("sync")).toObject().value(QStringLiteral("error")).toObject()
+                                           .value(QStringLiteral("code")).toString() == QStringLiteral("too_many_deletions"),
+              "cli a change's --push never confirms the deletions");
+        // --yes is passed on, by sync and by push alone.
+        QFile::remove(g_scratch + QStringLiteral("/stub.log"));
+        const Run syncYes = cliJson({ QStringLiteral("sync"), QStringLiteral("--yes") }, tooMany);
+        const Run pushYes = cliJson({ QStringLiteral("push"), QStringLiteral("--yes") }, tooMany);
+        check(syncYes.code == 0 && pushYes.code == 0 && syncYes.json().toObject().value(QStringLiteral("ok")).toBool()
+                  && stubLog() == QStringList{ QStringLiteral("sync --yes"), QStringLiteral("push --yes") },
+              "cli sync --yes and push --yes pass --yes to the engine");
+        check(cliJson({ QStringLiteral("pull"), QStringLiteral("--yes") }).code == 2, "cli pull takes no --yes");
+
+        // A change the push left for the next one: the push worked.
+        const Run skipped = cliJson({ QStringLiteral("sync") }, { { QStringLiteral("ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED"), QStringLiteral("1") } });
+        const QJsonObject pushRun = skipped.json().toObject().value(QStringLiteral("runs")).toArray().at(0).toObject();
+        const QJsonObject outcome = pushRun.value(QStringLiteral("result")).toObject().value(QStringLiteral("entries")).toArray().at(0)
+                                        .toObject().value(QStringLiteral("outcome")).toObject();
+        check(skipped.code == 0 && skipped.json().toObject().value(QStringLiteral("ok")).toBool() && skipped.error().isEmpty()
+                  && pushRun.value(QStringLiteral("ok")).toBool() && outcome.value(QStringLiteral("skipped")).toBool()
+                  && skipped.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral("left for the next push")),
+              "cli sync with a change left for the next push: exit 0, the outcome says skipped");
+    }
+
     // ---- export-pdf (a GUI application, offscreen) -----------------------------
     {
         const Run pdf = cliJson({ QStringLiteral("export-pdf"), QStringLiteral("alpha") });
@@ -1171,6 +1217,33 @@ int main(int argc, char *argv[])
                   && noVersion.code == 4 && !noVersion.errorEnvelope().isEmpty()
                   && noVersion.errorCode() == QStringLiteral("unknown_version_snapshot"),
               "real engine: history answers with its epochs; an unknown version is the engine's error object, exit 4");
+
+        // Most of the vault's note files gone (four more tracked notes, none
+        // with a file): the engine refuses the push, with a hint whose
+        // commands are this tool's, and the preview warns.
+        {
+            QJsonObject state = QJsonDocument::fromJson(readFile(QStringLiteral(".icloud-notes/state.json"), vault).toUtf8()).object();
+            QJsonObject notes = state.value(QStringLiteral("notes")).toObject();
+            QJsonObject entry = notes.begin().value().toObject();
+            for (int i = 0; i < 4; ++i) {
+                entry.insert(QStringLiteral("file"), QStringLiteral("Notes/Extra %1.md").arg(i));
+                notes.insert(QStringLiteral("00000000-0000-4000-8000-00000000000%1").arg(i), entry);
+            }
+            state.insert(QStringLiteral("notes"), notes);
+            writeFile(QStringLiteral(".icloud-notes/state.json"), QString::fromUtf8(QJsonDocument(state).toJson()), vault);
+            QFile::remove(vault + QLatin1Char('/') + note);
+        }
+        const Run guarded = real({ QStringLiteral("--json"), QStringLiteral("push") }, "tiny-lookup.json");
+        const QString guardHint = guarded.error().value(QStringLiteral("hint")).toString();
+        const Run preview = real({ QStringLiteral("--quiet"), QStringLiteral("push"), QStringLiteral("--dry-run") }, "tiny-lookup.json");
+        check(guarded.code == 2 && guarded.errorCode() == QStringLiteral("too_many_deletions")
+                  && guarded.error().value(QStringLiteral("message")).toString().startsWith(QStringLiteral("5 of the 5 notes tracked here"))
+                  && guardHint.contains(QStringLiteral("\"icloud-notes push --dry-run\"")) && guardHint.contains(QStringLiteral("\"icloud-notes push --yes\""))
+                  && preview.code == 0 && preview.json().toObject().value(QStringLiteral("entries")).toArray().size() == 5
+                  && preview.json().toObject().value(QStringLiteral("notices")).toArray().at(0).toObject().value(QStringLiteral("message"))
+                         .toString().contains(QStringLiteral("refuses to delete that many unless it is run with --yes")),
+              "real engine: a push that would delete most of the vault is too_many_deletions, exit 2; the hint names this tool's "
+              "commands, and the dry run lists the deletions with a warning");
 
         // A vault cloned for another account: the engine fails each half with
         // account_mismatch (exit 3, not a sign-in), inside the sync's answer.

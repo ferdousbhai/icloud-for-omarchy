@@ -797,6 +797,43 @@ ApplicationWindow {
             }
         }
 
+        // A push refused because most of the notes' files are gone: it would
+        // move that many notes to Recently Deleted, which only a person
+        // decides. Nothing was pushed, and nothing is until they say so here
+        // (the syncs that run on their own never do) or the files are back.
+        Rectangle {
+            visible: backend.deletionsRefused.length > 0
+            Layout.fillWidth: true
+            Layout.margins: 10
+            implicitHeight: deletionsRow.implicitHeight + 20
+            radius: 8
+            color: root.colRaised
+            RowLayout {
+                id: deletionsRow
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 12
+                Glyph { text: "\uf071"; color: root.colYellow }
+                Label {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: root.colTextDim
+                    text: backend.deletionsRefused + " If the files went missing by accident (a folder moved, a disk not mounted), put them back and Notes syncs as before."
+                }
+                Button {
+                    text: "Show them"
+                    enabled: !backend.syncRunning
+                    onClicked: { if (root.flushEdits()) backend.refreshPushPreview(); }
+                }
+                Button {
+                    text: "Delete them…"
+                    enabled: !backend.syncRunning
+                    onClicked: deleteMissingDialog.open()
+                }
+            }
+        }
+
         // One banner for the sign-in: expired, too short to last (a phone QR
         // sign-in never offers "Keep me signed in"), or lapsing within days.
         Rectangle {
@@ -1568,7 +1605,7 @@ ApplicationWindow {
 
     function dialogOpen() {
         return [previewDialog, logDialog, historyDialog, saveWarnDialog, newNoteDialog,
-                newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, onboardDialog]
+                newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, deleteMissingDialog, onboardDialog]
             .some(function (d) { return d.visible; });
     }
 
@@ -1878,6 +1915,49 @@ ApplicationWindow {
                 root.notice = err;
             else
                 root.loadEditor(); // unsaved edits go with the note
+        }
+    }
+
+    // The one place a sync is told to delete most of the vault (sync --yes).
+    // "Keep them" is the default: it has the focus, Enter and Escape both
+    // leave everything as it is, and deleting takes a click on its button,
+    // which the keyboard never reaches.
+    AppDialog {
+        id: deleteMissingDialog
+        title: "Delete these notes from iCloud?"
+        onOpened: keepMissingButton.forceActiveFocus()
+        ColumnLayout {
+            spacing: 14
+            Keys.onReturnPressed: deleteMissingDialog.reject()
+            Keys.onEnterPressed: deleteMissingDialog.reject()
+            Label {
+                textFormat: Text.PlainText
+                Layout.preferredWidth: 400
+                wrapMode: Text.WordWrap
+                text: backend.deletionsRefused + "\n\nDeleting moves every note whose file is gone to Recently Deleted in iCloud, on all your devices (recoverable there for about 30 days). Sync status lists them."
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Button {
+                    text: "Delete from iCloud"
+                    focusPolicy: Qt.NoFocus
+                    enabled: !backend.syncRunning
+                    onClicked: deleteMissingDialog.accept()
+                }
+                Item { Layout.fillWidth: true }
+                PrimaryButton {
+                    id: keepMissingButton
+                    text: "Keep them"
+                    onClicked: deleteMissingDialog.reject()
+                }
+            }
+        }
+        onAccepted: {
+            if (!root.flushEdits())
+                return;
+            root.lastFocusSync = Date.now();
+            backend.runSync(true);
         }
     }
 
