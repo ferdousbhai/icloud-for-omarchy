@@ -1202,6 +1202,67 @@ fn a_run_killed_after_writing_a_file_does_not_read_it_as_the_file_s_edits() {
     assert_eq!(count(&all_titles(&env, "Groceries"), "Coffee beans"), 1);
 }
 
+impl Env {
+    /// `background --sync`, ended at a folder crash point (`folder::CRASH_AT`).
+    fn background_crashing_at(&self, point: &str) {
+        let out = command_at(&self.base, self.dir.path(), &["background", "--sync"])
+            .env(icloud_reminders::folder::CRASH_AT, point)
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 86, "never reached {point}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn a_run_ended_between_writing_a_file_and_recording_it_adds_and_deletes_nothing() {
+    let env = start();
+    let dir = folder(&env);
+    // The phone renames Milk; Groceries.md is written with it, and the run
+    // ends before folder.json says so.
+    let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
+    milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
+    env.state.put(milk);
+    env.background_crashing_at("file-written");
+    assert!(
+        std::fs::read_to_string(dir.join("Groceries.md"))
+            .unwrap()
+            .contains("Coffee beans")
+    );
+
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["deleted"].as_i64()),
+        (Some(0), Some(0)),
+        "{out}"
+    );
+    assert_eq!(env.creates(), 0);
+    let milk = env.state.record("Reminder/REM-MILK").unwrap();
+    assert_eq!(milk["fields"]["Deleted"]["value"], 0);
+}
+
+#[test]
+fn a_run_ended_between_renaming_a_file_and_recording_it_keeps_the_file_and_its_edits() {
+    let env = start();
+    let dir = folder(&env);
+    // Groceries becomes Food while its file has a tick not yet sent; the
+    // file is renamed, and the run ends before folder.json says so.
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Name"]["value"] = json!("Food");
+    env.state.put(list);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("- [ ] Eggs", "- [x] Eggs")).unwrap();
+    env.background_crashing_at("renamed");
+    assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+
+    env.json(&["background", "--sync"]);
+    let eggs = env.state.record("Reminder/REM-EGGS").unwrap();
+    assert_eq!(eggs["fields"]["Completed"]["value"], 1);
+    assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+    let food = std::fs::read_to_string(dir.join("Food.md")).unwrap();
+    assert!(food.starts_with("# Food\n") && food.contains("- [x] Eggs"), "{food}");
+}
+
 #[test]
 fn a_renamed_list_s_file_keeps_its_new_name_after_a_run_killed_later() {
     let env = start();

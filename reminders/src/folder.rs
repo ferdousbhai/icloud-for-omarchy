@@ -48,7 +48,9 @@
 //!   ([`ListState::pending`]), so one that reached iCloud without the run
 //!   hearing so (killed, or the answer lost) is that line's reminder at the
 //!   next run (deleted since, its line goes), and one iCloud never heard of
-//!   is sent again. Nothing else ties a new
+//!   is sent again. A file about to be written is recorded first
+//!   ([`ListState::writing`]): one found as it says was written, by a run
+//!   killed before it could record so. Nothing else ties a new
 //!   line to a reminder: one made on the phone that reads the same is
 //!   another.
 //! - What a conflict copy added is in iCloud before it is in the file. Until
@@ -73,6 +75,50 @@ use crate::due;
 use crate::model::{Change, List, Reminder};
 use crate::service::Service;
 use crate::store::Cache;
+
+/// `ICLOUD_REMINDERS_CRASH_AT=<point>[:<n>]` (debug builds only) ends the
+/// process the `n`th time (default the first) a folder run reaches
+/// `<point>`, as a kill would: the points sit between each write and what
+/// records it (`tests/folder_model.rs`). A release build has no hook.
+pub const CRASH_AT: &str = "ICLOUD_REMINDERS_CRASH_AT";
+
+/// Every point [`CRASH_AT`] can name.
+pub const CRASH_POINTS: &[&str] = &[
+    "pending-saved",
+    "added",
+    "add-completed",
+    "updated",
+    "deleted",
+    "copy-applied",
+    "file-applied",
+    "tmp-written",
+    "file-written",
+    "renamed",
+    "gone-removed",
+];
+
+#[inline]
+fn crash(point: &str) {
+    #[cfg(debug_assertions)]
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static HITS: AtomicUsize = AtomicUsize::new(0);
+        debug_assert!(CRASH_POINTS.contains(&point));
+        let Some(want) = std::env::var_os(CRASH_AT) else { return };
+        let want = want.to_string_lossy();
+        let (at, nth) = match want.rsplit_once(':').map(|(p, n)| (p, n.parse::<usize>())) {
+            Some((p, Ok(n))) => (p, n.max(1)),
+            _ => (&*want, 1),
+        };
+        if at == point && HITS.fetch_add(1, Ordering::SeqCst) + 1 == nth {
+            eprintln!("icloud-reminders: crashing at {point} ({CRASH_AT})");
+            // Exited, not aborted: no core dump for a crash the tests asked for.
+            std::process::exit(86);
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = point;
+}
 
 /// How long a completed reminder stays in its file.
 pub const KEEP_DONE_MS: i64 = 7 * 24 * 3600 * 1000;
@@ -121,6 +167,16 @@ pub struct ListState {
     /// reminder is among `items`.
     #[serde(default)]
     pub pending: Vec<Pending>,
+    /// The file being written, saved before it is: found so on disk, it was.
+    #[serde(default)]
+    pub writing: Option<Writing>,
+}
+
+/// A file's text and items, recorded before the file is written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Writing {
+    pub text: String,
+    pub items: Vec<Known>,
 }
 
 /// A line sent to iCloud as `Reminder/<uuid>`, whether it got there or not.
@@ -600,6 +656,7 @@ fn write(path: &Path, text: &str) -> io::Result<()> {
     let mut f = fs::File::create(&tmp)?;
     f.write_all(text.as_bytes())?;
     f.sync_all()?;
+    crash("tmp-written");
     fs::rename(&tmp, path)
 }
 
@@ -680,6 +737,7 @@ fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut 
                 report.warnings.push(w);
             }
             report.edited += 1;
+            crash("updated");
         }
         // A copy's tick is not the file's: the item stays as the file has
         // it, so the file is not read as unticking it.
@@ -700,16 +758,19 @@ fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut 
             copy: from == Source::Copy,
         });
         save(ls)?;
+        crash("pending-saved");
         let when = it.due.as_deref().and_then(|d| due::parse_when(d, now).ok());
         let saved = svc.add_as(&uuid, &list.id, &it.title, &it.notes, when.as_ref())?;
         report.warnings.extend(saved.warning);
         report.added += 1;
         let made = saved.value;
+        crash("added");
         // Known from here on, so a failure below does not add it again.
         known_now(ls, &uuid, &made);
         save(ls)?;
         if it.done && !made.completed {
             svc.update(&made, &[Change::Completed(true)])?;
+            crash("add-completed");
             ls.items.last_mut().expect("just pushed").item.done = true;
             save(ls)?;
         }
@@ -718,6 +779,7 @@ fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut 
         if let Some(r) = cache.reminders.get(&id) {
             svc.update(r, &[Change::Deleted])?;
             report.deleted += 1;
+            crash("deleted");
         }
         ls.items.retain(|k| k.id != id);
         save(ls)?;
@@ -748,6 +810,17 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
     let Run { svc, list, now } = run;
     let path = dir.join(&ls.file);
     let on_disk = read(&path)?;
+    // Written by a run killed before it recorded so: compared with what it
+    // held before, iCloud's changes in it would read as its own (a
+    // reminder retitled there as one removed and one added).
+    if let Some(w) = ls.writing.take()
+        && on_disk.as_ref() == Some(&w.text)
+    {
+        ls.text = w.text;
+        ls.items = w.items;
+        ls.unwritten.clear();
+        ls.adopted = true;
+    }
     // Not ours yet: a file already there (from another computer, or from
     // before the data directory was cleared) is compared with iCloud as it is, and only adds.
     let first = !ls.adopted;
@@ -804,6 +877,7 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         };
         let delta = from_conflict_copy(&ls.items, &parse(&text, now));
         apply(run, delta, Source::Copy, ls, report, save)?;
+        crash("copy-applied");
         fs::remove_file(&copy)?;
     }
 
@@ -834,6 +908,7 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
             delta.deletes.clear();
         }
         apply(run, delta, Source::File, ls, report, save)?;
+        crash("file-applied");
         ls.text = text.clone();
         save(ls)?;
     }
@@ -855,11 +930,18 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
             // run, against the file as it was read here.
             return Ok(());
         }
+        ls.writing = Some(Writing {
+            text: text.clone(),
+            items: items.clone(),
+        });
+        save(ls)?;
         write(&path, &text)?;
+        crash("file-written");
         report.written.push(ls.file.clone());
     }
     ls.text = text;
     ls.items = items;
+    ls.writing = None;
     ls.unwritten.clear();
     ls.adopted = true;
     // Recorded at once: a run killed later on would leave the next one to
@@ -922,6 +1004,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                 }
             }
         }
+        crash("gone-removed");
     }
 
     for list in &cache.lists {
@@ -937,9 +1020,12 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
         if ls.file.is_empty() {
             ls.file = wanted;
         } else if ls.file != wanted {
-            // The list was renamed: the file follows, when nothing is in the way.
+            // The list was renamed: the file follows, when nothing is in the
+            // way. With the file gone from its old name, one at the new name
+            // is it, moved by a run killed before it recorded so (or by hand).
             let (from, to) = (dir.join(&ls.file), dir.join(&wanted));
-            if !to.exists() && (!from.exists() || fs::rename(&from, &to).is_ok()) {
+            if !from.exists() || (!to.exists() && fs::rename(&from, &to).is_ok()) {
+                crash("renamed");
                 // Its conflict copies too: they are found by the file's name.
                 let (old, new) = (conflict_prefix(&ls.file), conflict_prefix(&wanted));
                 for copy in conflict_copies(dir, &ls.file) {
