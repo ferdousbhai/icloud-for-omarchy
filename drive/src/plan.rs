@@ -488,6 +488,15 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                 ops.push(Op::SetAside {
                     path: other.to_string(),
                 });
+            } else if !local.contains_key(rpath)
+                && tracked_ids
+                    .get(rpath.as_str())
+                    .is_some_and(|holder| remote.paths.contains_key(*holder))
+            {
+                // Another item in step still holds the name (moved away
+                // here, and that not recorded yet): wait for it.
+                stuck.push(row);
+                continue;
             } else if local.contains_key(rpath) {
                 if let Some(holder) = tracked_ids.get(rpath.as_str()) {
                     if remote.paths.contains_key(*holder) {

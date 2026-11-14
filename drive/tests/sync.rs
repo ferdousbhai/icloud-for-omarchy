@@ -1121,3 +1121,23 @@ fn a_file_moved_here_into_a_folder_renamed_on_both_sides_follows_icloud_with_no_
     assert_eq!(bed.cloud.paths(), ["P", "P/s.txt"]);
     assert_eq!(bed.cloud.id_at("P/s.txt").as_deref(), Some(s.id.as_str()));
 }
+
+#[test]
+fn a_file_renamed_in_icloud_to_the_name_of_one_moved_away_here_keeps_both_in_step() {
+    let bed = Bed::new();
+    let c = bed.cloud.file(ROOT_ID, "c.md", "c", bed.time());
+    let d = bed.cloud.file(ROOT_ID, "d", "d", bed.time());
+    let q = bed.cloud.folder(ROOT_ID, "Q");
+    bed.settle();
+    // Here d goes into a new folder; in iCloud into Q, and c.md takes its name.
+    fs::create_dir(bed.root().join("r")).unwrap();
+    fs::rename(bed.root().join("d"), bed.root().join("r/d")).unwrap();
+    move_there(&bed, &d.id, &q.id);
+    bed.cloud.rename_item(&c.id, "d");
+    let uploads = bed.cloud.0.borrow().uploads;
+    bed.settle();
+    assert_eq!(bed.cloud.paths(), ["Q", "Q/d", "d", "r"]);
+    assert_eq!(bed.cloud.id_at("Q/d").as_deref(), Some(d.id.as_str()));
+    assert_eq!(bed.cloud.id_at("d").as_deref(), Some(c.id.as_str()));
+    assert_eq!(bed.cloud.0.borrow().uploads, uploads, "nothing sent again");
+}
