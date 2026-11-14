@@ -56,7 +56,14 @@
 //! - What a conflict copy added is in iCloud before it is in the file. Until
 //!   the file is written with it ([`ListState::unwritten`]), a changed file
 //!   that lacks it does not delete it, and a tick taken from a copy is not
-//!   undone by a file that still shows the box empty.
+//!   undone by a file that still shows the box empty, and a line of the
+//!   file is never read as a retitle of it.
+//! - A file Syncthing brings back after this computer moved or removed it
+//!   (the phone had changed it meanwhile) is never left unread: one under a
+//!   renamed list's old name ([`ListState::was`]) is read as a conflict copy
+//!   and removed; a deleted list's ([`State::removed`]) is left in the
+//!   folder like one that held changes never sent. Each is named in a
+//!   warning.
 //! - A list whose run failed and changed nothing is tried again after the
 //!   next sync or when its file changes, not every minute.
 //! - What a line cannot say (alerts, priority, flags, the due time's zone)
@@ -170,6 +177,11 @@ pub struct ListState {
     /// The file being written, saved before it is: found so on disk, it was.
     #[serde(default)]
     pub writing: Option<Writing>,
+    /// The file's names before the list was renamed. Syncthing brings one
+    /// back when the phone changed it meanwhile; it is then read as a
+    /// conflict copy.
+    #[serde(default)]
+    pub was: Vec<String>,
 }
 
 /// A file's text and items, recorded before the file is written.
@@ -218,6 +230,10 @@ pub struct State {
     /// the file is there: a new list of that name would read it as its own.
     #[serde(default)]
     pub left: Vec<String>,
+    /// Files removed with their deleted lists. One that comes back (changed
+    /// on the phone meanwhile) is left, as above.
+    #[serde(default)]
+    pub removed: Vec<String>,
 }
 
 /// A file that would have removed most of its list: its lines were put back.
@@ -689,13 +705,18 @@ pub fn default_dir() -> Option<PathBuf> {
 }
 
 /// Whether a file has something to send: it differs from what was last
-/// written, or has a conflict copy. A background run syncs with iCloud first
+/// written, or has a conflict copy, or an old name of it is back. A background run syncs with iCloud first
 /// when this is so. A file whose run failed is not, until it changes: one bad
 /// list does not make every minute's run a sync.
 pub fn pending(state: &State, dir: &Path) -> bool {
     state.lists.values().any(|ls| {
         let text = read(&dir.join(&ls.file)).ok().flatten();
-        !ls.stuck_on(&text) && (text.is_some_and(|text| text != ls.text) || !conflict_copies(dir, &ls.file).is_empty())
+        let back = ls
+            .was
+            .iter()
+            .any(|w| dir.join(w).exists() || !conflict_copies(dir, w).is_empty());
+        !ls.stuck_on(&text)
+            && (text.is_some_and(|text| text != ls.text) || !conflict_copies(dir, &ls.file).is_empty() || back)
     })
 }
 
@@ -805,6 +826,16 @@ fn known_now(ls: &mut ListState, uuid: &str, made: &Reminder) {
     }
 }
 
+/// Whether a file that is neither what was being written nor what was
+/// last written (changed since, by the user) was changed from the former:
+/// that is the one it asks less of. A write that never landed leaves the
+/// last one, and the user's edits are then of that.
+fn closer(writing: &Writing, ls: &ListState, text: &str, now: &Zoned) -> bool {
+    let local = parse(text, now);
+    let size = |d: Delta| d.adds.len() + d.updates.len() + d.deletes.len();
+    size(diff(&writing.items, &local, now)) < size(diff(&ls.items, &local, now))
+}
+
 /// One list: the file's changes to iCloud, then iCloud's state to the file.
 fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save) -> Result<()> {
     let Run { svc, list, now } = run;
@@ -814,7 +845,9 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
     // held before, iCloud's changes in it would read as its own (a
     // reminder retitled there as one removed and one added).
     if let Some(w) = ls.writing.take()
-        && on_disk.as_ref() == Some(&w.text)
+        && on_disk
+            .as_ref()
+            .is_some_and(|text| *text == w.text || (*text != ls.text && closer(&w, ls, text, now)))
     {
         ls.text = w.text;
         ls.items = w.items;
@@ -865,7 +898,17 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
     // Before the file: a copy is compared with the file as last written, so
     // a box it shows ticked that the file has just unticked is not news.
     let mut unreadable = None;
-    for copy in conflict_copies(dir, &ls.file) {
+    let mut copies = conflict_copies(dir, &ls.file);
+    // Its old names come back as the phone last had them, from before the
+    // rename: older than the file, so read as conflict copies.
+    let old: Vec<PathBuf> = ls
+        .was
+        .iter()
+        .flat_map(|was| std::iter::once(dir.join(was)).chain(conflict_copies(dir, was)))
+        .filter(|p| p.exists())
+        .collect();
+    copies.extend(old.iter().cloned());
+    for copy in copies {
         let text = match read(&copy) {
             Ok(Some(text)) => text,
             Ok(None) => continue,
@@ -879,6 +922,16 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         apply(run, delta, Source::Copy, ls, report, save)?;
         crash("copy-applied");
         fs::remove_file(&copy)?;
+        if old.contains(&copy) {
+            let name = copy
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            report.warnings.push(format!(
+                "{name}: came back after its list was renamed (it holds changes from another device); its ticks and new lines were taken into {} and it was removed",
+                ls.file
+            ));
+        }
     }
 
     // What the file holds is recorded as the writes are made: the next run
@@ -893,8 +946,14 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
             delta.updates.clear();
         }
         // A conflict copy's, which the file has yet to be written with: not
-        // lines removed from it.
+        // lines removed from it, and not retitled by a line like it (typed
+        // on another device: another reminder).
         delta.deletes.retain(|id| !ls.unwritten.contains(id));
+        let (retitles, updates) = std::mem::take(&mut delta.updates)
+            .into_iter()
+            .partition(|(id, _, c)| ls.unwritten.contains(id) && c.iter().any(|c| matches!(c, Change::Title(_))));
+        delta.updates = updates;
+        delta.adds.extend(retitles.into_iter().map(|(_, it, _)| it));
         // Most of the list as the file last held it: `items` has grown by
         // what a run killed after its adds made, and by a copy's adds.
         if risky(&delta, parse(&ls.text, now).len()) {
@@ -993,6 +1052,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                 if file.is_some() {
                     fs::remove_file(&path)?;
                 }
+                state.removed.push(ls.file.clone());
                 // Nothing can take them in now: the list and its reminders
                 // are gone, and a new list of its name would read them as
                 // its own.
@@ -1006,17 +1066,39 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
         }
         crash("gone-removed");
     }
+    // A removed file back (Syncthing restores one the phone had changed):
+    // left with what it holds, never taken by a new list of its name. Once a
+    // list has the name, a file of it is that list's.
+    state
+        .removed
+        .retain(|n| !state.lists.values().any(|ls| ls.file.eq_ignore_ascii_case(n)));
+    for name in std::mem::take(&mut state.removed) {
+        if dir.join(&name).exists() {
+            report.warnings.push(format!(
+                "{name}: came back after its list was deleted in iCloud (it holds changes from another device), so it is left here and no longer kept in step"
+            ));
+            state.left.push(name);
+        } else {
+            state.removed.push(name);
+        }
+    }
 
     for list in &cache.lists {
         let others: Vec<String> = state
             .lists
             .iter()
             .filter(|(id, _)| **id != list.id)
-            .map(|(_, ls)| ls.file.clone())
+            .flat_map(|(_, ls)| {
+                // A renamed list's old name, while a file of it is there to read.
+                let back = ls.was.iter().filter(|w| dir.join(w).exists()).cloned();
+                std::iter::once(ls.file.clone()).chain(back)
+            })
             .chain(state.left.iter().cloned())
             .collect();
         let wanted = free_name(&file_stem(&list.name), &others);
         let mut ls = state.lists.get(&list.id).cloned().unwrap_or_default();
+        // An old name another list now has is that list's file.
+        ls.was.retain(|w| !others.iter().any(|o| o.eq_ignore_ascii_case(w)));
         if ls.file.is_empty() {
             ls.file = wanted;
         } else if ls.file != wanted {
@@ -1036,7 +1118,8 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                         let _ = fs::rename(&copy, &to);
                     }
                 }
-                ls.file = wanted;
+                ls.was.retain(|w| !w.eq_ignore_ascii_case(&wanted));
+                ls.was.push(std::mem::replace(&mut ls.file, wanted));
                 // Recorded at once: the next run would otherwise look for
                 // the file under its old name, and write it there afresh.
                 state.lists.insert(list.id.clone(), ls.clone());
