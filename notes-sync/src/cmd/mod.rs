@@ -243,6 +243,16 @@ pub(crate) fn left_file_of(
 /// engine without it, which keeps it as it is.
 pub(crate) const UNSHARED_KEY: &str = "unshared";
 
+/// state.json's `pendingDirs`: the directories a pull made for folders new
+/// to the vault (or folders with a new name), written before it makes them
+/// and taken out by the state it saves once its notes are where the layout
+/// puts them. A pull killed in between leaves directories, and new notes in
+/// them, that the state names no folder for: a push would make each a
+/// folder in iCloud, a second one beside the folder the pull was laying
+/// out. So a push leaves everything until a pull has finished. An unknown
+/// top-level key to an engine without it, which keeps it.
+pub(crate) const PENDING_DIRS_KEY: &str = "pendingDirs";
+
 /// The ids state.json lists under [`UNSHARED_KEY`].
 pub(crate) fn unshared_note_ids(extra: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     extra

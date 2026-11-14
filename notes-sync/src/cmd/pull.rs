@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use super::remote::{Connector, DefaultConnector, resolve_folder_account};
 use super::report::{LISTING_INDENT, labelled_line, remark_line};
 use super::{
-    Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
-    UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of, redo_downloads,
-    shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner, unshared_note_ids,
-    used_names_for, zone_for_owner,
+    Error, LeftBehind, NoticeLevel, OTHER_ZONES_RECORD_NAME, PENDING_DIRS_KEY, SyncNotice, SyncProgress,
+    UNSAFE_RECORD_NAME, UNSHARED_KEY, attachment_lookup_notice, is_purged, left_behind_in, left_file_of,
+    redo_downloads, shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, skipped_zone_owner,
+    unshared_note_ids, used_names_for, zone_for_owner,
 };
 use crate::cloudkit::client::{DownloadQueue, merge_looked_up_records, needs_body_lookup};
 use crate::cloudkit::{CloudKitRecord, DatabaseScope, NoteZone, SharedZoneChanges, Transport, note_zone};
@@ -179,7 +179,7 @@ pub fn run_pull_with(
     progress: &mut dyn SyncProgress,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<PullSummary, Error> {
-    let state = require_vault(target_dir, on_status)?;
+    let mut state = require_vault(target_dir, on_status)?;
     let title_mode = state.mode();
     // What a run that was killed left half-written (a download cut off,
     // above all).
@@ -303,6 +303,24 @@ pub fn run_pull_with(
         ..PreviousLayout::of(&state)
     };
     let layout = build_vault_layout(&changes.records, &shared_zone_records, previous);
+    // Announced before they are made, for a push after a pull killed before
+    // it recorded them ([`PENDING_DIRS_KEY`]).
+    let known_dirs: HashSet<String> = previous_layout_dirs(PreviousLayout::of(&state)).into_iter().collect();
+    let mut pending_dirs: Vec<String> = state
+        .extra
+        .get(PENDING_DIRS_KEY)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let pending_before = pending_dirs.len();
+    for dir in &layout.all_dirs {
+        if !known_dirs.contains(dir) && !pending_dirs.contains(dir) && !target_dir.join(dir).exists() {
+            pending_dirs.push(dir.clone());
+        }
+    }
+    if pending_dirs.len() > pending_before {
+        state.extra.insert(PENDING_DIRS_KEY.to_owned(), pending_dirs.into());
+        write_clone_state(target_dir, &state)?;
+    }
     for dir in &layout.all_dirs {
         std::fs::create_dir_all(target_dir.join(dir))?;
     }
@@ -838,6 +856,8 @@ pub fn run_pull_with(
     let shared_held = failed || retry_zones.iter().any(Option::is_some);
     // A note tracked (again) is no kept copy of one no longer shared.
     let mut extra = state.extra;
+    // Every note is where the layout puts it.
+    extra.remove(PENDING_DIRS_KEY);
     let mut unshared = unshared_note_ids(&extra);
     unshared.extend(std::mem::take(&mut tracked.unshared));
     unshared.retain(|id| !tracked.notes.contains_key(id));
@@ -1225,7 +1245,12 @@ fn checkpoint_state(
         attachments: Some(attachments),
         table_attachments: Some(tracked.table_attachments.clone()),
         trashed: Some(trashed.clone()),
-        extra: state.extra.clone(),
+        // The folders and their directories are the layout's.
+        extra: {
+            let mut extra = state.extra.clone();
+            extra.remove(PENDING_DIRS_KEY);
+            extra
+        },
         ..Default::default()
     }
 }

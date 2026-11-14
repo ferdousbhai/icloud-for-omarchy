@@ -243,6 +243,15 @@ window closes, so a killed run is ordinary.
   beside it because the file was edited since, the file is tracked or a
   copy, and a copy is created as a note of its own as before. An id
   iCloud doesn't have is still pushed as a new note.
+- A pull that lays out a folder new to the vault (or a folder's new name)
+  first lists the directories it is about to make in state.json's
+  `pendingDirs`, and the state it saves once every note is where the
+  layout puts it (or a checkpoint, which is only saved then) takes the key
+  out. A pull killed in between leaves directories, and new notes in them,
+  that the state names no folder for; read by a push, each would become a
+  new folder in iCloud beside the one the pull was laying out. A push that
+  finds `pendingDirs` sends nothing (a warning says why) until a pull has
+  finished. An engine without it keeps the key and ignores it.
 - A note whose attachment downloads a failed run may not have finished
   keeps its attachments' entries without their checksum, and forgets its
   change tag (`cmd::redo_downloads`): the next pull applies it again and

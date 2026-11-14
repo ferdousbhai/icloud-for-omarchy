@@ -15,7 +15,7 @@ use super::plan::{
     TextUpdateRefusal, count_unchanged_notes,
 };
 use super::remote::{Connector, DefaultConnector, Remote, resolve_folder_account};
-use super::{Error, NoticeLevel, SyncNotice, is_in_trash, is_purged, unshared_note_ids};
+use super::{Error, NoticeLevel, PENDING_DIRS_KEY, SyncNotice, is_in_trash, is_purged, unshared_note_ids};
 use crate::cloudkit::{
     CloudKitRecord, CreateExtras, Database, NoteZone, RecordOp, RecordUpdate, RecordUpdateResult, Transport,
     UpdateFieldValue, UpdateFields, note_zone,
@@ -1135,6 +1135,21 @@ pub fn build_push_plan(
             crate::crash::point(crate::crash::PENDING_CREATES_CLEAR);
         }
         connected = Some(remote);
+    }
+    // A pull killed while it laid out new folders: its directories are no
+    // folders to make (`PENDING_DIRS_KEY`). The next pull finishes it.
+    if state.extra.contains_key(PENDING_DIRS_KEY) {
+        return Ok(BuildPushPlanResult {
+            state,
+            entries: Vec::new(),
+            notices: vec![SyncNotice {
+                level: NoticeLevel::Warn,
+                message: "A pull was cut short while it put new folders in place - nothing is pushed until a pull \
+                          has finished"
+                    .into(),
+            }],
+            remote: connected,
+        });
     }
     let mut planning_mutated_state = settle_pending_renames(target_dir, &mut state.notes, false, title_mode)?.changed;
 

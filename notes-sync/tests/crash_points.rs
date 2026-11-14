@@ -1000,6 +1000,13 @@ fn a_pull_cut_short_anywhere_is_finished_by_the_next_run() {
     crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
 }
 
+#[test]
+fn a_pull_that_moves_notes_cut_short_anywhere_is_finished_by_the_next_run() {
+    let mut start = cloned(6);
+    moved_in_icloud(&mut start);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
 /// What the user did in the vault: three new notes (one with a new
 /// attachment, one in a new folder), an edit, an edit that adds an
 /// attachment, a deleted note, a note moved to another folder, a removed
@@ -1160,5 +1167,31 @@ fn a_note_a_pull_cut_short_wrote_is_not_created_again_by_the_next_sync() {
         1,
         Then::Sync,
         "pull killed at its first note",
+    );
+}
+
+/// A pull killed after it made the directory of a folder new to the vault
+/// and wrote a note there: the push of the sync after it used to make the
+/// directory a folder in iCloud, a second one beside the folder the pull was
+/// laying out, and the note in it a second copy.
+#[test]
+fn a_folder_a_pull_cut_short_was_laying_out_is_not_made_again_by_the_next_sync() {
+    let mut start = cloned(3);
+    start
+        .zone
+        .put(folder_record("F0000000-0000-4000-8000-0000000000A1", "Projects"));
+    start.zone.put(note_record(
+        "A0000000-0000-4000-8000-000000000000",
+        "Added\nin a new folder",
+        "F0000000-0000-4000-8000-0000000000A1",
+    ));
+    start.expect.kept = kept_notes(&start.zone);
+    one_case(
+        &start,
+        "pull",
+        crash::NOTE_FILE,
+        1,
+        Then::Sync,
+        "pull killed in a new folder",
     );
 }
