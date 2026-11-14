@@ -116,6 +116,9 @@ pub fn run_clone_with(
     let mut table_attachments = IndexMap::new();
     let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
     let mut used_attachment_file_names: HashMap<String, HashSet<String>> = HashMap::new();
+    // The names each folder's `attachments/` held before this clone: a
+    // download never replaces one (see `resolve_note_attachments`).
+    let mut attachments_on_disk: HashMap<String, HashSet<String>> = HashMap::new();
     // Directories whose existing files are claimed: clone writes beside
     // what is already there, never over it (anything there afterwards is
     // in the set already, so once per directory is enough).
@@ -208,6 +211,12 @@ pub fn run_clone_with(
                 let mut body_text = decoded.markdown_text.clone();
                 let unpublishable_reason = decoded.unpublishable_reason.clone();
                 if !decoded.embed_slots.is_empty() {
+                    if !attachments_on_disk.contains_key(&placement.dir) {
+                        let mut names = HashSet::new();
+                        claim_names_on_disk(target_dir, &posix::join(&[&placement.dir, "attachments"]), &mut names)?;
+                        used_names_for(&mut used_attachment_file_names, &placement.dir).extend(names.iter().cloned());
+                        attachments_on_disk.insert(placement.dir.clone(), names);
+                    }
                     let resolved = resolve_note_attachments(
                         db,
                         &mut attachment_records,
@@ -220,6 +229,7 @@ pub fn run_clone_with(
                         &attachments,
                         &table_attachments,
                         used_names_for(&mut used_attachment_file_names, &placement.dir),
+                        attachments_on_disk.get_mut(&placement.dir),
                         &placement.dir,
                     )?;
                     body_text = resolved.body_text;

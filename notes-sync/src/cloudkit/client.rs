@@ -734,7 +734,7 @@ impl<T: Transport> Database<T> {
     }
 
     /// `fetchAssetBytes`: [`Database::fetch_asset`] into memory.
-    fn fetch_asset_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
+    pub(crate) fn fetch_asset_bytes(&self, url: &str) -> Result<Vec<u8>, CkError> {
         self.transport.download_bytes(url).map_err(asset_error)
     }
 

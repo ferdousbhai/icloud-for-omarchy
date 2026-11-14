@@ -368,6 +368,13 @@ pub fn decode_table_attachment(record: Option<&CloudKitRecord>) -> Option<String
 /// `downloads`), render tables inline, markers for anything unresolvable.
 /// Records come from `records`; names [`AttachmentRecords::prefetch`] didn't
 /// cover are looked up here.
+///
+/// `on_disk` (clone) holds the names in the note folder's `attachments/`
+/// that were there before the run, which `used_attachment_file_names`
+/// holds too, so that a download never replaces one. A file there that is
+/// byte for byte the attachment a new entry would download under that name
+/// (what a clone killed after the download left) is taken for it instead,
+/// so that the note's link, and its file, read as they did.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_note_attachments<T: Transport>(
     db: &Database<T>,
@@ -381,6 +388,7 @@ pub fn resolve_note_attachments<T: Transport>(
     existing_attachments: &IndexMap<String, AttachmentEntry>,
     existing_table_attachments: &IndexMap<String, TableAttachmentEntry>,
     used_attachment_file_names: &mut HashSet<String>,
+    on_disk: Option<&mut HashSet<String>>,
     note_dir: &str,
 ) -> Result<AttachmentSyncResult, Error> {
     let previous_for_note: Vec<String> = existing_attachments
@@ -481,7 +489,21 @@ pub fn resolve_note_attachments<T: Transport>(
         let known: Vec<String> = media_record_names.iter().flatten().cloned().collect();
         records.ensure(db, zone, &known)?;
         let media_records = records.records_named(zone, &known);
-        let matched = match_attachment_records(
+        let adopted = match on_disk {
+            Some(on_disk) => adopt_downloaded_files(
+                db,
+                target_dir,
+                note_dir,
+                &file_refs,
+                &media_record_names,
+                &media_records,
+                existing_attachments,
+                used_attachment_file_names,
+                on_disk,
+            )?,
+            None => HashMap::new(),
+        };
+        let mut matched = match_attachment_records(
             &file_refs,
             &media_record_names,
             &media_records,
@@ -490,6 +512,13 @@ pub fn resolve_note_attachments<T: Transport>(
             used_attachment_file_names,
             note_dir,
         );
+        for attachment in matched.iter_mut().flatten() {
+            if adopted.get(&attachment.record_name).map(String::as_str)
+                == Some(posix::basename(&attachment.relative_file))
+            {
+                attachment.needs_download = false;
+            }
+        }
         for (j, r) in file_refs.iter().enumerate() {
             let index = file_ref_indexes[j];
             let Some(attachment) = &matched[j] else {
@@ -525,6 +554,68 @@ pub fn resolve_note_attachments<T: Transport>(
         stale_table_attachment_record_names,
         table_attachment_snapshots,
     })
+}
+
+/// The files in `note_dir`'s `attachments/` from before the run (`on_disk`)
+/// that are byte for byte the attachment a new entry would download under
+/// their name: each is let go of in `used` and `on_disk`, so the entry
+/// takes the name, and returned by attachment record name. Only a file of
+/// the asset's size is downloaded to compare.
+#[allow(clippy::too_many_arguments)]
+fn adopt_downloaded_files<T: Transport>(
+    db: &Database<T>,
+    target_dir: &Path,
+    note_dir: &str,
+    file_refs: &[AttachmentReference],
+    media_record_names: &[Option<String>],
+    media_records: &[CloudKitRecord],
+    existing_attachments: &IndexMap<String, AttachmentEntry>,
+    used: &mut HashSet<String>,
+    on_disk: &mut HashSet<String>,
+) -> Result<HashMap<String, String>, Error> {
+    let mut adopted = HashMap::new();
+    for (r, media_record_name) in file_refs.iter().zip(media_record_names) {
+        if existing_attachments.contains_key(&r.attachment_identifier) {
+            continue;
+        }
+        let Some(media) = media_record_name
+            .as_ref()
+            .and_then(|name| media_records.iter().rev().find(|m| m.record_name == *name))
+            .filter(|m| m.record_type == "Media")
+        else {
+            continue;
+        };
+        let Some(asset) = parse_asset_field(media.fields.get("Asset")) else {
+            continue;
+        };
+        let name = decode_attachment_filename(
+            media.fields.get("FilenameEncrypted"),
+            &r.attachment_identifier,
+            &r.type_uti,
+        );
+        if !on_disk.contains(&name) {
+            continue;
+        }
+        let path = target_dir.join(note_dir).join(ATTACHMENTS_DIR).join(&name);
+        let size = media
+            .fields
+            .get("Asset")
+            .and_then(|f| f.value.get("size"))
+            .and_then(Value::as_u64);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.file_type().is_file() || size.is_some_and(|size| size != meta.len()) {
+            continue;
+        }
+        let downloaded = db.fetch_asset_bytes(&asset.download_url)?;
+        if std::fs::read(&path)? == downloaded {
+            on_disk.remove(&name);
+            used.remove(&name);
+            adopted.insert(r.attachment_identifier.clone(), name);
+        }
+    }
+    Ok(adopted)
 }
 
 fn marker_for(r: &AttachmentReference) -> EmbedMarkerContent {

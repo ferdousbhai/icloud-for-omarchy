@@ -1247,3 +1247,48 @@ fn a_move_a_push_cut_short_made_is_not_refused_by_the_next_push() {
     assert_eq!(entries[0]["resolution"], "ready", "{}", says(&again));
     assert_eq!(tracked_file(&place, "E0000000-0000-4000-8000-000000000001"), moved);
 }
+
+/// The photo note's attachment: its file name and what it holds.
+fn photo(zone: &Zone) -> (String, Vec<u8>) {
+    ("_7130093.jpeg".into(), zone.assets["/B/image-asset"].clone())
+}
+
+/// A clone into a directory whose `attachments/` already holds a file of
+/// an attachment's name, which is not that attachment: the file stays as it
+/// is, and the attachment is downloaded beside it.
+#[test]
+fn a_clone_never_replaces_a_file_in_attachments_that_is_not_the_attachment() {
+    let zone = account(0);
+    let (name, _) = photo(&zone);
+    let fake = Fake::start(zone);
+    let place = Place::new();
+    let mine = place.vault.join("Notes/attachments").join(&name);
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, b"my own picture").unwrap();
+    succeeded(&run(&fake, &place, "clone", &Crash::default()), "clone");
+    assert_eq!(std::fs::read(&mine).unwrap(), b"my own picture");
+    let state = read_clone_state(&place.vault).unwrap().unwrap();
+    let entry = &state.attachments.unwrap()["7ED80274-4400-4C02-87EA-F542F056FF02"];
+    assert_eq!(entry.file, "Notes/attachments/_7130093 2.jpeg");
+    let (_, bytes) = photo(&fake.zone());
+    assert_eq!(std::fs::read(place.vault.join(&entry.file)).unwrap(), bytes);
+}
+
+/// The same with the file byte for byte the attachment (what a clone
+/// killed after the download left): it is taken for the attachment, under
+/// its name, and nothing is downloaded beside it.
+#[test]
+fn a_clone_takes_a_file_in_attachments_that_is_the_attachment_for_it() {
+    let zone = account(0);
+    let (name, bytes) = photo(&zone);
+    let fake = Fake::start(zone);
+    let place = Place::new();
+    let left = place.vault.join("Notes/attachments").join(&name);
+    std::fs::create_dir_all(left.parent().unwrap()).unwrap();
+    std::fs::write(&left, &bytes).unwrap();
+    succeeded(&run(&fake, &place, "clone", &Crash::default()), "clone");
+    let state = read_clone_state(&place.vault).unwrap().unwrap();
+    let entry = &state.attachments.unwrap()["7ED80274-4400-4C02-87EA-F542F056FF02"];
+    assert_eq!(entry.file, format!("Notes/attachments/{name}"));
+    assert!(!place.vault.join("Notes/attachments/_7130093 2.jpeg").exists());
+}

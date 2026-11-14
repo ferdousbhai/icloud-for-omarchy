@@ -540,6 +540,7 @@ pub fn run_pull_with(
                         &tracked.attachments,
                         &tracked.table_attachments,
                         used_names_for(&mut used_attachment_file_names, &note_dir),
+                        None,
                         &note_dir,
                     )?;
                     body_text = resolved.body_text;
