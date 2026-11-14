@@ -133,7 +133,12 @@ icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconne
 
 Every `Set-Cookie` Apple sends a request goes back to the daemon through
 `MergeCookies`, and the in-process `Session()` cache is dropped so the next
-request uses the merged jar. On 421/401 from icloud.com or a service host
+request uses the merged jar. The daemon merges into the account it holds
+at that moment, and a `Session()` answer is reused for up to 5 minutes, so
+the client first checks that the daemon still holds the session's account
+(and checks the same after fetching `FindMySession()`): after a sign-out and
+a sign-in as someone else nothing is merged, the other account's Find My jar
+is not sent, and the call returns `SignInRequired`. On 421/401 from icloud.com or a service host
 (a content host's 401 is a plain `Http` error) the client calls
 `ReportSignInRequired()`: if the daemon is still signed in it retries the
 request once with the fresh jar (a 421/401 again is `Http`), otherwise it

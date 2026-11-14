@@ -2549,6 +2549,74 @@ fn a_session_refuses_to_serve_another_account() {
     assert_eq!(server.requests("/data").pop().unwrap().query()["dsid"], "67890");
 }
 
+/// A `Session` keeps a `Session()` answer for minutes. With one still in
+/// hand after a sign-out and a sign-in as someone else, what Apple sets for
+/// the first account never goes into the second's jar, and the second's
+/// Find My jar is never sent as the first.
+#[test]
+fn a_session_still_cached_never_mixes_its_account_with_the_next() {
+    let server = Server::start(|s, n, base| match s.path() {
+        VALIDATE if s.header("Cookie").unwrap_or_default().contains("=other") => {
+            let mut r = validate_ok(n, base);
+            r.body = r.body.replace(DSID, "67890").replace("someone@", "other@");
+            r
+        }
+        VALIDATE => validate_ok(n, base),
+        "/data" => Reply::json(200, json!({})).cookie("X-APPLE-WEBAUTH-TOKEN=of-the-first; Path=/"),
+        INIT_CLIENT => Reply::json(200, json!({"content": []})),
+        _ => Reply::json(404, json!({})),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "other", "domain": ".icloud.com"}]});
+    let signin = write_script(
+        dir.path(),
+        "signin",
+        &format!(
+            "if [ \"$1\" = --find ]; then n=1; cat <<EOF\n{}\nEOF\nelse cat <<'EOF'\n{capture}\nEOF\nfi",
+            find_capture("67890")
+        ),
+    );
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&signin),
+        ..Default::default()
+    });
+    let conn = env.conn();
+    // Two sessions of the first account, each with its answer cached.
+    let (merging, finding) = (Session::connect_on(&conn).unwrap(), Session::connect_on(&conn).unwrap());
+    let data = format!("{}/data", merging.webservices().unwrap().url("ckdatabasews").unwrap());
+    let init = init_client_url(&finding);
+
+    icloud_session::sign_out_on(&conn).unwrap();
+    let watch = changes(&conn);
+    icloud_session::sign_in_on(&conn).unwrap();
+    watch.window_opened();
+    assert_eq!(watch.window_closed().dsid.as_deref(), Some("67890"));
+    icloud_session::authorize_find_my_on(&conn).unwrap();
+    watch.window_opened();
+    assert!(watch.window_closed().find_my_authorized);
+    let token = env.account_cookie("X-APPLE-WEBAUTH-TOKEN").unwrap();
+
+    assert!(matches!(merging.get(&data), Err(Error::SignInRequired)));
+    assert_eq!(
+        env.account_cookie("X-APPLE-WEBAUTH-TOKEN").unwrap(),
+        token,
+        "the first account's cookie is not merged into the second's jar"
+    );
+    assert!(matches!(merging.get(&data), Err(Error::SignInRequired)));
+    assert_eq!(server.count("/data"), 1, "nothing more is sent");
+
+    assert!(matches!(
+        finding.post_json(&init, &json!({})),
+        Err(Error::SignInRequired)
+    ));
+    assert_eq!(
+        server.count(INIT_CLIENT),
+        0,
+        "the second account's Find My jar is not sent as the first"
+    );
+}
+
 // ------------------------------------------------------------- Find My
 
 const INIT_CLIENT: &str = "/fmipservice/client/web/initClient";

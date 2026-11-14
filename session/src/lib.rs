@@ -789,8 +789,7 @@ impl Session {
         // after a sign-out and a sign-in as someone else, they would go out
         // with the old dsid. Read after the reply, so a switch in between
         // is caught too. The app connects again for the new account.
-        let now = read_status(conn)?;
-        if !now.signed_in || now.dsid.as_deref() != Some(self.inner.dsid.as_str()) {
+        if !self.is_the_daemons_account(conn)? {
             *cached = None;
             return Err(Error::SignInRequired);
         }
@@ -803,6 +802,13 @@ impl Session {
         Ok(snap)
     }
 
+    /// Whether the daemon is signed in as the account this Session was
+    /// made for.
+    fn is_the_daemons_account(&self, conn: &Connection) -> Result<bool> {
+        let now = read_status(conn)?;
+        Ok(now.signed_in && now.dsid.as_deref() == Some(self.inner.dsid.as_str()))
+    }
+
     fn forget_snapshot(&self) {
         *self.inner.cached.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.forget_find_my();
@@ -813,14 +819,23 @@ impl Session {
     }
 
     /// The daemon's `FindMySession()`, reused until dropped.
+    /// `SignInRequired` once the daemon holds a different account: its
+    /// Find My jar is not ours to send (the snapshot may still be cached).
     fn find_my_jar(&self, conn: &Connection) -> Result<(String, HashMap<String, String>)> {
-        let mut cached = self.inner.find_my.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(jar) = cached.as_ref() {
-            return Ok(jar.clone());
+        {
+            let mut cached = self.inner.find_my.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(jar) = cached.as_ref() {
+                return Ok(jar.clone());
+            }
+            let jar = proxy(conn)?.find_my_session()?;
+            // Read after the reply, as `snapshot` does.
+            if self.is_the_daemons_account(conn)? {
+                *cached = Some(jar.clone());
+                return Ok(jar);
+            }
         }
-        let jar = proxy(conn)?.find_my_session()?;
-        *cached = Some(jar.clone());
-        Ok(jar)
+        self.forget_snapshot();
+        Err(Error::SignInRequired)
     }
 
     /// The `webservices` map from the daemon's last `/validate`
@@ -1091,6 +1106,14 @@ impl Session {
                     && !set_cookies.is_empty()
                     && let Some(conn) = &self.inner.conn
                 {
+                    // The daemon merges into the account it holds now. This
+                    // answer is for ours, sent with a snapshot that may be
+                    // minutes old: after a sign-out and a sign-in as someone
+                    // else, its cookies must not go into their jar.
+                    if !self.is_the_daemons_account(conn)? {
+                        self.forget_snapshot();
+                        return Err(Error::SignInRequired);
+                    }
                     if find_my.is_some() {
                         proxy(conn)?.merge_find_my_cookies(&set_cookies)?;
                         self.forget_find_my();
