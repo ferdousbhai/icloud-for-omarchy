@@ -267,7 +267,23 @@ window closes, so a killed run is ordinary.
   whose push failed on that lookup) has added the note as one new to the
   vault, in a file of its own (`X 2.md`); the announced file then takes
   the note over and the pulled file, when it still reads as pulled, is
-  removed, so that neither is left to be created as a second note.
+  removed, so that neither is left to be created as a second note. The
+  attachments that pull downloaded for it under second names
+  (`name 2.ext`) are tracked at the files the note was made with again,
+  and the second copies removed. `status` and `push --dry-run` settle the
+  same way in memory and write nothing.
+- An edit that adds attachments to a note is announced the same way,
+  under the note's own record name (`{file, attachments}`, the note's
+  file): the request is atomic, so when the next push finds one of the
+  announced `Attachment` records in iCloud, all of it went through. The
+  attachments are tracked at their files, and when the note in iCloud
+  reads exactly as its file does, the note is taken to be at that version
+  and the file becomes its base copy (`adopt_pushed_text`): nothing is
+  refused, sent or downloaded again. A file edited again since (or a note
+  changed in iCloud too) stays at its old version, and the next pull
+  merges the two, fetching the attachment under the name it has. An
+  engine without this reads such an entry as a create of a note it
+  already tracks at that file, and does nothing with it.
   `pendingCreates` is a top-level key an engine without it keeps and
   ignores (it would create the note again, as before).
 
@@ -379,7 +395,9 @@ missing while `.icloud-notes/` stayed (a folder moved aside, a disk not
 mounted, another sync tool's mistake) would have every note moved to Recently
 Deleted and every folder record deleted by the next push, which the Notes
 app runs by itself. A push now counts the deletions it planned (notes whose
-file is gone or emptied) and refuses the whole run, before sending anything,
+file is gone or emptied and that it would move to Recently Deleted; one
+iCloud no longer has, or has there already, is only untracked and does not
+count) and refuses the whole run, before sending anything,
 when they are more than 3 and more than half of the account's own notes
 tracked (`push::too_many_deletions`, the rule icloud-reminders' folder
 applies to a list; notes someone else shares are never deleted from here,

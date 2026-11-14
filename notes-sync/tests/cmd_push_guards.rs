@@ -421,9 +421,9 @@ fn a_planned_merge_is_not_written_over_a_later_save() {
 
 // --- most of the vault's files gone ----------------------------------------------------
 
-/// Tracks `count` more notes (no record in iCloud), each with its file and
-/// base copy; returns their files.
-fn track_more(vault: &Path, count: usize) -> Vec<String> {
+/// Tracks `count` more notes, each with its file and base copy, and, with a
+/// `server`, its record in iCloud; returns their files.
+fn track_more(server: Option<&Server>, vault: &Path, count: usize) -> Vec<String> {
     let mut state = state(vault);
     let mut files = Vec::new();
     for n in 0..count {
@@ -432,6 +432,12 @@ fn track_more(vault: &Path, count: usize) -> Vec<String> {
         let mut entry = state.notes[NOTE].clone();
         entry.file = file.clone();
         state.notes.insert(record_name.clone(), entry);
+        if let Some(server) = server {
+            let mut records = server.records.lock().unwrap();
+            let mut record = records[0].clone();
+            record["recordName"] = json!(record_name);
+            records.push(record);
+        }
         std::fs::write(vault.join(&file), format!("Note {n}\n")).unwrap();
         icloud_notes_sync::vault::base::write_base_copy(vault, &record_name, &format!("Note {n}\n")).unwrap();
         files.push(file);
@@ -448,7 +454,7 @@ fn a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to() {
     let dir = tempfile::tempdir().unwrap();
     let vault = cloned_vault(dir.path());
     let server = Arc::new(Server::with_note());
-    let mut files = track_more(&vault, 5);
+    let mut files = track_more(Some(&server), &vault, 5);
     files.push(NOTE_FILE.to_owned());
     for file in &files[1..] {
         std::fs::remove_file(vault.join(file)).unwrap();
@@ -501,7 +507,27 @@ fn a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to() {
     };
     let result = run_push_with(&serve(&server), &vault, &mut |_| {}, &allowed).unwrap();
     assert_eq!(result.pushed, Some(5));
-    assert_eq!(server.operations(), [("update".to_owned(), NOTE.to_owned())]);
+    assert_eq!(server.operations().len(), 5);
+    assert!(server.operations().iter().all(|(operation, _)| operation == "update"));
+    assert_eq!(state(&vault).notes.len(), 1);
+}
+
+/// Only what a push would send counts. Notes iCloud no longer has (deleted
+/// on another device, their files removed by a pull that was killed before
+/// it recorded that) are merely no longer tracked: nothing is deleted, so
+/// nothing is refused.
+#[test]
+fn notes_already_gone_from_icloud_are_not_counted_as_deletions() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    for file in track_more(None, &vault, 5) {
+        std::fs::remove_file(vault.join(file)).unwrap();
+    }
+
+    let result = push(&server, &vault);
+    assert_eq!(result.pushed, Some(5), "{result:?}");
+    assert!(server.operations().is_empty(), "nothing was sent");
     assert_eq!(state(&vault).notes.len(), 1);
 }
 
@@ -513,7 +539,7 @@ fn deleting_some_notes_is_not_refused() {
         let dir = tempfile::tempdir().unwrap();
         let vault = cloned_vault(dir.path());
         let server = Arc::new(Server::with_note());
-        let mut files = track_more(&vault, more);
+        let mut files = track_more(Some(&server), &vault, more);
         files.push(NOTE_FILE.to_owned());
         for file in &files[files.len() - deleted..] {
             std::fs::remove_file(vault.join(file)).unwrap();
@@ -532,7 +558,7 @@ fn every_own_note_gone_is_refused_whatever_is_shared_with_the_account() {
     let dir = tempfile::tempdir().unwrap();
     let vault = cloned_vault(dir.path());
     let server = Arc::new(Server::with_note());
-    let mut own = track_more(&vault, 4);
+    let mut own = track_more(Some(&server), &vault, 4);
     own.push(NOTE_FILE.to_owned());
     let mut with_shared = state(&vault);
     for n in 0..6 {

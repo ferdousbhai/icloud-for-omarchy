@@ -553,6 +553,55 @@ struct PendingAttachment {
     file: String,
 }
 
+impl PendingAttachment {
+    fn of(new_attachments: &[NewAttachment]) -> Vec<PendingAttachment> {
+        new_attachments
+            .iter()
+            .map(|attachment| PendingAttachment {
+                attachment_record_name: attachment.attachment_record_name.clone(),
+                media_record_name: attachment.media_record_name.clone(),
+                file: attachment.file.clone(),
+            })
+            .collect()
+    }
+
+    /// What state tracks of it once iCloud is known to have it. No
+    /// checksum: the upload's answer never arrived.
+    fn tracked_for(self, note_record_name: &str) -> (String, AttachmentEntry) {
+        (
+            self.attachment_record_name,
+            AttachmentEntry {
+                file: self.file,
+                media_record_name: self.media_record_name,
+                media_file_checksum: String::new(),
+                note_record_name: note_record_name.to_owned(),
+            },
+        )
+    }
+}
+
+/// Announces the attachments an edit is about to add to the note at `file`
+/// ([`mark_pending_create`], under the note's record name): cut off after
+/// iCloud took the request, the next push finds them there and tracks them.
+fn mark_pending_attachments(
+    target_dir: &Path,
+    state: &mut CloneState,
+    record_name: &str,
+    file: &str,
+    new_attachments: &[NewAttachment],
+) -> Result<(), Error> {
+    if new_attachments.is_empty() {
+        return Ok(());
+    }
+    let pending = PendingCreate {
+        file: file.to_owned(),
+        shared_zone_owner: None,
+        folder: None,
+        attachments: PendingAttachment::of(new_attachments),
+    };
+    mark_pending_create(target_dir, state, record_name, pending)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PendingFolder {
@@ -610,15 +659,16 @@ fn settle_pending_creates<T: Transport>(
     db: &Database<T>,
     target_dir: &Path,
     state: &mut CloneState,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     let pending = pending_creates(state);
     let mut zones: IndexMap<Option<String>, Vec<String>> = IndexMap::new();
     for (record_name, create) in &pending {
-        zones
-            .entry(create.shared_zone_owner.clone())
-            .or_default()
-            .push(record_name.clone());
+        let names = zones.entry(create.shared_zone_owner.clone()).or_default();
+        names.push(record_name.clone());
+        names.extend(create.attachments.iter().map(|a| a.attachment_record_name.clone()));
     }
+    // The note files settling takes out of the vault (a preview only says so).
+    let mut removed: Vec<String> = Vec::new();
     let mut found: HashMap<String, CloudKitRecord> = HashMap::new();
     for (owner, names) in &zones {
         let (records, failures) = db.lookup_records_and_failures(&note_zone(owner.as_deref()), names)?;
@@ -647,24 +697,71 @@ fn settle_pending_creates<T: Transport>(
             );
             continue;
         }
+        // Tracked at the announced file: an edit that was adding
+        // attachments to the note (or a create recorded all but its last
+        // step). The request is atomic, so an attachment iCloud has means
+        // all of it went through: each is tracked at its file, and its link
+        // stands for it.
+        if state.notes.get(&record_name).is_some_and(|e| e.file == create.file) {
+            let mut tracked_any = false;
+            for attachment in create.attachments {
+                let known = state
+                    .attachments
+                    .as_ref()
+                    .is_some_and(|a| a.contains_key(&attachment.attachment_record_name));
+                let exists = found
+                    .get(&attachment.attachment_record_name)
+                    .is_some_and(|r| !is_deleted(r));
+                if !known && exists {
+                    track_new_attachments(state, vec![attachment.tracked_for(&record_name)]);
+                    tracked_any = true;
+                }
+            }
+            if tracked_any {
+                adopt_pushed_text(target_dir, state, &record_name, record)?;
+            }
+            continue;
+        }
         let tracked_elsewhere = state.notes.values().any(|e| e.file == create.file);
         // Tracked already: a pull in between took it for a note new to the
         // vault and wrote it a file of its own. The file the note was made
         // in is the note's; the pulled one, still as the pull wrote it,
         // goes. Left there, one of the two would be created as a second
-        // note. (A preview leaves both, and so does a pulled file edited
-        // since: its text is nowhere else.)
+        // note. (A pulled file edited since stays: its text is nowhere
+        // else.) The attachments the pull downloaded for it, under other
+        // names, are the files the note was made with: tracking goes back
+        // to those.
         if let Some(pulled) = state.notes.get(&record_name).cloned() {
             let mode = state.mode();
-            if !recording_suppressed()
-                && !tracked_elsewhere
+            if !tracked_elsewhere
                 && target_dir.join(&create.file).is_file()
                 && local_file_state(target_dir, &pulled, &record_name, mode)? == LocalFileState::Clean
             {
-                stamp_note_id(target_dir, &create.file, &record_name, mode)?;
-                safe_unlink(&target_dir.join(&pulled.file))?;
+                let write = !recording_suppressed();
+                if write {
+                    stamp_note_id(target_dir, &create.file, &record_name, mode)?;
+                    safe_unlink(&target_dir.join(&pulled.file))?;
+                }
+                removed.push(pulled.file);
                 if let Some(entry) = state.notes.get_mut(&record_name) {
                     entry.file = create.file;
+                }
+                let attachments = state.attachments.get_or_insert_with(IndexMap::new);
+                for made_with in create.attachments {
+                    let Some(downloaded) = attachments
+                        .get(&made_with.attachment_record_name)
+                        .filter(|a| a.note_record_name == record_name && a.file != made_with.file)
+                        .map(|a| a.file.clone())
+                    else {
+                        continue;
+                    };
+                    if !target_dir.join(&made_with.file).is_file() {
+                        continue;
+                    }
+                    attachments[&made_with.attachment_record_name].file = made_with.file;
+                    if write && !attachments.values().any(|a| a.file == downloaded) {
+                        safe_unlink(&target_dir.join(&downloaded))?;
+                    }
                 }
             }
             continue;
@@ -689,24 +786,8 @@ fn settle_pending_creates<T: Transport>(
         // Its attachments were created with it: each link in the file
         // stands for one, as after the push that made them. (No checksum:
         // the upload's answer never arrived.)
-        track_new_attachments(
-            state,
-            create
-                .attachments
-                .into_iter()
-                .map(|attachment| {
-                    (
-                        attachment.attachment_record_name,
-                        AttachmentEntry {
-                            file: attachment.file,
-                            media_record_name: attachment.media_record_name,
-                            media_file_checksum: String::new(),
-                            note_record_name: record_name.clone(),
-                        },
-                    )
-                })
-                .collect(),
-        );
+        let attachments = create.attachments.into_iter();
+        track_new_attachments(state, attachments.map(|a| a.tracked_for(&record_name)).collect());
         state.notes.insert(
             record_name,
             NoteEntry {
@@ -722,6 +803,50 @@ fn settle_pending_creates<T: Transport>(
         );
     }
     state.extra.remove(PENDING_CREATES_KEY);
+    Ok(removed)
+}
+
+/// After a push that added attachments to a note was cut off, and iCloud
+/// turns out to have them: when the note in iCloud reads exactly as its file
+/// does (the links standing for the attachments), the file is what that push
+/// sent, so the note is at this version and the file is its base copy.
+/// Otherwise (edited here since, or changed in iCloud too) tracking stays
+/// where it was, and the next pull merges the two.
+fn adopt_pushed_text(
+    target_dir: &Path,
+    state: &mut CloneState,
+    record_name: &str,
+    record: &CloudKitRecord,
+) -> Result<(), Error> {
+    let title_mode = state.mode();
+    let Some(file) = state.notes.get(record_name).map(|e| e.file.clone()) else {
+        return Ok(());
+    };
+    let Some(text) = read_text(&target_dir.join(&file))? else {
+        return Ok(());
+    };
+    let body = split_frontmatter(&text, split_options(title_mode)).body;
+    let NoteDecodeResult::Ok(decoded) = classify_note_record(record, &ClassifyOptions { title_mode }) else {
+        return Ok(());
+    };
+    let tracked = TrackedAttachments::of(state, record_name, &file);
+    let same = plan_embed_representations(&body, &decoded.embed_slots, &tracked.links).is_ok_and(|plan| {
+        plan.new_links.is_empty()
+            && plan.removed_slots.is_empty()
+            && plan.reconstructed_body_text == decoded.markdown_text
+    });
+    if !same {
+        return Ok(());
+    }
+    if !recording_suppressed() {
+        write_base_copy(target_dir, record_name, &body)?;
+    }
+    if let Some(entry) = state.notes.get_mut(record_name) {
+        entry.record_change_tag = record.record_change_tag.clone().unwrap_or_default();
+        if let ms @ 1.. = modification_date_of(record) {
+            entry.modification_date = ms;
+        }
+    }
     Ok(())
 }
 
@@ -989,9 +1114,10 @@ pub fn build_push_plan(
     // Before anything is read off the vault: what an earlier push may have
     // created without getting to record it.
     let mut connected: Option<Remote> = None;
+    let mut settled_away: Vec<String> = Vec::new();
     if state.extra.contains_key(PENDING_CREATES_KEY) {
         let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
-        settle_pending_creates(&remote.db, target_dir, &mut state)?;
+        settled_away = settle_pending_creates(&remote.db, target_dir, &mut state)?;
         if !recording_suppressed() {
             write_clone_state(target_dir, &state)?;
         }
@@ -1016,9 +1142,11 @@ pub fn build_push_plan(
     let VaultWalk {
         dirs: dirs_on_disk,
         attachments_with_notes: mut attachments_dirs,
-        files,
+        mut files,
         conflicts: mut conflict_copies,
     } = walk_vault(target_dir)?;
+    // A preview leaves on disk what settling a cut-off create removes.
+    files.retain(|file| !settled_away.contains(file));
     // `attachments/` holds attachment files, never notes: say so rather than
     // skip notes put there in silence.
     attachments_dirs.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
@@ -3372,6 +3500,7 @@ fn execute<T: Transport>(
                 }
             };
             if !prepared.updates.is_empty() {
+                mark_pending_attachments(target_dir, state, record_name, to_file, &prepared.new_attachments)?;
                 let sent = match send_updates(
                     db,
                     &private,
@@ -3472,14 +3601,7 @@ fn execute<T: Transport>(
                     file: file.clone(),
                     shared_zone_owner: shared_zone_owner.clone(),
                     folder: None,
-                    attachments: new_attachments
-                        .iter()
-                        .map(|attachment| PendingAttachment {
-                            attachment_record_name: attachment.attachment_record_name.clone(),
-                            media_record_name: attachment.media_record_name.clone(),
-                            file: attachment.file.clone(),
-                        })
-                        .collect(),
+                    attachments: PendingAttachment::of(new_attachments),
                 },
             )?;
             let zone = note_zone(shared_zone_owner.as_deref());
@@ -3632,6 +3754,7 @@ fn execute<T: Transport>(
             {
                 return Ok(ExecuteOutcome::changed_since_planned(&entry.file));
             }
+            mark_pending_attachments(target_dir, state, record_name, &entry.file, new_attachments)?;
             let sent = match batched.remove(record_name) {
                 Some(results) => SentWrite {
                     results,
@@ -3743,9 +3866,11 @@ pub fn run_push_with(
     // Before anything is sent: a note whose file is gone (or emptied) is a
     // note to delete, and most of the vault at once is not deleted unasked.
     let mut notices = notices;
-    let deletions = serialized
+    // Only what would be sent: a note iCloud no longer has, or has in
+    // Recently Deleted already, is merely no longer tracked.
+    let deletions = entries
         .iter()
-        .filter(|e| e.kind == PlanEntryKind::Delete && e.resolution == PlanResolution::Ready)
+        .filter(|e| matches!(e.action, Some(Action::Delete { .. })))
         .count();
     // Measured against the account's own notes: one that someone else
     // shares is never deleted from here, however many of those there are.

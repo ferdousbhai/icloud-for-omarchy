@@ -173,6 +173,12 @@ impl Server {
                     if let Some(parent) = sent.get("parent") {
                         record["parent"] = parent.clone();
                     }
+                    // A stored asset can be downloaded.
+                    if sent["recordType"] == "Media" {
+                        let name = sent["recordName"].as_str().unwrap();
+                        record["fields"]["Asset"]["value"]["downloadURL"] =
+                            json!(format!("https://download.test/{name}"));
+                    }
                     records.push(record.clone());
                     record
                 }
@@ -239,8 +245,18 @@ impl Transport for Server {
         })
     }
 
-    fn download(&self, url: &str, _dest: &Path) -> Result<u64, CkError> {
-        panic!("unexpected download: {url}")
+    /// What was uploaded for the Media record the URL names.
+    fn download(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
+        let media = url
+            .strip_prefix("https://download.test/")
+            .expect("a download URL of this server");
+        let uploads = self.uploads.lock().unwrap();
+        let (_, bytes) = uploads
+            .iter()
+            .find(|(to, _)| to.strip_prefix("https://upload.test/") == Some(media))
+            .unwrap_or_else(|| panic!("unexpected download: {url}"));
+        std::fs::write(dest, bytes).unwrap();
+        Ok(bytes.len() as u64)
     }
 
     fn upload(&self, url: &str, bytes: &[u8]) -> Result<Value, CkError> {
@@ -1032,6 +1048,176 @@ fn a_new_note_whose_push_was_killed_keeps_its_attachment_tracked() {
     assert_eq!(tracked.file, "Notes/attachments/hello.txt");
     assert_eq!(tracked.note_record_name, note);
     assert_eq!(tracked.media_record_name, media);
+    assert!(preview(&server, &vault).entries.is_empty());
+}
+
+fn killed_push(server: &Arc<Server>, vault: &Path) {
+    *server.die_after_modify.lock().unwrap() = true;
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| push(server, vault)));
+    assert!(killed.is_err(), "the push was cut off");
+}
+
+fn names_in(vault: &Path, dir: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(vault.join(dir))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// An edit that adds an attachment to a note reaches iCloud and the push is
+/// killed before it records anything: the note is at its old version here,
+/// the attachment untracked. The next push finds what it had announced,
+/// tracks the attachment at its file and the note at what was sent: nothing
+/// is refused, sent or uploaded again, and the pull after it downloads no
+/// second copy of the file and merges nothing.
+#[test]
+fn an_edit_adding_an_attachment_whose_push_was_killed_is_settled_by_the_next_push() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    attach(&vault, "hello.txt", b"hello");
+    append(&vault, NOTE_FILE, "\nThe file: [hello.txt](attachments/hello.txt)\n");
+    let edited = std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap();
+
+    killed_push(&server, &vault);
+    let operations = server.posts_to("/records/modify")[0]["operations"].clone();
+    let name = |i: usize| operations[i]["record"]["recordName"].as_str().unwrap().to_owned();
+    let (media, attachment) = (name(1), name(2));
+    let left = state(&vault);
+    assert!(left.attachments.unwrap_or_default().is_empty(), "nothing was recorded");
+    let pending = &left.extra["pendingCreates"][NOTE];
+    assert_eq!(pending["file"], NOTE_FILE);
+    assert_eq!(pending["attachments"][0]["attachmentRecordName"], attachment.as_str());
+
+    // The preview settles it too (nothing to send), and writes nothing.
+    let planned = preview(&server, &vault);
+    assert!(
+        planned
+            .entries
+            .iter()
+            .all(|e| e.entry.resolution == PlanResolution::Noop),
+        "{planned:?}"
+    );
+    assert!(state(&vault).extra.contains_key("pendingCreates"));
+
+    let result = push(&server, &vault);
+    assert!(result.entries.is_empty(), "{result:?}");
+    assert_eq!(server.posts_to("/records/modify").len(), 1, "nothing more was sent");
+    assert_eq!(server.uploads.lock().unwrap().len(), 1);
+    let after = state(&vault);
+    assert!(!after.extra.contains_key("pendingCreates"));
+    let tracked = &after.attachments.as_ref().unwrap()[&attachment];
+    assert_eq!(tracked.file, "Notes/attachments/hello.txt");
+    assert_eq!(
+        (tracked.note_record_name.as_str(), tracked.media_record_name.as_str()),
+        (NOTE, media.as_str())
+    );
+    assert_eq!(
+        Some(after.notes[NOTE].record_change_tag.as_str()),
+        server.record(NOTE).unwrap()["recordChangeTag"].as_str()
+    );
+
+    let pulled = run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    assert!(pulled.changes.is_empty() && pulled.conflicts.is_empty(), "{pulled:?}");
+    assert_eq!(names_in(&vault, "Notes/attachments"), ["hello.txt"]);
+    assert_eq!(std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap(), edited);
+    assert!(preview(&server, &vault).entries.is_empty());
+}
+
+/// The same, with the file edited again (elsewhere in it) before the next
+/// push: iCloud's text is no longer the file's, so the note stays at its old
+/// version, and the pull merges the two without conflict markers and
+/// without a second copy of the attachment.
+#[test]
+fn a_killed_attachment_edit_followed_by_another_edit_merges_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    attach(&vault, "hello.txt", b"hello");
+    append(&vault, NOTE_FILE, "\nThe file: [hello.txt](attachments/hello.txt)\n");
+    killed_push(&server, &vault);
+    edit_note(&vault, |text| text.replace("# Test Note", "# Test Note Two"));
+
+    let result = push(&server, &vault);
+    assert!(result.failures().is_empty(), "{result:?}");
+    assert_eq!(
+        server.uploads.lock().unwrap().len(),
+        1,
+        "the file is not uploaded again"
+    );
+    let pulled = run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    assert!(pulled.conflicts.is_empty(), "{pulled:?}");
+    assert_eq!(names_in(&vault, "Notes/attachments"), ["hello.txt"]);
+    let text = std::fs::read_to_string(vault.join(NOTE_FILE)).unwrap();
+    assert!(!text.contains("<<<<<<<") && text.contains("# Test Note Two"), "{text}");
+    assert_eq!(text.matches("attachments/hello.txt").count(), 1);
+
+    let result = push(&server, &vault);
+    assert_eq!(result.pushed, Some(1), "{result:?}");
+    assert!(server.note_text(NOTE).0.contains("Test Note Two"));
+    assert_eq!(server.uploads.lock().unwrap().len(), 1);
+}
+
+/// A pull between the killed create and the next push wrote the note a
+/// second file and downloaded its attachment under a second name. The push
+/// keeps the file the note was made in and the file it was made with: the
+/// pulled twins go, and nothing is removed from the note or uploaded again.
+#[test]
+fn a_pull_before_the_next_push_leaves_the_new_notes_attachment_as_it_was_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    attach(&vault, "hello.txt", b"hello");
+    std::fs::write(
+        vault.join("Notes/Trip.md"),
+        "Trip\n\nThe ticket: [hello.txt](attachments/hello.txt)\n",
+    )
+    .unwrap();
+    killed_push(&server, &vault);
+    let operations = server.posts_to("/records/modify")[0]["operations"].clone();
+    let name = |i: usize| operations[i]["record"]["recordName"].as_str().unwrap().to_owned();
+    let (note, attachment) = (name(0), name(2));
+
+    run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    let pulled = state(&vault);
+    assert_eq!(pulled.notes[&note].file, "Notes/Trip 2.md");
+    assert_eq!(
+        pulled.attachments.as_ref().unwrap()[&attachment].file,
+        "Notes/attachments/hello 2.txt"
+    );
+
+    // The preview already shows what the push will do: nothing to send.
+    let planned = preview(&server, &vault);
+    assert!(
+        planned
+            .entries
+            .iter()
+            .all(|e| e.entry.resolution == PlanResolution::Noop),
+        "{planned:?}"
+    );
+    assert!(vault.join("Notes/Trip 2.md").exists(), "a preview removes nothing");
+
+    let result = push(&server, &vault);
+    assert!(result.failures().is_empty(), "{result:?}");
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|e| e.entry.resolution == PlanResolution::Noop),
+        "{result:?}"
+    );
+    assert_eq!(server.posts_to("/records/modify").len(), 1, "nothing more was sent");
+    assert_eq!(server.uploads.lock().unwrap().len(), 1);
+    let after = state(&vault);
+    assert_eq!(after.notes[&note].file, "Notes/Trip.md");
+    assert_eq!(
+        after.attachments.as_ref().unwrap()[&attachment].file,
+        "Notes/attachments/hello.txt"
+    );
+    assert_eq!(names_in(&vault, "Notes/attachments"), ["hello.txt"]);
+    assert!(!vault.join("Notes/Trip 2.md").exists());
     assert!(preview(&server, &vault).entries.is_empty());
 }
 
