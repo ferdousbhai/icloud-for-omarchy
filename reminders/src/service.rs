@@ -83,7 +83,9 @@ impl<'a> Service<'a> {
     /// was. The sync token is then not advanced, so the next sync fetches it
     /// again (and says so again) instead of losing it until it next changes.
     pub fn sync(&self, full: bool) -> Result<SyncReport> {
-        let account = self.t.account()?;
+        // The signed-in account's dsid: a cache of another account's data
+        // is never shown.
+        let account = self.t.with(|s| Ok(s.dsid().to_owned()))?;
         let ck = CloudKit::connect(self.t)?;
         let (list_records, _) = ck.all_changes(&["List"], None)?;
         let mut lists = Vec::new();

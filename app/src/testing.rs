@@ -54,7 +54,7 @@ pub fn write_script(path: &Path, text: &str) {
 
 /// The shared libraries a 64-bit little-endian ELF executable needs (its
 /// `DT_NEEDED` entries).
-pub fn needed_libs(path: &str) -> Vec<String> {
+fn needed_libs(path: &str) -> Vec<String> {
     let f = std::fs::read(path).unwrap();
     let u16_at = |o: usize| u16::from_le_bytes(f[o..o + 2].try_into().unwrap()) as usize;
     let u64_at = |o: usize| u64::from_le_bytes(f[o..o + 8].try_into().unwrap()) as usize;

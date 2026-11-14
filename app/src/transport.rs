@@ -50,12 +50,6 @@ impl SessionTransport {
     pub fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
         json(url, &self.with(|s| s.post_json(url, body))?)
     }
-
-    /// The signed-in account's dsid, so a cache of another account's data
-    /// is never shown.
-    pub fn account(&self) -> Result<String> {
-        self.with(|s| Ok(s.dsid().to_owned()))
-    }
 }
 
 /// A 200 that isn't JSON is the service misbehaving, not the network.
