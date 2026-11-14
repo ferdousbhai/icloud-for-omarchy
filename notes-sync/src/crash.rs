@@ -44,6 +44,10 @@ pub const PENDING_CREATES_CLEAR: &str = "pending-creates-clear";
 pub const ICLOUD_MODIFY: &str = "icloud-modify";
 /// An asset upload answered.
 pub const ICLOUD_UPLOAD: &str = "icloud-upload";
+/// A step of the layout 3 → 4 migration done: the backup copied, renamed
+/// into place, `.icloud-notes/` made, a state subdirectory moved, the
+/// tombstone written.
+pub const MIGRATE: &str = "migrate";
 
 /// Every point.
 pub const POINTS: &[&str] = &[
@@ -60,6 +64,7 @@ pub const POINTS: &[&str] = &[
     PENDING_CREATES_CLEAR,
     ICLOUD_MODIFY,
     ICLOUD_UPLOAD,
+    MIGRATE,
 ];
 
 /// The point `name` was reached (see the module docs).

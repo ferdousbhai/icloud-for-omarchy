@@ -945,6 +945,11 @@ fn crash_everywhere(start: &Start, command: &str, thens: &[Then]) {
 }
 
 fn one_case(start: &Start, command: &str, point: &str, n: u64, then: Then, label: &str) {
+    one_case_place(start, command, point, n, then, label);
+}
+
+/// [`one_case`], handing back the vault it checked.
+fn one_case_place(start: &Start, command: &str, point: &str, n: u64, then: Then, label: &str) -> Place {
     let fake = Fake::start(start.zone.clone());
     let place = Place::copy_of(&start.place);
     let killed = run(
@@ -981,10 +986,13 @@ fn one_case(start: &Start, command: &str, point: &str, n: u64, then: Then, label
         }
         std::panic::resume_unwind(panic);
     }
+    place
 }
 
 fn carry_on(fake: &Fake, place: &Place, command: &str, then: Then) -> Vec<Output> {
-    let cloned = place.vault.join(".icloud-notes/state.json").exists();
+    let cloned = [".icloud-notes", ".icloud-md"]
+        .iter()
+        .any(|dir| place.vault.join(dir).join("state.json").exists());
     let next = match then {
         Then::Again if command == "clone" && cloned => "pull",
         Then::Again => command,
@@ -1293,6 +1301,7 @@ fn every_crash_point_is_reached_by_some_test() {
     let mut moved = cloned(6);
     moved_in_icloud(&mut moved);
     trace(&moved, "pull");
+    trace(&older_layout(2), "push");
     let mut pushed = cloned(9);
     changed_here(&mut pushed);
     trace(&pushed, "push");
@@ -1609,4 +1618,111 @@ fn a_note_retitled_in_icloud_and_edited_here_takes_the_new_title_as_its_file_nam
         .unwrap()
         .clone();
     assert!(body_of(&record).starts_with("Extra five\n"), "{}", body_of(&record));
+}
+
+// --- layout migrations ---------------------------------------------------------------
+
+/// The cloned vault turned back into an older layout's (`version` 2 or 3:
+/// the state in `.icloud-md/`; 2: no ids in the note files, no title mode),
+/// with a note edited since.
+fn older_layout(version: u32) -> Start {
+    let mut start = cloned(4);
+    let vault = start.place.vault.clone();
+    let edited = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
+    let text = std::fs::read_to_string(vault.join(&edited)).unwrap();
+    std::fs::write(
+        vault.join(&edited),
+        text.replacen("line of note 1", "line of note 1, typed here", 1),
+    )
+    .unwrap();
+    start.expect.edits.push((edited, "typed here".into()));
+    std::fs::rename(vault.join(".icloud-notes"), vault.join(".icloud-md")).unwrap();
+    let path = vault.join(".icloud-md/state.json");
+    let mut state: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    state["layoutVersion"] = json!(version);
+    if version == 2 {
+        state.as_object_mut().unwrap().remove("titleMode");
+        let mut files = Vec::new();
+        markdown_files(&vault, "", &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(vault.join(&file)).unwrap();
+            let body = text
+                .splitn(3, "---\n")
+                .nth(2)
+                .unwrap()
+                .strip_prefix('\n')
+                .unwrap()
+                .to_owned();
+            std::fs::write(vault.join(&file), body).unwrap();
+        }
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&state).unwrap() + "\n").unwrap();
+    start
+}
+
+/// What a migration leaves besides the state: a tombstone where the state
+/// was, and one complete backup of it.
+fn check_migrated(place: &Place, label: &str) {
+    let vault = &place.vault;
+    let tombstone: Value =
+        serde_json::from_str(&std::fs::read_to_string(vault.join(".icloud-md/state.json")).unwrap()).unwrap();
+    assert_eq!(
+        tombstone,
+        json!({ "layoutVersion": 4, "movedTo": ".icloud-notes" }),
+        "{label}"
+    );
+    let backups: Vec<String> = std::fs::read_dir(vault)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".icloud-md.bak-"))
+        .collect();
+    assert!(!backups.is_empty(), "{label}: no backup");
+    for backup in &backups {
+        assert!(!backup.ends_with(".partial"), "{label}: {backups:?}");
+        let state: Value =
+            serde_json::from_str(&std::fs::read_to_string(vault.join(backup).join("state.json")).unwrap()).unwrap();
+        assert!(state["notes"].is_object(), "{label}: {backup}");
+    }
+}
+
+fn migration_cut_short_anywhere(version: u32) {
+    let start = older_layout(version);
+    let fake = Fake::start(start.zone.clone());
+    let traced = Place::copy_of(&start.place);
+    let sites = crash_sites(&fake, &traced, "push");
+    let migrating: Vec<(String, u64)> = sites
+        .into_iter()
+        .take_while(|(point, _)| point != crash::ICLOUD_MODIFY)
+        .collect();
+    let mut failures = Vec::new();
+    for (point, n) in &migrating {
+        for then in [Then::Again, Then::Sync] {
+            let label = format!("push of a layout {version} vault killed at {point}:{n}, then {then:?}");
+            let result = std::panic::catch_unwind(|| {
+                let place = one_case_place(&start, "push", point, *n, then, &label);
+                check_migrated(&place, &label);
+            });
+            if let Err(panic) = result {
+                failures.push(panic.downcast_ref::<String>().cloned().unwrap_or_else(|| label.clone()));
+            }
+        }
+    }
+    assert!(!migrating.is_empty());
+    assert!(
+        failures.is_empty(),
+        "{} failed:\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+#[test]
+fn a_migration_from_layout_2_cut_short_anywhere_is_finished_by_the_next_run() {
+    migration_cut_short_anywhere(2);
+}
+
+#[test]
+fn a_migration_from_layout_3_cut_short_anywhere_is_finished_by_the_next_run() {
+    migration_cut_short_anywhere(3);
 }

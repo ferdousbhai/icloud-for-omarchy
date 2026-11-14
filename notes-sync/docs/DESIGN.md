@@ -342,11 +342,14 @@ mock session against a fake iCloud that keeps what it is sent, kills it
 it reaches one, carries on with the same command (or a sync) and a sync,
 and checks that no note, attachment or folder was created twice, nothing
 the user kept was deleted or untracked, no edit was lost and state.json
-reads back. The points are in `src/crash.rs`: one right after every durable
+reads back. The runs: clone, pull (with checkpoints, and with notes and
+folders moved), push (notes, attachments, folders), sync, shared zones
+(written in, read only, revoked), a filename-title vault retitled on both
+sides, and migrations from layouts 2 and 3. The points are in `src/crash.rs`: one right after every durable
 write (state.json, note files, base copies, history snapshots and epochs,
 attachment downloads, renames, removals, an atomic write's temporary file,
-`pendingCreates` written and cleared) and after every `records/modify` and
-asset upload, and in a debug build only (`ICLOUD_NOTES_SYNC_CRASH_AT=
+`pendingCreates` written and cleared, each step of the 3 → 4 migration)
+and after every `records/modify` and asset upload, and in a debug build only (`ICLOUD_NOTES_SYNC_CRASH_AT=
 <point>[:<n>]`; `ICLOUD_NOTES_SYNC_CRASH_TRACE=<file>` lists the points a
 run reaches). Also tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
 failed and a killed push), tests/cmd_push_guards.rs (a push killed right

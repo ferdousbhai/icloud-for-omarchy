@@ -80,6 +80,7 @@ fn move_state_dir(target_dir: &Path, state: RawStateFile) -> Result<RawStateFile
     if !current.exists() {
         back_up_legacy_state_dir(target_dir)?;
         std::fs::create_dir_all(&current)?;
+        crate::crash::point(crate::crash::MIGRATE);
     }
     for name in STATE_SUBDIR_NAMES {
         move_merging(&legacy.join(name), &current.join(name))?;
@@ -115,7 +116,9 @@ fn back_up_legacy_state_dir(target_dir: &Path) -> Result<(), Error> {
     }
     let partial = target_dir.join(format!("{name}.partial"));
     copy_dir_all(&legacy, &partial)?;
+    crate::crash::point(crate::crash::MIGRATE);
     std::fs::rename(&partial, target_dir.join(&name))?;
+    crate::crash::point(crate::crash::MIGRATE);
     Ok(())
 }
 
@@ -143,7 +146,9 @@ fn move_merging(from: &Path, to: &Path) -> std::io::Result<()> {
         return Ok(());
     }
     if std::fs::symlink_metadata(to).is_err() {
-        return std::fs::rename(from, to);
+        std::fs::rename(from, to)?;
+        crate::crash::point(crate::crash::MIGRATE);
+        return Ok(());
     }
     if !(from.is_dir() && to.is_dir()) {
         return Ok(());
@@ -180,6 +185,7 @@ fn finish_layout_4(target_dir: &Path) -> Result<(), Error> {
         return Ok(());
     }
     super::local::write_atomic(&path, tombstone.as_bytes(), false)?;
+    crate::crash::point(crate::crash::MIGRATE);
     Ok(())
 }
 
