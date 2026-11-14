@@ -1633,6 +1633,43 @@ fn a_pull_moving_a_photo_to_a_free_name_cut_short_anywhere_is_finished_by_the_ne
     }
 }
 
+/// The photo note's folder `Work` renamed `Office` here, and the note
+/// deleted on the phone: the pull removes its unedited file and its photo,
+/// which went along with the directory (up to 0.11.1 the photo was left in
+/// `Office/attachments/`, tracked by nothing), even cut short anywhere.
+#[test]
+fn a_note_deleted_in_icloud_takes_its_photo_along_from_its_folder_renamed_here() {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    let mut zone = account(3);
+    let mut photo_note = zone.live(PHOTO_NOTE).unwrap().clone();
+    let reference = json!({ "recordName": WORK_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+    photo_note["fields"]["Folder"]["value"] = reference.clone();
+    photo_note["fields"]["Folders"]["value"] = json!([reference]);
+    zone.put(photo_note);
+    let mut start = cloned_from(zone);
+    let (photo_name, _) = photo(&start.zone);
+    let vault = start.place.vault.clone();
+    assert!(vault.join("Work/attachments").join(&photo_name).is_file());
+    std::fs::rename(vault.join("Work"), vault.join("Office")).unwrap();
+    let at = start.zone.tick();
+    let stored = start.zone.records.get_mut(PHOTO_NOTE).unwrap();
+    stored.deleted = true;
+    stored.changed_at = at;
+    start.expect.kept = kept_notes(&start.zone);
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    assert!(
+        !place.vault.join("Office/attachments").join(&photo_name).exists(),
+        "the photo was left: {}",
+        says(&pull)
+    );
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(&fake, &place, &start.expect, "a pull after the note was deleted");
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
 /// A push whose delete of a note iCloud took fails here removing the note's
 /// attachment file: the state it saves still tracks every other note's
 /// attachments, and the next sync finishes the delete.

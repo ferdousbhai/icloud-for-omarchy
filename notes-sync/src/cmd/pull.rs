@@ -1669,6 +1669,12 @@ fn handle_remote_deletion(
         LocalFileState::Missing => note_id_claimants(target_dir, &tracked.notes, record_name, title_mode)?,
         _ => vec![existing.file.clone()],
     };
+    // Moved here (its folder's directory renamed, say): its attachments are
+    // beside the files carrying it, where they go or stay with them.
+    let dirs: HashSet<String> = files.iter().map(|f| note_dir_of(f)).collect();
+    if existing.shared_zone_owner.is_none() && dirs.len() == 1 && !dirs.contains(&note_dir_of(&existing.file)) {
+        relocate_note_attachments(target_dir, record_name, &files[0], &mut tracked.attachments)?;
+    }
     let base = read_base_copy(target_dir, record_name)?;
     let mut kept: Vec<String> = Vec::new();
     for file in files {
