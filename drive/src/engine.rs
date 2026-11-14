@@ -1087,13 +1087,19 @@ impl<R: Remote> Engine<'_, R> {
                 .iter()
                 .any(|r| r.local.ino == sent.ino && r.local.is_dir == sent.is_dir);
             let here = found(sent).is_some();
+            // A folder is known by its name in the folder it was made in
+            // (one of that name elsewhere is another device's).
+            let made_in = match parent_of(path) {
+                "" => Some(self.top.id.clone()),
+                parent => base.iter().find(|r| r.path == parent).map(|r| r.node.id.clone()),
+            };
             let candidates: Vec<&Node> = snapshot
                 .nodes
                 .values()
                 .filter(|n| !known.contains(n.id.as_str()) && (n.kind == Kind::Folder) == sent.is_dir)
                 // Renamed or moved in iCloud since (by another device), a
                 // file is still known by its size and date.
-                .filter(|n| !sent.is_dir || n.name == name_of(path))
+                .filter(|n| !sent.is_dir || (n.name == name_of(path) && Some(&n.parent) == made_in.as_ref()))
                 .filter(|n| {
                     sent.is_dir || (n.size == sent.size && (n.mtime_ms - sent.mtime_ns / 1_000_000).abs() <= 2_000)
                 })

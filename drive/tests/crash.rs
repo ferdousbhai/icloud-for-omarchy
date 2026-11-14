@@ -427,3 +427,23 @@ fn an_upload_stopped_before_it_was_recorded_and_then_renamed_in_icloud_is_not_se
     assert_eq!(bed.cloud.paths(), ["d.md"]);
     assert_eq!(bed.local_paths(), ["d.md"]);
 }
+
+#[test]
+fn a_folder_sent_by_a_stopped_sync_is_not_taken_for_one_of_its_name_elsewhere() {
+    let bed = Bed::new();
+    bed.write("A/a.txt", "a");
+    bed.write("B/b.txt", "b");
+    bed.settle();
+    fs::create_dir(bed.root().join("A/New")).unwrap();
+    // Stopped before iCloud was asked to make it; then another device
+    // makes a folder of that name elsewhere.
+    assert_eq!(
+        common::crash_at(&bed, false, || crash::arm_named("state.set_sending")),
+        Some("state.set_sending")
+    );
+    let b = bed.cloud.id_at("B").unwrap();
+    bed.cloud.folder(&b, "New");
+    bed.sync();
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["A", "A/New", "A/a.txt", "B", "B/New", "B/b.txt"]);
+}
