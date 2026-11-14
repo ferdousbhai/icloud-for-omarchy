@@ -22,6 +22,10 @@
 //! - every file reads as iCloud now has it, and the folder holds no other;
 //! - a run after it sends and writes nothing.
 //!
+//! After the last step, a few more runs settle it: each is quiet, and
+//! `folder.json` holds no add, write, rename or failure still open, no old
+//! name or removed file in the folder, and no temp file.
+//!
 //! What a line asks for is the library's own [`folder::diff`] (the pairing
 //! heuristics are unit-tested there); the model checks that it pairs each
 //! line that could only be one reminder with that reminder, and then that
@@ -1415,6 +1419,60 @@ impl Case {
             self.fail(&format!("a run with nothing to do did something: {f}"));
         }
     }
+
+    /// Runs past the case's end: nothing is waiting for anything. Every
+    /// run is quiet, the files read as iCloud has them, and `folder.json`
+    /// holds no marker of a write, rename, add or failure still open.
+    fn settle(&mut self) {
+        for i in 0..3 {
+            let sent = self.env.modifies();
+            let data = self.env.background().unwrap_or_else(|e| self.fail(&e));
+            self.note(format!("settling run {i}: {}", data["folder"]));
+            self.check_quiet(sent, &data);
+            self.check_files(&Expect::default());
+        }
+        let text = std::fs::read_to_string(self.env.dir.path().join("data/folder.json")).unwrap();
+        let state: folder::State = serde_json::from_str(&text).unwrap();
+        let t = truth(&self.env.state);
+        let dir = self.env.folder();
+        let ids: BTreeSet<&String> = t.lists.iter().map(|l| &l.id).collect();
+        if state.lists.keys().collect::<BTreeSet<_>>() != ids {
+            self.fail(&format!(
+                "folder.json has lists {:?}, iCloud {ids:?}",
+                state.lists.keys()
+            ));
+        }
+        for (id, ls) in &state.lists {
+            let open = !ls.adopted
+                || !ls.pending.is_empty()
+                || ls.writing.is_some()
+                || ls.renaming.is_some()
+                || ls.stuck.is_some()
+                || !ls.unwritten.is_empty()
+                || std::fs::read_to_string(dir.join(&ls.file)).ok().as_ref() != Some(&ls.text);
+            if open {
+                self.fail(&format!("{id} has not settled: {ls:?}"));
+            }
+            if let Some(w) = ls.was.iter().find(|w| dir.join(w).exists()) {
+                self.fail(&format!("{id}'s old name {w} is in the folder"));
+            }
+        }
+        let left: BTreeSet<String> = state.left.iter().cloned().collect();
+        if left != self.left || left.iter().any(|f| !dir.join(f).exists()) {
+            self.fail(&format!("folder.json leaves {left:?}, the model {:?}", self.left));
+        }
+        if let Some(r) = state.removed.iter().find(|r| dir.join(r).exists()) {
+            self.fail(&format!("{r} is back but not left"));
+        }
+        let hidden: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        if !hidden.is_empty() {
+            self.fail(&format!("the folder still holds {hidden:?}"));
+        }
+    }
 }
 
 fn run_case(seed: u64) {
@@ -1426,6 +1484,7 @@ fn run_case(seed: u64) {
     for i in 0..steps {
         case.step(i);
     }
+    case.settle();
 }
 
 #[test]
