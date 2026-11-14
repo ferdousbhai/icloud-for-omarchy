@@ -1314,6 +1314,22 @@ int main(int argc, char *argv[])
               "seam a waiting save is never written into another note");
         QFile::remove(testVault() + QStringLiteral("/R.md"));
     }
+    // The note already gone when the save comes, under the sync that took
+    // it: the edits wait too, and are kept as a new note once it is done.
+    {
+        writeFile(QStringLiteral("Gone.md"), QStringLiteral("---\napple-note-id: id-gone\n---\n# Gone\none\n"));
+        b.refresh();
+        b.openNote(QStringLiteral("Gone.md"));
+        b.runPull();
+        QFile::remove(testVault() + QStringLiteral("/Gone.md"));
+        b.refresh();
+        const bool waits = b.currentNote().isEmpty() && !b.saveCurrentNote(QStringLiteral("# Gone\none, mine\n"));
+        waitForIdle(b);
+        check(waits && readFile(QStringLiteral("Gone (unsaved edits).md")) == QStringLiteral("# Gone\none, mine\n")
+                  && b.currentNote() == QStringLiteral("Gone (unsaved edits).md"),
+              "seam a save for a note the running sync deleted is kept as a new note once it is done");
+        QFile::remove(testVault() + QStringLiteral("/Gone (unsaved edits).md"));
+    }
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
     QFile::remove(testVault() + QStringLiteral("/Q.md"));
     b.refresh();
@@ -1700,6 +1716,25 @@ int main(int argc, char *argv[])
                   && readFile(QStringLiteral("W (unsaved edits).md")) == mine,
               "background: closing during a sync that deleted the note keeps the save waiting on it as a new note");
         QFile::remove(testVault() + QStringLiteral("/W (unsaved edits).md"));
+        // The same when the note was gone before the save came.
+        {
+            writeFile(QStringLiteral("W.md"), note);
+            qputenv("ICLOUD_NOTES_SYNC_STUB_SLEEP", "2");
+            auto *app = new NotesBackend;
+            app->openNote(QStringLiteral("W.md"));
+            app->runSync();
+            waitUntil([] { return false; }, 300);
+            QFile::remove(testVault() + QStringLiteral("/W.md"));
+            app->refresh();
+            const bool waiting = app->currentNote().isEmpty() && !app->saveCurrentNote(mine, QStringLiteral("# W\none\n\ntwo\n"))
+                && app->closeWritesQueuedSave();
+            delete app;
+            qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
+            waitUntil([] { return VaultLock(NotesBackend::lockPath()).tryLock() == VaultLock::Locked; });
+            check(waiting && readFile(QStringLiteral("W (unsaved edits).md")) == mine,
+                  "background: closing during a sync keeps a save made after its note went away as a new note");
+            QFile::remove(testVault() + QStringLiteral("/W (unsaved edits).md"));
+        }
 
         // A background sync holding the vault may be writing the note.
         writeFile(QStringLiteral("W.md"), note);

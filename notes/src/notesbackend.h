@@ -203,7 +203,8 @@ public:
     // since it was loaded, or is gone (no note open), or the write failed:
     // the edits stay unsaved. Also false while a sync runs, which may be
     // rewriting the note: the edits are written once it is done (merged
-    // with whatever it changed), and queuedSaveWritten says so.
+    // with whatever it changed, or as a new note when the note went away
+    // under them), and queuedSaveWritten says so.
     Q_INVOKABLE bool saveCurrentNote(const QString &body) { return saveNote(body, nullptr); }
     // The window's save: `base` is the text its editor's edits started
     // from (what it last loaded or saved). A save that has to wait for the

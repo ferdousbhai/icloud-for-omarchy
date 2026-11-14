@@ -1155,8 +1155,18 @@ void NotesBackend::openNote(const QString &name)
 bool NotesBackend::saveNote(const QString &body, const QString *editorBase)
 {
     const QString path = noteAbsolutePath();
-    if (path.isEmpty()) // the note went away under these edits: keepEditsAsConflict keeps them
+    if (path.isEmpty()) {
+        // The note went away under these edits: keepEditsAsConflict keeps
+        // them, which the window asks for once no sync runs. Under one they
+        // wait like any save, so that its end, or Notes closing first,
+        // still puts them somewhere (writeQueuedSave).
+        if (m_syncRunning && m_lostNote.valid && !body.isEmpty())
+            m_queuedSave = { QString(),
+                             editorBase ? *editorBase
+                                        : SyncModel::editorForm(SyncModel::splitEnvelope(m_lostNote.content).body),
+                             body, true };
         return body.isEmpty();
+    }
     const QString text = assembleNote(SyncModel::restoreEditorChars(noteBody(), body));
     if (!m_readOnlyReason.isEmpty() || text == m_noteContent) {
         m_queuedSave = {}; // an edit undone since it was queued is not written later
@@ -2248,15 +2258,24 @@ void NotesBackend::finishSyncHalves(int exitCode)
 
 // A save refused while the sync ran, now that it is done and its changes
 // are loaded: a note the sync left alone is saved as asked; one it changed
-// gets the edits merged in, as any change on disk under edits does. (The
-// window may already have merged them on the refresh, which clears this.)
+// gets the edits merged in, as any change on disk under edits does; one it
+// deleted gets them as a new note. (The window may already have merged
+// them on the refresh, which clears this.)
 void NotesBackend::writeQueuedSave()
 {
     const QueuedSave queued = std::exchange(m_queuedSave, {});
-    // A note gone keeps its edits through keepEditsAsConflict; another note is not theirs.
-    if (!queued.valid || m_currentNote.isEmpty() || vaultRelative(m_currentNote) != queued.note)
+    if (!queued.valid)
         return;
     const QString &base = queued.base;
+    // Its note is gone (and nobody deleted it here): the edits follow it to
+    // where it moved, or become a note of their own.
+    if (m_currentNote.isEmpty()) {
+        if (m_lostNote.valid && keepEditsAsConflict(base, queued.body))
+            emit queuedSaveWritten(queued.body);
+        return;
+    }
+    if (vaultRelative(m_currentNote) != queued.note) // another note is not theirs
+        return;
     const bool changed = SyncModel::editorForm(noteBody()) != base;
     bool written = changed && keepEditsAsConflict(base, queued.body);
     // Saving over the note is only for one the sync left as the edits
@@ -2319,10 +2338,7 @@ void NotesBackend::writeQueuedSaveOnClose()
     m_syncProcess.waitForFinished();
     m_syncRunning = false;
     refresh();
-    if (m_currentNote.isEmpty())
-        keepEditsAsConflict({}, std::exchange(m_queuedSave, {}).body);
-    else
-        writeQueuedSave();
+    writeQueuedSave();
 }
 
 QDBusMessage NotesBackend::sessionCall(const QString &method) const
