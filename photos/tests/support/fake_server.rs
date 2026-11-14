@@ -82,7 +82,10 @@ pub struct FakeServer {
 
 impl Drop for FakeServer {
     fn drop(&mut self) {
-        self.server.unblock();
+        // One for each thread waiting in `recv`.
+        for _ in 0..4 {
+            self.server.unblock();
+        }
     }
 }
 
@@ -174,6 +177,11 @@ impl FakeServer {
             let rec = s.asset_record(i);
             s.log.push(rec);
         }
+    }
+
+    /// Every asset iCloud has, deleted ones too.
+    pub fn total_assets(&self) -> usize {
+        self.state.lock().unwrap().assets.len()
     }
 
     pub fn asset_ids(&self) -> Vec<String> {

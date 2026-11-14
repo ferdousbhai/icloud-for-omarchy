@@ -20,6 +20,13 @@
 //!   `download.live.placed`, `download.live.fetched`):
 //!   [`originals_taken_up_after_the_catalog_was_lost_are_taken_up_once_when_killed`],
 //!   [`a_catalog_from_before_live_size_is_upgraded_and_takes_up_the_files_on_disk`]
+//!
+//! [`random_sequences_keep_every_original_once_and_the_catalog_in_step`]
+//! runs seeded random sequences of downloads, deletes, restores, uploads,
+//! catalog loss and changes on another device, a third of the commands
+//! killed at a random point and run again, checking after each step that no
+//! file is lost, changed or copied, iCloud has each upload once and the
+//! library the model expects, and the catalog agrees with both.
 //! - `delete.sent`, `delete.retried`: [`a_delete_killed_after_icloud_answered_leaves_the_catalog_in_step`]
 //! - `restore.sent`, `restore.retried`: [`a_restore_killed_after_icloud_answered_is_finished_by_the_rerun`]
 //! - `upload.reserved`, `upload.sent`, `upload.registered`:
@@ -661,4 +668,252 @@ fn a_sweep_of_temporary_files_killed_part_way_removes_only_old_ones() {
     assert!(old.iter().all(|p| !p.exists()));
     assert_eq!(std::fs::read(&running).unwrap(), b"part");
     catalog_and_files_agree(&env, &users, &month);
+}
+
+// ---- model-based ----------------------------------------------------------
+
+/// A small seeded PRNG (xorshift64*), so a failing case can be replayed.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+
+    /// Up to `most` distinct items of `from`, at least one if any.
+    fn some(&mut self, from: &std::collections::BTreeSet<String>, most: usize) -> Vec<String> {
+        let mut all: Vec<String> = from.iter().cloned().collect();
+        let mut out = Vec::new();
+        for _ in 0..(1 + self.below(most)).min(all.len()) {
+            out.push(all.remove(self.below(all.len())));
+        }
+        out
+    }
+}
+
+/// What the model expects, and what it has seen.
+#[derive(Default)]
+struct Model {
+    /// In the library in iCloud.
+    visible: std::collections::BTreeSet<String>,
+    /// Deleted with `delete` and known to the catalog: `restore` can bring them back.
+    restorable: std::collections::BTreeSet<String>,
+    /// Uploaded files still in iCloud's library, by asset id.
+    uploaded: BTreeMap<String, PathBuf>,
+    fresh_files: usize,
+    /// Every file the library has held: none may go or change.
+    seen: BTreeMap<PathBuf, Digest>,
+    /// The library's files when the catalog was last lost: these may be
+    /// unrecorded (until downloaded again, or for good if not in iCloud).
+    unrecorded_ok: std::collections::BTreeSet<PathBuf>,
+}
+
+/// The command and the crash points it reaches.
+fn points_of(command: &str) -> &'static [&'static str] {
+    match command {
+        "download" => &[
+            "download.original.fetched",
+            "download.original.placed",
+            "download.live.fetched",
+            "download.live.placed",
+        ],
+        "delete" => &["delete.sent", "delete.retried"],
+        "restore" => &["restore.sent", "restore.retried"],
+        "upload" => &["upload.reserved", "upload.sent", "upload.registered"],
+        _ => &[],
+    }
+}
+
+/// Run `args`, killed first at a random point of the command a third of
+/// the time and then run again, as someone would. The run that finished.
+fn run_maybe_killed(env: &Env, rng: &mut Rng, args: &[&str], log: &mut Vec<String>) -> Run {
+    let points = points_of(args[0]);
+    if !points.is_empty() && rng.below(3) == 0 {
+        let point = format!("{}:{}", points[rng.below(points.len())], 1 + rng.below(2));
+        log.push(format!("  killed at {point}?"));
+        let r = env.exec(true, args, Some(&point));
+        if r.code.is_some() {
+            log.push("  (not reached)".into());
+            return r;
+        }
+    }
+    env.run(args)
+}
+
+fn check(env: &Env, m: &mut Model, log: &[String]) {
+    let ctx = || log.join("\n");
+    // Nothing ever on disk is lost or changed; no second copy of an original.
+    let now = files(&env.library());
+    for (p, d) in &m.seen {
+        assert_eq!(now.get(p), Some(d), "{} lost or changed\n{}", p.display(), ctx());
+    }
+    for p in now.keys() {
+        assert!(
+            !p.to_string_lossy().contains(" ("),
+            "a copy: {}\n{}",
+            p.display(),
+            ctx()
+        );
+    }
+    m.seen.extend(now.clone());
+    // iCloud: everything uploaded once, and the library the model expects.
+    assert_eq!(env.server.total_assets(), 8 + m.fresh_files, "{}", ctx());
+    let mut icloud: Vec<String> = env.server.asset_ids();
+    icloud.sort();
+    assert_eq!(icloud, m.visible.iter().cloned().collect::<Vec<_>>(), "{}", ctx());
+    // The catalog, synced, agrees with iCloud and with the files.
+    env.run(&["sync"]).ok();
+    let mut catalog = env.ids();
+    catalog.sort();
+    assert_eq!(catalog, icloud, "{}", ctx());
+    let cat = Catalog::open(&env.catalog()).unwrap();
+    let mut recorded = std::collections::BTreeSet::new();
+    // Every row, those of items no longer in the library too.
+    let all: Vec<String> = {
+        let db = rusqlite::Connection::open(env.catalog()).unwrap();
+        let mut st = db.prepare("SELECT id FROM assets").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    };
+    for id in &all {
+        let row = cat.asset(id).unwrap().unwrap();
+        if let Some(p) = &row.local_path {
+            let len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            assert_eq!(len, row.size as u64, "{id}: {}\n{}", p.display(), ctx());
+        }
+        for p in [&row.local_path, &row.live_path].into_iter().flatten() {
+            assert!(p.exists(), "{id}: {} recorded, not there\n{}", p.display(), ctx());
+            assert!(recorded.insert(p.clone()), "{} recorded twice\n{}", p.display(), ctx());
+        }
+    }
+    for p in now.keys() {
+        let p = env.library().join(p);
+        assert!(
+            recorded.contains(&p) || m.unrecorded_ok.contains(&p),
+            "{} is no item's\n{}",
+            p.display(),
+            ctx()
+        );
+    }
+}
+
+#[test]
+fn random_sequences_keep_every_original_once_and_the_catalog_in_step() {
+    for seed in 1..=6u64 {
+        let env = Env::new(&format!("model-{seed}"), 8);
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut m = Model::default();
+        env.run(&["sync"]).ok();
+        m.visible = env.server.asset_ids().into_iter().collect();
+        let mut log = vec![format!("seed {seed}")];
+        for _ in 0..14 {
+            let op = rng.below(10);
+            match op {
+                0 | 1 if !m.visible.is_empty() => {
+                    let ids = rng.some(&m.visible, 3);
+                    log.push(format!("download {ids:?}"));
+                    let mut args = vec!["download"];
+                    args.extend(ids.iter().map(String::as_str));
+                    run_maybe_killed(&env, &mut rng, &args, &mut log).ok();
+                }
+                2 => {
+                    log.push("download --all".into());
+                    run_maybe_killed(&env, &mut rng, &["download", "--all"], &mut log).ok();
+                }
+                3 if !m.visible.is_empty() => {
+                    let ids = rng.some(&m.visible, 2);
+                    log.push(format!("delete {ids:?}"));
+                    let mut args = vec!["delete", "--yes"];
+                    args.extend(ids.iter().map(String::as_str));
+                    let r = run_maybe_killed(&env, &mut rng, &args, &mut log).ok();
+                    for (id, item) in ids.iter().zip(r.as_array().unwrap()) {
+                        assert_eq!(item["deleted"], true, "{item}\n{}", log.join("\n"));
+                        m.visible.remove(id);
+                        m.uploaded.remove(id);
+                        m.restorable.insert(id.clone());
+                    }
+                }
+                4 if !m.restorable.is_empty() => {
+                    let ids = rng.some(&m.restorable, 2);
+                    log.push(format!("restore {ids:?}"));
+                    let mut args = vec!["restore"];
+                    args.extend(ids.iter().map(String::as_str));
+                    let r = run_maybe_killed(&env, &mut rng, &args, &mut log).ok();
+                    for (id, item) in ids.iter().zip(r.as_array().unwrap()) {
+                        assert_eq!(item["restored"], true, "{item}\n{}", log.join("\n"));
+                        m.restorable.remove(id);
+                        m.visible.insert(id.clone());
+                    }
+                }
+                5 => {
+                    // A new file, or one uploaded before and still there.
+                    let again = (rng.below(3) == 0)
+                        .then(|| m.uploaded.values().next().cloned())
+                        .flatten();
+                    let file = again.clone().unwrap_or_else(|| {
+                        let n = m.fresh_files;
+                        let file = env.root.join(format!("up/up-{seed}-{n}.jpg"));
+                        write(
+                            &file,
+                            format!("\u{FF}\u{D8} photo {seed} {n} {}", rng.next()).as_bytes(),
+                        );
+                        file
+                    });
+                    log.push(format!("upload {} (again: {})", file.display(), again.is_some()));
+                    let r = run_maybe_killed(&env, &mut rng, &["upload", file.to_str().unwrap()], &mut log).ok();
+                    let id = r["files"][0]["asset_id"].as_str().unwrap().to_owned();
+                    assert_eq!(r["not_in_catalog"], serde_json::json!([]), "{r}");
+                    if again.is_none() {
+                        m.fresh_files += 1;
+                    }
+                    m.visible.insert(id.clone());
+                    m.uploaded.insert(id, file);
+                }
+                6 => {
+                    log.push("catalog lost".into());
+                    lose_catalog(&env);
+                    m.restorable.clear();
+                    m.unrecorded_ok = files(&env.library())
+                        .into_keys()
+                        .map(|p| env.library().join(p))
+                        .collect();
+                }
+                7 if !m.visible.is_empty() => {
+                    let id = rng.some(&m.visible, 1).remove(0);
+                    log.push(format!("deleted on another device: {id}"));
+                    env.server.delete_elsewhere(&id);
+                    m.visible.remove(&id);
+                    m.uploaded.remove(&id);
+                    // Seen there by the next sync, not by this test's.
+                    continue;
+                }
+                8 if !m.visible.is_empty() => {
+                    let id = rng.some(&m.visible, 1).remove(0);
+                    log.push(format!("edited on another device: {id}"));
+                    env.server.edit_elsewhere(&id);
+                    continue;
+                }
+                _ => {
+                    log.push("sync".into());
+                    env.run(&["sync"]).ok();
+                }
+            }
+            check(&env, &mut m, &log);
+        }
+        // In the end every item's original is there once, and recorded.
+        env.run(&["download", "--all"]).ok();
+        check(&env, &mut m, &log);
+        assert_eq!(
+            env.run(&["download", "--all"]).ok(),
+            serde_json::json!([]),
+            "{}",
+            log.join("\n")
+        );
+    }
 }
