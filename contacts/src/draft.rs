@@ -58,23 +58,28 @@ impl Draft {
         self.multis.iter().find(|(n, _)| *n == m).map_or(&[], |(_, v)| v)
     }
 
-    /// What is wrong with it, while something is.
-    pub fn problem(&self) -> Option<String> {
-        if let Err(e) = model::parse_birthday(self.scalar(Field::Birthday)) {
-            return Some(e);
-        }
-        for (m, values) in &self.multis {
-            for (_, v) in values {
-                if let Err(e) = m.check(v) {
-                    return Some(e);
-                }
+    /// What is wrong with it, while something is. Only what changed from
+    /// `before` is checked: a value iCloud already holds (a phone with no
+    /// digits, typed on another device) does not keep the rest of an edit
+    /// from being saved.
+    pub fn problem(&self, before: &Draft) -> Option<String> {
+        for c in self.changes(before) {
+            let checked = match c {
+                Change::Set(Field::Birthday, _) => model::parse_birthday(self.scalar(Field::Birthday)).map(drop),
+                Change::Add(m, l) => m.check(&l.value),
+                _ => Ok(()),
+            };
+            if let Err(e) = checked {
+                return Some(e);
             }
         }
         (!model::names_someone(&self.changes(&Draft::default())))
             .then(|| "A contact needs a name, a company, a phone number or an email.".into())
     }
 
-    /// The changes from `before` to this draft.
+    /// The changes from `before` to this draft. A row's text is read back
+    /// trimmed, so a stored value with spaces around it is the same value:
+    /// left alone, not removed and written again.
     pub fn changes(&self, before: &Draft) -> Vec<Change> {
         let mut out = Vec::new();
         for (f, v) in &self.scalars {
@@ -94,7 +99,7 @@ impl Draft {
         for (m, now) in &self.multis {
             let was = before.values(*m);
             for (label, v) in was {
-                if !now.iter().any(|(l, n)| l == label && n == v) {
+                if !now.iter().any(|(l, n)| l == label && n.trim() == v.trim()) {
                     out.push(Change::RemoveExact(
                         *m,
                         model::Labeled {
@@ -105,7 +110,7 @@ impl Draft {
                 }
             }
             for (label, v) in now {
-                if !was.iter().any(|(l, w)| l == label && w == v) {
+                if !was.iter().any(|(l, w)| l == label && w.trim() == v.trim()) {
                     out.push(Change::Add(
                         *m,
                         model::Labeled {
@@ -177,8 +182,8 @@ mod tests {
                 ),
             ]
         );
-        assert!(Draft::default().problem().is_some());
-        assert_eq!(after.problem(), None);
+        assert!(Draft::default().problem(&Draft::default()).is_some());
+        assert_eq!(after.problem(&before), None);
         // Emptying one row removes that value only: not another row holding
         // the same number written another way.
         let mut c = Contact(
@@ -221,6 +226,51 @@ mod tests {
         // A valid phone does not hide an invalid email after it.
         let mut bad = after.clone();
         bad.multis[1].1 = vec![("HOME".into(), "nope".into())];
-        assert_eq!(bad.problem().as_deref(), Some("\"nope\" is not an email address"));
+        assert_eq!(
+            bad.problem(&before).as_deref(),
+            Some("\"nope\" is not an email address")
+        );
+    }
+
+    /// A value iCloud already holds that this dialog would not accept (an
+    /// email with no `@`) does not disable Save for an edit elsewhere.
+    #[test]
+    fn a_stored_value_the_dialog_would_refuse_does_not_block_another_edit() {
+        let c = Contact(
+            json!({ "firstName": "Ann", "emailAddresses": [{"label": "HOME", "field": "nope"}], "birthday": "1990-02-30" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let before = Draft::of(&c);
+        let mut after = before.clone();
+        after.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = "Lee".into();
+        assert_eq!(after.problem(&before), None);
+        assert_eq!(after.changes(&before), [Change::Set(Field::Last, "Lee".into())]);
+        // A value typed anew is still checked.
+        after.multis[1].1.push(("WORK".into(), "also-nope".into()));
+        assert!(after.problem(&before).is_some());
+    }
+
+    /// Saving the dialog leaves a stored value with spaces around it as it
+    /// is (its place, its label or none, what else the entry holds): its
+    /// row reads back trimmed, and that is not an edit.
+    #[test]
+    fn a_padded_value_left_alone_is_not_rewritten() {
+        let c = Contact(
+            json!({ "firstName": "Ann", "urls": [{"field": " https://p.example/ann ", "x-extra": 1}, {"label": "WORK", "field": "acme.example"}] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let before = Draft::of(&c);
+        let mut read = before.clone();
+        for (m, rows) in &mut read.multis {
+            for r in rows.iter_mut() {
+                *r = typed(*m, Some(&r.0.clone()), &r.1);
+            }
+        }
+        read.scalars.iter_mut().find(|(f, _)| *f == Field::Last).unwrap().1 = "Lee".into();
+        assert_eq!(read.changes(&before), [Change::Set(Field::Last, "Lee".into())]);
     }
 }

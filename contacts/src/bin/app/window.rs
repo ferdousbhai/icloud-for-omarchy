@@ -406,9 +406,9 @@ impl Window {
         // Save is enabled only while the draft is valid, so a mistake never
         // closes the dialog and loses the edits.
         let validate = Rc::new({
-            let (dialog, problem, read) = (dialog.clone(), problem.clone(), read.clone());
+            let (dialog, problem, read, before) = (dialog.clone(), problem.clone(), read.clone(), before.clone());
             move || {
-                let text = read().problem();
+                let text = read().problem(&before);
                 problem.set_visible(text.is_some());
                 problem.set_label(text.as_deref().unwrap_or(""));
                 dialog.set_response_enabled("save", text.is_none());
