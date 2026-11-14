@@ -4055,6 +4055,11 @@ fi"#,
         /// Signs in as `who` and waits until it is stored.
         pub(super) fn sign_in(&self, who: &str) {
             self.start_sign_in(who);
+            self.signed_in_as(who);
+        }
+
+        /// Waits until a sign-in as `who` is stored.
+        pub(super) fn signed_in_as(&self, who: &str) {
             let dsid = if who == "b" { B_DSID } else { DSID };
             self.until(&format!("signed in as {who}"), |s| {
                 !s.signing_in && s.dsid.as_deref() == Some(dsid)
@@ -4266,7 +4271,7 @@ fi"#,
             name: "sign-in A to B",
             outcomes: &[Some(DSID), Some(B_DSID)],
             act: &|rig| rig.start_sign_in("b"),
-            done: &|rig| rig.sign_in("b"),
+            done: &|rig| rig.signed_in_as("b"),
             passes: &[
                 "captured:sign-in",
                 "lock:change",
@@ -4306,7 +4311,7 @@ fi"#,
                 rig.restart();
             },
             act: &|rig| rig.start_sign_in("b"),
-            done: &|rig| rig.sign_in("b"),
+            done: &|rig| rig.signed_in_as("b"),
             passes: &["set:session", "write:account.json", "remove:sign-out-reason"],
             ..Default::default()
         });
@@ -4533,6 +4538,38 @@ fi"#,
         });
     }
 
+    /// A sign-in as B cut off once its session was stored, and a keyring
+    /// that cannot be read when the next daemon starts: the change is
+    /// settled when the keyring answers, before the account is read from
+    /// it, rather than A's `account.json` beside B's session being read as
+    /// another Apple ID's.
+    #[test]
+    fn a_cut_off_sign_in_is_settled_once_the_keyring_answers() {
+        let rig = Rig::new(false);
+        rig.sign_in("a");
+        rig.restart();
+        rig.arm("CRASH", "set:session:1");
+        rig.mark();
+        rig.start_sign_in("b");
+        wait_until("the crash", Duration::from_secs(30), || {
+            rig.log_since().contains("crash injected at set:session")
+        });
+        wait_until("the killed daemon to leave the bus", Duration::from_secs(30), || {
+            !rig.env.daemon_running(&rig.conn)
+        });
+        let held = keyring_down(&rig.env);
+        assert!(rig.status().signed_in);
+        assert!(change_pending(&rig.env).exists());
+        keyring_up(&rig.env, &held);
+        let (cookie, _, _) = session(&rig.conn).unwrap();
+        assert!(cookie.contains("X-APPLE-WEBAUTH-TOKEN=b-"), "{cookie}");
+        assert_eq!(rig.status().dsid.as_deref(), Some(B_DSID));
+        rig.restart();
+        let case = "a cut-off sign-in settled late";
+        assert_eq!(rig.check(case, false).as_deref(), Some(B_DSID));
+        rig.sign_in_and_out_work(case);
+    }
+
     // ------------------------------------------------------- two daemons
 
     impl Rig {
@@ -4663,7 +4700,7 @@ fi"#,
         let exited = second.wait().unwrap();
         assert!(!exited.success());
         fs::remove_file(&paused).unwrap();
-        rig.sign_in("b");
+        rig.signed_in_as("b");
         let reason = rig.env.account_path().with_file_name("sign-out-reason");
         assert!(!reason.exists(), "{}", fs::read_to_string(&reason).unwrap_or_default());
         rig.restart();

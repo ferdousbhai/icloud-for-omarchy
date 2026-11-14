@@ -674,7 +674,7 @@ impl Daemon {
         let me = self.clone();
         thread::spawn(move || {
             // First, while `account.json` may be half of a change.
-            me.settle_cut_off();
+            me.settle_cut_off(&me.change());
             me.settle_removal();
             if let Err(ServiceError::KeyringUnavailable(why)) = me.retry_keyring() {
                 eprintln!("icloud-sessiond: {why}; no session to hand out until it answers");
@@ -977,8 +977,9 @@ impl Daemon {
         }
         let arrived = Instant::now();
         // `load_account` may write both stores, and must not read half of
-        // another daemon's change.
-        let _change = self.change();
+        // another daemon's change, or of one a crash cut off.
+        let change = self.change();
+        self.settle_cut_off(&change);
         let mut written = lock(&self.written);
         let generation = {
             let st = lock(&self.state);
@@ -1156,23 +1157,17 @@ impl Daemon {
     ///   `account.json` is finished: the session goes, and for a sign-out
     ///   the device trust. One that had not is undone.
     ///
-    /// Only when no daemon is making such a change now (the `flock` is free:
-    /// one winding down may be finishing a sign-in, and its change is not
-    /// cut off), which holds while it is settled. An item that is empty or
-    /// not a session is kept for inspection, as [`load_account`] keeps it.
-    fn settle_cut_off(&self) {
+    /// Under the [`Change`]: a daemon making such a change now (one winding
+    /// down, finishing a sign-in) is waited for, and then has removed its
+    /// marker. Also before the account is read from the keyring, which a
+    /// locked keyring may have kept the start from settling. An item that is
+    /// empty or not a session is kept for inspection, as [`load_account`]
+    /// keeps it.
+    fn settle_cut_off(&self, _change: &Change<'_>) {
         let paths = &self.cfg.paths;
         if !paths.change_pending.exists() {
             return;
         }
-        let _in_process = lock(&self.change);
-        let Ok(file) = files::open_lock(&paths.change_lock) else {
-            return;
-        };
-        if file.try_lock().is_err() {
-            return;
-        }
-        crash::point("lock", "change");
         let mut written = lock(&self.written);
         let pending = match Pending::load(&paths.change_pending) {
             Ok(Some(pending)) => pending,

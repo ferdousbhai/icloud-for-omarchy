@@ -342,9 +342,11 @@ in, and the daemon says which case it is on stderr:
   and starts signed out.
 
 A daemon killed in the middle of a change leaves `session-change-pending`,
-and the next start (with `change.lock` free: no other daemon is in the
-middle of such a change) settles it by what the keyring holds, so the
-stores hold the account before the change or the one after, whole:
+and the next start (once `change.lock` is free: another daemon in the
+middle of such a change finishes it first), or with a keyring that cannot
+be read then, the first read of the account from it, settles it by what
+the keyring holds, so the stores hold the account before the change or the
+one after, whole:
 
 - A sign-in whose session is in the keyring is finished: `account.json`
   is written from the marker. One whose session is not is undone. A
