@@ -524,6 +524,41 @@ fn deleting_some_notes_is_not_refused() {
     }
 }
 
+/// Notes other people share are never deleted from here, so they are not
+/// what "most of the vault" is measured against: every one of the account's
+/// own notes gone is refused however many shared notes sit beside them.
+#[test]
+fn every_own_note_gone_is_refused_whatever_is_shared_with_the_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let mut own = track_more(&vault, 4);
+    own.push(NOTE_FILE.to_owned());
+    let mut with_shared = state(&vault);
+    for n in 0..6 {
+        let record_name = format!("5a5a5a5a-0000-4000-8000-{n:012x}");
+        let file = format!("Notes/Shared {n}.md");
+        let mut entry = with_shared.notes[NOTE].clone();
+        entry.file = file.clone();
+        entry.shared_zone_owner = Some("_someone".into());
+        with_shared.notes.insert(record_name.clone(), entry);
+        std::fs::write(vault.join(&file), format!("Shared {n}\n")).unwrap();
+        icloud_notes_sync::vault::base::write_base_copy(&vault, &record_name, &format!("Shared {n}\n")).unwrap();
+    }
+    write_clone_state(&vault, &with_shared).unwrap();
+    for file in &own {
+        std::fs::remove_file(vault.join(file)).unwrap();
+    }
+
+    let error = try_push(&server, &vault).unwrap_err();
+    assert!(
+        matches!(error, Error::TooManyDeletions { deletions: 5, total: 11 }),
+        "{error:?}"
+    );
+    assert!(server.operations().is_empty(), "nothing was sent");
+    assert_eq!(state(&vault).notes.len(), 11, "every note is still tracked");
+}
+
 // --- a push killed between iCloud's answer and its own record of it -----------------
 
 /// A server that takes the whole run down right after it applied the first

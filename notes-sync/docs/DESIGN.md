@@ -377,9 +377,10 @@ mounted, another sync tool's mistake) would have every note moved to Recently
 Deleted and every folder record deleted by the next push, which the Notes
 app runs by itself. A push now counts the deletions it planned (notes whose
 file is gone or emptied) and refuses the whole run, before sending anything,
-when they are more than 3 and more than half of the notes tracked
-(`push::too_many_deletions`, the rule icloud-reminders' folder applies to a
-list): the error `too_many_deletions`, exit 2, with a hint. `push --yes` and
+when they are more than 3 and more than half of the account's own notes
+tracked (`push::too_many_deletions`, the rule icloud-reminders' folder
+applies to a list; notes someone else shares are never deleted from here,
+so they don't count): the error `too_many_deletions`, exit 2, with a hint. `push --yes` and
 `sync --yes` (`PushOptions::allow_deletes`) push it. `status` and `push
 --dry-run` list the deletions as before and add a warning. In a `sync` it is
 the push half's error; the pull still runs (it never writes a deleted note's
@@ -387,6 +388,7 @@ file back).
 
 Tests: tests/cmd_push_guards.rs
 (`a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to`,
+`every_own_note_gone_is_refused_whatever_is_shared_with_the_account`,
 `deleting_some_notes_is_not_refused`).
 
 ### A tracked note this build can no longer decode

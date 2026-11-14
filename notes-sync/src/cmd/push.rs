@@ -3703,7 +3703,14 @@ pub fn run_push_with(
         .iter()
         .filter(|e| e.kind == PlanEntryKind::Delete && e.resolution == PlanResolution::Ready)
         .count();
-    if !options.allow_deletes && too_many_deletions(deletions, state.notes.len()) {
+    // Measured against the account's own notes: one that someone else
+    // shares is never deleted from here, however many of those there are.
+    let own = state
+        .notes
+        .values()
+        .filter(|entry| entry.shared_zone_owner.is_none())
+        .count();
+    if !options.allow_deletes && too_many_deletions(deletions, own) {
         let total = state.notes.len();
         if !dry_run {
             return Err(Error::TooManyDeletions { deletions, total });
