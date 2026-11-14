@@ -53,7 +53,6 @@ pub enum Scalar {
     },
     Bool {
         source: String,
-        value: bool,
     },
     Num {
         value: f64,
@@ -714,8 +713,7 @@ pub fn resolve_plain(text: &str) -> Scalar {
         return Scalar::Null { source };
     }
     if matches!(text, "true" | "True" | "TRUE" | "false" | "False" | "FALSE") {
-        let value = text.starts_with(['t', 'T']);
-        return Scalar::Bool { source, value };
+        return Scalar::Bool { source };
     }
     let digits = |s: &str, radix: u32| !s.is_empty() && s.chars().all(|c| c.is_digit(radix));
     if let Some(oct) = text.strip_prefix("0o")
@@ -1014,7 +1012,7 @@ struct Ctx {
     indent: String,
     indent_at_start: Option<usize>,
     implicit_key: bool,
-    in_flow: Option<bool>,
+    in_flow: bool,
 }
 
 /// `String(doc)`.
@@ -1034,7 +1032,7 @@ enum Collection<'a> {
 
 /// `YAMLMap.toString` / `YAMLSeq.toString` → `stringifyCollection`.
 fn stringify_collection(collection: &Collection, flow: bool, ctx: &Ctx) -> String {
-    let flow = ctx.in_flow.unwrap_or(flow);
+    let flow = ctx.in_flow || flow;
     let (start, end, prefix, base_indent) = match collection {
         Collection::Map(_) => ("{", "}", "", ctx.indent.clone()),
         Collection::Seq(_) => ("[", "]", "- ", format!("{}  ", ctx.indent)),
@@ -1042,7 +1040,7 @@ fn stringify_collection(collection: &Collection, flow: bool, ctx: &Ctx) -> Strin
     let item_ctx = if flow {
         Ctx {
             indent: format!("{base_indent}{INDENT_STEP}"),
-            in_flow: Some(true),
+            in_flow: true,
             ..ctx.clone()
         }
     } else {
@@ -1137,12 +1135,12 @@ fn stringify_pair(pair: &Pair, item_ctx: &Ctx) -> String {
     match &pair.value {
         Value::Seq { space_before: true, .. } | Value::Map { space_before: true, .. } => {
             ws = "\n".into();
-            if !(value.is_empty() && ctx.in_flow != Some(true)) {
+            if !(value.is_empty() && !ctx.in_flow) {
                 ws.push_str(&format!("\n{}", ctx.indent));
             }
         }
         Value::Seq { flow, .. } | Value::Map { flow, .. } => {
-            if value.contains('\n') || !ctx.in_flow.unwrap_or(*flow) {
+            if value.contains('\n') || !(ctx.in_flow || *flow) {
                 ws = format!("\n{}", ctx.indent);
             }
         }
@@ -1169,7 +1167,7 @@ fn stringify_scalar(scalar: &Scalar, ctx: &Ctx) -> String {
     match scalar {
         Scalar::Str { value, style } => stringify_string(value, *style, ctx),
         Scalar::Null { source } => source.clone(),
-        Scalar::Bool { source, .. } => source.clone(),
+        Scalar::Bool { source } => source.clone(),
         Scalar::Num {
             value,
             format,
@@ -1289,7 +1287,7 @@ fn stringify_string(value: &str, style: Style, ctx: &Ctx) -> String {
         Style::Single => single_quoted_string(value, ctx),
         Style::Plain => plain_string(value, ctx),
         Style::Literal | Style::Folded => {
-            if ctx.implicit_key || ctx.in_flow == Some(true) {
+            if ctx.implicit_key || ctx.in_flow {
                 quoted_string(value, ctx)
             } else {
                 block_string(value, style, ctx)
@@ -1359,8 +1357,9 @@ fn block_string(value: &str, style: Style, ctx: &Ctx) -> String {
     let header = format!("{}{chomp}", if start_with_space { indent_size } else { "" });
     if !literal {
         let doubled = double_newline_runs(&value);
-        let unfolded = keep_more_indented(&doubled);
-        let folded_value = indent_newline_runs(&unfolded, &indent);
+        // yaml then rejoins more-indented lines; the parser refuses a folded
+        // scalar that holds any, and a value set here is one line.
+        let folded_value = indent_newline_runs(&doubled, &indent);
         let body = fold_flow_lines(
             &format!("{start}{folded_value}{end}"),
             &indent,
@@ -1400,13 +1399,6 @@ fn double_newline_runs(text: &str) -> String {
     out
 }
 
-/// `.replace(/(?:^|\n)([\t ].*)(?:([\n\t ]*)\n(?![\n\t ]))?/g, '$1$2')`:
-/// the source's folded scalars never hold more-indented lines (the parser
-/// refuses them), so only the no-match case is reachable.
-fn keep_more_indented(text: &str) -> String {
-    text.to_string()
-}
-
 /// `end.replace(/(^|(?<!\n))\n+(?!\n|$)/g, `$&${indent}`)`: a newline run
 /// not at the end of the string gets the indent after it.
 fn add_indent_after_inner_newlines(text: &str, indent: &str) -> String {
@@ -1443,8 +1435,7 @@ fn quoted_string(value: &str, ctx: &Ctx) -> String {
 }
 
 fn plain_string(value: &str, ctx: &Ctx) -> String {
-    let in_flow = ctx.in_flow == Some(true);
-    if (ctx.implicit_key && value.contains('\n')) || (in_flow && value.contains(['[', ']', '{', '}', ','])) {
+    if (ctx.implicit_key && value.contains('\n')) || (ctx.in_flow && value.contains(['[', ']', '{', '}', ','])) {
         return quoted_string(value, ctx);
     }
     if plain_not_allowed(value) {
