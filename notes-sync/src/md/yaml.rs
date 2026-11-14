@@ -150,10 +150,11 @@ pub fn parse_document(text: &str) -> Parsed {
     if first.indent != 0 {
         return Parsed::Unsupported;
     }
-    // A bare scalar or a sequence isn't a mapping icloud-md can set keys on.
-    if (first.text == "-" || first.text.starts_with("- "))
-        || (split_key(first.text).is_none() && !is_structural(first.text))
-    {
+    // A sequence isn't a mapping icloud-md can set keys on. Anything else
+    // that isn't a plain key (a quoted or anchored key, a bare scalar, a flow
+    // collection) is outside the subset: the caller's line-level fallback
+    // decides whether it is a mapping.
+    if first.text == "-" || first.text.starts_with("- ") {
         return Parsed::Invalid;
     }
     match parser.block_map(0) {

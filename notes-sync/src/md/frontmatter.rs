@@ -251,13 +251,16 @@ pub fn compose_note_file(
 
 // --- line-level fallback for YAML outside the modelled subset --------------
 
-/// A top-level `key:` line (not indented, not a comment).
+/// A top-level `key:` line (not indented, not a comment, a sequence item, a
+/// flow collection, an explicit `?` key or an empty one, and no comment
+/// before the colon).
 fn top_level_key(line: &str) -> Option<&str> {
-    if line.starts_with([' ', '\t', '#', '-']) {
+    if line.starts_with([' ', '\t', '#', '-', '{', '[', '?', ':']) {
         return None;
     }
     let colon = line.find(": ").or_else(|| line.strip_suffix(':').map(|l| l.len()))?;
-    Some(line[..colon].trim_end())
+    let key = line[..colon].trim_end();
+    (!key.contains(" #")).then_some(key)
 }
 
 /// Does this YAML look like a block mapping (its first content line a key)?

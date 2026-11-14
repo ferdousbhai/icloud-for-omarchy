@@ -291,3 +291,51 @@ fn compose_note_file_cases() {
         format!("---\napple-note-id: {ID}\n---\n\n# T")
     );
 }
+
+#[test]
+fn a_first_key_outside_the_modelled_yaml_is_still_a_mapping() {
+    // A quoted, anchored or non-string first key is valid YAML: the id reads
+    // and is stamped the same as when such a key comes later.
+    for first in ["\"k\": 1", "'k': 1", "&a k: 1", "1: one", "true: yes"] {
+        let leading = format!("---\n{first}\napple-note-id: {ID}\n---\n");
+        assert_eq!(read_note_id(&leading).as_deref(), Some(ID), "{first}");
+        assert!(frontmatter_readable(&leading), "{first}");
+        assert_eq!(
+            set_note_id(&leading, OTHER_ID),
+            format!("---\n{first}\napple-note-id: {OTHER_ID}\n---\n"),
+            "{first}"
+        );
+        let trailing = format!("---\napple-note-id: {ID}\n{first}\n---\n");
+        assert_eq!(read_note_id(&trailing).as_deref(), Some(ID), "{first}");
+
+        let unstamped = format!("---\n{first}\n---\n\n");
+        assert_eq!(
+            set_note_id(&unstamped, ID),
+            format!("---\n{first}\napple-note-id: {ID}\n---\n\n"),
+            "{first}"
+        );
+        assert_eq!(clear_note_id(&set_note_id(&unstamped, ID)), unstamped, "{first}");
+    }
+}
+
+#[test]
+fn a_first_line_that_is_no_key_is_left_alone() {
+    // Not a block mapping (a flow collection, an explicit key, a bare
+    // scalar, a sequence): nothing is read from it and no key is added.
+    for first in [
+        "{a: 1}",
+        "[a, b]",
+        "? k\n: 1",
+        ": : :",
+        "just a scalar",
+        "scalar #c: not a key",
+        "- item",
+    ] {
+        let text = format!("---\n{first}\napple-note-id: {ID}\n---\n");
+        assert_eq!(read_note_id(&text), None, "{first}");
+        assert!(!frontmatter_readable(&text), "{first}");
+        assert_eq!(set_note_id(&text, OTHER_ID), text, "{first}");
+        let bare = format!("---\n{first}\n---\n\n");
+        assert_eq!(set_note_id(&bare, ID), bare, "{first}");
+    }
+}
