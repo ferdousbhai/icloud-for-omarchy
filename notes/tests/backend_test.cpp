@@ -456,6 +456,23 @@ int main(int argc, char *argv[])
     b.refresh();
     check(b.saveWarning(QStringLiteral("edited\n")).contains(QStringLiteral("A copy.md")), "backend duplicate id warns");
     QFile::remove(testVault() + QStringLiteral("/A copy.md"));
+    // A Syncthing conflict copy of A shares its id too, but the engine never
+    // syncs one: it holds no save back, and is not A once A's file is gone.
+    {
+        const QString copy = QStringLiteral("A.sync-conflict-20261114-101500-ABCDEF7.md");
+        writeFile(copy, QStringLiteral("---\napple-note-id: id-a\n---\n# Alpha\nfrom the phone\n"));
+        b.refresh();
+        check(b.notes().contains(copy) && b.saveWarning(QStringLiteral("edited\n")).isEmpty(),
+              "backend a Syncthing conflict copy with the note's id does not hold its save back");
+        const QString a = readFile(QStringLiteral("A.md"));
+        QFile::remove(testVault() + QStringLiteral("/A.md"));
+        b.refresh();
+        check(b.currentNote().isEmpty(), "backend a Syncthing conflict copy is not followed as the note it copies");
+        QFile::remove(testVault() + QLatin1Char('/') + copy);
+        writeFile(QStringLiteral("A.md"), a);
+        b.refresh();
+        b.openNote(QStringLiteral("A.md"));
+    }
     b.refresh();
 
     // Scans are cached per file by mtime and size: a later rewrite of the

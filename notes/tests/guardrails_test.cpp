@@ -75,6 +75,16 @@ int main()
           "id literal block ignored");
     check(SyncModel::extractNoteId(QStringLiteral("---\nunclosed\n")).isEmpty(), "id unterminated ignored");
 
+    // isSyncConflictName: Syncthing's conflict copies, as the engine tells them.
+    check(SyncModel::isSyncConflictName(u"Plan.sync-conflict-20261114-101500-ABCDEF7.md")
+              && SyncModel::isSyncConflictName(u"Work/Plan.sync-conflict-20261114-101500-abcdef7.md")
+              && SyncModel::isSyncConflictName(u"Plan.sync-conflict-20261114-101500-ABCDEF7"),
+          "sync conflict copy names");
+    check(!SyncModel::isSyncConflictName(u"Plan.md") && !SyncModel::isSyncConflictName(u"Plan.sync-conflict-notes.md")
+              && !SyncModel::isSyncConflictName(u"Plan.sync-conflict-20261114-101500-ABCDEF78.md")
+              && !SyncModel::isSyncConflictName(u"Plan.sync-conflict-2026111-101500-ABCDEF7.md")
+              && !SyncModel::isSyncConflictName(u"Old.sync-conflict-20261114-101500-ABCDEF7.md/Plan.md"),
+          "sync conflict copy names: only Syncthing's own pattern, in the file's name");
     // hasConflictMarkers
     check(SyncModel::hasConflictMarkers(QStringLiteral("a\n<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n")),
           "markers diff3");

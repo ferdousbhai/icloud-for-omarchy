@@ -293,8 +293,11 @@ next sync here, like any other edit to its file. Two things to know:
   Syncthing keeps one version under the note's name and the other as a
   conflict copy, `<name>.sync-conflict-<date>-<time>-<device>.md`. Such a
   copy is never synced to iCloud (it would otherwise go up as a second
-  note): `icloud-notes status` and every push list it with a warning until
-  you have merged what you want from it into the note and deleted it.
+  note): **Sync status** in the window, `icloud-notes push --dry-run` and
+  every push list it with a warning until you have merged what you want
+  from it into the note and deleted it. The window's note list shows it
+  too, with a "foreign id" badge, and it does not get in the way of
+  editing the note it copies.
   Syncthing's own files (`.stfolder`, `.stversions`, `.syncthing.*.tmp`)
   are ignored too, as every file or folder whose name starts with a dot is.
 - Keep this machine's sync state off the other device. Put these lines in

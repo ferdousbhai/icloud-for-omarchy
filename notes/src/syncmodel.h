@@ -88,6 +88,18 @@ inline QString extractNoteId(const QString &text)
     return {};
 }
 
+// A copy Syncthing made of a file two devices changed at once:
+// "<name>.sync-conflict-<YYYYMMDD>-<HHMMSS>-<device>.<ext>", the device 7
+// letters or digits, the extension optional. The sync engine never reads
+// one as a note (notes-sync `is_sync_conflict_name`, which this mirrors),
+// though a copy of a note carries the note's apple-note-id. `path` is the
+// file's name, or a path ending in it.
+inline bool isSyncConflictName(QStringView path)
+{
+    static const QRegularExpression re(QStringLiteral(R"(\.sync-conflict-[0-9]{8}-[0-9]{6}-[0-9A-Za-z]{7}(\.|$))"));
+    return re.matchView(path.mid(path.lastIndexOf(u'/') + 1)).hasMatch();
+}
+
 // What mergeNoteVersions writes on overlapping edits (diff3 shape). Text
 // carrying these must never be uploaded; both push and pull gate on it.
 inline bool isConflictMarker(QStringView line)

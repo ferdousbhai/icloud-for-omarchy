@@ -1016,7 +1016,8 @@ QString NotesBackend::findNoteById(const QString &id) const
         return {};
     QString found;
     forEachNoteFile(rootPath(), [&](const QString &rel, const QString &path) {
-        if (SyncModel::extractNoteId(readText(path, 64 * 1024)) == id)
+        // A Syncthing conflict copy carries the id too, and is not the note.
+        if (!SyncModel::isSyncConflictName(rel) && SyncModel::extractNoteId(readText(path, 64 * 1024)) == id)
             found = rel;
         return found.isEmpty();
     });
@@ -1423,7 +1424,10 @@ QString NotesBackend::guardrailWarning(const QString &body)
     const QString id = SyncModel::extractNoteId(text);
     const QDir dir(folderAbsolutePath(m_currentFolder));
     for (const QString &name : m_notes) {
-        if (id.isEmpty() || name == m_currentNote || m_scans.value(dir.filePath(name)).id != id)
+        // A Syncthing conflict copy of this note carries its id, but the
+        // engine never syncs one: nothing ambiguous about it.
+        if (id.isEmpty() || name == m_currentNote || m_scans.value(dir.filePath(name)).id != id
+            || SyncModel::isSyncConflictName(name))
             continue;
         warnings << QStringLiteral("Another note in this folder (%1) carries the same apple-note-id. "
                                    "Pushing two files with one id is ambiguous, so keep only one.")
