@@ -86,7 +86,9 @@ fn reached(name: &'static str) {
     if let Some(trace) = std::env::var_os(CRASH_TRACE_ENV).filter(|v| !v.is_empty())
         && let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(trace)
     {
-        let _ = writeln!(file, "{name}");
+        // One write per line: with O_APPEND it lands whole, so the download
+        // pool and the main thread never interleave their points.
+        let _ = file.write_all(format!("{name}\n").as_bytes());
     }
     let Some(spec) = std::env::var(CRASH_AT_ENV).ok().filter(|v| !v.is_empty()) else {
         return;
