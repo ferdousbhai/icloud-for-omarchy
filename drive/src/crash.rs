@@ -16,7 +16,6 @@ pub const POINTS: &[&str] = &[
     "state.set_not_synced",
     "state.set_pending_move",
     "state.clear_pending_move",
-    "state.put_half",
     "state.put",
     "state.forget",
     "state.forget_under",

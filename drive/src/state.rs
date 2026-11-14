@@ -143,11 +143,8 @@ impl State {
     /// Records an item as in step. A row that held the path for another id
     /// (the file was replaced by a new one in iCloud) gives way.
     pub fn put(&self, row: &Row) -> rusqlite::Result<()> {
-        self.db.execute(
-            "DELETE FROM items WHERE path = ?1 AND id != ?2",
-            params![row.path, row.node.id],
-        )?;
-        crate::crash::point("state.put_half");
+        // One statement: REPLACE drops whichever row holds the id or, by
+        // the path's UNIQUE, the path.
         self.db.execute(
             "INSERT OR REPLACE INTO items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
