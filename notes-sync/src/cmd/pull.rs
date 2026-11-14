@@ -639,11 +639,15 @@ pub fn run_pull_with(
                     used_in_dir.insert(file_name.clone());
                     let relative_file = posix::join(&[&note_dir, &file_name]);
                     let file_path = target_dir.join(&relative_file);
+                    // The base copy first: a base copy of a note nothing
+                    // tracks is what a pull cut short wrote it from, which
+                    // tells push that a file carrying its id is untouched
+                    // since (see `push::left_by_a_pull_unchanged`).
+                    write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     if adopted.is_none() {
                         write_note_file(&file_path, &file_text)?;
                     }
                     apply_note_file_times(&file_path, record)?;
-                    write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                     tracked.notes.insert(
                         record.record_name.clone(),
                         NoteEntry {

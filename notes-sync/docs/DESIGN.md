@@ -247,7 +247,15 @@ window closes, so a killed run is ordinary.
   After the pull has taken the file for the note, or written the note
   beside it because the file was edited since, the file is tracked or a
   copy, and a copy is created as a note of its own as before. An id
-  iCloud doesn't have is still pushed as a new note.
+  iCloud doesn't have (or has in Recently Deleted) is pushed as a new
+  note, except in a file a pull cut short wrote for a note deleted on
+  another device since, untouched: that file is removed, as a remote
+  deletion removes a clean file (up to 0.11.1 the deleted note came back
+  as a new one). A pull writes a new note's base copy before its file, and
+  untracking a note removes its base copy, so a base copy of a note
+  nothing tracks that reads as the file's body says exactly that
+  (`push::left_by_a_pull_unchanged`). A file edited since, or put back
+  from a backup after the note was deleted from here, is pushed as before.
 - A pull that lays out a folder new to the vault (or a folder's new name)
   first lists the directories it is about to make in state.json's
   `pendingDirs`, and the state it saves once every note is where the

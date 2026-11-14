@@ -1915,6 +1915,31 @@ pub fn build_push_plan(
                 });
                 continue;
             }
+            // Gone from iCloud (deleted, in Recently Deleted, or never
+            // there): a file a pull cut short wrote for a note deleted on
+            // another device since, untouched, goes as a remote deletion's
+            // does, rather than coming back as a new note.
+            if left_by_a_pull_unchanged(target_dir, id, &c.local_text)? {
+                notices.retain(|n| !n.message.starts_with(&format!("{} carries an ", c.file)));
+                let preview = recording_suppressed();
+                if !preview {
+                    safe_unlink(&target_dir.join(&c.file))?;
+                    remove_base_copy(target_dir, id)?;
+                }
+                notices.push(SyncNotice {
+                    level: NoticeLevel::Info,
+                    message: format!(
+                        "{}: deleted in iCloud before the pull that wrote it got to record it - {}",
+                        c.file,
+                        if preview {
+                            "the next push removes it"
+                        } else {
+                            "removed here"
+                        }
+                    ),
+                });
+                continue;
+            }
         }
         let built = build_create_payload(
             &c.file,
@@ -2243,6 +2268,20 @@ fn moved_there_unchanged(
         crate::md::frontmatter::compose_note_file("", &decoded.markdown_text, &record.record_name, title.as_deref());
     let body = split_frontmatter(&file_text, split_options(title_mode)).body;
     Ok(read_base_copy(target_dir, &record.record_name)?.as_deref() == Some(body.as_str()))
+}
+
+/// Whether `body`, an untracked file's, is what a pull that never got to
+/// record the note `record_name` wrote: such a pull writes the note's base
+/// copy before its file, and nothing else leaves a base copy for a note no
+/// longer tracked (untracking removes it), so a base copy that reads as the
+/// body means the file is that pull's, untouched since. A file edited
+/// since, or put back from a backup after the note was deleted from here,
+/// reads otherwise, and is created as a note as before.
+fn left_by_a_pull_unchanged(target_dir: &Path, record_name: &str, body: &str) -> Result<bool, Error> {
+    if !crate::vault::state::is_plain_record_name(record_name) {
+        return Ok(false);
+    }
+    Ok(read_base_copy(target_dir, record_name)?.as_deref() == Some(body))
 }
 
 /// The create path's document build and verification:

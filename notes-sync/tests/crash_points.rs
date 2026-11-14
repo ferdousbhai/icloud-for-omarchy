@@ -2073,3 +2073,78 @@ fn a_push_cut_short_before_an_edit_on_the_phone_is_finished_by_the_next_run() {
     start.expect.between = Some(edit_on_the_phone);
     crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
 }
+
+/// Two notes of one title added on the phone, the second deleted on the
+/// phone while a pull writing them was cut short.
+fn deleted_while_pulled() -> Start {
+    let mut start = cloned(3);
+    for i in 0..2 {
+        start.zone.put(note_record(
+            &format!("A0000000-0000-4000-8000-{i:012}"),
+            &format!("Twin\nwritten on the phone, {i}"),
+            DEFAULT_FOLDER,
+        ));
+    }
+    fn delete_one(zone: &mut Zone) {
+        let at = zone.tick();
+        let stored = zone.records.get_mut("A0000000-0000-4000-8000-000000000001").unwrap();
+        stored.deleted = true;
+        stored.changed_at = at;
+    }
+    let mut after = start.zone.clone();
+    delete_one(&mut after);
+    start.expect.kept = kept_notes(&after);
+    start.expect.between = Some(delete_one);
+    start
+}
+
+/// The file the pull wrote for the deleted note, untouched since, used to be
+/// pushed as a new note by the next run: a note deleted on the phone came
+/// back. It goes, as the file of a deleted note does.
+#[test]
+fn a_pull_cut_short_before_a_note_it_wrote_was_deleted_is_finished_by_the_next_run() {
+    crash_everywhere(&deleted_while_pulled(), "pull", &[Then::Again, Then::Sync]);
+}
+
+/// The same with the file edited here before the next run: it is kept, and
+/// pushed as a new note, edits and all.
+#[test]
+fn a_file_a_pull_cut_short_wrote_and_edited_here_since_is_kept_when_its_note_is_deleted() {
+    let mut start = deleted_while_pulled();
+    fn type_here(vault: &Path) {
+        let file = vault.join("Notes/Twin 2.md");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("written on the phone, 1"), "{text}");
+        std::fs::write(&file, text + "\ntyped here\n").unwrap();
+    }
+    start.expect.between_here = Some(type_here);
+    start.expect.new_notes = 1;
+    start.expect.edits.push(("Notes/Twin 2.md".into(), "typed here".into()));
+    for then in [Then::Again, Then::Sync] {
+        one_case(
+            &start,
+            "pull",
+            crash::NOTE_FILE,
+            2,
+            then,
+            &format!("pull killed after the deleted note's file, then {then:?}"),
+        );
+    }
+}
+
+/// A note deleted here and its file put back from a backup afterwards is no
+/// file a pull left: it is pushed as a new note, as before.
+#[test]
+fn a_file_put_back_after_its_note_was_deleted_here_is_pushed_as_a_new_note() {
+    let start = cloned(3);
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let file = tracked_file(&place, "E0000000-0000-4000-8000-000000000001");
+    let backup = std::fs::read(place.vault.join(&file)).unwrap();
+    std::fs::remove_file(place.vault.join(&file)).unwrap();
+    succeeded(&run(&fake, &place, "push", &Crash::default()), "push");
+    std::fs::write(place.vault.join(&file), &backup).unwrap();
+    succeeded(&run(&fake, &place, "push", &Crash::default()), "push");
+    assert_eq!(fake.zone().creates("Note").len(), 1);
+    assert!(place.vault.join(&file).is_file());
+}
