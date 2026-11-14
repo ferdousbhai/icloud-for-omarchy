@@ -268,6 +268,15 @@ window closes, so a killed run is ordinary.
   has the note in the folder the file moved to, with the text it was last
   synced with (`push::moved_there_unchanged`), the move is done: only the
   file's tracking (and any edit made with the move) is brought up to date.
+- An edit a push sends is kept as `base/.<recordName>.sent` until the push
+  records it (the base copy written for it takes it out); a merged edit is
+  not, since the file never read as the merge. A push cut short after
+  iCloud took the edit leaves the note tracked at its old version, and when
+  the file was edited again before the next run, merging it against the old
+  base copy reads the push's own edit as a conflicting one (conflict
+  markers in the file). When the note in iCloud reads exactly as the sent
+  copy, push and pull merge against that copy instead
+  (`vault::base::merge_base`), and the later edits go up as edits.
 - A note whose attachment downloads a failed run may not have finished
   keeps its attachments' entries without their checksum, and forgets its
   change tag (`cmd::redo_downloads`): the next pull applies it again and

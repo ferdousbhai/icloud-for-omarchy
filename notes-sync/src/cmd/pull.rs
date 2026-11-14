@@ -29,7 +29,7 @@ use crate::vault::attachments::{
     AttachmentRecords, remove_attachments_for_note, remove_table_attachments_for_note, resolve_note_attachments,
     safe_unlink,
 };
-use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy_of};
+use crate::vault::base::{merge_base, read_base_copy, remove_base_copy, write_base_copy_of};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{reconcile_note_placements, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
@@ -1471,7 +1471,7 @@ pub fn merge_remote_change_into_local_file(
     unrepresentable_title: Option<&str>,
     title_mode: TitleMode,
 ) -> Result<MergeStatus, Error> {
-    let base = read_base_copy(target_dir, record_name)?.unwrap_or_default();
+    let base = merge_base(target_dir, record_name, remote_body_text)?;
     let path = target_dir.join(file);
     let text = read_text(&path)?
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{}: not found", path.display())))?;

@@ -56,7 +56,7 @@ use crate::md::title::{
 use crate::vault::attachments::{
     remove_attachments_for_note, remove_table_attachments_for_note, resolve_new_attachment_file, safe_unlink,
 };
-use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy};
+use crate::vault::base::{merge_base, read_base_copy, remove_base_copy, write_base_copy, write_sent_copy};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{PlannedFolder, plan_folder_creates, relocate_note_attachments};
 use crate::vault::history::{
@@ -2298,7 +2298,7 @@ pub fn merge_remote_change(
     remote_text: &str,
     remote_tag: &str,
 ) -> Result<RemoteMerge, Error> {
-    let base = read_base_copy(target_dir, record_name)?.unwrap_or_default();
+    let base = merge_base(target_dir, record_name, remote_text)?;
     let outcome = merge_note_versions(&base, local_text, remote_text);
     Ok(RemoteMerge {
         file_text: join_frontmatter(frontmatter, &outcome.text),
@@ -3340,8 +3340,11 @@ fn linked_from_another_note(target_dir: &Path, note_file: &str, file: &str) -> R
 fn batch_writes<T: Transport>(
     entries: &[ExecutablePlanEntry],
     db: &Database<T>,
+    target_dir: &Path,
 ) -> Result<HashMap<String, Vec<RecordUpdateResult>>, Error> {
     let mut by_zone: IndexMap<NoteZone, Vec<RecordUpdate>> = IndexMap::new();
+    // The text each update sends, by record name.
+    let mut sent: HashMap<&str, &str> = HashMap::new();
     for action in entries.iter().filter_map(|e| e.action.as_ref()) {
         match action {
             Action::Delete {
@@ -3353,11 +3356,13 @@ fn batch_writes<T: Transport>(
                     .push(trash_update(record_name, record));
             }
             Action::Update {
+                record_name,
                 zone,
                 updates,
                 new_attachments,
                 removed_attachments,
                 merged,
+                local_text,
                 ..
             // One that carries a merge is sent when its turn comes, right
             // after checking the file is still the one the merge was made from.
@@ -3367,12 +3372,18 @@ fn batch_writes<T: Transport>(
                 && merged.is_none() =>
             {
                 by_zone.entry(zone.clone()).or_default().push(updates[0].clone());
+                sent.insert(record_name, local_text);
             }
             _ => {}
         }
     }
     let mut results = HashMap::new();
     for (zone, updates) in by_zone.into_iter().filter(|(_, u)| u.len() > 1) {
+        for update in &updates {
+            if let Some(text) = sent.get(update.record_name.as_str()) {
+                write_sent_copy(target_dir, &update.record_name, text)?;
+            }
+        }
         let answers = db.update_records_independently(&zone, &updates)?;
         for (update, answer) in updates.into_iter().zip(answers) {
             results.insert(update.record_name, vec![answer]);
@@ -3632,6 +3643,7 @@ fn execute<T: Transport>(
             };
             if !prepared.updates.is_empty() {
                 mark_pending_attachments(target_dir, state, record_name, to_file, &prepared.new_attachments)?;
+                write_sent_copy(target_dir, record_name, &local_text)?;
                 let sent = match send_updates(
                     db,
                     &private,
@@ -3893,18 +3905,25 @@ fn execute<T: Transport>(
                     results,
                     attachments: Vec::new(),
                 },
-                None => match send_updates(
-                    db,
-                    zone,
-                    target_dir,
-                    record_name,
-                    updates,
-                    new_attachments,
-                    removed_attachments,
-                )? {
-                    Ok(sent) => sent,
-                    Err(failure) => return Ok(ExecuteOutcome::failed(format!("{}: {failure}", entry.file))),
-                },
+                None => {
+                    // Not a merge's: the file never read as the merged text,
+                    // so it can't be the file's ancestor.
+                    if merged.is_none() {
+                        write_sent_copy(target_dir, record_name, local_text)?;
+                    }
+                    match send_updates(
+                        db,
+                        zone,
+                        target_dir,
+                        record_name,
+                        updates,
+                        new_attachments,
+                        removed_attachments,
+                    )? {
+                        Ok(sent) => sent,
+                        Err(failure) => return Ok(ExecuteOutcome::failed(format!("{}: {failure}", entry.file))),
+                    }
+                }
             };
             let results = sent.results;
             if let Some(failed) = first_rejection(&results)
@@ -4055,7 +4074,7 @@ pub fn run_push_with(
     let mut results = Vec::with_capacity(entries.len());
     let mut failed_folders: HashSet<String> = HashSet::new();
     let mut batched = match &remote {
-        Some(remote) => batch_writes(&entries, &remote.db)?,
+        Some(remote) => batch_writes(&entries, &remote.db, target_dir)?,
         None => HashMap::new(),
     };
     for plan_entry in &entries {

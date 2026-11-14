@@ -659,6 +659,8 @@ struct Expect {
     /// What happens in iCloud after the run is cut short and before it is
     /// carried on with (`kept` is what iCloud has after it).
     between: Option<fn(&mut Zone)>,
+    /// What the user does in the vault then.
+    between_here: Option<fn(&Path)>,
     /// How many notes the user made here: each is created once.
     new_notes: usize,
     /// How many attachments the user added here: each is created once.
@@ -945,6 +947,9 @@ fn crash_everywhere(start: &Start, command: &str, thens: &[Then]) {
     if let Some(between) = start.expect.between {
         between(&mut fake.zone());
     }
+    if let Some(between) = start.expect.between_here {
+        between(&traced.vault);
+    }
     for then in thens {
         carry_on(&fake, &traced, command, *then);
     }
@@ -1022,6 +1027,9 @@ fn one_case_place(start: &Start, command: &str, point: &str, n: u64, then: Then,
     );
     if let Some(between) = start.expect.between {
         between(&mut fake.zone());
+    }
+    if let Some(between) = start.expect.between_here {
+        between(&place.vault);
     }
     let outputs = carry_on(&fake, &place, command, then);
     let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1971,4 +1979,25 @@ fn a_pull_cut_short_before_a_folder_it_was_renaming_was_renamed_again_is_finishe
     }
     start.expect.between = Some(rename_again);
     crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
+/// After the push was cut short, and before the next run, the user typed
+/// more into the new note and into the edited one: those edits go up too.
+#[test]
+fn a_push_cut_short_before_more_was_typed_here_is_finished_by_the_next_run() {
+    let mut start = cloned(9);
+    changed_here(&mut start);
+    let edited = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
+    assert_eq!(edited, "Notes/Extra 1.md");
+    fn type_more(vault: &Path) {
+        for file in ["Notes/Fresh.md", "Notes/Extra 1.md"] {
+            let text = std::fs::read_to_string(vault.join(file)).unwrap();
+            std::fs::write(vault.join(file), text + "\ntyped after the push\n").unwrap();
+        }
+    }
+    start.expect.between_here = Some(type_more);
+    for file in ["Notes/Fresh.md", "Notes/Extra 1.md"] {
+        start.expect.edits.push((file.into(), "typed after the push".into()));
+    }
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
 }
