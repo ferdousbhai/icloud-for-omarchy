@@ -13,6 +13,10 @@
 //! After one that was refused something or stopped, the last two hold, and
 //! every such text is still on one side or the other.
 //!
+//! After the last sync, three more find nothing to do (no rule waits a
+//! round forever), and the state holds a row for each synced path and no
+//! note of a move, a send or a download under way.
+//!
 //! Widened (in every case but the named regressions) to what the in-memory
 //! Drive cannot know of the real one: a rename or move that keeps the
 //! item's etag or not, listings in any order, a refused move answered in
@@ -681,6 +685,62 @@ impl Model {
         Ok(())
     }
 
+    /// After the sides have settled: more syncs still find nothing to do
+    /// (no rule waits a round forever), and the state holds exactly what is
+    /// in step, with no note of anything under way left behind.
+    fn check_state(&self) -> Result<(), String> {
+        for n in 0..3 {
+            let again = self
+                .bed
+                .try_sync(true)
+                .map_err(|e| format!("sync {n} past the end: {e}"))?;
+            if !again.done.is_empty() || !never_problems(&again.problems) {
+                return Err(format!(
+                    "sync {n} past the end did {:?}, failed {:?}",
+                    again.done, again.problems
+                ));
+            }
+        }
+        let state = icloud_drive::state::State::open(&self.bed.dir.path().join("state")).unwrap();
+        // (What is not synced may still have a row: a file moved here to a
+        // name iCloud never takes stays in step where it was.)
+        let rows: Vec<String> = state
+            .rows()
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .filter(|p| synced(p))
+            .collect();
+        let here: Vec<String> = self.tree(Side::Here).into_keys().filter(|p| synced(p)).collect();
+        if rows != here {
+            let extra: Vec<&String> = rows.iter().filter(|p| !here.contains(p)).collect();
+            let missing: Vec<&String> = here.iter().filter(|p| !rows.contains(p)).collect();
+            return Err(format!(
+                "the state holds {extra:?} beyond both sides, and lacks {missing:?}"
+            ));
+        }
+        // (A move to a name iCloud never takes is retried every sync, noted.)
+        let mut pending = state.pending_moves().unwrap();
+        pending.retain(|_, dest| synced(dest));
+        let sending = state.sending().unwrap();
+        let placed = state.placed().unwrap();
+        if !pending.is_empty() || !sending.is_empty() || !placed.is_empty() {
+            return Err(format!(
+                "notes left behind: moves {pending:?}, sending {sending:?}, placed {placed:?}"
+            ));
+        }
+        let not_synced: Vec<(String, String)> = state
+            .not_synced()
+            .unwrap()
+            .into_iter()
+            .filter(|(p, _)| synced(p))
+            .collect();
+        if !not_synced.is_empty() {
+            return Err(format!("listed as not synced: {not_synced:?}"));
+        }
+        Ok(())
+    }
+
     fn sync(&mut self) -> Result<(), String> {
         let kind = self.rng.below(8);
         self.during(kind == 2 || kind == 3);
@@ -810,7 +870,8 @@ fn run_case(seed: u64, widened: bool) -> Result<(), (String, Vec<String>)> {
         let last = model.bed.try_sync(true);
         model.log_started();
         last.map_err(|e| e.to_string())?;
-        model.check_settled()
+        model.check_settled()?;
+        model.check_state()
     }));
     match outcome {
         Ok(Ok(())) => Ok(()),
