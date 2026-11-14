@@ -515,7 +515,7 @@ struct VaultWalk {
 pub(crate) fn is_sync_conflict_name(name: &str) -> bool {
     const MARKER: &str = ".sync-conflict-";
     name.match_indices(MARKER).any(|(at, _)| {
-        let rest = name[at + MARKER.len()..].as_bytes();
+        let rest = &name.as_bytes()[at + MARKER.len()..];
         let digits = |range: std::ops::Range<usize>| rest[range].iter().all(u8::is_ascii_digit);
         rest.len() >= 23
             && digits(0..8)

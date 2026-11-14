@@ -469,6 +469,9 @@ fn check_layout_version(root: &Map<String, Value>, file_path: &Path, target_dir:
     })
 }
 
+/// A test of a JSON value's type (`Value::is_string`, ...).
+type ValueTest = fn(&Value) -> bool;
+
 /// The entries of the state's `key` map (`None` when it has none): each
 /// must be an object whose `required` keys pass their test, or the state is
 /// refused (`{fp} has a malformed entry for {label} "{name}".`); one that
@@ -478,7 +481,7 @@ fn entries<T>(
     key: &str,
     fp: &str,
     label: &str,
-    required: &[(&str, fn(&Value) -> bool)],
+    required: &[(&str, ValueTest)],
     build: impl Fn(&str, &Map<String, Value>) -> Option<T>,
 ) -> Result<Option<IndexMap<String, T>>, Error> {
     let Some(map) = root.get(key).and_then(obj) else {
@@ -520,8 +523,8 @@ fn assert_clone_state(value: &Value, file_path: &Path, target_dir: &Path) -> Res
 
     let layout_version = check_layout_version(root, file_path, target_dir)?;
 
-    const STRING: fn(&Value) -> bool = Value::is_string;
-    const NUMBER: fn(&Value) -> bool = Value::is_number;
+    const STRING: ValueTest = Value::is_string;
+    const NUMBER: ValueTest = Value::is_number;
     let str_of = |m: &Map<String, Value>, key: &str| opt_str(m, key).unwrap_or_default();
 
     // Sync writes, moves and removes these paths as they are: an entry
