@@ -155,8 +155,5 @@ it again with a label), and addresses are read-only.
 ## Releasing
 
 Released with the other packages from the repository root; see the root
-[README](../README.md#releasing). Its tags are `contacts-v<version>`.
-Name it in its first release (`bin/release icloud-contacts 0.1.0`) so it
-gets a real version: every release builds all packages, and an unnamed one
-ships as its post-tag development version (`0.0.0.r<count>` before its
-first tag).
+[README](../README.md#releasing). Releases are tagged `v<version>`: one
+suite version for every package.
