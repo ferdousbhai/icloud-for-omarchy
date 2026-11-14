@@ -347,41 +347,37 @@ impl NewAttachment {
     }
 }
 
-/// What the plan entry of a note that gains attachments says of them.
-fn new_attachments_remark(new_attachments: &[NewAttachment]) -> Option<String> {
-    let names: Vec<&str> = new_attachments.iter().map(|a| a.name.as_str()).collect();
+/// "`verb` attachment a" for one name, "`verb` attachments a, b" for
+/// several, nothing for none.
+fn attachments_phrase<'a>(verb: &str, names: impl Iterator<Item = &'a str>) -> Option<String> {
+    let names: Vec<&str> = names.collect();
     match names.as_slice() {
         [] => None,
-        [name] => Some(format!("adds the attachment {name}")),
-        names => Some(format!("adds the attachments {}", names.join(", "))),
+        [name] => Some(format!("{verb} attachment {name}")),
+        names => Some(format!("{verb} attachments {}", names.join(", "))),
     }
+}
+
+/// What the plan entry of a note that gains attachments says of them.
+fn new_attachments_remark(new_attachments: &[NewAttachment]) -> Option<String> {
+    attachments_phrase("adds the", new_attachments.iter().map(|a| a.name.as_str()))
 }
 
 /// What the plan entry of a note that loses attachments says of them.
 fn removed_attachments_remark(removed_attachments: &[RemovedAttachment]) -> Option<String> {
-    let names: Vec<&str> = removed_attachments.iter().map(|a| a.name.as_str()).collect();
-    match names.as_slice() {
-        [] => None,
-        [name] => Some(format!("removes the attachment {name}")),
-        names => Some(format!("removes the attachments {}", names.join(", "))),
-    }
+    attachments_phrase("removes the", removed_attachments.iter().map(|a| a.name.as_str()))
 }
 
 /// What a pushed entry's message says of the attachments it added and
 /// removed (nothing when there were none).
 fn attachment_changes_suffix(added: usize, removed: &[RemovedAttachment]) -> String {
-    let mut suffix = match added {
+    let added = match added {
         0 => String::new(),
         1 => ", with its new attachment".to_owned(),
         n => format!(", with its {n} new attachments"),
     };
-    let names: Vec<&str> = removed.iter().map(|a| a.name.as_str()).collect();
-    match names.as_slice() {
-        [] => {}
-        [name] => suffix.push_str(&format!(", without its attachment {name}")),
-        names => suffix.push_str(&format!(", without its attachments {}", names.join(", "))),
-    }
-    suffix
+    let removed = attachments_phrase(", without its", removed.iter().map(|a| a.name.as_str())).unwrap_or_default();
+    added + &removed
 }
 
 fn join_remarks<const N: usize>(remarks: [Option<String>; N]) -> Option<String> {
@@ -1814,15 +1810,16 @@ impl TrackedAttachments {
     fn of(state: &CloneState, record_name: &str, note_file: &str) -> Self {
         let note_dir = note_dir_of(note_file);
         let all = || state.attachments.iter().flatten();
+        let own: HashMap<String, AttachmentEntry> = all()
+            .filter(|(_, att)| att.note_record_name == record_name)
+            .map(|(k, att)| (k.clone(), att.clone()))
+            .collect();
         TrackedAttachments {
-            links: all()
-                .filter(|(_, att)| att.note_record_name == record_name)
+            links: own
+                .iter()
                 .map(|(k, att)| (k.clone(), posix::relative(&note_dir, &att.file)))
                 .collect(),
-            own: all()
-                .filter(|(_, att)| att.note_record_name == record_name)
-                .map(|(k, att)| (k.clone(), att.clone()))
-                .collect(),
+            own,
             files: all().map(|(_, att)| att.file.clone()).collect(),
         }
     }
@@ -2653,6 +2650,36 @@ fn send_with_attachment_changes<T: Transport>(
     Ok(Ok(SentWrite { results, attachments }))
 }
 
+/// Sends a note's updates (its own first, then any table updates): by
+/// themselves, or with the attachments the note gains and loses
+/// ([`send_with_attachment_changes`]).
+fn send_updates<T: Transport>(
+    db: &Database<T>,
+    zone: &NoteZone,
+    target_dir: &Path,
+    note_record_name: &str,
+    updates: &[RecordUpdate],
+    new_attachments: &[NewAttachment],
+    removed_attachments: &[RemovedAttachment],
+) -> Result<Result<SentWrite, String>, Error> {
+    if new_attachments.is_empty() && removed_attachments.is_empty() {
+        return Ok(Ok(SentWrite {
+            results: db.update_records(zone, updates)?,
+            attachments: Vec::new(),
+        }));
+    }
+    let ops = updates.iter().cloned().map(RecordOp::Update).collect();
+    send_with_attachment_changes(
+        db,
+        zone,
+        target_dir,
+        note_record_name,
+        ops,
+        new_attachments,
+        removed_attachments,
+    )
+}
+
 /// Tracks the attachments a write created: from here on each one's link
 /// stands for it, and its file is the download pull would have made.
 fn track_new_attachments(state: &mut CloneState, attachments: Vec<(String, AttachmentEntry)>) {
@@ -2989,28 +3016,20 @@ fn execute<T: Transport>(
                 }
             };
             if !prepared.updates.is_empty() {
-                let sent = if prepared.new_attachments.is_empty() && prepared.removed_attachments.is_empty() {
-                    SentWrite {
-                        results: db.update_records(&private, &prepared.updates)?,
-                        attachments: Vec::new(),
-                    }
-                } else {
-                    let ops = prepared.updates.iter().cloned().map(RecordOp::Update).collect();
-                    match send_with_attachment_changes(
-                        db,
-                        &private,
-                        target_dir,
-                        record_name,
-                        ops,
-                        &prepared.new_attachments,
-                        &prepared.removed_attachments,
-                    )? {
-                        Ok(sent) => sent,
-                        Err(failure) => {
-                            return Ok(ExecuteOutcome::ok(format!(
-                                "{moved} (its edits weren't pushed: {failure})"
-                            )));
-                        }
+                let sent = match send_updates(
+                    db,
+                    &private,
+                    target_dir,
+                    record_name,
+                    &prepared.updates,
+                    &prepared.new_attachments,
+                    &prepared.removed_attachments,
+                )? {
+                    Ok(sent) => sent,
+                    Err(failure) => {
+                        return Ok(ExecuteOutcome::ok(format!(
+                            "{moved} (its edits weren't pushed: {failure})"
+                        )));
                     }
                 };
                 let results = sent.results;
@@ -3233,25 +3252,18 @@ fn execute<T: Transport>(
                     results,
                     attachments: Vec::new(),
                 },
-                None if new_attachments.is_empty() && removed_attachments.is_empty() => SentWrite {
-                    results: db.update_records(zone, updates)?,
-                    attachments: Vec::new(),
+                None => match send_updates(
+                    db,
+                    zone,
+                    target_dir,
+                    record_name,
+                    updates,
+                    new_attachments,
+                    removed_attachments,
+                )? {
+                    Ok(sent) => sent,
+                    Err(failure) => return Ok(ExecuteOutcome::failed(format!("{}: {failure}", entry.file))),
                 },
-                None => {
-                    let ops = updates.iter().cloned().map(RecordOp::Update).collect();
-                    match send_with_attachment_changes(
-                        db,
-                        zone,
-                        target_dir,
-                        record_name,
-                        ops,
-                        new_attachments,
-                        removed_attachments,
-                    )? {
-                        Ok(sent) => sent,
-                        Err(failure) => return Ok(ExecuteOutcome::failed(format!("{}: {failure}", entry.file))),
-                    }
-                }
             };
             let results = sent.results;
             if let Some(failed) = first_rejection(&results)
