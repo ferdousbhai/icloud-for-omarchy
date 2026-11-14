@@ -90,10 +90,13 @@ pub fn reconcile_note_format_with(
         }
     }
 
+    let own_styles = own_styles_of_mixed_paragraphs(doc, &current);
+
     let changed: Vec<usize> = (0..desired.len())
         .filter(|&i| {
             needs_fresh_todo_uuid.contains(&i)
                 || needs_start_repair.contains(&i)
+                || own_styles[i].is_some()
                 || !paragraph_projections_equal(
                     &current[i],
                     &desired[i],
@@ -115,6 +118,7 @@ pub fn reconcile_note_format_with(
                 index == desired.len() - 1,
                 needs_fresh_todo_uuid.contains(&index),
                 mint_uuid(),
+                own_styles[index].clone(),
             )
         })
         .collect();
@@ -139,6 +143,9 @@ struct ParagraphPlan<'a> {
     desired_spans: Vec<SpanInterval>,
     todo_uuid: [u8; 16],
     force_fresh_todo_uuid: bool,
+    /// The paragraph's own style, when some of its runs carry another
+    /// ([`own_styles_of_mixed_paragraphs`]).
+    own_style: Option<Option<ParagraphStyle>>,
 }
 
 fn text_len(p: &FormatParagraph) -> usize {
@@ -151,6 +158,7 @@ fn build_paragraph_plan<'a>(
     is_last: bool,
     force_fresh_todo_uuid: bool,
     todo_uuid: [u8; 16],
+    own_style: Option<Option<ParagraphStyle>>,
 ) -> ParagraphPlan<'a> {
     let start = current.start;
     let end = start + text_len(current) + usize::from(!is_last);
@@ -176,6 +184,7 @@ fn build_paragraph_plan<'a>(
         desired_spans: span_intervals(desired, end),
         todo_uuid,
         force_fresh_todo_uuid,
+        own_style,
     }
 }
 
@@ -194,6 +203,79 @@ fn overlapping_runs<'a>(
         offset = run_end;
         run_start < end && run_end > start
     })
+}
+
+/// What a run's paragraph style says of the paragraph, as far as the format
+/// model reads it (`decode_note_format`).
+#[derive(PartialEq)]
+struct ParagraphFacts<'a> {
+    style: u32,
+    indent: i32,
+    block_quote_level: u32,
+    todo: Option<(&'a [u8], bool)>,
+    start_number: u32,
+}
+
+fn paragraph_facts(style: Option<&ParagraphStyle>) -> ParagraphFacts<'_> {
+    let kind = style.and_then(|ps| ps.style).unwrap_or(ParagraphKind::Body.style());
+    let is = |wanted: ParagraphKind| kind == wanted.style();
+    ParagraphFacts {
+        style: kind,
+        indent: style.and_then(|ps| ps.indent).unwrap_or(0),
+        block_quote_level: style.and_then(|ps| ps.block_quote_level).unwrap_or(0),
+        todo: style
+            .and_then(|ps| ps.todo.as_ref())
+            .filter(|_| is(ParagraphKind::TodoList))
+            .map(|todo| (todo.todo_uuid.as_deref().unwrap_or_default(), todo.done == Some(1))),
+        start_number: style
+            .and_then(|ps| ps.starting_list_item_number)
+            .filter(|_| is(ParagraphKind::NumberedList))
+            .map_or(1, effective_start_number),
+    }
+}
+
+/// A paragraph is styled by the run that covers its line break (its last
+/// character, for the note's last paragraph): that is the one
+/// `decode_note_format` reads, and in a note written by Notes every run of
+/// the paragraph says the same. Text typed at the start of a line joins the
+/// run before it (`adjust_attribute_runs`), which is the line above's: that
+/// run then says the paragraph is a title, say, where the paragraph is body
+/// text. For each such paragraph, the style of its own run (`Some(None)`: a
+/// run without one), which its other runs are given.
+fn own_styles_of_mixed_paragraphs(
+    doc: &NoteDocument,
+    paragraphs: &[FormatParagraph],
+) -> Vec<Option<Option<ParagraphStyle>>> {
+    let runs = &doc.attribute_runs;
+    let mut offset = 0usize;
+    let ends: Vec<usize> = runs
+        .iter()
+        .map(|run| {
+            offset += run.len() as usize;
+            offset
+        })
+        .collect();
+    paragraphs
+        .iter()
+        .enumerate()
+        .map(|(index, paragraph)| {
+            let start = paragraph.start;
+            let end = start + text_len(paragraph) + usize::from(index + 1 < paragraphs.len());
+            let first = ends.partition_point(|&run_end| run_end <= start);
+            let own = ends.partition_point(|&run_end| run_end < end);
+            // An empty last paragraph has no run, and runs shorter than the
+            // text leave none over the paragraph's end: nothing to go by.
+            if end == start || own >= runs.len() {
+                return None;
+            }
+            let own_style = runs[own].paragraph_style.as_ref();
+            let facts = paragraph_facts(own_style);
+            runs[first..own]
+                .iter()
+                .any(|run| paragraph_facts(run.paragraph_style.as_ref()) != facts)
+                .then(|| own_style.cloned())
+        })
+        .collect()
 }
 
 fn has_explicit_zero_start(doc: &NoteDocument, paragraph: &FormatParagraph, is_last: bool) -> bool {
@@ -283,6 +365,11 @@ fn style_at(intervals: &[SpanInterval], at: usize) -> InlineStyle {
 }
 
 fn overlay_piece(piece: &mut AttributeRun, plan: &ParagraphPlan, piece_start: usize) {
+    if let Some(own) = &plan.own_style
+        && paragraph_facts(piece.paragraph_style.as_ref()) != paragraph_facts(own.as_ref())
+    {
+        piece.paragraph_style = own.clone();
+    }
     overlay_paragraph_style(piece, plan);
     let current = style_at(&plan.current_spans, piece_start);
     let desired = style_at(&plan.desired_spans, piece_start);

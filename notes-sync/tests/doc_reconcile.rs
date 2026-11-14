@@ -367,6 +367,86 @@ fn a_code_line_made_body_text_drops_the_styling_its_runs_carried_unseen() {
     }
 }
 
+/// Text typed at the start of a line joins the run of the line above
+/// (`apply_text_edit`), which says that line's paragraph style. A paragraph
+/// is what the run over its line break says, and its other runs are made to
+/// say the same.
+#[test]
+fn text_typed_at_the_start_of_a_line_takes_that_lines_paragraph_style() {
+    use icloud_notes_sync::md::parse::parse_note_markdown;
+    // Per line, what its runs say it is: (style, quote level, todo uuid).
+    type Says = (u32, u32, Option<Vec<u8>>);
+    fn said_per_line(doc: &NoteDocument) -> Vec<Vec<Says>> {
+        let mut lines: Vec<Vec<Says>> = vec![Vec::new()];
+        let mut units = doc.text.encode_utf16();
+        for run in &doc.attribute_runs {
+            let style = run.paragraph_style.as_ref();
+            let says = (
+                style.and_then(|s| s.style).unwrap_or(3),
+                style.and_then(|s| s.block_quote_level).unwrap_or(0),
+                style.and_then(|s| s.todo.as_ref()).and_then(|t| t.todo_uuid.clone()),
+            );
+            for _ in 0..run.len() {
+                let line = lines.last_mut().unwrap();
+                if line.last() != Some(&says) {
+                    line.push(says.clone());
+                }
+                if units.next() == Some(u16::from(b'\n')) {
+                    lines.push(Vec::new());
+                }
+            }
+        }
+        lines
+    }
+    for (before, after, styles) in [
+        ("# Title\nbody", "# Title\nmy body", vec![0, 3]),
+        ("text\n> quoted", "text\n> more quoted", vec![3, 3]),
+        ("## Head\n- one", "## Head\n- [ ] one more\n- two", vec![1, 103, 100]),
+        (
+            "# Title\nbody text\n- [x] one\n- [ ] two",
+            "# Titles\nmy body text\n- [x] one!\n- [ ] a two",
+            vec![0, 3, 103, 103],
+        ),
+    ] {
+        let written = parse_note_markdown(before).unwrap();
+        let mut doc = build_initial_note_document(&written.text, &REPLICA_A).unwrap();
+        let mut mint = common::counting_uuids();
+        reconcile_note_format_with(&mut doc, &written.paragraphs, &REPLICA_A, &mut mint)
+            .unwrap()
+            .unwrap();
+        let edited = parse_note_markdown(after).unwrap();
+        assert!(apply_text_edit(&mut doc, &edited.text, &ApplyTextEditOptions { replica_id: REPLICA_B }).unwrap());
+        reconcile_note_format_with(&mut doc, &edited.paragraphs, &REPLICA_B, &mut mint)
+            .unwrap()
+            .unwrap();
+        let said = said_per_line(&doc);
+        assert!(said.iter().all(|line| line.len() == 1), "{after:?}: {said:?}");
+        assert_eq!(
+            said.iter().map(|line| line[0].0).collect::<Vec<_>>(),
+            styles,
+            "{after:?}"
+        );
+    }
+    // The quote level is the quoted line's own, too.
+    let mut doc = doc_with(
+        "text\nmore quoted",
+        vec![
+            plain(10),
+            with_style(
+                6,
+                ParagraphStyle {
+                    block_quote_level: Some(1),
+                    ..style(3)
+                },
+            ),
+        ],
+    );
+    let quoted = parse_note_markdown("text\n> more quoted").unwrap().paragraphs;
+    let result = reconcile_note_format_with(&mut doc, &quoted, &REPLICA_B, &mut common::counting_uuids());
+    assert_eq!(result.unwrap(), Ok(true));
+    assert_eq!(said_per_line(&doc), vec![vec![(3, 0, None)], vec![(3, 1, None)]]);
+}
+
 #[test]
 fn misaligned_desired_paragraphs_refuse_rather_than_guess() {
     let mut doc = doc_with("one line", vec![plain(8)]);
