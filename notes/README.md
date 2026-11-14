@@ -113,7 +113,7 @@ without asking.
   notes related by meaning follow the text matches (see the main README).
   Right-click a folder to rename or delete it. Window and pane sizes are remembered.
 - **Edit**: edits save on their own once you pause typing, and when you
-  switch notes; `Ctrl+S` forces a save when a guardrail has flagged the
+  switch notes or close the window; `Ctrl+S` forces a save when a guardrail has flagged the
   edit. `Ctrl+N` starts a note. The first line is the title: edit it
   to rename the note. As in Typora, headings, emphasis, links and
   checklists are styled as you type, their Markdown marks show only on
