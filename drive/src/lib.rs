@@ -9,6 +9,8 @@
 //! - [`cli`]: the `icloud-drive` command.
 
 pub mod cli;
+#[doc(hidden)]
+pub mod crash;
 pub mod engine;
 pub mod local;
 pub mod plan;

@@ -229,11 +229,13 @@ pub fn trash(path: &Path, trash_dir: &Path, now_rfc3339: &str) -> io::Result<Pat
             Err(e) => return Err(e),
         }
     };
+    crate::crash::point("local.trash_claimed");
     let moved = fs::rename(path, &dest);
     if let Err(e) = moved {
         let _ = fs::remove_file(&info_path);
         return Err(e);
     }
+    crate::crash::point("local.trash_moved");
     // The spec's date is local time without a zone; UTC is close enough for
     // sorting and never wrong by more than the offset.
     let deleted = now_rfc3339.trim_end_matches('Z');
@@ -241,6 +243,7 @@ pub fn trash(path: &Path, trash_dir: &Path, now_rfc3339: &str) -> io::Result<Pat
         &info_path,
         format!("[Trash Info]\nPath={}\nDeletionDate={deleted}\n", percent_encode(path)),
     )?;
+    crate::crash::point("local.trash");
     Ok(dest)
 }
 

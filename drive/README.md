@@ -23,7 +23,8 @@ After that it syncs every half minute while you are signed in.
   here replaces the one in iCloud in place, so its history and sharing stay.
 - **It changes on both sides:** both are kept. Yours is renamed
   `name (conflicted copy <computer> <date>).ext` and uploaded; iCloud's
-  version takes the name.
+  version takes the name. Two versions with the same content are one file,
+  whatever their dates.
 - **A file is removed in iCloud:** it goes to the desktop's trash here.
 - **A file is removed here:** it goes to Recently Deleted in iCloud, where
   it stays for 30 days. Nothing is ever deleted for good.

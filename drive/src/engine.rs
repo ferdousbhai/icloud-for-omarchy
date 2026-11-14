@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::crash;
 use crate::local::{self, Entry};
 use icloud_session::time::{now_ms, rfc3339};
 
@@ -126,6 +127,7 @@ fn describe(op: &Op) -> String {
         Op::LocalMove { from, to, .. } => format!("move {from} to {to} (as in iCloud)"),
         Op::RemoteMove { to, .. } => format!("move to {to} in iCloud"),
         Op::SetAside { path } => format!("keep {path} as a conflicted copy"),
+        Op::KeepBoth { path, .. } => format!("download {path}, keeping this one as a conflicted copy if it differs"),
         Op::MkdirLocal { path, .. } => format!("create folder {path}"),
         Op::MkdirRemote { path } => format!("create folder {path} in iCloud"),
         Op::Download { path, .. } => format!("download {path}"),
@@ -267,6 +269,7 @@ impl<R: Remote> Engine<'_, R> {
                 }
                 if !dry_run {
                     fs::create_dir_all(&self.root)?;
+                    crash::point("local.create_root");
                 }
             }
             let (entries, skipped) = if self.root.is_dir() {
@@ -447,7 +450,9 @@ impl<R: Remote> Engine<'_, R> {
     fn set_aside(&self, path: &str) -> io::Result<()> {
         let from = self.abs(path);
         let date = &rfc3339(now_ms() / 1000)[..10];
-        fs::rename(&from, local::conflict_path(&from, &self.host, date))
+        fs::rename(&from, local::conflict_path(&from, &self.host, date))?;
+        crash::point("local.set_aside");
+        Ok(())
     }
 
     /// Records the item as in step at `path`.
@@ -535,11 +540,13 @@ impl<R: Remote> Engine<'_, R> {
                     }
                     if let Some(parent) = self.abs(to).parent() {
                         fs::create_dir_all(parent)?;
+                        crash::point("local.mkdir");
                     }
                     // Never onto something that appeared there meanwhile.
                     if !local::rename_no_replace(&self.abs(from), &self.abs(to))? {
                         return Ok(false);
                     }
+                    crash::point("local.rename");
                 }
                 self.state.move_paths(&row.path, to)?;
                 self.put_moved(node, to, &row)?;
@@ -564,10 +571,12 @@ impl<R: Remote> Engine<'_, R> {
                 self.state.set_pending_move(id, to)?;
                 if node.parent != parent.id {
                     node = self.unless_refused(self.remote.move_to(&node, &parent.id), id, untouched)?;
+                    crash::point("remote.move_to");
                     untouched = false;
                 }
                 if node.name != name_of(to) {
                     node = self.unless_refused(self.remote.rename(&node, name_of(to)), id, untouched)?;
+                    crash::point("remote.rename");
                 }
                 self.state.move_paths(&row.path, to)?;
                 self.put_moved(node, to, &row)?;
@@ -582,6 +591,7 @@ impl<R: Remote> Engine<'_, R> {
             Op::MkdirLocal { id, path } => {
                 let node = node_of(id)?;
                 fs::create_dir_all(self.abs(path))?;
+                crash::point("local.mkdir");
                 let local = self.need_stat(path)?;
                 self.put(node, path, local)?;
             }
@@ -589,6 +599,7 @@ impl<R: Remote> Engine<'_, R> {
                 let local = self.need_stat(path)?;
                 let parent = self.parent_node(path)?;
                 let node = self.remote.create_folder(&parent.id, name_of(path))?;
+                crash::point("remote.create_folder");
                 self.put(node, path, local)?;
             }
             Op::Download { id, path } => {
@@ -605,37 +616,45 @@ impl<R: Remote> Engine<'_, R> {
                 if !safe {
                     return Ok(false);
                 }
-                let dest = self.abs(path);
-                let temp = dest.with_file_name(format!(".icloud-drive-{}.part", uuid::Uuid::new_v4().simple()));
-                let fetched = self.remote.download(&node, &temp).and_then(|()| {
-                    if node.mtime_ms > 0 {
-                        local::set_mtime(&temp, node.mtime_ms)?;
-                    }
-                    Ok(())
-                });
-                match fetched {
-                    Ok(()) => {}
-                    Err(remote::Error::Package(_)) => {
-                        let _ = fs::remove_file(&temp);
-                        self.state
-                            .ignore(&node, path, "a package (a Pages document, say), which is not synced")?;
-                        return Ok(false);
-                    }
-                    Err(e) => {
-                        let _ = fs::remove_file(&temp);
-                        return Err(e.into());
-                    }
-                }
+                let Some(temp) = self.fetch(&node, path)? else {
+                    return Ok(false);
+                };
                 // Looked at again: an edit saved while it came down is kept,
                 // and the next round sees both sides changed.
                 if self.stat(path)? != current {
                     let _ = fs::remove_file(&temp);
                     return Ok(false);
                 }
-                if let Err(e) = fs::rename(&temp, &dest) {
+                self.put_in_place(&temp, path)?;
+                let local = self.need_stat(path)?;
+                self.put(node, path, local)?;
+            }
+            Op::KeepBoth { id, path } => {
+                let node = node_of(id)?;
+                let current = self.stat(path)?;
+                if !current.is_some_and(|e| !e.is_dir) {
+                    // Gone or a folder meanwhile: the next round looks again.
+                    return Ok(false);
+                }
+                let Some(temp) = self.fetch(&node, path)? else {
+                    return Ok(false);
+                };
+                if self.stat(path)? != current {
+                    let _ = fs::remove_file(&temp);
+                    return Ok(false);
+                }
+                // The same bytes (a replace or a download that finished
+                // without being recorded, two copies of one file): in step.
+                if same_bytes(&temp, &self.abs(path))? {
+                    let _ = fs::remove_file(&temp);
+                    self.put(node, path, current.unwrap())?;
+                    return Ok(true);
+                }
+                if let Err(e) = self.set_aside(path) {
                     let _ = fs::remove_file(&temp);
                     return Err(e.into());
                 }
+                self.put_in_place(&temp, path)?;
                 let local = self.need_stat(path)?;
                 self.put(node, path, local)?;
             }
@@ -648,6 +667,7 @@ impl<R: Remote> Engine<'_, R> {
                     &self.abs(path),
                     before.mtime_ns / 1_000_000_000 * 1000,
                 )?;
+                crash::point("remote.upload_new");
                 let node = self.listed(&parent.id, &sent.id)?;
                 // Recorded as it was before the upload: a change made while
                 // it was going up shows as a change next time.
@@ -661,6 +681,7 @@ impl<R: Remote> Engine<'_, R> {
                 let sent = self
                     .remote
                     .replace(&row.node, &self.abs(path), before.mtime_ns / 1_000_000_000 * 1000)?;
+                crash::point("remote.replace");
                 // Recorded at once from the answer, so a listing that fails
                 // now does not leave the old row to read as a conflict.
                 let answered = Node {
@@ -713,6 +734,7 @@ impl<R: Remote> Engine<'_, R> {
                     return Ok(false);
                 }
                 self.remote.trash(&node_of(id).unwrap_or(row.node))?;
+                crash::point("remote.trash");
                 self.state.forget_under(path)?;
             }
             Op::Adopt { id, path } => {
@@ -723,6 +745,46 @@ impl<R: Remote> Engine<'_, R> {
             Op::Forget { id, .. } => self.state.forget(id)?,
         }
         Ok(true)
+    }
+
+    /// iCloud's file, dated as there, in a temp file beside `path`. `None`
+    /// for a package, which is set aside as not synced.
+    fn fetch(&self, node: &Node, path: &str) -> Result<Option<PathBuf>> {
+        let temp = self
+            .abs(path)
+            .with_file_name(format!(".icloud-drive-{}.part", uuid::Uuid::new_v4().simple()));
+        let fetched = self.remote.download(node, &temp).and_then(|()| {
+            if node.mtime_ms > 0 {
+                local::set_mtime(&temp, node.mtime_ms)?;
+            }
+            Ok(())
+        });
+        match fetched {
+            Ok(()) => {
+                crash::point("local.download_temp");
+                Ok(Some(temp))
+            }
+            Err(remote::Error::Package(_)) => {
+                let _ = fs::remove_file(&temp);
+                self.state
+                    .ignore(node, path, "a package (a Pages document, say), which is not synced")?;
+                Ok(None)
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&temp);
+                Err(e.into())
+            }
+        }
+    }
+
+    /// Gives a fetched temp file its name.
+    fn put_in_place(&self, temp: &Path, path: &str) -> Result<()> {
+        if let Err(e) = fs::rename(temp, self.abs(path)) {
+            let _ = fs::remove_file(temp);
+            return Err(e.into());
+        }
+        crash::point("local.download_rename");
+        Ok(())
     }
 
     fn trash(&self, path: &str) -> Result<()> {
@@ -737,6 +799,26 @@ impl<R: Remote> Engine<'_, R> {
                 Ok(())
             }
             Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// Whether two files hold the same bytes.
+fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
+    use std::io::Read;
+    let (mut a, mut b) = (fs::File::open(a)?, fs::File::open(b)?);
+    if a.metadata()?.len() != b.metadata()?.len() {
+        return Ok(false);
+    }
+    let (mut x, mut y) = (vec![0; 64 * 1024], vec![0; 64 * 1024]);
+    loop {
+        let n = a.read(&mut x)?;
+        if n == 0 {
+            return Ok(true);
+        }
+        b.read_exact(&mut y[..n])?;
+        if x[..n] != y[..n] {
+            return Ok(false);
         }
     }
 }

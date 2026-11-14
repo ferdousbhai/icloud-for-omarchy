@@ -147,6 +147,7 @@ impl State {
             "DELETE FROM items WHERE path = ?1 AND id != ?2",
             params![row.path, row.node.id],
         )?;
+        crate::crash::point("state.put_half");
         self.db.execute(
             "INSERT OR REPLACE INTO items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
@@ -165,18 +166,21 @@ impl State {
                 row.local.ino as i64,
             ],
         )?;
+        crate::crash::point("state.put");
         Ok(())
     }
 
     /// Drops one row (its children keep theirs).
     pub fn forget(&self, id: &str) -> rusqlite::Result<()> {
         self.db.execute("DELETE FROM items WHERE id = ?1", [id])?;
+        crate::crash::point("state.forget");
         Ok(())
     }
 
     /// Drops the row at `path` and every row below it.
     pub fn forget_under(&self, path: &str) -> rusqlite::Result<()> {
         self.db.execute(&format!("DELETE FROM items WHERE {UNDER_1}"), [path])?;
+        crate::crash::point("state.forget_under");
         Ok(())
     }
 
@@ -196,7 +200,9 @@ impl State {
                 tx.execute("UPDATE items SET path = ?1 WHERE id = ?2", params![moved, row.node.id])?;
             }
         }
-        tx.commit()
+        tx.commit()?;
+        crate::crash::point("state.move_paths");
+        Ok(())
     }
 
     pub fn meta(&self, key: &str) -> rusqlite::Result<Option<String>> {
@@ -208,6 +214,7 @@ impl State {
     pub fn set_meta(&self, key: &str, value: &str) -> rusqlite::Result<()> {
         self.db
             .execute("INSERT OR REPLACE INTO meta VALUES (?1, ?2)", params![key, value])?;
+        crate::crash::point("state.set_meta");
         Ok(())
     }
 
@@ -257,7 +264,9 @@ impl State {
                 ])?;
             }
         }
-        tx.commit()
+        tx.commit()?;
+        crate::crash::point("state.store_remote");
+        Ok(())
     }
 
     /// The items in iCloud that are left alone until they change there, by
@@ -283,6 +292,7 @@ impl State {
         for item in self.ignored()? {
             if !keep(&item.id) {
                 self.db.execute("DELETE FROM ignored WHERE id = ?1", [&item.id])?;
+                crate::crash::point("state.keep_ignored");
             }
         }
         Ok(())
@@ -300,7 +310,9 @@ impl State {
         for (path, reason) in items {
             tx.execute("INSERT INTO not_synced VALUES (?1, ?2)", params![path, reason])?;
         }
-        tx.commit()
+        tx.commit()?;
+        crate::crash::point("state.set_not_synced");
+        Ok(())
     }
 
     /// Notes that the item is being moved in iCloud to the local path
@@ -311,11 +323,13 @@ impl State {
             "INSERT OR REPLACE INTO pending_moves VALUES (?1, ?2)",
             params![id, dest],
         )?;
+        crate::crash::point("state.set_pending_move");
         Ok(())
     }
 
     pub fn clear_pending_move(&self, id: &str) -> rusqlite::Result<()> {
         self.db.execute("DELETE FROM pending_moves WHERE id = ?1", [id])?;
+        crate::crash::point("state.clear_pending_move");
         Ok(())
     }
 
@@ -333,6 +347,7 @@ impl State {
             "INSERT OR REPLACE INTO ignored VALUES (?1, ?2, ?3, ?4)",
             params![node.id, node.etag, path, reason],
         )?;
+        crate::crash::point("state.ignore");
         Ok(())
     }
 

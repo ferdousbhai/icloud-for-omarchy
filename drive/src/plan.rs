@@ -6,7 +6,8 @@
 //! The rules, in short:
 //! - A side that changed while the other did not wins.
 //! - Both changed: both are kept. The local file is set aside as a
-//!   "conflicted copy" (which then uploads) and iCloud's version takes the name.
+//!   "conflicted copy" (which then uploads) and iCloud's version takes the
+//!   name, unless the two turn out to be the same bytes.
 //! - An edit beats a delete: the edited side is kept and comes back.
 //! - A delete is only believed for something that was in step and is
 //!   unchanged on the other side; it goes to the trash there.
@@ -100,6 +101,13 @@ pub enum Op {
     },
     /// Rename the local file to a conflicted copy, freeing its name.
     SetAside {
+        path: String,
+    },
+    /// Both sides have a different-looking file at `path`: fetch iCloud's.
+    /// The same bytes are only recorded as in step; different ones are
+    /// both kept, the local file as a conflicted copy.
+    KeepBoth {
+        id: String,
         path: String,
     },
     MkdirLocal {
@@ -575,10 +583,7 @@ fn plan_content(
                 // Both differ from the row and agree with each other: an
                 // operation that finished without being recorded.
                 (true, true) if same_file(e, n) => plan.ops.push(Op::Adopt { id, path }),
-                (true, true) => {
-                    plan.ops.push(Op::SetAside { path: path.clone() });
-                    plan.ops.push(Op::Download { id, path });
-                }
+                (true, true) => plan.ops.push(Op::KeepBoth { id, path }),
             },
             (Some(n), None) => {
                 if remote_changed(row, n) {
@@ -651,10 +656,7 @@ fn plan_content(
         } else {
             match entry {
                 Some(e) if same_file(e, node) => plan.ops.push(Op::Adopt { id, path }),
-                Some(_) => {
-                    plan.ops.push(Op::SetAside { path: path.clone() });
-                    plan.ops.push(Op::Download { id, path });
-                }
+                Some(_) => plan.ops.push(Op::KeepBoth { id, path }),
                 None => plan.ops.push(Op::Download { id, path }),
             }
         }
@@ -683,7 +685,7 @@ fn plan_content(
     plan.again = plan
         .ops
         .iter()
-        .any(|op| matches!(op, Op::Forget { .. } | Op::SetAside { .. }));
+        .any(|op| matches!(op, Op::Forget { .. } | Op::SetAside { .. } | Op::KeepBoth { .. }));
     plan
 }
 
@@ -805,10 +807,7 @@ mod tests {
         assert_eq!(
             p.ops,
             [
-                Op::SetAside {
-                    path: "differ.txt".into()
-                },
-                Op::Download {
+                Op::KeepBoth {
                     id: "x".into(),
                     path: "differ.txt".into()
                 },
@@ -850,14 +849,12 @@ mod tests {
         let p = run(&base, &[newer], &[("a.txt", file(9, 8, 1))]);
         assert_eq!(
             p.ops,
-            [
-                Op::SetAside { path: "a.txt".into() },
-                Op::Download {
-                    id: "f".into(),
-                    path: "a.txt".into()
-                }
-            ]
+            [Op::KeepBoth {
+                id: "f".into(),
+                path: "a.txt".into()
+            }]
         );
+        assert!(p.again, "the conflicted copy uploads in the next round");
     }
 
     #[test]
