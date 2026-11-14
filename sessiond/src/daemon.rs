@@ -1698,18 +1698,12 @@ impl Daemon {
         if st.signin_seq != seq {
             drop(st);
             // A SignOut came in meanwhile, and may have removed the session
-            // (and the trust) before this one was stored.
+            // before this one was stored. (The trust stored above it
+            // removes itself: it waits for `written`, held here.)
             written.secret = None;
-            match self
-                .secrets
-                .remove_item(Kind::Session)
-                .and_then(|()| self.secrets.remove_item(Kind::Trust))
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
-                    let _ = files::touch(&self.cfg.paths.removal_pending);
-                }
+            if let Err(e) = self.secrets.remove_item(Kind::Session) {
+                eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
+                let _ = files::touch(&self.cfg.paths.removal_pending);
             }
             return Err(cancelled());
         }
