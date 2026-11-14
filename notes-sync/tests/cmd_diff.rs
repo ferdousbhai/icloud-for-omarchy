@@ -91,7 +91,6 @@ fn rejects_a_ref_matching_neither_snapshot_nor_epoch() {
         "Test Note.md",
         "missing-id",
         None,
-        &mut |_| {},
     )
     .unwrap_err();
     assert!(
@@ -117,7 +116,6 @@ fn refuses_epoch_from_to_form_without_network() {
         "Test Note.md",
         &epoch.id,
         Some("some-other-id"),
-        &mut |_| {},
     )
     .unwrap_err();
     let message = err.to_string();

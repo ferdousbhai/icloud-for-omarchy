@@ -84,7 +84,6 @@ fn a_note_written_before_the_pull_failed_stays_tracked() {
         &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();
@@ -180,7 +179,6 @@ fn notes_written_before_the_pull_was_killed_are_not_pushed_as_new() {
         &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();

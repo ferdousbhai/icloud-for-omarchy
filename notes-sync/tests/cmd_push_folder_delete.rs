@@ -168,7 +168,6 @@ fn delete_its_folder(vault: &Path, extra: &[Value]) -> (PushResult, Vec<Value>, 
         &replay(clone, vault.with_extension("clone.json")),
         vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();

@@ -114,7 +114,6 @@ fn clone_from(cassette: Cassette) -> (tempfile::TempDir, PathBuf, CloneSummary) 
         &replay(cassette),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();
@@ -361,7 +360,7 @@ fn filename_vault_named(title: &str) -> (tempfile::TempDir, PathBuf) {
         ],
         None,
     );
-    run_clone_with(&replay(c), &vault, &mut NoProgress, &mut |_| {}, &options).unwrap();
+    run_clone_with(&replay(c), &vault, &mut NoProgress, &options).unwrap();
     let mut state = read_clone_state(&vault).unwrap().unwrap();
     let cloned = state.notes[OWN].file.clone();
     let text: String = read(&vault, &cloned)

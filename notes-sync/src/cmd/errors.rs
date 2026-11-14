@@ -34,9 +34,8 @@
 //! exactly as the other tools report it.
 //!
 //! Messages keep icloud-md's wording (with `icloud-notes-sync` in hints).
-//! `name()` is the error's class name; `code()` is the
-//! machine-readable `error.code` of the contract error object
-//! (`cmd::output` turns an `Error` into icloud-session's `CliError`).
+//! `code()` is the machine-readable `error.code` of the contract error
+//! object (`cmd::output` turns an `Error` into icloud-session's `CliError`).
 
 use crate::cloudkit::CkError;
 use crate::vault::state::{STATE_DIR_NAME, STATE_FILE_NAME};
@@ -106,8 +105,6 @@ pub enum Error {
     VaultLock { path: String, reason: String },
     #[error(transparent)]
     CloudKit(CkError),
-    #[error("{0}")]
-    Usage(String),
     /// Anything else (a plain `Error` in icloud-md): exit 1.
     #[error("{0}")]
     Internal(String),
@@ -147,7 +144,7 @@ impl Error {
             | Error::AccountMismatch { .. }
             | Error::RequestedAccountMismatch { .. }
             | Error::NotesUnavailable => EXIT_SIGN_IN,
-            Error::Usage(_) | Error::AmbiguousTrackedFile { .. } | Error::AlreadyClonedDirectory { .. } => EXIT_USAGE,
+            Error::AmbiguousTrackedFile { .. } | Error::AlreadyClonedDirectory { .. } => EXIT_USAGE,
             Error::UntrackedFile { .. } | Error::UnknownVersionSnapshot { .. } => EXIT_NOT_FOUND,
             Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. })
                 if server_error_code == "ZONE_NOT_FOUND" =>
@@ -182,59 +179,50 @@ impl Error {
         }
     }
 
-    /// The error's class name (icloud-md's), from which [`Error::code`] is made.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Error::UntrackedFile { .. } => "UntrackedFileError",
-            Error::NotClonedDirectory { .. } => "NotClonedDirectoryError",
-            Error::AmbiguousTrackedFile { .. } => "AmbiguousTrackedFileError",
-            Error::UnsupportedVaultLayout { .. } => "UnsupportedVaultLayoutError",
-            Error::VaultFromNewerTool { .. } => "VaultFromNewerToolError",
-            Error::VaultNeedsUpdate { .. } => "VaultNeedsUpdateError",
-            Error::NotesUnavailable => "NotesUnavailableError",
-            Error::CorruptStateFile(_) => "CorruptStateFileError",
-            Error::AlreadyClonedDirectory { .. } => "AlreadyClonedDirectoryError",
-            Error::UnboundAccount { .. } => "UnboundAccountError",
-            Error::AccountMismatch { .. } => "AccountMismatchError",
-            Error::RequestedAccountMismatch { .. } => "RequestedAccountMismatchError",
-            Error::UnknownVersionSnapshot { .. } => "UnknownVersionSnapshotError",
-            Error::VersionContentUnavailable(_) => "VersionContentUnavailableError",
-            Error::SignInRequired => "SignInRequiredError",
-            Error::VaultBusy { .. } => "VaultBusyError",
-            Error::VaultLock { .. } => "VaultLockError",
-            Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "CloudKitZoneFetchFailedError",
-            Error::CloudKit(CkError::RequestFailed { .. }) => "CloudKitRequestFailedError",
-            Error::CloudKit(CkError::SessionRejected { .. }) => "SessionRejectedError",
-            Error::CloudKit(CkError::UnexpectedResponse(_)) => "BadResponseError",
-            Error::CloudKit(CkError::Network(_)) => "NetworkError",
-            Error::CloudKit(CkError::Offline(_)) => "OfflineError",
-            Error::CloudKit(CkError::SessionService(_)) => "SessionServiceError",
-            Error::CloudKit(CkError::KeyringUnavailable(_)) => "KeyringUnavailableError",
-            Error::Io(_) | Error::CloudKit(CkError::Io(_)) => "IoError",
-            // Its code comes from icloud-session (`Error::code`).
-            Error::CloudKit(CkError::Session(_)) => "SessionError",
-            Error::CloudKit(_) | Error::Internal(_) => "InternalError",
-            Error::Usage(_) => "UsageError",
-        }
-    }
-
     /// iCloud couldn't be reached (no network, or the connection failed):
     /// a retry once the network is back is all there is to do.
     pub fn is_network(&self) -> bool {
         matches!(self, Error::CloudKit(CkError::Network(_) | CkError::Offline(_)))
     }
 
-    /// The contract error object's `code`: the class name in snake case
-    /// without its `Error` suffix (`UntrackedFileError` → `untracked_file`),
-    /// so `sign_in_required`, `usage` and `internal` read as in the other
-    /// iCloud tools.
-    /// An icloud-session failure carried as it is takes icloud-session's
-    /// code (`Daemon` → `error`).
+    /// The contract error object's `code` (`untracked_file`,
+    /// `sign_in_required`, `usage` and `internal` read as in the other
+    /// iCloud tools). An icloud-session failure carried as it is takes
+    /// icloud-session's code (`Daemon` → `error`).
     pub fn code(&self) -> String {
-        match self.session_failure() {
-            Some(failure) => failure.code,
-            None => snake_code(self.name()),
+        if let Some(failure) = self.session_failure() {
+            return failure.code;
         }
+        match self {
+            Error::UntrackedFile { .. } => "untracked_file",
+            Error::NotClonedDirectory { .. } => "not_cloned_directory",
+            Error::AmbiguousTrackedFile { .. } => "ambiguous_tracked_file",
+            Error::UnsupportedVaultLayout { .. } => "unsupported_vault_layout",
+            Error::VaultFromNewerTool { .. } => "vault_from_newer_tool",
+            Error::VaultNeedsUpdate { .. } => "vault_needs_update",
+            Error::NotesUnavailable => "notes_unavailable",
+            Error::CorruptStateFile(_) => "corrupt_state_file",
+            Error::AlreadyClonedDirectory { .. } => "already_cloned_directory",
+            Error::UnboundAccount { .. } => "unbound_account",
+            Error::AccountMismatch { .. } => "account_mismatch",
+            Error::RequestedAccountMismatch { .. } => "requested_account_mismatch",
+            Error::UnknownVersionSnapshot { .. } => "unknown_version_snapshot",
+            Error::VersionContentUnavailable(_) => "version_content_unavailable",
+            Error::SignInRequired => "sign_in_required",
+            Error::VaultBusy { .. } => "vault_busy",
+            Error::VaultLock { .. } => "vault_lock",
+            Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "cloudkit_zone_fetch_failed",
+            Error::CloudKit(CkError::RequestFailed { .. }) => "cloudkit_request_failed",
+            Error::CloudKit(CkError::SessionRejected { .. }) => "session_rejected",
+            Error::CloudKit(CkError::UnexpectedResponse(_)) => "bad_response",
+            Error::CloudKit(CkError::Network(_)) => "network",
+            Error::CloudKit(CkError::Offline(_)) => "offline",
+            Error::CloudKit(CkError::SessionService(_)) => "session_service",
+            Error::CloudKit(CkError::KeyringUnavailable(_)) => "keyring_unavailable",
+            Error::Io(_) | Error::CloudKit(CkError::Io(_)) => "io",
+            Error::CloudKit(_) | Error::Internal(_) => "internal",
+        }
+        .to_owned()
     }
 
     /// The hint line icloud-md prints under the message, if any.
@@ -309,28 +297,7 @@ impl Error {
             Error::CloudKit(CkError::Network(_) | CkError::Offline(_)) => Some(NETWORK_HINT.into()),
             Error::CloudKit(CkError::SessionService(_)) => Some(SESSION_SERVICE_HINT.into()),
             Error::CloudKit(CkError::KeyringUnavailable(_)) => Some(KEYRING_HINT.into()),
-            Error::CloudKit(_) | Error::Usage(_) | Error::Internal(_) | Error::Io(_) => None,
+            Error::CloudKit(_) | Error::Internal(_) | Error::Io(_) => None,
         }
     }
-}
-
-/// `UntrackedFileError` → `untracked_file`; `CloudKitZoneFetchFailedError` →
-/// `cloudkit_zone_fetch_failed`.
-fn snake_code(name: &str) -> String {
-    let base = name
-        .strip_suffix("Error")
-        .unwrap_or(name)
-        .replace("CloudKit", "Cloudkit");
-    let mut out = String::new();
-    for (i, c) in base.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }

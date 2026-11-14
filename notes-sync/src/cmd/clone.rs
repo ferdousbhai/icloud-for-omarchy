@@ -33,9 +33,6 @@ pub struct CloneOptions {
     pub filename_as_title: bool,
     /// Checked against the icloud-session account's dsid (or Apple ID).
     pub account: Option<String>,
-    /// Accepted for compatibility; a no-op (icloud-session never opens a
-    /// window from here).
-    pub non_interactive: bool,
 }
 
 /// `CloneSummary`.
@@ -55,10 +52,9 @@ pub struct CloneSummary {
 pub fn run_clone(
     target_dir: &Path,
     progress: &mut dyn SyncProgress,
-    on_status: &mut dyn FnMut(&str),
     options: &CloneOptions,
 ) -> Result<CloneSummary, Error> {
-    run_clone_with(&DefaultConnector, target_dir, progress, on_status, options)
+    run_clone_with(&DefaultConnector, target_dir, progress, options)
 }
 
 /// `runClone` over an explicit connector.
@@ -66,7 +62,6 @@ pub fn run_clone_with(
     connector: &dyn Connector,
     target_dir: &Path,
     progress: &mut dyn SyncProgress,
-    _on_status: &mut dyn FnMut(&str),
     options: &CloneOptions,
 ) -> Result<CloneSummary, Error> {
     if read_clone_state(target_dir)?.is_some() {
@@ -84,7 +79,6 @@ pub fn run_clone_with(
     let db = &remote.db;
     std::fs::create_dir_all(target_dir)?;
 
-    progress.on_fetch_start();
     let mut fetched = 0usize;
     let mut on_page = |n: usize| {
         fetched += n;

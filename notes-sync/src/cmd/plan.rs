@@ -278,8 +278,6 @@ pub enum RetitleRefusal {
     /// the `TextUpdateRefusal`, whose message carries no `"{toFile}: "`
     /// prefix (the JS strips it with `.replace`, first occurrence).
     TextUpdate(TextUpdateRefusal),
-    /// fallback when no refusal was recorded.
-    Unapplied,
 }
 
 impl RetitleRefusal {
@@ -298,9 +296,6 @@ impl RetitleRefusal {
                 "this note's title contains an embedded object, so its file name doesn't carry the title".into()
             }
             RetitleRefusal::TextUpdate(r) => format!("renaming this note would retitle it, but {}", r.message()),
-            RetitleRefusal::Unapplied => {
-                "renaming this note would retitle it, but the new title couldn't be applied".into()
-            }
         }
     }
 
@@ -404,8 +399,6 @@ pub enum Refusal {
     TitleOnlySharedNote(SharedWriteRefusal),
     /// (update): `prepareUpdate` stopped.
     UpdatePrepare(PrepareRefusal),
-    /// fallback: `prepareUpdate` stopped without recording why.
-    UpdateRefusedUnspecified,
 }
 
 impl Refusal {
@@ -500,7 +493,6 @@ impl Refusal {
                 "changed remotely since the last pull - merged with conflict markers, resolve manually".into()
             }
             UpdatePrepare(p) => p.message(),
-            UpdateRefusedUnspecified => "refused".into(),
         }
     }
 }

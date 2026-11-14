@@ -179,7 +179,6 @@ pub fn run_pull_with(
     let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
     let db = &remote.db;
 
-    progress.on_fetch_start();
     let mut fetched = 0usize;
     let mut on_page = |n: usize| {
         fetched += n;

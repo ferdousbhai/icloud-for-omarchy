@@ -125,7 +125,6 @@ fn a_note_created_before_the_push_failed_is_tracked_and_not_created_again() {
         &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();
@@ -181,7 +180,6 @@ fn a_note_created_before_the_push_was_killed_is_not_created_again() {
         &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();

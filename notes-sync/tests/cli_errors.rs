@@ -118,7 +118,6 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
             true,
             2,
         ),
-        (Error::Usage("bad".into()), "UsageError", "usage", false, 2),
         (
             Error::CloudKit(CkError::RequestFailed {
                 message: "records/lookup request failed (private db): HTTP 500".into(),
@@ -282,7 +281,6 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
         ),
     ];
     for (error, name, code, has_hint, exit) in errors {
-        assert_eq!(error.name(), name);
         assert_eq!(error.code(), code, "{name}");
         assert_eq!(error.hint().is_some(), has_hint, "{name} hint");
         assert_eq!(error.exit_code(), exit, "{name} ({code})");

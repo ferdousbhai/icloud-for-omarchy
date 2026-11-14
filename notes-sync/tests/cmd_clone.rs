@@ -29,7 +29,6 @@ fn refuses_an_already_cloned_folder_without_authenticating() {
         &connector,
         dir.path(),
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap_err();
@@ -71,7 +70,6 @@ fn clone_from(cassette: Cassette, vault: &Path, log: PathBuf) -> CloneSummary {
         &replay(cassette, log),
         vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap()
@@ -378,7 +376,6 @@ fn a_clone_that_fails_part_way_tracks_what_it_wrote() {
         &replay(failing, dir.path().join("failing.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     );
     assert!(failed.is_err());

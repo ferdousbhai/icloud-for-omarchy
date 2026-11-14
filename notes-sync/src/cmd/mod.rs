@@ -44,7 +44,6 @@ pub enum NoticeLevel {
 /// `SyncProgress`: progress callbacks for clone/pull (a machine mode renders them
 /// as `icloud-notes:progress:...` lines on stderr).
 pub trait SyncProgress {
-    fn on_fetch_start(&mut self) {}
     fn on_fetch_page(&mut self, records_so_far: usize) {
         let _ = records_so_far;
     }

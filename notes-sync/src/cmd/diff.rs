@@ -78,9 +78,8 @@ pub fn run_diff(
     file: &str,
     from_id: &str,
     to_id: Option<&str>,
-    on_status: &mut dyn FnMut(&str),
 ) -> Result<DiffResult, Error> {
-    run_diff_with(&DefaultConnector, target_dir, file, from_id, to_id, on_status)
+    run_diff_with(&DefaultConnector, target_dir, file, from_id, to_id)
 }
 
 /// `runDiff` over an explicit connector.
@@ -90,9 +89,7 @@ pub fn run_diff_with(
     file: &str,
     from_id: &str,
     to_id: Option<&str>,
-    on_status: &mut dyn FnMut(&str),
 ) -> Result<DiffResult, Error> {
-    let _ = on_status;
     let state = read_vault(target_dir)?;
     let tracked = resolve_tracked_note(&state, file, target_dir)?;
     let record_names = history_record_names(&state, &tracked.record_name);

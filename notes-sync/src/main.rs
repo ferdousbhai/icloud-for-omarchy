@@ -426,15 +426,14 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             directory,
             filename_as_title,
             account,
-            non_interactive,
+            non_interactive: _,
         } => {
             let options = clone::CloneOptions {
                 filename_as_title,
                 account,
-                non_interactive,
             };
             let _lock = lock_vault(&directory, wait)?;
-            let s = clone::run_clone(&directory, progress, &mut on_status, &options)?;
+            let s = clone::run_clone(&directory, progress, &options)?;
             let summary = format!(
                 "Cloned {} (plus {} shared with you) into {}",
                 plural(s.written, "note", "notes"),
@@ -615,7 +614,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 }
             };
             let target = resolve_target_dir(directory)?;
-            let r = diff::run_diff(&target, &file, from, to, &mut on_status)?;
+            let r = diff::run_diff(&target, &file, from, to)?;
             let summary = if r.has_differences() {
                 "Differences found"
             } else {

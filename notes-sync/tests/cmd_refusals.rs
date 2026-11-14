@@ -231,11 +231,6 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             ),
         ),
         (
-            retitle(RetitleRefusal::Unapplied),
-            Refused,
-            format!("renaming this note would retitle it, but the new title couldn't be applied{rename_back}"),
-        ),
-        (
             Refusal::CreateMarkdown {
                 reason: "a parse refusal".into(),
             },
@@ -280,11 +275,6 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             Refusal::MergedWithConflicts,
             Conflict,
             "changed remotely since the last pull - merged with conflict markers, resolve manually".into(),
-        ),
-        (
-            Refusal::UpdateRefusedUnspecified,
-            Refused,
-            "refused".into(),
         ),
         // prepareUpdate & co. (reported with the
         // "<file>: " prefix stripped)
@@ -508,14 +498,13 @@ fn every_refusal_variant_is_listed() {
             | UpdateChangedRemotelyUnmergeable
             | MergedWithConflicts
             | TitleOnlySharedNote(_)
-            | UpdatePrepare(_)
-            | UpdateRefusedUnspecified => true,
+            | UpdatePrepare(_) => true,
         }
     }];
     assert!(covers(&all[0]));
     let discriminants: std::collections::HashSet<std::mem::Discriminant<Refusal>> =
         listed.iter().map(std::mem::discriminant).collect();
-    assert_eq!(discriminants.len(), 34, "one row per Refusal variant at least");
+    assert_eq!(discriminants.len(), 33, "one row per Refusal variant at least");
 
     let prepare: std::collections::HashSet<std::mem::Discriminant<PrepareRefusal>> = listed
         .iter()
@@ -540,5 +529,5 @@ fn every_refusal_variant_is_listed() {
             _ => None,
         })
         .collect();
-    assert_eq!(retitle.len(), 5, "one row per RetitleRefusal variant");
+    assert_eq!(retitle.len(), 4, "one row per RetitleRefusal variant");
 }

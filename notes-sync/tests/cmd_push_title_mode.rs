@@ -94,7 +94,7 @@ fn entry(file: &str) -> NoteEntry {
 
 fn retitle(record: &CloudKitRecord, from: &str, to_file: &str, new_title: &str) -> Result<Option<Retitle>, String> {
     let e = entry(from);
-    prepare_retitle(record, &e, to_file, new_title, &REPLICA, TitleMode::Filename)
+    prepare_retitle(record, to_file, new_title, &REPLICA, TitleMode::Filename)
         .unwrap()
         .map_err(|r| r.message(&e.file))
 }

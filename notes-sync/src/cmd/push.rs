@@ -1321,7 +1321,7 @@ pub fn build_push_plan(
         }
         let mut retitle = None;
         if let Some(new_title) = &m.new_title {
-            match prepare_retitle(record, &m.entry, &m.to_file, new_title, &replica_bytes, title_mode)? {
+            match prepare_retitle(record, &m.to_file, new_title, &replica_bytes, title_mode)? {
                 Ok(r) => retitle = r,
                 Err(refusal) => {
                     entries.push(refuse(Refusal::MoveRetitle {
@@ -2255,7 +2255,6 @@ fn prepare_embed_candidate<T: Transport>(
 /// title (`Ok(None)`: the title doesn't actually change).
 pub fn prepare_retitle(
     record: &CloudKitRecord,
-    entry: &NoteEntry,
     to_file: &str,
     new_title: &str,
     replica: &[u8; 16],
@@ -2284,7 +2283,6 @@ pub fn prepare_retitle(
         return Ok(Ok(None));
     }
     let desired = restore_title_paragraph_text(&title_paragraph_from_filename(new_title), body);
-    let _ = entry;
     match prepare_note_text_update(
         record,
         &classified.body_text,

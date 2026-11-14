@@ -306,7 +306,6 @@ fn cloned_vault(dir: &Path) -> PathBuf {
         &connector,
         &vault,
         &mut NoProgress,
-        &mut |_| {},
         &CloneOptions::default(),
     )
     .unwrap();
