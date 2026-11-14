@@ -1489,6 +1489,36 @@ fn a_clone_takes_a_file_in_attachments_that_is_the_attachment_for_it() {
     assert!(!place.vault.join("Notes/attachments/_7130093 2.jpeg").exists());
 }
 
+/// The account with the recording's file given the photo's name: two
+/// attachments of one name in one folder, the second downloaded as
+/// `_7130093 2.jpeg`.
+fn same_attachment_names() -> Zone {
+    let mut zone = account(3);
+    let media_name = "0B8509A3-A5FC-470B-A777-03BFFFDFB5F9";
+    let mut media = zone.live(media_name).unwrap().clone();
+    media["fields"]["FilenameEncrypted"]["value"] = json!(base64_encode(b"_7130093.jpeg"));
+    zone.put(media);
+    zone
+}
+
+/// A clone killed after it downloaded both: the clone after it took the
+/// first file for its attachment and downloaded the second again under a
+/// third name, so the note file left beside it no longer read as the one it
+/// wrote, and the next push created that file as a second note.
+#[test]
+fn a_clone_cut_short_with_two_attachments_of_one_name_is_finished_by_the_next_run() {
+    let zone = same_attachment_names();
+    let start = Start {
+        expect: Expect {
+            kept: kept_notes(&zone),
+            ..Default::default()
+        },
+        zone,
+        place: Place::new(),
+    };
+    crash_everywhere(&start, "clone", &[Then::Again, Then::Sync]);
+}
+
 // --- shared zones -------------------------------------------------------------------
 
 const WRITABLE_OWNER: &str = "_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

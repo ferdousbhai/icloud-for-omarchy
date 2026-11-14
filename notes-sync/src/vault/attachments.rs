@@ -588,31 +588,47 @@ fn adopt_downloaded_files<T: Transport>(
         let Some(asset) = parse_asset_field(media.fields.get("Asset")) else {
             continue;
         };
-        let name = decode_attachment_filename(
+        let base = decode_attachment_filename(
             media.fields.get("FilenameEncrypted"),
             &r.attachment_identifier,
             &r.type_uti,
         );
-        if !on_disk.contains(&name) {
-            continue;
-        }
-        let path = target_dir.join(note_dir).join(ATTACHMENTS_DIR).join(&name);
         let size = media
             .fields
             .get("Asset")
             .and_then(|f| f.value.get("size"))
             .and_then(Value::as_u64);
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !meta.file_type().is_file() || size.is_some_and(|size| size != meta.len()) {
-            continue;
-        }
-        let downloaded = db.fetch_asset_bytes(&asset.download_url)?;
-        if std::fs::read(&path)? == downloaded {
-            on_disk.remove(&name);
-            used.remove(&name);
-            adopted.insert(r.attachment_identifier.clone(), name);
+        // The names the killed clone may have given it: its own, or the
+        // `name N.ext` it got because one before it was taken (another
+        // attachment of that name, or a file already there), up to the
+        // first name nothing holds, which that clone would have taken.
+        let ext = posix::extname(&base).to_owned();
+        let stem = base[..base.len() - ext.len()].to_owned();
+        let candidates = std::iter::once(base).chain((2u64..).map(|n| format!("{stem} {n}{ext}")));
+        let mut downloaded: Option<Vec<u8>> = None;
+        for name in candidates {
+            if !on_disk.contains(&name) {
+                if used.contains(&name) {
+                    continue;
+                }
+                break;
+            }
+            let path = target_dir.join(note_dir).join(ATTACHMENTS_DIR).join(&name);
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !meta.file_type().is_file() || size.is_some_and(|size| size != meta.len()) {
+                continue;
+            }
+            if downloaded.is_none() {
+                downloaded = Some(db.fetch_asset_bytes(&asset.download_url)?);
+            }
+            if downloaded.as_deref() == Some(std::fs::read(&path)?.as_slice()) {
+                on_disk.remove(&name);
+                used.remove(&name);
+                adopted.insert(r.attachment_identifier.clone(), name);
+                break;
+            }
         }
     }
     Ok(adopted)

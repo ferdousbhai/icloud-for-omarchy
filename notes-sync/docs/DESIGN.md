@@ -279,11 +279,12 @@ window closes, so a killed run is ordinary.
 - `clone` does not replace one either: the names a folder's `attachments/`
   held before the clone are taken as used, and the download gets
   `name 2.ext`. A file there that is byte for byte the attachment to be
-  downloaded under its name (what a clone killed after the download left;
-  only one of the asset's size is fetched to compare) is taken for the
-  attachment instead, so that the note file left beside it reads as the
-  clone would write it and is adopted (above). Up to 0.11.1 a clone into
-  a directory with such a file replaced it.
+  downloaded under its name, or under the `name N.ext` a clone gives it
+  when an earlier attachment or file took the name (what a clone killed
+  after the download left; only one of the asset's size is fetched to
+  compare), is taken for the attachment instead, so that the note file
+  left beside it reads as the clone would write it and is adopted (above).
+  Up to 0.11.1 a clone into a directory with such a file replaced it.
 
 - A run killed mid-write leaves a temporary file: the engine's own
   `.<pid>.<n>.tmp` beside a note, the state or a base copy, and
