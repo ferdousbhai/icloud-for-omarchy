@@ -28,9 +28,6 @@
 # ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED=1: a push (alone, or as a sync's half)
 # runs but has a change refused by iCloud: its result with the failed entry,
 # exit 1, and in a sync the half's error `push_rejected` beside the result.
-# ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR=1: such a failure also ends stderr with
-# an older engine's one-line error (sorted keys), which the app must keep
-# out of its log.
 orig=("$@")
 quiet="" json="" styled="" ids="" count=""
 args=()
@@ -93,8 +90,6 @@ stub_fail() {
   local code="${ICLOUD_NOTES_SYNC_STUB_ERROR:-internal}"
   local message="${ICLOUD_NOTES_SYNC_STUB_MESSAGE:-stub failure}"
   echo "stub: failing with $code" >&2
-  [ -n "${ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR:-}" ] \
-    && printf ' {"error":{"code":"%s","message":"%s"},"ok":false}\n' "$code" "$message" >&2
   fail "$code" "$message" "${ICLOUD_NOTES_SYNC_STUB_HINT:-}" "$ICLOUD_NOTES_SYNC_STUB_EXIT" sorted
 }
 # progress N: the engine's machine-mode progress on stderr (one line per
@@ -171,7 +166,7 @@ elif [ "$1" = "sync" ]; then
         "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS" "$ICLOUD_NOTES_SYNC_STUB_PULL_ADDS"
       return
     fi
-    [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-notes:progress:fetch:3" >&2 && echo "icloud-md:progress:fetch:3" >&2
+    [ "$1" = pull ] && echo "Fetching changes from iCloud..." >&2 && echo "icloud-notes:progress:fetch:3" >&2
     printf '{"ok":true,"exit_code":0,"result":{"stub":"%s","ok":true},"lines":["stub %s ok"]}' "$1" "$1"
   }
   push_json=$(half push)

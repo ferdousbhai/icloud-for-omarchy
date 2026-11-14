@@ -236,23 +236,15 @@ QJsonObject contractError(QByteArrayView text)
     return object.value(QStringLiteral("error")).toObject();
 }
 
-// The engine's error for a failed run. In its machine modes (--json,
+// The engine's error for a failed run: in its machine modes (--json,
 // --quiet) the engine prints it on stdout as the contract error document (a
 // pull, push, clone, diff, status or history, or a sync that gave no
-// answer); a half of runSync carries it as {"error":{...}}. An older
-// engine's last contract error line on stderr is the fallback. Empty when
-// none says (a crash, plain text).
-QJsonObject engineError(const QByteArray &output, const QByteArray &stderrText)
+// answer); a half of runSync carries it as {"error":{...}}. Empty when
+// neither is there (a crash).
+QJsonObject engineError(const QByteArray &output)
 {
-    QJsonObject error = contractError(output);
-    if (error.isEmpty())
-        error = QJsonDocument::fromJson(output).object().value(QStringLiteral("error")).toObject();
-    if (error.isEmpty()) {
-        const QList<QByteArray> lines = stderrText.split('\n');
-        for (auto it = lines.crbegin(); it != lines.crend() && error.isEmpty(); ++it)
-            error = contractError(*it);
-    }
-    return error;
+    const QJsonObject error = contractError(output);
+    return error.isEmpty() ? QJsonDocument::fromJson(output).object().value(QStringLiteral("error")).toObject() : error;
 }
 
 // The JSON envelope {"ok":true,"data","summary","meta"?} a `--json` run
@@ -301,11 +293,6 @@ QJsonObject refusedChange(const QJsonObject &pushResult)
                                                          : QStringLiteral("%1 (and %2 more; see the log)")
                                                                .arg(messages.first())
                                                                .arg(messages.size() - 1) } };
-}
-
-QString engineErrorCode(const QByteArray &output, const QByteArray &stderrText)
-{
-    return engineError(output, stderrText).value(QStringLiteral("code")).toString();
 }
 
 // Only a sign-in fixes it: the engine's error code says so. Exit 3 also
@@ -412,14 +399,11 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     // (finishSyncHalves), or the error's message and hint. Stderr is read a
     // line at a time in every mode, leaving out the progress lines (one per
     // fetched page and processed note in a machine mode: thousands in a
-    // clone), empty lines, and an older engine's stderr error line (which
-    // the error logged after the run repeats).
+    // clone) and empty lines.
     connect(&m_syncProcess, &QProcess::readyReadStandardOutput, this,
             [this] { m_captured += m_syncProcess.readAllStandardOutput(); });
     connect(&m_syncProcess, &QProcess::readyReadStandardError, this, [this] {
-        const QByteArray err = m_syncProcess.readAllStandardError();
-        m_capturedErr += err;
-        m_errLine += err;
+        m_errLine += m_syncProcess.readAllStandardError();
         QStringList lines;
         for (qsizetype nl; (nl = m_errLine.indexOf('\n')) >= 0;) {
             const QByteArray line = m_errLine.left(nl);
@@ -747,15 +731,9 @@ bool NotesBackend::vaultCloned()
     return QFile::exists(stateDir() + QStringLiteral("/state.json"));
 }
 
-bool NotesBackend::isProgressLine(const QByteArray &line)
-{
-    // icloud-notes:progress:..., or an older engine's icloud-md:progress:...
-    return line.startsWith("icloud-notes:progress:") || line.startsWith("icloud-md:progress:");
-}
-
 bool NotesBackend::isLoggedStderrLine(const QByteArray &line)
 {
-    return !line.trimmed().isEmpty() && !isProgressLine(line) && contractError(line).isEmpty();
+    return !line.trimmed().isEmpty() && !line.startsWith("icloud-notes:progress:");
 }
 
 QString NotesBackend::vaultInfoKey() const
@@ -1998,7 +1976,6 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     m_mode = mode;
     m_syncLabel = label;
     m_captured.clear();
-    m_capturedErr.clear();
     m_errLine.clear();
     m_runSignIns = m_signIns;
     if (mode == Mode::Sync) {
@@ -2068,8 +2045,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
                      : data.isArray() ? QJsonDocument(data.toArray()).toJson(QJsonDocument::Compact)
                                       : QByteArray();
         if (m_mode == Mode::Diff) {
-            diffText = meta.contains(QStringLiteral("text")) ? meta.value(QStringLiteral("text")).toString()
-                                                             : data.toObject().value(QStringLiteral("text")).toString();
+            diffText = meta.value(QStringLiteral("text")).toString();
         } else {
             const QStringList lines = strings(meta.value(QStringLiteral("lines")));
             const QString report = lines.isEmpty() ? envelope.value(QStringLiteral("summary")).toString() : lines.join(u'\n');
@@ -2086,7 +2062,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // iCloud out of reach is not worth a failure: the next sync tries again.
     m_lastError = ok        ? QJsonObject()
                   : refused ? refusedChange(QJsonDocument::fromJson(m_captured).object())
-                            : engineError(output, m_capturedErr);
+                            : engineError(output);
     // A failure's output is its error, as a failed half's is: {"error":{...}}.
     if (!m_lastError.isEmpty())
         m_captured = QJsonDocument(QJsonObject{ { QStringLiteral("error"), m_lastError } }).toJson(QJsonDocument::Compact);
@@ -2214,7 +2190,7 @@ void NotesBackend::finishSyncHalves(int exitCode)
         // failed as the run did, as two runs would have; a sign-in skips the
         // pull. The engine's error object, when it printed one, is on stdout.
         const int code = exitCode == 0 ? -1 : exitCode;
-        const QJsonObject error = engineError(m_captured, m_capturedErr);
+        const QJsonObject error = engineError(m_captured);
         QByteArray output;
         if (!error.isEmpty()) {
             appendLog(failedLog(QStringLiteral("sync"), error));
@@ -2232,7 +2208,8 @@ void NotesBackend::finishSyncHalves(int exitCode)
                 pulledChanges = pulledChanges || pulled.value(QLatin1StringView(count)).toInt() > 0;
             pulledChanges = pulledChanges || !pulled.value(QStringLiteral("changes")).toArray().isEmpty()
                 || !pulled.value(QStringLiteral("conflicts")).toArray().isEmpty();
-        } else if (!needsSignIn(engineErrorCode(halves.first().output, m_capturedErr), halves.first().exitCode)) {
+        } else if (!needsSignIn(push.value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString(),
+                                halves.first().exitCode)) {
             // Not run, and not for a sign-in (sign_in_required or
             // session_rejected, which pause instead): the push found iCloud
             // out of reach. It failed as the push did.

@@ -322,9 +322,8 @@ public:
     int lastExitCode() const { return m_lastExit; }
     QByteArray lastOutput() const { return m_captured; }
     // The engine's error {code, message, hint?} for that run when it failed:
-    // the error object on its stdout (or in its half), else an older engine's
-    // contract error line on its stderr. Empty when it worked or said nothing
-    // (a crash, an engine that printed only text).
+    // the error object on its stdout (or in its half). Empty when it worked
+    // or said nothing (a crash, an engine that printed only text).
     QJsonObject lastError() const { return m_lastError; }
 
 signals:
@@ -392,12 +391,8 @@ private:
     void adoptVaultInfo(const QJsonObject &answer) const;
     // The engine's state file's mtime and size, "-" without one.
     static QString stateFileStamp();
-    // An engine progress line (icloud-notes:progress:..., or an older
-    // engine's icloud-md:progress:...), which the log leaves out.
-    static bool isProgressLine(const QByteArray &line);
-    // A line of the engine's stderr the log shows: not empty, not progress,
-    // and not an older engine's one-line error document (which the error
-    // logged after the run repeats).
+    // A line of the engine's stderr the log shows: not empty, and not one
+    // of its progress lines (icloud-notes:progress:...).
     static bool isLoggedStderrLine(const QByteArray &line);
     void startEngine();
     void rebuildFolders();
@@ -542,7 +537,6 @@ private:
     // starts once it is free, never before.
     QTimer m_lockRetry;
     QByteArray m_captured; // the run's stdout (its JSON result or error object); its data once finished
-    QByteArray m_capturedErr; // its stderr: progress, warnings, errors
     const double m_uiScale;
     QVariantMap m_theme;
     MarkdownHighlighter *m_highlighter = nullptr;

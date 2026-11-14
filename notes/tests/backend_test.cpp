@@ -1077,7 +1077,6 @@ int main(int argc, char *argv[])
                                         [&](const QString &label, bool ok) { runs << label + (ok ? u'+' : u'-'); });
         qputenv("ICLOUD_NOTES_SYNC_STUB_EXIT", "3");
         qputenv("ICLOUD_NOTES_SYNC_STUB_ERROR", "not_cloned_directory");
-        qputenv("ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR", "1"); // an older engine's line too
         b.runSync();
         waitForIdle(b);
         QObject::disconnect(c);
@@ -1090,7 +1089,6 @@ int main(int argc, char *argv[])
                   && log.contains(QStringLiteral("sync failed: stub failure")) && !log.contains(QStringLiteral("\n\n"))
                   && !log.contains(QStringLiteral("\"ok\":false")) && !log.contains(QStringLiteral("{\"error\"")),
               "seam the engine's error is logged by its message; no JSON leaks into the sync log");
-        qunsetenv("ICLOUD_NOTES_SYNC_STUB_STDERR_ERROR");
         // The same from the window's own pull, push and clone (--json): the
         // code comes from the error object on stdout, so exit 3 with
         // not_cloned_directory or account_mismatch is still no sign-in, and

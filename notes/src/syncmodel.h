@@ -498,7 +498,7 @@ inline QVariantMap parseStatusJson(const QByteArray &bytes)
     result[QStringLiteral("unchanged")] = doc.object().value(QStringLiteral("unchanged")).toInt();
     QStringList notices;
     for (const QJsonValue &v : doc.object().value(QStringLiteral("notices")).toArray())
-        notices << (v.isObject() ? v.toObject().value(QStringLiteral("message")).toString() : v.toString());
+        notices << v.toObject().value(QStringLiteral("message")).toString();
     result[QStringLiteral("notices")] = notices;
     return result;
 }
