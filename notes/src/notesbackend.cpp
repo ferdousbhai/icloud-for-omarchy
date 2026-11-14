@@ -2240,8 +2240,14 @@ void NotesBackend::writeQueuedSave()
     // started, or that already holds them: never over a change a merge
     // could not take (a failed write), which would drop it.
     const QString theirs = SyncModel::editorForm(noteBody());
-    if (!written && (!changed || theirs == base || theirs == queued.body))
+    if (!written && (!changed || theirs == base || theirs == queued.body)) {
+        // The window may hold later typing by now: its reload must not take
+        // the text written here for a change from elsewhere and merge the
+        // two into a conflict (it rebases on queuedSaveWritten instead).
+        const bool wasMerging = std::exchange(m_merging, true);
         written = saveCurrentNote(queued.body);
+        m_merging = wasMerging;
+    }
     if (written)
         emit queuedSaveWritten(queued.body);
 }

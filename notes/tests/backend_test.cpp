@@ -1191,6 +1191,22 @@ int main(int argc, char *argv[])
     check(readFile(QStringLiteral("Q.md"))
               == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine again\n\ntwo from iCloud\n"),
           "seam waiting save written once the pull is done");
+    // The window under a queued save: typing went on, on the same line. Its
+    // reload hands the backend its unsaved text, as for any change on disk;
+    // the queued text being written is not one, so no conflict comes of it.
+    {
+        const QString saved = QStringLiteral("# Q\none, mine again\n\ntwo from iCloud\n");
+        const QString typed = QStringLiteral("# Q\none, mine again and more\n\ntwo from iCloud\n");
+        const QMetaObject::Connection window = QObject::connect(&b, &NotesBackend::noteContentChanged, &b,
+                                                                [&] { b.keepEditsAsConflict(saved, typed); });
+        b.runPull();
+        b.saveCurrentNote(QStringLiteral("# Q\none, mine again and\n\ntwo from iCloud\n"));
+        waitForIdle(b);
+        QObject::disconnect(window);
+        check(readFile(QStringLiteral("Q.md"))
+                  == QStringLiteral("---\napple-note-id: id-q\n---\n# Q\none, mine again and\n\ntwo from iCloud\n"),
+              "seam waiting save written under later typing is not merged into a conflict");
+    }
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_SLEEP");
     QFile::remove(testVault() + QStringLiteral("/Q.md"));
     b.refresh();

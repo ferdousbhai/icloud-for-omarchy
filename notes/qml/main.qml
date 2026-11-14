@@ -1711,7 +1711,18 @@ ApplicationWindow {
             if (editor.text === body) {
                 root.loadEditor();
                 root.notice = "";
+                return;
             }
+            // Typing went on: the edits now start from what was queued. A
+            // sync that changed the note too is merged with them; otherwise
+            // they stay unsaved, on top of the text just written.
+            root.keepingEdits = true;
+            var kept = backend.keepEditsAsConflict(body, editor.text);
+            root.keepingEdits = false;
+            if (kept)
+                root.loadEditor();
+            else
+                root.savedText = body;
         }
         function onEditsKeptAsNote(message) {
             root.keptNotice = message;
