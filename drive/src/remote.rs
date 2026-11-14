@@ -395,12 +395,7 @@ struct TempFile {
 /// On disk, not in `/run` or `/tmp`, which are memory on most systems: the
 /// form is as large as the file it carries.
 fn upload_dir() -> std::path::PathBuf {
-    let cache = std::env::var_os("XDG_CACHE_HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir);
-    cache.join("icloud-drive")
+    crate::engine::xdg_dir("XDG_CACHE_HOME", ".cache").join("icloud-drive")
 }
 
 fn new_upload_form() -> std::io::Result<TempFile> {

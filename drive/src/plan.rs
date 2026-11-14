@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::local::Entry;
-use crate::remote::{Kind, Node, ROOT_ID};
+use crate::remote::{Kind, Node};
 use crate::state::{Row, is_under};
 
 /// iCloud Drive now: every syncable node below the top folder.
@@ -36,13 +36,9 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// From a flat listing. App libraries and what is below them are left
-    /// out, as are names that cannot exist or would be hidden locally.
-    pub fn build(nodes: &[Node]) -> Snapshot {
-        Snapshot::build_below(ROOT_ID, nodes)
-    }
-
-    /// [`Snapshot::build`] with another folder as the top.
+    /// From a flat listing of everything below the folder `top`. App
+    /// libraries and what is below them are left out, as are names that
+    /// cannot exist or would be hidden locally.
     pub fn build_below(top: &str, nodes: &[Node]) -> Snapshot {
         let mut children: HashMap<&str, Vec<&Node>> = HashMap::new();
         for node in nodes {
@@ -175,6 +171,12 @@ fn settling(entry: &Entry, now_ns: i64) -> bool {
 
 fn remote_changed(row: &Row, node: &Node) -> bool {
     node.size != row.node.size || node.mtime_ms != row.node.mtime_ms
+}
+
+/// A local file and an iCloud one of the same size and date: taken as the
+/// same file.
+fn same_file(entry: &Entry, node: &Node) -> bool {
+    !entry.is_dir && entry.size == node.size && (entry.mtime_ns / 1_000_000 - node.mtime_ms).abs() <= SAME_TIME_MS
 }
 
 fn local_changed(row: &Row, entry: &Entry) -> bool {
@@ -381,7 +383,7 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
         let node = remote
             .nodes
             .get(&id)
-            .filter(|n| remote.paths[&n.id] == row.path && (n.kind == Kind::Folder) == row.local.is_dir);
+            .filter(|n| (n.kind == Kind::Folder) == row.local.is_dir);
         let entry = local.get(&path).filter(|e| e.is_dir == row.local.is_dir);
         if local.get(&path).is_some() && entry.is_none() {
             // A file where a folder was, or the other way round.
@@ -395,20 +397,24 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
                 (Some(_), None) => {
                     // The folder was removed here. If nothing below it changed
                     // in iCloud, it goes to Recently Deleted as one; else it
-                    // comes back and its contents are judged one by one.
+                    // comes back and its contents are judged one by one. It
+                    // also comes back while iCloud holds something below it
+                    // that was never synced (a hidden name, say), which
+                    // removing the folder here cannot have meant.
                     let below: Vec<&Row> = base.iter().filter(|r| is_under(&r.path, &path)).collect();
                     let known: HashSet<&str> = below.iter().map(|r| r.node.id.as_str()).collect();
-                    let untouched = below.iter().all(|r| {
-                        remote
-                            .nodes
-                            .get(&r.node.id)
-                            .is_some_and(|n| remote.paths[&n.id] == r.path && (r.local.is_dir || !remote_changed(r, n)))
-                    }) && remote
-                        .by_path
-                        .range(path.clone()..)
-                        .take_while(|(p, _)| p.starts_with(&path))
-                        .filter(|(p, _)| is_under(p, &path))
-                        .all(|(_, id)| known.contains(id.as_str()));
+                    let untouched = !holds_unknown(&path)
+                        && below.iter().all(|r| {
+                            remote.nodes.get(&r.node.id).is_some_and(|n| {
+                                remote.paths[&n.id] == r.path && (r.local.is_dir || !remote_changed(r, n))
+                            })
+                        })
+                        && remote
+                            .by_path
+                            .range(path.clone()..)
+                            .take_while(|(p, _)| p.starts_with(&path))
+                            .filter(|(p, _)| is_under(p, &path))
+                            .all(|(_, id)| known.contains(id.as_str()));
                     if untouched {
                         plan.deletions += below.len();
                         plan.ops.push(Op::TrashRemote { id, path: path.clone() });
@@ -458,6 +464,9 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
                         plan.ops.push(Op::Replace { id, path });
                     }
                 }
+                // Both differ from the row and agree with each other: an
+                // operation that finished without being recorded.
+                (true, true) if same_file(e, n) => plan.ops.push(Op::Adopt { id, path }),
                 (true, true) => {
                     plan.ops.push(Op::SetAside { path: path.clone() });
                     plan.ops.push(Op::Download { id, path });
@@ -533,13 +542,7 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
             ready.insert(path);
         } else {
             match entry {
-                Some(e)
-                    if !e.is_dir
-                        && e.size == node.size
-                        && (e.mtime_ns / 1_000_000 - node.mtime_ms).abs() <= SAME_TIME_MS =>
-                {
-                    plan.ops.push(Op::Adopt { id, path })
-                }
+                Some(e) if same_file(e, node) => plan.ops.push(Op::Adopt { id, path }),
                 Some(_) => {
                     plan.ops.push(Op::SetAside { path: path.clone() });
                     plan.ops.push(Op::Download { id, path });
@@ -579,6 +582,7 @@ fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote::ROOT_ID;
 
     const NOW: i64 = 1_000_000_000_000_000_000;
 
@@ -626,6 +630,10 @@ mod tests {
         }
     }
 
+    fn snapshot(nodes: &[Node]) -> Snapshot {
+        Snapshot::build_below(ROOT_ID, nodes)
+    }
+
     fn context() -> Context {
         Context {
             now_ns: NOW,
@@ -635,7 +643,7 @@ mod tests {
 
     fn run(base: &[Row], remote: &[Node], local: &[(&str, Entry)]) -> Plan {
         let local: BTreeMap<String, Entry> = local.iter().map(|(p, e)| (p.to_string(), *e)).collect();
-        plan(base, &Snapshot::build(remote), &local, &context())
+        plan(base, &snapshot(remote), &local, &context())
     }
 
     #[test]
@@ -851,6 +859,51 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_removed_here_comes_back_when_icloud_holds_something_never_synced_in_it() {
+        let d = node("d", "", "Docs", true, 0, 0);
+        let f = node("f", "d", "a.txt", false, 5, 100);
+        let hidden = node("h", "d", ".hidden", false, 1, 300);
+        let base = [row(&d, "Docs", dir(1)), row(&f, "Docs/a.txt", file(5, 7, 2))];
+        let remote = snapshot(&[d.clone(), f.clone(), hidden]);
+        let context = Context {
+            unknown: remote.skipped.iter().map(|(path, _)| path.clone()).collect(),
+            ..context()
+        };
+        assert_eq!(context.unknown, ["Docs/.hidden"]);
+        let p = plan(&base, &remote, &BTreeMap::new(), &context);
+        assert_eq!(
+            p.ops,
+            [
+                Op::MkdirLocal {
+                    id: "d".into(),
+                    path: "Docs".into()
+                },
+                Op::TrashRemote {
+                    id: "f".into(),
+                    path: "Docs/a.txt".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn both_changed_to_the_same_file_is_adopted_not_a_conflict() {
+        // A download or an upload that finished but was not recorded.
+        let old = node("f", "", "a.txt", false, 5, 100);
+        let base = [row(&old, "a.txt", file(5, 7, 1))];
+        let newer = node("f", "", "a.txt", false, 6, 200);
+        let p = run(&base, &[newer], &[("a.txt", file(6, 200_000_000, 1))]);
+        assert_eq!(
+            p.ops,
+            [Op::Adopt {
+                id: "f".into(),
+                path: "a.txt".into()
+            }]
+        );
+        assert!(!p.again);
+    }
+
+    #[test]
     fn a_folder_removed_in_icloud_goes_to_the_trash_unless_something_in_it_is_new() {
         let d = node("d", "", "Docs", true, 0, 0);
         let f = node("f", "d", "a.txt", false, 5, 100);
@@ -1004,7 +1057,7 @@ mod tests {
         lib.kind = Kind::AppLibrary;
         let inside = node("in", "lib", "doc.pages", false, 5, 1);
         let hidden = node("h", "", ".secret", false, 1, 1);
-        let snapshot = Snapshot::build(&[lib, inside, hidden]);
+        let snapshot = snapshot(&[lib, inside, hidden]);
         assert!(snapshot.nodes.is_empty());
         assert_eq!(snapshot.skipped.len(), 2);
     }
@@ -1015,10 +1068,10 @@ mod tests {
         let local = BTreeMap::new();
         let mut context = context();
         context.ignored.insert("p".to_string(), pkg.etag.clone());
-        let p = plan(&[], &Snapshot::build(std::slice::from_ref(&pkg)), &local, &context);
+        let p = plan(&[], &snapshot(std::slice::from_ref(&pkg)), &local, &context);
         assert!(p.ops.is_empty());
         context.ignored.insert("p".to_string(), "older".to_string());
-        let p = plan(&[], &Snapshot::build(&[pkg]), &local, &context);
+        let p = plan(&[], &snapshot(&[pkg]), &local, &context);
         assert_eq!(p.ops.len(), 1);
     }
 
@@ -1037,10 +1090,10 @@ mod tests {
         let local: BTreeMap<String, Entry> = [("Docs".to_string(), dir(1))].into();
         let mut context = context();
         context.unknown = vec!["a.txt".into(), "Docs/in.txt".into()];
-        let p = plan(&base, &Snapshot::build(&[a, d.clone(), inside]), &local, &context);
+        let p = plan(&base, &snapshot(&[a, d.clone(), inside]), &local, &context);
         assert_eq!(p, Plan::default());
         // And a folder iCloud removed is kept while it holds such a path.
-        let p = plan(&base[..2], &Snapshot::build(&[]), &local, &context);
+        let p = plan(&base[..2], &snapshot(&[]), &local, &context);
         assert!(
             !p.ops.iter().any(|op| matches!(op, Op::TrashLocal { .. })),
             "{:?}",

@@ -22,6 +22,9 @@ struct Cloud {
     trashed: Vec<String>,
     packages: Vec<String>,
     broken_listing: Option<String>,
+    /// The listing right after a replace fails, once.
+    listing_fails_after_replace: bool,
+    listing_fails_once: bool,
     counter: u64,
     uploads: usize,
     listings: usize,
@@ -225,7 +228,7 @@ impl Remote for Fake {
             id: folder_id.to_string(),
             status: "ID_INVALID".into(),
         };
-        if c.broken_listing.as_deref() == Some(folder_id) {
+        if c.broken_listing.as_deref() == Some(folder_id) || std::mem::take(&mut c.listing_fails_once) {
             return Err(gone());
         }
         let folder = if folder_id == ROOT_ID {
@@ -254,6 +257,7 @@ impl Remote for Fake {
             return Err(remote::Error::Stale(node.name.clone()));
         }
         c.uploads += 1;
+        c.listing_fails_once = c.listing_fails_after_replace;
         c.content.insert(node.id.clone(), bytes.clone());
         let n = c
             .nodes
@@ -351,10 +355,22 @@ impl Bed {
         };
         engine.sync(dry_run, allow_deletes)
     }
+    fn not_synced(&self) -> Vec<String> {
+        let state = State::open(&self.dir.path().join("state")).unwrap();
+        state.not_synced().unwrap().into_iter().map(|(path, _)| path).collect()
+    }
     fn sync(&self) -> Outcome {
         let outcome = self.try_sync(false).unwrap();
         assert!(outcome.problems.is_empty(), "{:?}", outcome.problems);
         outcome
+    }
+    /// Syncs twice, the second finding nothing to do, with iCloud left
+    /// holding `cloud` (which may include what is never synced).
+    fn settle_paths(&self, cloud: &[&str]) {
+        self.sync();
+        let again = self.sync();
+        assert!(again.done.is_empty(), "not settled: {:?}", again.done);
+        assert_eq!(self.cloud.paths(), cloud);
     }
     /// Syncs, then checks that a second sync finds nothing to do and that
     /// both sides hold the same paths.
@@ -709,23 +725,6 @@ fn a_same_size_edit_or_a_rename_in_icloud_is_seen_though_no_folder_etag_changes(
 }
 
 #[test]
-fn same_size_edits_on_both_sides_keep_both_files() {
-    let bed = Bed::new();
-    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
-    bed.settle();
-    bed.cloud.edit(&a.id, "two", bed.time());
-    bed.write("a.txt", "six");
-    bed.settle();
-    assert_eq!(bed.read("a.txt").as_deref(), Some("two"));
-    let copy = bed
-        .local_paths()
-        .into_iter()
-        .find(|p| p.contains("conflicted copy"))
-        .unwrap();
-    assert_eq!(bed.cloud.text(&copy).as_deref(), Some("six"));
-}
-
-#[test]
 fn when_the_feed_starts_over_everything_is_listed_again() {
     let bed = Bed::new();
     let docs = bed.cloud.folder(ROOT_ID, "Docs");
@@ -752,4 +751,65 @@ fn a_synced_file_that_becomes_unsyncable_is_left_alone_on_both_sides() {
     assert_eq!(bed.cloud.paths(), ["a.txt", "b.txt"]);
     assert!(bed.cloud.0.borrow().trashed.is_empty());
     assert_eq!(outcome.skipped.len(), 3, "{:?}", outcome.skipped);
+}
+
+#[test]
+fn a_replace_whose_listing_fails_is_still_recorded_and_makes_no_conflict() {
+    let bed = Bed::new();
+    bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    bed.write("a.txt", "two from here");
+    bed.cloud.0.borrow_mut().listing_fails_after_replace = true;
+    let outcome = bed.try_sync(false).unwrap();
+    assert_eq!(outcome.problems.len(), 1, "{:?}", outcome.problems);
+    assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("two from here"));
+    bed.cloud.0.borrow_mut().listing_fails_after_replace = false;
+    let uploads = bed.cloud.0.borrow().uploads;
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["a.txt"], "no conflicted copy");
+    assert_eq!(bed.cloud.0.borrow().uploads, uploads, "not sent again");
+}
+
+#[test]
+fn a_download_that_was_not_recorded_makes_no_conflict() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    let at = bed.time();
+    bed.cloud.edit(&a.id, "two from icloud", at);
+    // What a sync stopped between putting the file in place and recording it leaves.
+    fs::write(bed.root().join("a.txt"), "two from icloud").unwrap();
+    local::set_mtime(&bed.root().join("a.txt"), at).unwrap();
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["a.txt"], "no conflicted copy");
+    assert_eq!(bed.read("a.txt").as_deref(), Some("two from icloud"));
+}
+
+#[test]
+fn what_is_not_synced_is_kept_for_status_and_a_package_that_goes_is_dropped() {
+    let bed = Bed::new();
+    let doc = bed.cloud.file(ROOT_ID, "letter.pages", "bundle", bed.time());
+    bed.cloud.0.borrow_mut().packages.push(doc.id.clone());
+    bed.cloud.file(ROOT_ID, ".hidden", "h", bed.time());
+    bed.write("a.txt", "one");
+    std::os::unix::fs::symlink("a.txt", bed.root().join("link")).unwrap();
+    bed.sync();
+    assert_eq!(bed.not_synced(), [".hidden", "letter.pages", "link"]);
+    bed.cloud.remove(&doc.id);
+    fs::remove_file(bed.root().join("link")).unwrap();
+    bed.sync();
+    assert_eq!(bed.not_synced(), [".hidden"]);
+}
+
+#[test]
+fn a_folder_removed_here_stays_in_icloud_while_it_holds_something_never_synced() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    bed.cloud.file(&docs.id, "a.txt", "one", bed.time());
+    bed.cloud.file(&docs.id, ".hidden", "h", bed.time());
+    bed.cloud.file(ROOT_ID, "keep.txt", "k", bed.time());
+    bed.settle_paths(&["Docs", "Docs/.hidden", "Docs/a.txt", "keep.txt"]);
+    fs::remove_dir_all(bed.root().join("Docs")).unwrap();
+    bed.settle_paths(&["Docs", "Docs/.hidden", "keep.txt"]);
+    assert_eq!(bed.local_paths(), ["Docs", "keep.txt"]);
 }

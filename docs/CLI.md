@@ -427,7 +427,7 @@ timer that fails every minute while signed out would only fill the journal.
 | Exit | Codes |
 |---|---|
 | 1 | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data) |
-| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID) |
+| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID), `other_folder` (`--dir` names a folder other than the one the sync state belongs to; give it its own with `--state-dir`), `start`/`stop` with `--dir` (`usage`: the background sync keeps `~/iCloud Drive` only) |
 | 3 | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data) |
 | 4 | `folder_missing` (the local folder is gone, so nothing is synced) |
 | 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
@@ -768,7 +768,7 @@ engines: `icloud-md:progress:...`).
 
 | Command | `data` |
 |---|---|
-| `status` | `{sync:"on"\|"off", starts_at_login, signed_in, folder, files, folders, last_sync \| null, problem:{code, message, hint \| null} \| null, not_synced:[{path, reason}]}` |
+| `status` | `{sync:"on"\|"off", starts_at_login, signed_in, folder, files, folders, last_sync \| null, problem:{code, message, hint \| null} \| null, not_synced:[{path, reason}]}`; `not_synced` is everything the last sync left out: packages, app folders, links, hidden names in iCloud, names iCloud does not take, names that differ only by case |
 | `sync` | `{done:[line], problems:[line], pending:[path], skipped:[line], dry_run}`; `done` is what was carried out (with `--dry-run`: what would be), one line each; exit 1 with data when `problems` is not empty |
 | `start`, `stop` | `{sync:"on"\|"off", folder}` |
 

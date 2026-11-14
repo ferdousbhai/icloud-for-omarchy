@@ -21,6 +21,8 @@ use crate::remote::{self, DriveApi, ROOT_ID};
 use crate::state::State;
 
 const SERVICE: &str = "icloud-drive.service";
+/// How long the background service rests between syncs.
+const INTERVAL: Duration = Duration::from_secs(30);
 /// How long `sync` waits for the background service's pass to end.
 const SYNC_WAIT: Duration = Duration::from_secs(120);
 
@@ -43,7 +45,7 @@ Exit codes:
   0 ok
   1 error (io, error, busy, http 4xx), or a sync that left some items for later
   2 usage; too_many_deletions (run `icloud-drive sync --yes` after checking
-    `icloud-drive sync --dry-run`); other_account
+    `icloud-drive sync --dry-run`); other_account; other_folder
   3 sign_in_required, session_rejected, drive_unavailable; status while signed out
   4 folder_missing
   5 offline, network, session_service, keyring_unavailable, bad_response, http 5xx";
@@ -58,10 +60,12 @@ Exit codes:
 struct Args {
     #[command(flatten)]
     out: OutputFlags,
-    /// The local folder (default: ~/iCloud Drive).
+    /// The local folder for `status` and `sync` (default: ~/iCloud Drive,
+    /// the one the background sync keeps).
     #[arg(long, global = true, value_name = "DIR")]
     dir: Option<PathBuf>,
     /// Where the sync state is kept (default: ~/.local/state/icloud-drive).
+    /// One state serves one folder.
     #[arg(long, global = true, value_name = "DIR", hide = true)]
     state_dir: Option<PathBuf>,
     /// Sync one folder of iCloud Drive (its drivewsid) instead of all of it.
@@ -81,7 +85,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
         /// Go ahead with a sync that removes many items at once.
-        #[arg(long = "yes", alias = "allow-deletes")]
+        #[arg(long = "yes")]
         allow_deletes: bool,
     },
     /// Turn the background sync on, now and at every login.
@@ -90,11 +94,7 @@ enum Cmd {
     Stop,
     /// Sync again and again (what the background service runs).
     #[command(hide = true)]
-    Run {
-        /// Seconds between syncs.
-        #[arg(long, default_value_t = 30)]
-        interval: u64,
-    },
+    Run,
 }
 
 struct Paths {
@@ -105,24 +105,10 @@ struct Paths {
 
 impl Paths {
     fn of(args: &Args) -> Paths {
-        // The service's unit can set these without changing its command.
-        let env = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty());
         Paths {
-            folder: args
-                .dir
-                .clone()
-                .or_else(|| env("ICLOUD_DRIVE_DIR").map(PathBuf::from))
-                .unwrap_or_else(engine::default_folder),
-            state_dir: args
-                .state_dir
-                .clone()
-                .or_else(|| env("ICLOUD_DRIVE_STATE_DIR").map(PathBuf::from))
-                .unwrap_or_else(engine::default_state_dir),
-            top: args
-                .top
-                .clone()
-                .or_else(|| env("ICLOUD_DRIVE_TOP").map(|v| v.to_string_lossy().into_owned()))
-                .unwrap_or_else(|| ROOT_ID.to_string()),
+            folder: args.dir.clone().unwrap_or_else(engine::default_folder),
+            state_dir: args.state_dir.clone().unwrap_or_else(engine::default_state_dir),
+            top: args.top.clone().unwrap_or_else(|| ROOT_ID.to_string()),
         }
     }
 }
@@ -134,12 +120,21 @@ pub fn run() -> u8 {
     };
     let mode = args.out.mode();
     let paths = Paths::of(&args);
+    // The service runs with no options, so it only ever keeps the default
+    // folder: saying "on" for another one would be untrue.
+    let own_folder = args.dir.is_some() || args.state_dir.is_some() || args.top.is_some();
     let result = match args.command {
+        Cmd::Start | Cmd::Stop if own_folder => Err(CliError::new(
+            "usage",
+            EXIT_USAGE,
+            "the background sync keeps ~/iCloud Drive only; --dir does not apply to start and stop",
+        )
+        .hint("sync another folder by hand: `icloud-drive --dir DIR --state-dir DIR sync`")),
         Cmd::Status => status(&paths),
         Cmd::Sync { dry_run, allow_deletes } => sync_once(&paths, dry_run, allow_deletes, mode),
         Cmd::Start => service(&["enable", "--now", SERVICE], "on", &paths),
         Cmd::Stop => service(&["disable", "--now", SERVICE], "off", &paths).inspect(|_| record(&paths, None)),
-        Cmd::Run { interval } => run_forever(&paths, Duration::from_secs(interval.max(5))),
+        Cmd::Run => run_forever(&paths, INTERVAL),
     };
     match result {
         Ok(response) => response.print(mode),
@@ -156,13 +151,17 @@ fn failure(e: &engine::Error) -> CliError {
         E::Remote(remote::Error::Listing { .. }) => CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string())
             .hint("iCloud gave an incomplete answer; nothing was changed. Try again later"),
         E::FolderMissing(folder) => CliError::new("folder_missing", EXIT_NOT_FOUND, e.to_string()).hint(format!(
-            "put {} back, or remove the state folder to start over",
+            "put {} back (mount its disk, or move it back); nothing is removed in iCloud while it is missing",
             folder.display()
         )),
         E::TooManyDeletions { .. } => CliError::new("too_many_deletions", EXIT_USAGE, e.to_string())
             .hint("see them with `icloud-drive sync --dry-run`, then run `icloud-drive sync --yes`"),
-        E::OtherAccount { .. } => CliError::new("other_account", EXIT_USAGE, e.to_string())
-            .hint("sign in to that account again, or use another folder with --dir"),
+        E::OtherAccount { .. } => CliError::new("other_account", EXIT_USAGE, e.to_string()).hint(
+            "sign in to that account again, or sync this one into a folder of its own: \
+             `icloud-drive --dir DIR --state-dir DIR sync`",
+        ),
+        E::OtherFolder { .. } => CliError::new("other_folder", EXIT_USAGE, e.to_string())
+            .hint("give this folder a state of its own: `icloud-drive --dir DIR --state-dir DIR sync`"),
         E::Io(_) => CliError::new("io", EXIT_ERROR, e.to_string()),
         _ => CliError::new("error", EXIT_ERROR, e.to_string()),
     }
@@ -206,7 +205,7 @@ fn one_sync(
 ) -> Result<Outcome, engine::Error> {
     let api = DriveApi::connect()?;
     let state = State::open(&paths.state_dir)?;
-    engine::bind_account(&state, api.dsid(), &paths.folder)?;
+    engine::bind(&state, api.dsid(), &paths.folder)?;
     let mut engine = Engine {
         remote: &api,
         state,
@@ -344,7 +343,7 @@ fn status(paths: &Paths) -> Result<Response, CliError> {
     let last_error = state.meta("last_error").map_err(db)?;
     let hint = state.meta("last_error_hint").map_err(db)?.filter(|h| !h.is_empty());
     let code = state.meta("last_error_code").map_err(db)?;
-    let not_synced = state.ignored_list().map_err(db)?;
+    let not_synced = state.not_synced().map_err(db)?;
     let running = service_state("is-active");
     let enabled = service_state("is-enabled");
     // None: icloud-sessiond could not be asked, which is not the same as signed out.

@@ -52,6 +52,10 @@ After that it syncs every half minute while you are signed in.
 - Two names in one folder that differ only by case: neither is synced.
 - Folders shared with you by other people.
 
+A folder removed here stays in iCloud (and comes back here) while it holds
+something in iCloud that is not synced, such as a hidden file: only what was
+synced in it goes to Recently Deleted.
+
 Requirements are the suite's: an Apple ID with Advanced Data Protection off
 and Access iCloud Data on the Web on.
 
@@ -84,4 +88,7 @@ rules, each with a test), `src/engine.rs`, `src/cli.rs`. `tests/sync.rs`
 runs the engine end to end against an in-memory iCloud Drive that behaves
 as the real one was measured to. `cargo run -p icloud-drive --example
 scratch` makes a scratch folder in the real Drive for trying a sync
-against one folder (`--top <id> --dir <dir> --state-dir <dir>`).
+against one folder (`--top <id> --dir <dir> --state-dir <dir>`). A state
+folder serves one local folder: `--dir` with another folder's state is
+refused (`other_folder`), and `start`/`stop` take no `--dir`, since the
+background sync keeps `~/iCloud Drive` only.

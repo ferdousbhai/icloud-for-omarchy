@@ -33,6 +33,10 @@ pub enum Error {
     /// The state belongs to another Apple account.
     #[error("{folder} was synced with another iCloud account")]
     OtherAccount { folder: PathBuf },
+    /// The state belongs to another local folder: its rows say what was in
+    /// step there, and would read here as everything having been removed.
+    #[error("the sync state belongs to {bound}, not {folder}")]
+    OtherFolder { folder: PathBuf, bound: PathBuf },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -219,49 +223,52 @@ impl<R: Remote> Engine<'_, R> {
             dry_run,
             ..Outcome::default()
         };
-        let had_rows = !self.state.rows()?.is_empty();
-        if !self.root.is_dir() {
-            if had_rows {
-                return Err(Error::FolderMissing(self.root.clone()));
-            }
-            if !dry_run {
-                fs::create_dir_all(&self.root)?;
-            }
-        }
+        // What neither side could show properly in the last round.
+        let mut unseen: Vec<(String, String)> = Vec::new();
         for _ in 0..MAX_ROUNDS {
             let nodes = self.crawl()?;
             let snapshot = Snapshot::build_below(&self.top.id, &nodes);
+            // A package that is gone from iCloud is no longer left out.
+            self.state.keep_ignored(|id| snapshot.nodes.contains_key(id))?;
             let base = self.state.rows()?;
+            if !self.root.is_dir() {
+                // Missing (unmounted, renamed), now or since the last round.
+                if !base.is_empty() {
+                    return Err(Error::FolderMissing(self.root.clone()));
+                }
+                if !dry_run {
+                    fs::create_dir_all(&self.root)?;
+                }
+            }
             let (entries, skipped) = if self.root.is_dir() {
                 local::scan(&self.root)?
-            } else if base.is_empty() {
-                Default::default()
             } else {
-                // Gone since the last round (unmounted, renamed).
-                return Err(Error::FolderMissing(self.root.clone()));
+                Default::default()
             };
+            unseen = skipped
+                .iter()
+                .map(|s| (s.path.clone(), s.reason.to_string()))
+                .chain(
+                    snapshot
+                        .skipped
+                        .iter()
+                        .map(|(path, why)| (path.clone(), why.to_string())),
+                )
+                .collect();
+            let ignored = self.state.ignored()?;
             let context = plan::Context {
-                ignored: self.state.ignored()?,
-                unknown: skipped
-                    .iter()
-                    .map(|s| s.path.clone())
-                    .chain(snapshot.skipped.iter().map(|(path, _)| path.clone()))
-                    .collect(),
+                ignored: ignored.iter().map(|i| (i.id.clone(), i.etag.clone())).collect(),
+                unknown: unseen.iter().map(|(path, _)| path.clone()).collect(),
                 now_ns: now_ms() * 1_000_000,
             };
             let plan = plan::plan(&base, &snapshot, &entries, &context);
 
             outcome.pending = plan.pending.clone();
-            outcome.skipped = skipped
+            outcome.skipped = unseen
                 .iter()
-                .map(|s| format!("{}: {}", s.path, s.reason))
-                .chain(snapshot.skipped.iter().map(|(p, why)| format!("{p}: {why}")))
-                .chain(
-                    self.state
-                        .ignored_list()?
-                        .into_iter()
-                        .map(|(p, why)| format!("{p}: {why}")),
-                )
+                .cloned()
+                .chain(ignored.into_iter().map(|i| (i.path, i.reason)))
+                .map(|(path, why)| format!("{path}: {why}"))
                 .collect();
 
             let allowed = FREE_DELETIONS.max(base.len() / 4);
@@ -286,6 +293,10 @@ impl<R: Remote> Engine<'_, R> {
                 break;
             }
         }
+        // For `status`: everything left out, with what this sync found to
+        // be a package.
+        unseen.extend(self.state.ignored()?.into_iter().map(|i| (i.path, i.reason)));
+        self.state.set_not_synced(&unseen)?;
         self.state.set_meta("last_sync_ms", &now_ms().to_string())?;
         Ok(outcome)
     }
@@ -402,7 +413,7 @@ impl<R: Remote> Engine<'_, R> {
                 let Some(row) = self.state.row(id)? else {
                     return Ok(false);
                 };
-                let entry = self.need_stat(to)?;
+                self.need_stat(to)?;
                 let parent = self.parent_node(to)?;
                 let mut node = row.node.clone();
                 if node.parent != parent.id {
@@ -412,17 +423,10 @@ impl<R: Remote> Engine<'_, R> {
                     node = self.remote.rename(&node, name_of(to))?;
                 }
                 self.state.move_paths(&row.path, to)?;
-                // A file keeps the stamp it was in step with, so an edit
-                // made along with the move still shows as one.
-                let local = if entry.is_dir {
-                    entry
-                } else {
-                    Entry {
-                        ino: entry.ino,
-                        ..row.local
-                    }
-                };
-                self.put(node, to, local)?;
+                // It keeps the stamp it was in step with (the planner found
+                // it by that stamp and its inode), so an edit made since
+                // still shows as one.
+                self.put(node, to, row.local)?;
             }
             Op::SetAside { path } => {
                 if !self.abs(path).exists() {
@@ -512,6 +516,15 @@ impl<R: Remote> Engine<'_, R> {
                 let sent = self
                     .remote
                     .replace(&row.node, &self.abs(path), before.mtime_ns / 1_000_000_000 * 1000)?;
+                // Recorded at once from the answer, so a listing that fails
+                // now does not leave the old row to read as a conflict.
+                let answered = Node {
+                    etag: sent.etag.clone(),
+                    size: sent.size,
+                    mtime_ms: sent.mtime_ms,
+                    ..row.node.clone()
+                };
+                self.put(answered, path, before)?;
                 let node = self.listed(&row.node.parent, &sent.id)?;
                 self.put(node, path, before)?;
             }
@@ -583,21 +596,22 @@ impl<R: Remote> Engine<'_, R> {
     }
 }
 
-/// Where the state for a local folder lives when nothing says otherwise.
-pub fn default_state_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
+/// An XDG base folder: `var` when it holds an absolute path, else
+/// `fallback` under the home folder.
+pub(crate) fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
+    std::env::var_os(var)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home().join(".local/state"));
-    base.join("icloud-drive")
+        .unwrap_or_else(|| home().join(fallback))
+}
+
+/// Where the state for a local folder lives when nothing says otherwise.
+pub fn default_state_dir() -> PathBuf {
+    xdg_dir("XDG_STATE_HOME", ".local/state").join("icloud-drive")
 }
 
 pub fn default_trash_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home().join(".local/share"));
-    base.join("Trash")
+    xdg_dir("XDG_DATA_HOME", ".local/share").join("Trash")
 }
 
 pub fn default_folder() -> PathBuf {
@@ -610,13 +624,45 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Refuses a state that belongs to another account; claims a new one.
-pub fn bind_account(state: &State, dsid: &str, folder: &Path) -> Result<()> {
+/// Refuses a state that belongs to another local folder or another
+/// account; claims a new one for both.
+pub fn bind(state: &State, dsid: &str, folder: &Path) -> Result<()> {
+    let here = std::path::absolute(folder)?;
+    match state.meta("folder")? {
+        Some(bound) if bound != here.to_string_lossy() => {
+            return Err(Error::OtherFolder {
+                folder: here,
+                bound: PathBuf::from(bound),
+            });
+        }
+        Some(_) => {}
+        None => state.set_meta("folder", &here.to_string_lossy())?,
+    }
     match state.meta("dsid")? {
         Some(owner) if owner != dsid => Err(Error::OtherAccount {
             folder: folder.to_path_buf(),
         }),
         Some(_) => Ok(()),
         None => Ok(state.set_meta("dsid", dsid)?),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_state_is_bound_to_one_folder_and_one_account() {
+        let state = State::in_memory();
+        bind(&state, "1", Path::new("/home/me/iCloud Drive")).unwrap();
+        bind(&state, "1", Path::new("/home/me/iCloud Drive")).unwrap();
+        assert!(matches!(
+            bind(&state, "1", Path::new("/home/me/Other")),
+            Err(Error::OtherFolder { .. })
+        ));
+        assert!(matches!(
+            bind(&state, "2", Path::new("/home/me/iCloud Drive")),
+            Err(Error::OtherAccount { .. })
+        ));
     }
 }

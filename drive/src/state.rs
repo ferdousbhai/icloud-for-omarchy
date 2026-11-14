@@ -4,7 +4,6 @@
 //! SQLite under the state folder, with the last listing of iCloud Drive (so
 //! unchanged folders are not listed again) and a few settings.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -27,6 +26,20 @@ pub struct State {
     db: Connection,
 }
 
+/// An item in iCloud that is left alone until it changes there (a package,
+/// say).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ignored {
+    pub id: String,
+    /// The etag it had when it was set aside.
+    pub etag: String,
+    pub path: String,
+    pub reason: String,
+}
+
+/// The SQL test for "`path` is ?1 or below it" (see [`is_under`]).
+const UNDER_1: &str = "(path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/')";
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY, docwsid TEXT NOT NULL, zone TEXT NOT NULL, parent TEXT NOT NULL,
@@ -40,6 +53,7 @@ CREATE TABLE IF NOT EXISTS remote_cache (
   mtime_ms INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ignored (id TEXT PRIMARY KEY, etag TEXT NOT NULL, path TEXT NOT NULL, reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS not_synced (path TEXT NOT NULL, reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
@@ -161,30 +175,27 @@ impl State {
 
     /// Drops the row at `path` and every row below it.
     pub fn forget_under(&self, path: &str) -> rusqlite::Result<()> {
-        for row in self.rows()? {
-            if is_under(&row.path, path) {
-                self.forget(&row.node.id)?;
-            }
-        }
+        self.db.execute(&format!("DELETE FROM items WHERE {UNDER_1}"), [path])?;
         Ok(())
     }
 
     /// After a move: the rows at and below `from` now live at and below `to`.
     pub fn move_paths(&self, from: &str, to: &str) -> rusqlite::Result<()> {
+        let tx = self.db.unchecked_transaction()?;
         // Anything a stale row still claims at the destination gives way.
-        for row in self.rows()? {
-            if is_under(&row.path, to) && !is_under(&row.path, from) {
-                self.forget(&row.node.id)?;
-            }
-        }
+        let under_from = UNDER_1.replace("?1", "?2");
+        tx.execute(
+            &format!("DELETE FROM items WHERE {UNDER_1} AND NOT {under_from}"),
+            [to, from],
+        )?;
+        // Parents first, so no row takes a path another still holds.
         for row in self.rows()? {
             if is_under(&row.path, from) {
                 let moved = format!("{to}{}", &row.path[from.len()..]);
-                self.db
-                    .execute("UPDATE items SET path = ?1 WHERE id = ?2", params![moved, row.node.id])?;
+                tx.execute("UPDATE items SET path = ?1 WHERE id = ?2", params![moved, row.node.id])?;
             }
         }
-        Ok(())
+        tx.commit()
     }
 
     pub fn meta(&self, key: &str) -> rusqlite::Result<Option<String>> {
@@ -248,17 +259,47 @@ impl State {
         tx.commit()
     }
 
-    /// Items in iCloud that are left alone until they change there (a
-    /// package, say): id to the etag they had.
-    pub fn ignored(&self) -> rusqlite::Result<HashMap<String, String>> {
-        let mut stmt = self.db.prepare("SELECT id, etag FROM ignored")?;
+    /// The items in iCloud that are left alone until they change there, by
+    /// path.
+    pub fn ignored(&self) -> rusqlite::Result<Vec<Ignored>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT id, etag, path, reason FROM ignored ORDER BY path")?;
+        stmt.query_map([], |r| {
+            Ok(Ignored {
+                id: r.get(0)?,
+                etag: r.get(1)?,
+                path: r.get(2)?,
+                reason: r.get(3)?,
+            })
+        })?
+        .collect()
+    }
+
+    /// Stops ignoring every item whose id `keep` does not want (it is gone
+    /// from iCloud).
+    pub fn keep_ignored(&self, keep: impl Fn(&str) -> bool) -> rusqlite::Result<()> {
+        for item in self.ignored()? {
+            if !keep(&item.id) {
+                self.db.execute("DELETE FROM ignored WHERE id = ?1", [&item.id])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `(path, reason)` of everything the last sync left out, for `status`.
+    pub fn not_synced(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.db.prepare("SELECT path, reason FROM not_synced ORDER BY path")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
     }
 
-    /// `(path, reason)` of every ignored item, for `status`.
-    pub fn ignored_list(&self) -> rusqlite::Result<Vec<(String, String)>> {
-        let mut stmt = self.db.prepare("SELECT path, reason FROM ignored ORDER BY path")?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+    pub fn set_not_synced(&mut self, items: &[(String, String)]) -> rusqlite::Result<()> {
+        let tx = self.db.transaction()?;
+        tx.execute("DELETE FROM not_synced", [])?;
+        for (path, reason) in items {
+            tx.execute("INSERT INTO not_synced VALUES (?1, ?2)", params![path, reason])?;
+        }
+        tx.commit()
     }
 
     pub fn ignore(&self, node: &Node, path: &str, reason: &str) -> rusqlite::Result<()> {
@@ -327,6 +368,45 @@ mod tests {
         assert_eq!(paths, ["ab.txt", "z/y", "z/y/b.txt"]);
         state.forget_under("z/y").unwrap();
         assert_eq!(state.rows().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_move_up_into_the_parent_replaces_what_the_parent_held() {
+        let state = State::in_memory();
+        for (id, path, dir) in [
+            ("1", "a", true),
+            ("2", "a/b", true),
+            ("3", "a/b/b", false),
+            ("4", "a/other.txt", false),
+            ("5", "a%", false),
+        ] {
+            state.put(&row(id, path, dir)).unwrap();
+        }
+        state.move_paths("a/b", "a").unwrap();
+        let rows: Vec<_> = state.rows().unwrap().into_iter().map(|r| (r.node.id, r.path)).collect();
+        let want = [("2", "a"), ("5", "a%"), ("3", "a/b")].map(|(id, path)| (id.to_string(), path.to_string()));
+        assert_eq!(rows, want);
+        state.forget_under("a").unwrap();
+        let paths: Vec<_> = state.rows().unwrap().into_iter().map(|r| r.path).collect();
+        assert_eq!(paths, ["a%"]);
+    }
+
+    #[test]
+    fn ignored_items_and_the_not_synced_list_round_trip() {
+        let mut state = State::in_memory();
+        state
+            .ignore(&row("1", "b.pages", false).node, "b.pages", "a package")
+            .unwrap();
+        state
+            .ignore(&row("2", "a.pages", false).node, "a.pages", "a package")
+            .unwrap();
+        state.keep_ignored(|id| id == "2").unwrap();
+        let left: Vec<_> = state.ignored().unwrap().into_iter().map(|i| (i.id, i.path)).collect();
+        assert_eq!(left, [("2".to_string(), "a.pages".to_string())]);
+        let items = [("link".to_string(), "it is a link".to_string())];
+        state.set_not_synced(&items).unwrap();
+        state.set_not_synced(&items).unwrap();
+        assert_eq!(state.not_synced().unwrap(), items);
     }
 
     #[test]

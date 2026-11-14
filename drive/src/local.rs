@@ -64,9 +64,13 @@ fn walk(dir: &Path, prefix: &str, entries: &mut BTreeMap<String, Entry>, skipped
             continue;
         };
         if name.starts_with('.') {
-            // A download a crash cut short (engine.rs names them so); only
-            // one sync runs at a time, so none is still being written.
-            if name.starts_with(".icloud-drive-") && name.ends_with(".part") {
+            // A download a crash cut short: engine.rs names it
+            // `.icloud-drive-<id>.part`, and the session crate writes that
+            // through a temp file of its own beside it (`.<name>.….tmp`).
+            // Only one sync runs at a time, so none is still being written.
+            if name.trim_start_matches('.').starts_with("icloud-drive-")
+                && (name.ends_with(".part") || name.ends_with(".tmp"))
+            {
                 let _ = fs::remove_file(item.path());
             }
             continue;
@@ -76,7 +80,13 @@ fn walk(dir: &Path, prefix: &str, entries: &mut BTreeMap<String, Entry>, skipped
             skipped.push(Skipped { path: rel, reason });
             continue;
         }
-        let meta = fs::symlink_metadata(item.path())?;
+        let meta = match fs::symlink_metadata(item.path()) {
+            Ok(meta) => meta,
+            // Removed since the folder was listed (an editor's temp file):
+            // not there, as the next scan would find.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
         if meta.file_type().is_symlink() {
             skipped.push(Skipped {
                 path: rel,
@@ -100,7 +110,14 @@ fn walk(dir: &Path, prefix: &str, entries: &mut BTreeMap<String, Entry>, skipped
         }
         entries.insert(rel.clone(), entry_of(&meta));
         if meta.is_dir() {
-            walk(&item.path(), &rel, entries, skipped)?;
+            match walk(&item.path(), &rel, entries, skipped) {
+                // The same for a folder removed before it was read. (Only
+                // below the top: a missing top folder stays an error.)
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    entries.remove(&rel);
+                }
+                done => done?,
+            }
         }
     }
     Ok(())
@@ -179,8 +196,13 @@ pub fn trash(path: &Path, trash_dir: &Path, now_rfc3339: &str) -> io::Result<Pat
     let (dest, info_path) = loop {
         let candidate = if n == 1 { name.clone() } else { format!("{name}.{n}") };
         let info_path = info.join(format!("{candidate}.trashinfo"));
-        // Creating the info file claims the name.
+        // Creating the info file claims the name, unless a file without one
+        // already has it: that one is not to be replaced.
         match fs::OpenOptions::new().write(true).create_new(true).open(&info_path) {
+            Ok(_) if fs::symlink_metadata(files.join(&candidate)).is_ok() => {
+                let _ = fs::remove_file(&info_path);
+                n += 1;
+            }
             Ok(_) => break (files.join(&candidate), info_path),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => n += 1,
             Err(e) => return Err(e),
@@ -226,6 +248,8 @@ mod tests {
         fs::write(root.join("a/x:y.txt"), "bad").unwrap();
         fs::write(root.join(".hidden"), "h").unwrap();
         fs::write(root.join("a/.icloud-drive-0123.part"), "cut short").unwrap();
+        fs::write(root.join("a/..icloud-drive-0123.part.4242.0.tmp"), "cut short").unwrap();
+        fs::create_dir(root.join(".icloud-drive-trash")).unwrap();
         fs::write(root.join("Case.txt"), "1").unwrap();
         fs::write(root.join("case.txt"), "2").unwrap();
         std::os::unix::fs::symlink("a", root.join("link")).unwrap();
@@ -236,6 +260,8 @@ mod tests {
         let reasons: Vec<_> = skipped.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(reasons, ["Case.txt", "a/x:y.txt", "case.txt", "link"]);
         assert!(!root.join("a/.icloud-drive-0123.part").exists());
+        assert!(!root.join("a/..icloud-drive-0123.part.4242.0.tmp").exists());
+        assert!(root.join(".icloud-drive-trash").exists());
         assert!(root.join(".hidden").exists());
     }
 
@@ -272,5 +298,29 @@ mod tests {
         fs::write(&file, "y").unwrap();
         let dest2 = trash(&file, &trash_dir, "2026-11-11T10:00:01Z").unwrap();
         assert_ne!(dest, dest2);
+    }
+
+    #[test]
+    fn trash_does_not_replace_a_file_that_has_no_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash_dir = dir.path().join("Trash");
+        fs::create_dir_all(trash_dir.join("files")).unwrap();
+        fs::write(trash_dir.join("files/a.txt"), "left by something else").unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "x").unwrap();
+        let dest = trash(&file, &trash_dir, "2026-11-11T10:00:00Z").unwrap();
+        assert_eq!(dest, trash_dir.join("files/a.txt.2"));
+        assert_eq!(
+            fs::read_to_string(trash_dir.join("files/a.txt")).unwrap(),
+            "left by something else"
+        );
+        assert!(!trash_dir.join("info/a.txt.trashinfo").exists());
+        assert!(trash_dir.join("info/a.txt.2.trashinfo").exists());
+    }
+
+    #[test]
+    fn a_missing_top_folder_is_an_error_not_an_empty_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(scan(&dir.path().join("gone")).is_err());
     }
 }
