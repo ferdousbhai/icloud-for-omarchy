@@ -50,7 +50,8 @@
 //!   next run (deleted since, its line goes), and one iCloud never heard of
 //!   is sent again. A file about to be written is recorded first
 //!   ([`ListState::writing`]): one found as it says was written, by a run
-//!   killed before it could record so (its temp file is removed); a
+//!   killed before it could record so (its temp file is removed; one
+//!   still holding the text says it was not); a
 //!   rename too ([`ListState::renaming`]): done only when the file is at
 //!   its new name and not its old. Nothing else ties a new
 //!   line to a reminder: one made on the phone that reads the same is
@@ -1084,8 +1085,15 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     for ls in state.lists.values_mut() {
         // A write a killed run began: its temp file is this program's own,
         // also once the list is renamed or gone.
-        if ls.writing.is_some() {
-            let _ = fs::remove_file(tmp_path(&dir.join(&ls.file)));
+        if let Some(w) = &ls.writing {
+            let tmp = tmp_path(&dir.join(&ls.file));
+            // Still there with (the start of) what was being written: the
+            // rename never happened, so the file is as last recorded, and
+            // the user's edits are of that, whatever they look closer to.
+            if fs::read(&tmp).is_ok_and(|t| w.text.as_bytes().starts_with(&t)) {
+                ls.writing = None;
+            }
+            let _ = fs::remove_file(tmp);
         }
         if let Some(to) = ls.renaming.take()
             && dir.join(&to).exists()

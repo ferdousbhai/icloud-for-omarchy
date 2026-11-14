@@ -1242,6 +1242,48 @@ impl Env {
 }
 
 #[test]
+fn a_file_edited_after_a_run_ended_before_its_write_landed_is_read_against_what_it_last_held() {
+    // Seed 1874 of the model, which failed only when the reminders' random
+    // IDs fell in one order: two "Tea", the second completed.
+    let env = start();
+    let now = now_ms();
+    env.state.put(fake::reminder(
+        "REM-TEA-2",
+        "List/LIST-GROCERIES",
+        "Tea",
+        "",
+        None,
+        now - MINUTE,
+    ));
+    let mut done = fake::reminder("REM-TEA-1", "List/LIST-GROCERIES", "Tea", "", None, now - MINUTE);
+    done["fields"]["Completed"]["value"] = json!(1);
+    done["fields"]["CompletionDate"] = json!({ "type": "TIMESTAMP", "value": now - MINUTE });
+    env.state.put(done);
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("- [ ] Tea\n") && text.contains("- [x] Tea\n"), "{text}");
+    // Reopened in iCloud; the run writing that ends before its rename.
+    let mut tea = env.state.record("Reminder/REM-TEA-1").unwrap();
+    tea["fields"]["Completed"]["value"] = json!(0);
+    tea["fields"]["CompletionDate"]["value"] = Value::Null;
+    env.state.put(tea);
+    env.background_crashing_at("tmp-written");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    // The file as it was, with its two Tea lines swapped: read against what
+    // it held, not against the write that never landed (to which it would
+    // be one tick, of whichever Tea came first).
+    let swapped = text
+        .replace("- [ ] Tea\n", "OPEN\n")
+        .replace("- [x] Tea\n", "- [ ] Tea\n")
+        .replace("OPEN\n", "- [x] Tea\n");
+    std::fs::write(&path, swapped).unwrap();
+    env.json(&["background", "--sync"]);
+    let completed = |id: &str| env.state.record(id).unwrap()["fields"]["Completed"]["value"] == json!(1);
+    assert!(completed("Reminder/REM-TEA-2") && !completed("Reminder/REM-TEA-1"));
+}
+
+#[test]
 fn a_run_ended_between_writing_a_file_and_recording_it_adds_and_deletes_nothing() {
     let env = start();
     let dir = folder(&env);
