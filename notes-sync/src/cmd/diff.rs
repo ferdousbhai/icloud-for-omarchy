@@ -73,12 +73,7 @@ pub fn render_diff_result(result: &DiffResult) -> String {
 }
 
 /// `runDiff`: `to_id` `None` = against the current remote copy.
-pub fn run_diff(
-    target_dir: &Path,
-    file: &str,
-    from_id: &str,
-    to_id: Option<&str>,
-) -> Result<DiffResult, Error> {
+pub fn run_diff(target_dir: &Path, file: &str, from_id: &str, to_id: Option<&str>) -> Result<DiffResult, Error> {
     run_diff_with(&DefaultConnector, target_dir, file, from_id, to_id)
 }
 

@@ -2,8 +2,7 @@
 //! and names `icloud-notes-sync`. Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cmd::plan::{
-    PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, count_unchanged_notes,
-    render_plan,
+    PlanEntry, PlanEntryKind as K, PlanResolution as R, RenderPlanOptions, count_unchanged_notes, render_plan,
 };
 
 fn e(kind: K, file: &str, resolution: R) -> PlanEntry {

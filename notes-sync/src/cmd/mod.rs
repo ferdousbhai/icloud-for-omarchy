@@ -115,7 +115,12 @@ pub(crate) const OTHER_ZONES_RECORD_NAME: &str = "a note from another zone is al
 /// run is the caller's to say: `revoked` ends the sentence for a zone the
 /// server no longer has, `untouched` the one for a zone whose notes came
 /// without their text (`when`: " this run", or nothing).
-pub(crate) fn skipped_zone_notice(skipped: &SkippedSharedZone, revoked: &str, when: &str, untouched: &str) -> SyncNotice {
+pub(crate) fn skipped_zone_notice(
+    skipped: &SkippedSharedZone,
+    revoked: &str,
+    when: &str,
+    untouched: &str,
+) -> SyncNotice {
     let owner = skipped_zone_owner(skipped).unwrap_or("unknown");
     let message = match skipped {
         SkippedSharedZone::ZoneNotFound { server_error_code, .. } => format!(

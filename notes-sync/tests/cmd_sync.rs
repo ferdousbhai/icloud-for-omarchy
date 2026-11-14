@@ -118,10 +118,15 @@ fn the_exit_code_is_3_above_all_then_the_higher_half() {
     assert_eq!(outcome(mismatch(), Some(offline())), 3);
     assert_eq!(outcome(Error::Internal("x".into()), Some(untracked())), 4);
     assert_eq!(outcome(untracked(), Some(offline())), 5);
-    assert_eq!(outcome(
-            Error::AlreadyClonedDirectory { target_dir: "/v".into() },
+    assert_eq!(
+        outcome(
+            Error::AlreadyClonedDirectory {
+                target_dir: "/v".into()
+            },
             Some(Error::Internal("x".into()))
-        ), 2);
+        ),
+        2
+    );
     assert_eq!(outcome(offline(), None), 5);
 }
 

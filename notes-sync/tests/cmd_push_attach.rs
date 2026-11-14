@@ -12,7 +12,7 @@ use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cloudkit::{CkError, Database, Transport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution};
-use icloud_notes_sync::cmd::pull::{run_pull_with};
+use icloud_notes_sync::cmd::pull::run_pull_with;
 use icloud_notes_sync::cmd::push::{PushOptions, PushResult, run_push_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
@@ -302,13 +302,7 @@ fn cloned_vault(dir: &Path) -> PathBuf {
             account,
         })
     });
-    run_clone_with(
-        &connector,
-        &vault,
-        &mut NoProgress,
-        &CloneOptions::default(),
-    )
-    .unwrap();
+    run_clone_with(&connector, &vault, &mut NoProgress, &CloneOptions::default()).unwrap();
     vault
 }
 
@@ -1149,13 +1143,7 @@ fn a_link_gone_from_the_note_removes_the_attachment_in_one_atomic_request() {
     // Attachment and Media records now `Deleted: 1`) does nothing: no file
     // comes back, nothing is tracked again, nothing is reported.
     let notes_after_push = state(&vault).notes;
-    let summary = run_pull_with(
-        &serve(&server),
-        &vault,
-        &mut NoProgress,
-        &mut |_| {}
-    )
-    .unwrap();
+    let summary = run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
     assert_eq!(
         (summary.added, summary.updated, summary.merged, summary.removed),
         (0, 0, 0, 0)
@@ -1188,13 +1176,7 @@ fn a_device_that_pulls_the_removal_loses_the_link_and_the_file() {
     edit_note(&vault, |text| text.replace("[plan.pdf](attachments/plan.pdf)\n", ""));
     assert_eq!(push(&server, &vault).pushed, Some(1));
 
-    let summary = run_pull_with(
-        &serve(&server),
-        &other,
-        &mut NoProgress,
-        &mut |_| {}
-    )
-    .unwrap();
+    let summary = run_pull_with(&serve(&server), &other, &mut NoProgress, &mut |_| {}).unwrap();
     assert_eq!(summary.updated, 1, "{:?}", summary.changes);
     assert!(summary.notices.is_empty(), "{:?}", summary.notices);
     let text = std::fs::read_to_string(other.join(NOTE_FILE)).unwrap();

@@ -12,8 +12,8 @@ use super::{
     Error, NoticeLevel, OTHER_ZONES_RECORD_NAME, SyncNotice, SyncProgress, UNSAFE_RECORD_NAME,
     shared_zone_tokens_and_records, skipped_note_notice, skipped_zone_notice, used_names_for, zone_for_owner,
 };
-use crate::cloudkit::client::DownloadQueue;
 use crate::cloudkit::CloudKitRecord;
+use crate::cloudkit::client::DownloadQueue;
 use crate::doc::decode::{ClassifyOptions, NoteDecodeResult, classify_note_record};
 use crate::js::posix;
 use crate::md::filename::{note_file_name_for, title_needing_frontmatter, unique_file_name};
@@ -318,7 +318,11 @@ pub fn run_clone_with(
         } else {
             None
         },
-        shared_zone_sync_tokens: Some(if failed { IndexMap::new() } else { shared_zone_sync_tokens }),
+        shared_zone_sync_tokens: Some(if failed {
+            IndexMap::new()
+        } else {
+            shared_zone_sync_tokens
+        }),
         shared_database: if failed { None } else { shared.cursor.clone() },
         notes,
         folders: Some(layout.state_folders),

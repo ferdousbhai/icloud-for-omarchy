@@ -118,8 +118,7 @@ pub struct PullSummary {
 
 /// What a pull says of a file it could not merge into: the markers of an
 /// earlier conflict are still in it.
-const UNRESOLVED_MARKERS: &str =
-    "still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile";
+const UNRESOLVED_MARKERS: &str = "still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile";
 /// What a pull says of a merge that left conflict markers.
 const MERGED_WITH_MARKERS: &str = "merged with conflict markers - resolve manually";
 /// What a pull with nothing to apply says.
@@ -597,9 +596,7 @@ pub fn run_pull_with(
                         tracked.notes.insert(record.record_name.clone(), refreshed(&existing));
                         for claimant in &claimants {
                             if conflicted {
-                                summary
-                                    .conflicts
-                                    .push(format!("{claimant}: {MERGED_WITH_MARKERS}"));
+                                summary.conflicts.push(format!("{claimant}: {MERGED_WITH_MARKERS}"));
                             } else {
                                 summary.merged += 1;
                             }
@@ -691,7 +688,7 @@ pub fn run_pull_with(
                     entry.pending_rename = None;
                     tracked.notes.insert(record.record_name.clone(), entry);
                     summary.conflicts.push(format!("{file}: {UNRESOLVED_MARKERS}"));
-                    let mut remarks = vec![PullChangeRemark::new("conflict", UNRESOLVED_MARKERS)];
+                    let remarks = vec![PullChangeRemark::new("conflict", UNRESOLVED_MARKERS)];
                     summary.changes.push(change_with(PullChangeKind::Update, Some(remarks)));
                     return Ok(());
                 }
@@ -699,9 +696,7 @@ pub fn run_pull_with(
                     .notes
                     .insert(record.record_name.clone(), updated_entry(&existing));
                 if merged == MergeStatus::Conflict {
-                    summary
-                        .conflicts
-                        .push(format!("{file}: {MERGED_WITH_MARKERS}"));
+                    summary.conflicts.push(format!("{file}: {MERGED_WITH_MARKERS}"));
                     let mut remarks = vec![PullChangeRemark::new("conflict", MERGED_WITH_MARKERS)];
                     remarks.extend(title_remarks.iter().cloned());
                     if unpublishable_reason.is_some() {

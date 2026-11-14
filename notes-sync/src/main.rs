@@ -355,7 +355,10 @@ fn plan_lines(entries: &[PlanEntry], unchanged: Option<usize>, target: &Path) ->
 }
 
 fn preview_summary(changes: usize, unchanged: usize) -> String {
-    format!("{} to push, {unchanged} unchanged", plural(changes, "change", "changes"))
+    format!(
+        "{} to push, {unchanged} unchanged",
+        plural(changes, "change", "changes")
+    )
 }
 
 fn push_summary(r: &push::PushResult, target: &Path) -> String {

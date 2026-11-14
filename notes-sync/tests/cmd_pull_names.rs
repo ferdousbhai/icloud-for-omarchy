@@ -110,24 +110,12 @@ fn listing_in(mut c: Cassette, private: Vec<Value>, shared: Option<Vec<Value>>) 
 fn clone_from(cassette: Cassette) -> (tempfile::TempDir, PathBuf, CloneSummary) {
     let tmp = tempfile::tempdir().unwrap();
     let vault = tmp.path().join("a/vault");
-    let summary = run_clone_with(
-        &replay(cassette),
-        &vault,
-        &mut NoProgress,
-        &CloneOptions::default(),
-    )
-    .unwrap();
+    let summary = run_clone_with(&replay(cassette), &vault, &mut NoProgress, &CloneOptions::default()).unwrap();
     (tmp, vault, summary)
 }
 
 fn pull(vault: &Path, cassette: Cassette) -> PullSummary {
-    run_pull_with(
-        &replay(cassette),
-        vault,
-        &mut NoProgress,
-        &mut |_| {}
-    )
-    .unwrap()
+    run_pull_with(&replay(cassette), vault, &mut NoProgress, &mut |_| {}).unwrap()
 }
 
 fn read(vault: &Path, file: &str) -> String {

@@ -214,5 +214,8 @@ fn a_note_created_before_the_push_was_killed_is_not_created_again() {
     assert_eq!(server.created.lock().unwrap().len(), 1, "only the second note");
     let state = read_clone_state(&vault).unwrap().unwrap();
     let files: Vec<&str> = state.notes.values().map(|e| e.file.as_str()).collect();
-    assert!(files.contains(&"Notes/A.md") && files.contains(&"Notes/B.md"), "{files:?}");
+    assert!(
+        files.contains(&"Notes/A.md") && files.contains(&"Notes/B.md"),
+        "{files:?}"
+    );
 }

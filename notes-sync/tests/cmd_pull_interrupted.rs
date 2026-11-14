@@ -43,12 +43,7 @@ fn replay(cassette: Cassette, log: PathBuf) -> impl Connector {
 }
 
 fn pull(vault: &Path, cassette: Cassette, log: PathBuf) -> Result<PullSummary, Error> {
-    run_pull_with(
-        &replay(cassette, log),
-        vault,
-        &mut NoProgress,
-        &mut |_| {}
-    )
+    run_pull_with(&replay(cassette, log), vault, &mut NoProgress, &mut |_| {})
 }
 
 /// Every Markdown file under `dir`, relative to it, sorted.
@@ -192,7 +187,7 @@ fn notes_written_before_the_pull_was_killed_are_not_pushed_as_new() {
                 after: 50,
                 processed: 0,
             },
-            &mut |_| {}
+            &mut |_| {},
         )
     }));
     assert!(killed.is_err(), "the pull was cut off");

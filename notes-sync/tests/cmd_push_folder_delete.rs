@@ -8,7 +8,7 @@ use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cloudkit::{CkError, Database, Transport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
 use icloud_notes_sync::cmd::plan::PlanResolution;
-use icloud_notes_sync::cmd::pull::{run_pull_with};
+use icloud_notes_sync::cmd::pull::run_pull_with;
 use icloud_notes_sync::cmd::push::{PushOptions, PushResult, run_push_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
@@ -219,13 +219,7 @@ fn deleting_its_folder_keeps(extra: Value) {
         records: vec![],
         log: Arc::default(),
     };
-    run_pull_with(
-        &serve(server),
-        &vault,
-        &mut NoProgress,
-        &mut |_| {}
-    )
-    .unwrap();
+    run_pull_with(&serve(server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
     assert!(vault.join("Private").is_dir());
 }
 

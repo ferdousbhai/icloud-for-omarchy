@@ -85,14 +85,7 @@ fn render_diff_treats_empty_from_as_everything_added() {
 fn rejects_a_ref_matching_neither_snapshot_nor_epoch() {
     let dir = tempfile::tempdir().unwrap();
     write_clone_state(dir.path(), &state()).unwrap();
-    let err = run_diff_with(
-        &no_network(),
-        dir.path(),
-        "Test Note.md",
-        "missing-id",
-        None,
-    )
-    .unwrap_err();
+    let err = run_diff_with(&no_network(), dir.path(), "Test Note.md", "missing-id", None).unwrap_err();
     assert!(
         err.to_string()
             .contains("No version snapshot with id \"missing-id\" found")

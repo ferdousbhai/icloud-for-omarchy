@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use icloud_notes_sync::cloudkit::Database;
 use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, CloneSummary, run_clone_with};
-use icloud_notes_sync::cmd::pull::{run_pull_with};
+use icloud_notes_sync::cmd::pull::run_pull_with;
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress, NoticeLevel};
 use icloud_notes_sync::vault::state::{Account, CloneState, read_clone_state, write_clone_state};
@@ -25,13 +25,7 @@ fn refuses_an_already_cloned_folder_without_authenticating() {
     };
     write_clone_state(dir.path(), &state).unwrap();
     let connector = FnConnector(|| -> Result<Remote, Error> { panic!("must not authenticate") });
-    let err = run_clone_with(
-        &connector,
-        dir.path(),
-        &mut NoProgress,
-        &CloneOptions::default(),
-    )
-    .unwrap_err();
+    let err = run_clone_with(&connector, dir.path(), &mut NoProgress, &CloneOptions::default()).unwrap_err();
     assert!(err.to_string().contains("is already a cloned notes directory"));
 }
 
@@ -66,13 +60,7 @@ fn replay(cassette: Cassette, log: PathBuf) -> impl Connector {
 }
 
 fn clone_from(cassette: Cassette, vault: &Path, log: PathBuf) -> CloneSummary {
-    run_clone_with(
-        &replay(cassette, log),
-        vault,
-        &mut NoProgress,
-        &CloneOptions::default(),
-    )
-    .unwrap()
+    run_clone_with(&replay(cassette, log), vault, &mut NoProgress, &CloneOptions::default()).unwrap()
 }
 
 fn logged(log: &Path) -> Vec<Value> {
@@ -135,7 +123,7 @@ fn clone_saves_no_private_sync_token_past_a_note_still_without_text() {
         &replay(cassette("bodyless-clone.json"), log.clone()),
         &vault,
         &mut NoProgress,
-        &mut |_| {}
+        &mut |_| {},
     )
     .unwrap();
     assert_eq!(pulled.added, 1);
@@ -241,7 +229,7 @@ fn a_pull_to_a_note_opening_with_blank_lines_leaves_nothing_to_push() {
         ),
         &vault,
         &mut NoProgress,
-        &mut |_| {}
+        &mut |_| {},
     )
     .unwrap();
     assert_eq!(pulled.updated, 1);
@@ -388,7 +376,7 @@ fn a_clone_that_fails_part_way_tracks_what_it_wrote() {
         &replay(cassette("attach-clone.json"), dir.path().join("pull.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {}
+        &mut |_| {},
     )
     .unwrap();
     let files = tracked_files(&vault);

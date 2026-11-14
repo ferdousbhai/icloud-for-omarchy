@@ -101,6 +101,10 @@ pub struct Database<T: Transport> {
     pub transport: T,
 }
 
+/// Records a lookup was answered an error for, each with its
+/// `serverErrorCode`.
+pub type LookupFailures = Vec<(String, String)>;
+
 impl<T: Transport> Database<T> {
     pub fn new(transport: T) -> Self {
         Database { transport }
@@ -426,7 +430,7 @@ impl<T: Transport> Database<T> {
         &self,
         zone: &NoteZone,
         record_names: &[String],
-    ) -> Result<(Vec<CloudKitRecord>, Vec<(String, String)>), CkError> {
+    ) -> Result<(Vec<CloudKitRecord>, LookupFailures), CkError> {
         let mut records = Vec::new();
         let mut failures = Vec::new();
         for batch in record_names.chunks(LOOKUP_BATCH_SIZE) {
@@ -447,7 +451,8 @@ impl<T: Transport> Database<T> {
                     && get(entry, "fields").is_some_and(is_record)
                 {
                     records.push(parse_record(entry)?);
-                } else if let (Some(name), Some(code)) = (get_str(entry, "recordName"), get_str(entry, "serverErrorCode"))
+                } else if let (Some(name), Some(code)) =
+                    (get_str(entry, "recordName"), get_str(entry, "serverErrorCode"))
                     && code != "NOT_FOUND"
                 {
                     failures.push((name.to_owned(), code.to_owned()));
