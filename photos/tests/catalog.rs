@@ -3,7 +3,7 @@ mod support;
 use std::collections::HashSet;
 use std::path::Path;
 
-use icloud_photos::catalog::{Catalog, PathKind, SCHEMA_VERSION};
+use icloud_photos::catalog::{Catalog, PathKind};
 use icloud_photos::cloudkit::{Asset, Kind, MasterInfo, Resource};
 
 fn asset(id: &str, created: i64) -> Asset {
@@ -60,7 +60,7 @@ fn path_lookups_use_the_partial_indexes() {
 }
 
 #[test]
-fn an_old_catalog_is_migrated_once_and_keeps_its_rows() {
+fn an_old_catalog_gains_the_path_indexes_and_keeps_its_rows() {
     let tmp = support::temp_dir("migrate");
     let path = tmp.path().join("catalog.db");
     {
@@ -73,7 +73,7 @@ fn an_old_catalog_is_migrated_once_and_keeps_its_rows() {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP INDEX assets_by_local_path; DROP INDEX assets_by_live_path;
-             DROP INDEX assets_by_medium_path; PRAGMA user_version = 0;",
+             DROP INDEX assets_by_medium_path;",
         )
         .unwrap();
     }
@@ -82,8 +82,6 @@ fn an_old_catalog_is_migrated_once_and_keeps_its_rows() {
     assert!(!cat.path_taken(Path::new("/lib/A.JPG"), "A").unwrap());
     drop(cat);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version as usize, SCHEMA_VERSION);
     let indexes: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'assets_by_%_path'",
@@ -92,9 +90,6 @@ fn an_old_catalog_is_migrated_once_and_keeps_its_rows() {
         )
         .unwrap();
     assert_eq!(indexes, 3);
-    // Opening again runs nothing new.
-    drop(conn);
-    Catalog::open(&path).unwrap();
 }
 
 #[test]

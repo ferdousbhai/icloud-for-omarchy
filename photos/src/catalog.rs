@@ -50,39 +50,20 @@ CREATE TABLE IF NOT EXISTS album_assets(
 CREATE INDEX IF NOT EXISTS album_assets_by_asset ON album_assets(asset_id);
 CREATE INDEX IF NOT EXISTS album_assets_by_relation ON album_assets(relation_id);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+-- The download threads ask whether a library path is already an asset
+-- (`path_taken`) for every candidate name, and pruning the medium cache forgets files by
+-- path: index the paths, only the rows that have one.
+CREATE INDEX IF NOT EXISTS assets_by_local_path ON assets(local_path) WHERE local_path IS NOT NULL;
+CREATE INDEX IF NOT EXISTS assets_by_live_path ON assets(live_path) WHERE live_path IS NOT NULL;
+CREATE INDEX IF NOT EXISTS assets_by_medium_path ON assets(medium_path) WHERE medium_path IS NOT NULL;
 ";
 
-/// Schema migrations, in order: `PRAGMA user_version` counts how many have
-/// run. Each runs once, in a transaction; append, never edit.
-const MIGRATIONS: &[&str] = &[
-    // 1: the download threads ask "is this library path anyone's?"
-    // (`path_taken`) for every candidate name, and pruning the medium cache
-    // forgets files by path: index the paths, only the rows that have one.
-    "CREATE INDEX IF NOT EXISTS assets_by_local_path ON assets(local_path) WHERE local_path IS NOT NULL;
-     CREATE INDEX IF NOT EXISTS assets_by_live_path ON assets(live_path) WHERE live_path IS NOT NULL;
-     CREATE INDEX IF NOT EXISTS assets_by_medium_path ON assets(medium_path) WHERE medium_path IS NOT NULL;",
-];
-
-/// Create the tables, then bring an older catalog up to date.
+/// Create the tables and indexes; an older catalog gains what it lacks.
 fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)?;
-    let version: usize = conn
-        .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?
-        .max(0) as usize;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(version) {
-        conn.execute_batch("BEGIN IMMEDIATE")?;
-        let done = conn.execute_batch(&format!("{sql} PRAGMA user_version = {};", i + 1));
-        if let Err(e) = done.and_then(|()| conn.execute_batch("COMMIT")) {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(e);
-        }
-    }
     conn.set_prepared_statement_cache_capacity(32);
     Ok(())
 }
-
-/// The schema version a catalog opened by this build has.
-pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
 
 /// A catalog row, as the UI and downloaders see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,30 +401,13 @@ impl Catalog {
 
     /// Visible assets, newest first; `album` narrows to one album.
     pub fn assets(&self, album: Option<&str>) -> Result<Vec<Row>> {
-        let rows = match album {
-            None => {
-                let mut st = self.conn.prepare(&format!(
-                    "SELECT {ROW_COLUMNS} FROM assets WHERE deleted = 0 ORDER BY created DESC, id"
-                ))?;
-                st.query_map([], row)?.collect::<rusqlite::Result<Vec<_>>>()?
-            }
-            Some(album) => {
-                let mut st = self.conn.prepare(&format!(
-                    "SELECT {ROW_COLUMNS} FROM assets WHERE deleted = 0
-                       AND id IN (SELECT asset_id FROM album_assets WHERE album_id = ?1)
-                     ORDER BY created DESC, id"
-                ))?;
-                st.query_map([album], row)?.collect::<rusqlite::Result<Vec<_>>>()?
-            }
-        };
-        Ok(rows)
+        self.visible(ROW_COLUMNS, album, row)
     }
 
     /// [`assets`](Self::assets) with only what the photo grid shows: no
     /// download URLs (four long strings a row), no paths it does not use.
     pub fn grid_assets(&self, album: Option<&str>) -> Result<Vec<GridRow>> {
-        const COLS: &str = "id, created, thumb_path, kind, is_live, filename";
-        let grid_row = |r: &rusqlite::Row| {
+        self.visible("id, created, thumb_path, kind, is_live, filename", album, |r| {
             Ok(GridRow {
                 id: r.get(0)?,
                 created: r.get(1)?,
@@ -452,24 +416,25 @@ impl Catalog {
                 is_live: r.get::<_, i64>(4)? != 0,
                 filename: r.get(5)?,
             })
+        })
+    }
+
+    /// `columns` of the visible assets, newest first, of one album or of all.
+    fn visible<T>(
+        &self,
+        columns: &str,
+        album: Option<&str>,
+        map: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
+        let in_album = match album {
+            Some(_) => "AND id IN (SELECT asset_id FROM album_assets WHERE album_id = ?1)",
+            None => "",
         };
-        let rows = match album {
-            None => {
-                let mut st = self.conn.prepare(&format!(
-                    "SELECT {COLS} FROM assets WHERE deleted = 0 ORDER BY created DESC, id"
-                ))?;
-                st.query_map([], grid_row)?.collect::<rusqlite::Result<Vec<_>>>()?
-            }
-            Some(album) => {
-                let mut st = self.conn.prepare(&format!(
-                    "SELECT {COLS} FROM assets WHERE deleted = 0
-                       AND id IN (SELECT asset_id FROM album_assets WHERE album_id = ?1)
-                     ORDER BY created DESC, id"
-                ))?;
-                st.query_map([album], grid_row)?.collect::<rusqlite::Result<Vec<_>>>()?
-            }
-        };
-        Ok(rows)
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {columns} FROM assets WHERE deleted = 0 {in_album} ORDER BY created DESC, id"
+        ))?;
+        let rows = st.query_map(rusqlite::params_from_iter(album), map)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn asset(&self, id: &str) -> Result<Option<Row>> {
