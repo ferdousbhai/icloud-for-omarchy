@@ -552,7 +552,13 @@ fn every_own_note_gone_is_refused_whatever_is_shared_with_the_account() {
 
     let error = try_push(&server, &vault).unwrap_err();
     assert!(
-        matches!(error, Error::TooManyDeletions { deletions: 5, total: 11 }),
+        matches!(
+            error,
+            Error::TooManyDeletions {
+                deletions: 5,
+                total: 11
+            }
+        ),
         "{error:?}"
     );
     assert!(server.operations().is_empty(), "nothing was sent");

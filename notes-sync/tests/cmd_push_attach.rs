@@ -1018,7 +1018,10 @@ fn a_new_note_whose_push_was_killed_keeps_its_attachment_tracked() {
     let result = push(&server, &vault);
     assert!(result.failures().is_empty(), "{result:?}");
     assert!(
-        result.entries.iter().all(|e| e.entry.resolution == PlanResolution::Noop),
+        result
+            .entries
+            .iter()
+            .all(|e| e.entry.resolution == PlanResolution::Noop),
         "{result:?}"
     );
     assert_eq!(server.posts_to("/records/modify").len(), 1, "nothing more was sent");
