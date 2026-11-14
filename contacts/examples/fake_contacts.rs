@@ -106,6 +106,14 @@ impl State {
             .map(|(_, c)| Value::Object(c.clone()))
     }
 
+    /// Deletes a card, as another device would.
+    #[allow(dead_code)] // tests/model.rs
+    pub fn remove(&self, id: &str) {
+        let mut b = self.book.lock().unwrap();
+        b.seq += 1;
+        b.cards.remove(id);
+    }
+
     pub fn count(&self) -> usize {
         self.book.lock().unwrap().cards.len()
     }
@@ -120,6 +128,17 @@ impl State {
     /// Every request, oldest first: `{"method", "path", "query", "body"}`.
     pub fn requests(&self) -> Vec<Value> {
         self.requests.lock().unwrap().clone()
+    }
+
+    /// The requests after the first `n`.
+    #[allow(dead_code)] // tests/model.rs
+    pub fn requests_since(&self, n: usize) -> Vec<Value> {
+        self.requests.lock().unwrap().get(n..).unwrap_or_default().to_vec()
+    }
+
+    #[allow(dead_code)] // tests/model.rs
+    pub fn request_count(&self) -> usize {
+        self.requests.lock().unwrap().len()
     }
 
     fn tokens(b: &Book) -> (String, String) {

@@ -116,7 +116,11 @@ cargo test -p icloud-contacts
 ```
 
 `tests/cli.rs` runs the built command line against the fake for every
-command. The library has no GTK dependency (the window's code is in
+command. `tests/model.rs` edits seeded random contacts through both the
+command line and the window's dialog (`src/draft.rs`), some over another
+device's change, and checks that each edit changes only what it names; it
+also reads every vCard it exports back (`MODEL_SEED=<n>` reruns one case).
+The library has no GTK dependency (the window's code is in
 `src/bin/app/`), so `cargo test --no-default-features` runs on a machine
 without the GTK stack.
 
