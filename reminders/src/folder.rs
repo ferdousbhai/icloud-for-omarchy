@@ -159,21 +159,41 @@ fn bullet(body: &str) -> Option<&str> {
     rest.starts_with([' ', '\t']).then(|| rest.trim_start())
 }
 
-/// The title and the due date after the last 📅 that reads as one.
-fn split_due<'a>(text: &'a str, now: &Zoned) -> (&'a str, Option<String>) {
-    if let Some(at) = text.rfind(DUE_MARK)
-        && let Ok(d) = due::parse_when(&text[at + DUE_MARK.len()..], now)
-    {
-        return (text[..at].trim_end(), Some(d.display(now.time_zone())));
+/// The title and the due date after the last 📅 that reads as one. A
+/// backslash before that 📅 makes it the title's own ([`escaped`]).
+fn split_due(text: &str, now: &Zoned) -> (String, Option<String>) {
+    if let Some(at) = text.rfind(DUE_MARK) {
+        if let Some(before) = text[..at].strip_suffix('\\') {
+            return (format!("{before}{}", &text[at..]), None);
+        }
+        if let Ok(d) = due::parse_when(&text[at + DUE_MARK.len()..], now) {
+            return (text[..at].trim_end().to_owned(), Some(d.display(now.time_zone())));
+        }
     }
-    (text, None)
+    (text.to_owned(), None)
+}
+
+/// A title as a line with no due date holds it: with a backslash before its
+/// last 📅 when the line would otherwise read as another title ("Call 📅
+/// tomorrow" as "Call", due tomorrow).
+fn escaped(title: &str, now: &Zoned) -> String {
+    match title.rfind(DUE_MARK) {
+        Some(at) if split_due(title, now).0 != title => format!("{}\\{}", &title[..at], &title[at..]),
+        _ => title.to_owned(),
+    }
+}
+
+/// A Markdown heading: hashes, then a space or nothing. `#hashtag` is text.
+fn heading(body: &str) -> bool {
+    let rest = body.trim_start_matches('#');
+    rest.len() < body.len() && (rest.is_empty() || rest.starts_with([' ', '\t']))
 }
 
 fn item(done: bool, text: &str, now: &Zoned) -> Option<Item> {
     let (title, due) = split_due(text.trim(), now);
-    (!title.is_empty()).then(|| Item {
+    (!title.is_empty()).then_some(Item {
         done,
-        title: title.to_owned(),
+        title,
         due,
         notes: String::new(),
     })
@@ -185,7 +205,8 @@ fn item(done: bool, text: &str, now: &Zoned) -> Option<Item> {
 pub fn parse(text: &str, now: &Zoned) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     let mut blanks = 0;
-    for line in text.lines() {
+    // Some editors start a file with a byte order mark.
+    for line in text.trim_start_matches('\u{feff}').lines() {
         let body = line.trim_start();
         if body.trim_end().is_empty() {
             blanks += 1;
@@ -199,7 +220,7 @@ pub fn parse(text: &str, now: &Zoned) -> Vec<Item> {
             .sum();
         if indent < 2 || items.is_empty() {
             blanks = 0;
-            if body.starts_with('#') {
+            if heading(body) {
                 continue;
             }
             let (done, text) = checkbox(body).unwrap_or((false, bullet(body).unwrap_or(body)));
@@ -231,9 +252,13 @@ fn write_item(out: &mut String, r: &Reminder, sub: bool, now: &Zoned) {
         "" => UNTITLED,
         t => t,
     };
-    out.push_str(&format!("{pad}- [{}] {title}", if r.completed { 'x' } else { ' ' }));
-    if let Some(d) = &r.due {
-        out.push_str(&format!(" {DUE_MARK} {}", d.display(now.time_zone())));
+    let done = if r.completed { 'x' } else { ' ' };
+    match &r.due {
+        Some(d) => out.push_str(&format!(
+            "{pad}- [{done}] {title} {DUE_MARK} {}",
+            d.display(now.time_zone())
+        )),
+        None => out.push_str(&format!("{pad}- [{done}] {}", escaped(title, now))),
     }
     out.push('\n');
     for line in r.notes.trim().lines() {
@@ -821,6 +846,40 @@ mod tests {
         assert!(got[2].done);
         assert_eq!(got[2].due.as_deref(), Some("2026-11-15 09:00"));
         assert_eq!(got[3].due, None);
+    }
+
+    #[test]
+    fn only_hashes_and_a_space_are_a_heading_and_a_byte_order_mark_is_skipped() {
+        let got = items("\u{feff}# Groceries\n#hashtag buy milk\n##\n### Later\n#1 priority\n");
+        let titles: Vec<&str> = got.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["#hashtag buy milk", "#1 priority"]);
+    }
+
+    #[test]
+    fn a_title_that_reads_as_a_due_date_stays_a_title() {
+        let now = now();
+        let mut dated = reminder("C", "Call \\📅 Ann 📅 2026-12-01");
+        dated.due = Some(due::parse_when("2026-12-24", &now).unwrap());
+        let all = vec![
+            reminder("A", "📅 tomorrow"),
+            reminder("B", "Call 📅 tomorrow"),
+            dated,
+            reminder("D", "Odd \\📅 one"),
+        ];
+        let titles: Vec<String> = all.iter().map(|r| r.title.clone()).collect();
+        let (text, ids) = render(&list(&["A", "B", "C", "D"]), &cache(all), &now);
+        let read = known(&text, ids, &now).unwrap();
+        assert_eq!(read.iter().map(|k| k.item.title.clone()).collect::<Vec<_>>(), titles);
+        let dues: Vec<Option<&str>> = read.iter().map(|k| k.item.due.as_deref()).collect();
+        assert_eq!(dues, [None, None, Some("2026-12-24"), None]);
+        // Read on another day, with a box ticked: only the tick is asked for.
+        let later = now.checked_add(jiff::Span::new().days(3)).unwrap();
+        let ticked = text.replace("- [ ] Call \\📅 tomorrow", "- [x] Call \\📅 tomorrow");
+        assert_ne!(ticked, text, "{text}");
+        let delta = diff(&read, &parse(&ticked, &later), &later);
+        assert_eq!(delta.updates.len(), 1);
+        assert_eq!(delta.updates[0].2, vec![Change::Completed(true)]);
+        assert!(delta.adds.is_empty() && delta.deletes.is_empty());
     }
 
     #[test]
