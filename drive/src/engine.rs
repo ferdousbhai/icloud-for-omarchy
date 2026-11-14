@@ -802,7 +802,7 @@ impl<R: Remote> Engine<'_, R> {
                     let _ = fs::remove_file(&temp);
                     return Ok(false);
                 }
-                self.place(&temp, path, node)?;
+                return self.place(&temp, path, node, current.is_some());
             }
             Op::KeepBoth { id, path } => {
                 let node = node_of(id)?;
@@ -829,7 +829,7 @@ impl<R: Remote> Engine<'_, R> {
                     let _ = fs::remove_file(&temp);
                     return Err(e.into());
                 }
-                self.place(&temp, path, node)?;
+                return self.place(&temp, path, node, false);
             }
             Op::Upload { path } => {
                 let before = self.need_stat(path)?;
@@ -1016,23 +1016,33 @@ impl<R: Remote> Engine<'_, R> {
     }
 
     /// Gives a fetched temp file its name and records it, noted first as
-    /// placed (a rename keeps its inode, size and date).
-    fn place(&self, temp: &Path, path: &str, node: Node) -> Result<()> {
+    /// placed (a rename keeps its inode, size and date). Only `over` the
+    /// file in step there: with none expected, never onto one that
+    /// appeared since it was looked at (`false`, left for the next round).
+    fn place(&self, temp: &Path, path: &str, node: Node, over: bool) -> Result<bool> {
         let row = Row {
             node,
             path: path.to_string(),
             local: local::stat(temp)?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the download is gone"))?,
         };
         self.state.set_placed(&row)?;
-        if let Err(e) = fs::rename(temp, self.abs(path)) {
-            let _ = fs::remove_file(temp);
-            self.state.clear_placed(&row.node.id)?;
-            return Err(e.into());
+        let placed = if over {
+            fs::rename(temp, self.abs(path)).map(|()| true)
+        } else {
+            local::rename_no_replace(temp, &self.abs(path))
+        };
+        match placed {
+            Ok(true) => {}
+            failed => {
+                let _ = fs::remove_file(temp);
+                self.state.clear_placed(&row.node.id)?;
+                return failed.map_err(Error::from);
+            }
         }
         crash::point("local.download_rename");
         self.state.put(&row)?;
         self.state.clear_placed(&row.node.id)?;
-        Ok(())
+        Ok(true)
     }
 
     /// What a run that stopped sent to iCloud as new but did not record:
