@@ -484,7 +484,7 @@ pub(crate) fn list_untracked_markdown_files(
     notes: &IndexMap<String, NoteEntry>,
 ) -> Result<Vec<String>, Error> {
     let tracked: HashSet<&str> = notes.values().map(|e| e.file.as_str()).collect();
-    let (_, mut found) = walk_vault(target_dir)?;
+    let mut found = walk_vault(target_dir)?.files;
     found.retain(|file| !tracked.contains(file.as_str()));
     found.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     Ok(found)
@@ -493,13 +493,45 @@ pub(crate) fn list_untracked_markdown_files(
 /// Every directory in the vault that could be a folder's: dot-directories
 /// and `attachments/` skipped, as for note files.
 fn list_vault_dirs(target_dir: &Path) -> Result<HashSet<String>, Error> {
-    Ok(walk_vault(target_dir)?.0)
+    Ok(walk_vault(target_dir)?.dirs)
+}
+
+/// What [`walk_vault`] finds, relative to the vault's directory.
+#[derive(Default)]
+struct VaultWalk {
+    dirs: HashSet<String>,
+    /// `.md` files.
+    files: Vec<String>,
+    /// Syncthing conflict copies ([`is_sync_conflict_name`]), of any
+    /// extension: never note files.
+    conflicts: Vec<String>,
+}
+
+/// Whether `name` is a copy Syncthing made of a file two devices changed at
+/// once: `<name>.sync-conflict-<YYYYMMDD>-<HHMMSS>-<device>.<ext>` (the
+/// device is 7 letters or digits; the extension may be absent). Such a copy
+/// of a note carries the note's id, so read as a note file it would be
+/// pushed as a new note, or taken for the note itself once its file is gone.
+pub(crate) fn is_sync_conflict_name(name: &str) -> bool {
+    const MARKER: &str = ".sync-conflict-";
+    name.match_indices(MARKER).any(|(at, _)| {
+        let rest = name[at + MARKER.len()..].as_bytes();
+        let digits = |range: std::ops::Range<usize>| rest[range].iter().all(u8::is_ascii_digit);
+        rest.len() >= 23
+            && digits(0..8)
+            && rest[8] == b'-'
+            && digits(9..15)
+            && rest[15] == b'-'
+            && rest[16..23].iter().all(u8::is_ascii_alphanumeric)
+            && matches!(rest.get(23), None | Some(b'.'))
+    })
 }
 
 /// The vault's directories and `.md` files, relative to `target_dir`, with
-/// dot-entries and `attachments/` directories skipped.
-fn walk_vault(target_dir: &Path) -> Result<(HashSet<String>, Vec<String>), Error> {
-    fn walk(target_dir: &Path, dir: &str, dirs: &mut HashSet<String>, files: &mut Vec<String>) -> Result<(), Error> {
+/// dot-entries and `attachments/` directories skipped, and Syncthing's
+/// conflict copies kept apart.
+fn walk_vault(target_dir: &Path) -> Result<VaultWalk, Error> {
+    fn walk(target_dir: &Path, dir: &str, found: &mut VaultWalk) -> Result<(), Error> {
         let entries = match std::fs::read_dir(target_dir.join(dir)) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -516,18 +548,22 @@ fn walk_vault(target_dir: &Path) -> Result<(HashSet<String>, Vec<String>), Error
             let relative = if dir.is_empty() { name } else { format!("{dir}/{name}") };
             if file_type.is_dir() {
                 if !attachments {
-                    walk(target_dir, &relative, dirs, files)?;
-                    dirs.insert(relative);
+                    walk(target_dir, &relative, found)?;
+                    found.dirs.insert(relative);
                 }
-            } else if file_type.is_file() && relative.ends_with(".md") {
-                files.push(relative);
+            } else if file_type.is_file() {
+                if is_sync_conflict_name(posix::basename(&relative)) {
+                    found.conflicts.push(relative);
+                } else if relative.ends_with(".md") {
+                    found.files.push(relative);
+                }
             }
         }
         Ok(())
     }
-    let (mut dirs, mut files) = (HashSet::new(), Vec::new());
-    walk(target_dir, "", &mut dirs, &mut files)?;
-    Ok((dirs, files))
+    let mut found = VaultWalk::default();
+    walk(target_dir, "", &mut found)?;
+    Ok(found)
 }
 
 /// A folder directory renamed here (`from` gone, `to` new beside it).
@@ -739,6 +775,20 @@ pub fn build_push_plan(
                 });
             }
         }
+    }
+
+    // A Syncthing conflict copy is never a note file: say so, so that it
+    // gets merged by hand and deleted.
+    let mut conflict_copies = walk_vault(target_dir)?.conflicts;
+    conflict_copies.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    for file in conflict_copies {
+        notices.push(SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!(
+                "{file} is a Syncthing conflict copy, so it is not synced - merge what you want from it into the \
+                 note and delete it"
+            ),
+        });
     }
 
     let mut untracked: Vec<UntrackedNote> = Vec::new();

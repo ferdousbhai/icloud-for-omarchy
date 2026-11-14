@@ -733,6 +733,63 @@ fn id_from_another_vault_plans_as_new_note_with_notice() {
     );
 }
 
+const CONFLICT_COPY: &str = "Notes/Tracked.sync-conflict-20261114-103000-ABCDEFG.md";
+
+fn conflict_notices(result: &BuildPushPlanResult) -> Vec<&str> {
+    result
+        .notices
+        .iter()
+        .map(|n| n.message.as_str())
+        .filter(|m| m.contains("Syncthing conflict copy"))
+        .collect()
+}
+
+#[test]
+fn a_syncthing_conflict_copy_is_reported_and_not_created_as_a_note() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &id_state()).unwrap();
+    write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", &with_id(NOTE_ID, "Synced text"));
+    write_vault_file(dir.path(), CONFLICT_COPY, &with_id(NOTE_ID, "The phone's version"));
+    // Not Syncthing's shape: an ordinary new note (refused here only for
+    // where it is, so the plan needs no network).
+    write_vault_file(dir.path(), "Pat/About.sync-conflict-files.md", "A note of its own");
+    let result = plan(dir.path());
+    let files: Vec<&str> = result.entries.iter().map(|e| e.entry.file.as_str()).collect();
+    assert_eq!(files, ["Pat/About.sync-conflict-files.md"]);
+    assert_eq!(result.entries[0].entry.kind, PlanEntryKind::Create);
+    assert_eq!(
+        conflict_notices(&result),
+        [format!(
+            "{CONFLICT_COPY} is a Syncthing conflict copy, so it is not synced - merge what you want from it into \
+             the note and delete it"
+        )]
+    );
+}
+
+#[test]
+fn a_syncthing_conflict_copy_is_not_taken_for_the_note_whose_file_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    // A shared note, so that its missing file is a refused delete and the
+    // plan needs no network.
+    let state = with_notes(state(), vec![(NOTE_ID, shared_note("Pat/Tracked.md", None))]);
+    write_clone_state(dir.path(), &state).unwrap();
+    write_base_copy(dir.path(), NOTE_ID, "Synced text").unwrap();
+    // Same id, same text and (but for the infix) same name: every pairing
+    // rule would otherwise take it for the note, moved.
+    let copy = "Pat/Tracked.sync-conflict-20261114-103000-ABCDEFG.md";
+    write_vault_file(dir.path(), copy, &with_id(NOTE_ID, "Synced text"));
+    let result = plan(dir.path());
+    let entries: Vec<(PlanEntryKind, &str)> = result
+        .entries
+        .iter()
+        .map(|e| (e.entry.kind, e.entry.file.as_str()))
+        .collect();
+    assert_eq!(entries, [(PlanEntryKind::Delete, "Pat/Tracked.md")]);
+    assert_eq!(result.entries[0].entry.resolution, PlanResolution::Refused);
+    assert_eq!(conflict_notices(&result).len(), 1);
+}
+
 #[test]
 fn tracked_file_with_stripped_frontmatter_is_still_that_note() {
     let dir = tempfile::tempdir().unwrap();

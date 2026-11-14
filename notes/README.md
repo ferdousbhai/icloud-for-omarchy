@@ -283,6 +283,33 @@ you press Ctrl+S and confirm "Save anyway?". From a terminal, run
 drops an attachment's link unless you pass `--yes`. A link that is still
 there but changed or moved is refused by the push, as before.
 
+### Syncing the vault with Syncthing
+
+The notes folder can be shared with another device (a phone, say) by
+[Syncthing](https://syncthing.net): a note edited there is pushed by the
+next sync here, like any other edit to its file. Two things to know:
+
+- When both sides change a note before Syncthing has carried it over,
+  Syncthing keeps one version under the note's name and the other as a
+  conflict copy, `<name>.sync-conflict-<date>-<time>-<device>.md`. Such a
+  copy is never synced to iCloud (it would otherwise go up as a second
+  note): `icloud-notes status` and every push list it with a warning until
+  you have merged what you want from it into the note and deleted it.
+  Syncthing's own files (`.stfolder`, `.stversions`, `.syncthing.*.tmp`)
+  are ignored too, as every file or folder whose name starts with a dot is.
+- Keep this machine's sync state off the other device. Put these lines in
+  the folder's `.stignore`:
+
+  ```
+  .icloud-notes
+  .icloud-md*
+  .*.tmp
+  ```
+
+  `.icloud-notes` holds the state, merge bases and history (`.icloud-md`
+  and `.icloud-md.bak-<time>` are what an older version left of them), and
+  `.*.tmp` are files half written.
+
 ## Limitations
 
 - Packages are built for x86_64 only. The app itself would build on

@@ -196,6 +196,33 @@ fn pull_merges_a_remote_edit_into_a_renamed_file_and_the_move_still_pairs() {
 }
 
 #[test]
+fn pull_does_not_take_a_syncthing_conflict_copy_for_a_moved_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().canonicalize().unwrap();
+    let vault = out.join("vault");
+    copy_dir(&differential().join("expected/tiny-clone/vault"), &vault);
+    // The note's file is gone, and a conflict copy of it (same id) is there.
+    let copy = "Notes/Test Note.sync-conflict-20261114-103000-ABCDEFG.md";
+    let original = std::fs::read_to_string(vault.join(FILE)).unwrap();
+    assert!(original.contains(RECORD), "the file carries the note's id");
+    std::fs::write(vault.join(copy), &original).unwrap();
+    std::fs::remove_file(vault.join(FILE)).unwrap();
+
+    let (code, stdout, stderr) = run(
+        &out,
+        &differential().join("cassettes/tiny-pull-update.json"),
+        &["--quiet", "pull", vault.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(vault.join(copy)).unwrap(),
+        original,
+        "the remote edit is not merged into the conflict copy"
+    );
+    assert_eq!(state(&vault)["notes"][RECORD]["file"], FILE);
+}
+
+#[test]
 fn pull_never_overwrites_an_untracked_file_with_the_same_name() {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().canonicalize().unwrap();
