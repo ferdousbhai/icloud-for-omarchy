@@ -34,10 +34,8 @@ pub struct Validated {
 pub enum ValidateError {
     /// 421/401, or a 200 that still wants a 2FA challenge.
     SignedOut,
-    /// No route to Apple: the name did not resolve or the connection was
-    /// refused or timed out. The network is most likely down.
-    Offline(String),
-    /// Anything else: a slow answer, another status, an unexpected body.
+    /// Anything else: no route to Apple, a slow answer, another status, an
+    /// unexpected body.
     Failed(String),
 }
 
@@ -51,15 +49,24 @@ pub fn agent() -> ureq::Agent {
         .build()
 }
 
-/// The setup endpoint's URL with the client params (and `dsid`) in the query.
-fn setup_endpoint(
+/// A `/validate` body that still wants a 2FA challenge, at the top or in
+/// its `dsInfo`: such a sign-in also answers 200, and is not signed in.
+pub fn hsa_challenge_pending(body: &Value) -> bool {
+    let challenge = |v: &Value| v.get("hsaChallengeRequired") == Some(&Value::Bool(true));
+    challenge(body) || challenge(&body["dsInfo"])
+}
+
+/// `/validate` with `cookie`: the client params (and `dsid`) go in the query.
+pub fn validate(
+    agent: &ureq::Agent,
     setup_url: &str,
-    path: &str,
+    cookie: &str,
     params: &BTreeMap<String, String>,
     dsid: Option<&str>,
-) -> Result<url::Url, String> {
-    let mut url =
-        url::Url::parse(&format!("{setup_url}/setup/ws/1/{path}")).map_err(|e| format!("bad setup URL: {e}"))?;
+) -> Result<Validated, ValidateError> {
+    let failed = |m: String| ValidateError::Failed(m);
+    let mut url = url::Url::parse(&format!("{setup_url}/setup/ws/1/validate"))
+        .map_err(|e| failed(format!("bad setup URL: {e}")))?;
     {
         let param = |k: &str| params.get(k).map(String::as_str).unwrap_or_default();
         let mut query = url.query_pairs_mut();
@@ -72,43 +79,6 @@ fn setup_endpoint(
             query.append_pair("dsid", dsid);
         }
     }
-    Ok(url)
-}
-
-/// A 2xx answer from a setup endpoint: its `Set-Cookie`s and JSON body.
-struct SetupReply {
-    set_cookies: Vec<String>,
-    body: Value,
-}
-
-/// Reads a setup endpoint's answer: `Set-Cookie`s and a JSON body.
-fn read_reply(response: ureq::Response, what: &str) -> Result<SetupReply, String> {
-    let set_cookies: Vec<String> = response.all("set-cookie").into_iter().map(str::to_string).collect();
-    let mut body = Vec::new();
-    response
-        .into_reader()
-        .take(8 << 20)
-        .read_to_end(&mut body)
-        .map_err(|e| format!("reading {what}: {e}"))?;
-    let body: Value = serde_json::from_slice(&body).map_err(|e| format!("bad {what} JSON: {e}"))?;
-    Ok(SetupReply { set_cookies, body })
-}
-
-/// The name did not resolve or nothing answered the connect: no network,
-/// rather than a slow or broken Apple.
-fn is_offline(t: &ureq::Transport) -> bool {
-    matches!(t.kind(), ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed)
-}
-
-/// `/validate` with `cookie`, the answer read but not judged.
-fn post_validate(
-    agent: &ureq::Agent,
-    setup_url: &str,
-    cookie: &str,
-    params: &BTreeMap<String, String>,
-    dsid: Option<&str>,
-) -> Result<SetupReply, ValidateError> {
-    let url = setup_endpoint(setup_url, "validate", params, dsid).map_err(ValidateError::Failed)?;
     let result = agent
         .post(url.as_str())
         .set("Cookie", cookie)
@@ -116,30 +86,31 @@ fn post_validate(
         .set("Referer", "https://www.icloud.com/")
         .set("Accept", "application/json")
         .send_bytes(&[]);
-    match result {
-        Ok(r) => read_reply(r, "/validate").map_err(ValidateError::Failed),
-        Err(ureq::Error::Status(401 | 421, _)) => Err(ValidateError::SignedOut),
-        Err(ureq::Error::Status(status, _)) => Err(ValidateError::Failed(format!("/validate answered HTTP {status}"))),
-        Err(ureq::Error::Transport(t)) if is_offline(&t) => Err(ValidateError::Offline(format!("/validate: {t}"))),
-        Err(e) => Err(ValidateError::Failed(format!("/validate: {e}"))),
-    }
-}
-
-pub fn validate(
-    agent: &ureq::Agent,
-    setup_url: &str,
-    cookie: &str,
-    params: &BTreeMap<String, String>,
-    dsid: Option<&str>,
-) -> Result<Validated, ValidateError> {
-    let failed = |m: String| ValidateError::Failed(m);
-    let SetupReply { set_cookies, body } = post_validate(agent, setup_url, cookie, params, dsid)?;
+    let response = match result {
+        Ok(response) => response,
+        Err(ureq::Error::Status(401 | 421, _)) => return Err(ValidateError::SignedOut),
+        Err(ureq::Error::Status(status, _)) => return Err(failed(format!("/validate answered HTTP {status}"))),
+        // The name did not resolve or nothing answered the connect: no
+        // network, rather than a slow or broken Apple.
+        Err(ureq::Error::Transport(t))
+            if matches!(t.kind(), ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed) =>
+        {
+            return Err(failed(format!("Apple unreachable, offline? /validate: {t}")));
+        }
+        Err(e) => return Err(failed(format!("/validate: {e}"))),
+    };
+    let set_cookies: Vec<String> = response.all("set-cookie").into_iter().map(str::to_string).collect();
+    let mut body = Vec::new();
+    response
+        .into_reader()
+        .take(8 << 20)
+        .read_to_end(&mut body)
+        .map_err(|e| failed(format!("reading /validate: {e}")))?;
+    let body: Value = serde_json::from_slice(&body).map_err(|e| failed(format!("bad /validate JSON: {e}")))?;
     let Some(ds_info) = body.get("dsInfo").filter(|v| v.is_object()) else {
         return Err(failed("unexpected /validate response (missing dsInfo)".into()));
     };
-    // A sign-in stuck at 2FA also answers 200; it is not signed in.
-    let challenge = |v: &Value| v.get("hsaChallengeRequired") == Some(&Value::Bool(true));
-    if challenge(&body) || challenge(ds_info) {
+    if hsa_challenge_pending(&body) {
         return Err(ValidateError::SignedOut);
     }
     let text = |k: &str| ds_info.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());

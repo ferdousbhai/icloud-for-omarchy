@@ -110,10 +110,11 @@ enum Command {
     /// Stores the Apple ID password in the keyring (GNOME Keyring), so the
     /// daemon re-authorizes Find My by itself when it asks for the password
     /// again, then prints status. The password is checked with a Find My
-    /// sign-in first and stored only if Apple accepts it (exit 3,
-    /// password_rejected, when Apple refuses it). It is read from the
-    /// terminal without echo, or from stdin when that is not a terminal,
-    /// e.g. from a password manager:
+    /// sign-in first and not stored when Apple refuses it (exit 3,
+    /// password_rejected). When the check fails for another reason (Apple
+    /// unreachable, say) it is stored anyway and the failure reported
+    /// (exit 1). It is read from the terminal without echo, or from stdin
+    /// when that is not a terminal, e.g. from a password manager:
     ///
     ///     bw get password "Apple ID" | icloud-session set-password
     ///     op read "op://Private/Apple ID/password" | icloud-session set-password
@@ -270,9 +271,7 @@ const WINDOW_NOTE: &str = "icloud-session: finish in the \"Sign in to iCloud\" w
 /// Opens the window (unless one is open) and returns the status at once.
 fn open_now(open: fn() -> Result<(), Error>) -> Outcome {
     let run = || -> Result<Status, Error> {
-        if !icloud_session::status()?.signing_in {
-            open()?;
-        }
+        open()?;
         eprintln!("{WINDOW_NOTE}");
         icloud_session::status()
     };
@@ -323,17 +322,9 @@ fn authorize_find_my() -> Outcome {
 /// (`SigningIn` false). A window already open is waited for instead.
 fn open_window(open: fn() -> Result<(), Error>) -> Result<Status, Error> {
     let mut watch = icloud_session::watch()?;
-    let before = icloud_session::status()?;
-    if !before.signing_in {
-        open()?;
-    }
+    open()?;
     eprintln!("{WINDOW_NOTE}");
-    let mut opened = before.signing_in;
-    if let Some(current) = watch.current()
-        && current.signing_in
-    {
-        opened = true;
-    }
+    let mut opened = watch.current().is_some_and(|s| s.signing_in);
     for status in watch.by_ref() {
         if status.signing_in {
             opened = true;
@@ -510,24 +501,17 @@ mod tests {
         super::Args::command().debug_assert();
     }
 
+    /// What this CLI adds to the shared table (`session_failure`, tested in
+    /// `session/src/output.rs`): the daemon's own errors.
     #[test]
-    fn errors_map_to_the_shared_codes_and_exits() {
+    fn the_daemons_errors_map_to_codes_and_exits() {
         let daemon = |name: &str| Error::Daemon {
             name: name.into(),
             message: "why".into(),
         };
         let cases = [
-            (Error::Service("gone".into()), "session_service", 5),
             (daemon("io.github.ferdousbhai.ICloudSession.Error.Failed"), "error", 1),
             (daemon(ERROR_PASSWORD_REJECTED), "password_rejected", 3),
-            (Error::KeyringUnavailable("locked".into()), "keyring_unavailable", 5),
-            (Error::FindMyAuthRequired, "find_my_auth_required", 3),
-            (Error::BadResponse("html".into()), "bad_response", 5),
-            (Error::Offline("x".into()), "offline", 5),
-            (Error::Network("x".into()), "network", 5),
-            (http(401), "session_rejected", 3),
-            (http(503), "http", 5),
-            (http(404), "http", 1),
         ];
         for (e, code, exit) in cases {
             let what = format!("{e:?}");
@@ -536,12 +520,5 @@ mod tests {
         }
         let f = super::failure(daemon(ERROR_PASSWORD_REJECTED));
         assert_eq!(f.message, "why");
-    }
-
-    fn http(status: u16) -> Error {
-        Error::Http {
-            status,
-            body: String::new(),
-        }
     }
 }

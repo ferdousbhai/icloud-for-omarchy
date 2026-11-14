@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use icloud_sessiond::secrets;
+use icloud_sessiond::secrets::{self, Kind};
 use zbus::object_server::{ObjectServer, SignalEmitter};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -439,9 +439,13 @@ fn keyring_speaks_the_secret_service() {
     st().collections.get_mut(&made).unwrap().1 = false;
 
     // The session's jars: their own item, replaced in place.
-    assert_eq!(keyring.get_session().unwrap(), None);
-    keyring.set_session("someone@example.com", r#"{"v":1}"#).unwrap();
-    keyring.set_session("someone@example.com", r#"{"v":2}"#).unwrap();
+    assert_eq!(keyring.get_item(Kind::Session).unwrap(), None);
+    keyring
+        .set_item(Kind::Session, "someone@example.com", r#"{"v":1}"#)
+        .unwrap();
+    keyring
+        .set_item(Kind::Session, "someone@example.com", r#"{"v":2}"#)
+        .unwrap();
     let sessions: Vec<FakeItem> = st()
         .items
         .iter()
@@ -454,7 +458,7 @@ fn keyring_speaks_the_secret_service() {
         "iCloud session (icloud-session): someone@example.com"
     );
     assert_eq!(
-        keyring.get_session().unwrap().as_deref().map(String::as_str),
+        keyring.get_item(Kind::Session).unwrap().as_deref().map(String::as_str),
         Some(r#"{"v":2}"#)
     );
     assert_eq!(
@@ -470,7 +474,7 @@ fn keyring_speaks_the_secret_service() {
     // What the keyring's file would mangle is stored without a backslash
     // or a newline, and read back exactly.
     let awkward = "{\"a\":\"q\\\"x\\\\y\"}\nend";
-    keyring.set_session("someone@example.com", awkward).unwrap();
+    keyring.set_item(Kind::Session, "someone@example.com", awkward).unwrap();
     let stored = st()
         .items
         .iter()
@@ -480,18 +484,18 @@ fn keyring_speaks_the_secret_service() {
         .clone();
     assert!(!stored.contains(&b'\\') && !stored.contains(&b'\n'), "{stored:?}");
     assert_eq!(
-        keyring.get_session().unwrap().as_deref().map(String::as_str),
+        keyring.get_item(Kind::Session).unwrap().as_deref().map(String::as_str),
         Some(awkward)
     );
 
     // The device trust: its own item too, never taken for the session or
     // a password.
-    assert_eq!(keyring.get_trust().unwrap(), None);
+    assert_eq!(keyring.get_item(Kind::Trust).unwrap(), None);
     keyring
-        .set_trust("someone@example.com", r#"[{"name":"DES1"}]"#)
+        .set_item(Kind::Trust, "someone@example.com", r#"[{"name":"DES1"}]"#)
         .unwrap();
     keyring
-        .set_trust("someone@example.com", r#"[{"name":"DES2"}]"#)
+        .set_item(Kind::Trust, "someone@example.com", r#"[{"name":"DES2"}]"#)
         .unwrap();
     let trusts: Vec<FakeItem> = st()
         .items
@@ -505,11 +509,11 @@ fn keyring_speaks_the_secret_service() {
         "iCloud device trust (icloud-session): someone@example.com"
     );
     assert_eq!(
-        keyring.get_trust().unwrap().as_deref().map(String::as_str),
+        keyring.get_item(Kind::Trust).unwrap().as_deref().map(String::as_str),
         Some(r#"[{"name":"DES2"}]"#)
     );
     assert_eq!(
-        keyring.get_session().unwrap().as_deref().map(String::as_str),
+        keyring.get_item(Kind::Session).unwrap().as_deref().map(String::as_str),
         Some(awkward)
     );
 
@@ -520,10 +524,10 @@ fn keyring_speaks_the_secret_service() {
     left.sort();
     assert_eq!(left, ["icloud-session", "icloud-session", "something-else"]);
     assert!(!keyring.contains("someone@example.com").unwrap());
-    assert!(keyring.get_session().unwrap().is_some());
-    assert!(keyring.get_trust().unwrap().is_some());
-    keyring.remove_trust().unwrap();
-    assert_eq!(keyring.get_trust().unwrap(), None);
+    assert!(keyring.get_item(Kind::Session).unwrap().is_some());
+    assert!(keyring.get_item(Kind::Trust).unwrap().is_some());
+    keyring.remove_item(Kind::Trust).unwrap();
+    assert_eq!(keyring.get_item(Kind::Trust).unwrap(), None);
     // The error above dropped the session; the next call opened another.
     assert_eq!(st().sessions.len(), 2);
 
@@ -531,18 +535,18 @@ fn keyring_speaks_the_secret_service() {
     // session" for want of seeing it, and an error if it stays locked.
     st().collections.get_mut(&made).unwrap().1 = true;
     let prompts = st().prompts;
-    assert!(keyring.get_session().unwrap().is_some());
+    assert!(keyring.get_item(Kind::Session).unwrap().is_some());
     assert_eq!(st().prompts, prompts + 1);
     st().collections.get_mut(&made).unwrap().1 = true;
     st().dismiss = true;
-    assert!(keyring.get_session().unwrap_err().contains("dismissed"));
+    assert!(keyring.get_item(Kind::Session).unwrap_err().contains("dismissed"));
     st().collections.get_mut(&made).unwrap().1 = true;
     st().dismiss = true;
-    assert!(keyring.remove_session().unwrap_err().contains("dismissed"));
-    assert!(keyring.get_session().unwrap().is_some());
+    assert!(keyring.remove_item(Kind::Session).unwrap_err().contains("dismissed"));
+    assert!(keyring.get_item(Kind::Session).unwrap().is_some());
 
-    keyring.remove_session().unwrap();
-    assert_eq!(keyring.get_session().unwrap(), None);
+    keyring.remove_item(Kind::Session).unwrap();
+    assert_eq!(keyring.get_item(Kind::Session).unwrap(), None);
     let left: Vec<String> = st().items.iter().map(|i| i.attributes["application"].clone()).collect();
     assert_eq!(left, ["something-else"]);
 }

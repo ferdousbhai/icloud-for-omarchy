@@ -34,9 +34,33 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zeroize::Zeroizing;
 
 const APPLICATION: &str = "icloud-session";
-const KIND: &str = "kind";
-const SESSION: &str = "session";
-const TRUST: &str = "trust";
+
+/// The daemon's own items: one of each at a time, told apart by the
+/// `kind` attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The signed-in account's cookie jars.
+    Session,
+    /// The device-trust cookies.
+    Trust,
+}
+
+impl Kind {
+    fn attributes(self) -> HashMap<&'static str, String> {
+        let kind = match self {
+            Kind::Session => "session",
+            Kind::Trust => "trust",
+        };
+        HashMap::from([("application", APPLICATION.to_string()), ("kind", kind.to_string())])
+    }
+
+    fn label(self, apple_id: &str) -> String {
+        match self {
+            Kind::Session => format!("iCloud session (icloud-session): {apple_id}"),
+            Kind::Trust => format!("iCloud device trust (icloud-session): {apple_id}"),
+        }
+    }
+}
 
 pub type Password = Zeroizing<String>;
 
@@ -50,30 +74,16 @@ pub trait SecretStore: Send + Sync {
     /// Removes every stored password (every icloud-session item but the
     /// session and the device trust); returns how many.
     fn forget_passwords(&self) -> Result<usize, String>;
-    /// The session's jars, as stored.
-    fn get_session(&self) -> Result<Option<Zeroizing<String>>, String>;
-    /// Stores (or replaces) the session's jars.
-    fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String>;
-    /// Removes the session item.
-    fn remove_session(&self) -> Result<(), String>;
-    /// The device-trust cookies, as stored.
-    fn get_trust(&self) -> Result<Option<Zeroizing<String>>, String>;
-    /// Stores (or replaces) the device-trust cookies.
-    fn set_trust(&self, apple_id: &str, secret: &str) -> Result<(), String>;
-    /// Removes the device-trust item.
-    fn remove_trust(&self) -> Result<(), String>;
+    /// The item of `kind` (JSON), as stored.
+    fn get_item(&self, kind: Kind) -> Result<Option<Zeroizing<String>>, String>;
+    /// Stores (or replaces) the item of `kind`, labelled with `apple_id`.
+    fn set_item(&self, kind: Kind, apple_id: &str, secret: &str) -> Result<(), String>;
+    /// Removes the item of `kind`.
+    fn remove_item(&self, kind: Kind) -> Result<(), String>;
 }
 
 pub fn label(apple_id: &str) -> String {
     format!("iCloud (icloud-session): {apple_id}")
-}
-
-pub fn session_label(apple_id: &str) -> String {
-    format!("iCloud session (icloud-session): {apple_id}")
-}
-
-pub fn trust_label(apple_id: &str) -> String {
-    format!("iCloud device trust (icloud-session): {apple_id}")
 }
 
 fn attributes(apple_id: &str) -> HashMap<&'static str, String> {
@@ -83,14 +93,6 @@ fn attributes(apple_id: &str) -> HashMap<&'static str, String> {
     ])
 }
 
-fn session_attributes() -> HashMap<&'static str, String> {
-    HashMap::from([("application", APPLICATION.to_string()), (KIND, SESSION.to_string())])
-}
-
-fn trust_attributes() -> HashMap<&'static str, String> {
-    HashMap::from([("application", APPLICATION.to_string()), (KIND, TRUST.to_string())])
-}
-
 /// Every item of ours, whatever its kind.
 fn ours() -> HashMap<&'static str, String> {
     HashMap::from([("application", APPLICATION.to_string())])
@@ -98,7 +100,7 @@ fn ours() -> HashMap<&'static str, String> {
 
 /// What removing the passwords leaves: our items that are not passwords.
 fn not_passwords() -> [HashMap<&'static str, String>; 2] {
-    [session_attributes(), trust_attributes()]
+    [Kind::Session.attributes(), Kind::Trust.attributes()]
 }
 
 /// The keyring, or the test file when `ICLOUD_SESSION_TEST_SECRET_FILE` is set.
@@ -391,35 +393,24 @@ impl SecretStore for Keyring {
         self.run(|k| k.delete(&ours(), &not_passwords()))
     }
 
-    fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
-        // Whatever the item holds: one that is not UTF-8 is a damaged
-        // session (not JSON either, so the daemon reports it as such),
-        // never "no session".
-        self.run(|k| {
-            k.read(&session_attributes(), |v| {
+    fn get_item(&self, kind: Kind) -> Result<Option<Zeroizing<String>>, String> {
+        self.run(|k| match kind {
+            // Whatever the item holds: one that is not UTF-8 is a damaged
+            // session (not JSON either, so the daemon reports it as such),
+            // never "no session".
+            Kind::Session => k.read(&kind.attributes(), |v| {
                 Some(Zeroizing::new(String::from_utf8_lossy(v).into_owned()))
-            })
+            }),
+            Kind::Trust => k.read(&kind.attributes(), utf8),
         })
     }
 
-    fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
-        self.run(|k| k.store(session_label(apple_id), session_attributes(), secret))
+    fn set_item(&self, kind: Kind, apple_id: &str, secret: &str) -> Result<(), String> {
+        self.run(|k| k.store(kind.label(apple_id), kind.attributes(), secret))
     }
 
-    fn remove_session(&self) -> Result<(), String> {
-        self.run(|k| k.delete(&session_attributes(), &[]).map(drop))
-    }
-
-    fn get_trust(&self) -> Result<Option<Zeroizing<String>>, String> {
-        self.run(|k| k.read(&trust_attributes(), utf8))
-    }
-
-    fn set_trust(&self, apple_id: &str, secret: &str) -> Result<(), String> {
-        self.run(|k| k.store(trust_label(apple_id), trust_attributes(), secret))
-    }
-
-    fn remove_trust(&self) -> Result<(), String> {
-        self.run(|k| k.delete(&trust_attributes(), &[]).map(drop))
+    fn remove_item(&self, kind: Kind) -> Result<(), String> {
+        self.run(|k| k.delete(&kind.attributes(), &[]).map(drop))
     }
 }
 
@@ -501,27 +492,15 @@ impl SecretStore for TestFile {
         self.remove(&ours(), &not_passwords())
     }
 
-    fn get_session(&self) -> Result<Option<Zeroizing<String>>, String> {
-        self.find(&session_attributes())
+    fn get_item(&self, kind: Kind) -> Result<Option<Zeroizing<String>>, String> {
+        self.find(&kind.attributes())
     }
 
-    fn set_session(&self, apple_id: &str, secret: &str) -> Result<(), String> {
-        self.put(session_label(apple_id), session_attributes(), secret)
+    fn set_item(&self, kind: Kind, apple_id: &str, secret: &str) -> Result<(), String> {
+        self.put(kind.label(apple_id), kind.attributes(), secret)
     }
 
-    fn remove_session(&self) -> Result<(), String> {
-        self.remove(&session_attributes(), &[]).map(drop)
-    }
-
-    fn get_trust(&self) -> Result<Option<Zeroizing<String>>, String> {
-        self.find(&trust_attributes())
-    }
-
-    fn set_trust(&self, apple_id: &str, secret: &str) -> Result<(), String> {
-        self.put(trust_label(apple_id), trust_attributes(), secret)
-    }
-
-    fn remove_trust(&self) -> Result<(), String> {
-        self.remove(&trust_attributes(), &[]).map(drop)
+    fn remove_item(&self, kind: Kind) -> Result<(), String> {
+        self.remove(&kind.attributes(), &[]).map(drop)
     }
 }

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -20,7 +20,7 @@ use crate::apple::{self, ValidateError};
 use crate::cookies::{self, Cookie};
 use crate::files::{self, Account, FindMyJar, Paths, SessionSecret, Stored};
 use crate::old_profile;
-use crate::secrets::{self, Password, SecretStore};
+use crate::secrets::{self, Kind, Password, SecretStore};
 use zeroize::Zeroizing;
 
 /// Heartbeat keeps running while a client called within this window
@@ -165,6 +165,23 @@ struct Props {
     find_my_authorized: bool,
     find_my_password_stored: bool,
     sign_out_reason: String,
+}
+
+impl Props {
+    /// Each property's D-Bus name and value, in a fixed order.
+    fn values(&self) -> [(&'static str, Value<'_>); 9] {
+        [
+            ("SignedIn", self.signed_in.into()),
+            ("AppleId", self.apple_id.as_str().into()),
+            ("FullName", self.full_name.as_str().into()),
+            ("Dsid", self.dsid.as_str().into()),
+            ("ExpiresAt", self.expires_at.into()),
+            ("SigningIn", self.signing_in.into()),
+            ("FindMyAuthorized", self.find_my_authorized.into()),
+            ("FindMyPasswordStored", self.find_my_password_stored.into()),
+            ("SignOutReason", self.sign_out_reason.as_str().into()),
+        ]
+    }
 }
 
 /// How the last `/validate` of an account ended.
@@ -318,13 +335,14 @@ pub struct Daemon {
     /// a slow Apple never holds up a caller or the idle exit.
     refreshing: AtomicBool,
     /// Sign-in windows running (a sign-in and a hidden Find My one can
-    /// overlap); the last to close clears WebKit's HTTP cache.
+    /// overlap); the idle exit waits for them.
     windows: AtomicUsize,
     /// The open sign-in window, with the `signin_seq` that opened it.
     signin_child: Mutex<Option<(u64, Child)>>,
     /// The hidden Find My autofill window (one at a time, under
-    /// `find_my_login_lock`), so a SignOut closes it too.
-    autofill_child: Mutex<Option<Child>>,
+    /// `find_my_login_lock`), with the account `generation` it was opened
+    /// for, so a SignOut closes it too.
+    autofill_child: Mutex<Option<(u64, Child)>>,
     /// The keyring holding the Apple ID password (opt-in).
     secrets: Box<dyn SecretStore>,
     /// One Find My one-factor sign-in at a time; a waiter shares its answer.
@@ -404,7 +422,7 @@ fn load_account(path: &Path, secrets: &dyn SecretStore) -> Result<Loaded, Box<Un
     let secret = match stored.legacy_secret() {
         Some(legacy) => {
             let text = Zeroizing::new(serde_json::to_string(&legacy).expect("the session secret serializes"));
-            if let Err(e) = secrets.set_session(&stored.apple_id, &text) {
+            if let Err(e) = secrets.set_item(Kind::Session, &stored.apple_id, &text) {
                 let why = format!("moving the session's cookies to the keyring: {e}");
                 return Err(Box::new(Unread { stored, why }));
             }
@@ -415,7 +433,7 @@ fn load_account(path: &Path, secrets: &dyn SecretStore) -> Result<Loaded, Box<Un
             legacy
         }
         None => {
-            let text = match secrets.get_session() {
+            let text = match secrets.get_item(Kind::Session) {
                 Ok(text) => text,
                 Err(e) => {
                     let why = format!("reading the session's cookies from the keyring: {e}");
@@ -602,7 +620,7 @@ impl Daemon {
             me.move_old_profile();
             me.look_for_password();
             let _ = looked.send(());
-            me.publish();
+            me.announce(false);
         });
         let _ = keyring_looked.recv_timeout(KEYRING_LOOK_WAIT);
         if !take_name(&conn)? {
@@ -678,7 +696,7 @@ impl Daemon {
     /// Stores the old profile's device trust with what the keyring has, a
     /// newer window's trust winning over the old.
     fn store_old_trust(&self, old: Vec<Cookie>) -> Result<(), String> {
-        let stored = match self.secrets.get_trust()? {
+        let stored = match self.secrets.get_item(Kind::Trust)? {
             Some(text) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_default(),
             None => Vec::new(),
         };
@@ -690,53 +708,26 @@ impl Daemon {
     /// Stores `trust` as the keyring's device trust, labelled with `apple_id`.
     fn set_trust(&self, apple_id: &str, trust: &[Cookie]) -> Result<(), String> {
         let text = Zeroizing::new(serde_json::to_string(trust).expect("cookies serialize"));
-        self.secrets.set_trust(apple_id, &text)
+        self.secrets.set_item(Kind::Trust, apple_id, &text)
     }
 
     // ----------------------------------------------------------- publish
 
-    /// Announces every property that changed since the last announcement
-    /// with one `PropertiesChanged`.
-    fn publish(&self) {
-        self.announce(false);
-    }
-
-    /// `PropertiesChanged` with the properties that changed, or with all of
-    /// them.
+    /// `PropertiesChanged` with the properties that changed since the last
+    /// announcement (none: nothing is sent), or with all of them.
     fn announce(&self, all: bool) {
         let mut published = lock(&self.published);
         let now = lock(&self.state).props();
         if *published == now && !all {
             return;
         }
-        let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
-        if all || published.signed_in != now.signed_in {
-            changed.insert("SignedIn", now.signed_in.into());
-        }
-        if all || published.apple_id != now.apple_id {
-            changed.insert("AppleId", now.apple_id.as_str().into());
-        }
-        if all || published.full_name != now.full_name {
-            changed.insert("FullName", now.full_name.as_str().into());
-        }
-        if all || published.dsid != now.dsid {
-            changed.insert("Dsid", now.dsid.as_str().into());
-        }
-        if all || published.expires_at != now.expires_at {
-            changed.insert("ExpiresAt", now.expires_at.into());
-        }
-        if all || published.signing_in != now.signing_in {
-            changed.insert("SigningIn", now.signing_in.into());
-        }
-        if all || published.find_my_authorized != now.find_my_authorized {
-            changed.insert("FindMyAuthorized", now.find_my_authorized.into());
-        }
-        if all || published.find_my_password_stored != now.find_my_password_stored {
-            changed.insert("FindMyPasswordStored", now.find_my_password_stored.into());
-        }
-        if all || published.sign_out_reason != now.sign_out_reason {
-            changed.insert("SignOutReason", now.sign_out_reason.as_str().into());
-        }
+        let changed: HashMap<&str, Value<'_>> = now
+            .values()
+            .into_iter()
+            .zip(published.values())
+            .filter(|(new, old)| all || new.1 != old.1)
+            .map(|(new, _)| new)
+            .collect();
         if let Some(conn) = self.conn() {
             let body = (INTERFACE, changed, Vec::<&str>::new());
             if let Err(e) = conn.emit_signal(
@@ -798,7 +789,7 @@ impl Daemon {
                 let secret = a.secret();
                 if written.secret.as_ref() != Some(&secret) {
                     written.secret = None;
-                    match self.secrets.set_session(&a.apple_id, &secret) {
+                    match self.secrets.set_item(Kind::Session, &a.apple_id, &secret) {
                         Ok(()) => {
                             written.secret = Some(secret);
                             self.clear_removal_pending();
@@ -812,7 +803,7 @@ impl Daemon {
                     errors.push(format!("removing {}: {e}", path.display()));
                 }
                 written.secret = None;
-                match self.secrets.remove_session() {
+                match self.secrets.remove_item(Kind::Session) {
                     Ok(_) => self.clear_removal_pending(),
                     Err(e) => {
                         errors.push(format!(
@@ -892,7 +883,7 @@ impl Daemon {
                     // automatic Find My sign-in, depend on it.
                     self.look_for_password();
                 }
-                self.publish();
+                self.announce(false);
                 Ok(())
             }
             Err(unread) => {
@@ -919,7 +910,11 @@ impl Daemon {
                 return;
             }
         }
-        match self.secrets.remove_session().and_then(|()| self.secrets.remove_trust()) {
+        match self
+            .secrets
+            .remove_item(Kind::Session)
+            .and_then(|()| self.secrets.remove_item(Kind::Trust))
+        {
             Ok(_) => {
                 eprintln!("icloud-sessiond: removed the signed-out session from the keyring");
                 self.clear_removal_pending();
@@ -974,7 +969,9 @@ impl Daemon {
         let mut st = lock(&self.state);
         // Signed out or signed in again meanwhile: this answer is about a
         // jar we no longer hold.
-        let same = st.generation == generation && st.account.is_some();
+        // (Every change of `account` bumps the generation, so the same
+        // generation still holds the account that was validated.)
+        let same = st.generation == generation;
         if same {
             st.last_attempt = Some(Attempt {
                 finished: Instant::now(),
@@ -1002,10 +999,6 @@ impl Daemon {
                 }
                 Err(Refresh::SignedOut)
             }
-            Err(ValidateError::Offline(msg)) => {
-                eprintln!("icloud-sessiond: Apple unreachable, offline? {msg}");
-                Err(Refresh::Failed)
-            }
             Err(ValidateError::Failed(msg)) => {
                 eprintln!("icloud-sessiond: {msg}");
                 Err(Refresh::Failed)
@@ -1015,7 +1008,7 @@ impl Daemon {
         if let Some(save) = save {
             self.write(save);
         }
-        self.publish();
+        self.announce(false);
         outcome
     }
 
@@ -1095,7 +1088,7 @@ impl Daemon {
         if let Some(save) = save {
             self.write(save);
         }
-        self.publish();
+        self.announce(false);
         Ok(())
     }
 
@@ -1153,14 +1146,8 @@ impl Daemon {
         self.fingerprint_key.hash_one((apple_id, password))
     }
 
-    /// Looks in the keyring for the account's password and announces
-    /// `FindMyPasswordStored`.
-    fn refresh_password_stored(&self) {
-        self.look_for_password();
-        self.publish();
-    }
-
-    /// [`Daemon::refresh_password_stored`] without the announcement.
+    /// Looks in the keyring for the account's password, for
+    /// `FindMyPasswordStored`; the caller announces it.
     fn look_for_password(&self) {
         let Some((apple_id, generation)) = ({
             let st = lock(&self.state);
@@ -1244,7 +1231,7 @@ impl Daemon {
         let arrived = Instant::now();
         let _one = lock(&self.find_my_login_lock);
         let mut save = None;
-        let (apple_id, dsid, generation) = {
+        let found = {
             let mut st = lock(&self.state);
             // Waited behind a sign-in that finished meanwhile: its answer
             // is ours too (a 450 about the jar it replaced forgets nothing).
@@ -1279,20 +1266,15 @@ impl Daemon {
             let a = st.account.as_ref().expect("checked above");
             let found = (a.apple_id.clone(), a.dsid.clone(), st.generation);
             let waiting = matches!(st.find_my_block, Some(LoginBlock::Until(t)) if Instant::now() < t);
-            if !st.password_stored || waiting {
-                drop(st);
-                if let Some(save) = save {
-                    self.write(save);
-                }
-                self.publish();
-                return false;
-            }
-            found
+            (st.password_stored && !waiting).then_some(found)
         };
         if let Some(save) = save {
             self.write(save);
         }
-        self.publish();
+        self.announce(false);
+        let Some((apple_id, dsid, generation)) = found else {
+            return false;
+        };
         let password: Password = match self.secrets.get(&apple_id) {
             Ok(Some(p)) => p,
             Ok(None) => {
@@ -1301,7 +1283,7 @@ impl Daemon {
                     st.password_stored = false;
                 }
                 drop(st);
-                self.publish();
+                self.announce(false);
                 return false;
             }
             Err(e) => {
@@ -1323,13 +1305,14 @@ impl Daemon {
             ),
             Err(LoginError::Failed(m)) => eprintln!("icloud-sessiond: Find My sign-in: {m}"),
         }
-        self.publish();
+        self.announce(false);
         lock(&self.state).account.as_ref().is_some_and(|a| a.find_my.is_some())
     }
 
-    /// `SetPassword()`: signs in to Find My with `password` once, and only
-    /// if Apple accepts it, keeps the jar and stores the password in the
-    /// keyring for the signed-in Apple ID.
+    /// `SetPassword()`: signs in to Find My with `password` once, keeping
+    /// the jar if that works, and stores the password in the keyring for
+    /// the signed-in Apple ID unless Apple refused it: a sign-in that
+    /// failed for another reason is reported, with the password stored.
     fn set_password(&self, password: Password) -> Result<(), ServiceError> {
         if password.is_empty() {
             return Err(ServiceError::Failed("the password is empty".into()));
@@ -1344,7 +1327,7 @@ impl Daemon {
             (a.apple_id.clone(), a.dsid.clone(), st.generation)
         };
         let result = self.find_my_login(generation, &apple_id, &dsid, &password);
-        self.publish();
+        self.announce(false);
         // Only Apple refusing the password keeps it out of the keyring; any
         // other failure (a changed or misread endpoint) says nothing about
         // the password, which usually comes from the user's own vault.
@@ -1366,7 +1349,7 @@ impl Daemon {
             st.password_stored = true;
         }
         drop(st);
-        self.publish();
+        self.announce(false);
         match login_failure {
             None => Ok(()),
             Some(m) => Err(ServiceError::Failed(format!(
@@ -1385,7 +1368,7 @@ impl Daemon {
         st.password_stored = false;
         st.find_my_block = None;
         drop(st);
-        self.publish();
+        self.announce(false);
         Ok(())
     }
 
@@ -1401,7 +1384,7 @@ impl Daemon {
             st.signin_seq += 1;
             st.signin_seq
         };
-        self.publish();
+        self.announce(false);
         let me = self.clone();
         thread::spawn(move || {
             let result = me.run_sign_in(seq, find);
@@ -1440,9 +1423,10 @@ impl Daemon {
                 store_reason(&me.cfg.paths.sign_out_reason, written, &reason);
             }
             drop(written);
-            me.publish();
+            me.announce(false);
             if result.is_ok() && !find {
-                me.refresh_password_stored();
+                me.look_for_password();
+                me.announce(false);
             }
         });
     }
@@ -1453,7 +1437,7 @@ impl Daemon {
     /// My's, say) is signed in already. Its WebKit profile is in memory
     /// only, so nothing else carries over from one window to the next.
     fn window_cookies(&self) -> Zeroizing<String> {
-        let mut jar = match self.secrets.get_trust() {
+        let mut jar = match self.secrets.get_item(Kind::Trust) {
             Ok(Some(text)) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_else(|e| {
                 eprintln!("icloud-sessiond: the keyring's device trust is not a cookie list ({e}); not used");
                 Vec::new()
@@ -1478,6 +1462,57 @@ impl Daemon {
         Window(self)
     }
 
+    /// Starts a sign-in window with `args`, parked in `slot` under `key`
+    /// (the value `current` reads from the state now, or a SignOut has
+    /// cancelled it already), and counts it in: its stdin, its stdout, and
+    /// the count's guard for [`Daemon::finish_window`].
+    fn spawn_window(
+        &self,
+        slot: &Mutex<Option<(u64, Child)>>,
+        key: u64,
+        current: impl FnOnce(&State) -> u64,
+        args: &[&str],
+    ) -> Result<(ChildStdin, ChildStdout, Window<'_>), WindowError> {
+        let bin = &self.cfg.signin_bin;
+        // Spawned under the slot's lock, so a SignOut either sees the
+        // child (and kills it) or has already moved `key` on.
+        let mut slot = lock(slot);
+        if current(&lock(&self.state)) != key {
+            return Err(WindowError::Cancelled);
+        }
+        let mut child = Command::new(bin)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| WindowError::Failed(spawn_error(bin, &e)))?;
+        let stdin = child.stdin.take().expect("stdin is piped");
+        let stdout = child.stdout.take().expect("stdout is piped");
+        *slot = Some((key, child));
+        Ok((stdin, stdout, self.window_opened()))
+    }
+
+    /// Reads all a window prints, then takes it back out of its slot and
+    /// waits for it: how it exited, and what it printed.
+    fn finish_window(
+        &self,
+        slot: &Mutex<Option<(u64, Child)>>,
+        key: u64,
+        mut stdout: ChildStdout,
+        window: Window<'_>,
+    ) -> Result<(ExitStatus, Vec<u8>), WindowError> {
+        let mut out = Vec::new();
+        let read = stdout.read_to_end(&mut out);
+        let mut child = take_window(slot, key)?;
+        let status = child
+            .wait()
+            .map_err(|e| WindowError::Failed(format!("waiting for {}: {e}", self.cfg.signin_bin.display())))?;
+        drop(window);
+        read.map_err(|e| WindowError::Failed(format!("reading the sign-in window's output: {e}")))?;
+        Ok((status, out))
+    }
+
     /// Runs the sign-in window hidden in `--find --autofill` mode: it signs
     /// in on Apple's own page with the stored password (showing itself only
     /// if Apple asks for more, like a 2FA code) and prints the jar once Find
@@ -1486,46 +1521,21 @@ impl Daemon {
     fn autofill_find_my(&self, generation: u64, apple_id: &str, password: &str) -> Result<FindMyCapture, LoginError> {
         let bin = &self.cfg.signin_bin;
         let failed = |m: String| LoginError::Failed(m);
-        let cancelled = || failed("cancelled by SignOut".into());
         let cookies = self.window_cookies();
-        let (mut stdout, mut stdin, _window) = {
-            // Spawned under the slot's lock, so a SignOut either sees the
-            // child (and kills it) or has already moved the generation on.
-            let mut slot = lock(&self.autofill_child);
-            if lock(&self.state).generation != generation {
-                return Err(cancelled());
-            }
-            let mut child = Command::new(bin)
-                .args(["--find", "--autofill", "--cookies"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .map_err(|e| failed(spawn_error(bin, &e)))?;
-            let stdout = child.stdout.take().expect("stdout is piped");
-            let stdin = child.stdin.take().expect("stdin is piped");
-            *slot = Some(child);
-            (stdout, stdin, self.window_opened())
-        };
-        // Back out of the slot, unless SignOut killed and reaped it.
-        let take = || lock(&self.autofill_child).take().ok_or_else(cancelled);
+        let slot = &self.autofill_child;
+        let args = ["--find", "--autofill", "--cookies"];
+        let (mut stdin, stdout, window) = self.spawn_window(slot, generation, |st| st.generation, &args)?;
         {
             let mut input = Zeroizing::new(format!("{}{apple_id}\n{password}\n", *cookies));
             let written = stdin.write_all(input.as_bytes());
             zeroize::Zeroize::zeroize(&mut *input);
             drop(stdin);
             if let Err(e) = written {
-                kill(take()?);
+                kill(take_window(slot, generation)?);
                 return Err(failed(format!("giving the sign-in window the password: {e}")));
             }
         }
-        let mut out = Vec::new();
-        let read = stdout.read_to_end(&mut out);
-        let mut child = take()?;
-        let status = child
-            .wait()
-            .map_err(|e| failed(format!("waiting for {}: {e}", bin.display())))?;
-        read.map_err(|e| failed(format!("reading the sign-in window's output: {e}")))?;
+        let (status, out) = self.finish_window(slot, generation, stdout, window)?;
         if status.code() == Some(3) {
             return Err(LoginError::Rejected);
         }
@@ -1543,50 +1553,15 @@ impl Daemon {
     /// captures is kept as the Find My jar instead (see [`FindMyJar`]).
     fn run_sign_in(&self, seq: u64, find: bool) -> Result<(), NotKept> {
         let bin = &self.cfg.signin_bin;
-        let cancelled = || NotKept::Closed("cancelled by SignOut".into());
+        let cancelled = || NotKept::from(WindowError::Cancelled);
         let cookies = self.window_cookies();
-        let (mut stdout, mut stdin, window) = {
-            // Spawned under the slot's lock, so a SignOut either sees the
-            // child (and kills it) or has already cancelled this sign-in.
-            let mut slot = lock(&self.signin_child);
-            if lock(&self.state).signin_seq != seq {
-                return Err(cancelled());
-            }
-            let mut child = Command::new(bin)
-                .args(find.then_some("--find"))
-                .arg("--cookies")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .map_err(|e| spawn_error(bin, &e))?;
-            let stdout = child.stdout.take().expect("stdout is piped");
-            let stdin = child.stdin.take().expect("stdin is piped");
-            *slot = Some((seq, child));
-            (stdout, stdin, self.window_opened())
-        };
+        let slot = &self.signin_child;
+        let args: &[&str] = if find { &["--find", "--cookies"] } else { &["--cookies"] };
+        let (mut stdin, stdout, window) = self.spawn_window(slot, seq, |st| st.signin_seq, args)?;
         // A window that ends without reading them needed none.
         let _ = stdin.write_all(cookies.as_bytes());
         drop(stdin);
-        let mut out = Vec::new();
-        let read = stdout.read_to_end(&mut out);
-        let child = {
-            let mut slot = lock(&self.signin_child);
-            match slot.take() {
-                Some((s, child)) if s == seq => Some(child),
-                other => {
-                    *slot = other;
-                    None
-                }
-            }
-        };
-        // Gone from the slot: SignOut killed and reaped it.
-        let mut child = child.ok_or_else(cancelled)?;
-        let status = child
-            .wait()
-            .map_err(|e| format!("waiting for {}: {e}", bin.display()))?;
-        drop(window);
-        read.map_err(|e| format!("reading the sign-in window's output: {e}"))?;
+        let (status, out) = self.finish_window(slot, seq, stdout, window)?;
         if !status.success() {
             return Err(NotKept::Closed(format!(
                 "{} exited with {status} (window closed?)",
@@ -1621,7 +1596,6 @@ impl Daemon {
         )
         .map_err(|e| match e {
             ValidateError::SignedOut => "Apple did not accept the captured session".to_string(),
-            ValidateError::Offline(m) => format!("Apple unreachable, offline? {m}"),
             ValidateError::Failed(m) => m,
         })?;
         cookies::merge_set_cookies(&mut jar, &v.set_cookies, now);
@@ -1661,7 +1635,7 @@ impl Daemon {
             // The keyring is unlocked if this sign-in is to be kept, so it
             // can be read now.
             let old = legacy.or_else(|| {
-                let text = self.secrets.get_session().ok().flatten()?;
+                let text = self.secrets.get_item(Kind::Session).ok().flatten()?;
                 serde_json::from_str::<SessionSecret>(&text).ok()
             });
             if let Some(old) = old.filter(|old| old.dsid == account.dsid) {
@@ -1673,7 +1647,7 @@ impl Daemon {
         let secret = account.secret();
         written.secret = None;
         self.secrets
-            .set_session(&account.apple_id, &secret)
+            .set_item(Kind::Session, &account.apple_id, &secret)
             .map_err(|e| format!("storing the session's cookies in the keyring failed: {e}"))?;
         written.secret = Some(secret);
         self.clear_removal_pending();
@@ -1691,7 +1665,11 @@ impl Daemon {
             // A SignOut came in meanwhile, and may have removed the session
             // (and the trust) before this one was stored.
             written.secret = None;
-            match self.secrets.remove_session().and_then(|()| self.secrets.remove_trust()) {
+            match self
+                .secrets
+                .remove_item(Kind::Session)
+                .and_then(|()| self.secrets.remove_item(Kind::Trust))
+            {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("icloud-sessiond: removing the session from the keyring: {e}");
@@ -1723,7 +1701,7 @@ impl Daemon {
     fn store_find_my(&self, seq: u64, (jar, params, dsid, trust): FindMyCapture) -> Result<(), String> {
         let mut st = lock(&self.state);
         if st.signin_seq != seq {
-            return Err("cancelled by SignOut".into());
+            return Err(CANCELLED.into());
         }
         let Some(account) = st.account.as_mut() else {
             return Err("signed out meanwhile; sign in first".into());
@@ -1773,7 +1751,7 @@ impl Daemon {
                 kill(child);
             }
             let mut autofill = lock(&self.autofill_child);
-            if let Some(child) = autofill.take() {
+            if let Some((_, child)) = autofill.take() {
                 kill(child);
             }
             let mut st = lock(&self.state);
@@ -1792,7 +1770,7 @@ impl Daemon {
             // After any sign-in's write (`written`), so none stores its
             // trust after this.
             let _written = lock(&self.written);
-            if let Err(e) = self.secrets.remove_trust() {
+            if let Err(e) = self.secrets.remove_item(Kind::Trust) {
                 eprintln!(
                     "icloud-sessiond: removing the device trust from the keyring (retried at the next start): {e}"
                 );
@@ -1811,7 +1789,7 @@ impl Daemon {
                 }
             }
         }
-        self.publish();
+        self.announce(false);
         if self.cfg.paths.removal_pending.exists() {
             return Err(ServiceError::KeyringUnavailable(
                 "signed out, but the keyring would not remove the session's cookies; \
@@ -1963,6 +1941,47 @@ impl Daemon {
     }
 }
 
+/// Why a sign-in window gave no result.
+enum WindowError {
+    /// A SignOut closed it (or came before it opened).
+    Cancelled,
+    /// It could not be started, waited for or read.
+    Failed(String),
+}
+
+const CANCELLED: &str = "cancelled by SignOut";
+
+impl From<WindowError> for NotKept {
+    fn from(e: WindowError) -> NotKept {
+        match e {
+            WindowError::Cancelled => NotKept::Closed(CANCELLED.into()),
+            WindowError::Failed(e) => NotKept::Failed(e),
+        }
+    }
+}
+
+impl From<WindowError> for LoginError {
+    fn from(e: WindowError) -> LoginError {
+        match e {
+            WindowError::Cancelled => LoginError::Failed(CANCELLED.into()),
+            WindowError::Failed(e) => LoginError::Failed(e),
+        }
+    }
+}
+
+/// Takes the window parked under `key` back out of `slot`; gone, a SignOut
+/// killed and reaped it. Another key's window (a later sign-in's) stays.
+fn take_window(slot: &Mutex<Option<(u64, Child)>>, key: u64) -> Result<Child, WindowError> {
+    let mut slot = lock(slot);
+    match slot.take() {
+        Some((k, child)) if k == key => Ok(child),
+        other => {
+            *slot = other;
+            Err(WindowError::Cancelled)
+        }
+    }
+}
+
 /// Why [`Daemon::run_sign_in`] kept nothing.
 enum NotKept {
     /// The window closed without a sign-in, or a SignOut closed it.
@@ -1977,20 +1996,14 @@ impl From<String> for NotKept {
     }
 }
 
-/// A running sign-in window ([`Daemon::window_opened`]). When the last one
-/// closes, a WebKit HTTP cache (`WebKitCache`) left on disk goes. The
-/// window's own profile is in memory only, its device trust kept in the
-/// keyring instead.
+/// A running sign-in window ([`Daemon::window_opened`]), counted while it
+/// lives. Its profile is in memory only, its device trust kept in the
+/// keyring instead, so closing it leaves nothing on disk to clear.
 struct Window<'a>(&'a Daemon);
 
 impl Drop for Window<'_> {
     fn drop(&mut self) {
-        if self.0.windows.fetch_sub(1, Ordering::SeqCst) == 1 {
-            let dir = self.0.cfg.paths.webkit_cache.join("WebKitCache");
-            if let Err(e) = files::remove_dir(&dir) {
-                eprintln!("icloud-sessiond: removing {}: {e}", dir.display());
-            }
-        }
+        self.0.windows.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

@@ -21,7 +21,8 @@
 //! call from the page, with those params and the page's cookies, and
 //! counts it signed in when it answers 2xx with `dsInfo` and no pending
 //! `hsaChallengeRequired` (icloud-md's `isFullySignedInBody`); a token
-//! `/validate` refused is not tried again until it changes. The cookies
+//! `/validate` refused is not tried again until it changes (a check that
+//! got no answer from Apple is simply made again). The cookies
 //! are read from WebKit's cookie manager a second later.
 //!
 //! - `--find` opens `www.icloud.com/find`, validates once in-page, then
@@ -46,6 +47,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
 
+use icloud_sessiond::apple::hsa_challenge_pending;
 use icloud_sessiond::cookies::{Cookie, TOKEN, is_apple_domain, is_icloud_domain, is_trust_cookie};
 use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER};
 use serde_json::{Value, json};
@@ -196,8 +198,7 @@ const OPEN_SIGN_IN_JS: &str = r##"
 /// A completed sign-in: account info present and no 2FA still pending
 /// (icloud-md's `isFullySignedInBody`).
 fn is_fully_signed_in(body: &Value) -> bool {
-    let challenge = |v: &Value| v.get("hsaChallengeRequired") == Some(&Value::Bool(true));
-    body.get("dsInfo").is_some_and(Value::is_object) && !challenge(body) && !challenge(&body["dsInfo"])
+    body.get("dsInfo").is_some_and(Value::is_object) && !hsa_challenge_pending(body)
 }
 
 /// The client params this window identifies as, to Apple and then to the daemon.
@@ -357,7 +358,8 @@ struct Capture {
     /// A check is running.
     checking: Cell<bool>,
     /// The token value /validate last refused: not tried again until the
-    /// jar holds a different one (a fresh sign-in or a rotation).
+    /// jar holds a different one (a fresh sign-in or a rotation). Only an
+    /// answer from Apple sets it, never a check that failed to run.
     refused: RefCell<Option<String>>,
     /// Authorizing Find My (`--find`) rather than signing in: done when
     /// Find My answers, re-checked on every poll since entering the
@@ -470,11 +472,9 @@ impl Capture {
                             };
                         }
                         me2.finish();
-                    } else {
-                        if status != 0 {
-                            let what = if me2.find { "Find My" } else { "/validate" };
-                            eprintln!("icloud-session-signin: not signed in yet ({what} answered {status})");
-                        }
+                    } else if status != 0 {
+                        let what = if me2.find { "Find My" } else { "/validate" };
+                        eprintln!("icloud-session-signin: not signed in yet ({what} answered {status})");
                         *me2.refused.borrow_mut() = Some(token);
                     }
                     me2.checking.set(false);
@@ -541,18 +541,26 @@ fn main() -> ExitCode {
 
     let content = webkit6::UserContentManager::new();
     content.register_script_message_handler(TRACE_HANDLER, None);
-    // Set once the Capture exists: Apple saying the password is wrong ends
-    // the window with exit code 3, so the daemon stops trying it.
-    let rejected: Rc<RefCell<Option<Rc<Capture>>>> = Rc::new(RefCell::new(None));
+    let capture = Rc::new(Capture {
+        done: Cell::new(false),
+        exit: Cell::new(1),
+        main_loop: glib::MainLoop::new(None, false),
+        cookies,
+        client_id: uuid::Uuid::new_v4().to_string(),
+        checking: Cell::new(false),
+        refused: RefCell::new(None),
+        find,
+        last_find: Cell::new(None),
+        dsid: RefCell::new(None),
+    });
+    // Apple saying the password is wrong ends the window with exit code 3,
+    // so the daemon stops trying it.
     {
-        let rejected = rejected.clone();
+        let capture = capture.clone();
         content.connect_script_message_received(Some(TRACE_HANDLER), move |_, value| {
             let text = value.to_str();
             eprintln!("icloud-session-signin: {text}");
-            if text.as_str() == "autofill: password rejected"
-                && let Some(capture) = rejected.borrow().as_ref()
-                && !capture.done.replace(true)
-            {
+            if text.as_str() == "autofill: password rejected" && !capture.done.replace(true) {
                 capture.exit.set(3);
                 capture.main_loop.quit();
             }
@@ -605,20 +613,6 @@ fn main() -> ExitCode {
             None => {}
         }
     }
-
-    let capture = Rc::new(Capture {
-        done: Cell::new(false),
-        exit: Cell::new(1),
-        main_loop: glib::MainLoop::new(None, false),
-        cookies,
-        client_id: uuid::Uuid::new_v4().to_string(),
-        checking: Cell::new(false),
-        refused: RefCell::new(None),
-        find,
-        last_find: Cell::new(None),
-        dsid: RefCell::new(None),
-    });
-    *rejected.borrow_mut() = Some(capture.clone());
 
     // Signed in yet? Checked on a timer and after each page load.
     {

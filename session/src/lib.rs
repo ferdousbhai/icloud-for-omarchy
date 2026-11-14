@@ -365,13 +365,17 @@ fn session_bus() -> Result<Connection> {
 }
 
 fn read_status(conn: &Connection) -> Result<Status> {
+    Ok(status_from(&read_props(conn)?))
+}
+
+/// Every property of the daemon, one `GetAll`.
+fn read_props(conn: &Connection) -> Result<HashMap<String, OwnedValue>> {
     let props = zbus::blocking::fdo::PropertiesProxy::builder(conn)
         .destination(BUS_NAME)?
         .path(OBJECT_PATH)?
         .cache_properties(zbus::proxy::CacheProperties::No)
         .build()?;
-    let all = props.get_all(zbus::names::InterfaceName::from_static_str_unchecked(INTERFACE))?;
-    Ok(status_from(&all))
+    Ok(props.get_all(zbus::names::InterfaceName::from_static_str_unchecked(INTERFACE))?)
 }
 
 fn status_from(all: &HashMap<String, OwnedValue>) -> Status {
@@ -476,10 +480,11 @@ const WATCH_RETRY_MIN: Duration = Duration::from_secs(2);
 const WATCH_RETRY_MAX: Duration = Duration::from_secs(60);
 
 /// Calls `f` with the status on every (re)connect to the daemon, then after
-/// every change, until `f` returns false. A [`watch`] ends when
-/// icloud-sessiond goes away (it exits when idle, or is restarted); this
-/// opens it again, which D-Bus-activates the daemon, after 2 s, doubling up
-/// to 60 s while it cannot be reached. An outage is reported once on
+/// every change, until `f` returns false. A [`watch`] outlives
+/// icloud-sessiond exiting when idle or being restarted, and ends only when
+/// its bus connection closes; this then opens it again, which
+/// D-Bus-activates the daemon, after 2 s, doubling up to 60 s while the
+/// bus or the daemon cannot be reached. An outage is reported once on
 /// stderr. Blocks: run it on its own thread. In mock mode it returns at once.
 pub fn watch_forever(mut f: impl FnMut(Status) -> bool) {
     if mock_url().is_some() {
@@ -532,12 +537,13 @@ pub fn watch_on(conn: &Connection) -> Result<Watch> {
         });
         Ok::<_, zbus::Error>(changes.map(Event::Changed).or(owners))
     })?;
-    let last = read_status(conn)?;
+    let props = read_props(conn)?;
     Ok(Watch {
         inner: Some(WatchInner {
             conn: conn.clone(),
             events: Box::pin(events),
-            last,
+            last: status_from(&props),
+            props,
         }),
     })
 }
@@ -561,6 +567,8 @@ enum Event {
 struct WatchInner {
     conn: Connection,
     events: Pin<Box<dyn Stream<Item = Event> + Send>>,
+    /// The daemon's properties as last heard, and the status they make.
+    props: HashMap<String, OwnedValue>,
     last: Status,
 }
 
@@ -577,55 +585,36 @@ impl Iterator for Watch {
     fn next(&mut self) -> Option<Status> {
         let w = self.inner.as_mut()?;
         loop {
-            let next = match futures_lite::future::block_on(w.events.next())? {
+            match futures_lite::future::block_on(w.events.next())? {
                 Event::OwnerAppeared => continue,
-                Event::OwnerGone => read_status(&w.conn).unwrap_or_else(|_| Status {
-                    signing_in: false,
-                    ..w.last.clone()
-                }),
+                Event::OwnerGone => match read_props(&w.conn) {
+                    Ok(fresh) => w.props = fresh,
+                    // No daemon to ask: its window went with it.
+                    Err(_) => drop(w.props.remove("SigningIn")),
+                },
                 Event::Changed(signal) => {
                     let Ok(args) = signal.args() else { continue };
                     if args.interface_name().as_str() != INTERFACE {
                         continue;
                     }
-                    let mut next = w.last.clone();
                     for (name, value) in args.changed_properties() {
-                        let Ok(value) = OwnedValue::try_from(value) else {
-                            continue;
-                        };
-                        apply_property(&mut next, name, &value);
+                        if let Ok(value) = OwnedValue::try_from(value) {
+                            w.props.insert(name.to_string(), value);
+                        }
                     }
                     if !args.invalidated_properties().is_empty()
-                        && let Ok(fresh) = read_status(&w.conn)
+                        && let Ok(fresh) = read_props(&w.conn)
                     {
-                        next = fresh;
+                        w.props = fresh;
                     }
-                    next
                 }
-            };
+            }
+            let next = status_from(&w.props);
             if next != w.last {
                 w.last = next.clone();
                 return Some(next);
             }
         }
-    }
-}
-
-fn apply_property(status: &mut Status, name: &str, value: &OwnedValue) {
-    let mut one = HashMap::new();
-    one.insert(name.to_string(), value.try_clone().expect("plain values clone"));
-    let parsed = status_from(&one);
-    match name {
-        "SignedIn" => status.signed_in = parsed.signed_in,
-        "AppleId" => status.apple_id = parsed.apple_id,
-        "FullName" => status.full_name = parsed.full_name,
-        "Dsid" => status.dsid = parsed.dsid,
-        "ExpiresAt" => status.expires_at = parsed.expires_at,
-        "SigningIn" => status.signing_in = parsed.signing_in,
-        "FindMyAuthorized" => status.find_my_authorized = parsed.find_my_authorized,
-        "FindMyPasswordStored" => status.find_my_password_stored = parsed.find_my_password_stored,
-        "SignOutReason" => status.sign_out_reason = parsed.sign_out_reason,
-        _ => {}
     }
 }
 
@@ -1125,7 +1114,9 @@ impl Session {
                 body: read_body_lossy(response),
             }),
             // Mock mode, where Find My shares the (empty) main jar.
-            Err(ureq::Error::Status(450, _)) if icloud => Ok(Sent::FindMyAuth { cookie: cookie.clone() }),
+            Err(ureq::Error::Status(450, _)) if icloud && self.inner.conn.is_none() => {
+                Ok(Sent::FindMyAuth { cookie: cookie.clone() })
+            }
             Err(ureq::Error::Status(status, response)) => Err(Error::Http {
                 status,
                 body: read_body_lossy(response),

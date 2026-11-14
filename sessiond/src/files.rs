@@ -210,21 +210,19 @@ impl Account {
 }
 
 impl Stored {
-    pub fn load(path: &Path) -> io::Result<Option<Stored>> {
-        match fs::read(path) {
+    /// `account.json` (`None`: there is none). A file that cannot be read
+    /// or parsed is moved aside to `account.json.bad` and treated as signed
+    /// out, so one bad write never keeps the daemon from starting. `Err`:
+    /// it was (logged).
+    pub fn load_or_set_aside(path: &Path) -> io::Result<Option<Stored>> {
+        let loaded = match fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .map(Some)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
-        }
-    }
-
-    /// [`Stored::load`], but a file that cannot be read or parsed is moved
-    /// aside to `account.json.bad` and treated as signed out, so one bad
-    /// write never keeps the daemon from starting. `Err`: it was (logged).
-    pub fn load_or_set_aside(path: &Path) -> io::Result<Option<Stored>> {
-        match Stored::load(path) {
+        };
+        match loaded {
             Ok(stored) => Ok(stored),
             Err(e) => {
                 let bad = path.with_extension("json.bad");
@@ -277,9 +275,6 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// `JSON.stringify(value, null, 2) + "\n"`, written atomically, mode 0600,
 /// creating the parent directory 0700.
 pub fn write_json(path: &Path, value: &Value) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        create_private_dir(dir)?;
-    }
     let mut bytes = serde_json::to_vec_pretty(value).expect("JSON serializes");
     bytes.push(b'\n');
     write_atomic(path, &bytes)
@@ -294,15 +289,16 @@ pub fn touch(path: &Path) -> io::Result<()> {
 /// `text`, written atomically, mode 0600, creating the parent directory
 /// 0700.
 pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        create_private_dir(dir)?;
-    }
     write_atomic(path, text.as_bytes())
 }
 
 /// Writes `bytes` to a temp file (mode 0600) beside `path`, then renames it
-/// over `path`, so a reader sees either the old file or the new one.
+/// over `path`, so a reader sees either the old file or the new one. The
+/// parent directory and any missing above it are created with mode 0700.
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
@@ -316,11 +312,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     result
-}
-
-/// Creates `dir` and any missing parents with mode 0700.
-pub fn create_private_dir(dir: &Path) -> io::Result<()> {
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
 }
 
 #[cfg(test)]
@@ -352,7 +343,7 @@ mod tests {
         assert!(!text.contains("secret-"), "{text}");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         let secret: SessionSecret = serde_json::from_str(&account.secret()).unwrap();
-        let stored = Stored::load(&path).unwrap().unwrap();
+        let stored = Stored::load_or_set_aside(&path).unwrap().unwrap();
         assert_eq!(Account::join(stored.clone(), secret.clone()), Some(account));
         let other = SessionSecret {
             dsid: "999".into(),
