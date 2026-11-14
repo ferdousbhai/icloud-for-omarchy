@@ -1368,8 +1368,9 @@ impl Daemon {
 
     /// Signs in to Find My in the hidden autofill window with a fresh jar
     /// and, if it worked for the account it was made for, keeps that jar
-    /// (and the window's client params) as the Find My jar. The main jar
-    /// is neither sent nor touched. Records the attempt and what
+    /// (and the window's client params) as the Find My jar. The window
+    /// starts with the main jar's cookies ([`Daemon::window_cookies`]), but
+    /// what it prints is kept apart: the main jar is not touched. Records the attempt and what
     /// it means for the next one. Call under `find_my_login_lock`.
     fn find_my_login(&self, generation: u64, apple_id: &str, dsid: &str, password: &str) -> Result<(), LoginError> {
         let fingerprint = self.fingerprint(apple_id, password);
