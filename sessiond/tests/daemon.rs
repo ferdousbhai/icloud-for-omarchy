@@ -3383,11 +3383,21 @@ EOF"#,
 /// An env whose account holds a stale Find My jar and, if given, a
 /// stored password; the daemon is up and has looked in the keyring.
 fn stored_password_env(server: &Server, password: Option<&str>) -> (Env, Connection, Autofill) {
+    stored_password_env_retrying(server, password, 0.5)
+}
+
+/// [`stored_password_env`] whose failed Find My sign-in is retried after
+/// `retry_secs`.
+fn stored_password_env_retrying(
+    server: &Server,
+    password: Option<&str>,
+    retry_secs: f64,
+) -> (Env, Connection, Autofill) {
     let autofill = Autofill::new();
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&autofill.bin),
-        retry_secs: 0.5,
+        retry_secs,
         ..Default::default()
     });
     env.seed_stale_find_my();
@@ -3743,16 +3753,29 @@ fn a_session_find_my_refuses_at_once_is_not_signed_in_again() {
 #[test]
 fn an_unreachable_find_my_sign_in_backs_off() {
     let (_accepted, server) = accepting("auto2");
-    let (_env, conn, autofill) = stored_password_env(&server, Some(PASSWORD));
+    // A back-off long enough that the second request is inside it however
+    // loaded the machine is.
+    let (_env, conn, autofill) = stored_password_env_retrying(&server, Some(PASSWORD), 10.0);
     autofill.set_failing(true);
     let s = Session::connect_on(&conn).unwrap();
     let init = init_client_url(&s);
+    let failed = Instant::now();
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
     assert!(matches!(s.post_json(&init, &json!({})), Err(Error::FindMyAuthRequired)));
+    assert!(
+        failed.elapsed() < Duration::from_secs(10),
+        "the machine is too slow for the test"
+    );
     assert_eq!(autofill.runs(), 1, "backing off");
     autofill.set_failing(false);
-    thread::sleep(Duration::from_millis(600));
-    s.post_json(&init, &json!({})).unwrap();
+    // Tried again once the back-off is over, and not before.
+    wait_until("the retry after the back-off", Duration::from_secs(60), || {
+        s.post_json(&init, &json!({})).is_ok()
+    });
+    assert!(
+        failed.elapsed() >= Duration::from_secs(10),
+        "retried during the back-off"
+    );
     assert_eq!(autofill.runs(), 2);
 }
 
