@@ -822,6 +822,17 @@ fn plan_content(
     // Local paths this plan removes or sets aside, so their name is free.
     let mut freed: HashSet<String> = HashSet::new();
     let under = |list: &[String], path: &str| list.iter().any(|p| is_under(path, p));
+    // Where a row's file is here now, when not at its path and as it was
+    // (its inode, size and date): moved, not removed, whatever kept the
+    // move rules from following it. Never sent to Recently Deleted then (it
+    // would be sent again as new from where it is): both places wait. (Not
+    // a folder: an inode a removed one had may be a new folder's.)
+    let moved_away = |row: &Row| -> Option<String> {
+        local
+            .iter()
+            .find(|(p, e)| **p != row.path && e.ino == row.local.ino && !e.is_dir && !local_changed(row, e))
+            .map(|(p, _)| p.clone())
+    };
     let forget = |row: &Row| Op::Forget {
         id: row.node.id.clone(),
         path: row.path.clone(),
@@ -926,6 +937,9 @@ fn plan_content(
             (Some(n), None) => {
                 if remote_changed(row, n) {
                     plan.ops.push(Op::Download { id, path });
+                } else if let Some(now) = moved_away(row) {
+                    done.push(path);
+                    done.push(now);
                 } else {
                     plan.deletions += 1;
                     plan.ops.push(Op::TrashRemote { id, path });
@@ -1039,6 +1053,13 @@ fn plan_content(
         } else {
             match entry {
                 Some(e) if same_file(e, node) => plan.ops.push(Op::Adopt { id, path }),
+                // A folder here of a file's name: the folder is kept under
+                // a conflicted name (sent up next round), the file comes down.
+                Some(e) if e.is_dir => {
+                    plan.ops.push(Op::SetAside { path: path.clone() });
+                    aside.push(path.clone());
+                    plan.ops.push(Op::Download { id, path });
+                }
                 Some(_) => plan.ops.push(Op::KeepBoth { id, path }),
                 None => plan.ops.push(Op::Download { id, path }),
             }
@@ -1541,6 +1562,23 @@ mod tests {
             "{:?}",
             p.ops
         );
+    }
+
+    #[test]
+    fn a_file_moved_here_where_it_cannot_follow_yet_is_not_removed_in_icloud() {
+        // Moved here into a new folder T, where iCloud has a file named T.
+        let f = node("f", "", "a.txt", false, 5, 100);
+        let t = node("t", "", "T", false, 1, 1);
+        let base = [row(&f, "a.txt", file(5, 7, 2))];
+        let p = run(&base, &[f.clone(), t], &[("T", dir(9)), ("T/a.txt", file(5, 7, 2))]);
+        assert!(
+            !p.ops
+                .iter()
+                .any(|op| matches!(op, Op::TrashRemote { .. } | Op::Upload { .. })),
+            "{:?}",
+            p.ops
+        );
+        assert_eq!(p.deletions, 0);
     }
 
     #[test]

@@ -1635,3 +1635,25 @@ fn a_folder_renamed_here_to_the_name_one_takes_in_icloud_while_it_goes_into_that
     assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
     assert_eq!(bed.cloud.paths(), ["r", "r/s s", "r/s s/y.txt", "r/x.txt"]);
 }
+
+#[test]
+fn a_file_moved_here_into_a_new_folder_named_as_a_file_in_icloud_is_kept_once() {
+    let bed = Bed::new();
+    bed.write("a.txt", "mine");
+    bed.settle();
+    bed.cloud.file(ROOT_ID, "T", "theirs", bed.time());
+    fs::create_dir(bed.root().join("T")).unwrap();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("T/a.txt")).unwrap();
+    for _ in 0..3 {
+        bed.sync();
+    }
+    bed.settle();
+    assert!(
+        bed.cloud.0.borrow().trashed.is_empty(),
+        "{:?}",
+        bed.cloud.trashed_texts()
+    );
+    let mut texts: Vec<String> = bed.local_tree().into_values().flatten().collect();
+    texts.sort();
+    assert_eq!(texts, ["mine", "theirs"]);
+}
