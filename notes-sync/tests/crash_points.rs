@@ -1884,6 +1884,34 @@ fn a_sync_cut_short_anywhere_is_finished_by_the_next_run() {
     crash_everywhere(&start, "sync", &[Then::Again, Then::Pull]);
 }
 
+/// A sync whose pull downloads the attachments of two notes added on the
+/// phone side by side (the download pool, as in the Notes app; no other
+/// test here lets downloads overlap in a sync), one of them in the folder of
+/// a note edited here, killed anywhere.
+#[test]
+fn a_sync_downloading_attachments_side_by_side_cut_short_anywhere_is_finished_by_the_next_run() {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    const CALL_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000a0d1";
+    let mut zone = account(3);
+    for note in [PHOTO_NOTE, CALL_NOTE] {
+        zone.records.get_mut(note).unwrap().deleted = true;
+    }
+    let mut start = cloned_from(zone);
+    let edited = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
+    let path = start.place.vault.join(&edited);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replacen("line of note 1", "line of note 1, typed here", 1)).unwrap();
+    start.expect.edits.push((edited, "typed here".into()));
+    let zone = &mut start.zone;
+    assert!(!zone.downloads_in_line);
+    for note in [PHOTO_NOTE, CALL_NOTE] {
+        let record = zone.records[note].record.clone();
+        zone.put(record);
+    }
+    start.expect.kept = kept_notes(zone);
+    crash_everywhere(&start, "sync", &[Then::Again, Then::Pull]);
+}
+
 /// Every point is reached by the runs the tests above cut short, so every
 /// point has a test.
 #[test]
