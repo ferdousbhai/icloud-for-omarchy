@@ -294,7 +294,7 @@ impl Window {
             .map(|l| l.id.clone());
         drop(cache);
         let Some(list) = list else {
-            return self.toast("Choose a list in the sidebar first: iCloud records no default list");
+            return self.toast("Choose a list in the sidebar first");
         };
         // Cleared once it's saved (unless typed over meanwhile); kept on failure.
         let (sent_title, sent_due) = (self.new_title.text(), self.new_due.text());
