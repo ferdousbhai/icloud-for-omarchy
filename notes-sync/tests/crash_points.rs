@@ -993,6 +993,13 @@ fn moved_in_icloud(start: &mut Start) {
     start.expect.kept = kept_notes(zone);
 }
 
+#[test]
+fn a_pull_cut_short_anywhere_is_finished_by_the_next_run() {
+    let mut start = cloned(6);
+    changed_in_icloud(&mut start);
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+}
+
 /// What the user did in the vault: three new notes (one with a new
 /// attachment, one in a new folder), an edit, an edit that adds an
 /// attachment, a deleted note, a note moved to another folder, a removed
@@ -1129,4 +1136,29 @@ fn every_crash_point_is_reached_by_some_test() {
         .filter(|p| !reached.contains(*p))
         .collect();
     assert!(missing.is_empty(), "no test reaches {missing:?}");
+}
+
+// --- what the runs above found, one case each ---------------------------------------
+
+/// A pull killed after it wrote a new note's file and before it recorded
+/// the note: the file carries the id of a note iCloud has, which nothing
+/// here tracks. The sync after it (push first) used to create it as a new
+/// note, a second copy; now the push leaves it and the pull takes it up.
+#[test]
+fn a_note_a_pull_cut_short_wrote_is_not_created_again_by_the_next_sync() {
+    let mut start = cloned(3);
+    start.zone.put(note_record(
+        "A0000000-0000-4000-8000-000000000000",
+        "Added\nwritten on the phone",
+        DEFAULT_FOLDER,
+    ));
+    start.expect.kept = kept_notes(&start.zone);
+    one_case(
+        &start,
+        "pull",
+        crash::NOTE_FILE,
+        1,
+        Then::Sync,
+        "pull killed at its first note",
+    );
 }

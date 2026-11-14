@@ -233,6 +233,16 @@ window closes, so a killed run is ordinary.
   would write it (what a pull killed before a save, or one that failed
   between writing the file and recording it, left) is taken for the note's
   file instead of `X 2.md` being written beside it.
+- `push` (the first half of the sync that follows such a pull in the
+  Notes app) leaves such a file alone: an untracked file whose
+  `apple-note-id` no note here is tracked under is looked up first, and
+  when iCloud has that note (not deleted, not in Recently Deleted) it is
+  not created but left for the next pull, with a warning (so is one whose
+  lookup answers an error). Created, the note would be in iCloud twice.
+  After the pull has taken the file for the note, or written the note
+  beside it because the file was edited since, the file is tracked or a
+  copy, and a copy is created as a note of its own as before. An id
+  iCloud doesn't have is still pushed as a new note.
 - A note whose attachment downloads a failed run may not have finished
   keeps its attachments' entries without their checksum, and forgets its
   change tag (`cmd::redo_downloads`): the next pull applies it again and

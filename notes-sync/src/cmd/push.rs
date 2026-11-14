@@ -513,6 +513,9 @@ struct CreateCandidate {
     new_attachments: Vec<NewAttachment>,
     folder_record_name: String,
     shared_zone_owner: Option<String>,
+    /// The `apple-note-id` the file carries when no note here is tracked
+    /// under it: looked up before the note is created.
+    untracked_id: Option<String>,
 }
 
 // --- creates a run was cut off in ----------------------------------------------------
@@ -1625,6 +1628,7 @@ pub fn build_push_plan(
             new_attachments,
             folder_record_name: info.folder_record_name().unwrap_or_default().to_owned(),
             shared_zone_owner: info.shared_zone_owner().map(str::to_owned),
+            untracked_id: u.note_id.clone().filter(|id| !state.notes.contains_key(id)),
         });
     }
 
@@ -1684,6 +1688,14 @@ pub fn build_push_plan(
         .chain(folder_deletes.iter().map(|(_, rn)| rn))
     {
         lookup_groups.entry(None).or_default().push(record_name.clone());
+    }
+    for c in &create_candidates {
+        if let Some(id) = &c.untracked_id {
+            lookup_groups
+                .entry(c.shared_zone_owner.clone())
+                .or_default()
+                .push(id.clone());
+        }
     }
     let mut records_by_name: HashMap<String, CloudKitRecord> = HashMap::new();
     // Records iCloud answered an error for (other than "not found"): it
@@ -1842,6 +1854,37 @@ pub fn build_push_plan(
         let refuse = |refusal: Refusal| -> ExecutablePlanEntry {
             PlanEntry::refused(PlanEntryKind::Create, c.file.clone(), refusal).into()
         };
+        // A file carrying the id of a note iCloud has that nothing here
+        // tracks is what a clone or pull killed before it recorded the note
+        // left (docs/DESIGN.md, "A run that fails or is killed part way"):
+        // the next pull takes it for the note, or writes the note beside it
+        // when it was edited since, and the file is a copy from then on.
+        // Created now, the note would be in iCloud twice.
+        if let Some(id) = &c.untracked_id {
+            let live = records_by_name
+                .get(id)
+                .is_some_and(|r| !r.is_deleted() && !is_purged(r) && !is_in_trash(r));
+            let failed = lookup_failures.get(id);
+            if live || failed.is_some() {
+                notices.retain(|n| !n.message.starts_with(&format!("{} carries an ", c.file)));
+                notices.push(SyncNotice {
+                    level: NoticeLevel::Warn,
+                    message: match failed {
+                        Some(code) => format!(
+                            "{}: iCloud answered {code} when asked for the note it carries the id of - left as it \
+                             is this run",
+                            c.file
+                        ),
+                        None => format!(
+                            "{} is a note iCloud has that a pull cut short wrote and didn't record - left for the \
+                             next pull to take up",
+                            c.file
+                        ),
+                    },
+                });
+                continue;
+            }
+        }
         let built = build_create_payload(
             &c.file,
             &c.document_text,
