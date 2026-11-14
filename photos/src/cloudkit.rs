@@ -654,7 +654,7 @@ impl<'t> CloudKit<'t> {
         let mut signed_out = false;
         for chunk in assets.chunks(MODIFY_BATCH) {
             if signed_out {
-                out.extend(chunk.iter().map(|_| Err(Error::SignInRequired)));
+                out.extend(chunk.iter().map(|_| Err(Error::sign_in())));
                 continue;
             }
             let operations: Vec<Value> = chunk
@@ -669,7 +669,7 @@ impl<'t> CloudKit<'t> {
                     // One failure against every asset of the request.
                     out.extend(chunk.iter().map(|_| {
                         Err(match &e {
-                            Error::SignInRequired => Error::SignInRequired,
+                            e if e.is_sign_in() => Error::sign_in(),
                             Error::CloudKit { code, reason } => Error::CloudKit {
                                 code: code.clone(),
                                 reason: reason.clone(),

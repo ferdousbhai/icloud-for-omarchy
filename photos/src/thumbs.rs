@@ -301,10 +301,10 @@ fn download_fresh(
 /// must not read as `session_rejected` and a request to sign in again.
 fn url_refused(e: Error) -> Error {
     match e {
-        Error::Http {
+        Error::Session(icloud_session::Error::Http {
             status: status @ (401 | 421),
             body,
-        } => Error::Other(format!("the signed download URL was refused (HTTP {status}): {body}")),
+        }) => Error::Other(format!("the signed download URL was refused (HTTP {status}): {body}")),
         e => e,
     }
 }

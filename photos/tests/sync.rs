@@ -147,7 +147,7 @@ fn incremental_failure_falls_back_to_a_full_listing() {
 fn sign_in_required_does_not_fall_back() {
     let t = FixtureTransport::new(|call| {
         if call.op == "changes/zone" {
-            Err(Error::SignInRequired)
+            Err(Error::sign_in())
         } else {
             library(call)
         }
@@ -202,10 +202,7 @@ fn full_sync_marks_assets_gone_from_icloud() {
 fn a_failed_full_sync_writes_nothing() {
     let t = FixtureTransport::new(|call| {
         if call.record_type() == Some("CPLContainerRelationLiveByAssetDate") {
-            return Err(Error::Http {
-                status: 503,
-                body: "try later".into(),
-            });
+            return Err(Error::http(503, "try later"));
         }
         library(call)
     });

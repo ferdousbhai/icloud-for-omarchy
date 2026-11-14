@@ -319,7 +319,7 @@ fn delete_assets_batches_and_maps_each_record_by_name() {
 
 #[test]
 fn delete_assets_stops_sending_after_a_lapsed_sign_in() {
-    let t = FixtureTransport::new(|_| Err(Error::SignInRequired));
+    let t = FixtureTransport::new(|_| Err(Error::sign_in()));
     let ck = CloudKit::connect(&t).unwrap();
     let names: Vec<String> = (0..250).map(|i| format!("A{i}")).collect();
     let items: Vec<(&str, Option<&str>)> = names.iter().map(|n| (n.as_str(), None)).collect();
@@ -330,7 +330,7 @@ fn delete_assets_stops_sending_after_a_lapsed_sign_in() {
 
 #[test]
 fn sign_in_required_propagates() {
-    let t = FixtureTransport::new(|_| Err(Error::SignInRequired));
+    let t = FixtureTransport::new(|_| Err(Error::sign_in()));
     let ck = CloudKit::connect(&t).unwrap();
     assert!(ck.albums().unwrap_err().is_sign_in());
 }

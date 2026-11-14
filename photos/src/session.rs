@@ -11,24 +11,6 @@ use serde_json::Value;
 
 use crate::transport::{Error, Result, SignInState, Transport};
 
-impl From<icloud_session::Error> for Error {
-    fn from(e: icloud_session::Error) -> Self {
-        match e {
-            icloud_session::Error::SignInRequired => Error::SignInRequired,
-            icloud_session::Error::Http { status, body } => Error::Http { status, body },
-            icloud_session::Error::Io(e) => Error::Io(e),
-            icloud_session::Error::Offline(m) => Error::Offline(m),
-            icloud_session::Error::Network(m) => Error::Network(m),
-            icloud_session::Error::BadResponse(m) => Error::BadResponse(m),
-            icloud_session::Error::Service(m) => Error::Service(m),
-            icloud_session::Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m),
-            // The daemon's own failures, Find My's password (which Photos
-            // never asks for): reported as every iCloud tool reports them.
-            other => Error::Session(other),
-        }
-    }
-}
-
 /// The real transport: every call goes through `icloud_session::Session`.
 pub struct SessionTransport {
     session: icloud_session::Session,
@@ -99,7 +81,7 @@ pub fn sign_in_state() -> Result<SignInState> {
         );
         return match t.post_json(&url, &Value::Object(Default::default())) {
             Ok(_) => Ok(mock_state(true)),
-            Err(Error::SignInRequired) => Ok(mock_state(false)),
+            Err(e) if e.is_sign_in() => Ok(mock_state(false)),
             Err(e) => Err(e),
         };
     }

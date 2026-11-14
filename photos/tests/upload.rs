@@ -18,10 +18,7 @@ fn apple(put_asset: &'static str) -> FixtureTransport {
         "/photosupload/putAsset" => Ok(fixture(put_asset)),
         "/photosupload/uploadStatus" => Ok(fixture("write/upload_status.json")),
         url if url.contains("/singleFileUpload") => Ok(fixture("write/single_file_upload.json")),
-        other => Err(Error::Http {
-            status: 404,
-            body: other.into(),
-        }),
+        other => Err(Error::http(404, other)),
     })
 }
 
@@ -137,7 +134,7 @@ fn a_rejected_registration_is_an_error() {
         .unwrap()
         .upload(&photo("rejected"), CLIENT, &|_| {})
         .unwrap_err();
-    assert!(matches!(err, Error::Http { status: 500, .. }), "{err:?}");
+    assert_eq!(err.http_status(), Some(500), "{err:?}");
 }
 
 #[test]
@@ -152,7 +149,7 @@ fn a_registration_refused_with_401_is_not_a_refused_session() {
         .upload(&photo("refused"), CLIENT, &|_| {})
         .unwrap_err();
     assert!(err.to_string().contains("status 401"), "{err}");
-    assert!(err.into_session().is_err(), "not an icloud-session failure");
+    assert!(!matches!(err, Error::Session(_)), "not an icloud-session failure");
 }
 
 #[test]

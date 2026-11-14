@@ -304,11 +304,13 @@ fn classify(fail: Fail) -> CliError {
         Fail::Cli(e) => return e,
         Fail::Err(e) => e,
     };
-    match e.into_session() {
-        Ok(session) => with_sign_in_hint(output::session_failure(&session), sign_in_hint()),
-        Err(e @ Error::NotOffered(_)) => CliError::new("photos_unavailable", EXIT_SIGN_IN, e.to_string())
+    match e {
+        Error::Session(session) => with_sign_in_hint(output::session_failure(&session), sign_in_hint()),
+        // An I/O error, local or the session's, reads the same (`io`, exit 1).
+        Error::Io(e) => output::session_failure(&icloud_session::Error::Io(e)),
+        e @ Error::NotOffered(_) => CliError::new("photos_unavailable", EXIT_SIGN_IN, e.to_string())
             .hint("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
-        Err(e) => CliError::new("error", EXIT_ERROR, e.to_string()),
+        e => CliError::new("error", EXIT_ERROR, e.to_string()),
     }
 }
 
@@ -1042,7 +1044,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
             }
         }
         if sign_in_lapsed && new_ids.is_empty() {
-            return Err(Fail::Err(Error::SignInRequired));
+            return Err(Fail::Err(Error::sign_in()));
         }
 
         if let (Some(album), false) = (album, new_ids.is_empty()) {
@@ -1221,7 +1223,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
 /// A conflict's re-sync failed: the item fails (a lapsed sign-in as itself).
 fn resync_failed(e: &Error) -> Error {
     if e.is_sign_in() {
-        Error::SignInRequired
+        Error::sign_in()
     } else {
         Error::Other(format!("changed on another device; re-sync failed: {e}"))
     }
@@ -1279,7 +1281,7 @@ impl<'a> Changed<'a> {
 
     fn finish(self, summary: impl Fn(String) -> String) -> Res<Response> {
         if self.signed_out && self.ok.is_empty() {
-            return Err(Error::SignInRequired.into());
+            return Err(Error::sign_in().into());
         }
         let code = match (self.signed_out, self.failed) {
             (true, _) => EXIT_SIGN_IN,
@@ -1289,7 +1291,7 @@ impl<'a> Changed<'a> {
         if self.ctx.text() {
             // Every line is already out.
             if self.signed_out {
-                classify(Error::SignInRequired.into()).report(self.ctx.mode);
+                classify(Error::sign_in().into()).report(self.ctx.mode);
             }
             return Ok(Response::silent().exit(code));
         }
@@ -1317,7 +1319,7 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
     for row in &rows {
         // After a lapsed sign-in nothing more is sent.
         if report.signed_out {
-            report.item(&row.id, Err(Error::SignInRequired));
+            report.item(&row.id, Err(Error::sign_in()));
             continue;
         }
         let mut result = ck.restore_asset(&row.id, row.change_tag.as_deref());
@@ -1415,44 +1417,49 @@ mod tests {
 #[cfg(test)]
 mod exit_tests {
     use super::*;
+    use icloud_session::Error as S;
 
-    fn exit_and_code(e: Error) -> (u8, String, bool) {
-        let e = classify(Fail::Err(e));
+    fn exit_and_code(e: impl Into<Error>) -> (u8, String, bool) {
+        let e = classify(Fail::Err(e.into()));
         (e.exit, e.code, e.hint.is_some())
     }
 
     #[test]
     fn failures_follow_the_shared_exit_mapping() {
         let s = || "x".to_owned();
-        let http = |status| Error::Http { status, body: s() };
         let t = |exit, code: &str, hint| (exit, code.to_owned(), hint);
-        assert_eq!(exit_and_code(Error::Offline(s())), t(5, "offline", true));
-        assert_eq!(exit_and_code(Error::Network(s())), t(5, "network", true));
-        assert_eq!(exit_and_code(Error::BadResponse(s())), t(5, "bad_response", true));
-        assert_eq!(exit_and_code(Error::Service(s())), t(5, "session_service", true));
+        assert_eq!(exit_and_code(S::Offline(s())), t(5, "offline", true));
+        assert_eq!(exit_and_code(S::Network(s())), t(5, "network", true));
+        assert_eq!(exit_and_code(S::BadResponse(s())), t(5, "bad_response", true));
+        assert_eq!(exit_and_code(S::Service(s())), t(5, "session_service", true));
         assert_eq!(
-            exit_and_code(Error::KeyringUnavailable(s())),
+            exit_and_code(S::KeyringUnavailable(s())),
             t(5, "keyring_unavailable", true)
         );
-        assert_eq!(exit_and_code(http(503)), t(5, "http", true));
-        assert_eq!(exit_and_code(http(421)), t(3, "session_rejected", true));
-        assert_eq!(exit_and_code(http(401)), t(3, "session_rejected", true));
-        assert_eq!(exit_and_code(http(404)), t(1, "http", false));
+        assert_eq!(exit_and_code(Error::http(503, "x")), t(5, "http", true));
+        assert_eq!(exit_and_code(Error::http(421, "x")), t(3, "session_rejected", true));
+        assert_eq!(exit_and_code(Error::http(401, "x")), t(3, "session_rejected", true));
+        assert_eq!(exit_and_code(Error::http(404, "x")), t(1, "http", false));
         assert_eq!(
             exit_and_code(Error::NotOffered("ckdatabasews".into())),
             t(3, "photos_unavailable", true)
         );
-        let rejected = classify(Fail::Err(http(421)));
+        let rejected = classify(Fail::Err(Error::http(421, "x")));
         assert_eq!(rejected.hint.as_deref(), Some(sign_in_hint().as_str()));
         assert!(rejected.message.contains("HTTP 421"), "{}", rejected.message);
-        assert_eq!(exit_and_code(Error::SignInRequired), t(3, "sign_in_required", true));
+        let sign_in = classify(Fail::Err(Error::sign_in()));
+        assert_eq!((sign_in.code.as_str(), sign_in.exit), ("sign_in_required", 3));
+        assert_eq!(sign_in.hint, Some(sign_in_hint()));
         assert_eq!(exit_and_code(Error::Other(s())), t(1, "error", false));
-        assert_eq!(exit_and_code(Error::Io(std::io::Error::other("x"))), t(1, "io", false));
-        let daemon = icloud_session::Error::Daemon {
+        // I/O reads the same whether it was Photos' own or the session's.
+        assert_eq!(exit_and_code(std::io::Error::other("x")), t(1, "io", false));
+        assert_eq!(exit_and_code(S::Io(std::io::Error::other("x"))), t(1, "io", false));
+        let daemon = S::Daemon {
             name: "org.freedesktop.DBus.Error.Failed".into(),
             message: "x".into(),
         };
-        assert_eq!(exit_and_code(daemon.into()), t(1, "error", false));
+        assert_eq!(exit_and_code(daemon), t(1, "error", false));
+        assert_eq!(exit_and_code(S::FindMyAuthRequired), t(3, "find_my_auth_required", true));
         assert_eq!(
             exit_and_code(Error::CloudKit {
                 code: "CONFLICT".into(),
@@ -1463,65 +1470,5 @@ mod exit_tests {
         assert_eq!(classify(not_found(s()).into()).exit, 4);
         assert_eq!(classify(usage(s()).into()).exit, 2);
         assert_eq!(classify(cancelled(s()).into()).exit, 1);
-    }
-}
-
-#[cfg(test)]
-mod session_parity_tests {
-    use super::*;
-
-    /// Every icloud-session failure, through Photos' error and back, reads
-    /// as `output::session_failure` makes it in every iCloud tool: the same
-    /// code, exit, message and hint (the sign-in hint with Photos' extra).
-    /// `SignInRequired` is checked apart: its message asks the daemon why.
-    #[test]
-    fn icloud_session_errors_read_as_in_every_tool() {
-        let variants = || {
-            let http = |status| icloud_session::Error::Http {
-                status,
-                body: "x".into(),
-            };
-            vec![
-                icloud_session::Error::FindMyAuthRequired,
-                http(401),
-                http(421),
-                http(404),
-                http(503),
-                icloud_session::Error::Offline("x".into()),
-                icloud_session::Error::Network("x".into()),
-                icloud_session::Error::BadResponse("x".into()),
-                icloud_session::Error::Service("x".into()),
-                icloud_session::Error::KeyringUnavailable("x".into()),
-                icloud_session::Error::Daemon {
-                    name: "org.freedesktop.DBus.Error.Failed".into(),
-                    message: "x".into(),
-                },
-                icloud_session::Error::Io(std::io::Error::other("x")),
-            ]
-        };
-        for (session, expected) in variants()
-            .into_iter()
-            .zip(variants().iter().map(output::session_failure))
-        {
-            let label = format!("{session:?}");
-            let ours = classify(Fail::Err(Error::from(session)));
-            let expected_hint = match expected.hint.as_deref() {
-                Some(SIGN_IN_HINT) => Some(sign_in_hint()),
-                other => other.map(str::to_owned),
-            };
-            assert_eq!(
-                (ours.code.as_str(), ours.exit, ours.message.as_str(), ours.hint),
-                (
-                    expected.code.as_str(),
-                    expected.exit,
-                    expected.message.as_str(),
-                    expected_hint
-                ),
-                "{label}"
-            );
-        }
-        let sign_in = classify(Fail::Err(Error::from(icloud_session::Error::SignInRequired)));
-        assert_eq!((sign_in.code.as_str(), sign_in.exit), ("sign_in_required", 3));
-        assert_eq!(sign_in.hint, Some(sign_in_hint()));
     }
 }

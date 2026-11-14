@@ -113,15 +113,9 @@ impl Transport for FixtureTransport {
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {
         self.downloads.lock().unwrap().push(url.to_owned());
         if url.contains("/expired/") {
-            return Err(Error::Http {
-                status: 403,
-                body: "expired".into(),
-            });
+            return Err(Error::http(403, "expired"));
         }
-        let bytes = self.files.lock().unwrap().get(url).cloned().ok_or(Error::Http {
-            status: 404,
-            body: url.into(),
-        })?;
+        let bytes = self.files.lock().unwrap().get(url).cloned().ok_or(Error::http(404, url))?;
         // Like icloud-session: a temp file next to `dest`, then a rename
         // over it. No directory is created, so a missing one shows.
         let tmp = dest.with_extension(format!("part-{}", std::process::id()));
@@ -172,10 +166,7 @@ pub fn library(call: &Call) -> Result<Value> {
                 _ => serde_json::json!({ "records": [] }),
             })
         }
-        other => Err(Error::Http {
-            status: 404,
-            body: format!("no fixture for {other}"),
-        }),
+        other => Err(Error::http(404, format!("no fixture for {other}"))),
     }
 }
 

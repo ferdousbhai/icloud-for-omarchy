@@ -196,10 +196,7 @@ impl<'t> Uploader<'t> {
             // status, which icloud-session handles).
             return Err(match status {
                 401 | 421 => Error::Other(format!("putAsset refused the upload (status {status}): {msg}")),
-                _ => Error::Http {
-                    status: status as u16,
-                    body: format!("putAsset: {msg}"),
-                },
+                _ => Error::http(status as u16, format!("putAsset: {msg}")),
             });
         }
         Ok(Uploaded {

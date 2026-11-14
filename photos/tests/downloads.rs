@@ -154,10 +154,7 @@ fn a_signed_url_refused_after_its_refresh_is_not_a_refused_session() {
         }
         fn download(&self, url: &str, _dest: &std::path::Path) -> Result<u64> {
             self.0.downloads.lock().unwrap().push(url.to_owned());
-            Err(icloud_photos::transport::Error::Http {
-                status: 401,
-                body: "denied".into(),
-            })
+            Err(icloud_photos::transport::Error::http(401, "denied"))
         }
     }
     let t = Refusing(t);
@@ -169,7 +166,10 @@ fn a_signed_url_refused_after_its_refresh_is_not_a_refused_session() {
     );
     assert!(t.0.ops().contains(&"records/lookup".to_string()));
     assert!(err.to_string().contains("HTTP 401"), "{err}");
-    assert!(err.into_session().is_err(), "not an icloud-session failure");
+    assert!(
+        !matches!(err, icloud_photos::transport::Error::Session(_)),
+        "not an icloud-session failure"
+    );
 }
 
 #[test]
