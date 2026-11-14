@@ -529,6 +529,31 @@ fn urls_that_could_open_inline_constructs_fall_back_to_escaped_text() {
 
 /// Issue #21: markdown-rs ends lines at `\r\n`, `\r` and `\n`, so a lone
 /// `\r` must not leave a node pointing past the parser's line table.
+/// markdown-rs reads a web address in a link's text as a link of its own
+/// (micromark doesn't), and ends it on the backslash that escapes the
+/// character after the address: that backslash is no text of the note's.
+#[test]
+fn a_link_text_holding_an_address_before_an_escaped_character_round_trips() {
+    for text in [
+        "http://x.co/a_",
+        "see http://x.co/a* now",
+        "www.x.co~",
+        "http://x.co/a<b",
+        "http://x.co/a\\",
+        "http://x.co/a\\_",
+    ] {
+        let length = text.encode_utf16().count();
+        let link = styled(length, |style| style.link = "https://example.com/".into());
+        let rendered = assert_round_trips(&[with_spans(p(Body, text), vec![link])]);
+        assert!(
+            rendered.contains('\\'),
+            "{text:?} is written with an escape: {rendered:?}"
+        );
+    }
+    let parsed = parse_note_markdown("[http://x.co/a\\_](https://example.com/)").unwrap();
+    assert_eq!(parsed.text, "http://x.co/a_");
+}
+
 #[test]
 fn carriage_returns_never_panic_the_parser() {
     for input in ["```\n\r", "```\na\rb\n```", "```\r```", "# h\rx", "- a\r- b", "a\r\rb"] {

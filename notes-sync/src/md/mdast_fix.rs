@@ -180,7 +180,10 @@ fn fix_links_in_labels(node: &mut Node, source: &str, in_label: bool) {
                 && let Some(p) = &link.position
                 && !matches!(source.as_bytes().get(p.start.offset), Some(b'[' | b'<'))
             {
-                let value = decode_text(&source[p.start.offset..p.end.offset]);
+                let value = decode_text(
+                    &source[p.start.offset..p.end.offset],
+                    source[p.end.offset..].chars().next(),
+                );
                 *child = Node::Text(mdast::Text {
                     value,
                     position: link.position.clone(),
@@ -193,7 +196,10 @@ fn fix_links_in_labels(node: &mut Node, source: &str, in_label: bool) {
 }
 
 /// Backslash escapes and character references, as micromark decodes text.
-fn decode_text(raw: &str) -> String {
+/// `following` is the character after `raw`: markdown-rs ends a literal on
+/// the backslash that escapes it ("http://a.b/c\_" + "_"), and that
+/// backslash is no text.
+fn decode_text(raw: &str, following: Option<char>) -> String {
     let mut out = String::new();
     let mut rest = raw;
     while let Some(c) = rest.chars().next() {
@@ -201,6 +207,9 @@ fn decode_text(raw: &str) -> String {
             out.push_str(&rest[1..2]);
             rest = &rest[2..];
             continue;
+        }
+        if rest == "\\" && following.is_some_and(|n| n.is_ascii_punctuation()) {
+            break;
         }
         if c == '&'
             && let Some(end) = rest.find(';')
