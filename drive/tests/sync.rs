@@ -813,3 +813,20 @@ fn a_folder_removed_here_stays_in_icloud_while_it_holds_something_never_synced()
     bed.settle_paths(&["Docs", "Docs/.hidden", "keep.txt"]);
     assert_eq!(bed.local_paths(), ["Docs", "keep.txt"]);
 }
+
+#[test]
+fn a_file_moved_into_a_folder_both_sides_made_does_not_stop_the_sync() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    // Offline: a phone makes "Trip", and so does this computer, which also
+    // moves a synced file into it.
+    bed.cloud.folder(ROOT_ID, "Trip");
+    fs::create_dir(bed.root().join("Trip")).unwrap();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Trip/a.txt")).unwrap();
+    bed.write("other.txt", "unrelated");
+    bed.settle();
+    assert_eq!(bed.cloud.id_at("Trip/a.txt").as_deref(), Some(a.id.as_str()));
+    assert_eq!(bed.cloud.text("other.txt").as_deref(), Some("unrelated"));
+    assert!(bed.cloud.0.borrow().trashed.is_empty());
+}

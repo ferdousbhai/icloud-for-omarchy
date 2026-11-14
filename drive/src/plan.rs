@@ -314,16 +314,36 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             if into(&dests_here, to) {
                 continue;
             }
-            // Folders it was moved into that iCloud does not have yet.
+            // Folders it was moved into that are not in step yet: iCloud
+            // does not have them, or has one of that name made there too
+            // (which is taken as the same folder, as the content rules
+            // would). Without them the move could never be done, and no
+            // round would get past it.
             let mut missing = Vec::new();
             let mut dir = parent_of(to);
-            while !dir.is_empty() && !remote.by_path.contains_key(dir) && !made.contains(dir) {
-                missing.push(dir.to_string());
+            let mut blocked = false;
+            while !dir.is_empty() && !made.contains(dir) {
+                match remote.by_path.get(dir) {
+                    Some(_) if tracked.contains(dir) => break,
+                    Some(id) if remote.nodes[id].kind == Kind::Folder => missing.push(Op::Adopt {
+                        id: id.clone(),
+                        path: dir.to_string(),
+                    }),
+                    // A file of that name in iCloud: the content rules
+                    // sort that out (this one reads as deleted here).
+                    Some(_) => blocked = true,
+                    None => missing.push(Op::MkdirRemote { path: dir.to_string() }),
+                }
                 dir = parent_of(dir);
             }
-            for dir in missing.into_iter().rev() {
-                made.insert(dir.clone());
-                ops.push(Op::MkdirRemote { path: dir });
+            if blocked {
+                continue;
+            }
+            for op in missing.into_iter().rev() {
+                if let Op::Adopt { path, .. } | Op::MkdirRemote { path } = &op {
+                    made.insert(path.clone());
+                }
+                ops.push(op);
             }
             moving.push(&row.path);
             ops.push(Op::RemoteMove {
@@ -996,6 +1016,36 @@ mod tests {
                 },
                 Op::Upload { path: "b.txt".into() }
             ]
+        );
+    }
+
+    #[test]
+    fn a_move_here_into_a_folder_icloud_also_made_adopts_that_folder_first() {
+        let f = node("f", "", "a.txt", false, 5, 100);
+        let trip = node("t", "", "Trip", true, 0, 0);
+        let base = [row(&f, "a.txt", file(5, 7, 2))];
+        let local = [("Trip", dir(9)), ("Trip/a.txt", file(5, 7, 2))];
+        let p = run(&base, &[f.clone(), trip], &local);
+        assert_eq!(
+            p.ops,
+            [
+                Op::Adopt {
+                    id: "t".into(),
+                    path: "Trip".into()
+                },
+                Op::RemoteMove {
+                    id: "f".into(),
+                    to: "Trip/a.txt".into()
+                }
+            ]
+        );
+        // A file of that name in iCloud is not a folder to move into.
+        let not_a_folder = node("t", "", "Trip", false, 1, 1);
+        let p = run(&base, &[f, not_a_folder], &local);
+        assert!(
+            !p.ops.iter().any(|op| matches!(op, Op::RemoteMove { .. })),
+            "{:?}",
+            p.ops
         );
     }
 
