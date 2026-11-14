@@ -841,6 +841,33 @@ fn a_sign_in_that_lapses_part_way_keeps_the_report_and_exits_3() {
 }
 
 #[test]
+fn an_upload_cut_short_by_a_lapsed_sign_in_lists_the_files_not_sent() {
+    let env = Env::synced("upload-lapse", 3);
+    let files: Vec<PathBuf> = (0..3).map(|i| env.root.join(format!("NEW_{i}.JPG"))).collect();
+    for (i, f) in files.iter().enumerate() {
+        std::fs::write(f, format!("\u{0}jpeg {i}")).unwrap();
+    }
+    env.server.sign_out_after_uploads(1);
+    let mut args = vec!["--json", "upload"];
+    args.extend(files.iter().map(|f| f.to_str().unwrap()));
+    let r = env.run(&args);
+    assert_eq!(r.code, 3, "{}", r.stdout);
+    let v = r.json();
+    assert_eq!(
+        (v["uploaded"].as_i64(), v["failed"].as_i64()),
+        (Some(1), Some(2)),
+        "{v}"
+    );
+    let listed = v["files"].as_array().unwrap();
+    assert_eq!(listed.len(), 3, "every file is listed: {v}");
+    assert!(listed[0]["asset_id"].is_string(), "{v}");
+    for (entry, file) in listed.iter().zip(&files).skip(1) {
+        assert_eq!(entry["file"].as_str().map(Path::new), Some(file.as_path()), "{v}");
+        assert!(entry["error"].is_string(), "{v}");
+    }
+}
+
+#[test]
 fn prune_cache_drops_renditions_of_deleted_items() {
     let env = Env::synced("prune", 5);
     let ids = env.ids(&[]);

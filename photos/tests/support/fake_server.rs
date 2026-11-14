@@ -48,6 +48,8 @@ struct State {
     signed_out: bool,
     /// Sign out once this many more `records/modify` requests were answered.
     sign_out_after_modifies: Option<usize>,
+    /// The same, counting `putAsset` requests.
+    sign_out_after_uploads: Option<usize>,
     /// Answer 503 to the listings a sync makes (`changes/zone`, `records/query`).
     listings_down: bool,
     uploads: HashMap<String, Arc<Vec<u8>>>,
@@ -101,6 +103,11 @@ impl FakeServer {
     /// Answer `n` more `records/modify` requests, then sign out.
     pub fn sign_out_after_modifies(&self, n: usize) {
         self.state.lock().unwrap().sign_out_after_modifies = Some(n);
+    }
+
+    /// Answer `n` more `putAsset` requests (one per uploaded file), then sign out.
+    pub fn sign_out_after_uploads(&self, n: usize) {
+        self.state.lock().unwrap().sign_out_after_uploads = Some(n);
     }
 
     /// Make every sync fail with a 503 (writes still go through) until called with false.
@@ -214,6 +221,7 @@ impl State {
             log: Vec::new(),
             signed_out: false,
             sign_out_after_modifies: None,
+            sign_out_after_uploads: None,
             listings_down: false,
             uploads: HashMap::new(),
             jpegs: HashMap::new(),
@@ -563,7 +571,11 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
                 .unwrap_or_default();
             json_ok(json!({ "uploadUrls": urls }))
         }
-        "/photosupload/putAsset" => json_ok(s.put_asset(&body)),
+        "/photosupload/putAsset" => {
+            let answer = s.put_asset(&body);
+            s.signed_out |= sign_out_after(&mut s.sign_out_after_uploads);
+            json_ok(answer)
+        }
         "/photosupload/uploadStatus" => {
             let m: serde_json::Map<String, Value> = body["uploadJobIds"]
                 .as_array()
@@ -595,17 +607,28 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
             "records/lookup" => json_ok(s.lookup(&body)),
             "records/modify" => {
                 let answer = s.modify(&body);
-                if let Some(left) = s.sign_out_after_modifies.as_mut() {
-                    *left = left.saturating_sub(1);
-                    if *left == 0 {
-                        (s.signed_out, s.sign_out_after_modifies) = (true, None);
-                    }
-                }
+                s.signed_out |= sign_out_after(&mut s.sign_out_after_modifies);
                 json_ok(answer)
             }
             _ => (404, "application/json", br#"{"serverErrorCode":"NOT_FOUND"}"#.to_vec()),
         },
         _ => (404, "text/plain", b"not found".to_vec()),
+    }
+}
+
+/// One more request answered against a "sign out after n" count: whether
+/// that was the last one.
+fn sign_out_after(left: &mut Option<usize>) -> bool {
+    match left {
+        Some(n) if *n > 1 => {
+            *n -= 1;
+            false
+        }
+        Some(_) => {
+            *left = None;
+            true
+        }
+        None => false,
     }
 }
 

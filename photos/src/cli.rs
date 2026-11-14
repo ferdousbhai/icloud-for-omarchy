@@ -1027,7 +1027,10 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
         uploaded = summary.uploaded;
         duplicates = summary.duplicates;
 
-        for (index, result) in done.into_inner() {
+        let done = done.into_inner();
+        // A lapsed sign-in ends the batch: the files after it were not sent.
+        let unsent = paths.get(done.len()..).unwrap_or_default();
+        for (index, result) in done {
             match result {
                 Ok(u) => {
                     new_ids.push(u.asset_id.clone());
@@ -1044,6 +1047,9 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
         }
         if sign_in_lapsed && new_ids.is_empty() {
             return Err(Fail::Err(Error::sign_in()));
+        }
+        for file in unsent {
+            results.push(json!({ "file": file, "error": "not sent: the sign-in lapsed" }));
         }
 
         if let (Some(album), false) = (album, new_ids.is_empty()) {
