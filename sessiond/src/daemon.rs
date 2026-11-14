@@ -759,20 +759,35 @@ impl Daemon {
     }
 
     /// Stores the old profile's device trust with what the keyring has, a
-    /// newer window's trust winning over the old.
+    /// newer window's trust winning over the old, as the signed-in
+    /// account's (none signed in: unattributed).
     fn store_old_trust(&self, old: Vec<Cookie>) -> Result<(), String> {
-        let stored = match self.secrets.get_item(Kind::Trust)? {
-            Some(text) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_default(),
-            None => Vec::new(),
-        };
+        let stored = self.read_trust()?.map(|t| t.cookies).unwrap_or_default();
         let trust = cookies::trust_cookies(old.into_iter().chain(stored), time::now_secs());
-        let apple_id = lock(&self.state).props().apple_id;
-        self.set_trust(&apple_id, &trust)
+        let props = lock(&self.state).props();
+        let dsid = Some(props.dsid).filter(|d| !d.is_empty());
+        self.set_trust(&props.apple_id, dsid.as_deref(), &trust)
     }
 
-    /// Stores `trust` as the keyring's device trust, labelled with `apple_id`.
-    fn set_trust(&self, apple_id: &str, trust: &[Cookie]) -> Result<(), String> {
-        let text = Zeroizing::new(serde_json::to_string(trust).expect("cookies serialize"));
+    /// The keyring's device trust (`None`: none, or not a cookie list,
+    /// logged).
+    fn read_trust(&self) -> Result<Option<Trust>, String> {
+        let Some(text) = self.secrets.get_item(Kind::Trust)? else {
+            return Ok(None);
+        };
+        Ok(Trust::parse(&text)
+            .map_err(|e| eprintln!("icloud-sessiond: the keyring's device trust is not a cookie list ({e}); not used"))
+            .ok())
+    }
+
+    /// Stores `trust` as the keyring's device trust of the account `dsid`
+    /// (`None`: unknown), labelled with `apple_id`.
+    fn set_trust(&self, apple_id: &str, dsid: Option<&str>, trust: &[Cookie]) -> Result<(), String> {
+        let stored = Trust {
+            dsid: dsid.map(str::to_string),
+            cookies: trust.to_vec(),
+        };
+        let text = Zeroizing::new(serde_json::to_string(&stored).expect("cookies serialize"));
         self.secrets.set_item(Kind::Trust, apple_id, &text)
     }
 
@@ -1537,7 +1552,7 @@ impl Daemon {
             st.account
                 .as_ref()
                 .filter(|_| st.generation == generation)
-                .map(|a| a.apple_id.clone())
+                .map(|a| (a.apple_id.clone(), a.dsid.clone()))
         });
         Ok(())
     }
@@ -1775,14 +1790,10 @@ impl Daemon {
         let trust = if self.cfg.paths.removal_pending.exists() {
             Ok(None)
         } else {
-            self.secrets.get_item(Kind::Trust)
+            self.read_trust()
         };
         let mut jar = match trust {
-            Ok(Some(text)) => serde_json::from_str::<Vec<Cookie>>(&text).unwrap_or_else(|e| {
-                eprintln!("icloud-sessiond: the keyring's device trust is not a cookie list ({e}); not used");
-                Vec::new()
-            }),
-            Ok(None) => Vec::new(),
+            Ok(trust) => trust.map(|t| t.cookies).unwrap_or_default(),
             Err(e) => {
                 eprintln!("icloud-sessiond: reading the device trust from the keyring: {e}");
                 Vec::new()
@@ -1958,11 +1969,18 @@ impl Daemon {
         // `Change` until `account.json` is written too.
         let change = self.change();
         let mut written = lock(&self.written);
-        let unread_same = {
+        let (unread_same, before) = {
             let st = lock(&self.state);
             if st.signin_seq != seq {
                 return Err(cancelled());
             }
+            // Whose an unattributed device trust is: the account signed
+            // in now (a trust stored before trusts named theirs).
+            let before = st
+                .account
+                .as_ref()
+                .map(|a| a.dsid.clone())
+                .or_else(|| st.unread.as_ref().map(|u| u.stored.dsid.clone()));
             // Signing in again as the same Apple ID keeps its Find My
             // session, which Apple judges on its own.
             if let Some(old) = st.account.as_ref().filter(|old| old.dsid == account.dsid) {
@@ -1971,10 +1989,12 @@ impl Daemon {
             // Its jars were never read (keyring locked at start): still in
             // an account.json the migration could not move, or in the
             // keyring.
-            st.unread
+            let unread_same = st
+                .unread
                 .as_ref()
                 .filter(|u| st.account.is_none() && u.stored.dsid == account.dsid)
-                .map(|u| u.stored.legacy_secret())
+                .map(|u| u.stored.legacy_secret());
+            (unread_same, before)
         };
         if let Some(legacy) = unread_same {
             // The keyring is unlocked if this sign-in is to be kept, so it
@@ -1998,13 +2018,26 @@ impl Daemon {
             forget_trust: false,
         });
         // The window's trust replaces what was stored (it started with
-        // that, so still holds what Apple has not dropped). The old goes
-        // before the session is replaced, so no crash leaves one account's
-        // trust beside another's session (only none). None captured keeps
-        // the old: losing it would only bring 2FA back. Not a signed-out
-        // account's, though, whose removal is still owed (the window did
-        // not start with that): it goes unless replaced.
-        let cleared = !trust.is_empty()
+        // that, so still holds what Apple has not dropped). With none
+        // captured, the account's own is kept (losing it would only bring
+        // 2FA back), but another Apple ID's goes: a trust is one account's,
+        // and no help to another. The old goes before the session is
+        // replaced, so no crash leaves one account's trust beside another's
+        // session (only none). Not a signed-out account's, though, whose
+        // removal is still owed (the window did not start with that): it
+        // goes unless replaced.
+        let stored_trust = match trust.is_empty() {
+            true => self.read_trust().unwrap_or_else(|e| {
+                eprintln!("icloud-sessiond: reading the device trust from the keyring: {e}");
+                None
+            }),
+            false => None,
+        };
+        let owner = stored_trust
+            .as_ref()
+            .and_then(|t| t.dsid.clone().or_else(|| before.clone()));
+        let foreign = owner.as_ref().is_some_and(|owner| *owner != account.dsid);
+        let cleared = (!trust.is_empty() || foreign)
             && match self.secrets.remove_item(Kind::Trust) {
                 Ok(()) => true,
                 Err(e) => {
@@ -2018,11 +2051,21 @@ impl Daemon {
         written.secret = Some(secret);
         if cleared {
             self.clear_removal_pending();
-            if let Err(e) = self.set_trust(&account.apple_id, &trust) {
+            if !trust.is_empty()
+                && let Err(e) = self.set_trust(&account.apple_id, Some(&account.dsid), &trust)
+            {
                 eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
             }
         } else {
             self.settle_owed_trust();
+            // The account's own trust, stored before trusts named theirs:
+            // named now.
+            if let Some(old) = stored_trust.filter(|t| t.dsid.is_none() && owner.is_some())
+                && !self.cfg.paths.removal_pending.exists()
+                && let Err(e) = self.set_trust(&account.apple_id, Some(&account.dsid), &old.cookies)
+            {
+                eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}");
+            }
         }
         // No SignOut can have come in since the check above: it takes the
         // `Change` before it moves `signin_seq` on.
@@ -2064,7 +2107,7 @@ impl Daemon {
             st.account
                 .as_ref()
                 .filter(|_| st.signin_seq == seq)
-                .map(|a| a.apple_id.clone())
+                .map(|a| (a.apple_id.clone(), a.dsid.clone()))
         });
         Ok(())
     }
@@ -2074,15 +2117,15 @@ impl Daemon {
     /// state) names the Apple ID it is still for. A SignOut since, which
     /// removes the trust under [`Daemon::written`] after changing the
     /// state, wins. None captured keeps the old.
-    fn keep_trust(&self, trust: &[Cookie], current: impl FnOnce(&State) -> Option<String>) {
+    fn keep_trust(&self, trust: &[Cookie], current: impl FnOnce(&State) -> Option<(String, String)>) {
         if trust.is_empty() {
             return;
         }
         let _written = lock(&self.written);
-        let Some(apple_id) = current(&lock(&self.state)) else {
+        let Some((apple_id, dsid)) = current(&lock(&self.state)) else {
             return;
         };
-        match self.set_trust(&apple_id, trust) {
+        match self.set_trust(&apple_id, Some(&dsid), trust) {
             // Replaced, so a signed-out account's is no longer owed a removal.
             Ok(()) => self.clear_removal_pending(),
             Err(e) => eprintln!("icloud-sessiond: storing the device trust in the keyring: {e}"),
@@ -2367,6 +2410,23 @@ fn spawn_error(bin: &Path, e: &std::io::Error) -> String {
 /// `d` in whole seconds, rounded up (unix-second timestamps compare with it).
 fn whole_secs(d: Duration) -> u64 {
     d.as_secs_f64().ceil() as u64
+}
+
+/// The keyring's device-trust item: the cookies, and the account they
+/// are the trust of. A trust stored before it named its account is the
+/// bare cookie list (`dsid` none).
+#[derive(Debug, serde::Serialize, Deserialize)]
+struct Trust {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dsid: Option<String>,
+    cookies: Vec<Cookie>,
+}
+
+impl Trust {
+    fn parse(text: &str) -> serde_json::Result<Trust> {
+        serde_json::from_str::<Trust>(text)
+            .or_else(|_| serde_json::from_str::<Vec<Cookie>>(text).map(|cookies| Trust { dsid: None, cookies }))
+    }
 }
 
 /// What `icloud-session-signin` prints.

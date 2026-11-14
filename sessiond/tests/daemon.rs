@@ -1358,8 +1358,18 @@ fn sign_out_forgets_account_and_profile() {
 fn trust_item(env: &Env) -> Option<(String, Value)> {
     let items = env.all_secrets();
     let item = items.as_array()?.iter().find(|i| i["attributes"]["kind"] == "trust")?;
-    let cookies = serde_json::from_str(item["secret"].as_str()?).unwrap();
+    let trust: Value = serde_json::from_str(item["secret"].as_str()?).unwrap();
+    // `{dsid, cookies}`; a bare list from before trusts named their account.
+    let cookies = trust.get("cookies").cloned().unwrap_or(trust);
     Some((item["label"].as_str()?.to_string(), cookies))
+}
+
+/// The account the test keyring's device trust names, if it names one.
+fn trust_dsid(env: &Env) -> Option<String> {
+    let items = env.all_secrets();
+    let item = items.as_array()?.iter().find(|i| i["attributes"]["kind"] == "trust")?;
+    let trust: Value = serde_json::from_str(item["secret"].as_str()?).unwrap();
+    trust["dsid"].as_str().map(str::to_string)
 }
 
 /// The names, sorted, of the cookies in the test keyring's device-trust
@@ -3936,8 +3946,9 @@ mod crash {
 
     /// A fake window for the account named in `<dir>/who` (`a` or `b`):
     /// a sign-in capture, or with `--find` (and `--autofill`) a one-factor
-    /// one with Find My's cookie; each with that account's device trust.
-    /// While `<dir>/hold` exists it waits.
+    /// one with Find My's cookie; each with that account's device trust
+    /// (none while `<dir>/notrust` exists). While `<dir>/hold` exists it
+    /// waits.
     pub(super) fn two_window(dir: &Path) -> String {
         let cookie = |name: &str, value: &str| {
             format!(
@@ -3945,8 +3956,9 @@ mod crash {
             )
         };
         let user = cookie("X-APPLE-WEBAUTH-USER", r#"\"v=1:s=0:d=$dsid\""#);
-        let trust = format!(
-            r#""trust": [{{"name": "DES$who", "value": "$who-trust", "domain": "idmsa.apple.com", "path": "/", "expires": {}}}]"#,
+        let trust = r#""trust": [$tc]"#;
+        let trust_cookie = format!(
+            r#"{{"name": "DES$who", "value": "$who-trust", "domain": "idmsa.apple.com", "path": "/", "expires": {}}}"#,
             now() + 86400
         );
         let end = "EOF";
@@ -3959,6 +3971,11 @@ cat > /dev/null
 while [ -e "$d/hold" ]; do sleep 0.02; done
 who=$(cat "$d/who" 2>/dev/null || echo a)
 case $who in b) dsid={B_DSID} ;; *) dsid={DSID} ;; esac
+tc=
+[ -e "$d/notrust" ] || tc=$(cat <<{end}
+{trust_cookie}
+{end}
+)
 if [ "$1" = --find ]; then
 cat <<{end}
 {{"cookies": [{user}, {token1}, {fmip}], {trust}, "dsid": "$dsid", "clientId": "$who-find"}}
@@ -4134,6 +4151,9 @@ fi"#,
                     "{case}"
                 );
                 mine(cookies, "the device trust");
+                if let Some(owner) = trust_dsid(&self.env) {
+                    assert_eq!(owner, dsid, "{case}: the device trust of {owner}: {secrets}");
+                }
             }
             let (header, _, _) = session(&self.conn).unwrap();
             let token = cookie_of(&header, "X-APPLE-WEBAUTH-TOKEN").unwrap();
@@ -4534,6 +4554,96 @@ fi"#,
             },
             done: &|rig| rig.until("signed out", |s| !s.signed_in),
             passes: &["rename:account.json", "write:sign-out-reason"],
+            ..Default::default()
+        });
+    }
+
+    /// Makes the test keyring's device trust a bare cookie list, as a
+    /// daemon from before trusts named their account stored it.
+    fn unattribute_trust(env: &Env) {
+        let mut items = env.all_secrets();
+        let item = items
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|i| i["attributes"]["kind"] == "trust")
+            .expect("a trust item");
+        let (_, cookies) = trust_item(env).unwrap();
+        item["secret"] = json!(cookies.to_string());
+        fs::write(env.secrets_path(), items.to_string()).unwrap();
+        assert_eq!(trust_dsid(env), None);
+    }
+
+    fn no_trust_of_its_own(rig: &Rig) {
+        fs::write(rig.window.path().join("notrust"), "").unwrap();
+    }
+
+    /// A sign-in whose window captured no trust keeps the stored one only
+    /// if it is the same account's: a trust is one Apple ID's. One stored
+    /// before trusts named their account is the account's signed in then,
+    /// and is named once kept.
+    #[test]
+    fn a_sign_in_without_a_trust_of_its_own_keeps_only_its_own_account_s() {
+        let rig = Rig::new(false);
+        rig.sign_in("a");
+        assert_eq!(trust_dsid(&rig.env).as_deref(), Some(DSID));
+        no_trust_of_its_own(&rig);
+        rig.sign_in("a");
+        assert_eq!(
+            trust_dsid(&rig.env).as_deref(),
+            Some(DSID),
+            "the same account keeps its trust"
+        );
+        rig.sign_in("b");
+        assert!(trust_item(&rig.env).is_none(), "{}", rig.env.all_secrets());
+
+        // Unattributed: A's, signed in when it is read.
+        fs::remove_file(rig.window.path().join("notrust")).unwrap();
+        rig.sign_in("a");
+        unattribute_trust(&rig.env);
+        no_trust_of_its_own(&rig);
+        rig.sign_in("a");
+        assert_eq!(trust_dsid(&rig.env).as_deref(), Some(DSID), "named once kept");
+        assert_eq!(trust_item(&rig.env).unwrap().1[0]["value"], "a-trust");
+        unattribute_trust(&rig.env);
+        rig.sign_in("b");
+        assert!(trust_item(&rig.env).is_none(), "{}", rig.env.all_secrets());
+    }
+
+    #[test]
+    fn a_sign_in_as_another_account_without_a_trust_of_its_own_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-in A to B without a trust",
+            outcomes: &[Some(DSID), Some(B_DSID)],
+            act: &|rig| {
+                no_trust_of_its_own(rig);
+                rig.start_sign_in("b");
+            },
+            done: &|rig| rig.signed_in_as("b"),
+            passes: &["remove:trust", "set:session", "write:account.json"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn a_sign_in_naming_an_unattributed_trust_cut_off_anywhere() {
+        run(&Change {
+            name: "sign-in A to A naming its trust",
+            setup: &|rig| {
+                rig.sign_in("a");
+                unattribute_trust(&rig.env);
+                rig.restart();
+            },
+            act: &|rig| {
+                no_trust_of_its_own(rig);
+                rig.start_sign_in("a");
+            },
+            done: &|rig| {
+                wait_until("the trust named", Duration::from_secs(30), || {
+                    trust_dsid(&rig.env).as_deref() == Some(DSID) && !change_pending(&rig.env).exists()
+                })
+            },
+            passes: &["set:session", "set:trust", "write:account.json"],
             ..Default::default()
         });
     }

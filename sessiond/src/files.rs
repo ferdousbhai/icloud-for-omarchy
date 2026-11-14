@@ -319,7 +319,10 @@ pub fn open_lock(path: &Path) -> io::Result<fs::File> {
 pub fn remove(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => {
+        result => {
+            if result.is_ok() {
+                sync_dir(path)?;
+            }
             crash::point("remove", &file_name(path));
             Ok(())
         }
@@ -330,6 +333,7 @@ pub fn remove(path: &Path) -> io::Result<()> {
 pub fn set_aside(path: &Path) -> io::Result<PathBuf> {
     let bad = path.with_extension("json.bad");
     fs::rename(path, &bad)?;
+    sync_dir(path)?;
     crash::point("rename", &file_name(path));
     Ok(bad)
 }
@@ -369,8 +373,17 @@ pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
     write_atomic(path, text.as_bytes())
 }
 
+/// Flushes `path`'s directory, where a rename or removal of it is kept.
+fn sync_dir(path: &Path) -> io::Result<()> {
+    match path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => fs::File::open(dir)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
 /// Writes `bytes` to a temp file (mode 0600) beside `path`, then renames it
-/// over `path`, so a reader sees either the old file or the new one. The
+/// over `path`, fsynced with its directory, so a reader sees either the old
+/// file or the new one, after a power loss too. The
 /// parent directory and any missing above it are created with mode 0700.
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
@@ -383,7 +396,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&tmp, path)
+        fs::rename(&tmp, path)?;
+        // The rename itself, so a power loss keeps the order of the writes.
+        sync_dir(path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
