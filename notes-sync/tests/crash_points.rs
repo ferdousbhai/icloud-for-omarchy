@@ -869,6 +869,48 @@ struct Start {
     expect: Expect,
 }
 
+/// The points a run reaches once per note (or per write) in a loop.
+const PER_NOTE_POINTS: &[&str] = &[
+    crash::TEMP_FILE,
+    crash::NOTE_FILE,
+    crash::BASE_COPY,
+    crash::HISTORY_SNAPSHOT,
+    crash::HISTORY_EPOCH,
+];
+
+/// The places worth cutting a run short at: every place but the per-note
+/// points' (`PER_NOTE_POINTS`), and of those, the first two times and the
+/// last time each is reached, and the times within a few places of one of
+/// the others (a checkpoint, a request, a rename...): the notes in between
+/// go through the same code with nothing else around them.
+/// `CRASH_POINTS_ALL=1` keeps every place.
+fn distinct_sites(sites: Vec<(String, u64)>) -> Vec<(String, u64)> {
+    if std::env::var_os("CRASH_POINTS_ALL").is_some() {
+        return sites;
+    }
+    const NEAR: usize = 4;
+    let per_note = |point: &str| PER_NOTE_POINTS.contains(&point);
+    let last: HashMap<&str, u64> = sites
+        .iter()
+        .map(|(p, n)| (p.as_str(), *n))
+        .fold(HashMap::new(), |mut m, (p, n)| {
+            m.insert(p, n);
+            m
+        });
+    let anchors: Vec<usize> = (0..sites.len()).filter(|&i| !per_note(&sites[i].0)).collect();
+    sites
+        .iter()
+        .enumerate()
+        .filter(|(i, (point, n))| {
+            !per_note(point)
+                || *n <= 2
+                || last.get(point.as_str()) == Some(n)
+                || anchors.iter().any(|a| a.abs_diff(*i) <= NEAR)
+        })
+        .map(|(_, site)| site.clone())
+        .collect()
+}
+
 /// How a run cut short is carried on with.
 #[derive(Debug, Clone, Copy)]
 enum Then {
@@ -899,6 +941,7 @@ fn crash_everywhere(start: &Start, command: &str, thens: &[Then]) {
     check(&fake, &traced, &start.expect, &format!("{command} not cut short"));
 
     let only = std::env::var("CRASH_POINTS_ONLY").ok();
+    let sites = distinct_sites(sites);
     let cases: Vec<((String, u64), Then)> = sites
         .iter()
         .filter(|(p, n)| only.as_ref().is_none_or(|o| *o == format!("{p}:{n}")))
