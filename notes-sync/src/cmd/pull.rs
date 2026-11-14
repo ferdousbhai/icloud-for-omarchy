@@ -109,6 +109,8 @@ pub struct PullSummary {
     pub attachments_downloaded: usize,
     pub unpublishable: usize,
     pub skipped_new_unsyncable: usize,
+    /// Always 0: a tracked note that can no longer be decoded stays tracked
+    /// (read-only). Kept for the shape of the result.
     pub dropped_unsyncable: usize,
     pub unshared_untracked: usize,
     pub changes: Vec<PullChange>,
@@ -121,6 +123,9 @@ pub struct PullSummary {
 const UNRESOLVED_MARKERS: &str = "still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile";
 /// What a pull says of a merge that left conflict markers.
 const MERGED_WITH_MARKERS: &str = "merged with conflict markers - resolve manually";
+/// Why a tracked note whose text can no longer be decoded is read-only (it
+/// follows "this note").
+const UNDECODABLE_REASON: &str = "has changed in iCloud into something this version can't read";
 /// What a pull with nothing to apply says.
 pub const UP_TO_DATE: &str = "Already up to date.";
 
@@ -405,15 +410,26 @@ pub fn run_pull_with(
                             summary.skipped_new_unsyncable += 1;
                             return Ok(());
                         };
-                        drop_unsyncable_note(
-                            target_dir,
-                            &record.record_name,
-                            existing,
-                            &mut tracked,
-                            &mut summary,
-                            reason.as_str(),
-                            title_mode,
-                        )?;
+                        // The note is still in iCloud: it stays tracked, its
+                        // file as it is. Untracked, the file (which carries
+                        // the note's id) would go up as a new note with the
+                        // next push, a second copy of this one.
+                        let mut entry = existing.clone();
+                        if let Some(tag) = &record.record_change_tag {
+                            entry.record_change_tag = tag.clone();
+                        }
+                        entry.unpublishable_reason = Some(UNDECODABLE_REASON.to_owned());
+                        tracked.notes.insert(record.record_name.clone(), entry);
+                        summary.unpublishable += 1;
+                        summary.notices.push(SyncNotice {
+                            level: NoticeLevel::Warn,
+                            message: format!(
+                                "{}: its text in iCloud can't be read by this version ({}) - left as it is here, \
+                                 read-only, and still tracked",
+                                existing.file,
+                                reason.as_str()
+                            ),
+                        });
                         return Ok(());
                     }
                     NoteDecodeResult::Ok(decoded) => decoded,
@@ -1208,42 +1224,6 @@ fn handle_remote_deletion(
     change.remarks = Some(vec![PullChangeRemark::new("note", remark)]);
     summary.changes.push(change);
     Ok(())
-}
-
-/// `dropUnsyncableNote`.
-fn drop_unsyncable_note(
-    target_dir: &Path,
-    record_name: &str,
-    existing: &NoteEntry,
-    tracked: &mut Tracked,
-    summary: &mut PullSummary,
-    reason: &str,
-    title_mode: TitleMode,
-) -> Result<(), Error> {
-    let local = local_file_state(target_dir, existing, record_name, title_mode)?;
-    if local == LocalFileState::Modified {
-        summary.conflicts.push(format!(
-            "{}: became unsyncable remotely ({reason}), and has local edits - left in place, untracked",
-            existing.file
-        ));
-        let mut change = PullChange::new(PullChangeKind::Untrack, existing.file.clone());
-        change.remarks = Some(vec![PullChangeRemark::new(
-            "conflict",
-            format!("became unsyncable remotely ({reason}), and has local edits - left in place"),
-        )]);
-        summary.changes.push(change);
-    } else {
-        summary.dropped_unsyncable += 1;
-        if local == LocalFileState::Clean {
-            let mut change = PullChange::new(PullChangeKind::Untrack, existing.file.clone());
-            change.remarks = Some(vec![PullChangeRemark::new(
-                "unsyncable",
-                format!("no longer syncable remotely ({reason}) - local copy left in place"),
-            )]);
-            summary.changes.push(change);
-        }
-    }
-    drop_tracking(target_dir, record_name, tracked)
 }
 
 /// `mergeRemoteChangeIntoLocalFile`'s status.

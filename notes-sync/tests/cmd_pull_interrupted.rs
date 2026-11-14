@@ -218,3 +218,51 @@ fn notes_written_before_the_pull_was_killed_are_not_pushed_as_new() {
     tracked.sort();
     assert_eq!(notes_under(&vault), tracked);
 }
+
+/// tiny-pull-update's answers, with the note's text replaced by bytes that
+/// can't be decoded (a format this build doesn't read).
+fn undecodable_update() -> Cassette {
+    let mut cassette = cassette("tiny-pull-update.json");
+    let listing = cassette.interactions[0].response.body.as_mut().unwrap();
+    let records = listing["zones"][0]["records"].as_array_mut().unwrap();
+    let note = records.iter_mut().find(|r| r["recordType"] == "Note").unwrap();
+    note["fields"]["TextDataEncrypted"]["value"] = "bm90IGEgbm90ZSBkb2N1bWVudA==".into();
+    cassette
+}
+
+/// A tracked note whose text this build can no longer decode still exists
+/// in iCloud. It stays tracked, with its file as it was: untracked, the file
+/// (which carries the note's id) would be sent to iCloud as a new note by
+/// the next push, a second copy of a note that is still there.
+#[test]
+fn a_tracked_note_that_became_undecodable_stays_tracked_and_is_not_pushed_as_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    run_clone_with(
+        &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
+        &vault,
+        &mut NoProgress,
+        &CloneOptions::default(),
+    )
+    .unwrap();
+    let before = read_clone_state(&vault).unwrap().unwrap();
+    let (record_name, entry) = before.notes.first().unwrap();
+    let text = std::fs::read_to_string(vault.join(&entry.file)).unwrap();
+
+    let summary = pull(&vault, undecodable_update(), dir.path().join("pull.json")).unwrap();
+    assert_eq!(summary.dropped_unsyncable, 0);
+    assert!(summary.changes.is_empty(), "{:?}", summary.changes);
+    assert!(
+        summary.notices.iter().any(|n| n.message.contains(&entry.file)),
+        "{:?}",
+        summary.notices
+    );
+
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.notes.get(record_name).map(|e| &e.file), Some(&entry.file));
+    assert_eq!(std::fs::read_to_string(vault.join(&entry.file)).unwrap(), text);
+    let no_network = FnConnector(|| -> Result<Remote, Error> { panic!("network: the plan found a change") });
+    let plan = build_push_plan(&no_network, &vault, &mut |_| {}).unwrap();
+    let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
+    assert!(entries.is_empty(), "{entries:?}");
+}

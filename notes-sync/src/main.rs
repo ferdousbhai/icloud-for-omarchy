@@ -269,13 +269,10 @@ fn pull_lines(s: &pull::PullSummary, target: &Path) -> Vec<Line> {
         .into_iter()
         .map(|line| (false, line))
         .collect();
-    if s.skipped_new_unsyncable > 0 || s.dropped_unsyncable > 0 {
+    if s.skipped_new_unsyncable > 0 {
         lines.push((
             false,
-            format!(
-                "{} new unsyncable note(s) skipped, {} note(s) dropped from tracking (no longer syncable)",
-                s.skipped_new_unsyncable, s.dropped_unsyncable
-            ),
+            format!("{} new unsyncable note(s) skipped", s.skipped_new_unsyncable),
         ));
     }
     if s.unshared_untracked > 0 {

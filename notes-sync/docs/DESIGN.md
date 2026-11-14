@@ -264,6 +264,24 @@ for more than text edits). The engine:
 
 Tests: tests/cmd_local_delete.rs.
 
+### A tracked note this build can no longer decode
+
+A tracked note whose text arrives in a form the decoder can't read
+(`UnsyncableReason::Undecodable`) is still a note in iCloud. Up to 0.11.1 a
+pull stopped tracking it and left its file in place (icloud-md 0.6.2 does the
+same); the file carries the note's `apple-note-id`, which push then finds
+tracked by nothing, so the next push created it as a new note: a second copy,
+with the older text, of a note that was still there. Now the note stays
+tracked: its file and base copy are left as they are, its entry takes the
+record's change tag and a read-only reason (vault-info's `readOnlyReason`),
+and pull warns. An edit made here is refused by push (the live record is not
+editable); deleting the file still moves the note to Recently Deleted; a
+later version that decodes is applied like any other change. `PullSummary`'s
+`droppedUnsyncable` stays in the result and is always 0.
+
+Tests: tests/cmd_pull_interrupted.rs
+(`a_tracked_note_that_became_undecodable_stays_tracked_and_is_not_pushed_as_new`).
+
 ### Bounded history, and previews that record none
 
 History lives in `history/<record>/` (one JSON snapshot of a note's or
