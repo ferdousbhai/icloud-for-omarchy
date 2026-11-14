@@ -497,12 +497,7 @@ impl Case {
                 });
             }
             6 if !ids.is_empty() && t.lists.len() > 1 => {
-                // One whose title no other reminder has: a line added with
-                // that title could otherwise take it up (`TAKE_UP_MS`).
                 let r = ids[self.rng.below(ids.len())];
-                if t.live.values().filter(|o| o.title == r.title).count() > 1 {
-                    return;
-                }
                 let to = pick_list(&mut self.rng);
                 if to == r.list_id {
                     return;

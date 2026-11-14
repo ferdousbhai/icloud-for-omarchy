@@ -7,7 +7,7 @@
 //! - `notified.json`: which reminders have notified, for which due time.
 //! - `replica`: this computer's ID in `ResolutionTokenMap`.
 //! - `folder.json`: the Markdown folder ([`crate::folder`]): each list's
-//!   file as last written. `folder.lock` is held over a folder run, which
+//!   file as last written, and the lines being added. `folder.lock` is held over a folder run, which
 //!   takes `lock` itself for each write.
 //! - `lock`: `flock`ed around every read-modify-write of those, so the
 //!   window, the command line and the background timer never interleave.

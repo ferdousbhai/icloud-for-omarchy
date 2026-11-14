@@ -202,10 +202,22 @@ impl<'a> Service<'a> {
 
     /// Adds a reminder to `list_id`.
     pub fn add(&self, list_id: &str, title: &str, notes: &str, due: Option<&Due>) -> Result<Saved<Reminder>> {
+        self.add_as(&new_uuid(), list_id, title, notes, due)
+    }
+
+    /// [`Service::add`] as `Reminder/<uuid>`: a caller that records the
+    /// UUID before sending can tell later whether the add reached iCloud.
+    pub fn add_as(
+        &self,
+        uuid: &str,
+        list_id: &str,
+        title: &str,
+        notes: &str,
+        due: Option<&Due>,
+    ) -> Result<Saved<Reminder>> {
         let replica = self.store.replica()?;
-        let uuid = uuid::Uuid::new_v4().to_string().to_uppercase();
         let ck = CloudKit::connect(self.t)?;
-        let op = model::create_op(&uuid, list_id, title, notes, due, &replica, now_ms());
+        let op = model::create_op(uuid, list_id, title, notes, due, &replica, now_ms());
         let records = ck.modify(vec![op])?;
         let id = format!("Reminder/{uuid}");
         let live = saved_reminder(&id, &records)?
@@ -260,6 +272,11 @@ impl<'a> Service<'a> {
             value: live,
         })
     }
+}
+
+/// A new reminder's UUID, as Apple's are written.
+pub fn new_uuid() -> String {
+    uuid::Uuid::new_v4().to_string().to_uppercase()
 }
 
 /// What a write saved, and why the local cache may not show it.

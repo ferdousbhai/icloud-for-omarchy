@@ -43,11 +43,13 @@
 //! - A write that fails stops that list. Each write (to iCloud, of a file,
 //!   a file's rename) is recorded in `folder.json` as soon as it is made, so
 //!   the next run goes on from there instead of adding twice or reading
-//!   iCloud's changes as the file's, also after a run that was killed. A reminder
-//!   that reached iCloud without the run hearing so (killed, or the answer
-//!   lost) is found again: a line to add takes up a reminder of its list
-//!   made in the last [`TAKE_UP_MS`] that reads exactly as it and that no
-//!   line has yet.
+//!   iCloud's changes as the file's, also after a run that was killed. A line
+//!   to add is recorded with the ID its reminder will have before it is sent
+//!   ([`ListState::pending`]), so one that reached iCloud without the run
+//!   hearing so (killed, or the answer lost) is that line's reminder at the
+//!   next run, and one that did not is sent again. Nothing else ties a new
+//!   line to a reminder: one made on the phone that reads the same is
+//!   another.
 //! - What a conflict copy added is in iCloud before it is in the file. Until
 //!   the file is written with it ([`ListState::unwritten`]), a changed file
 //!   that lacks it does not delete it, and a tick taken from a copy is not
@@ -77,10 +79,6 @@ const DUE_MARK: &str = "📅";
 const UNTITLED: &str = "(untitled)";
 /// Titles at least this alike are one reminder, retitled.
 const ALIKE: f64 = 0.5;
-/// How new a reminder no line has must be for a line that reads exactly as it
-/// to take it up instead of being added: long enough for the run after a
-/// killed one, too short to merge a line with a reminder made on purpose.
-pub const TAKE_UP_MS: i64 = 10 * 60 * 1000;
 
 /// One line of a file, with the indented lines under it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +116,21 @@ pub struct ListState {
     /// Set by a run on this list that failed and changed nothing.
     #[serde(default)]
     pub stuck: Option<Stuck>,
+    /// Lines being added: saved before each is sent, removed once its
+    /// reminder is among `items`.
+    #[serde(default)]
+    pub pending: Vec<Pending>,
+}
+
+/// A line sent to iCloud as `Reminder/<uuid>`, whether it got there or not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pending {
+    pub uuid: String,
+    #[serde(flatten)]
+    pub item: Item,
+    /// From a conflict copy, so not yet in the file.
+    #[serde(default)]
+    pub copy: bool,
 }
 
 /// A list's file and the sync it was read against when its run failed: the
@@ -628,13 +641,6 @@ pub fn pending(state: &State, dir: &Path) -> bool {
     })
 }
 
-/// A reminder as its line in a file reads.
-fn as_item(r: &Reminder, now: &Zoned) -> Option<Item> {
-    let mut line = String::new();
-    write_item(&mut line, r, false, now);
-    parse(&line, now).into_iter().next()
-}
-
 /// Records a list's state in `folder.json`.
 type Save<'a> = &'a mut dyn FnMut(&ListState) -> Result<()>;
 
@@ -660,7 +666,6 @@ fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut 
     // Read once: a change tag gone stale meanwhile is `Service::update`'s
     // conflict to retry.
     let cache = svc.cache()?;
-    let now_ms = now.timestamp().as_millisecond();
     for (id, it, changes) in delta.updates {
         // Gone in iCloud meanwhile: the line goes with the next write. A
         // copy's tick already given (by a run that then failed) is not
@@ -685,35 +690,22 @@ fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut 
         }
     }
     for it in delta.adds {
-        // Made by a run that never heard so: taken up, not made again.
-        let lost = cache.reminders.values().find(|r| {
-            r.list_id == list.id
-                && (it.done || !r.completed)
-                && r.created_ms.is_some_and(|ms| now_ms - ms < TAKE_UP_MS)
-                && !ls.items.iter().any(|k| k.id == r.id)
-                && as_item(r, now).is_some_and(|i| i.title == it.title && i.due == it.due && i.notes == it.notes)
+        // Recorded before it is sent: a run that never hears back (killed,
+        // or the answer lost) leaves the next one to look the ID up.
+        let uuid = crate::service::new_uuid();
+        ls.pending.push(Pending {
+            uuid: uuid.clone(),
+            item: it.clone(),
+            copy: from == Source::Copy,
         });
-        let made = match lost {
-            Some(r) => r.clone(),
-            None => {
-                let when = it.due.as_deref().and_then(|d| due::parse_when(d, now).ok());
-                let saved = svc.add(&list.id, &it.title, &it.notes, when.as_ref())?;
-                report.warnings.extend(saved.warning);
-                report.added += 1;
-                saved.value
-            }
-        };
+        save(ls)?;
+        let when = it.due.as_deref().and_then(|d| due::parse_when(d, now).ok());
+        let saved = svc.add_as(&uuid, &list.id, &it.title, &it.notes, when.as_ref())?;
+        report.warnings.extend(saved.warning);
+        report.added += 1;
+        let made = saved.value;
         // Known from here on, so a failure below does not add it again.
-        ls.items.push(Known {
-            id: made.id.clone(),
-            item: Item {
-                done: made.completed,
-                ..it.clone()
-            },
-        });
-        if from == Source::Copy {
-            ls.unwritten.push(made.id.clone());
-        }
+        known_now(ls, &uuid, &made);
         save(ls)?;
         if it.done && !made.completed {
             svc.update(&made, &[Change::Completed(true)])?;
@@ -732,6 +724,24 @@ fn apply(run: Run, delta: Delta, from: Source, ls: &mut ListState, report: &mut 
     Ok(())
 }
 
+/// A pending line's reminder `made`, now among the items.
+fn known_now(ls: &mut ListState, uuid: &str, made: &Reminder) {
+    let Some(at) = ls.pending.iter().position(|p| p.uuid == uuid) else {
+        return;
+    };
+    let p = ls.pending.remove(at);
+    ls.items.push(Known {
+        id: made.id.clone(),
+        item: Item {
+            done: made.completed,
+            ..p.item
+        },
+    });
+    if p.copy {
+        ls.unwritten.push(made.id.clone());
+    }
+}
+
 /// One list: the file's changes to iCloud, then iCloud's state to the file.
 fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save) -> Result<()> {
     let Run { svc, list, now } = run;
@@ -744,6 +754,22 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
         let (text, ids) = render(list, &svc.cache()?, now);
         ls.items = known(&text, ids, now).map_err(Error::Other)?;
         ls.unwritten.clear();
+        // Those that got there are among the items already.
+        ls.pending.clear();
+    }
+    // Lines a run sent without hearing back: the reminder iCloud has is
+    // that line's; one it lacks never got there, and the line is sent
+    // again (the file, or the copy, still has it).
+    if !ls.pending.is_empty() {
+        let cache = svc.cache()?;
+        for p in std::mem::take(&mut ls.pending) {
+            let id = format!("Reminder/{}", p.uuid);
+            if let Some(made) = cache.reminders.get(&id) {
+                ls.pending.push(p.clone());
+                known_now(ls, &p.uuid, made);
+            }
+        }
+        save(ls)?;
     }
 
     // Before the file: a copy is compared with the file as last written, so

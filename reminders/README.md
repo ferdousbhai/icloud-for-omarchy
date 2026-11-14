@@ -112,6 +112,8 @@ written at the next sync.
   made, renamed or removed from the folder.
 - A line has no ID. A line whose title changed a little is the same
   reminder; one rewritten beyond recognition is one deleted and one added.
+  A new line is a new reminder, even beside one of the same text just
+  added on the phone; a run cut short while adding it does not add it twice.
   Alerts, priority and flags are never written, so they stay as they are.
 
 What keeps a bad file from costing reminders: a file that no longer

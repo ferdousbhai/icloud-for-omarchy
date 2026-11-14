@@ -1277,3 +1277,51 @@ fn a_gutted_file_s_run_killed_after_its_adds_still_deletes_nothing() {
     assert_eq!(titles.len(), 14, "{titles:?}");
     assert_eq!(env.creates(), 8);
 }
+
+#[test]
+fn a_line_and_a_reminder_of_one_title_added_on_each_side_are_two() {
+    let env = start();
+    let dir = folder(&env);
+    // Within a minute, the phone adds Bread in iCloud and a line of it in
+    // the file: two reminders asked for, two kept.
+    env.state.put(fake::reminder(
+        "REM-BREAD",
+        "List/LIST-GROCERIES",
+        "Bread",
+        "",
+        None,
+        now_ms(),
+    ));
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Bread\n").unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["added"], 1, "{out}");
+    assert_eq!(count(&all_titles(&env, "Groceries"), "Bread"), 2);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap().matches("- [ ] Bread\n").count(),
+        2
+    );
+}
+
+#[test]
+fn a_line_whose_add_never_reached_icloud_is_sent_again_once() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Bread\n").unwrap();
+    // As a run killed before its add was sent leaves it: recorded, not made.
+    let state_path = env.data().join("folder.json");
+    let mut state: Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    state["lists"]["List/LIST-GROCERIES"]["pending"] =
+        json!([{"uuid": "NEVER-SENT", "done": false, "title": "Bread", "due": null, "notes": ""}]);
+    std::fs::write(&state_path, state.to_string()).unwrap();
+
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["added"], 1, "{out}");
+    assert_eq!(count(&all_titles(&env, "Groceries"), "Bread"), 1);
+    assert!(env.state.record("Reminder/NEVER-SENT").is_none());
+    let state: Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    assert_eq!(state["lists"]["List/LIST-GROCERIES"]["pending"], json!([]));
+}
