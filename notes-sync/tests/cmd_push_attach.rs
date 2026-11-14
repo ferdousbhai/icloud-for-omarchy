@@ -12,7 +12,7 @@ use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cloudkit::{CkError, Database, Transport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution};
-use icloud_notes_sync::cmd::pull::{PullOptions, run_pull_with};
+use icloud_notes_sync::cmd::pull::{run_pull_with};
 use icloud_notes_sync::cmd::push::{PushOptions, PushResult, run_push_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
@@ -1153,8 +1153,7 @@ fn a_link_gone_from_the_note_removes_the_attachment_in_one_atomic_request() {
         &serve(&server),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
     .unwrap();
     assert_eq!(
@@ -1193,8 +1192,7 @@ fn a_device_that_pulls_the_removal_loses_the_link_and_the_file() {
         &serve(&server),
         &other,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
     .unwrap();
     assert_eq!(summary.updated, 1, "{:?}", summary.changes);

@@ -45,12 +45,6 @@ use crate::vault::state::{
     is_plain_record_name, write_clone_state,
 };
 
-/// `PullOptions`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PullOptions {
-    pub defer_renames: bool,
-}
-
 /// `PullChangeKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -89,8 +83,6 @@ pub struct PullChange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_rename: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remarks: Option<Vec<PullChangeRemark>>,
 }
 
@@ -100,7 +92,6 @@ impl PullChange {
             kind,
             file: file.into(),
             previous_file: None,
-            pending_rename: None,
             remarks: None,
         }
     }
@@ -145,9 +136,8 @@ pub fn run_pull(
     target_dir: &Path,
     progress: &mut dyn SyncProgress,
     on_status: &mut dyn FnMut(&str),
-    options: &PullOptions,
 ) -> Result<PullSummary, Error> {
-    run_pull_with(&DefaultConnector, target_dir, progress, on_status, options)
+    run_pull_with(&DefaultConnector, target_dir, progress, on_status)
 }
 
 /// One source of records: the private zone or one shared zone.
@@ -170,11 +160,9 @@ pub fn run_pull_with(
     target_dir: &Path,
     progress: &mut dyn SyncProgress,
     on_status: &mut dyn FnMut(&str),
-    options: &PullOptions,
 ) -> Result<PullSummary, Error> {
     let state = require_vault(target_dir, on_status)?;
     let title_mode = state.mode();
-    let defer_renames = options.defer_renames;
 
     let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
     let db = &remote.db;
@@ -200,7 +188,9 @@ pub fn run_pull_with(
         table_attachments: state.table_attachments.clone().unwrap_or_default(),
     };
     let mut trashed = state.trashed.clone().unwrap_or_default();
-    let settled = settle_pending_renames(target_dir, &mut tracked.notes, !defer_renames, title_mode)?;
+    // A rename an older engine's pull left pending (`pull --defer-renames`,
+    // which is gone) is carried out now.
+    let settled = settle_pending_renames(target_dir, &mut tracked.notes, true, title_mode)?;
 
     let mut used_file_names: HashMap<String, HashSet<String>> = HashMap::new();
     for entry in tracked.notes.values() {
@@ -560,6 +550,19 @@ pub fn run_pull_with(
                     return Ok(());
                 };
 
+                // The tracked entry brought up to this record (where its file
+                // and its folder are is each case's own).
+                let refreshed = |entry: &NoteEntry| -> NoteEntry {
+                    let mut entry = entry.clone();
+                    if let Some(tag) = &record.record_change_tag {
+                        entry.record_change_tag = tag.clone();
+                    }
+                    entry.modification_date = modification_date_of(record);
+                    entry.unpublishable_reason = unpublishable_reason.clone();
+                    entry.frontmatter_title = recorded_title.clone();
+                    entry.pending_rename = None;
+                    entry
+                };
                 let local = local_file_state(target_dir, &existing, &record.record_name, title_mode)?;
                 // A note someone shared with you can't be deleted from here
                 // (push refuses), so its file comes back below.
@@ -594,15 +597,7 @@ pub fn run_pull_with(
                         if !conflicted {
                             write_base_copy_of(target_dir, &record.record_name, &fresh_file_text, title_mode)?;
                         }
-                        let mut entry = existing;
-                        if let Some(tag) = &record.record_change_tag {
-                            entry.record_change_tag = tag.clone();
-                        }
-                        entry.modification_date = modification_date_of(record);
-                        entry.unpublishable_reason = unpublishable_reason;
-                        entry.frontmatter_title = recorded_title;
-                        entry.pending_rename = None;
-                        tracked.notes.insert(record.record_name.clone(), entry);
+                        tracked.notes.insert(record.record_name.clone(), refreshed(&existing));
                         for claimant in &claimants {
                             if conflicted {
                                 summary
@@ -622,15 +617,8 @@ pub fn run_pull_with(
                     // record, so the base copy is the text being deleted.
                     // (icloud-md writes the file back.)
                     write_base_copy_of(target_dir, &record.record_name, &fresh_file_text, title_mode)?;
-                    let mut entry = existing.clone();
-                    if let Some(tag) = &record.record_change_tag {
-                        entry.record_change_tag = tag.clone();
-                    }
-                    entry.modification_date = modification_date_of(record);
-                    entry.unpublishable_reason = unpublishable_reason;
-                    entry.folder_record_name = placement.folder_record_name;
-                    entry.frontmatter_title = recorded_title;
-                    entry.pending_rename = None;
+                    let mut entry = refreshed(&existing);
+                    entry.folder_record_name = placement.folder_record_name.clone();
                     tracked.notes.insert(record.record_name.clone(), entry);
                     summary.notices.push(SyncNotice {
                         level: NoticeLevel::Info,
@@ -641,44 +629,25 @@ pub fn run_pull_with(
                     });
                     return Ok(());
                 }
-                let (file, pending_rename) = rename_for_remote_title(
+                let file = rename_for_remote_title(
                     target_dir,
                     &existing.file,
                     &decoded.title_line,
                     title_mode,
                     &mut used_file_names,
                     local != LocalFileState::Missing,
-                    defer_renames,
                 )?;
                 let previous_file = (file != existing.file).then(|| existing.file.clone());
-                let deferred = pending_rename.as_ref().map(|p| posix::join(&[&note_dir_of(&file), p]));
-                let deferred_remarks: Vec<PullChangeRemark> = match &pending_rename {
-                    None => Vec::new(),
-                    Some(p) => vec![PullChangeRemark::new(
-                        "note",
-                        format!("rename deferred: this file should become \"{p}\""),
-                    )],
-                };
-                let info_remarks: Vec<PullChangeRemark> =
-                    title_remarks.iter().chain(&deferred_remarks).cloned().collect();
                 let updated_entry = |existing: &NoteEntry| -> NoteEntry {
-                    let mut entry = existing.clone();
+                    let mut entry = refreshed(existing);
                     entry.file = file.clone();
-                    if let Some(tag) = &record.record_change_tag {
-                        entry.record_change_tag = tag.clone();
-                    }
-                    entry.modification_date = modification_date_of(record);
-                    entry.unpublishable_reason = unpublishable_reason.clone();
                     entry.folder_record_name = placement.folder_record_name.clone();
-                    entry.frontmatter_title = recorded_title.clone();
-                    entry.pending_rename = pending_rename.clone();
                     entry
                 };
                 let change_with = |kind: PullChangeKind, remarks: Option<Vec<PullChangeRemark>>| PullChange {
                     kind,
                     file: file.clone(),
                     previous_file: previous_file.clone(),
-                    pending_rename: deferred.clone(),
                     remarks,
                 };
 
@@ -706,7 +675,7 @@ pub fn run_pull_with(
                     summary.updated += 1;
                     summary.changes.push(change_with(
                         PullChangeKind::Update,
-                        remarks_for(&info_remarks, unpublishable_reason.as_deref()),
+                        remarks_for(&title_remarks, unpublishable_reason.as_deref()),
                     ));
                     return Ok(());
                 }
@@ -722,7 +691,7 @@ pub fn run_pull_with(
                 if merged == MergeStatus::UnresolvedMarkers {
                     let mut entry = existing;
                     entry.file = file.clone();
-                    entry.pending_rename = pending_rename.clone();
+                    entry.pending_rename = None;
                     tracked.notes.insert(record.record_name.clone(), entry);
                     summary.conflicts.push(format!(
                         "{file}: still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile"
@@ -731,7 +700,6 @@ pub fn run_pull_with(
                         "conflict",
                         "still contains diff3 conflict markers - resolve them, then run \"push\" to reconcile",
                     )];
-                    remarks.extend(deferred_remarks.iter().cloned());
                     summary.changes.push(change_with(PullChangeKind::Update, Some(remarks)));
                     return Ok(());
                 }
@@ -746,7 +714,7 @@ pub fn run_pull_with(
                         "conflict",
                         "merged with conflict markers - resolve manually",
                     )];
-                    remarks.extend(info_remarks.iter().cloned());
+                    remarks.extend(title_remarks.iter().cloned());
                     if unpublishable_reason.is_some() {
                         remarks.push(read_only_remark());
                     }
@@ -755,7 +723,7 @@ pub fn run_pull_with(
                     summary.merged += 1;
                     summary.changes.push(change_with(
                         PullChangeKind::Merge,
-                        remarks_for(&info_remarks, unpublishable_reason.as_deref()),
+                        remarks_for(&title_remarks, unpublishable_reason.as_deref()),
                     ));
                 }
                 Ok(())
@@ -988,8 +956,8 @@ fn backfill_share_permissions<T: Transport>(
 }
 
 /// `renameForRemoteTitle`: in a filename-as-title vault, rename a tracked
-/// note's file when its title changed remotely (or, deferring, report the
-/// name it should get). Returns `(file, pendingRename)`.
+/// note's file when its title changed remotely. Returns the file's path
+/// from then on.
 pub fn rename_for_remote_title(
     target_dir: &Path,
     current_file: &str,
@@ -997,13 +965,11 @@ pub fn rename_for_remote_title(
     title_mode: TitleMode,
     used_file_names: &mut HashMap<String, HashSet<String>>,
     on_disk: bool,
-    defer: bool,
-) -> Result<(String, Option<String>), Error> {
+) -> Result<String, Error> {
     let current_name = posix::basename(current_file).to_owned();
     if title_mode != TitleMode::Filename || file_name_carries_title(&current_name, title_line) {
-        return Ok((current_file.to_owned(), None));
+        return Ok(current_file.to_owned());
     }
-    let defer = defer && on_disk;
     let dir = note_dir_of(current_file);
     let used_in_dir = used_names_for(used_file_names, &dir);
     used_in_dir.remove(&current_name);
@@ -1015,15 +981,11 @@ pub fn rename_for_remote_title(
     }
     used_in_dir.insert(wanted.clone());
 
-    if defer {
-        used_in_dir.insert(current_name);
-        return Ok((current_file.to_owned(), Some(wanted)));
-    }
     let new_file = posix::join(&[&dir, &wanted]);
     if on_disk {
         std::fs::rename(target_dir.join(current_file), target_dir.join(&new_file))?;
     }
-    Ok((new_file, None))
+    Ok(new_file)
 }
 
 fn drop_tracking(target_dir: &Path, record_name: &str, tracked: &mut Tracked) -> Result<(), Error> {

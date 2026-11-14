@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use icloud_notes_sync::cloudkit::Database;
 use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, CloneSummary, run_clone_with};
-use icloud_notes_sync::cmd::pull::{PullOptions, run_pull_with};
+use icloud_notes_sync::cmd::pull::{run_pull_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress, NoticeLevel};
 use icloud_notes_sync::vault::state::{Account, CloneState, read_clone_state, write_clone_state};
@@ -135,8 +135,7 @@ fn clone_saves_no_private_sync_token_past_a_note_still_without_text() {
         &replay(cassette("bodyless-clone.json"), log.clone()),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
     .unwrap();
     assert_eq!(pulled.added, 1);
@@ -242,8 +241,7 @@ fn a_pull_to_a_note_opening_with_blank_lines_leaves_nothing_to_push() {
         ),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
     .unwrap();
     assert_eq!(pulled.updated, 1);
@@ -390,8 +388,7 @@ fn a_clone_that_fails_part_way_tracks_what_it_wrote() {
         &replay(cassette("attach-clone.json"), dir.path().join("pull.json")),
         &vault,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
     .unwrap();
     let files = tracked_files(&vault);

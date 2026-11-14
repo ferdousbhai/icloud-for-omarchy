@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::SyncProgress;
 use super::errors::{EXIT_ERROR, EXIT_OK, EXIT_SIGN_IN, Error};
-use super::pull::{self, PullOptions, PullSummary};
+use super::pull::{self, PullSummary};
 use super::push::{self, PushOptions, PushResult};
 use super::remote::{Connector, DefaultConnector, SharedConnector};
 
@@ -76,13 +76,7 @@ pub fn run_sync_with(
     let push = push::run_push_with(&shared, target_dir, on_status, &PushOptions { dry_run: false });
     let pull = match &push {
         Err(error) if push_error_skips_pull(error) => None,
-        _ => Some(pull::run_pull_with(
-            &shared,
-            target_dir,
-            progress,
-            on_status,
-            &PullOptions::default(),
-        )),
+        _ => Some(pull::run_pull_with(&shared, target_dir, progress, on_status)),
     };
     SyncOutcome { push, pull }
 }

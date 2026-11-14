@@ -71,7 +71,7 @@ fn vault_shape_flags_live_on_the_commands_that_own_them() {
     assert!(clone.contains("--non-interactive"));
 
     let pull = stdout(&run_here(&["pull", "--help"]));
-    assert!(pull.contains("--defer-renames"));
+    assert!(!pull.contains("--defer-renames"), "removed: a pull renames at once");
     assert!(!pull.contains("--filename-as-title"));
 }
 

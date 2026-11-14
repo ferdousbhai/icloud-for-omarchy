@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use icloud_notes_sync::cloudkit::Database;
 use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, CloneSummary, run_clone_with};
-use icloud_notes_sync::cmd::pull::{PullOptions, PullSummary, run_pull_with};
+use icloud_notes_sync::cmd::pull::{PullSummary, run_pull_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress, NoticeLevel, SyncNotice};
 use icloud_notes_sync::doc::document::{build_initial_note_document, encode_note_document};
@@ -125,8 +125,7 @@ fn pull(vault: &Path, cassette: Cassette) -> PullSummary {
         &replay(cassette),
         vault,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
     .unwrap()
 }

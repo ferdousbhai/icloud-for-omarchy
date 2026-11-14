@@ -205,9 +205,8 @@ for notes: it runs the engine for `sync`, `pull`, `push` and `clone` the
 way the window does (a refused sign-in is reported to icloud-session), and
 for `push --dry-run`, `history [--records]`, `diff` and `restore` becomes
 the engine (exec), with the output flags and `--wait` passed on: the first three
-only read and take no lock, so they work while the window is open. The engine's other flags are the app's to choose: `clone
---filename-as-title` (the app clones with titles in the first line) and
-`pull --defer-renames` are not exposed.
+only read and take no lock, so they work while the window is open. The engine's other flag is the app's to choose: `clone
+--filename-as-title` (the app clones with titles in the first line) is not exposed.
 
 The app runs the engine at `$ICLOUD_NOTES_SYNC_BIN` when set (tests,
 development; nothing else is tried then), else

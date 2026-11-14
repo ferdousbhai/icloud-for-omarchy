@@ -93,12 +93,7 @@ enum Command {
         non_interactive: bool,
     },
     /// Fetch changes since the last clone/pull (defaults to the current directory)
-    Pull {
-        directory: Option<PathBuf>,
-        /// In a filename-as-title vault, report the renames a remote retitle needs instead of performing them
-        #[arg(long)]
-        defer_renames: bool,
-    },
+    Pull { directory: Option<PathBuf> },
     /// Reconcile local disk state up to iCloud (creates, updates, moves, deletes)
     Push {
         directory: Option<PathBuf>,
@@ -448,13 +443,10 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 .human(human(mode, lines))
                 .meta("lines", report)
         }
-        Command::Pull {
-            directory,
-            defer_renames,
-        } => {
+        Command::Pull { directory } => {
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
-            let s = pull::run_pull(&target, progress, &mut on_status, &pull::PullOptions { defer_renames })?;
+            let s = pull::run_pull(&target, progress, &mut on_status)?;
             let lines = pull_lines(&s, &target);
             let report = report_lines(&lines);
             Response::new(&s, pull_summary(&s))

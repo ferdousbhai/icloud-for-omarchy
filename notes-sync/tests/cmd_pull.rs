@@ -371,9 +371,8 @@ fn rename(
     mode: TitleMode,
     used: &mut HashMap<String, HashSet<String>>,
     on_disk: bool,
-    defer: bool,
-) -> (String, Option<String>) {
-    rename_for_remote_title(dir, file, title, mode, used, on_disk, defer).unwrap()
+) -> String {
+    rename_for_remote_title(dir, file, title, mode, used, on_disk).unwrap()
 }
 
 #[test]
@@ -381,14 +380,13 @@ fn remote_retitle_renames_the_file() {
     let tmp = vault();
     let dir = tmp.path();
     write_vault_file(dir, "Notes/Shopping list.md", "Milk");
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Shopping list.md",
         "Groceries",
         TitleMode::Filename,
         &mut used(&["Notes/Shopping list.md"]),
         true,
-        false,
     );
     assert_eq!(file, "Notes/Groceries.md");
     assert_eq!(names_in(&dir.join("Notes")), vec!["Groceries.md"]);
@@ -400,14 +398,13 @@ fn file_already_carrying_title_is_left_alone() {
     let tmp = vault();
     let dir = tmp.path();
     write_vault_file(dir, "Notes/Groceries.md", "Milk");
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Groceries.md",
         "Groceries",
         TitleMode::Filename,
         &mut used(&["Notes/Groceries.md"]),
         true,
-        false,
     );
     assert_eq!(file, "Notes/Groceries.md");
 }
@@ -418,14 +415,13 @@ fn uniquified_name_is_not_walked_up() {
     let dir = tmp.path();
     write_vault_file(dir, "Notes/Groceries.md", "Other note");
     write_vault_file(dir, "Notes/Groceries 2.md", "Milk");
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Groceries 2.md",
         "Groceries",
         TitleMode::Filename,
         &mut used(&["Notes/Groceries.md", "Notes/Groceries 2.md"]),
         true,
-        false,
     );
     assert_eq!(file, "Notes/Groceries 2.md");
 }
@@ -436,14 +432,13 @@ fn rename_never_lands_on_an_untracked_file() {
     let dir = tmp.path();
     write_vault_file(dir, "Notes/Shopping list.md", "Milk");
     write_vault_file(dir, "Notes/Groceries.md", "MINE, UNTRACKED");
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Shopping list.md",
         "Groceries",
         TitleMode::Filename,
         &mut used(&["Notes/Shopping list.md"]),
         true,
-        false,
     );
     assert_eq!(file, "Notes/Groceries 2.md");
     assert_eq!(read(dir, "Notes/Groceries.md"), "MINE, UNTRACKED");
@@ -455,14 +450,13 @@ fn homoglyph_spelling_is_used() {
     let tmp = vault();
     let dir = tmp.path();
     write_vault_file(dir, "Notes/Old.md", "Body");
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Old.md",
         "Pat/Alex: notes",
         TitleMode::Filename,
         &mut used(&["Notes/Old.md"]),
         true,
-        false,
     );
     assert_eq!(file, "Notes/Pat⁄Alex꞉ notes.md");
     assert_eq!(read(dir, &file), "Body");
@@ -472,13 +466,12 @@ fn homoglyph_spelling_is_used() {
 fn missing_file_placed_at_new_name_without_rename() {
     let tmp = vault();
     let dir = tmp.path();
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Shopping list.md",
         "Groceries",
         TitleMode::Filename,
         &mut used(&["Notes/Shopping list.md"]),
-        false,
         false,
     );
     assert_eq!(file, "Notes/Groceries.md");
@@ -490,68 +483,16 @@ fn in_body_vault_never_renames() {
     let tmp = vault();
     let dir = tmp.path();
     write_vault_file(dir, "Notes/Shopping list.md", "Groceries\n\nMilk");
-    let (file, _) = rename(
+    let file = rename(
         dir,
         "Notes/Shopping list.md",
         "Groceries",
         TitleMode::InBody,
         &mut used(&["Notes/Shopping list.md"]),
         true,
-        false,
     );
     assert_eq!(file, "Notes/Shopping list.md");
     assert_eq!(names_in(&dir.join("Notes")), vec!["Shopping list.md"]);
-}
-
-#[test]
-fn defer_records_the_rename_instead() {
-    let tmp = vault();
-    let dir = tmp.path();
-    write_vault_file(dir, "Notes/Shopping list.md", "Milk");
-    let result = rename(
-        dir,
-        "Notes/Shopping list.md",
-        "Groceries",
-        TitleMode::Filename,
-        &mut used(&["Notes/Shopping list.md"]),
-        true,
-        true,
-    );
-    assert_eq!(
-        result,
-        ("Notes/Shopping list.md".to_string(), Some("Groceries.md".to_string()))
-    );
-    assert_eq!(names_in(&dir.join("Notes")), vec!["Shopping list.md"]);
-}
-
-#[test]
-fn deferred_rename_holds_both_names() {
-    let tmp = vault();
-    let dir = tmp.path();
-    write_vault_file(dir, "Notes/A.md", "first");
-    write_vault_file(dir, "Notes/B.md", "second");
-    let mut u = used(&["Notes/A.md", "Notes/B.md"]);
-    rename(dir, "Notes/A.md", "C", TitleMode::Filename, &mut u, true, true);
-    let wants_a = rename(dir, "Notes/B.md", "A", TitleMode::Filename, &mut u, true, true);
-    let wants_c = rename(dir, "Notes/B.md", "C", TitleMode::Filename, &mut u, true, true);
-    assert_eq!(wants_a.1.as_deref(), Some("A 2.md"));
-    assert_eq!(wants_c.1.as_deref(), Some("C 2.md"));
-}
-
-#[test]
-fn missing_file_is_never_deferred() {
-    let tmp = vault();
-    let dir = tmp.path();
-    let result = rename(
-        dir,
-        "Notes/Shopping list.md",
-        "Groceries",
-        TitleMode::Filename,
-        &mut used(&["Notes/Shopping list.md"]),
-        false,
-        true,
-    );
-    assert_eq!(result, ("Notes/Groceries.md".to_string(), None));
 }
 
 #[test]
@@ -561,8 +502,8 @@ fn freed_name_is_available_to_the_next_note() {
     write_vault_file(dir, "Notes/A.md", "first");
     write_vault_file(dir, "Notes/B.md", "second");
     let mut u = used(&["Notes/A.md", "Notes/B.md"]);
-    let (first, _) = rename(dir, "Notes/A.md", "C", TitleMode::Filename, &mut u, true, false);
-    let (second, _) = rename(dir, "Notes/B.md", "A", TitleMode::Filename, &mut u, true, false);
+    let first = rename(dir, "Notes/A.md", "C", TitleMode::Filename, &mut u, true);
+    let second = rename(dir, "Notes/B.md", "A", TitleMode::Filename, &mut u, true);
     assert_eq!(first, "Notes/C.md");
     assert_eq!(second, "Notes/A.md");
     assert_eq!(read(dir, "Notes/A.md"), "second");
@@ -756,34 +697,6 @@ fn report_renders_note_remarks_unmarked() {
             "                     title kept in apple-note-title: the title starts with a dot",
             "",
             "1 added, 0 updated, 0 auto-merged, 0 deleted.",
-        ]
-    );
-}
-
-#[test]
-fn report_shows_deferred_rename_as_remark_not_arrow() {
-    let mut updated = with_remarks(
-        change(K::Update, "Notes/Shopping list.md"),
-        vec![remark(
-            "note",
-            "rename deferred: this file should become \"Groceries.md\"",
-        )],
-    );
-    updated.pending_rename = Some("Notes/Groceries.md".into());
-    let summary = PullSummary {
-        updated: 1,
-        changes: vec![updated],
-        ..Default::default()
-    };
-    assert_eq!(
-        render_pull_report(&summary, &id),
-        vec![
-            "Changes pulled from iCloud:",
-            "",
-            "        modified:  Notes/Shopping list.md",
-            "                     rename deferred: this file should become \"Groceries.md\"",
-            "",
-            "0 added, 1 updated, 0 auto-merged, 0 deleted.",
         ]
     );
 }

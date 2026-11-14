@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use icloud_notes_sync::cloudkit::Database;
 use icloud_notes_sync::cloudkit::transport::{Cassette, ReplayTransport};
 use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
-use icloud_notes_sync::cmd::pull::{PullOptions, PullSummary, run_pull_with};
+use icloud_notes_sync::cmd::pull::{PullSummary, run_pull_with};
 use icloud_notes_sync::cmd::push::build_push_plan;
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
@@ -47,8 +47,7 @@ fn pull(vault: &Path, cassette: Cassette, log: PathBuf) -> Result<PullSummary, E
         &replay(cassette, log),
         vault,
         &mut NoProgress,
-        &mut |_| {},
-        &PullOptions::default(),
+        &mut |_| {}
     )
 }
 
@@ -193,8 +192,7 @@ fn notes_written_before_the_pull_was_killed_are_not_pushed_as_new() {
                 after: 50,
                 processed: 0,
             },
-            &mut |_| {},
-            &PullOptions::default(),
+            &mut |_| {}
         )
     }));
     assert!(killed.is_err(), "the pull was cut off");
