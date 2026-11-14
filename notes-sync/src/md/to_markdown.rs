@@ -405,8 +405,7 @@ fn unsafe_patterns() -> &'static [Unsafe] {
             u('|').brk().after(After::TabSpaceColonDash),
             u('|').inside(&["tableCell"]),
             u(':').brk().after(After::Dash),
-            u('-').brk().after(After::ColonPipeDash),
-            // mdast-util-gfm-task-list-item
+            // (mdast-util-gfm-task-list-item adds this same pattern again.)
             u('-').brk().after(After::ColonPipeDash),
         ]
     })
