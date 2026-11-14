@@ -747,8 +747,8 @@ impl<T: Transport> Database<T> {
     /// NoteStoreProto document), so its download is inlined as-is and decodes
     /// on the normal path.
     ///
-    /// Only the in-memory record changes. Push re-reads the record before any
-    /// write and still refuses a note stored as an asset. A failed download
+    /// Only the in-memory record changes: push writes such a note's text back
+    /// as a new asset (`upload_text_assets`). A failed download
     /// propagates rather than leaving the note body-less: that would read as
     /// a clean sync while the syncToken moved past the note.
     pub fn inline_asset_bodies(&self, records: &mut [CloudKitRecord]) -> Result<(), CkError> {

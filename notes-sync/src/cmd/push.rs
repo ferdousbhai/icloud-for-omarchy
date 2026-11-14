@@ -56,7 +56,9 @@ use crate::md::title::{
 use crate::vault::attachments::{
     remove_attachments_for_note, remove_table_attachments_for_note, resolve_new_attachment_file, safe_unlink,
 };
-use crate::vault::base::{merge_base, read_base_copy, remove_base_copy, write_base_copy, write_sent_copy};
+use crate::vault::base::{
+    merge_base, read_base_copy, read_sent_copy, remove_base_copy, write_base_copy, write_sent_copy,
+};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{PlannedFolder, plan_folder_creates, relocate_note_attachments};
 use crate::vault::history::{
@@ -2244,7 +2246,8 @@ pub fn build_push_plan(
 }
 
 /// Whether iCloud has the note in `folder_record_name` already, with the
-/// text it was last synced with: a move a push cut short made (iCloud took
+/// text it was last synced with (or the text a push cut short sent with
+/// the move): a move a push cut short made (iCloud took
 /// it, nothing here recorded it), or the same move made on another device.
 /// Nothing is left to send for it but the edits made here.
 fn moved_there_unchanged(
@@ -2267,7 +2270,12 @@ fn moved_there_unchanged(
     let file_text =
         crate::md::frontmatter::compose_note_file("", &decoded.markdown_text, &record.record_name, title.as_deref());
     let body = split_frontmatter(&file_text, split_options(title_mode)).body;
-    Ok(read_base_copy(target_dir, &record.record_name)?.as_deref() == Some(body.as_str()))
+    // Or with the text a push cut short sent after the move (the edit made
+    // with it, which iCloud took too).
+    Ok(
+        read_base_copy(target_dir, &record.record_name)?.as_deref() == Some(body.as_str())
+            || read_sent_copy(target_dir, &record.record_name)?.as_deref() == Some(body.as_str()),
+    )
 }
 
 /// Whether `body`, an untracked file's, is what a pull that never got to

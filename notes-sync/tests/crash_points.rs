@@ -1462,6 +1462,38 @@ fn a_move_a_push_cut_short_made_is_not_refused_by_the_next_push() {
     assert_eq!(tracked_file(&place, "E0000000-0000-4000-8000-000000000001"), moved);
 }
 
+/// The same with an edit made along with the move, cut short after iCloud
+/// took the edit too: the next push alone settles it, the note not read as
+/// changed elsewhere.
+#[test]
+fn a_move_with_an_edit_a_push_cut_short_made_is_not_refused_by_the_next_push() {
+    let start = cloned(3);
+    let moving = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
+    let moved = format!("Work/{}", Path::new(&moving).file_name().unwrap().to_string_lossy());
+    let text = std::fs::read_to_string(start.place.vault.join(&moving)).unwrap();
+    std::fs::remove_file(start.place.vault.join(&moving)).unwrap();
+    std::fs::write(start.place.vault.join(&moved), text + "\nedited with the move\n").unwrap();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let crash = Crash {
+        at: Some((crash::ICLOUD_MODIFY.into(), 2)),
+        ..Default::default()
+    };
+    assert_eq!(run(&fake, &place, "push", &crash).status.signal(), Some(6));
+    assert!(
+        body_of(fake.zone().live("E0000000-0000-4000-8000-000000000001").unwrap()).contains("edited with the move")
+    );
+    let again = run(&fake, &place, "push", &Crash::default());
+    succeeded(&again, "push");
+    let result: Value = serde_json::from_slice(&again.stdout).unwrap();
+    let entries = &result["data"]["entries"];
+    assert_eq!(entries.as_array().map(Vec::len), Some(1), "{}", says(&again));
+    assert_eq!(entries[0]["resolution"], "ready", "{}", says(&again));
+    assert_eq!(tracked_file(&place, "E0000000-0000-4000-8000-000000000001"), moved);
+    let on_disk = std::fs::read_to_string(place.vault.join(&moved)).unwrap();
+    assert_eq!(on_disk.matches("edited with the move").count(), 1, "{on_disk}");
+}
+
 /// The photo note's attachment: its file name and what it holds.
 fn photo(zone: &Zone) -> (String, Vec<u8>) {
     ("_7130093.jpeg".into(), zone.assets["/B/image-asset"].clone())

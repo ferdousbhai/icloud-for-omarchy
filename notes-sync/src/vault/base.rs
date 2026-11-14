@@ -86,15 +86,20 @@ pub fn write_sent_copy(target_dir: &Path, record_name: &str, content: &str) -> R
     Ok(())
 }
 
+/// What a push cut short was sending for the note ([`write_sent_copy`]),
+/// if it left it.
+pub fn read_sent_copy(target_dir: &Path, record_name: &str) -> Result<Option<String>, Error> {
+    match sent_copy_path(target_dir, record_name)? {
+        Some(path) => read_text(&path),
+        None => Ok(None),
+    }
+}
+
 /// The ancestor to merge the note's file with `remote_text`, the note's
 /// body in iCloud: what a push cut short sent ([`write_sent_copy`]) when
 /// iCloud has exactly that, else the base copy (empty when there is none).
 pub fn merge_base(target_dir: &Path, record_name: &str, remote_text: &str) -> Result<String, Error> {
-    let sent = match sent_copy_path(target_dir, record_name)? {
-        Some(path) => read_text(&path)?,
-        None => None,
-    };
-    match sent {
+    match read_sent_copy(target_dir, record_name)? {
         Some(sent) if sent == remote_text => Ok(sent),
         _ => Ok(read_base_copy(target_dir, record_name)?.unwrap_or_default()),
     }

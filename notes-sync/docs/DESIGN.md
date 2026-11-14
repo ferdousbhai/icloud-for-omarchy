@@ -288,7 +288,8 @@ window closes, so a killed run is ordinary.
   note tracked at its old file with the old change tag. The next push
   finds the record changed since, which refuses a move; but when iCloud
   has the note in the folder the file moved to, with the text it was last
-  synced with (`push::moved_there_unchanged`), the move is done: only the
+  synced with or the text that push sent with the move (`base/.<recordName>.sent`,
+  below; `push::moved_there_unchanged`), the move is done: only the
   file's tracking (and any edit made with the move) is brought up to date.
 - An edit a push sends is kept as `base/.<recordName>.sent` until the push
   records it (the base copy written for it takes it out); a merged edit is
