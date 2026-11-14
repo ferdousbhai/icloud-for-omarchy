@@ -739,3 +739,255 @@ fn no_command_runs_the_app_beside_it() {
     assert_eq!(code(&out), 7, "{}", stderr(&out));
     assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "0");
 }
+
+/// The folder of a test, turned on: `<tmp>/Reminders`.
+fn folder(env: &Env) -> PathBuf {
+    let dir = env.dir.path().join("Reminders");
+    env.json(&["folder", "start", dir.to_str().unwrap()]);
+    dir
+}
+
+fn modifies(env: &Env) -> usize {
+    env.sent("records/modify").len()
+}
+
+fn all_titles(env: &Env, list: &str) -> Vec<String> {
+    titles(&env.json(&["list", list, "--all"]))
+}
+
+#[test]
+fn folder_start_writes_one_checklist_per_list() {
+    let env = start();
+    let dir = folder(&env);
+    let groceries = std::fs::read_to_string(dir.join("Groceries.md")).unwrap();
+    let lines: Vec<&str> = groceries.lines().collect();
+    assert_eq!(lines[0], "# Groceries");
+    assert!(lines[2].starts_with("- [ ] Milk 📅 20"), "{groceries}");
+    assert_eq!(lines[3], "    Oat, 2 cartons");
+    assert_eq!(lines[4], "- [ ] Eggs");
+    let reminders = std::fs::read_to_string(dir.join("Reminders.md")).unwrap();
+    assert!(reminders.contains("- [ ] Call the dentist 📅 "), "{reminders}");
+    // Completed in the last week: still listed, after the open ones.
+    assert!(reminders.trim_end().ends_with("- [x] Buy paint"), "{reminders}");
+    assert_eq!(modifies(&env), 0);
+
+    let status = env.json(&["folder", "status"]);
+    assert_eq!(status["on"], true);
+    assert_eq!(status["files"].as_array().unwrap().len(), 2);
+    // Off: the files stay, and nothing reads them any more.
+    env.json(&["folder", "stop"]);
+    assert!(dir.join("Groceries.md").exists());
+    assert_eq!(env.json(&["folder", "status"])["on"], false);
+    let (exit, error) = env.fails(&["folder", "sync"]);
+    assert_eq!((exit, error["code"].as_str()), (3, Some("not_set_up")));
+}
+
+#[test]
+fn a_file_s_changes_reach_icloud_once_and_come_back() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    // On the phone: tick Eggs, add a line as plain text, another with a date.
+    let edited = text.replace("- [ ] Eggs", "- [x] Eggs") + "Bread\n- [ ] Butter 📅 2030-01-02 09:30\n    Salted\n";
+    std::fs::write(&path, edited).unwrap();
+
+    let out = env.json(&["background"]);
+    assert_eq!(out["synced"], true, "a changed file syncs at once");
+    assert_eq!(out["folder"]["added"], 2);
+    assert_eq!(out["folder"]["edited"], 1);
+    assert_eq!(out["folder"]["deleted"], 0);
+    let eggs = env.state.record("Reminder/REM-EGGS").unwrap();
+    assert_eq!(eggs["fields"]["Completed"]["value"], 1);
+    let shown = env.json(&["show", "butter"]);
+    assert_eq!(shown["notes"], "Salted");
+    assert_eq!(shown["due"]["date"], "2030-01-02");
+    assert_eq!(shown["list"]["name"], "Groceries");
+    // Written back as this program writes it.
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(after.contains("- [ ] Bread\n"), "{after}");
+    assert!(
+        after.contains("- [ ] Butter 📅 2030-01-02 09:30\n    Salted\n"),
+        "{after}"
+    );
+    assert!(after.trim_end().ends_with("- [x] Eggs"), "{after}");
+
+    // Nothing left to send: no further writes, and nothing said.
+    let sent = modifies(&env);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(modifies(&env), sent);
+    assert_eq!(out["folder"]["written"], json!([]));
+    assert_eq!(
+        all_titles(&env, "Groceries").iter().filter(|t| *t == "Bread").count(),
+        1
+    );
+}
+
+#[test]
+fn icloud_s_changes_reach_the_file_and_a_removed_line_deletes() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    // The iPhone adds one and retitles another.
+    env.state.put(fake::reminder(
+        "REM-TEA",
+        "List/LIST-GROCERIES",
+        "Tea",
+        "",
+        None,
+        now_ms(),
+    ));
+    env.ok(&["edit", "eggs", "--title", "Eggs, a dozen"]);
+    env.json(&["background", "--sync"]);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("- [ ] Tea\n") && text.contains("- [ ] Eggs, a dozen\n"),
+        "{text}"
+    );
+
+    // A line removed in the file is deleted, the Apple way: Deleted = 1.
+    let sent = modifies(&env);
+    std::fs::write(&path, text.replace("- [ ] Tea\n", "")).unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["deleted"], 1);
+    assert_eq!(modifies(&env), sent + 1);
+    let tea = env.state.record("Reminder/REM-TEA").unwrap();
+    assert_eq!(tea["fields"]["Deleted"]["value"], 1);
+    assert!(!all_titles(&env, "Groceries").contains(&"Tea".to_owned()));
+    // A light rewrite is an edit of the same reminder, not a new one.
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("Eggs, a dozen", "Eggs, two dozen")).unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (out["folder"]["edited"].as_i64(), out["folder"]["added"].as_i64()),
+        (Some(1), Some(0))
+    );
+    assert_eq!(env.json(&["show", "REM-EGGS"])["title"], "Eggs, two dozen");
+}
+
+#[test]
+fn a_gutted_file_is_held_until_asked() {
+    let env = start();
+    for n in 0..6 {
+        env.state.put(fake::reminder(
+            &format!("REM-EXTRA-{n}"),
+            "List/LIST-GROCERIES",
+            &format!("Extra number {n}"),
+            "",
+            None,
+            now_ms(),
+        ));
+    }
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let before = all_titles(&env, "Groceries").len();
+    assert_eq!(before, 8);
+    // A sync gone wrong leaves only the heading.
+    std::fs::write(&path, "# Groceries\n").unwrap();
+    let sent = modifies(&env);
+    let out = env.json(&["background"]);
+    assert_eq!(out["folder"]["held"][0]["file"], "Groceries.md");
+    assert_eq!(out["folder"]["held"][0]["removing"], 8);
+    assert_eq!(modifies(&env), sent, "nothing is deleted");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# Groceries\n",
+        "the file is left alone"
+    );
+    let said = env.notifications();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].iter().any(|a| a.contains("Groceries.md not applied")),
+        "{said:?}"
+    );
+    // Said once, and no sync forced every minute while it waits.
+    let ops = env.ops().len();
+    env.json(&["background"]);
+    assert_eq!(env.notifications().len(), 1);
+    assert_eq!(env.ops().len(), ops);
+    assert_eq!(env.json(&["folder", "status"])["files"][0]["held"], true);
+
+    // Asking without --yes says so and exits 2; with it, the lines go.
+    let out = env.run(&["folder", "sync"]);
+    assert_eq!(code(&out), 2);
+    assert_eq!(envelope(&out)["data"]["held"][0]["removing"], 8);
+    assert_eq!(all_titles(&env, "Groceries").len(), before);
+    let out = env.json(&["folder", "sync", "--yes"]);
+    assert_eq!(out["deleted"], 8);
+    assert!(all_titles(&env, "Groceries").is_empty());
+}
+
+#[test]
+fn a_conflict_copy_ticks_and_adds_and_is_removed() {
+    let env = start();
+    let dir = folder(&env);
+    // Syncthing's copy of an older file: Milk ticked there, one new line,
+    // and Eggs missing, which must not delete it.
+    let copy = dir.join("Groceries.sync-conflict-20261114-093000-ABCDEFG.md");
+    std::fs::write(&copy, "# Groceries\n\n- [x] Milk\n- [ ] Butter\n").unwrap();
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["edited"].as_i64()),
+        (Some(1), Some(1))
+    );
+    assert_eq!(out["folder"]["deleted"], 0);
+    assert!(!copy.exists());
+    let titles = all_titles(&env, "Groceries");
+    assert!(
+        titles.contains(&"Eggs".to_owned()) && titles.contains(&"Butter".to_owned()),
+        "{titles:?}"
+    );
+    let milk = env.state.record("Reminder/REM-MILK").unwrap();
+    assert_eq!(milk["fields"]["Completed"]["value"], 1);
+}
+
+#[test]
+fn a_change_made_offline_waits_and_is_sent_once() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Bread\n").unwrap();
+    *env.state.signed_out.lock().unwrap() = true;
+    let out = env.json(&["background"]);
+    assert_eq!(out["synced"], false);
+    assert_eq!(out["folder"], Value::Null, "the file waits for a sync");
+    assert!(std::fs::read_to_string(&path).unwrap().contains("- [ ] Bread"));
+    *env.state.signed_out.lock().unwrap() = false;
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["added"], 1);
+    env.json(&["background", "--sync"]);
+    assert_eq!(
+        all_titles(&env, "Groceries").iter().filter(|t| *t == "Bread").count(),
+        1
+    );
+}
+
+#[test]
+fn starting_again_over_existing_files_only_adds_what_is_new() {
+    let env = start();
+    let dir = folder(&env);
+    env.json(&["folder", "stop"]);
+    let path = dir.join("Groceries.md");
+    // While it was off: a line added in the file, one removed, and iCloud gained one.
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("- [ ] Eggs\n", "") + "- [ ] Bread\n").unwrap();
+    env.state.put(fake::reminder(
+        "REM-TEA",
+        "List/LIST-GROCERIES",
+        "Tea",
+        "",
+        None,
+        now_ms(),
+    ));
+    let out = env.json(&["folder", "start", dir.to_str().unwrap()]);
+    assert_eq!((out["added"].as_i64(), out["deleted"].as_i64()), (Some(1), Some(0)));
+    let mut titles = all_titles(&env, "Groceries");
+    titles.sort();
+    assert_eq!(titles, ["Bread", "Eggs", "Milk", "Tea"]);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("- [ ] Eggs\n") && text.contains("- [ ] Tea\n"), "{text}");
+    // Elsewhere is refused while it is on.
+    let (exit, error) = env.fails(&["folder", "start", "/tmp/elsewhere"]);
+    assert_eq!((exit, error["code"].as_str()), (2, Some("usage")));
+}

@@ -7,6 +7,8 @@ Type=oneshot
 # Syncs when the last attempt is over 4 minutes old (skipped, and reported,
 # when signed out or offline), then shows a notification for each reminder
 # that just fell due, from the cache. Between syncs it reads only files.
+# With `icloud-reminders folder start`, it also keeps the Markdown folder
+# in step: a changed file is sent to iCloud at once.
 # --styled: text even though the journal is not a terminal (nothing when
 # there is nothing to notify about), instead of a JSON envelope a minute.
 ExecStart=/usr/bin/icloud-reminders background --styled

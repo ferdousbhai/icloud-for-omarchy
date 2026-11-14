@@ -279,6 +279,7 @@ $ icloud-reminders --quiet complete "dentist"
 | `complete REMINDER`, `uncomplete REMINDER`, `delete REMINDER --yes` | as in the window (a delete goes to Recently Deleted) |
 | `sync [--full]` | fetch what changed |
 | `background` | what the systemd timer runs every minute: sync if stale, notify about due ones |
+| `folder start [DIR]`, `folder status`, `folder sync [--yes]`, `folder stop` | the reminders as Markdown checklists in a folder (default `~/Documents/Reminders`), one file per list, synced both ways by the timer |
 
 REMINDER is an ID, an exact title, or a unique part of one (open
 reminders first; `ambiguous` lists the candidates). WHEN: `2026-10-10`
@@ -287,6 +288,12 @@ reminders first; `ambiguous` lists the candidates). WHEN: `2026-10-10`
 `alerts` counts alerts set on an Apple device: they keep their own time
 when `--due` changes, so say so if it is not 0. Due reminders notify on
 their own (the timer); never run `background` to notify on purpose.
+
+When `folder status` says the folder is on, the files are a working copy for
+phones and editors. Keep using the commands above to change reminders: they
+name a reminder by ID, and the files follow within minutes. Do not turn the
+folder on or off, and never run `folder sync --yes` (it deletes what a held
+file no longer lists) unless the user asked for exactly that.
 
 ## Contacts: `icloud-contacts`
 
