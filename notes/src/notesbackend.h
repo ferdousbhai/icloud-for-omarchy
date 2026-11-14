@@ -222,7 +222,7 @@ public:
     // removal, and the next push deletes it in iCloud, on every device:
     // nothing writes such a body without asking first (saveWarning in the
     // window, --yes on the command line).
-    Q_INVOKABLE QStringList removedAttachments(const QString &body) const;
+    QStringList removedAttachments(const QString &body) const;
     // `body` without the link(s) to the attachment file `name` of its
     // folder's attachments/; a line left empty goes with its link. `body`
     // itself when it holds no such link.
@@ -401,6 +401,7 @@ private:
     void closeNote();
     QString findNoteById(const QString &id) const;
     bool followNote(const QString &id);
+    void showNote(const QString &folder, const QString &name);
     void loseCurrentNote();
     bool noteChangedOnDisk();
     bool keepEditsAsNewNote(const QString &mine, const QString &why);
@@ -468,6 +469,7 @@ private:
         QString content;
         bool valid = false;
     } m_lostNote;
+    LostNote lostCopy(const QString &content) const;
     bool m_following = false;
     bool m_merging = false; // keepEditsAsConflict is reloading its merge
     // A save asked for while a sync ran: the note (vault-relative), the

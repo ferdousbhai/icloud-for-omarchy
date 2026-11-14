@@ -229,7 +229,6 @@ ApplicationWindow {
                         textFormat: Text.PlainText
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         color: parent.modelData.changed ? root.colText : root.colTextDim
-                        linkColor: root.colAccent
                         font.pixelSize: root.pt(13)
                     }
                 }

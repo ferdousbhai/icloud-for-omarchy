@@ -126,6 +126,21 @@ bool isNotePath(const QString &relativePath)
         && !relativePath.split(u'/').contains(QStringLiteral("attachments"), Qt::CaseInsensitive);
 }
 
+// Every note file under `dirPath`, subfolders included: fn(its path relative
+// to dirPath, its absolute path), until fn returns false.
+template <typename Fn>
+void forEachNoteFile(const QString &dirPath, Fn fn)
+{
+    const QDir dir(dirPath);
+    QDirIterator files(dirPath, { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString path = files.next();
+        const QString rel = dir.relativeFilePath(path);
+        if (isNotePath(rel) && !fn(rel, path))
+            return;
+    }
+}
+
 QString sanitized(const QString &name)
 {
     QString clean = name.trimmed();
@@ -265,6 +280,15 @@ QString failedLog(const QString &name, const QJsonObject &error)
         + (hint.isEmpty() ? QString() : u'\n' + hint);
 }
 
+// The strings of a JSON array (a report's lines).
+QStringList strings(const QJsonValue &array)
+{
+    QStringList out;
+    for (const QJsonValue &value : array.toArray())
+        out << value.toString();
+    return out;
+}
+
 // The error of a push whose result holds a change that failed (iCloud
 // refused it, or something it depends on failed): `push_rejected`, with the
 // first one's message. Empty when the result has none.
@@ -318,6 +342,16 @@ bool needsSignIn(const QString &code, int exitCode)
 bool isNetworkError(const QString &code)
 {
     return code == u"offline" || code == u"network";
+}
+
+// The log's lines for a failed run or half: iCloud out of reach is one line
+// and no failure to act on, anything else failedLog's.
+QString runFailedLog(const QString &name, const QJsonObject &error)
+{
+    if (isNetworkError(error.value(QStringLiteral("code")).toString()))
+        return QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.")
+            .arg(name, error.value(QStringLiteral("message")).toString());
+    return failedLog(name, error);
 }
 
 } // namespace
@@ -882,17 +916,14 @@ void NotesBackend::rebuildFolders()
     QVariantMap counts;
     for (const QString &folder : folders)
         counts.insert(folder, 0);
-    QDirIterator files(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
-    while (files.hasNext()) {
-        QString rel = root.relativeFilePath(files.next());
-        if (!isNotePath(rel))
-            continue;
+    forEachNoteFile(rootPath(), [&](QString rel, const QString &) {
         do {
             rel = rel.section(u'/', 0, -2);
             if (counts.contains(rel))
                 counts[rel] = counts[rel].toInt() + 1;
         } while (!rel.isEmpty());
-    }
+        return true;
+    });
 
     m_folders = folders;
     m_folderNoteCounts = counts;
@@ -911,13 +942,10 @@ void NotesBackend::rebuildNotes()
 {
     const QDir dir(folderAbsolutePath(m_currentFolder));
     QFileInfoList entries;
-    QDirIterator files(dir.absolutePath(), { QStringLiteral("*.md") }, QDir::Files,
-                       QDirIterator::Subdirectories);
-    while (files.hasNext()) {
-        const QFileInfo info(files.next());
-        if (isNotePath(dir.relativeFilePath(info.filePath())))
-            entries << info;
-    }
+    forEachNoteFile(dir.absolutePath(), [&](const QString &, const QString &path) {
+        entries << QFileInfo(path);
+        return true;
+    });
     // The sync tool syncs note mtimes, so newest-first matches Notes.app ordering.
     std::sort(entries.begin(), entries.end(),
               [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
@@ -1015,16 +1043,13 @@ QString NotesBackend::findNoteById(const QString &id) const
 {
     if (id.isEmpty())
         return {};
-    const QDir root(rootPath());
-    QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        const QString rel = root.relativeFilePath(it.next());
-        if (!isNotePath(rel))
-            continue;
-        if (SyncModel::extractNoteId(readText(it.filePath(), 64 * 1024)) == id)
-            return rel;
-    }
-    return {};
+    QString found;
+    forEachNoteFile(rootPath(), [&](const QString &rel, const QString &path) {
+        if (SyncModel::extractNoteId(readText(path, 64 * 1024)) == id)
+            found = rel;
+        return found.isEmpty();
+    });
+    return found;
 }
 
 // Open the note with this id where it now is. False when there is none.
@@ -1034,30 +1059,41 @@ bool NotesBackend::followNote(const QString &id)
     if (rel.isEmpty())
         return false;
     m_following = true;
-    const QString folder = rel.section(u'/', 0, -2);
+    m_lostNote = {};
+    if (m_queuedSave.valid)
+        m_queuedSave.note = rel; // its edits go where the note went
+    showNote(rel.section(u'/', 0, -2), rel.section(u'/', -1)); // unsaved edits merge on its load (keepEditsAsConflict)
+    m_following = false;
+    return true;
+}
+
+// Makes `name` in `folder` the open note, wherever the backend was: the
+// folder's list, the note's content and the watches follow.
+void NotesBackend::showNote(const QString &folder, const QString &name)
+{
     if (folder != m_currentFolder) {
         m_currentFolder = folder;
         emit currentFolderChanged();
     }
-    m_currentNote = rel.section(u'/', -1);
-    m_lostNote = {};
-    if (m_queuedSave.valid)
-        m_queuedSave.note = rel; // its edits go where the note went
+    m_currentNote = name;
     emit currentNoteChanged();
     rebuildNotes();
-    loadCurrentNote(); // unsaved edits merge here (keepEditsAsConflict)
+    loadCurrentNote();
     rewatch();
-    m_following = false;
-    return true;
+}
+
+// The open note, with `content`, as keepEditsAsNewNote wants it remembered.
+NotesBackend::LostNote NotesBackend::lostCopy(const QString &content) const
+{
+    return { m_currentFolder, SyncModel::previewNote(content, m_currentNote.chopped(3), vaultTitleMode()).title, content,
+             true };
 }
 
 // The open note's file is gone and no file carries its id: close it, but
 // remember it, so unsaved edits can still be kept (keepEditsAsNewNote).
 void NotesBackend::loseCurrentNote()
 {
-    m_lostNote = { m_currentFolder,
-                   SyncModel::previewNote(m_noteContent, m_currentNote.chopped(3), vaultTitleMode()).title,
-                   m_noteContent, true };
+    m_lostNote = lostCopy(m_noteContent);
     closeNote();
 }
 
@@ -1079,15 +1115,7 @@ bool NotesBackend::keepEditsAsNewNote(const QString &mine, const QString &why)
     if (!writeText(dir.filePath(name), body))
         return false;
     m_lostNote = {};
-    if (folder != m_currentFolder) {
-        m_currentFolder = folder;
-        emit currentFolderChanged();
-    }
-    m_currentNote = name;
-    emit currentNoteChanged();
-    rebuildNotes();
-    loadCurrentNote();
-    rewatch();
+    showNote(folder, name);
     const QString message = why.arg(title, name.chopped(3));
     appendLog(message);
     emit editsKeptAsNote(message);
@@ -1371,8 +1399,7 @@ bool NotesBackend::keepEditsAsConflict(const QString &base, const QString &mine)
     // left as it is and the edits become a note of their own.
     if (SyncModel::hasConflictMarkers(theirs) || SyncModel::hasConflictMarkers(base)
         || SyncModel::hasConflictMarkers(mine)) {
-        m_lostNote = { m_currentFolder,
-                       SyncModel::previewNote(disk, m_currentNote.chopped(3), vaultTitleMode()).title, disk, true };
+        m_lostNote = lostCopy(disk);
         return keepEditsAsNewNote(
             mine, QStringLiteral("\"%1\" has an unresolved conflict, so your unsaved edits were not merged into it. "
                                  "They are in a new note, \"%2\", and \"%1\" is unchanged."));
@@ -1530,16 +1557,9 @@ QString NotesBackend::moveCurrentNote(const QString &folder)
         return QStringLiteral("A note with that name already exists in that folder.");
     if (!QFile::rename(noteAbsolutePath(), target))
         return QStringLiteral("Could not move the file.");
-    const QString name = m_currentNote;
     m_lostNote = {};
-    m_currentFolder = folder;
-    emit currentFolderChanged();
-    m_currentNote = name;
-    emit currentNoteChanged();
-    rebuildFolders();
-    rebuildNotes();
-    loadCurrentNote();
-    rewatch();
+    rebuildFolders(); // the counts
+    showNote(folder, m_currentNote);
     emit vaultChanged();
     return {};
 }
@@ -1761,18 +1781,15 @@ QVariantList NotesBackend::searchVault(const QString &query, bool withMeaning)
     QJsonArray records;
     QMap<QString, QVariantMap> candidates;
     const QString mode = vaultTitleMode();
-    const QDir root(rootPath());
-    QDirIterator it(rootPath(), { QStringLiteral("*.md") }, QDir::Files, QDirIterator::Subdirectories);
     int scanned = 0;
-    while (it.hasNext() && (rank || out.size() < 100)) {
-        const QString rel = root.relativeFilePath(it.next());
-        if (!isNotePath(rel))
-            continue;
+    forEachNoteFile(rootPath(), [&](const QString &rel, const QString &path) {
+        if (!rank && out.size() >= 100)
+            return false;
         if (withMeaning && scanned++ == kWindowSearchNotes) {
             truncated = true;
-            break;
+            return false;
         }
-        const QString text = readText(it.filePath(), 1024 * 1024);
+        const QString text = readText(path, 1024 * 1024);
         const QString name = rel.section(u'/', -1);
         const QString folder = rel.section(u'/', 0, -2);
         const SyncModel::NotePreview preview = SyncModel::previewNote(text, QFileInfo(name).completeBaseName(), mode);
@@ -1782,7 +1799,7 @@ QVariantList NotesBackend::searchVault(const QString &query, bool withMeaning)
                                                 { "snippet", preview.snippet } });
         }
         if (out.size() >= 100 || (!text.contains(q, Qt::CaseInsensitive) && !preview.title.contains(q, Qt::CaseInsensitive)))
-            continue;
+            return true;
         QString snippet;
         for (const QString &line : text.split(u'\n')) {
             if (line.contains(q, Qt::CaseInsensitive))
@@ -1794,7 +1811,8 @@ QVariantList NotesBackend::searchVault(const QString &query, bool withMeaning)
                             { QStringLiteral("file"), name },
                             { QStringLiteral("title"), preview.title },
                             { QStringLiteral("snippet"), snippet.isEmpty() ? preview.snippet : snippet } };
-    }
+        return true;
+    });
     if (withMeaning && !rank && meaningOnly) {
         // Asked for meaning without Recall: say so once the caller has the text matches.
         QTimer::singleShot(0, this, [this, query, generation] {
@@ -2053,9 +2071,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
             diffText = meta.contains(QStringLiteral("text")) ? meta.value(QStringLiteral("text")).toString()
                                                              : data.toObject().value(QStringLiteral("text")).toString();
         } else {
-            QStringList lines;
-            for (const QJsonValue &line : meta.value(QStringLiteral("lines")).toArray())
-                lines << line.toString();
+            const QStringList lines = strings(meta.value(QStringLiteral("lines")));
             const QString report = lines.isEmpty() ? envelope.value(QStringLiteral("summary")).toString() : lines.join(u'\n');
             if (!report.isEmpty())
                 appendLog(report);
@@ -2081,10 +2097,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
     // it as a sync half's is (finishSyncHalves logs the halves'), and say it
     // in the preview's or history's error rather than "see log".
     if (m_mode != Mode::Sync && !m_lastError.isEmpty()) {
-        if (offline)
-            appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.").arg(label.toLower(), message));
-        else
-            appendLog(failedLog(label.toLower(), m_lastError));
+        appendLog(runFailedLog(label.toLower(), m_lastError));
     }
     const QString error = ok                    ? parsed.value(QStringLiteral("error")).toString()
                           : !message.isEmpty() ? QStringLiteral("%1 failed: %2").arg(label, message)
@@ -2175,30 +2188,20 @@ void NotesBackend::finishSyncHalves(int exitCode)
         const QString name = label.toLower();
         const bool ok = half.value(QStringLiteral("ok")).toBool();
         QJsonObject output;
+        // A failed push that ran but had a change refused has lines too:
+        // what it did do, which goes to the log ahead of the failure.
+        const QStringList lines = strings(half.value(QStringLiteral("lines")));
+        if (ok || !lines.isEmpty())
+            appendLog(name + u':' + (lines.isEmpty() ? QString() : u'\n' + lines.join(u'\n')));
         if (ok) {
             output = half.value(QStringLiteral("result")).toObject();
-            QStringList lines;
-            for (const QJsonValue &line : half.value(QStringLiteral("lines")).toArray())
-                lines << line.toString();
-            appendLog(name + u':' + (lines.isEmpty() ? QString() : u'\n' + lines.join(u'\n')));
         } else {
             const QJsonObject error = half.value(QStringLiteral("error")).toObject();
             output.insert(QStringLiteral("error"), error);
-            // A push that ran but had a change refused: what it did do is
-            // in its lines, which go to the log ahead of the failure.
-            QStringList lines;
-            for (const QJsonValue &line : half.value(QStringLiteral("lines")).toArray())
-                lines << line.toString();
-            if (!lines.isEmpty())
-                appendLog(name + u":\n" + lines.join(u'\n'));
+            appendLog(runFailedLog(name, error));
             const QString code = error.value(QStringLiteral("code")).toString();
-            if (isNetworkError(code)) {
-                appendLog(QStringLiteral("%1: iCloud could not be reached (%2); the next sync tries again.")
-                              .arg(name, error.value(QStringLiteral("message")).toString()));
-            } else {
-                appendLog(failedLog(name, error));
+            if (!isNetworkError(code))
                 quiet = quiet && (code == u"sign_in_required" || isSessionRejected(code));
-            }
         }
         const int code = half.value(QStringLiteral("exit_code")).toInt(ok ? 0 : 1);
         halves << Half{ label, code, QJsonDocument(output).toJson(QJsonDocument::Compact) };
