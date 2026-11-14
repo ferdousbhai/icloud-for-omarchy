@@ -260,9 +260,11 @@ for more than text edits). The engine:
   the moved file's older text after it.
 - A pull never writes or moves a note over a file it doesn't track (a note
   made here and not pushed yet): new notes and folder relocations take the
-  names already on disk as used and get a `" 2"` name instead.
+  names already on disk as used and get a `" 2"` name instead. So do the
+  attachment files of a note moved to another folder, in that folder's
+  `attachments/`.
 
-Tests: tests/cmd_local_delete.rs.
+Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
 
 ### A tracked note this build can no longer decode
 
