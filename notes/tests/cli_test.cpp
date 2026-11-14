@@ -5,7 +5,9 @@
 // a fake icloud-session on the private bus bin/test starts: never the real
 // notes, account or daemon. Checks exit codes, the output contract (the
 // envelope when piped, --quiet, --ids-only, --count, --styled, the error
-// object on stdout) and the JSON shapes docs/CLI.md documents.
+// object on stdout) and the JSON shapes docs/CLI.md documents. The last
+// part runs the real engine instead of the stub, replaying recorded iCloud
+// answers, so the app and the engine are checked against each other.
 #include "../src/cli.h"
 #include "../src/notesbackend.h"
 #include "../src/vaultlock.h"
@@ -1067,6 +1069,123 @@ int main(int argc, char *argv[])
               "cli export-pdf");
         check(cliJson({ QStringLiteral("export-pdf"), QStringLiteral("alpha") }).errorCode() == QStringLiteral("exists"),
               "cli export-pdf never overwrites");
+    }
+
+    // ---- the real engine, on recorded iCloud answers ----------------------------
+    // Everything above runs the stub. Here the commands run icloud-notes-sync
+    // itself (bin/test builds it), which replays recorded CloudKit answers
+    // (ICLOUD_NOTES_SYNC_CASSETTE, the engine's own test cassettes) instead of
+    // asking iCloud: what the app sends the engine and reads back from it is
+    // checked against what the engine really takes and prints.
+    {
+        const QString vault = g_scratch + QStringLiteral("/real");
+        const QString note = QStringLiteral("Notes/Test Note.md");
+        const auto replay = [](const char *cassette) {
+            return QHash<QString, QString>{
+                { QStringLiteral("ICLOUD_NOTES_SYNC_BIN"), qEnvironmentVariable("ICLOUD_NOTES_SYNC_REAL") },
+                { QStringLiteral("ICLOUD_NOTES_SYNC_CASSETTE"),
+                  QStringLiteral(NOTES_SYNC_CASSETTES) + QLatin1Char('/') + QLatin1StringView(cassette) },
+                { QStringLiteral("ICLOUD_NOTES_SYNC_NOW"), QStringLiteral("1790000000000") },
+                { QStringLiteral("ICLOUD_NOTES_SYNC_DETERMINISTIC"), QStringLiteral("1") },
+            };
+        };
+        const auto real = [&](QStringList args, const char *cassette) {
+            return cli(QStringList{ QStringLiteral("--vault"), vault } + args, replay(cassette));
+        };
+        const auto run = [](const Run &r, int i) { return r.json().toObject().value(QStringLiteral("runs")).toArray().at(i).toObject(); };
+        const auto result = [&](const Run &r, int i) { return run(r, i).value(QStringLiteral("result")).toObject(); };
+        const QString dsid = fake.dsid;
+        fake.set({ { QStringLiteral("Dsid"), QStringLiteral("10000000001") } }); // the cassettes' account
+
+        // clone: --account <dsid> --non-interactive <vault>, the envelope's data and meta.lines.
+        const Run cloned = real({ QStringLiteral("clone") }, "tiny-clone.json");
+        check(cloned.code == 0 && run(cloned, 0).value(QStringLiteral("command")).toString() == QStringLiteral("clone")
+                  && run(cloned, 0).value(QStringLiteral("ok")).toBool() && result(cloned, 0).value(QStringLiteral("written")).toInt() == 1
+                  && cloned.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral("Cloned 1 notes"))
+                  && !cloned.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral(":progress:"))
+                  && readFile(note, vault).contains(QStringLiteral("apple-note-id: ")),
+              "real engine: clone writes the vault, its result and report come through");
+        // vault-info, as the note list reads it: tracked (not "new"), the default folder, the title mode.
+        const Run listed = real({ QStringLiteral("list") }, "tiny-lookup.json");
+        const QJsonObject only = listed.json().toArray().at(0).toObject();
+        const Run folders = real({ QStringLiteral("folders") }, "tiny-lookup.json");
+        check(listed.json().toArray().size() == 1 && only.value(QStringLiteral("path")).toString() == note
+                  && only.value(QStringLiteral("flags")).toArray().isEmpty() && !only.value(QStringLiteral("id")).toString().isEmpty()
+                  && folders.json().toArray().at(1).toObject().value(QStringLiteral("default")).toBool(),
+              "real engine: vault-info says which notes are tracked and which folder is the default");
+
+        // sync with nothing to do: both halves, each with its own result.
+        const Run clean = real({ QStringLiteral("sync") }, "tiny-pull-noop.json");
+        check(clean.code == 0 && clean.json().toObject().value(QStringLiteral("ok")).toBool()
+                  && run(clean, 0).value(QStringLiteral("command")).toString() == QStringLiteral("push")
+                  && run(clean, 0).value(QStringLiteral("ok")).toBool() && run(clean, 0).value(QStringLiteral("exit_code")).toInt() == 0
+                  && result(clean, 0).value(QStringLiteral("dryRun")) == QJsonValue(false)
+                  && result(clean, 0).value(QStringLiteral("pushed")).toInt(-1) == 0
+                  && result(clean, 0).value(QStringLiteral("unchanged")).toInt() == 1
+                  && run(clean, 1).value(QStringLiteral("command")).toString() == QStringLiteral("pull")
+                  && run(clean, 1).value(QStringLiteral("ok")).toBool() && result(clean, 1).value(QStringLiteral("changes")).isArray()
+                  && result(clean, 1).value(QStringLiteral("added")).toInt(-1) == 0
+                  && clean.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral("pull:\nAlready up to date."))
+                  && !clean.json().toObject().value(QStringLiteral("log")).toString().contains(QStringLiteral(":progress:")),
+              "real engine: sync reports its push and its pull, each half's result and lines");
+
+        // A local edit: push --dry-run (the engine itself) plans the update.
+        // A Syncthing conflict copy of the note beside it is no second note,
+        // to the engine (a warning) or here (it holds no write back).
+        const QString copy = QStringLiteral("Notes/Test Note.sync-conflict-20261114-101500-ABCDEF7.md");
+        writeFile(copy, readFile(note, vault), vault);
+        {
+            QFile f(vault + QLatin1Char('/') + note);
+            if (f.open(QIODevice::Append))
+                f.write("\nA line added locally.");
+        }
+        const Run dry = real({ QStringLiteral("--quiet"), QStringLiteral("push"), QStringLiteral("--dry-run") }, "tiny-lookup.json");
+        const QJsonObject entry = dry.json().toObject().value(QStringLiteral("entries")).toArray().at(0).toObject();
+        check(dry.code == 0 && dry.json().toObject().value(QStringLiteral("dryRun")).toBool()
+                  && dry.json().toObject().value(QStringLiteral("entries")).toArray().size() == 1
+                  && entry.value(QStringLiteral("kind")).toString() == QStringLiteral("update")
+                  && entry.value(QStringLiteral("file")).toString() == note
+                  && entry.value(QStringLiteral("resolution")).toString() == QStringLiteral("ready")
+                  && dry.json().toObject().value(QStringLiteral("notices")).isArray(),
+              "real engine: push --dry-run lists the edited note as an update, ready");
+        const QJsonObject notice = dry.json().toObject().value(QStringLiteral("notices")).toArray().at(0).toObject();
+        const Run appended = real({ QStringLiteral("write"), note, QStringLiteral("--append"), QStringLiteral("--body"), QStringLiteral("more") },
+                                  "tiny-lookup.json");
+        check(dry.json().toObject().value(QStringLiteral("notices")).toArray().size() == 1
+                  && notice.value(QStringLiteral("level")).toString() == QStringLiteral("warn")
+                  && notice.value(QStringLiteral("message")).toString().startsWith(copy + QStringLiteral(" is a Syncthing conflict copy"))
+                  && appended.code == 0 && readFile(note, vault).endsWith(QStringLiteral("A line added locally.\nmore\n")),
+              "real engine: a Syncthing conflict copy is a warning, not a note to push, and the note beside it is still written");
+        QFile::remove(vault + QLatin1Char('/') + copy);
+        // history (no version is recorded under the pinned clock) and an
+        // unknown version: the engine's own data and error, passed through.
+        const Run history = real({ QStringLiteral("--quiet"), QStringLiteral("history"), QStringLiteral("Test Note") }, "tiny-lookup.json");
+        const Run noVersion = real({ QStringLiteral("--json"), QStringLiteral("diff"), QStringLiteral("Test Note"), QStringLiteral("no-such-id") },
+                                   "tiny-lookup.json");
+        check(history.code == 0 && history.json().toObject().value(QStringLiteral("mode")).toString() == QStringLiteral("epochs")
+                  && history.json().toObject().value(QStringLiteral("epochs")).isArray()
+                  && noVersion.code == 4 && !noVersion.errorEnvelope().isEmpty()
+                  && noVersion.errorCode() == QStringLiteral("unknown_version_snapshot"),
+              "real engine: history answers with its epochs; an unknown version is the engine's error object, exit 4");
+
+        // A vault cloned for another account: the engine fails each half with
+        // account_mismatch (exit 3, not a sign-in), inside the sync's answer.
+        {
+            const QString state = readFile(QStringLiteral(".icloud-notes/state.json"), vault);
+            writeFile(QStringLiteral(".icloud-notes/state.json"),
+                      QString(state).replace(QStringLiteral("\"10000000001\""), QStringLiteral("\"10000000002\"")), vault);
+        }
+        const int reports = fake.reportCalls;
+        const Run mismatch = real({ QStringLiteral("sync") }, "tiny-pull-noop.json");
+        check(mismatch.code == 3 && mismatch.errorCode() == QStringLiteral("account_mismatch")
+                  && !mismatch.error().value(QStringLiteral("hint")).toString().isEmpty()
+                  && mismatch.json().toObject().value(QStringLiteral("runs")).toArray().size() == 2
+                  && !run(mismatch, 0).value(QStringLiteral("ok")).toBool() && run(mismatch, 0).value(QStringLiteral("exit_code")).toInt() == 3
+                  && result(mismatch, 0).value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString()
+                         == QStringLiteral("account_mismatch")
+                  && fake.reportCalls == reports,
+              "real engine: another account's vault is account_mismatch in both halves, exit 3, never reported as a sign-in");
+        fake.set({ { QStringLiteral("Dsid"), dsid } });
     }
 
     return report();

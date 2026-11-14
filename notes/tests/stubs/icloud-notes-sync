@@ -23,8 +23,13 @@
 # ICLOUD_NOTES_SYNC_STUB_HINT): sync, pull, push, clone, diff, status and
 # history fail at once with exit N and that error, giving no answer, as the
 # engine does for a vault it cannot use (not_cloned_directory,
-# account_mismatch, ...). pull, push and clone print progress lines first,
-# as the real engine does in a machine mode.
+# account_mismatch, ...). The real `sync` gives no answer only when it never
+# starts (vault_busy, vault_lock, usage): a vault it cannot use fails each
+# half inside its answer, which is ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL/PULL_FAIL
+# here. pull, push and clone print progress lines first, as the real engine
+# does in a machine mode. The success results are markers the tests look
+# for ({"stub":"pull","ok":true}), not the engine's shapes: cli_test's last
+# part runs the real engine on recorded answers for those.
 # ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED=1: a push (alone, or as a sync's half)
 # runs but has a change refused by iCloud: its result with the failed entry,
 # exit 1, and in a sync the half's error `push_rejected` beside the result.
