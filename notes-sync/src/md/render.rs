@@ -51,7 +51,7 @@ pub fn spelling_candidates<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<
         },
     ]
     .into_iter()
-    .filter(|c| (!c.obsidian || obsidian) && (!c.autolink || autolink) && (c.obsidian || c.autolink))
+    .filter(|c| (!c.obsidian || obsidian) && (!c.autolink || autolink))
     .collect()
 }
 
@@ -489,7 +489,7 @@ fn text_pieces(value: &[u16], absolute_start: usize, raw_ranges: &[RawRange], es
     let mut out = Vec::new();
     let mut at = 0usize;
     for range in raw_ranges {
-        if range.start < absolute_start || range.end < absolute_start {
+        if range.start < absolute_start {
             continue;
         }
         let start = range.start - absolute_start;

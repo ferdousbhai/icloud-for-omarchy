@@ -263,13 +263,7 @@ fn fix_atx_heading_content(node: &mut Node, source: &str) {
             && first <= position.end.offset
             && let Some(gap) = dropped_heading_sequence(source, at, first)
         {
-            heading.children.insert(
-                0,
-                Node::Text(mdast::Text {
-                    value: gap.to_string(),
-                    position: None,
-                }),
-            );
+            heading.children.insert(0, text(gap));
         }
     }
     if let Some(children) = node.children_mut() {

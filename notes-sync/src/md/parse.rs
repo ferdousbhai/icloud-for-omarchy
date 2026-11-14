@@ -543,16 +543,15 @@ impl Parser<'_> {
                 continue;
             }
             let mut first_paragraph_seen = false;
-            for child in &item.children {
+            for (child_index, child) in item.children.iter().enumerate() {
                 match child {
                     mdast::Node::Paragraph(p) => {
                         // remark starts a task item's paragraph at its check
                         // (`[x]` then a line ending puts the text on the next
                         // line); markdown-rs at the text.
-                        let start_line =
-                            (checked.is_some() && !first_paragraph_seen && item.children.first() == Some(child))
-                                .then(|| task_check_line(self.source, child))
-                                .flatten();
+                        let start_line = (checked.is_some() && child_index == 0)
+                            .then(|| task_check_line(self.source, child))
+                            .flatten();
                         let seed = if first_paragraph_seen { &BODY_SEED } else { &seed };
                         self.record_paragraph_lines(child, &p.children, block_quote_level, seed, start_line)?;
                         first_paragraph_seen = true;

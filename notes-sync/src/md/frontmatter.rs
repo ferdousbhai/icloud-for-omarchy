@@ -189,11 +189,11 @@ fn clear_key(frontmatter: &str, key: &str) -> String {
             }
             reassemble(frontmatter, &text)
         }
-        Some(Frontmatter::Lines(lines)) => {
-            if fallback_key_line(&lines, key).is_none() {
+        Some(Frontmatter::Lines(mut remaining)) => {
+            let Some(at) = fallback_key_line(&remaining, key) else {
                 return frontmatter.to_string();
-            }
-            let remaining = fallback_clear(lines, key);
+            };
+            remaining.drain(fallback_span(&remaining, at));
             if remaining
                 .iter()
                 .all(|l| js::trim(l).is_empty() || js::trim(l).starts_with('#'))
@@ -337,12 +337,4 @@ fn fallback_set(mut lines: Vec<String>, key: &str, value: &str) -> String {
         }
     }
     lines.join("\n")
-}
-
-fn fallback_clear(mut lines: Vec<String>, key: &str) -> Vec<String> {
-    if let Some(at) = fallback_key_line(&lines, key) {
-        let span = fallback_span(&lines, at);
-        lines.drain(span);
-    }
-    lines
 }

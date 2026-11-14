@@ -49,9 +49,8 @@ pub fn file_name_carries_title(file_name: &str, title_line: &str) -> bool {
     if file_name == wanted {
         return true;
     }
-    let extension = js::posix::extname(&wanted);
-    let stem = &wanted[..wanted.len() - extension.len()];
-    let Some(actual) = file_name.strip_suffix(extension.as_str()) else {
+    // `wanted` always ends in `.md`.
+    let (Some(stem), Some(actual)) = (wanted.strip_suffix(".md"), file_name.strip_suffix(".md")) else {
         return false;
     };
     let Some(suffix) = actual.strip_prefix(stem).and_then(|rest| rest.strip_prefix(' ')) else {
