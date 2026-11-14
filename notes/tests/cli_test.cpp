@@ -608,7 +608,7 @@ int main(int argc, char *argv[])
                     out << v.toObject().value(QStringLiteral("name")).toString();
                 return out;
             };
-            check(names() == QStringList{ QStringLiteral("photo.PNG"), QStringLiteral("photo 2.PNG"), QStringLiteral("anim.gif") },
+            check(names() == QStringList{ QStringLiteral("photo.PNG"), QStringLiteral("photo 2.PNG"), QStringLiteral("plan [v1] (a).pdf"), QStringLiteral("anim.gif") },
                   "cli read lists the attachments detach takes by name");
             const Run unasked = cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("photo 2.PNG") });
             check(unasked.code == 2 && unasked.errorCode() == QStringLiteral("usage")
@@ -635,7 +635,7 @@ int main(int argc, char *argv[])
             check(readFile(QStringLiteral("Notes/Alpha.md"))
                       == QString(before).remove(QStringLiteral("![photo 2.PNG](attachments/photo%202.PNG)\n"))
                       && exists(QStringLiteral("Notes/attachments/photo 2.PNG"))
-                      && names() == QStringList{ QStringLiteral("photo.PNG"), QStringLiteral("anim.gif") },
+                      && names() == QStringList{ QStringLiteral("photo.PNG"), QStringLiteral("plan [v1] (a).pdf"), QStringLiteral("anim.gif") },
                   "cli detach removes the link's line only; the file is the push's to remove");
             QFile::remove(g_scratch + QStringLiteral("/stub.log"));
             const Run detPushed = cliJson({ QStringLiteral("detach"), QStringLiteral("alpha"), QStringLiteral("anim.gif"), QStringLiteral("--yes"),
@@ -669,7 +669,8 @@ int main(int argc, char *argv[])
                   "cli write that keeps the links, and --append, need no --yes");
             const Run confirmed = cliJson({ QStringLiteral("write"), QStringLiteral("alpha"), QStringLiteral("--yes"), QStringLiteral("--body"), bodyWithout });
             check(confirmed.code == 0 && confirmed.json().toObject().value(QStringLiteral("changed")).toBool()
-                      && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("photo.PNG")) && names().isEmpty(),
+                      && !readFile(QStringLiteral("Notes/Alpha.md")).contains(QStringLiteral("photo.PNG"))
+                      && names() == QStringList{ QStringLiteral("plan [v1] (a).pdf") },
                   "cli write --yes removes the attachment's link");
 
             QDir(g_vault + QStringLiteral("/Notes/attachments")).removeRecursively();

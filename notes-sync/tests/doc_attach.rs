@@ -103,6 +103,10 @@ fn the_type_agrees_with_the_extension_pull_gives_it() {
         ("p.webp", "![p.webp](attachments/p.webp)"),
         ("p.pdf", "[p.pdf](attachments/p.pdf)"),
         ("a b [1].txt", "[a b \\[1\\].txt](attachments/a%20b%20%5B1%5D.txt)"),
+        // Parentheses that pair up stay; ones that don't would end the link.
+        ("shot (1).png", "![shot (1).png](attachments/shot%20(1).png)"),
+        ("odd).pdf", "[odd).pdf](attachments/odd%29.pdf)"),
+        ("odd)(.pdf", "[odd)(.pdf](attachments/odd%29%28.pdf)"),
         // The links `icloud-notes attach` writes (notes/tests/cli_test.cpp).
         ("photo 2.PNG", "![photo 2.PNG](attachments/photo%202.PNG)"),
         (
@@ -271,6 +275,14 @@ fn attachment_links_are_found_where_they_are() {
     assert_eq!(links[0].href, "attachments/p.png");
     assert_eq!(links[1].text, "[a \\[1\\].txt](attachments/a%20%5B1%5D.txt)");
     assert_eq!(links[1].href, "attachments/a%20%5B1%5D.txt");
+
+    // Parentheses in the target pair up, as Markdown reads them.
+    let links =
+        find_attachment_links("(see ![shot (1).png](attachments/shot%20(1).png)) [odd).pdf](attachments/odd%29.pdf)");
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert_eq!(links[0].href, "attachments/shot%20(1).png");
+    assert_eq!(links[0].text, "![shot (1).png](attachments/shot%20(1).png)");
+    assert_eq!(links[1].href, "attachments/odd%29.pdf");
 
     // A `!` before a file that isn't an image is the note's own text.
     let links = find_attachment_links("Wow![plan.pdf](attachments/plan.pdf)");
