@@ -10,7 +10,9 @@
 
 use std::collections::HashMap;
 
-use crate::api::{Client, Error, Result, Tokens, Transport, Written};
+use serde_json::{Map, Value};
+
+use crate::api::{Client, Error, Result, Tokens, Transport};
 use crate::model::{Change, Contact};
 use crate::store::{Cache, Store};
 
@@ -33,15 +35,6 @@ pub struct Saved<T> {
     pub warning: Option<String>,
 }
 
-impl<T> Saved<T> {
-    fn map<U>(self, f: impl FnOnce(T) -> U) -> Saved<U> {
-        Saved {
-            value: f(self.value),
-            warning: self.warning,
-        }
-    }
-}
-
 fn io(e: std::io::Error) -> Error {
     Error::Other(e.to_string())
 }
@@ -59,24 +52,17 @@ impl<'a> Service<'a> {
 
     /// Fetches every contact, saves them, and returns the new cache.
     pub fn sync(&self) -> Result<(SyncReport, Cache)> {
-        let account = self.t.account()?;
         let fetched = Client::connect(self.t)?.fetch()?;
         let _lock = self.store.lock().map_err(io)?;
         let before = self.cache()?;
         let mut cache = Cache {
-            account: account.clone(),
             tokens: Some(fetched.tokens),
             me: fetched.me,
-            synced_ms: Some(icloud_session::time::now_ms()),
             contacts: fetched.cards.into_iter().map(Contact).collect(),
             ..Cache::default()
         };
         cache.sort();
-        let changed = if before.account == account {
-            changes(&before, &cache)
-        } else {
-            cache.contacts.len()
-        };
+        let changed = changes(&before, &cache);
         self.store.save_cache(&mut cache).map_err(io)?;
         let report = SyncReport {
             contacts: cache.contacts.len(),
@@ -88,7 +74,7 @@ impl<'a> Service<'a> {
     /// Runs one write with the cached tokens; with fresh ones when iCloud
     /// refuses those (or none are cached). The tokens it ends with are
     /// saved, with the card, by [`Service::record`].
-    fn with_tokens(&self, client: &Client, write: impl Fn(&Tokens) -> Result<Written>) -> Result<Written> {
+    fn with_tokens<T>(&self, client: &Client, write: impl Fn(&Tokens) -> Result<T>) -> Result<T> {
         if let Some(tokens) = self.cache()?.tokens {
             match write(&tokens) {
                 Err(e) if e.is_stale_token() => {}
@@ -99,27 +85,21 @@ impl<'a> Service<'a> {
         write(&tokens)
     }
 
-    /// Folds a write's result (the card `id` as saved, or gone) into the
-    /// cache. The write happened, so a failure here is a warning, not an
-    /// error: reporting it as failed would invite writing it again.
-    fn record(&self, id: &str, w: Written) -> Saved<Option<Contact>> {
-        let card = w.card.map(Contact);
+    /// Folds a write's result (its tokens, and `change`: the card as saved,
+    /// or gone) into the cache. The write happened, so a failure here is a
+    /// warning, not an error: reporting it as failed would invite writing it
+    /// again.
+    fn record(&self, tokens: Tokens, change: impl FnOnce(&mut Cache)) -> Option<String> {
         let save = || -> std::io::Result<()> {
             let _lock = self.store.lock()?;
             let mut cache = self.store.cache()?;
-            cache.tokens = Some(w.tokens);
-            match &card {
-                Some(c) => cache.put(c.clone()),
-                None => cache.remove(id),
-            }
+            cache.tokens = Some(tokens);
+            change(&mut cache);
             self.store.save_cache(&mut cache)
         };
-        Saved {
-            warning: save()
-                .err()
-                .map(|e| format!("saved in iCloud; local cache not updated: {e}")),
-            value: card,
-        }
+        save()
+            .err()
+            .map(|e| format!("saved in iCloud; local cache not updated: {e}"))
     }
 
     /// Adds a contact made of `changes` (a new card has nothing to remove);
@@ -128,8 +108,10 @@ impl<'a> Service<'a> {
         let mut card = Contact::new(is_company);
         card.apply(changes).map_err(Error::Other)?;
         let client = Client::connect(self.t)?;
-        let w = self.with_tokens(&client, |t| client.write(t, None, &card.0))?;
-        Ok(self.record(card.id(), w).map(|c| c.expect("a create answers its card")))
+        let (saved, tokens) = self.with_tokens(&client, |t| client.write(t, None, &card.0))?;
+        let value = Contact(saved);
+        let warning = self.record(tokens, |cache| cache.put(value.clone()));
+        Ok(Saved { value, warning })
     }
 
     /// Writes `changes` to the contact `c` (as cached). When it changed on
@@ -140,12 +122,12 @@ impl<'a> Service<'a> {
     /// has are dropped, and when none is left nothing is written.
     pub fn update(&self, c: &Contact, changes: &[Change]) -> Result<Saved<Contact>> {
         let client = Client::connect(self.t)?;
-        let write = |base: &Contact, changes: &[Change]| -> Result<Written> {
+        let write = |base: &Contact, changes: &[Change]| -> Result<(Map<String, Value>, Tokens)> {
             let mut card = base.clone();
             card.apply(changes).map_err(Error::Other)?;
             self.with_tokens(&client, |t| client.write(t, Some("PUT"), &card.0))
         };
-        let w = match write(c, changes) {
+        let (saved, tokens) = match write(c, changes) {
             Err(e) if e.is_conflict() => {
                 let fresh = self
                     .fresh(c)?
@@ -161,14 +143,16 @@ impl<'a> Service<'a> {
             }
             other => other?,
         };
-        Ok(self.record(c.id(), w).map(|c| c.expect("an update answers its card")))
+        let value = Contact(saved);
+        let warning = self.record(tokens, |cache| cache.put(value.clone()));
+        Ok(Saved { value, warning })
     }
 
     /// Deletes the contact `c`. When it changed on another device since, it
     /// is deleted as it is now; when it is already gone, that is done too.
     pub fn delete(&self, c: &Contact) -> Result<Saved<()>> {
         let client = Client::connect(self.t)?;
-        let w = match self.with_tokens(&client, |t| client.delete(t, c.id(), c.etag())) {
+        let tokens = match self.with_tokens(&client, |t| client.delete(t, c.id(), c.etag())) {
             Err(e) if e.is_conflict() => {
                 let Some(fresh) = self.fresh(c)? else {
                     return Ok(Saved {
@@ -180,7 +164,10 @@ impl<'a> Service<'a> {
             }
             other => other?,
         };
-        Ok(self.record(c.id(), w).map(drop))
+        Ok(Saved {
+            value: (),
+            warning: self.record(tokens, |cache| cache.remove(c.id())),
+        })
     }
 
     /// The contact `c` as iCloud has it now (a sync: there is no call for

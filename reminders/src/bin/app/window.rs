@@ -73,7 +73,7 @@ impl Window {
             glib::Propagation::Proceed
         });
         this.connect();
-        if let Some(store) = this.store() {
+        if let Ok(store) = store_in(this.dir.clone()) {
             match store.cache() {
                 Ok(cache) => *this.cache.borrow_mut() = cache,
                 Err(e) => this.error(&e.to_string()),
@@ -100,10 +100,6 @@ impl Window {
 
     fn toast(&self, msg: &str) {
         self.toasts.add_toast(adw::Toast::new(msg));
-    }
-
-    fn store(&self) -> Option<Store> {
-        self.dir.clone().map(Store::new)
     }
 
     fn connect(self: &Rc<Self>) {
@@ -179,8 +175,7 @@ impl Window {
         let weak = Rc::downgrade(self);
         background(
             move || {
-                let dir = dir.ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))?;
-                let svc = Service::new(&*t, Store::new(dir));
+                let svc = Service::new(&*t, store_in(dir)?);
                 let warning = svc.sync(false)?.warning();
                 Ok::<_, Error>((svc.cache()?, warning))
             },
@@ -227,8 +222,7 @@ impl Window {
         let weak = Rc::downgrade(self);
         background(
             move || {
-                let dir = dir.ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))?;
-                let svc = Service::new(&*t, Store::new(dir));
+                let svc = Service::new(&*t, store_in(dir)?);
                 let out = f(&svc)?;
                 // The write happened: a cache that can't be read is shown
                 // as a warning, not as a failed write.
@@ -608,6 +602,12 @@ struct Draft {
     title: String,
     due: String,
     notes: String,
+}
+
+/// The store in `dir`, which is `None` without a home directory.
+fn store_in(dir: Option<PathBuf>) -> Result<Store, Error> {
+    dir.map(Store::new)
+        .ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))
 }
 
 fn sidebar_row(id: &str, name: &str, open: usize) -> gtk::ListBoxRow {

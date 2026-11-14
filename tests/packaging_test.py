@@ -3,6 +3,7 @@
 import io
 import os
 import pwd
+import re
 import shutil
 import tomllib
 from pathlib import Path
@@ -13,7 +14,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
-PACKAGES = ("icloud-session", "icloud-photos", "icloud-findmy", "icloud-notes", "icloud-drive", "icloud-reminders", "icloud-contacts")
+# The recipe's pkgname is the one list of packages.
+PACKAGES = tuple(subprocess.check_output(
+    ["bash", "-c", 'source packaging/PKGBUILD; printf "%s\\n" "${pkgname[@]}"'], cwd=ROOT, text=True,
+).split())
 
 
 class Packaging(unittest.TestCase):
@@ -84,6 +88,12 @@ class Packaging(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             versions.append(subprocess.check_output(["bash", "-ec", 'source packaging/PKGBUILD; echo "$pkgver"'], cwd=root, text=True))
         self.assertEqual(versions[0], versions[1])
+
+    def test_installer_offers_the_packages_the_recipe_builds(self):
+        # install.sh runs standalone, so it carries its own list.
+        listed = re.search(r"^PACKAGES=\((.*)\)$", (ROOT / "install.sh").read_text(), re.M).group(1).split()
+        self.assertEqual(len(listed), len(set(listed)))
+        self.assertEqual(set(listed), set(PACKAGES))
 
     def test_every_app_needs_the_sign_in_service_of_its_own_suite(self):
         # Installing or upgrading one app must bring icloud-session up with
@@ -172,7 +182,7 @@ for arch in ("x86_64", "aarch64"):
         log = Path(self.env["LOG"]).read_text()
         self.assertIn("git push -q origin v1.2.3", log)
         self.assertIn("gh workflow run packages.yml", log)
-        self.assertEqual(log.count("--detach-sign"), 14)
+        self.assertEqual(log.count("--detach-sign"), 2 * len(PACKAGES))
         self.assertIn("gh release create v1.2.3", log)
         self.assertNotIn("verify-release", log)
         self.assertNotIn("cargo publish", log)
@@ -435,10 +445,11 @@ for arch in ("x86_64", "aarch64"):
         result = subprocess.run([str(root / "bin/verify-release"), "v1.2.3"], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         log = Path(self.env["LOG"]).read_text()
-        self.assertEqual(log.count("-fsSL"), 7)
+        # install.sh and one installer per app (every package but icloud-session).
+        self.assertEqual(log.count("-fsSL"), len(PACKAGES))
         self.assertIn("https://github.com/ferdousbhai/icloud-for-omarchy/releases/download/v1.2.3/install-notes.sh", log)
         self.assertNotIn("/latest/", log)
-        self.assertEqual(result.stdout.count("Verified:"), 7)
+        self.assertEqual(result.stdout.count("Verified:"), len(PACKAGES))
         for pkg in PACKAGES:
             self.assertIn(f"Verified: {pkg} 1.2.3", result.stdout)
 

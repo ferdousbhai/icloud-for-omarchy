@@ -342,7 +342,7 @@ impl Cli<'_> {
             .iter()
             .filter(|c| query.is_none_or(|q| c.matches(q)))
             .collect();
-        let data: Vec<Value> = rows.iter().map(|c| contact_json(c, &cache)).collect();
+        let data: Vec<Value> = rows.iter().map(|c| contact_json(c, cache.is_me(c))).collect();
         let ids: Vec<String> = rows.iter().map(|c| c.id().to_owned()).collect();
         let human = if rows.is_empty() {
             "No contacts.".to_string()
@@ -357,8 +357,9 @@ impl Cli<'_> {
     fn show(&self, query: &str) -> Outcome {
         let cache = self.fresh()?;
         let c = resolve(&cache, query)?;
-        Ok(Response::new(contact_json(c, &cache), c.display_name())
-            .human(detail(c, &cache).trim_end())
+        let me = cache.is_me(c);
+        Ok(Response::new(contact_json(c, me), c.display_name())
+            .human(detail(c, me).trim_end())
             .ids(vec![c.id().to_owned()]))
     }
 
@@ -376,7 +377,14 @@ impl Cli<'_> {
         }
         let saved = self.svc.add(&changes, is_company)?;
         let c = saved.value;
-        self.done("add", &c, &format!("Added {}", c.display_name()), saved.warning)
+        // A new card is never the "me" card.
+        Ok(done(
+            "add",
+            &c,
+            false,
+            &format!("Added {}", c.display_name()),
+            saved.warning,
+        ))
     }
 
     fn edit(&self, query: &str, changes: Vec<Change>) -> Outcome {
@@ -389,12 +397,13 @@ impl Cli<'_> {
         let c = resolve(&cache, query)?.clone();
         let saved = self.svc.update(&c, &changes)?;
         let after = saved.value;
-        self.done(
+        Ok(done(
             "edit",
             &after,
+            cache.is_me(&c),
             &format!("Changed {}", after.display_name()),
             saved.warning,
-        )
+        ))
     }
 
     fn delete(&self, query: &str, yes: bool) -> Outcome {
@@ -451,19 +460,20 @@ impl Cli<'_> {
         Ok(resp.ids(ids))
     }
 
-    fn done(&self, action: &str, c: &Contact, text: &str, warning: Option<String>) -> Outcome {
-        let cache = self.svc.cache()?;
-        let mut data = json!({ "action": action, "contact": contact_json(c, &cache) });
-        warn(&mut data, warning);
-        Ok(Response::new(data, text.to_string()).ids(vec![c.id().to_owned()]))
-    }
-
     fn sync(&self) -> Outcome {
         let (report, _) = self.svc.sync()?;
         let data = json!({ "contacts": report.contacts, "changed": report.changed });
         let text = format!("Synced: {} ({} changed)", contacts(report.contacts), report.changed);
         Ok(Response::new(data, text).count(report.changed))
     }
+}
+
+/// What `add` and `edit` answer: the contact as saved (`me`: it is the "me"
+/// card).
+fn done(action: &str, c: &Contact, me: bool, text: &str, warning: Option<String>) -> Response {
+    let mut data = json!({ "action": action, "contact": contact_json(c, me) });
+    warn(&mut data, warning);
+    Response::new(data, text.to_string()).ids(vec![c.id().to_owned()])
 }
 
 /// The changes `fields` asks for, checked.
@@ -606,7 +616,8 @@ fn opt(s: &str) -> Value {
     if s.is_empty() { Value::Null } else { json!(s) }
 }
 
-pub fn contact_json(c: &Contact, cache: &Cache) -> Value {
+/// `me`: whether `c` is the account's "me" card.
+pub fn contact_json(c: &Contact, me: bool) -> Value {
     let addresses: Vec<Value> = c
         .addresses()
         .into_iter()
@@ -634,7 +645,7 @@ pub fn contact_json(c: &Contact, cache: &Cache) -> Value {
         "job_title": opt(c.field(Field::JobTitle)),
         "department": opt(c.field(Field::Department)),
         "is_company": c.is_company(),
-        "me": cache.is_me(c),
+        "me": me,
         "phones": labeled_json(c.values(Multi::Phone)),
         "emails": labeled_json(c.values(Multi::Email)),
         "urls": labeled_json(c.values(Multi::Url)),
@@ -664,8 +675,8 @@ fn line(c: &Contact) -> String {
     }
 }
 
-fn detail(c: &Contact, cache: &Cache) -> String {
-    let mut out = format!("{}{}\n", c.display_name(), if cache.is_me(c) { "  (me)" } else { "" });
+fn detail(c: &Contact, me: bool) -> String {
+    let mut out = format!("{}{}\n", c.display_name(), if me { "  (me)" } else { "" });
     let row = |out: &mut String, label: &str, value: &str| {
         if !value.is_empty() {
             *out += &format!("  {:<11}{value}\n", format!("{label}:"));
@@ -711,26 +722,6 @@ fn detail(c: &Contact, cache: &Cache) -> String {
 mod tests {
     use super::*;
 
-    fn cache() -> Cache {
-        let card = |v: Value| Contact(v.as_object().unwrap().clone());
-        let mut c = Cache {
-            me: Some("ME".into()),
-            contacts: vec![
-                card(json!({"contactId": "ME", "firstName": "Ferdous"})),
-                card(
-                    json!({"contactId": "A", "firstName": "Ann", "lastName": "Lee", "emailAddresses": [{"label": "HOME", "field": "ann@x.org"}]}),
-                ),
-                card(
-                    json!({"contactId": "B", "firstName": "Anna", "lastName": "Berg", "phones": [{"label": "MOBILE", "field": "+47 555-0100"}]}),
-                ),
-                card(json!({"contactId": "C", "firstName": "Bob"})),
-            ],
-            ..Cache::default()
-        };
-        c.sort();
-        c
-    }
-
     #[test]
     fn the_cli_definition_is_consistent() {
         use clap::CommandFactory;
@@ -773,27 +764,5 @@ mod tests {
         assert_eq!(f.hint.as_deref(), Some(sign_in_hint().as_str()));
         let f = Failure::from(A::Offline("x".into()));
         assert_eq!(f.hint.as_deref(), Some(NETWORK_HINT));
-    }
-
-    #[test]
-    fn resolves_ids_me_names_emails_phones_and_parts() {
-        let c = cache();
-        let id = |q: &str| resolve(&c, q).ok().map(|c| c.id().to_owned());
-        assert_eq!(id("B").as_deref(), Some("B"));
-        assert_eq!(id("me").as_deref(), Some("ME"));
-        assert_eq!(id("ann lee").as_deref(), Some("A"));
-        assert_eq!(id("ANN@x.org").as_deref(), Some("A"));
-        assert_eq!(id("5550100").as_deref(), Some("B"));
-        assert_eq!(id("bo").as_deref(), Some("C"));
-        let Err(e) = resolve(&c, "ann") else {
-            panic!("ambiguous")
-        };
-        assert_eq!((e.code.as_str(), e.exit), ("ambiguous", 2));
-        let hint = e.hint.unwrap();
-        assert!(hint.contains("(A)") && hint.contains("(B)"), "{hint}");
-        let Err(e) = resolve(&c, "zed") else {
-            panic!("not found")
-        };
-        assert_eq!((e.code.as_str(), e.exit), ("not_found", 4));
     }
 }

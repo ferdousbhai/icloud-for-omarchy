@@ -64,10 +64,6 @@ pub fn now_ms() -> i64 {
     icloud_session::time::now_ms()
 }
 
-fn io(e: std::io::Error) -> Error {
-    Error::Other(e.to_string())
-}
-
 impl<'a> Service<'a> {
     pub fn new(t: &'a dyn Transport, store: Store) -> Self {
         Service { t, store }
@@ -76,7 +72,7 @@ impl<'a> Service<'a> {
     /// The cache as last saved (files are replaced whole, so a read needs
     /// no lock).
     pub fn cache(&self) -> Result<Cache> {
-        self.store.cache().map_err(io)
+        Ok(self.store.cache()?)
     }
 
     /// Fetches what changed and saves it. `full` ignores the sync token.
@@ -112,19 +108,20 @@ impl<'a> Service<'a> {
             Snapshot::new()
         };
         let token = start.sync_token.filter(|_| start.account == account && !full);
-        let (records, new_token, full) = match &token {
+        // CloudKit refuses a stale token with CHANGE_TOKEN_EXPIRED, or at zone
+        // level with BAD_REQUEST ("Unknown sync continuation type"); the Notes
+        // engine recovers from the latter the same way
+        // (notes-sync/src/cloudkit/client.rs, fetch_zone_changes).
+        let delta = match &token {
             Some(t) => match ck.all_changes(&["Reminder"], Some(t)) {
-                Ok((records, token)) => (records, token, false),
-                // CloudKit refuses a stale token with CHANGE_TOKEN_EXPIRED, or at
-                // zone level with BAD_REQUEST ("Unknown sync continuation type");
-                // the Notes engine recovers from the latter the same way
-                // (notes-sync/src/cloudkit/client.rs, fetch_zone_changes).
-                Err(Error::CloudKit { code, .. }) if code == "CHANGE_TOKEN_EXPIRED" || code == "BAD_REQUEST" => {
-                    let (records, token) = ck.all_changes(&["Reminder"], None)?;
-                    (records, token, true)
-                }
+                Ok(delta) => Some(delta),
+                Err(Error::CloudKit { code, .. }) if code == "CHANGE_TOKEN_EXPIRED" || code == "BAD_REQUEST" => None,
                 Err(e) => return Err(e),
             },
+            None => None,
+        };
+        let (records, new_token, full) = match delta {
+            Some((records, token)) => (records, token, false),
             None => {
                 let (records, token) = ck.all_changes(&["Reminder"], None)?;
                 (records, token, true)
@@ -141,7 +138,7 @@ impl<'a> Service<'a> {
                 }
             }
         }
-        let _lock = self.store.lock().map_err(io)?;
+        let _lock = self.store.lock()?;
         // Re-read under the lock: a write may have landed meanwhile.
         let mut cache = self.cache()?;
         if cache.account != account {
@@ -164,7 +161,7 @@ impl<'a> Service<'a> {
         // With a record skipped, the next sync asks from the same token.
         cache.sync_token = if skipped.is_empty() { Some(new_token) } else { token };
         cache.synced_ms = Some(now_ms());
-        self.store.save_cache(&cache).map_err(io)?;
+        self.store.save_cache(&cache)?;
         Ok(SyncReport {
             lists: cache.lists.len(),
             reminders: cache.reminders.len(),
@@ -174,38 +171,38 @@ impl<'a> Service<'a> {
         })
     }
 
-    /// Folds what CloudKit answered to a write into the cache: the server's
-    /// copy, as saved.
-    fn store_records(&self, records: &[Record]) -> Result<()> {
-        let _lock = self.store.lock().map_err(io)?;
+    /// Folds what CloudKit answered about one reminder into the cache: the
+    /// server's copy as saved, or that it is gone.
+    fn store_one(&self, id: &str, live: Option<&Reminder>) -> Result<()> {
+        let _lock = self.store.lock()?;
         let mut cache = self.cache()?;
-        for r in records {
-            apply_record(&mut cache, r)?;
-        }
-        self.store.save_cache(&cache).map_err(io)
+        match live {
+            Some(r) => cache.reminders.insert(id.to_owned(), r.clone()),
+            None => cache.reminders.remove(id),
+        };
+        Ok(self.store.save_cache(&cache)?)
     }
 
     /// A fresh copy of one reminder from iCloud; `None` when it is gone.
     fn fetch(&self, id: &str) -> Result<Option<Reminder>> {
         let ck = CloudKit::connect(self.t)?;
-        let records = ck.lookup(&[id])?;
-        let live = saved_reminder(id, &records)?;
-        self.store_records(&records)?;
+        let live = saved_reminder(id, &ck.lookup(&[id])?)?;
+        self.store_one(id, live.as_ref())?;
         Ok(live)
     }
 
-    /// Folds a successful write's records into the cache. The write
+    /// Folds a successful write's answer into the cache. The write
     /// happened, so a failure here is a warning, not an error: reporting
     /// it as failed would invite writing it again.
-    fn cache_written(&self, records: &[Record]) -> Option<String> {
-        self.store_records(records)
+    fn cache_written(&self, id: &str, live: Option<&Reminder>) -> Option<String> {
+        self.store_one(id, live)
             .err()
             .map(|e| format!("saved in iCloud; local cache not updated: {e}"))
     }
 
     /// Adds a reminder to `list_id`.
     pub fn add(&self, list_id: &str, title: &str, notes: &str, due: Option<&Due>) -> Result<Saved<Reminder>> {
-        let replica = self.store.replica().map_err(io)?;
+        let replica = self.store.replica()?;
         let uuid = uuid::Uuid::new_v4().to_string().to_uppercase();
         let ck = CloudKit::connect(self.t)?;
         let op = model::create_op(&uuid, list_id, title, notes, due, &replica, now_ms());
@@ -214,7 +211,7 @@ impl<'a> Service<'a> {
         let live = saved_reminder(&id, &records)?
             .ok_or_else(|| Error::Other(format!("CloudKit answered the new {id} as deleted")))?;
         Ok(Saved {
-            warning: self.cache_written(&records),
+            warning: self.cache_written(&id, Some(&live)),
             value: live,
         })
     }
@@ -227,7 +224,7 @@ impl<'a> Service<'a> {
     /// nothing is written. Returns the reminder as saved; `None` after a
     /// delete.
     pub fn update(&self, r: &Reminder, changes: &[Change]) -> Result<Saved<Option<Reminder>>> {
-        let replica = self.store.replica().map_err(io)?;
+        let replica = self.store.replica()?;
         let ck = CloudKit::connect(self.t)?;
         let write = |r: &Reminder, changes: &[Change]| {
             let op = model::update_op(r, changes, &replica, now_ms()).map_err(Error::Other)?;
@@ -258,7 +255,7 @@ impl<'a> Service<'a> {
         };
         let live = saved_reminder(&r.id, &records)?;
         Ok(Saved {
-            warning: self.cache_written(&records),
+            warning: self.cache_written(&r.id, live.as_ref()),
             value: live,
         })
     }
@@ -300,21 +297,6 @@ fn saved_reminder(id: &str, records: &[Record]) -> Result<Option<Reminder>> {
         Parsed::Gone(_) => Ok(None),
         Parsed::NotAReminder => Err(Error::Other(format!("{id} is not a reminder"))),
     }
-}
-
-/// Folds a lookup or modify record into the cache: the server's copy, as
-/// saved.
-fn apply_record(cache: &mut Cache, r: &Record) -> Result<()> {
-    match Reminder::from_record(r).map_err(Error::Other)? {
-        Parsed::Live(rem) => {
-            cache.reminders.insert(rem.id.clone(), *rem);
-        }
-        Parsed::Gone(id) => {
-            cache.reminders.remove(&id);
-        }
-        Parsed::NotAReminder => {}
-    }
-    Ok(())
 }
 
 /// Each cached reminder's change tag when a sync began. A write that lands

@@ -58,6 +58,18 @@ _install_licenses() {
   install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
 }
 
+# The package's background service and timer from <directory>, as systemd
+# user units. The timer is enabled for every user by the package itself, so
+# an update through pacman turns it on too; install.sh only starts it at
+# once instead of at the next login.
+_install_background_timer() {
+  local unit=$pkgname-background units="$pkgdir/usr/lib/systemd/user"
+  install -Dm644 "$1/$unit.service" "$units/$unit.service"
+  install -Dm644 "$1/$unit.timer" "$units/$unit.timer"
+  install -dm755 "$units/timers.target.wants"
+  ln -s "../$unit.timer" "$units/timers.target.wants/$unit.timer"
+}
+
 _package_gtk_app() {
   local app=${pkgname#icloud-} desktop=com.ferdousbhai.$1 binary
   cd "$srcdir/icloud-for-omarchy"
@@ -119,14 +131,9 @@ package_icloud-notes() {
   install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
   install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
   install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
-  # Background sync while the app is closed, enabled just below; install.sh
-  # only starts it at once instead of at the next login.
-  install -Dm644 data/icloud-notes-background.service "$pkgdir/usr/lib/systemd/user/icloud-notes-background.service"
-  install -Dm644 data/icloud-notes-background.timer "$pkgdir/usr/lib/systemd/user/icloud-notes-background.timer"
-  # Enabled for every user by the package itself, so an update through pacman
-  # turns it on too; it does nothing for a user with no cloned notes.
-  install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
-  ln -s ../icloud-notes-background.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-notes-background.timer"
+  # Background sync while the app is closed; it does nothing for a user
+  # with no cloned notes.
+  _install_background_timer data
 }
 
 package_icloud-drive() {
@@ -146,12 +153,7 @@ package_icloud-reminders() {
   depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme')
   _package_gtk_app IcloudReminders
   # Sync and due-time notifications every minute, window open or not.
-  install -Dm644 reminders/data/icloud-reminders-background.service "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.service"
-  install -Dm644 reminders/data/icloud-reminders-background.timer "$pkgdir/usr/lib/systemd/user/icloud-reminders-background.timer"
-  # Enabled for every user by the package itself, like Notes' background
-  # sync; install.sh only starts it at once instead of at the next login.
-  install -dm755 "$pkgdir/usr/lib/systemd/user/timers.target.wants"
-  ln -s ../icloud-reminders-background.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/icloud-reminders-background.timer"
+  _install_background_timer reminders/data
 }
 
 package_icloud-contacts() {

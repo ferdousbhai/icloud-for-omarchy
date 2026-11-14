@@ -98,9 +98,6 @@ pub trait Transport: Send + Sync {
     fn service_url(&self, key: &str) -> Result<String>;
     fn get_json(&self, url: &str) -> Result<Value>;
     fn post_json(&self, url: &str, body: &Value) -> Result<Value>;
-    /// The signed-in account's dsid, so a cache of another account's
-    /// contacts is never shown.
-    fn account(&self) -> Result<String>;
 }
 
 /// [`Transport`] over `icloud-session`. Connects lazily, so a missing
@@ -153,10 +150,6 @@ impl Transport for SessionTransport {
         let response = self.with(|s| s.post_json(url, body))?;
         parse(url, &response.body)
     }
-
-    fn account(&self) -> Result<String> {
-        self.with(|s| Ok(s.dsid().to_owned()))
-    }
 }
 
 /// The pair every call after `/co/startup` carries.
@@ -191,14 +184,6 @@ pub struct Fetched {
     /// The "me" card's contactId, when the account has one.
     pub me: Option<String>,
     pub cards: Vec<Map<String, Value>>,
-}
-
-/// One write's outcome: the card as saved (`None` after a delete) and the
-/// tokens to carry next.
-#[derive(Debug)]
-pub struct Written {
-    pub card: Option<Map<String, Value>>,
-    pub tokens: Tokens,
 }
 
 pub struct Client<'a> {
@@ -257,8 +242,14 @@ impl<'a> Client<'a> {
 
     /// Creates `card` (`method` `None`; the card carries its new
     /// `contactId`) or replaces it (`Some("PUT")`: whole, so a field left
-    /// out is removed, as of its `etag`).
-    pub fn write(&self, tokens: &Tokens, method: Option<&str>, card: &Map<String, Value>) -> Result<Written> {
+    /// out is removed, as of its `etag`). Answers the card as saved and the
+    /// tokens to carry next.
+    pub fn write(
+        &self,
+        tokens: &Tokens,
+        method: Option<&str>,
+        card: &Map<String, Value>,
+    ) -> Result<(Map<String, Value>, Tokens)> {
         let id = card
             .get("contactId")
             .and_then(Value::as_str)
@@ -267,7 +258,8 @@ impl<'a> Client<'a> {
         saved(&answer, id, tokens)
     }
 
-    pub fn delete(&self, tokens: &Tokens, id: &str, etag: &str) -> Result<Written> {
+    /// Deletes the card `id` as of its `etag`; answers the tokens to carry next.
+    pub fn delete(&self, tokens: &Tokens, id: &str, etag: &str) -> Result<Tokens> {
         let answer = self.card_call(tokens, Some("DELETE"), json!({ "contactId": id, "etag": etag }))?;
         refused(&answer, id)?;
         let deleted = answer["deletes"]["contactIds"]
@@ -278,10 +270,7 @@ impl<'a> Client<'a> {
                 "iCloud's answer does not list contact {id} as deleted"
             )));
         }
-        Ok(Written {
-            card: None,
-            tokens: tokens.after(&answer),
-        })
+        Ok(tokens.after(&answer))
     }
 }
 
@@ -301,7 +290,7 @@ fn refused(answer: &Value, id: &str) -> Result<()> {
 
 /// The card `id` in a write's answer: found by its id, since the answer is a
 /// changeset that may hold other cards too.
-fn saved(answer: &Value, id: &str, tokens: &Tokens) -> Result<Written> {
+fn saved(answer: &Value, id: &str, tokens: &Tokens) -> Result<(Map<String, Value>, Tokens)> {
     refused(answer, id)?;
     let card = answer["contacts"]
         .as_array()
@@ -309,10 +298,7 @@ fn saved(answer: &Value, id: &str, tokens: &Tokens) -> Result<Written> {
         .and_then(Value::as_object)
         .cloned()
         .ok_or_else(|| Error::BadResponse(format!("iCloud's answer has no contact {id}")))?;
-    Ok(Written {
-        card: Some(card),
-        tokens: tokens.after(answer),
-    })
+    Ok((card, tokens.after(answer)))
 }
 
 #[cfg(test)]
@@ -341,10 +327,10 @@ mod tests {
             pref: "p".into(),
             sync: "s1".into(),
         };
-        let w = saved(&answer, "MINE", &tokens).unwrap();
-        assert_eq!(w.card.unwrap()["firstName"], "Ann");
+        let (card, after) = saved(&answer, "MINE", &tokens).unwrap();
+        assert_eq!(card["firstName"], "Ann");
         assert_eq!(
-            w.tokens,
+            after,
             Tokens {
                 pref: "p".into(),
                 sync: "s2".into()

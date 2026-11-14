@@ -62,6 +62,13 @@ impl From<icloud_session::Error> for Error {
     }
 }
 
+/// A file of this computer's (the cache, the folder) that cannot be read or written.
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Other(e.to_string())
+    }
+}
+
 impl Error {
     /// CloudKit refused a write because the record changed on the server
     /// since its change tag was read.

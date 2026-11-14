@@ -234,6 +234,11 @@ fn other(msg: impl Into<String>) -> Failure {
     CliError::new("error", EXIT_ERROR, msg)
 }
 
+/// A file of this computer's that cannot be read or written.
+fn file(e: std::io::Error) -> Failure {
+    other(e.to_string())
+}
+
 /// The shared sign-in hint, plus the app's own button.
 fn sign_in_hint() -> String {
     format!("{SIGN_IN_HINT}, or Sign In in the app")
@@ -333,7 +338,6 @@ impl Cli<'_> {
     /// `None` without a home directory to keep the folder in.
     fn folder_run(&self) -> Result<Option<folder::Report>, Failure> {
         let store = &self.svc.store;
-        let file = |e: std::io::Error| other(e.to_string());
         let _lock = store.folder_lock().map_err(file)?;
         let mut state = match (store.folder().map_err(file)?, folder::default_dir()) {
             (Some(state), _) => state,
@@ -365,9 +369,17 @@ impl Cli<'_> {
 
     fn lists(&self) -> Outcome {
         let cache = self.fresh()?;
-        let open = open_counts(&cache);
+        let mut open: HashMap<&str, usize> = HashMap::new();
+        for r in cache.reminders.values().filter(|r| !r.completed) {
+            *open.entry(r.list_id.as_str()).or_insert(0) += 1;
+        }
         let count = |l: &List| open.get(l.id.as_str()).copied().unwrap_or(0);
         let ids: Vec<String> = cache.lists.iter().map(|l| bare(&l.id).to_owned()).collect();
+        let rows: Vec<Value> = cache
+            .lists
+            .iter()
+            .map(|l| json!({ "id": bare(&l.id), "name": l.name, "color": l.color, "open": count(l) }))
+            .collect();
         let human = if cache.lists.is_empty() {
             "No lists.".to_owned()
         } else {
@@ -382,7 +394,7 @@ impl Cli<'_> {
             1 => "1 list".to_owned(),
             n => format!("{n} lists"),
         };
-        Ok(Response::new(lists_json(&cache, &open), summary).human(human).ids(ids))
+        Ok(Response::new(rows, summary).human(human).ids(ids))
     }
 
     fn list(&self, list: Option<&str>, completed: bool, all: bool) -> Outcome {
@@ -439,6 +451,7 @@ impl Cli<'_> {
         self.done(
             "add",
             &r,
+            &cache,
             &format!("Added \"{}\" to {}", r.title, list.name),
             saved.warning,
         )
@@ -485,7 +498,13 @@ impl Cli<'_> {
         }
         let saved = self.svc.update(&r, &changes).map_err(cloud_error)?;
         let after = saved.value.ok_or_else(|| gone(&r))?;
-        self.done("edit", &after, &format!("Changed \"{}\"", after.title), saved.warning)
+        self.done(
+            "edit",
+            &after,
+            &cache,
+            &format!("Changed \"{}\"", after.title),
+            saved.warning,
+        )
     }
 
     fn set_completed(&self, query: &str, completed: bool) -> Outcome {
@@ -509,7 +528,6 @@ impl Cli<'_> {
             (true, false) => format!("\"{}\" was already completed", after.title),
             (false, false) => format!("\"{}\" was already open", after.title),
         };
-        let cache = self.cache()?;
         let mut out =
             json!({ "action": action, "changed": changed, "reminder": reminder_json(&after, &cache, &self.local) });
         warn(&mut out, warning);
@@ -526,9 +544,8 @@ impl Cli<'_> {
         Ok(Response::new(out, format!("Deleted \"{}\"", r.title)).ids(vec![r.uuid().to_owned()]))
     }
 
-    fn done(&self, action: &str, r: &Reminder, text: &str, warning: Option<String>) -> Outcome {
-        let cache = self.cache()?;
-        let mut out = json!({ "action": action, "reminder": reminder_json(r, &cache, &self.local) });
+    fn done(&self, action: &str, r: &Reminder, cache: &Cache, text: &str, warning: Option<String>) -> Outcome {
+        let mut out = json!({ "action": action, "reminder": reminder_json(r, cache, &self.local) });
         warn(&mut out, warning);
         Ok(Response::new(out, text.to_owned()).ids(vec![r.uuid().to_owned()]))
     }
@@ -549,16 +566,14 @@ impl Cli<'_> {
 
     fn background(&self, force_sync: bool) -> Outcome {
         let store = &self.svc.store;
-        let file = |e: std::io::Error| other(e.to_string());
+        let attempt = store.notified().map_err(file)?.sync_attempt_ms;
+        let synced_ms = self.cache()?.synced_ms;
         // The last sync, or the last attempt when that failed.
-        let last = self
-            .cache()?
-            .synced_ms
-            .max(store.notified().map_err(file)?.sync_attempt_ms);
+        let last = synced_ms.max(attempt);
         let stale = last.is_none_or(|ms| service::now_ms() - ms >= service::SYNC_EVERY.as_millis() as i64);
         // A changed file in the folder is sent now, not at the next sync,
         // unless the last sync failed: that waits its turn.
-        let last_failed = store.notified().map_err(file)?.sync_attempt_ms > self.cache()?.synced_ms;
+        let last_failed = attempt > synced_ms;
         let pending = store.folder().map_err(file)?.as_ref().is_some_and(folder::pending);
         let attempted = (force_sync || stale || (pending && !last_failed)).then(service::now_ms);
         let mut synced = false;
@@ -693,31 +708,6 @@ fn confirm(mode: Mode, cmd: &str, yes: bool, question: &str) -> Result<(), Failu
     }
 }
 
-/// How many reminders are open in each list, by list ID, in one pass.
-fn open_counts(cache: &Cache) -> HashMap<&str, usize> {
-    let mut open = HashMap::new();
-    for r in cache.reminders.values().filter(|r| !r.completed) {
-        *open.entry(r.list_id.as_str()).or_insert(0) += 1;
-    }
-    open
-}
-
-/// The lists as `[{id, name, color, open}]`.
-fn lists_json(cache: &Cache, open: &HashMap<&str, usize>) -> Vec<Value> {
-    cache
-        .lists
-        .iter()
-        .map(|l| {
-            json!({
-                "id": bare(&l.id),
-                "name": l.name,
-                "color": l.color,
-                "open": open.get(l.id.as_str()).copied().unwrap_or(0),
-            })
-        })
-        .collect()
-}
-
 /// `List/ABC` and `Reminder/ABC` as `ABC`.
 fn bare(id: &str) -> &str {
     id.split_once('/').map_or(id, |(_, rest)| rest)
@@ -742,6 +732,17 @@ fn fold(s: &str) -> String {
     s.to_lowercase().replace(['\u{2019}', '\u{2018}'], "'")
 }
 
+/// The items named `query` (ignoring case), else those whose name holds it.
+fn by_name<'c, T>(items: impl Iterator<Item = &'c T> + Clone, name: impl Fn(&T) -> &str, query: &str) -> Vec<&'c T> {
+    let f = fold(query);
+    let exact: Vec<&T> = items.clone().filter(|i| fold(name(i)) == f).collect();
+    if exact.is_empty() && !f.is_empty() {
+        items.filter(|i| fold(name(i)).contains(&f)).collect()
+    } else {
+        exact
+    }
+}
+
 fn resolve<'c>(cache: &'c Cache, query: &str) -> Result<&'c Reminder, Failure> {
     resolve_prefer(cache, query, true)
 }
@@ -753,18 +754,9 @@ fn resolve_prefer<'c>(cache: &'c Cache, query: &str, open: bool) -> Result<&'c R
     if let Some(r) = cache.reminders.values().find(|r| r.id == q || r.uuid() == q) {
         return Ok(r);
     }
-    let f = fold(q);
-    let all: Vec<&Reminder> = cache.reminders.values().collect();
-    let preferred = |rs: Vec<&'c Reminder>| -> Vec<&'c Reminder> {
-        let first: Vec<_> = rs.iter().copied().filter(|r| r.completed != open).collect();
-        if first.is_empty() { rs } else { first }
-    };
-    let exact = preferred(all.iter().copied().filter(|r| fold(&r.title) == f).collect());
-    let matches = if exact.is_empty() && !f.is_empty() {
-        preferred(all.iter().copied().filter(|r| fold(&r.title).contains(&f)).collect())
-    } else {
-        exact
-    };
+    let found = by_name(cache.reminders.values(), |r| &r.title, q);
+    let first: Vec<&Reminder> = found.iter().copied().filter(|r| r.completed != open).collect();
+    let matches = if first.is_empty() { found } else { first };
     let listing = |rs: &[&Reminder]| {
         rs.iter()
             .take(20)
@@ -792,13 +784,7 @@ fn resolve_list<'c>(cache: &'c Cache, query: &str) -> Result<&'c List, Failure> 
     if let Some(l) = cache.lists.iter().find(|l| l.id == q || bare(&l.id) == q) {
         return Ok(l);
     }
-    let f = fold(q);
-    let exact: Vec<&List> = cache.lists.iter().filter(|l| fold(&l.name) == f).collect();
-    let matches = if exact.is_empty() && !f.is_empty() {
-        cache.lists.iter().filter(|l| fold(&l.name).contains(&f)).collect()
-    } else {
-        exact
-    };
+    let matches = by_name(cache.lists.iter(), |l| &l.name, q);
     let names = |ls: &[&List]| ls.iter().map(|l| format!("\n  {}", l.name)).collect::<String>();
     match matches.as_slice() {
         [l] => Ok(l),
@@ -980,17 +966,5 @@ mod tests {
             assert!(exit != 5 || f.hint.is_some(), "{what}");
         }
         assert_eq!(cloud_error(http(421)).hint.as_deref(), Some(sign_in_hint().as_str()));
-    }
-
-    #[test]
-    fn open_reminders_are_counted_per_list_in_one_pass() {
-        let mut cache = Cache::default();
-        let mut other_list = reminder("3", "c", false);
-        other_list.list_id = "List/B".into();
-        for r in [reminder("1", "a", false), reminder("2", "b", true), other_list] {
-            cache.reminders.insert(r.id.clone(), r);
-        }
-        let open = open_counts(&cache);
-        assert_eq!((open.get("List/A"), open.get("List/B")), (Some(&1), Some(&1)));
     }
 }

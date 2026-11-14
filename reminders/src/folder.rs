@@ -74,8 +74,6 @@ pub struct Item {
     /// As [`due::Due::display`] writes it: a date, or a date and time.
     pub due: Option<String>,
     pub notes: String,
-    /// Written under another reminder, as its subtask.
-    pub sub: bool,
 }
 
 /// An item of a file and the reminder it is.
@@ -144,10 +142,6 @@ pub struct Delta {
     pub deletes: Vec<String>,
 }
 
-fn io_err(e: io::Error) -> Error {
-    Error::Other(e.to_string())
-}
-
 /// `[ ] text` or `[x] text`, with or without a bullet before it.
 fn checkbox(body: &str) -> Option<(bool, &str)> {
     let rest = bullet(body).unwrap_or(body);
@@ -175,14 +169,13 @@ fn split_due<'a>(text: &'a str, now: &Zoned) -> (&'a str, Option<String>) {
     (text, None)
 }
 
-fn item(done: bool, text: &str, sub: bool, now: &Zoned) -> Option<Item> {
+fn item(done: bool, text: &str, now: &Zoned) -> Option<Item> {
     let (title, due) = split_due(text.trim(), now);
     (!title.is_empty()).then(|| Item {
         done,
         title: title.to_owned(),
         due,
         notes: String::new(),
-        sub,
     })
 }
 
@@ -210,10 +203,10 @@ pub fn parse(text: &str, now: &Zoned) -> Vec<Item> {
                 continue;
             }
             let (done, text) = checkbox(body).unwrap_or((false, bullet(body).unwrap_or(body)));
-            items.extend(item(done, text, false, now));
+            items.extend(item(done, text, now));
         } else if let Some((done, text)) = checkbox(body) {
             blanks = 0;
-            items.extend(item(done, text, true, now));
+            items.extend(item(done, text, now));
         } else {
             let last = items.last_mut().expect("checked above");
             // A note that reads as a checkbox is written with a backslash.
@@ -589,7 +582,7 @@ fn apply(
 /// One list: the file's changes to iCloud, then iCloud's state to the file.
 fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, report: &mut Report) -> Result<()> {
     let path = dir.join(&ls.file);
-    let on_disk = read(&path).map_err(io_err)?;
+    let on_disk = read(&path)?;
     // Not ours yet: a file already there (from another computer, or from
     // before the data directory was cleared) is compared with iCloud as it is, and only adds.
     let first = !ls.adopted;
@@ -628,14 +621,14 @@ fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, 
     }
 
     for copy in conflict_copies(dir, &ls.file) {
-        let Some(text) = read(&copy).map_err(io_err)? else {
+        let Some(text) = read(&copy)? else {
             continue;
         };
         let delta = from_conflict_copy(&base, &parse(&text, now));
         let applied = apply(svc, list, delta, &mut base, now, report);
         ls.items = base.clone();
         applied?;
-        fs::remove_file(&copy).map_err(io_err)?;
+        fs::remove_file(&copy)?;
     }
 
     let cache = svc.cache()?;
@@ -644,14 +637,14 @@ fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, 
     };
     let (text, ids) = render(list, &cache, now);
     let items = known(&text, ids, now).map_err(Error::Other)?;
-    let current = read(&path).map_err(io_err)?;
+    let current = read(&path)?;
     if current.as_deref() != Some(text.as_str()) {
         if current != on_disk {
             // The file changed while this ran: its changes are for the next
             // run, against the file as it was read here.
             return Ok(());
         }
-        write(&path, &text).map_err(io_err)?;
+        write(&path, &text)?;
         report.written.push(ls.file.clone());
     }
     ls.text = text;
@@ -669,7 +662,7 @@ pub fn sync(svc: &Service, state: &mut State, now: &Zoned) -> Result<Report> {
     if cache.synced_ms.is_none() {
         return Ok(report);
     }
-    fs::create_dir_all(&state.dir).map_err(io_err)?;
+    fs::create_dir_all(&state.dir)?;
 
     // A list gone from iCloud: its file goes too, unless it was changed.
     let gone: Vec<String> = state
@@ -681,8 +674,8 @@ pub fn sync(svc: &Service, state: &mut State, now: &Zoned) -> Result<Report> {
     for id in gone {
         let ls = state.lists.remove(&id).expect("listed above");
         let path = state.dir.join(&ls.file);
-        if read(&path).map_err(io_err)?.is_some_and(|text| text == ls.text) {
-            fs::remove_file(&path).map_err(io_err)?;
+        if read(&path)?.is_some_and(|text| text == ls.text) {
+            fs::remove_file(&path)?;
         }
     }
 
@@ -766,7 +759,7 @@ mod tests {
             .enumerate()
             .map(|(i, t)| Known {
                 id: format!("Reminder/{i}"),
-                item: item(false, t, false, &now()).unwrap(),
+                item: item(false, t, &now()).unwrap(),
             })
             .collect()
     }
@@ -799,7 +792,6 @@ mod tests {
         let read = known(&text, ids, &now).unwrap();
         assert_eq!(read[1].item.due.as_deref(), Some("2026-11-18 09:00"));
         assert_eq!(read[1].item.notes, "First line\n\n- [ ] not a subtask\nindented");
-        assert!(read[2].item.sub && !read[1].item.sub);
         assert!(read[3].item.done);
         // Written again from what was read, nothing asks for a change.
         assert_eq!(diff(&read, &items(&text), &now), Delta::default());

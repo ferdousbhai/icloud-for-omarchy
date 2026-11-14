@@ -26,9 +26,10 @@ REPO=icloud-for-omarchy
 RELEASES=${ICLOUD_RELEASES:-https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download}
 SIGNING_KEY_FINGERPRINT=52130299581DAD685226900CA89CA1A6A1E74251
 PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts)
-# What a run with no arguments installs. bin/make-installers rewrites this
-# one line for the per-app installers.
-DEFAULT_PACKAGES=(icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts)
+# What a run with no arguments installs: every app, which is all but
+# icloud-session. bin/make-installers rewrites this one line for the
+# per-app installers.
+DEFAULT_PACKAGES=("${PACKAGES[@]:1}")
 # Repositories of earlier releases: Notes had one of its own.
 OLD_REPOS=(icloud-notes)
 
@@ -176,13 +177,10 @@ start_timer() {
 # Everything runs from main, called on the last line, so a download cut
 # short while piped into bash runs nothing at all.
 main() {
-  local pkg wanted=("$@")
+  local pkg sudo='' wanted=("$@")
+  (( EUID == 0 )) || sudo=sudo
   if ! command -v pacman >/dev/null; then
     echo "pacman not found: this installer is for Omarchy and other Arch Linux systems." >&2
-    exit 1
-  fi
-  if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
-    echo "This copy of install.sh has no signing key pinned; nothing was changed." >&2
     exit 1
   fi
 
@@ -220,11 +218,7 @@ main() {
     # every repository's database, and installing from those without upgrading
     # is Arch's unsupported partial upgrade: a new dependency can need newer
     # libraries than the ones installed.
-    if (( EUID == 0 )); then
-      pacman -Syu --needed --noconfirm "${wanted[@]}"
-    else
-      sudo pacman -Syu --needed --noconfirm "${wanted[@]}"
-    fi
+    $sudo pacman -Syu --needed --noconfirm "${wanted[@]}"
   fi
 
   if [[ " ${wanted[*]} " == *" icloud-notes "* ]]; then

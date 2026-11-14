@@ -1,10 +1,9 @@
 //! What this computer keeps, in `~/.local/share/icloud-contacts/`:
 //!
 //! - `cache.json`: the contacts as last synced (each card whole, as iCloud
-//!   sent it), the "me" card's id, the tokens writes carry, and the account
-//!   (dsid) they belong to. Only a cache: iCloud holds the contacts, and a
-//!   sync rebuilds it. No credentials: the iCloud session is
-//!   icloud-session's, fetched over D-Bus per request.
+//!   sent it), the "me" card's id and the tokens writes carry. Only a cache:
+//!   iCloud holds the contacts, and a sync rebuilds it. No credentials: the
+//!   iCloud session is icloud-session's, fetched over D-Bus per request.
 //! - `lock`: `flock`ed around every read-modify-write of the cache, so the
 //!   window and the command line never interleave.
 //!
@@ -26,13 +25,9 @@ const CACHE_VERSION: u32 = 1;
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Cache {
     pub version: u32,
-    /// The dsid the cache belongs to.
-    pub account: String,
     pub tokens: Option<Tokens>,
     /// The "me" card's contactId.
     pub me: Option<String>,
-    /// When the last sync finished (Unix ms).
-    pub synced_ms: Option<i64>,
     /// Sorted as Contacts sorts them (last name, first name).
     pub contacts: Vec<Contact>,
 }

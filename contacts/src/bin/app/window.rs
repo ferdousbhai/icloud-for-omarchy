@@ -236,7 +236,7 @@ impl Window {
             },
             move |result| {
                 let Some(this) = weak.upgrade() else { return };
-                match result {
+                let problem = match result {
                     Ok(Ok((out, cache))) => {
                         match cache {
                             Ok(cache) => *this.cache.borrow_mut() = cache,
@@ -244,20 +244,19 @@ impl Window {
                         }
                         done(&this, out);
                         this.show_list();
+                        return;
                     }
                     Ok(Err(Error::SignInRequired)) => {
                         this.banner.show();
-                        failed(&this);
+                        None
                     }
-                    Ok(Err(e)) => {
-                        this.toast(&e.to_string());
-                        failed(&this);
-                    }
-                    Err(e) => {
-                        this.toast(&e);
-                        failed(&this);
-                    }
+                    Ok(Err(e)) => Some(e.to_string()),
+                    Err(e) => Some(e),
+                };
+                if let Some(problem) = problem {
+                    this.toast(&problem);
                 }
+                failed(&this);
             },
         );
     }
@@ -291,13 +290,14 @@ impl Window {
 
     /// The add (`None`) or edit dialog.
     fn edit(self: &Rc<Self>, contact: Option<Contact>) {
-        let draft = contact.as_ref().map(Draft::of).unwrap_or_default();
-        self.edit_draft(contact, draft);
+        self.edit_draft(contact, None);
     }
 
-    /// The dialog filled from `draft`: the contact's values, or what was
-    /// typed before a save that failed.
-    fn edit_draft(self: &Rc<Self>, contact: Option<Contact>, draft: Draft) {
+    /// The dialog filled from the contact's values, or from `draft`: what
+    /// was typed before a save that failed.
+    fn edit_draft(self: &Rc<Self>, contact: Option<Contact>, draft: Option<Draft>) {
+        let before = contact.as_ref().map(Draft::of).unwrap_or_default();
+        let draft = draft.unwrap_or_else(|| before.clone());
         let heading = if contact.is_some() {
             "Edit Contact"
         } else {
@@ -431,7 +431,6 @@ impl Window {
         }
         validate();
 
-        let before = contact.as_ref().map(Draft::of).unwrap_or_default();
         let weak = Rc::downgrade(self);
         dialog.connect_response(Some("save"), move |_, _| {
             let Some(this) = weak.upgrade() else { return };
@@ -439,7 +438,7 @@ impl Window {
             let changes = typed.changes(&before);
             let retry = {
                 let (contact, typed) = (contact.clone(), typed.clone());
-                move |this: &Rc<Window>| this.edit_draft(contact, typed)
+                move |this: &Rc<Window>| this.edit_draft(contact, Some(typed))
             };
             match contact.clone() {
                 None => this.write(

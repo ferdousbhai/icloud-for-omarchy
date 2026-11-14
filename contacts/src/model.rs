@@ -364,9 +364,6 @@ impl Contact {
     /// in a phone number's digits.
     pub fn matches(&self, query: &str) -> bool {
         let q = fold(query.trim());
-        if q.is_empty() {
-            return true;
-        }
         let texts = [
             self.display_name(),
             self.person_name(),

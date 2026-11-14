@@ -130,7 +130,6 @@ fn run_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
         .env("TZ", "UTC")
         .env("PATH", path)
         .env_remove("OMARCHY_PATH")
-        .env("FAKE_REMINDERS_QUIET", "1")
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
         .stdin(Stdio::null())
         .output()

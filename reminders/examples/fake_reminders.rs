@@ -30,7 +30,6 @@ struct Zone {
     /// By recordName; `seq` orders changes (the sync token is a seq).
     records: BTreeMap<String, Stored>,
     seq: u64,
-    tags: u64,
 }
 
 /// One server's state.
@@ -126,8 +125,7 @@ impl State {
     pub fn put(&self, mut record: Value) {
         let mut z = self.zone.lock().unwrap();
         z.seq += 1;
-        z.tags += 1;
-        record["recordChangeTag"] = json!(format!("tag-{}", z.tags));
+        record["recordChangeTag"] = json!(format!("tag-{}", z.seq));
         let name = record["recordName"].as_str().unwrap().to_owned();
         let seq = z.seq;
         z.records.insert(name, Stored { seq, record });
@@ -268,8 +266,7 @@ impl State {
                 fields.insert(k, v);
             }
             z.seq += 1;
-            z.tags += 1;
-            stored["recordChangeTag"] = json!(format!("tag-{}", z.tags));
+            stored["recordChangeTag"] = json!(format!("tag-{}", z.seq));
             // CloudKit's own record times, as every record carries them.
             let now = json!({ "timestamp": icloud_session::time::now_ms(), "userRecordName": "_fake" });
             if stored.get("created").is_none() {
@@ -357,13 +354,11 @@ fn handle(mut request: tiny_http::Request, state: &State) -> std::io::Result<()>
     request.as_reader().read_to_end(&mut body)?;
     let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let (status, reply) = state.route(request.url(), &sent);
-    if std::env::var_os("FAKE_REMINDERS_QUIET").is_none() {
-        eprintln!(
-            "{} {} -> {status}",
-            request.method(),
-            request.url().split('?').next().unwrap_or("")
-        );
-    }
+    eprintln!(
+        "{} {} -> {status}",
+        request.method(),
+        request.url().split('?').next().unwrap_or("")
+    );
     let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("header");
     let data = if reply.is_null() {
         Vec::new()
