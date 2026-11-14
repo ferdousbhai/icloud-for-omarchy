@@ -6,6 +6,9 @@
 //! The pull runs whatever the push did, except when the push found the
 //! sign-in gone (every request would be refused the same way) or iCloud out
 //! of reach (the pull would only fail again; the next sync retries both).
+//! When the push refused a move because the note changed in iCloud since
+//! the last pull, the push runs again after the pull has merged that change,
+//! and its entries take the refused move's place in the push half.
 
 use std::path::Path;
 
@@ -83,10 +86,38 @@ pub fn run_sync_with(
         dry_run: false,
         ..*options
     };
-    let push = push::run_push_with(&shared, target_dir, on_status, &options);
+    let mut push = push::run_push_with(&shared, target_dir, on_status, &options);
     let pull = match &push {
         Err(error) if push_error_skips_pull(error) => None,
         _ => Some(pull::run_pull_with(&shared, target_dir, progress, on_status)),
     };
+    // A move the push refused because the note changed in iCloud since the
+    // last pull: the pull has merged that change into the moved file and
+    // brought the note's change tag up to date, so the move goes now rather
+    // than a sync later. A plain push keeps the refusal.
+    if let (Ok(first), Some(Ok(_))) = (&mut push, &pull)
+        && first.entries.iter().any(|e| is_move_changed_remotely(&e.entry))
+    {
+        match push::run_push_with(&shared, target_dir, on_status, &options) {
+            Ok(second) => {
+                first.entries.retain(|e| !is_move_changed_remotely(&e.entry));
+                first.entries.extend(second.entries);
+                first.pushed = Some(first.pushed.unwrap_or(0) + second.pushed.unwrap_or(0));
+                first.unchanged = second.unchanged;
+                for notice in second.notices {
+                    if !first.notices.contains(&notice) {
+                        first.notices.push(notice);
+                    }
+                }
+            }
+            Err(error) => push = Err(error),
+        }
+    }
     SyncOutcome { push, pull }
+}
+
+/// A move refused as changed remotely since the last pull.
+fn is_move_changed_remotely(entry: &super::plan::PlanEntry) -> bool {
+    entry.kind == super::plan::PlanEntryKind::Move
+        && entry.reason.as_deref() == Some(super::plan::Refusal::MoveChangedRemotely.reason().as_str())
 }

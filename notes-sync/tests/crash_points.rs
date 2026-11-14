@@ -1852,3 +1852,34 @@ fn a_migration_from_layout_2_cut_short_anywhere_is_finished_by_the_next_run() {
 fn a_migration_from_layout_3_cut_short_anywhere_is_finished_by_the_next_run() {
     migration_cut_short_anywhere(3);
 }
+
+/// A note renamed here and edited in iCloud: the push refuses the move
+/// (changed since the last pull), the pull merges the edit into the renamed
+/// file, and the sync then pushes the move, where it used to wait for the
+/// next sync. A push by itself still refuses it.
+#[test]
+fn a_note_renamed_here_and_edited_in_icloud_is_moved_and_merged_in_one_sync() {
+    let start = retitled_both_sides();
+    let id = "E0000000-0000-4000-8000-000000000007";
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let pushed = run(&fake, &place, "push", &Crash::default());
+    let result: Value = serde_json::from_slice(&pushed.stdout).unwrap();
+    let refused = result["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["file"] == "Notes/Extra seven.md" && e["resolution"] == "conflict");
+    assert!(refused, "{}", says(&pushed));
+
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let synced = run(&fake, &place, "sync", &Crash::default());
+    succeeded(&synced, "sync");
+    assert_eq!(tracked_file(&place, id), "Notes/Extra seven.md", "{}", says(&synced));
+    let record = fake.zone().live(id).unwrap().clone();
+    assert!(body_of(&record).starts_with("Extra seven\n"), "{}", body_of(&record));
+    assert!(body_of(&record).contains("remote line"));
+    let text = std::fs::read_to_string(place.vault.join("Notes/Extra seven.md")).unwrap();
+    assert!(text.contains("remote line"), "{text}");
+}

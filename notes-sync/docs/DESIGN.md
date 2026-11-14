@@ -98,7 +98,12 @@ keeps its conflict backups in `stateDir`.
 `sync` (`src/cmd/sync.rs`) is push then pull in one run, over one connection
 (`remote::SharedConnector`), under one lock: what the app runs on every tick.
 The pull runs whatever the push did, except after a sign-in required or a
-network error. Its data holds both results plus vault-info's answer, a
+network error. A move the push refused because the note changed in iCloud
+since the last pull ("changed remotely since the last pull") is pushed
+after the pull, which merged that change into the moved file: the push
+runs again, and its entries take the refused move's place in the push
+half, so a note renamed here and edited elsewhere is settled in one sync
+(it took two up to 0.11.1). A `push` by itself still refuses it. Its data holds both results plus vault-info's answer, a
 failed half's error included (no separate error object); the process exits
 with the worse half (`Response::exit`).
 icloud-session's `Offline` and `Network` errors are the errors `offline` and
