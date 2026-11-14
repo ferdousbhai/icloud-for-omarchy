@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 
 const DB: &str = "/database/1/com.apple.photos.cloud/production/private/";
 const PAGE_PAIRS: usize = 50;
+/// What stands in for a video's bytes.
+const MOVIE: &[u8] = b"not really a movie";
 /// 2026-09-20T12:00:00Z.
 const NEWEST_MS: i64 = 1_789_905_600_000;
 
@@ -242,6 +244,14 @@ impl State {
                            "downloadURL": format!("{}/content/{kind}/{i}", self.base) }, "type": "ASSETID" })
     }
 
+    /// The original's size in bytes, as its record says and as it is served.
+    fn original_size(&self, i: usize) -> i64 {
+        match &self.assets[i].uploaded {
+            Some(bytes) => bytes.len() as i64,
+            None => 400_000 + i as i64 * 1000,
+        }
+    }
+
     fn asset_record(&self, i: usize) -> Value {
         let a = &self.assets[i];
         json!({
@@ -262,7 +272,7 @@ impl State {
         let mut fields = json!({
             "filenameEnc": { "value": b64, "type": "ENCRYPTED_BYTES" },
             "itemType": { "value": a.uti, "type": "STRING" },
-            "resOriginalRes": self.res("orig", i, 2_000_000 + i as i64 * 1000),
+            "resOriginalRes": self.res("orig", i, self.original_size(i)),
             "resOriginalFileType": { "value": a.uti, "type": "STRING" },
             "resOriginalWidth": { "value": a.w, "type": "INT64" },
             "resOriginalHeight": { "value": a.h, "type": "INT64" },
@@ -277,7 +287,7 @@ impl State {
             f.remove("resJPEGMedFileType");
         }
         if a.live {
-            fields["resOriginalVidComplRes"] = self.res("live", i, 400_000);
+            fields["resOriginalVidComplRes"] = self.res("live", i, MOVIE.len() as i64);
             fields["resOriginalVidComplFileType"] = json!({ "value": "com.apple.quicktime-movie", "type": "STRING" });
         }
         if a.video {
@@ -512,15 +522,25 @@ impl State {
             "thumb" => ("thumb", 320, 240),
             "med" => ("med", 1024, 768),
             "orig" => ("orig", 1600, 1200),
-            "live" | "vsmall" => return Some(Arc::new(b"not really a movie".to_vec())),
+            "live" | "vsmall" => return Some(Arc::new(MOVIE.to_vec())),
             _ => return None,
         };
         let (w, h) = if a.h > a.w { (h, w) } else { (w, h) };
         let hue = a.hue;
+        // An original is as long as its record says (bytes after a JPEG's
+        // end are ignored by whatever reads it).
+        let size = (kind == "orig").then(|| self.original_size(i) as usize);
         Some(
             self.jpegs
                 .entry((i, kind))
-                .or_insert_with(|| Arc::new(jpeg(w, h, hue, i)))
+                .or_insert_with(|| {
+                    let mut bytes = jpeg(w, h, hue, i);
+                    if let Some(size) = size {
+                        assert!(bytes.len() <= size, "a {}-byte original", bytes.len());
+                        bytes.resize(size, 0);
+                    }
+                    Arc::new(bytes)
+                })
                 .clone(),
         )
     }

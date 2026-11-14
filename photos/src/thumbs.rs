@@ -7,6 +7,9 @@
 //! a private temp name that is then moved into place without replacing
 //! anything: names are reserved under a lock, checked against the catalog and
 //! the disk, and a file that appears meanwhile only moves ours to the next name.
+//! A file already there under the original's name and of its exact size,
+//! which the catalog has for no asset, is an earlier download the catalog
+//! lost: it is recorded, not downloaded again ([`unrecorded`]).
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::io;
@@ -138,20 +141,30 @@ fn original(t: &dyn Transport, cat: &Catalog, targets: &Targets, mut row: Row, p
     let photo = match row.local_path.clone().filter(|p| p.exists()) {
         Some(p) => p,
         None => {
-            let dest = {
+            // The file to download to, unless an earlier download left it.
+            let (dest, have) = {
                 let mut taken = reserved();
-                let (photo, live) = plan_original(cat, &targets.library, &row, &taken)?;
+                let names = (1..10_000).map(|n| original_names(&targets.library, &row, n));
+                let have = unrecorded(cat, &row, &taken, row.size, names)?;
+                let (photo, live) = match &have {
+                    Some(photo) => (photo.clone(), None),
+                    None => plan_original(cat, &targets.library, &row, &taken)?,
+                };
                 hold.add(&mut taken, photo.clone());
                 if let Some(live) = live {
                     hold.add(&mut taken, live);
                 }
-                photo
+                (photo, have.is_some())
             };
-            let tmp = Temp::beside(&dest)?;
-            download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?;
-            let photo = settle(tmp, dest, &mut hold, |taken| {
-                Ok(plan_original(cat, &targets.library, &row, taken)?.0)
-            })?;
+            let photo = if have {
+                dest
+            } else {
+                let tmp = Temp::beside(&dest)?;
+                download_fresh(t, cat, &mut row, |r| r.orig_url.as_ref(), Job::Original, &tmp.0, peers)?;
+                settle(tmp, dest, &mut hold, |taken| {
+                    Ok(plan_original(cat, &targets.library, &row, taken)?.0)
+                })?
+            };
             cat.set_path(&row.id, PathKind::Original, Some(&photo))?;
             row.local_path = Some(photo.clone());
             photo
@@ -253,20 +266,63 @@ fn live(
     mut hold: Reservation,
     peers: Peers,
 ) -> Result<PathBuf> {
-    let dest = {
+    let (dest, have) = {
         let mut taken = reserved();
         // The photo is in the catalog now; re-plan the video with the lock held.
         hold.release(&mut taken);
-        let dest = plan_live(cat, row, photo, &taken)?;
+        let names = (1..10_000).map(|n| (live_name(row, photo, n), None));
+        let have = unrecorded(
+            cat,
+            row,
+            &taken,
+            row.live_size,
+            names.filter(|(video, _)| video != photo),
+        )?;
+        let dest = match &have {
+            Some(video) => video.clone(),
+            None => plan_live(cat, row, photo, &taken)?,
+        };
         hold.add(&mut taken, dest.clone());
-        dest
+        (dest, have.is_some())
     };
-    let tmp = Temp::beside(&dest)?;
-    download_fresh(t, cat, row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?;
-    let live = settle(tmp, dest, &mut hold, |taken| plan_live(cat, row, photo, taken))?;
+    let live = if have {
+        dest
+    } else {
+        let tmp = Temp::beside(&dest)?;
+        download_fresh(t, cat, row, |r| r.live_url.as_ref(), Job::Original, &tmp.0, peers)?;
+        settle(tmp, dest, &mut hold, |taken| plan_live(cat, row, photo, taken))?
+    };
     cat.set_path(&row.id, PathKind::Live, Some(&live))?;
     row.live_path = Some(live.clone());
     Ok(live)
+}
+
+/// The file an earlier download of this asset left in the library without
+/// the catalog knowing of it (the catalog was deleted since, or the download
+/// was cut off before its path was recorded), so that it is recorded instead
+/// of downloaded again as " (2)": among `names` (the file's own, then the
+/// numbered ones, each with the name that goes with it, while any is in
+/// use), the first file of `size` bytes, the size iCloud reports, that no
+/// other asset and no running download has. A file of another size is
+/// somebody else's: never touched, never recorded.
+fn unrecorded(
+    cat: &Catalog,
+    row: &Row,
+    taken: &BTreeSet<PathBuf>,
+    size: i64,
+    names: impl Iterator<Item = (PathBuf, Option<PathBuf>)>,
+) -> Result<Option<PathBuf>> {
+    if size <= 0 {
+        return Ok(None);
+    }
+    let in_use = |(file, pair): &(PathBuf, Option<PathBuf>)| file.exists() || pair.as_ref().is_some_and(|p| p.exists());
+    for (file, _) in names.take_while(in_use) {
+        let same_size = std::fs::symlink_metadata(&file).is_ok_and(|m| m.is_file() && m.len() == size as u64);
+        if same_size && !taken.contains(&file) && !cat.path_taken(&file, &row.id)? {
+            return Ok(Some(file));
+        }
+    }
+    Ok(None)
 }
 
 /// Download `url_of(row)` to `dest`; on an expired URL, refresh `row` (and
@@ -501,14 +557,8 @@ fn original_names(library: &Path, row: &Row, n: u32) -> (PathBuf, Option<PathBuf
 /// The video of a Live Photo whose photo is saved at `photo`: the photo's
 /// stem with the video's extension, numbered if that is taken.
 fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) -> Result<PathBuf> {
-    let dir = photo.parent().unwrap_or(Path::new("."));
-    let stem = photo
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "photo".into());
-    let ext = live_ext(row.live_type.as_deref());
     for n in 1..10_000 {
-        let candidate = numbered(dir, &stem, n, ext);
+        let candidate = live_name(row, photo, n);
         if candidate != photo && is_free(cat, row, taken, &candidate)? {
             return Ok(candidate);
         }
@@ -517,6 +567,16 @@ fn plan_live(cat: &Catalog, row: &Row, photo: &Path, taken: &BTreeSet<PathBuf>) 
         "no free name for the video of {}",
         photo.display()
     )))
+}
+
+/// The `n`th name for the video of a Live Photo saved at `photo`.
+fn live_name(row: &Row, photo: &Path, n: u32) -> PathBuf {
+    let dir = photo.parent().unwrap_or(Path::new("."));
+    let stem = photo
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "photo".into());
+    numbered(dir, &stem, n, live_ext(row.live_type.as_deref()))
 }
 
 /// The longest file name Linux takes, in bytes.

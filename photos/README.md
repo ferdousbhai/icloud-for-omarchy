@@ -109,6 +109,10 @@ and error codes and the JSON shapes are in the
 | preferences | `~/.config/icloud-photos/settings.json` |
 
 Deleting the cache or the catalog is safe: the next sync fetches them again.
+Originals already in the folder are not downloaded a second time: a file
+with the photo's name and exactly the size iCloud reports is taken to be
+its download and recorded again. A file of that name with any other size is
+left alone, and the download goes beside it as `IMG_0001 (2).HEIC`.
 
 **Upgrading**: originals used to go to
 `~/Pictures/icloud-photos/`. The first start after the update (app or

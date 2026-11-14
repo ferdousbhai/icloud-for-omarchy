@@ -73,11 +73,13 @@ fn an_old_catalog_gains_the_path_indexes_and_keeps_its_rows() {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP INDEX assets_by_local_path; DROP INDEX assets_by_live_path;
-             DROP INDEX assets_by_medium_path;",
+             DROP INDEX assets_by_medium_path; ALTER TABLE assets DROP COLUMN live_size;",
         )
         .unwrap();
     }
     let cat = Catalog::open(&path).unwrap();
+    // The video's size, a later column, is not known (0) until a sync brings it.
+    assert_eq!(cat.asset("A").unwrap().unwrap().live_size, 0);
     assert!(cat.path_taken(Path::new("/lib/A.JPG"), "B").unwrap());
     assert!(!cat.path_taken(Path::new("/lib/A.JPG"), "A").unwrap());
     drop(cat);

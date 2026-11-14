@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS assets(
   deleted INTEGER NOT NULL DEFAULT 0,
   change_tag TEXT NULL,
   orig_url TEXT NULL, orig_type TEXT NULL,
-  thumb_url TEXT NULL, medium_url TEXT NULL, live_url TEXT NULL, live_type TEXT NULL
+  thumb_url TEXT NULL, medium_url TEXT NULL, live_url TEXT NULL, live_type TEXT NULL,
+  live_size INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS assets_by_date ON assets(deleted, created DESC);
 CREATE INDEX IF NOT EXISTS assets_by_master ON assets(master_id);
@@ -61,6 +62,22 @@ CREATE INDEX IF NOT EXISTS assets_by_medium_path ON assets(medium_path) WHERE me
 /// Create the tables and indexes; an older catalog gains what it lacks.
 fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)?;
+    // The Live Photo video's size came later; 0 (not known) until a sync
+    // brings the master again.
+    let has_live_size = || {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('assets') WHERE name = 'live_size')",
+            [],
+            |r| r.get::<_, bool>(0),
+        )
+    };
+    if !has_live_size()?
+        && let Err(e) = conn.execute("ALTER TABLE assets ADD COLUMN live_size INTEGER NOT NULL DEFAULT 0", [])
+        // Another connection may have added it meanwhile.
+        && !has_live_size()?
+    {
+        return Err(e);
+    }
     conn.set_prepared_statement_cache_capacity(32);
     Ok(())
 }
@@ -89,6 +106,9 @@ pub struct Row {
     pub medium_url: Option<String>,
     pub live_url: Option<String>,
     pub live_type: Option<String>,
+    /// The Live Photo video's size in bytes as iCloud reports it; 0 when
+    /// not known.
+    pub live_size: i64,
 }
 
 impl Row {
@@ -99,7 +119,8 @@ impl Row {
 }
 
 const ROW_COLUMNS: &str = "id, master_id, filename, created, size, w, h, kind, is_live, local_path, live_path, \
-    thumb_path, medium_path, deleted, change_tag, orig_url, orig_type, thumb_url, medium_url, live_url, live_type";
+    thumb_path, medium_path, deleted, change_tag, orig_url, orig_type, thumb_url, medium_url, live_url, live_type, \
+    live_size";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
     let path = |i: usize| r.get::<_, Option<String>>(i).map(|p| p.map(PathBuf::from));
@@ -125,6 +146,7 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
         medium_url: r.get(18)?,
         live_url: r.get(19)?,
         live_type: r.get(20)?,
+        live_size: r.get(21)?,
     })
 }
 
@@ -210,14 +232,14 @@ impl Catalog {
         self.conn
             .prepare_cached(
                 "INSERT INTO assets(id, master_id, filename, created, size, w, h, kind, is_live, deleted, change_tag,
-                                orig_url, orig_type, thumb_url, medium_url, live_url, live_type)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                                orig_url, orig_type, thumb_url, medium_url, live_url, live_type, live_size)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO UPDATE SET master_id = excluded.master_id, filename = excluded.filename,
                created = excluded.created, size = excluded.size, w = excluded.w, h = excluded.h,
                kind = excluded.kind, is_live = excluded.is_live, deleted = excluded.deleted,
                change_tag = excluded.change_tag, orig_url = excluded.orig_url, orig_type = excluded.orig_type,
                thumb_url = excluded.thumb_url, medium_url = excluded.medium_url,
-               live_url = excluded.live_url, live_type = excluded.live_type",
+               live_url = excluded.live_url, live_type = excluded.live_type, live_size = excluded.live_size",
             )?
             .execute(params![
                 a.id,
@@ -237,6 +259,7 @@ impl Catalog {
                 url(&m.medium),
                 url(&m.live),
                 file_type(&m.live),
+                size(&m.live),
             ])?;
         Ok(())
     }
@@ -259,7 +282,8 @@ impl Catalog {
             .conn
             .prepare_cached(
                 "UPDATE assets SET filename = ?2, size = ?3, w = ?4, h = ?5, kind = ?6, is_live = ?7,
-                   orig_url = ?8, orig_type = ?9, thumb_url = ?10, medium_url = ?11, live_url = ?12, live_type = ?13
+                   orig_url = ?8, orig_type = ?9, thumb_url = ?10, medium_url = ?11, live_url = ?12, live_type = ?13,
+                   live_size = ?14
                  WHERE master_id = ?1",
             )?
             .execute(params![
@@ -276,6 +300,7 @@ impl Catalog {
                 url(&m.medium),
                 url(&m.live),
                 file_type(&m.live),
+                size(&m.live),
             ])?)
     }
 
@@ -571,6 +596,10 @@ pub enum PathKind {
 
 fn url(r: &Option<Resource>) -> Option<&str> {
     r.as_ref().map(|r| r.url.as_str())
+}
+
+fn size(r: &Option<Resource>) -> i64 {
+    r.as_ref().map_or(0, |r| r.size)
 }
 
 fn file_type(r: &Option<Resource>) -> Option<&str> {

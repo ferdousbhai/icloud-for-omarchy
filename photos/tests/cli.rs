@@ -469,6 +469,63 @@ fn out_naming_the_library_folder_is_a_plain_download() {
 }
 
 #[test]
+fn a_deleted_catalog_finds_the_originals_already_downloaded() {
+    let env = Env::synced("catalog-deleted", 4);
+    let library = env.data().join("library");
+    let files = || {
+        let mut all = Vec::new();
+        for month in std::fs::read_dir(&library)
+            .unwrap()
+            .flat_map(|y| std::fs::read_dir(y.unwrap().path()).unwrap())
+        {
+            all.extend(
+                std::fs::read_dir(month.unwrap().path())
+                    .unwrap()
+                    .map(|f| f.unwrap().path()),
+            );
+        }
+        all.sort();
+        all
+    };
+    assert_eq!(env.json(&["download", "--all"]).as_array().unwrap().len(), 4);
+    let before = files();
+    assert_eq!(before.len(), 5, "four originals and a Live Photo's video: {before:?}");
+    let paths = |env: &Env| -> Vec<(Value, Value, Value)> {
+        let rows = env.json(&["list"]);
+        let row = |r: &Value| (r["id"].clone(), r["local_path"].clone(), r["live_path"].clone());
+        rows.as_array().unwrap().iter().map(row).collect()
+    };
+    let recorded = paths(&env);
+
+    // The README says deleting the catalog is safe: the next sync and
+    // "download all" record the files that are there, and fetch none again.
+    for name in ["catalog.db", "catalog.db-wal", "catalog.db-shm"] {
+        let _ = std::fs::remove_file(env.data().join("data").join(name));
+    }
+    env.json(&["sync"]);
+    assert_eq!(env.json(&["status"])["downloaded"], 0);
+    assert_eq!(env.json(&["download", "--all"]).as_array().unwrap().len(), 4);
+    assert_eq!(files(), before, "one copy of each");
+    assert_eq!(paths(&env), recorded);
+    assert_eq!(env.json(&["status"])["downloaded"], 4);
+
+    // A file of an original's name that is not its size is left alone, and
+    // the download goes beside it under a numbered name.
+    let photo = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);
+    let path = PathBuf::from(env.json(&["info", &photo])["local_path"].as_str().unwrap());
+    for name in ["catalog.db", "catalog.db-wal", "catalog.db-shm"] {
+        let _ = std::fs::remove_file(env.data().join("data").join(name));
+    }
+    std::fs::write(&path, b"mine").unwrap();
+    env.json(&["sync"]);
+    let again = env.json(&["download", &photo]);
+    let numbered = PathBuf::from(again[0]["path"].as_str().unwrap());
+    assert!(numbered.to_str().unwrap().contains(" (2)."), "{numbered:?}");
+    assert!(is_jpeg(&numbered));
+    assert_eq!(std::fs::read(&path).unwrap(), b"mine");
+}
+
+#[test]
 fn a_png_with_no_preview_keeps_its_name_as_a_medium_download() {
     let env = Env::synced("medium-png", 4);
     let shot = env.ids(&["--kind", "photo", "--limit", "1"]).remove(0);

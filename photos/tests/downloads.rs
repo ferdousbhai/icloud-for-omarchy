@@ -386,6 +386,66 @@ fn files_already_on_disk_are_never_overwritten() {
 }
 
 #[test]
+fn a_download_the_catalog_does_not_know_of_is_recorded_not_fetched_again() {
+    let tmp = temp_dir("adopt");
+    let root = tmp.path();
+    let t = FixtureTransport::new(library);
+    let (cat, targets) = synced(&t, root);
+    // As long as iCloud says each is: the photo and the video of ASSET-001.
+    let row = cat.asset("ASSET-001").unwrap().unwrap();
+    assert!(row.size > 0 && row.live_size > 0 && row.size != row.live_size);
+    t.serve(&row.orig_url.clone().unwrap(), &vec![1; row.size as usize]);
+    t.serve(&row.live_url.clone().unwrap(), &vec![2; row.live_size as usize]);
+    let photo = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    let video = photo.with_extension("MOV");
+    let month = photo.parent().unwrap().to_owned();
+    let forget = || {
+        for kind in [PathKind::Original, PathKind::Live] {
+            cat.set_path("ASSET-001", kind, None).unwrap();
+        }
+    };
+
+    // The catalog lost them (deleted, or the download was cut off before
+    // its paths were recorded): the files are taken up as they are.
+    forget();
+    let n = t.downloads.lock().unwrap().len();
+    assert_eq!(fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap(), photo);
+    assert_eq!(t.downloads.lock().unwrap().len(), n, "nothing is downloaded");
+    let row = cat.asset("ASSET-001").unwrap().unwrap();
+    assert_eq!(
+        (row.local_path, row.live_path),
+        (Some(photo.clone()), Some(video.clone()))
+    );
+    assert_eq!(std::fs::read_dir(&month).unwrap().count(), 2);
+
+    // Only the video's path lost: the photo's record stays, the video is taken up.
+    cat.set_path("ASSET-001", PathKind::Live, None).unwrap();
+    fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    assert_eq!(t.downloads.lock().unwrap().len(), n);
+    assert_eq!(cat.asset("ASSET-001").unwrap().unwrap().live_path, Some(video.clone()));
+
+    // A file of that name and another size is somebody else's: left as it
+    // is, and the download takes a numbered name, video and all.
+    forget();
+    std::fs::write(&photo, b"mine").unwrap();
+    let second = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    assert_eq!(second, month.join("IMG_0001 (2).HEIC"));
+    assert_eq!(std::fs::read(&photo).unwrap(), b"mine");
+    assert_eq!(
+        cat.asset("ASSET-001").unwrap().unwrap().live_path,
+        Some(month.join("IMG_0001 (2).MOV"))
+    );
+    assert_eq!(std::fs::read(&video).unwrap(), vec![2; row.live_size as usize]);
+
+    // A file another asset has is never taken, whatever its size.
+    forget();
+    cat.set_path("ASSET-004", PathKind::Original, Some(&second)).unwrap();
+    std::fs::remove_file(month.join("IMG_0001 (2).MOV")).unwrap();
+    let third = fetch(&t, &cat, &targets, "ASSET-001", Job::Original).unwrap();
+    assert_eq!(third, month.join("IMG_0001 (3).HEIC"));
+}
+
+#[test]
 fn exporting_again_finds_the_numbered_copy_it_made() {
     let tmp = temp_dir("export-again");
     let root = tmp.path();
