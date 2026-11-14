@@ -503,10 +503,16 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let push = outcome.push.as_ref().map_err(CliError::from);
             let pull = outcome.pull.as_ref().map(|p| p.as_ref().map_err(CliError::from));
             let mut push_half = sync_half_json(&push, |r| push_lines(r, &target));
-            let push_failure = outcome.push.as_ref().ok().and_then(push_failure_json);
+            // The push run again after the pull failed: the first one's
+            // result stays, with that error.
+            let push_again = outcome.push_again.as_ref().map(CliError::from);
+            let push_failure = match &push_again {
+                Some(error) => Some(error_json(error)),
+                None => outcome.push.as_ref().ok().and_then(push_failure_json),
+            };
             if let Some(error) = &push_failure {
                 push_half["ok"] = false.into();
-                push_half["exit_code"] = cmd::errors::EXIT_ERROR.into();
+                push_half["exit_code"] = push_again.as_ref().map_or(cmd::errors::EXIT_ERROR, |e| e.exit).into();
                 push_half["error"] = error.clone();
             }
             let data = serde_json::json!({
@@ -516,7 +522,9 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             });
             let summary = format!(
                 "{}, {}",
-                if push_failure.is_some() {
+                if let Some(error) = &push_again {
+                    format!("push failed ({})", error.code)
+                } else if push_failure.is_some() {
                     "push failed (push_rejected)".to_owned()
                 } else {
                     half_summary("push", Some(&push))
@@ -533,6 +541,9 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                     Err(error) => {
                         error.report(mode);
                     }
+                }
+                if let Some(error) = &push_again {
+                    error.report(mode);
                 }
                 match &pull {
                     Some(Ok(s)) => lines.extend(pull_lines(s, &target)),

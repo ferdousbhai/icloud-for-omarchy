@@ -103,7 +103,9 @@ since the last pull ("changed remotely since the last pull") is pushed
 after the pull, which merged that change into the moved file: the push
 runs again, and its entries take the refused move's place in the push
 half, so a note renamed here and edited elsewhere is settled in one sync
-(it took two up to 0.11.1). A `push` by itself still refuses it. Its data holds both results plus vault-info's answer, a
+(it took two up to 0.11.1). A second run that fails leaves the first
+run's entries in the half, with its error. A `push` by itself still
+refuses it. Its data holds both results plus vault-info's answer, a
 failed half's error included (no separate error object); the process exits
 with the worse half (`Response::exit`).
 icloud-session's `Offline` and `Network` errors are the errors `offline` and

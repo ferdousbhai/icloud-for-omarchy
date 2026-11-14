@@ -761,7 +761,9 @@ exit_code, error}`; `pull` is null when it did not run (the push found the
 sign-in gone or refused, or iCloud out of reach), and `vault_info` is what
 `vault-info` would print after it. A push half that ran but had a change
 refused is `{ok:false, exit_code:1, result, lines, error}` with the error
-`push_rejected`: its result and its error both. It exits 3 if either half
+`push_rejected`: its result and its error both; so is one whose push, run
+again after the pull to send a move it had refused, failed (the error is
+that second run's, e.g. `cloudkit_request_failed` with its exit). It exits 3 if either half
 exited 3, else with the worse half's code. `stateDir` is the engine's state directory,
 `.icloud-notes` (or a layout 3 vault's `.icloud-md`, until a command that
 takes the lock moves it; see notes-sync/docs/DESIGN.md §1). In a machine

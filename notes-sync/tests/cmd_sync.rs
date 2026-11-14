@@ -107,6 +107,7 @@ fn the_exit_code_is_3_above_all_then_the_higher_half() {
         SyncOutcome {
             push: Err(push),
             pull: pull.map(Err),
+            push_again: None,
         }
         .exit_code()
     };
@@ -192,6 +193,7 @@ fn a_push_with_a_refused_change_exits_1() {
         SyncOutcome {
             push: Ok(push(succeeded)),
             pull: None,
+            push_again: None,
         }
         .exit_code()
     };

@@ -72,6 +72,10 @@ struct Zone {
     shared: indexmap::IndexMap<String, Zone>,
     /// Shared zones whose owner stopped sharing them.
     revoked: BTreeSet<String>,
+    /// Private `records/lookup` requests answered so far, and the first one
+    /// to answer 503 from then on (0: none).
+    lookups: usize,
+    fail_lookups_from: usize,
 }
 
 fn field_type(name: &str, value: &Value) -> &'static str {
@@ -379,7 +383,13 @@ impl Fake {
                     if let Some(op) = path.strip_prefix(PRIVATE) {
                         return match op {
                             "changes/zone" => reply(zone.changes(&json_body())),
-                            "records/lookup" => reply(zone.lookup(&json_body())),
+                            "records/lookup" => {
+                                zone.lookups += 1;
+                                if zone.fail_lookups_from != 0 && zone.lookups >= zone.fail_lookups_from {
+                                    return Err(503);
+                                }
+                                reply(zone.lookup(&json_body()))
+                            }
                             "records/modify" => reply(zone.modify(&json_body(), &url)),
                             "assets/upload" => {
                                 zone.next_upload += 1;
@@ -2147,4 +2157,41 @@ fn a_file_put_back_after_its_note_was_deleted_here_is_pushed_as_a_new_note() {
     succeeded(&run(&fake, &place, "push", &Crash::default()), "push");
     assert_eq!(fake.zone().creates("Note").len(), 1);
     assert!(place.vault.join(&file).is_file());
+}
+
+/// The push a sync runs again after the pull failing: the half still lists
+/// what the first push did, with the second one's error.
+#[test]
+fn a_sync_whose_second_push_fails_keeps_what_the_first_one_did() {
+    let start = retitled_both_sides();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    let lookups = fake.zone().lookups;
+
+    let mut zone = start.zone.clone();
+    zone.fail_lookups_from = lookups;
+    let fake = Fake::start(zone);
+    let place = Place::copy_of(&start.place);
+    let synced = run(&fake, &place, "sync", &Crash::default());
+    assert_eq!(synced.status.code(), Some(5), "{}", says(&synced));
+    let result: Value = serde_json::from_slice(&synced.stdout).unwrap();
+    let push = &result["data"]["push"];
+    assert_eq!(push["ok"], false, "{}", says(&synced));
+    assert_eq!(push["exit_code"], 5);
+    assert_eq!(push["error"]["code"], "cloudkit_request_failed");
+    let entries = push["result"]["entries"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["file"] == "Notes/Extra one.md" && e["outcome"]["succeeded"] == true),
+        "{}",
+        says(&synced)
+    );
+    assert!(
+        entries.iter().any(|e| e["file"] == "Notes/Extra seven.md"),
+        "{}",
+        says(&synced)
+    );
+    assert!(!push["lines"].as_array().unwrap().is_empty());
 }

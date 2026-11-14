@@ -8,7 +8,8 @@
 //! of reach (the pull would only fail again; the next sync retries both).
 //! When the push refused a move because the note changed in iCloud since
 //! the last pull, the push runs again after the pull has merged that change,
-//! and its entries take the refused move's place in the push half.
+//! and its entries take the refused move's place in the push half (when it
+//! fails, the first push's result stays, with its error: `push_again`).
 
 use std::path::Path;
 
@@ -24,6 +25,9 @@ use super::remote::{Connector, DefaultConnector, SharedConnector};
 pub struct SyncOutcome {
     pub push: Result<PushResult, Error>,
     pub pull: Option<Result<PullSummary, Error>>,
+    /// The error of the push run again after the pull (see the module
+    /// docs), when it failed: the first push's result stays in `push`.
+    pub push_again: Option<Error>,
 }
 
 impl SyncOutcome {
@@ -34,10 +38,11 @@ impl SyncOutcome {
     /// 0: a specific reason beats the generic error. A push that had a
     /// change refused counts as 1.
     pub fn exit_code(&self) -> u8 {
-        let push = match &self.push {
+        let push = match (&self.push, &self.push_again) {
+            (Ok(_), Some(again)) => again.exit_code(),
             // A push that ran but had a change refused is an error too.
-            Ok(result) if !result.failures().is_empty() => EXIT_ERROR,
-            half => half_exit_code(half),
+            (Ok(result), None) if !result.failures().is_empty() => EXIT_ERROR,
+            (half, _) => half_exit_code(half),
         };
         let pull = self.pull.as_ref().map_or(EXIT_OK, half_exit_code);
         if push == EXIT_SIGN_IN || pull == EXIT_SIGN_IN {
@@ -95,6 +100,7 @@ pub fn run_sync_with(
     // last pull: the pull has merged that change into the moved file and
     // brought the note's change tag up to date, so the move goes now rather
     // than a sync later. A plain push keeps the refusal.
+    let mut push_again = None;
     if let (Ok(first), Some(Ok(_))) = (&mut push, &pull)
         && first.entries.iter().any(|e| is_move_changed_remotely(&e.entry))
     {
@@ -116,10 +122,11 @@ pub fn run_sync_with(
                     }
                 }
             }
-            Err(error) => push = Err(error),
+            // What the first push did stays reported, with the error.
+            Err(error) => push_again = Some(error),
         }
     }
-    SyncOutcome { push, pull }
+    SyncOutcome { push, pull, push_again }
 }
 
 /// A move refused as changed remotely since the last pull.
