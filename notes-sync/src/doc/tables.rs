@@ -50,13 +50,6 @@ impl TableDocument {
     }
 }
 
-/// `TableRowColumn`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TableRowColumn {
-    identity_ref: usize,
-    pub uuid_index: u64,
-}
-
 /// `TableCell`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableCell {
@@ -64,11 +57,12 @@ pub struct TableCell {
     pub text: String,
 }
 
-/// `ResolvedTable`; `cells` keyed by (row position, column position).
+/// `ResolvedTable`: how many rows and columns, and `cells` keyed by (row
+/// position, column position).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTable {
-    pub rows: Vec<TableRowColumn>,
-    pub columns: Vec<TableRowColumn>,
+    pub rows: usize,
+    pub columns: usize,
     pub cells: HashMap<(usize, usize), TableCell>,
 }
 
@@ -156,8 +150,8 @@ fn resolve_table_refs(document: &crdt::Document) -> Result<(u32, u32, u32)> {
 /// `gridFromTableDocument`: rows × columns of cell text, visual order.
 pub fn grid_from_table_document(doc: &TableDocument) -> Result<Vec<Vec<String>>> {
     let resolved = resolve_table(doc)?;
-    let num_rows = resolved.rows.len();
-    let num_cols = resolved.columns.len();
+    let num_rows = resolved.rows;
+    let num_cols = resolved.columns;
     if num_cols == 0 {
         return fail("Table has no columns - refusing to guess at its structure");
     }
@@ -179,16 +173,9 @@ pub fn resolve_table(doc: &TableDocument) -> Result<ResolvedTable> {
     let column_set = parse_ordered_set(pool, doc.cr_columns_ref)?;
     let row_positions = compute_positions(pool, &row_set)?;
     let column_positions = compute_positions(pool, &column_set)?;
-    let rows = row_set
-        .array_uuid_indexes
-        .iter()
-        .map(|&i| identity_of(pool, i))
-        .collect::<Result<Vec<_>>>()?;
-    let columns = column_set
-        .array_uuid_indexes
-        .iter()
-        .map(|&i| identity_of(pool, i))
-        .collect::<Result<Vec<_>>>()?;
+    for &uuid_index in row_set.array_uuid_indexes.iter().chain(&column_set.array_uuid_indexes) {
+        require_identity(pool, uuid_index)?;
+    }
 
     let mut cells = HashMap::new();
     for (column_ref, row_map_ref) in parse_ref_pair_list(pool, doc.cell_columns_ref, "cellColumns")? {
@@ -207,7 +194,11 @@ pub fn resolve_table(doc: &TableDocument) -> Result<ResolvedTable> {
             cells.insert((row_position, column_position), TableCell { text_ref, text });
         }
     }
-    Ok(ResolvedTable { rows, columns, cells })
+    Ok(ResolvedTable {
+        rows: row_set.array_uuid_indexes.len(),
+        columns: column_set.array_uuid_indexes.len(),
+        cells,
+    })
 }
 
 /// `UUIDIndex` key position (`keyNames.indexOf`), -1 when absent.
@@ -229,16 +220,16 @@ pub(crate) fn identity_uuid_index(entry: &DocObject, key: i64) -> Option<u64> {
     map_entry.value.as_ref()?.unsigned_integer_value
 }
 
-/// `identityOf`.
-fn identity_of(pool: &crdt::Document, uuid_index: u64) -> Result<TableRowColumn> {
+/// `identityOf`: every row and column of the ordering has an identity
+/// object in the pool.
+fn require_identity(pool: &crdt::Document, uuid_index: u64) -> Result<()> {
     let key = key_index(pool, "UUIDIndex");
-    for (identity_ref, entry) in pool.object.iter().enumerate() {
-        if identity_uuid_index(entry, key) == Some(uuid_index) {
-            return Ok(TableRowColumn {
-                identity_ref,
-                uuid_index,
-            });
-        }
+    if pool
+        .object
+        .iter()
+        .any(|entry| identity_uuid_index(entry, key) == Some(uuid_index))
+    {
+        return Ok(());
     }
     fail(format!(
         "Table array entry's UUID-table index {uuid_index} has no matching identity object in the pool"

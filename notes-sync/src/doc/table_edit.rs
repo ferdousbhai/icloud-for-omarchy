@@ -732,7 +732,7 @@ pub fn apply_table_edit_with(
 fn apply_cell_edits(doc: &mut TableDocument, session: &Session, edits: &[CellEdit]) -> Result<()> {
     let resolved = resolve_table(doc)?;
     for edit in edits {
-        if edit.row >= resolved.rows.len() || edit.column >= resolved.columns.len() {
+        if edit.row >= resolved.rows || edit.column >= resolved.columns {
             return fail(format!(
                 "Cell edit references row {}/column {} outside the table",
                 edit.row, edit.column
@@ -1466,8 +1466,8 @@ pub fn validate_table_document_invariants(doc: &TableDocument) -> Result<()> {
 
     match resolve_table(doc) {
         Ok(resolved) => {
-            for row in 0..resolved.rows.len() {
-                for column in 0..resolved.columns.len() {
+            for row in 0..resolved.rows {
+                for column in 0..resolved.columns {
                     if !resolved.cells.contains_key(&(row, column)) {
                         failures.push(format!("no cell object at row {row}, column {column}"));
                     }
