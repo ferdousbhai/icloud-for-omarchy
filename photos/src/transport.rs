@@ -93,39 +93,6 @@ impl Error {
     pub fn is_expired_url(&self) -> bool {
         matches!(self, Error::Http { status, .. } if (400..500).contains(status) && *status != 421)
     }
-
-    /// The same error again, for reporting one failure against several
-    /// items (I/O and database errors keep their message only).
-    pub fn duplicate(&self) -> Error {
-        match self {
-            Error::SignInRequired => Error::SignInRequired,
-            Error::Http { status, body } => Error::Http {
-                status: *status,
-                body: body.clone(),
-            },
-            Error::CloudKit { code, reason } => Error::CloudKit {
-                code: code.clone(),
-                reason: reason.clone(),
-            },
-            Error::Offline(m) => Error::Offline(m.clone()),
-            Error::Network(m) => Error::Network(m.clone()),
-            Error::BadResponse(m) => Error::BadResponse(m.clone()),
-            Error::Service(m) => Error::Service(m.clone()),
-            Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m.clone()),
-            Error::NotOffered(m) => Error::NotOffered(m.clone()),
-            Error::Session(e) => match e {
-                icloud_session::Error::Daemon { name, message } => Error::Session(icloud_session::Error::Daemon {
-                    name: name.clone(),
-                    message: message.clone(),
-                }),
-                icloud_session::Error::FindMyAuthRequired => Error::Session(icloud_session::Error::FindMyAuthRequired),
-                other => Error::Other(other.to_string()),
-            },
-            Error::Other(m) => Error::Other(m.clone()),
-            Error::Io(e) => Error::Io(std::io::Error::new(e.kind(), e.to_string())),
-            Error::Db(e) => Error::Other(e.to_string()),
-        }
-    }
 }
 
 /// Everything the Photos code needs from an HTTP client with an iCloud session.

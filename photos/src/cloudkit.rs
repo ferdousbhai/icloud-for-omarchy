@@ -677,7 +677,17 @@ impl<'t> CloudKit<'t> {
                 Ok(v) => v,
                 Err(e) => {
                     signed_out = e.is_sign_in();
-                    out.extend(chunk.iter().map(|_| Err(e.duplicate())));
+                    // One failure against every asset of the request.
+                    out.extend(chunk.iter().map(|_| {
+                        Err(match &e {
+                            Error::SignInRequired => Error::SignInRequired,
+                            Error::CloudKit { code, reason } => Error::CloudKit {
+                                code: code.clone(),
+                                reason: reason.clone(),
+                            },
+                            other => Error::Other(other.to_string()),
+                        })
+                    }));
                     continue;
                 }
             };
