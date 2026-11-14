@@ -101,7 +101,13 @@ pub fn run_sync_with(
         match push::run_push_with(&shared, target_dir, on_status, &options) {
             Ok(second) => {
                 first.entries.retain(|e| !is_move_changed_remotely(&e.entry));
-                first.entries.extend(second.entries);
+                // What the first push already said (a change refused both
+                // times) is listed once.
+                for entry in second.entries {
+                    if !first.entries.contains(&entry) {
+                        first.entries.push(entry);
+                    }
+                }
                 first.pushed = Some(first.pushed.unwrap_or(0) + second.pushed.unwrap_or(0));
                 first.unchanged = second.unchanged;
                 for notice in second.notices {

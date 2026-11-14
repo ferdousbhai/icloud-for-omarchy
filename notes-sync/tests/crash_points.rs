@@ -1913,3 +1913,29 @@ fn a_note_renamed_here_and_edited_in_icloud_is_moved_and_merged_in_one_sync() {
     let text = std::fs::read_to_string(place.vault.join("Notes/Extra seven.md")).unwrap();
     assert!(text.contains("remote line"), "{text}");
 }
+
+/// The sync that pushes such a move again reports each entry once: a change
+/// refused by both pushes (here, a file with conflict markers) used to be
+/// listed twice in the push half.
+#[test]
+fn a_sync_that_pushes_twice_lists_each_refusal_once() {
+    let start = retitled_both_sides();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let file = place.vault.join("Notes/Extra 2.md");
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, text + "<<<<<<< ours\nmine\n=======\ntheirs\n>>>>>>> theirs\n").unwrap();
+    let synced = run(&fake, &place, "sync", &Crash::default());
+    let result: Value = serde_json::from_slice(&synced.stdout).unwrap();
+    let push = &result["data"]["push"]["result"];
+    let entries = push["entries"].as_array().unwrap();
+    let refused: Vec<&Value> = entries.iter().filter(|e| e["file"] == "Notes/Extra 2.md").collect();
+    assert_eq!(refused.len(), 1, "{}", says(&synced));
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["file"] == "Notes/Extra seven.md" && e["resolution"] == "ready"),
+        "{}",
+        says(&synced)
+    );
+}
