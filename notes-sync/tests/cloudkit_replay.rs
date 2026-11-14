@@ -238,6 +238,28 @@ fn records_modify_bodies_keep_icloud_md_key_order() {
 }
 
 #[test]
+fn a_modify_answer_with_a_result_missing_is_refused() {
+    let transport = ReplayTransport::from_cassette(
+        cassette(vec![post("private/records/modify", 200, modify_ok("n1", "t2"))]),
+        None,
+    )
+    .unwrap();
+    let database = Database::new(transport);
+    let update = |name: &str, record_type: &str| RecordUpdate {
+        record_name: name.into(),
+        record_type: record_type.into(),
+        record_change_tag: "t1".into(),
+        fields: UpdateFields::new(),
+        parent_record_name: None,
+    };
+    // Two updates, one result: the table's must not read as gone through.
+    let err = database
+        .update_records(&note_zone(None), &[update("n1", "Note"), update("a1", "Attachment")])
+        .unwrap_err();
+    assert!(matches!(err, CkError::UnexpectedResponse(_)), "{err:?}");
+}
+
+#[test]
 fn folder_create_without_extras_sends_the_bare_shape() {
     let transport = ReplayTransport::from_cassette(
         cassette(vec![post("private/records/modify", 200, modify_ok("f1", "t"))]),

@@ -110,13 +110,13 @@ impl<T: Transport> Database<T> {
     /// `database`; a non-2xx becomes `RequestFailed("{operation} request
     /// failed ({database} db): HTTP {status}")`.
     fn post_database(&self, database: DatabaseScope, operation: &str, body: &Value) -> Result<Value, CkError> {
-        match self.transport.post_json(&database_path(database, operation), body) {
-            Err(CkError::Http { status, .. }) => Err(CkError::RequestFailed {
-                message: format!("{operation} request failed ({} db): HTTP {status}", database.as_str()),
-                status: Some(status),
-            }),
-            other => other,
-        }
+        self.transport
+            .post_json(&database_path(database, operation), body)
+            .map_err(|e| {
+                request_failed_on_http(e, |status| {
+                    format!("{operation} request failed ({} db): HTTP {status}", database.as_str())
+                })
+            })
     }
 
     /// One `changes/zone` walk from `start_token` until `moreComing` is false.
@@ -452,10 +452,7 @@ impl<T: Transport> Database<T> {
     ) -> Result<Vec<RecordUpdateResult>, CkError> {
         let (updates, uploaded) = self.upload_text_assets(zone, updates)?;
         let ops: Vec<RecordOp> = updates.into_iter().map(RecordOp::Update).collect();
-        let body = self.post_database(zone.database, "records/modify", &modify_body(&ops, &zone.zone_id))?;
-        let mut results = parse_record_update_response(&body)?;
-        inline_uploaded_text(&mut results, &uploaded);
-        Ok(results)
+        self.modify(zone, &ops, None, &uploaded)
     }
 
     /// Many unrelated updates in as few `records/modify` requests as fit
@@ -469,17 +466,8 @@ impl<T: Transport> Database<T> {
         let mut results = Vec::with_capacity(updates.len());
         for batch in updates.chunks(LOOKUP_BATCH_SIZE) {
             let (batch, uploaded) = self.upload_text_assets(zone, batch)?;
-            let count = batch.len();
             let ops: Vec<RecordOp> = batch.into_iter().map(RecordOp::Update).collect();
-            let mut body = modify_body(&ops, &zone.zone_id);
-            body["atomic"] = Value::Bool(false);
-            let response = self.post_database(zone.database, "records/modify", &body)?;
-            let mut parsed = parse_record_update_response(&response)?;
-            if parsed.len() != count {
-                return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
-            }
-            inline_uploaded_text(&mut parsed, &uploaded);
-            results.extend(parsed);
+            results.extend(self.modify(zone, &ops, Some(false), &uploaded)?);
         }
         Ok(results)
     }
@@ -506,14 +494,30 @@ impl<T: Transport> Database<T> {
                 other => other.clone(),
             });
         }
-        let mut body = modify_body(&sent, &zone.zone_id);
-        body["atomic"] = Value::Bool(true);
+        self.modify(zone, &sent, Some(true), &uploaded)
+    }
+
+    /// One `records/modify` of `ops` (`atomic` as given; `None` leaves it to
+    /// iCloud's default): one result per operation, in request order, or the
+    /// answer is refused as unreadable - a result missing would read as a
+    /// record that went through. `uploaded` is [`inline_uploaded_text`]'s.
+    fn modify(
+        &self,
+        zone: &NoteZone,
+        ops: &[RecordOp],
+        atomic: Option<bool>,
+        uploaded: &HashMap<String, String>,
+    ) -> Result<Vec<RecordUpdateResult>, CkError> {
+        let mut body = modify_body(ops, &zone.zone_id);
+        if let Some(atomic) = atomic {
+            body["atomic"] = Value::Bool(atomic);
+        }
         let response = self.post_database(zone.database, "records/modify", &body)?;
         let mut results = parse_record_update_response(&response)?;
         if results.len() != ops.len() {
             return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
         }
-        inline_uploaded_text(&mut results, &uploaded);
+        inline_uploaded_text(&mut results, uploaded);
         Ok(results)
     }
 
@@ -733,15 +737,21 @@ impl<T: Transport> Database<T> {
     }
 }
 
-/// A failed asset upload, in the words a failed download has.
-fn asset_upload_error(e: CkError) -> CkError {
+/// A non-2xx answer as the transport saw it ([`CkError::Http`]) becomes
+/// `RequestFailed` with `message(status)`; any other error stays as it is.
+fn request_failed_on_http(e: CkError, message: impl FnOnce(u16) -> String) -> CkError {
     match e {
         CkError::Http { status, .. } => CkError::RequestFailed {
-            message: format!("Asset upload failed: HTTP {status}"),
+            message: message(status),
             status: Some(status),
         },
         other => other,
     }
+}
+
+/// A failed asset upload, in the words a failed download has.
+fn asset_upload_error(e: CkError) -> CkError {
+    request_failed_on_http(e, |status| format!("Asset upload failed: HTTP {status}"))
 }
 
 /// Gives each updated note whose text went up as an asset (see
@@ -783,13 +793,7 @@ fn stored_zone_token<'a>(since_sync_tokens: &'a IndexMap<String, String>, zone_i
 /// A failed asset GET: non-2xx is `RequestFailed("Attachment download
 /// failed: HTTP {status}")`.
 fn asset_error(e: CkError) -> CkError {
-    match e {
-        CkError::Http { status, .. } => CkError::RequestFailed {
-            message: format!("Attachment download failed: HTTP {status}"),
-            status: Some(status),
-        },
-        other => other,
-    }
+    request_failed_on_http(e, |status| format!("Attachment download failed: HTTP {status}"))
 }
 
 /// How many attachment downloads a [`DownloadQueue`] keeps in flight when
@@ -814,9 +818,17 @@ pub struct DownloadQueue<'a, T: Transport> {
 struct DownloadPool {
     jobs: Option<std::sync::mpsc::Sender<(usize, String, PathBuf)>>,
     workers: Vec<std::thread::JoinHandle<()>>,
-    /// (queue position, error), every failure so far.
-    errors: std::sync::Arc<std::sync::Mutex<Vec<(usize, CkError)>>>,
+    failures: std::sync::Arc<DownloadFailures>,
     next: usize,
+}
+
+#[derive(Default)]
+struct DownloadFailures {
+    /// Set by the first failure, and when the pool is dropped: the workers
+    /// start no further download.
+    stopped: std::sync::atomic::AtomicBool,
+    /// (queue position, error), every failure not reported yet.
+    errors: std::sync::Mutex<Vec<(usize, CkError)>>,
 }
 
 impl<'a, T: Transport> DownloadQueue<'a, T> {
@@ -824,22 +836,22 @@ impl<'a, T: Transport> DownloadQueue<'a, T> {
         let pool = db.transport.shared_downloader().map(|download| {
             let (jobs, receiver) = std::sync::mpsc::channel::<(usize, String, PathBuf)>();
             let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
-            let errors: std::sync::Arc<std::sync::Mutex<Vec<(usize, CkError)>>> = Default::default();
+            let failures: std::sync::Arc<DownloadFailures> = Default::default();
             let workers = (0..DOWNLOAD_WORKERS)
                 .map(|_| {
-                    let (receiver, errors, download) = (receiver.clone(), errors.clone(), download.clone());
+                    let (receiver, failures, download) = (receiver.clone(), failures.clone(), download.clone());
                     std::thread::spawn(move || {
+                        use std::sync::atomic::Ordering;
                         loop {
                             let job = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv();
                             let Ok((i, url, dest)) = job else { break };
-                            let mut errors_now = errors.lock().unwrap_or_else(|e| e.into_inner());
-                            if !errors_now.is_empty() {
+                            if failures.stopped.load(Ordering::SeqCst) {
                                 continue;
                             }
-                            drop(errors_now);
                             if let Err(e) = download(&url, &dest) {
-                                errors_now = errors.lock().unwrap_or_else(|e| e.into_inner());
-                                errors_now.push((i, asset_error(e)));
+                                let mut errors = failures.errors.lock().unwrap_or_else(|e| e.into_inner());
+                                errors.push((i, asset_error(e)));
+                                failures.stopped.store(true, Ordering::SeqCst);
                             }
                         }
                     })
@@ -848,7 +860,7 @@ impl<'a, T: Transport> DownloadQueue<'a, T> {
             DownloadPool {
                 jobs: Some(jobs),
                 workers,
-                errors,
+                failures,
                 next: 0,
             }
         });
@@ -913,27 +925,15 @@ impl DownloadPool {
     /// The failure earliest in queue order, if any. The workers start no
     /// further download either way once one has failed.
     fn take_error(&mut self) -> Option<CkError> {
-        let mut errors = self.errors.lock().unwrap_or_else(|e| e.into_inner());
+        let mut errors = self.failures.errors.lock().unwrap_or_else(|e| e.into_inner());
         errors.sort_by_key(|(i, _)| *i);
-        let first = (!errors.is_empty()).then(|| errors.remove(0).1);
-        if first.is_some() {
-            errors.push(stop_marker());
-        }
-        first
+        (!errors.is_empty()).then(|| errors.remove(0).1)
     }
-}
-
-/// Recorded as an error so the workers start nothing more; never reported.
-fn stop_marker() -> (usize, CkError) {
-    (usize::MAX, CkError::Other("download queue stopped".into()))
 }
 
 impl Drop for DownloadPool {
     fn drop(&mut self) {
-        self.errors
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(stop_marker());
+        self.failures.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
         self.join();
     }
 }
