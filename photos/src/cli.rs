@@ -178,8 +178,8 @@ enum Command {
     ///
     /// Progress on stderr. The data is {files: [{file, asset_id,
     /// master_id, duplicate} | {file, error}], uploaded, duplicates,
-    /// failed, album, album_error, sync, not_in_catalog}. Exits 1 if any
-    /// file failed.
+    /// failed, album, album_error, sync, sync_error, not_in_catalog}. Exits
+    /// 1 if any file failed, or the album or the sync afterwards did.
     #[command(after_help = AFTER_HELP)]
     Upload {
         #[arg(required = true)]
@@ -999,6 +999,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
     let mut new_ids: Vec<String> = Vec::new();
     let mut album_error = None;
     let mut sync_report = None;
+    let mut sync_error = None;
     let mut missing: Vec<String> = Vec::new();
 
     if !paths.is_empty() {
@@ -1059,18 +1060,30 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
         // CloudKit can take ~15-20 s to make new assets queryable: sync until
         // they are in the catalog, for up to a minute.
         if !no_sync && !new_ids.is_empty() && !sign_in_lapsed {
+            missing = new_ids.clone();
             for attempt in 0..4 {
                 if attempt > 0 {
                     eprintln!("waiting for iCloud to index {} new item(s)…", missing.len());
                     std::thread::sleep(Duration::from_secs(15));
                 }
-                sync_report = Some(run_sync(ctx, &*t, false)?);
-                let cat = ctx.catalog()?;
-                missing = new_ids
-                    .iter()
-                    .filter(|id| !cat.asset(id).ok().flatten().is_some_and(|r| !r.deleted))
-                    .cloned()
-                    .collect();
+                let synced = run_sync(ctx, &*t, false).and_then(|report| Ok((report, ctx.catalog()?)));
+                let (report, cat) = match synced {
+                    Ok(done) => done,
+                    // The files are in iCloud all the same: a failed sync
+                    // must not lose their report.
+                    Err(fail) => {
+                        sign_in_lapsed |= matches!(&fail, Fail::Err(e) if e.is_sign_in());
+                        let e = classify(fail);
+                        if ctx.text() {
+                            warn(&format!("error: syncing: {}", e.message));
+                        }
+                        sync_error = Some(e.message);
+                        failed += 1;
+                        break;
+                    }
+                };
+                sync_report = Some(report);
+                missing.retain(|id| !cat.asset(id).ok().flatten().is_some_and(|r| !r.deleted));
                 if missing.is_empty() {
                     break;
                 }
@@ -1092,6 +1105,7 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
         "album": album,
         "album_error": album_error,
         "sync": sync_report.as_ref().map(report_json),
+        "sync_error": sync_error,
         "not_in_catalog": missing,
     });
     let mut lines: Vec<String> = results

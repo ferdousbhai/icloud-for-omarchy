@@ -757,7 +757,7 @@ engines: `icloud-md:progress:...`).
 | `open` | `{id, path, opened}` |
 | `copy` | `{id, path, type:"image/jpeg"\|"image/png"}` |
 | `wallpaper` | `{id, path}` (the file the background now points at) |
-| `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, not_in_catalog}` |
+| `upload` | `{files:[{file, asset_id, master_id, duplicate} \| {file, error}], uploaded, duplicates, failed, album, album_error, sync, sync_error, not_in_catalog}`; a sync that failed after the upload is `sync_error` (the files are in iCloud, `not_in_catalog` lists them), exit 1 |
 | `delete` | `[{id, deleted, error?}]` |
 | `restore` | `[{id, restored, error?}]` |
 | `prune-cache` | `{removed}` |

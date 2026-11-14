@@ -632,6 +632,24 @@ fn upload_then_sync_into_the_catalog() {
 }
 
 #[test]
+fn a_sync_that_fails_after_an_upload_keeps_the_uploads_report() {
+    let env = Env::synced("upload-sync", 3);
+    let f = env.root.join("NEW.JPG");
+    std::fs::write(&f, b"\xFF\xD8 a pretend jpeg").unwrap();
+    env.server.fail_syncs(true);
+    let r = env.run(&["--json", "upload", f.to_str().unwrap()]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    let v = r.json();
+    let id = v["files"][0]["asset_id"].as_str().expect("the uploaded file's id");
+    assert!(env.server.asset_ids().iter().any(|a| a == id));
+    assert_eq!((v["uploaded"].as_i64(), v["sync"].is_null()), (Some(1), true), "{v}");
+    assert!(v["sync_error"].as_str().is_some_and(|e| e.contains("503")), "{v}");
+    assert_eq!(v["not_in_catalog"], serde_json::json!([id]));
+    let r = env.run(&["--ids-only", "upload", f.to_str().unwrap(), "--no-sync"]);
+    assert_eq!((r.code, r.stdout.trim()), (0, id), "a duplicate now: {}", r.stderr);
+}
+
+#[test]
 fn delete_asks_refuses_or_moves_to_recently_deleted() {
     let env = Env::synced("delete", 10);
     let ids = env.ids(&[]);
