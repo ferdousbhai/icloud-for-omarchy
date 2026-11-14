@@ -556,41 +556,48 @@ fn own_folder_dir<'a>(layout: &'a VaultLayout, folder_record_name: &str) -> Opti
     layout.folder_dirs.get(folder_record_name).filter(|_| own)
 }
 
-/// `placeNote`.
-pub fn place_note(layout: &VaultLayout, record: &CloudKitRecord, shared_zone_owner: Option<&str>) -> NotePlacement {
-    let folder_record_name = reference_record_name(record.fields.get("Folder").map(|f| &f.value));
-    match shared_zone_owner {
-        None => {
-            if let Some(dir) = folder_record_name.as_ref().and_then(|f| own_folder_dir(layout, f)) {
-                return NotePlacement {
-                    dir: dir.clone(),
-                    folder_record_name,
-                };
-            }
-            NotePlacement {
-                dir: layout
+/// Where a note belongs: its directory (`None` for a shared note whose
+/// sharer has no home in the layout), and whether that is the directory of
+/// the folder it names (`folder_record_name`) rather than the fallback - the
+/// default folder's for an own note, the sharer's home for a shared one.
+fn note_dir(
+    layout: &VaultLayout,
+    folder_record_name: Option<&str>,
+    shared_zone_owner: Option<&str>,
+) -> (Option<String>, bool) {
+    let folder_dir = folder_record_name.and_then(|folder| match shared_zone_owner {
+        None => own_folder_dir(layout, folder),
+        Some(owner) => layout.folder_dirs.get(folder).filter(|_| {
+            layout
+                .state_folders
+                .get(folder)
+                .and_then(|e| e.shared_zone_owner.as_deref())
+                == Some(owner)
+        }),
+    });
+    match (folder_dir, shared_zone_owner) {
+        (Some(dir), _) => (Some(dir.clone()), true),
+        (None, None) => (
+            Some(
+                layout
                     .folder_dirs
                     .get(DEFAULT_FOLDER_RECORD_NAME)
                     .cloned()
                     .unwrap_or_default(),
-                folder_record_name: None,
-            }
-        }
-        Some(owner) => {
-            if let Some(f) = &folder_record_name
-                && let Some(dir) = layout.folder_dirs.get(f)
-                && layout.state_folders.get(f).and_then(|e| e.shared_zone_owner.as_deref()) == Some(owner)
-            {
-                return NotePlacement {
-                    dir: dir.clone(),
-                    folder_record_name,
-                };
-            }
-            NotePlacement {
-                dir: layout.sharer_home_dirs.get(owner).cloned().unwrap_or_default(),
-                folder_record_name: None,
-            }
-        }
+            ),
+            false,
+        ),
+        (None, Some(owner)) => (layout.sharer_home_dirs.get(owner).cloned(), false),
+    }
+}
+
+/// `placeNote`.
+pub fn place_note(layout: &VaultLayout, record: &CloudKitRecord, shared_zone_owner: Option<&str>) -> NotePlacement {
+    let folder_record_name = reference_record_name(record.fields.get("Folder").map(|f| &f.value));
+    let (dir, in_folder) = note_dir(layout, folder_record_name.as_deref(), shared_zone_owner);
+    NotePlacement {
+        dir: dir.unwrap_or_default(),
+        folder_record_name: folder_record_name.filter(|_| in_folder),
     }
 }
 
@@ -602,28 +609,12 @@ pub fn note_dir_of(state_file: &str) -> String {
 
 /// `expectedNoteDir`: `None` = leave it where it is.
 pub fn expected_note_dir(layout: &VaultLayout, entry: &NoteEntry) -> Option<String> {
-    match &entry.shared_zone_owner {
-        None => {
-            let dir = entry
-                .folder_record_name
-                .as_ref()
-                .and_then(|f| own_folder_dir(layout, f));
-            Some(
-                dir.or_else(|| layout.folder_dirs.get(DEFAULT_FOLDER_RECORD_NAME))
-                    .cloned()
-                    .unwrap_or_default(),
-            )
-        }
-        Some(owner) => {
-            if let Some(f) = &entry.folder_record_name
-                && let Some(dir) = layout.folder_dirs.get(f)
-                && layout.state_folders.get(f).and_then(|e| e.shared_zone_owner.as_ref()) == Some(owner)
-            {
-                return Some(dir.clone());
-            }
-            layout.sharer_home_dirs.get(owner).cloned()
-        }
-    }
+    note_dir(
+        layout,
+        entry.folder_record_name.as_deref(),
+        entry.shared_zone_owner.as_deref(),
+    )
+    .0
 }
 
 /// `StateDirInfo`.
