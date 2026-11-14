@@ -509,14 +509,21 @@ impl Catalog {
     }
 
     /// Assets with no downloaded original, or a Live Photo with no
-    /// downloaded video ("download all" mode).
+    /// downloaded video ("download all" mode). A recorded file that is no
+    /// longer on disk (deleted by hand, or moved by a library move killed
+    /// part-way) counts as not downloaded.
     pub fn missing_originals(&self) -> Result<Vec<String>> {
         let mut st = self.conn.prepare(
-            "SELECT id FROM assets WHERE deleted = 0
-               AND ((local_path IS NULL AND orig_url IS NOT NULL) OR (live_path IS NULL AND live_url IS NOT NULL))
+            "SELECT id, orig_url IS NOT NULL, local_path, live_url IS NOT NULL, live_path FROM assets
+             WHERE deleted = 0 AND (orig_url IS NOT NULL OR live_url IS NOT NULL)
              ORDER BY created DESC",
         )?;
-        Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        let gone = |has: bool, path: Option<String>| has && path.is_none_or(|p| !Path::new(&p).exists());
+        let rows = st.query_map([], |r| {
+            let missing = gone(r.get(1)?, r.get(2)?) || gone(r.get(3)?, r.get(4)?);
+            missing.then(|| r.get::<_, String>(0)).transpose()
+        })?;
+        Ok(rows.filter_map(|r| r.transpose()).collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn set_path(&self, id: &str, which: PathKind, path: Option<&Path>) -> Result<()> {

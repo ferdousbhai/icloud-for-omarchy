@@ -917,3 +917,57 @@ fn random_sequences_keep_every_original_once_and_the_catalog_in_step() {
         );
     }
 }
+
+#[test]
+fn download_all_fetches_again_what_was_recorded_but_is_gone() {
+    // Deleted by hand: fetched again, under its own name.
+    let env = Env::new("gone", 3);
+    env.run(&["sync"]).ok();
+    let month = env.library().join("2026/09");
+    let users = users_files(&month);
+    env.run(&["download", "--all"]).ok();
+    let library = files(&env.library());
+    let live = env.rows().into_iter().find(|r| r["kind"] == "live").unwrap();
+    let (photo, video) = (
+        live["local_path"].as_str().unwrap(),
+        live["live_path"].as_str().unwrap(),
+    );
+    std::fs::remove_file(video).unwrap();
+    let again = env.run(&["download", "--all"]).ok();
+    assert_eq!(again.as_array().unwrap().len(), 1, "{again}");
+    assert_eq!(again[0]["live_path"], video, "{again}");
+    std::fs::remove_file(photo).unwrap();
+    assert_eq!(env.run(&["download", "--all"]).ok()[0]["path"], photo);
+    assert_eq!(files(&env.library()), library);
+    catalog_and_files_agree(&env, &users, &month);
+}
+
+#[test]
+fn a_move_killed_with_a_video_of_unknown_size_leaves_it_to_be_taken_up_by_its_bytes() {
+    let env = Env::new("move-unknown", 3);
+    let (pictures, _old) = old_library(&env);
+    let catalog = env.home().join("xdg-data/icloud-photos/catalog.db");
+    let db = rusqlite::Connection::open(&catalog).unwrap();
+    db.execute("UPDATE assets SET live_size = 0", []).unwrap();
+    drop(db);
+    let before = files(&pictures);
+    // Renames: 2025, IMG_1001.HEIC, then the Live Photo's IMG_1001.MOV.
+    env.exec(false, &["status"], Some("migrate.renamed:3"))
+        .crashed("migrate.renamed:3");
+    env.exec(false, &["status"], None).ok();
+    let again = env.exec(false, &["download", "--all"], None).ok();
+    assert_eq!(again.as_array().unwrap().len(), 1, "{again}");
+    let video = pictures.join("2026/09/IMG_1001.MOV");
+    assert_eq!(again[0]["live_path"], video.to_str().unwrap(), "{again}");
+    let moved: Vec<PathBuf> = files(&pictures).into_keys().collect();
+    let mut was: Vec<PathBuf> = before
+        .into_keys()
+        .map(|p| p.strip_prefix("icloud-photos").map(Path::to_path_buf).unwrap_or(p))
+        .collect();
+    was.sort();
+    assert_eq!(moved, was, "no second copy");
+    assert_eq!(
+        env.exec(false, &["download", "--all"], None).ok(),
+        serde_json::json!([])
+    );
+}

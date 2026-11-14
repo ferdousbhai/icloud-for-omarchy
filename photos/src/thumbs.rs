@@ -638,7 +638,8 @@ fn numbered(dir: &Path, stem: &str, n: u32, ext: &str) -> PathBuf {
 
 /// `<library>/<YYYY>/<MM>/<filename>`, with ` (2)` etc. when the name is
 /// taken (IMG_0001.JPG repeats across cameras). For a Live Photo the video's
-/// name (same stem) must be free too. Returns (photo, video).
+/// name (same stem) must be free too, or be its video already. Returns
+/// (photo, video).
 fn plan_original(
     cat: &Catalog,
     library: &Path,
@@ -650,8 +651,9 @@ fn plan_original(
         if !is_free(cat, row, taken, &photo)? {
             continue;
         }
+        // The video already downloaded under this name is no obstacle.
         if let Some(l) = &live
-            && (*l == photo || !is_free(cat, row, taken, l)?)
+            && (*l == photo || (row.live_path.as_ref() != Some(l) && !is_free(cat, row, taken, l)?))
         {
             continue;
         }
