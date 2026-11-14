@@ -404,7 +404,8 @@ push or sync a pull by itself) and a sync,
 and checks that no note, attachment or folder was created twice, nothing
 the user kept was deleted or untracked, no edit was lost and state.json
 reads back. The runs: clone, pull (with checkpoints, and with notes and
-folders moved), push (notes, attachments, folders), sync, shared zones
+folders moved), push (notes, attachments, folders), sync (one with
+attachments downloading side by side), shared zones
 (written in, read only, revoked), a filename-title vault retitled on both
 sides, and migrations from layouts 2 and 3; and runs cut short and then
 met by a change before the next one: a share revoked, a folder renamed
@@ -789,8 +790,13 @@ The engine (`vault::attachments::AttachmentRecords`,
   icloud-session `Session`, whose ureq agent is shared behind an `Arc`) they
   run on 4 background threads while the notes are processed; a failure
   surfaces at the next queued download, and the queue is drained (its first
-  failure returned) before pull moves or removes any attachment file and
-  before state is written. A destination already queued is fetched once.
+  failure returned) before pull moves notes to a changed layout and before
+  the final state is written. While they run, pull removes only attachment
+  files of the note at hand, and an attachment it moves beside a note moved
+  here never takes a name a queued download was given (which the download
+  would replace when it lands); a checkpoint forgets the versions of the
+  notes with downloads queued (`cmd::redo_downloads`). A destination
+  already queued is fetched once.
   Over a transport without `Transport::shared_downloader` (the recorded
   scenarios' `ReplayTransport`, the test mocks) each download runs when
   queued, in order, so request logs stay deterministic.
