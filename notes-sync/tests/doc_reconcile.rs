@@ -342,6 +342,31 @@ fn an_explicit_starting_list_item_number_of_0_is_repaired_even_when_nothing_rend
     }
 }
 
+/// A monospaced paragraph shows no inline styling, whatever its runs
+/// carry. Made body text, it shows what they carry: that is reconciled
+/// with the styling asked for, like any other.
+#[test]
+fn a_code_line_made_body_text_drops_the_styling_its_runs_carried_unseen() {
+    use icloud_notes_sync::doc::format::formats_round_trip_equal;
+    use icloud_notes_sync::md::parse::parse_note_markdown;
+    let styled = |length: u32| AttributeRun {
+        length: Some(length),
+        paragraph_style: Some(style(4)),
+        font_hints: Some(1),
+        underline: Some(1),
+        link: Some("https://example.com/".into()),
+        ..Default::default()
+    };
+    for (markdown, text) in [("some code", "some code"), ("some **code**", "some code")] {
+        let mut doc = doc_with(text, vec![styled(5), with_style(4, style(4))]);
+        let desired = parse_note_markdown(markdown).unwrap().paragraphs;
+        let result = reconcile_note_format_with(&mut doc, &desired, &REPLICA_B, &mut common::counting_uuids());
+        assert_eq!(result.unwrap(), Ok(true));
+        let written = decode_note_format(&doc.text, &doc.attribute_runs).unwrap();
+        assert!(formats_round_trip_equal(&written, &desired), "{markdown}: {written:?}");
+    }
+}
+
 #[test]
 fn misaligned_desired_paragraphs_refuse_rather_than_guess() {
     let mut doc = doc_with("one line", vec![plain(8)]);

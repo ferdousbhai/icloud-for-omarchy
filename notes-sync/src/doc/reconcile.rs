@@ -154,12 +154,25 @@ fn build_paragraph_plan<'a>(
 ) -> ParagraphPlan<'a> {
     let start = current.start;
     let end = start + text_len(current) + usize::from(!is_last);
+    // A monospaced paragraph shows none of the styling its runs carry
+    // (`normalize_spans`); made another kind it shows all of it, so that is
+    // what the wanted styling is compared with.
+    let shown;
+    let styled = if current.kind == ParagraphKind::Monospaced && desired.kind != ParagraphKind::Monospaced {
+        shown = FormatParagraph {
+            kind: desired.kind,
+            ..current.clone()
+        };
+        &shown
+    } else {
+        current
+    };
     ParagraphPlan {
         current,
         desired,
         start,
         end,
-        current_spans: span_intervals(current, end),
+        current_spans: span_intervals(styled, end),
         desired_spans: span_intervals(desired, end),
         todo_uuid,
         force_fresh_todo_uuid,
