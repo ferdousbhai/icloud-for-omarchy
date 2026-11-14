@@ -3531,6 +3531,45 @@ fn with_no_find_my_jar_the_stored_password_signs_in_first() {
     assert!(prop::<bool>(&conn, "FindMyAuthorized"));
 }
 
+/// Another daemon's change of `account.json` (the same Apple ID) while the
+/// autofill window is open: followed, and the jar the window captured is
+/// still kept, on the account read back.
+#[test]
+fn a_find_my_sign_in_outlasting_a_followed_change_is_kept() {
+    let (_accepted, server) = accepting("auto1");
+    let autofill = Autofill::new();
+    let env = Env::start(Opts {
+        setup_url: &server.url,
+        signin: Some(&autofill.bin),
+        // Ticks every half second: the change is followed while the
+        // window is open.
+        idle_secs: 2.0,
+        ..Default::default()
+    });
+    env.store_password(PASSWORD);
+    let conn = env.conn();
+    wait_keyring_look(&conn, true);
+    autofill.set_delay("2");
+    let caller = env.conn();
+    let asked = thread::spawn(move || call::<(String, HashMap<String, String>)>(&caller, "FindMySession"));
+    wait_until("the window", Duration::from_secs(30), || autofill.file("got").exists());
+    env.seed_validated_at(now());
+    let (header, _) = asked.join().unwrap().unwrap();
+    assert_eq!(
+        cookie_of(&header, "X-APPLE-WEBAUTH-FMIP").as_deref(),
+        Some("auto1"),
+        "{header}"
+    );
+    assert!(prop::<bool>(&conn, "FindMyAuthorized"));
+    let secret = env.session_secret().unwrap();
+    assert_eq!(
+        find_my_cookie(&secret["find_my"]["cookies"]).as_deref(),
+        Some("auto1"),
+        "{secret}"
+    );
+    assert_eq!(autofill.runs(), 1);
+}
+
 /// A Find My autofill window can wait minutes on a 2FA code with its
 /// caller gone: the daemon neither exits under it nor loses what it
 /// captures.

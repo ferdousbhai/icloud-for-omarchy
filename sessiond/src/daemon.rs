@@ -1420,50 +1420,63 @@ impl Daemon {
     /// Merges `Set-Cookie`s a client got into the jar `jar` picks of the
     /// account (none: nothing to do), and stores the account if it changed.
     /// With `dsid`, the account the client got them for: `SignInRequired`,
-    /// and nothing merged, unless that is the account held now (checked
-    /// under the same lock as the merge, so no sign-in comes between).
-    ///
-    /// Another daemon's change followed before the merge was written (see
-    /// [`Daemon::follow_disk`]) drops it with the account it was made on:
-    /// it is made again on the account followed, if that is the same
-    /// sign-in (merging by name, the other daemon's cookies stay, unless
-    /// these replace them).
+    /// and nothing merged, unless that is the account held now. Merged
+    /// only into the sign-in held when the call came (checked under the
+    /// same lock as the merge, so no sign-in comes between): made again
+    /// after a follow, merging by name keeps the other daemon's cookies,
+    /// but a later sign-in's jar must not get an earlier one's.
     fn merge_into(
         &self,
         dsid: Option<&str>,
         set_cookies: &[String],
         jar: impl Fn(&mut Account) -> Option<&mut Vec<Cookie>>,
     ) -> Result<(), ServiceError> {
-        let mut merged_into = None;
-        for _ in 0..3 {
-            self.retry_keyring()?;
-            let mut st = lock(&self.state);
-            let sign_in = st.account.as_ref().map(|a| (a.dsid.clone(), a.captured_at.clone()));
-            if merged_into.is_some() && sign_in != merged_into {
-                break;
+        self.retry_keyring()?;
+        let sign_in = {
+            let st = lock(&self.state);
+            match st.account.as_ref() {
+                Some(a) if dsid.is_none_or(|dsid| a.dsid == dsid) => (a.dsid.clone(), a.captured_at.clone()),
+                Some(_) => return Err(st.sign_in_required()),
+                None if dsid.is_some() => return Err(st.sign_in_required()),
+                None => return Ok(()),
             }
-            if let Some(dsid) = dsid
-                && st.account.as_ref().is_none_or(|a| a.dsid != dsid)
-            {
-                return Err(st.sign_in_required());
-            }
-            let follows = st.follows;
-            let changed = st
-                .account
-                .as_mut()
-                .and_then(&jar)
-                .is_some_and(|jar| cookies::merge_set_cookies(jar, set_cookies, time::now_secs()));
-            let save = changed.then(|| self.save_account(&mut st));
-            drop(st);
-            let Some(save) = save else { break };
-            self.write(save);
-            if lock(&self.state).follows == follows {
-                break;
-            }
-            merged_into = sign_in;
-        }
+        };
+        self.apply_following(
+            |a| (&a.dsid, &a.captured_at) == (&sign_in.0, &sign_in.1),
+            |a| jar(a).is_some_and(|jar| cookies::merge_set_cookies(jar, set_cookies, time::now_secs())),
+        );
         self.announce(false);
         Ok(())
+    }
+
+    /// Makes a change of the account (`apply`: whether it changed
+    /// anything) and writes it, if the account held is one `same` accepts.
+    /// Another daemon's change followed before the write (see
+    /// [`Daemon::follow_disk`]) drops it with the account it was made on:
+    /// it is made again on the account followed, read from the keyring,
+    /// if that one is accepted too (a few times at most). Whether an
+    /// accepted account was held.
+    fn apply_following(&self, same: impl Fn(&Account) -> bool, apply: impl Fn(&mut Account) -> bool) -> bool {
+        for _ in 0..3 {
+            if self.retry_keyring().is_err() {
+                return false;
+            }
+            let mut st = lock(&self.state);
+            let follows = st.follows;
+            let Some(account) = st.account.as_mut().filter(|a| same(a)) else {
+                return false;
+            };
+            if !apply(account) {
+                return true;
+            }
+            let save = self.save_account(&mut st);
+            drop(st);
+            self.write(save);
+            if lock(&self.state).follows == follows {
+                return true;
+            }
+        }
+        true
     }
 
     /// Confirms with Apple before signing every app out. A 2xx keeps the
@@ -1578,20 +1591,25 @@ impl Daemon {
             }
         }
         let (jar, params, trust) = result?;
-        let same = st.generation == generation;
-        let Some(account) = st.account.as_mut().filter(|_| same) else {
-            return Err(LoginError::Failed("signed out meanwhile".into()));
-        };
-        account.find_my = Some(FindMyJar::captured_now(jar, params));
-        let save = self.save_account(&mut st);
         drop(st);
-        self.write(save);
+        // Kept for the same Apple ID, even if another daemon's change was
+        // followed meanwhile (a SignOut closes the window).
+        let jar = FindMyJar::captured_now(jar, params);
+        let kept = self.apply_following(
+            |a| a.dsid == dsid,
+            |a| {
+                a.find_my = Some(jar.clone());
+                true
+            },
+        );
+        if !kept {
+            return Err(LoginError::Failed("signed out meanwhile".into()));
+        }
         // The window shows itself when Apple asks for a code, and may have
         // been trusted then.
         self.keep_trust(&trust, |st| {
-            st.account
-                .as_ref()
-                .filter(|_| st.generation == generation)
+            (st.account.as_ref())
+                .filter(|a| a.dsid == dsid)
                 .map(|a| (a.apple_id.clone(), a.dsid.clone()))
         });
         Ok(())
