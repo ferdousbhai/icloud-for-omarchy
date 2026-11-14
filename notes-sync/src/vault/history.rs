@@ -235,13 +235,16 @@ pub fn list_versions(target_dir: &Path, record_name: &str) -> Result<Vec<Version
     read_json_dir(&record_history_dir(target_dir, record_name)?)
 }
 
-/// A record's latest snapshot, parsing only that one file.
+/// A record's latest snapshot, parsing only that one file - or, when it
+/// can't be read (cut short by a crash of an older version, which wrote it
+/// in place), the newest one before it that can: what [`record_version`]
+/// passes over, an epoch must not fail on.
 pub fn latest_version(target_dir: &Path, record_name: &str) -> Result<Option<VersionSnapshot>, Error> {
     let dir = record_history_dir(target_dir, record_name)?;
-    match json_file_names(&dir)?.last() {
-        Some(name) => Ok(Some(read_json_file(&dir.join(name))?)),
-        None => Ok(None),
-    }
+    Ok(json_file_names(&dir)?
+        .iter()
+        .rev()
+        .find_map(|name| read_json_file(&dir.join(name)).ok()))
 }
 
 /// A record's snapshot by id, parsing only the files whose name could

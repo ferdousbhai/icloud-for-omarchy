@@ -415,6 +415,31 @@ fn file_names(dir: &Path) -> Vec<String> {
     names
 }
 
+/// A table's latest snapshot cut short (an older version wrote in place):
+/// the epoch of a push that left the table alone names the newest snapshot
+/// that reads, instead of failing the push after it was sent.
+#[test]
+fn record_epoch_passes_over_an_unreadable_latest_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    record_version(dir.path(), &note_input("REC-1", "tag-1", "AAAA")).unwrap();
+    record_version(
+        dir.path(),
+        &VersionSnapshotInput::table("ATT-1", "tag-1", "TTTT", "REC-1"),
+    )
+    .unwrap();
+    let readable = latest_version(dir.path(), "ATT-1").unwrap().unwrap();
+    let table_dir = dir.path().join(".icloud-notes/history/ATT-1");
+    std::fs::write(
+        table_dir.join("9999999999999-000001-deadbeef.json"),
+        "{\"recordName\": \"ATT",
+    )
+    .unwrap();
+
+    record_epoch(dir.path(), "REC-1", &names(&["REC-1", "ATT-1"])).unwrap();
+    let epoch = list_epochs(dir.path(), "REC-1").unwrap().remove(0);
+    assert_eq!(epoch.snapshots["ATT-1"], Some(readable.id));
+}
+
 #[test]
 fn record_version_and_record_epoch_parse_only_the_latest_snapshot() {
     let dir = tempfile::tempdir().unwrap();
