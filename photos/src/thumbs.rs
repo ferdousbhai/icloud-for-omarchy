@@ -860,10 +860,7 @@ impl Downloader {
     /// temporary files killed downloads left ([`sweep_temporaries`]), off
     /// the caller's thread.
     pub fn start(transport: Arc<dyn Transport>, targets: Targets, workers: usize, notify: Notify) -> Downloader {
-        let library = targets.library.clone();
-        let _ = std::thread::Builder::new().name("sweep".into()).spawn(move || {
-            sweep_temporaries(&library, STALE_TEMPORARY);
-        });
+        sweep_in_background(targets.library.clone());
         let inner = Arc::new(Inner {
             queues: Mutex::new(Queues {
                 now: VecDeque::new(),
@@ -885,7 +882,10 @@ impl Downloader {
         Downloader { inner }
     }
 
+    /// Download originals into `dir` from now on, first clearing it of
+    /// old temporary files as [`start`](Self::start) does.
     pub fn set_library(&self, dir: PathBuf) {
+        sweep_in_background(dir.clone());
         self.inner.targets.lock().unwrap_or_else(|e| e.into_inner()).library = dir;
     }
 
@@ -949,6 +949,13 @@ impl Downloader {
             q.pending.remove(&k);
         }
     }
+}
+
+/// [`sweep_temporaries`] of `library`, off the caller's thread.
+fn sweep_in_background(library: PathBuf) {
+    let _ = std::thread::Builder::new().name("sweep".into()).spawn(move || {
+        sweep_temporaries(&library, STALE_TEMPORARY);
+    });
 }
 
 fn worker(inner: Arc<Inner>) {

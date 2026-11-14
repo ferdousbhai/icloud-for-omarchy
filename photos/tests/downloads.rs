@@ -688,10 +688,18 @@ fn the_temporaries_of_killed_downloads_are_swept_once_stale() {
     put(&month.join(ours), old);
     let t = FixtureTransport::new(library_fixture);
     let (_cat, targets) = synced(&t, root);
-    let _pool = Downloader::start(std::sync::Arc::new(t), targets, 1, Box::new(|_| {}));
-    let gone = (0..500).any(|_| {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        !month.join(ours).exists()
-    });
-    assert!(gone, "swept when the pool starts");
+    let pool = Downloader::start(std::sync::Arc::new(t), targets, 1, Box::new(|_| {}));
+    let swept = |p: &std::path::Path| {
+        (0..500).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            !p.exists()
+        })
+    };
+    assert!(swept(&month.join(ours)), "swept when the pool starts");
+
+    // And a library folder chosen in the preferences, at once.
+    let other = root.join("Other");
+    put(&other.join("2026/01").join(ours), old);
+    pool.set_library(other.clone());
+    assert!(swept(&other.join("2026/01").join(ours)), "swept when chosen");
 }
