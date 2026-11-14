@@ -57,6 +57,9 @@ struct Server {
     reject: Option<(&'static str, &'static str)>,
     /// `records/modify` fails with this HTTP status.
     fail_modify: Option<u16>,
+    /// The run is taken down right after the next `records/modify` was
+    /// applied (a panic stands in for the kill).
+    die_after_modify: Mutex<bool>,
     changes: Mutex<u32>,
 }
 
@@ -216,7 +219,13 @@ impl Transport for Server {
                         body: "modify refused".into(),
                     });
                 }
-                None => self.modify(body),
+                None => {
+                    let answer = self.modify(body);
+                    if std::mem::take(&mut *self.die_after_modify.lock().unwrap()) {
+                        std::panic::resume_unwind(Box::new("killed"));
+                    }
+                    answer
+                }
             },
             // A pull: everything the zone holds, and nobody sharing.
             "/changes/zone" => json!({ "zones": [{
@@ -977,6 +986,50 @@ fn a_new_note_is_created_with_its_attachments() {
          directory, or remove the link"
     );
     assert_eq!(server.posts.lock().unwrap().len(), requests);
+}
+
+/// A push killed right after iCloud created a new note with its attachment
+/// recorded neither. The next push finds the create it had announced, and
+/// tracks the attachment along with the note: the link in the file stands
+/// for it, and nothing is left to push. (Untracked, the link read as a
+/// missing embed marker, and the note was refused by every push after.)
+#[test]
+fn a_new_note_whose_push_was_killed_keeps_its_attachment_tracked() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server {
+        die_after_modify: Mutex::new(true),
+        ..Server::with_note()
+    });
+    attach(&vault, "hello.txt", b"hello");
+    std::fs::write(
+        vault.join("Notes/Trip.md"),
+        "Trip\n\nThe ticket: [hello.txt](attachments/hello.txt)\n",
+    )
+    .unwrap();
+
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| push(&server, &vault)));
+    assert!(killed.is_err(), "the push was cut off");
+    let operations = server.posts_to("/records/modify")[0]["operations"].clone();
+    let name = |i: usize| operations[i]["record"]["recordName"].as_str().unwrap().to_owned();
+    let (note, media, attachment) = (name(0), name(1), name(2));
+    assert!(!state(&vault).notes.contains_key(&note), "nothing was recorded");
+
+    let result = push(&server, &vault);
+    assert!(result.failures().is_empty(), "{result:?}");
+    assert!(
+        result.entries.iter().all(|e| e.entry.resolution == PlanResolution::Noop),
+        "{result:?}"
+    );
+    assert_eq!(server.posts_to("/records/modify").len(), 1, "nothing more was sent");
+    assert_eq!(server.uploads.lock().unwrap().len(), 1);
+    let after = state(&vault);
+    assert_eq!(after.notes[&note].file, "Notes/Trip.md");
+    let tracked = &after.attachments.as_ref().unwrap()[&attachment];
+    assert_eq!(tracked.file, "Notes/attachments/hello.txt");
+    assert_eq!(tracked.note_record_name, note);
+    assert_eq!(tracked.media_record_name, media);
+    assert!(preview(&server, &vault).entries.is_empty());
 }
 
 // --- removing an attachment -----------------------------------------------------------

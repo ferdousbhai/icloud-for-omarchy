@@ -250,13 +250,16 @@ window closes, so a killed run is ordinary.
 - `push` announces a create before sending it: the record name (a new
   note's, drawn then; a new folder's, drawn by the plan) goes into
   state.json's `pendingCreates` (`{recordName: {file, sharedZoneOwner?,
-  folder?: {title, parentRecordName?}}}`), which is written before the
+  folder?: {title, parentRecordName?}, attachments?: [{attachmentRecordName,
+  mediaRecordName, file}]}}`), which is written before the
   request and cleared once the entry's requests are answered. A push killed
   in between (iCloud has the record; the file has no id and nothing tracks
   it) leaves the entry. The next push, before it reads the vault
   (`cmd::push::settle_pending_creates`), looks the names up: a note that
   exists is tracked at its file (the announced one, or the untracked file
-  already carrying the id) and its id stamped; a folder that exists is
+  already carrying the id) and its id stamped, and the attachments created
+  with it (one atomic request) are tracked at their files, so that their
+  links stand for them; a folder that exists is
   recorded; one iCloud doesn't have was never created and is created by the
   plan as usual. A lookup that answers an error fails the push
   (`cloudkit_request_failed`): the answer decides between one note and two.

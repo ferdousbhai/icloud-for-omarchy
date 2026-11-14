@@ -537,6 +537,20 @@ struct PendingCreate {
     /// For a folder: its title and parent, as the create sent them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<PendingFolder>,
+    /// For a note: the attachments created with it in the same request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<PendingAttachment>,
+}
+
+/// An attachment a pending note create carries: what state tracks of it
+/// once the note is found to exist (the request is atomic).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingAttachment {
+    attachment_record_name: String,
+    media_record_name: String,
+    /// Vault-root-relative.
+    file: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -672,6 +686,27 @@ fn settle_pending_creates<T: Transport>(
         if !recording_suppressed() {
             stamp_note_id(target_dir, &file, &record_name, state.mode())?;
         }
+        // Its attachments were created with it: each link in the file
+        // stands for one, as after the push that made them. (No checksum:
+        // the upload's answer never arrived.)
+        track_new_attachments(
+            state,
+            create
+                .attachments
+                .into_iter()
+                .map(|attachment| {
+                    (
+                        attachment.attachment_record_name,
+                        AttachmentEntry {
+                            file: attachment.file,
+                            media_record_name: attachment.media_record_name,
+                            media_file_checksum: String::new(),
+                            note_record_name: record_name.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        );
         state.notes.insert(
             record_name,
             NoteEntry {
@@ -3129,6 +3164,7 @@ fn execute<T: Transport>(
                         title: folder.title.clone(),
                         parent_record_name: folder.parent_record_name.clone(),
                     }),
+                    attachments: Vec::new(),
                 },
             )?;
             let fields = build_folder_create_fields(&folder.title, folder.parent_record_name.as_deref());
@@ -3436,6 +3472,14 @@ fn execute<T: Transport>(
                     file: file.clone(),
                     shared_zone_owner: shared_zone_owner.clone(),
                     folder: None,
+                    attachments: new_attachments
+                        .iter()
+                        .map(|attachment| PendingAttachment {
+                            attachment_record_name: attachment.attachment_record_name.clone(),
+                            media_record_name: attachment.media_record_name.clone(),
+                            file: attachment.file.clone(),
+                        })
+                        .collect(),
                 },
             )?;
             let zone = note_zone(shared_zone_owner.as_deref());
