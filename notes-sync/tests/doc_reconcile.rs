@@ -447,6 +447,40 @@ fn text_typed_at_the_start_of_a_line_takes_that_lines_paragraph_style() {
     assert_eq!(said_per_line(&doc), vec![vec![(3, 0, None)], vec![(3, 1, None)]]);
 }
 
+/// The note's last paragraph has no line break to carry its style: empty,
+/// it has no character at all, and nothing is written for the style asked.
+#[test]
+fn an_empty_last_paragraph_is_given_no_style() {
+    use icloud_notes_sync::doc::format::{formats_round_trip_equal, note_holds_format};
+    use icloud_notes_sync::md::parse::parse_note_markdown;
+    for markdown in ["- one\n-", "- one\n- [ ]", "- one\n##", "- one\n>"] {
+        let wanted = parse_note_markdown(markdown).unwrap();
+        let last = wanted.paragraphs.last().unwrap();
+        assert!(
+            last.kind != ParagraphKind::Body || last.block_quote_level == 1,
+            "{markdown:?}"
+        );
+        let length = len16(&wanted.text) as u32;
+        let mut doc = doc_with(&wanted.text, vec![with_style(length, style(100))]);
+        let before = doc.clone();
+        let result =
+            reconcile_note_format_with(&mut doc, &wanted.paragraphs, &REPLICA_B, &mut common::counting_uuids());
+        assert_eq!(result.unwrap(), Ok(false), "{markdown:?}");
+        assert_eq!(doc, before, "{markdown:?}");
+        let written = decode_note_format(&doc.text, &doc.attribute_runs).unwrap();
+        assert!(note_holds_format(&written, &wanted.paragraphs), "{markdown:?}");
+        assert!(!formats_round_trip_equal(&written, &wanted.paragraphs), "{markdown:?}");
+    }
+    // A last paragraph with text is held to what was asked, as is an empty
+    // one that isn't the last.
+    let wanted = parse_note_markdown("- one\n- two").unwrap().paragraphs;
+    let plain_last = parse_note_markdown("- one\ntwo").unwrap().paragraphs;
+    assert!(!note_holds_format(&plain_last, &wanted));
+    let wanted = parse_note_markdown("-\n- two").unwrap().paragraphs;
+    let plain_first = parse_note_markdown("\n- two").unwrap().paragraphs;
+    assert!(!note_holds_format(&plain_first, &wanted));
+}
+
 #[test]
 fn misaligned_desired_paragraphs_refuse_rather_than_guess() {
     let mut doc = doc_with("one line", vec![plain(8)]);

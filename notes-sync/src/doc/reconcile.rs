@@ -93,6 +93,9 @@ pub fn reconcile_note_format_with(
     let own_styles = own_styles_of_mixed_paragraphs(doc, &current);
 
     let changed: Vec<usize> = (0..desired.len())
+        // The note's last paragraph, when empty, has no character to carry
+        // a style (`note_holds_format`): nothing is written for it.
+        .filter(|&i| !(i == last && current[i].text.is_empty()))
         .filter(|&i| {
             needs_fresh_todo_uuid.contains(&i)
                 || needs_start_repair.contains(&i)

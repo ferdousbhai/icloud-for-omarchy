@@ -465,3 +465,20 @@ pub fn formats_round_trip_equal(a: &[FormatParagraph], b: &[FormatParagraph]) ->
             )
         })
 }
+
+/// Whether a note whose format reads back as `written` holds what `wanted`
+/// asks for: [`formats_round_trip_equal`], but for the style of a last
+/// paragraph that is empty. A paragraph's style is carried by its
+/// characters, its line break among them, and the note's last paragraph has
+/// no line break: empty, it is read as body text whatever it was written as
+/// (`decode_note_format`), so a list item, heading or quote with nothing in
+/// it, on a note's last line, is an empty line in the note.
+pub fn note_holds_format(written: &[FormatParagraph], wanted: &[FormatParagraph]) -> bool {
+    let Some(last) = wanted.len().checked_sub(1) else {
+        return written.is_empty();
+    };
+    if written.len() != wanted.len() || !wanted[last].text.is_empty() || !written[last].text.is_empty() {
+        return formats_round_trip_equal(written, wanted);
+    }
+    formats_round_trip_equal(&written[..last], &wanted[..last])
+}

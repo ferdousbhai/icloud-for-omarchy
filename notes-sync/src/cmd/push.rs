@@ -38,7 +38,7 @@ use crate::doc::encode::{
     build_folder_create_fields, build_media_create_fields, build_note_create_fields, build_note_move_fields,
     build_note_trash_fields, build_note_update_fields,
 };
-use crate::doc::format::{FormatParagraph, decode_note_format, formats_round_trip_equal};
+use crate::doc::format::{FormatParagraph, decode_note_format, note_holds_format};
 use crate::doc::proto::topotext::AttachmentInfo;
 use crate::doc::reconcile::reconcile_note_format;
 use crate::doc::table_edit::prepare_table_attachment_update;
@@ -2179,9 +2179,7 @@ fn build_create_payload(
     let rebuilt_text = rebuilt.string();
     let format = decode_note_format(rebuilt_text, &rebuilt.attribute_run);
     let verified = rebuilt_text == desired.text
-        && format
-            .as_ref()
-            .is_ok_and(|f| formats_round_trip_equal(f, &desired.paragraphs))
+        && format.as_ref().is_ok_and(|f| note_holds_format(f, &desired.paragraphs))
         && (new_attachments.is_empty()
             || crate::doc::embeds::embed_slots_of(&rebuilt).is_some_and(|slots| slots == expected_slots));
     if !verified {
@@ -2960,7 +2958,7 @@ fn prepare_note_text_update(
         Err(e) => return Ok(Err(exception(e))),
     };
     match decode_note_format(rebuilt.string(), &rebuilt.attribute_run) {
-        Ok(format) if formats_round_trip_equal(&format, &desired.paragraphs) => {}
+        Ok(format) if note_holds_format(&format, &desired.paragraphs) => {}
         _ => return Ok(Err(TextUpdateRefusal::RebuiltFormatFailed)),
     }
     Ok(Ok(Some(js::base64_encode(&compressed))))
