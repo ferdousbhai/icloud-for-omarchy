@@ -8,60 +8,24 @@
 //! so no GTK code may reach it (not even through generic code a debug
 //! build shares between modules of one crate).
 
-mod banner;
 mod window;
 
-use gtk::{gio, glib};
+use adw::prelude::*;
 
 pub const APP_ID: &str = "com.ferdousbhai.IcloudReminders";
 
 fn main() {
-    if std::env::args_os().len() > 1 {
-        std::process::exit(icloud_reminders::cli::run().into());
-    }
-    std::process::exit(i32::from(run().get()));
-}
-
-/// Runs `f` on a worker thread and hands its result back on the main loop.
-/// Every network and file call goes through here, never the main loop.
-pub fn background<T, F, C>(f: F, done: C)
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-    C: FnOnce(Result<T, String>) + 'static,
-{
-    glib::spawn_future_local(async move {
-        let result = gio::spawn_blocking(f)
-            .await
-            .map_err(|_| "the background task crashed".to_string());
-        done(result);
-    });
-}
-
-fn run() -> glib::ExitCode {
-    use adw::prelude::*;
-
-    // The name the CLI has (X11 WM_CLASS, logs), not the
-    // `icloud-reminders-app` binary's.
-    glib::set_prgname(Some("icloud-reminders"));
-    glib::set_application_name("Reminders");
-    let local = match icloud_reminders::due::local_zone() {
-        Ok(zone) => zone,
-        Err(e) => {
+    icloud_app_ui::main(icloud_reminders::cli::run, || {
+        let local = icloud_reminders::due::local_zone().unwrap_or_else(|e| {
             eprintln!("icloud-reminders: {e}");
-            return glib::ExitCode::FAILURE;
-        }
-    };
-    let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| {
-        if let Some(win) = app.active_window() {
-            win.present();
-            return;
-        }
-        window::Window::new(app, local.clone()).present();
-    });
-    app.set_accels_for_action("win.refresh", &["<Ctrl>r", "F5"]);
-    app.set_accels_for_action("win.new", &["<Ctrl>n"]);
-    app.set_accels_for_action("window.close", &["<Ctrl>w", "<Ctrl>q"]);
-    app.run()
+            std::process::exit(1);
+        });
+        let app = icloud_app_ui::application(APP_ID, "icloud-reminders", "Reminders", move |app| {
+            window::Window::new(app, local.clone()).present()
+        });
+        app.set_accels_for_action("win.refresh", &["<Ctrl>r", "F5"]);
+        app.set_accels_for_action("win.new", &["<Ctrl>n"]);
+        app.set_accels_for_action("window.close", &["<Ctrl>w", "<Ctrl>q"]);
+        app
+    })
 }

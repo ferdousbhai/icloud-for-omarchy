@@ -6,12 +6,12 @@
 //! The request shapes are timlaing/pyicloud's Reminders service
 //! (`services/reminders/{client,_reads,_writes}.py`), the only public
 //! description of them; Reminders left CalDAV for this store in iOS 13.
-//! All HTTP goes through [`SessionTransport`], over `icloud_session::Session`;
+//! All HTTP goes through [`SessionTransport`] (icloud-app's), over `icloud_session::Session`;
 //! the tests point that at a fake server with icloud-session's mock mode.
 
-use std::sync::Mutex;
-
 use serde_json::{Map, Value, json};
+
+pub use icloud_app::SessionTransport;
 
 pub const DB_PATH: &str = "/database/1/com.apple.reminders/production/private";
 pub const ZONE: &str = "Reminders";
@@ -20,28 +20,15 @@ const PAGE_LIMIT: u64 = 200;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The iCloud web session is gone: `icloud-session sign-in`.
-    #[error("sign in to iCloud required")]
-    SignInRequired,
-    /// No network (or Apple unreachable): a background run skips its sync.
-    #[error("offline: {0}")]
-    Offline(String),
-    /// Signed in, but the keyring holding the iCloud session won't give it
-    /// (locked, no Secret Service): unlock it and try again. Not a sign-in.
-    #[error("the keyring holding the iCloud session cannot be read ({0}): unlock it and try again")]
-    KeyringUnavailable(String),
-    /// The service answered, but with a body this version can't read (an
-    /// HTML maintenance page instead of JSON, say). Not offline.
-    #[error("unexpected response: {0}")]
-    BadResponse(String),
-    #[error("iCloud answered HTTP {status}: {body}")]
-    Http { status: u16, body: String },
+    /// Anything icloud-session failed with: signed out, offline, an HTTP
+    /// status, the daemon or the keyring out of reach, an answer that is not
+    /// JSON. Kept whole, so the command line reports it as every iCloud
+    /// tool does.
+    #[error(transparent)]
+    Session(#[from] icloud_session::Error),
     /// CloudKit answered 200 but refused a record or the zone.
     #[error("CloudKit {code}: {reason}")]
     CloudKit { code: String, reason: String },
-    /// `icloud-sessiond` cannot be reached.
-    #[error("{0}")]
-    Service(String),
     /// The reminder a write was for has been deleted on another device.
     #[error("\"{0}\" has been deleted")]
     Gone(String),
@@ -51,20 +38,6 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<icloud_session::Error> for Error {
-    fn from(e: icloud_session::Error) -> Self {
-        match e {
-            icloud_session::Error::SignInRequired => Error::SignInRequired,
-            icloud_session::Error::Http { status, body } => Error::Http { status, body },
-            icloud_session::Error::Offline(m) | icloud_session::Error::Network(m) => Error::Offline(m),
-            icloud_session::Error::KeyringUnavailable(m) => Error::KeyringUnavailable(m),
-            icloud_session::Error::BadResponse(m) => Error::BadResponse(m),
-            e @ icloud_session::Error::Service(_) => Error::Service(e.to_string()),
-            other => Error::Other(other.to_string()),
-        }
-    }
-}
-
 /// A file of this computer's (the cache, the folder) that cannot be read or written.
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
@@ -73,60 +46,15 @@ impl From<std::io::Error> for Error {
 }
 
 impl Error {
+    /// The iCloud web session is gone: the window shows its sign-in banner.
+    pub fn is_sign_in(&self) -> bool {
+        matches!(self, Error::Session(icloud_session::Error::SignInRequired))
+    }
+
     /// CloudKit refused a write because the record changed on the server
     /// since its change tag was read.
     pub fn is_conflict(&self) -> bool {
         matches!(self, Error::CloudKit { code, .. } if code == "CONFLICT")
-    }
-}
-
-/// What the Reminders code needs from an HTTP client with an iCloud
-/// session, over `icloud-session`. Connects lazily, so a missing
-/// sign-in surfaces as `SignInRequired` on first use, and drops the
-/// connection on `SignInRequired` or a daemon failure so that a later
-/// sign-in is picked up without restarting.
-#[derive(Default)]
-pub struct SessionTransport {
-    session: Mutex<Option<icloud_session::Session>>,
-}
-
-impl SessionTransport {
-    fn with<T>(&self, f: impl FnOnce(&icloud_session::Session) -> icloud_session::Result<T>) -> Result<T> {
-        let mut guard = self.session.lock().unwrap_or_else(|p| p.into_inner());
-        if guard.is_none() {
-            *guard = Some(icloud_session::Session::connect()?);
-        }
-        let result = f(guard.as_ref().expect("just connected"));
-        if let Err(icloud_session::Error::SignInRequired | icloud_session::Error::Service(_)) = &result {
-            *guard = None;
-        }
-        Ok(result?)
-    }
-
-    /// Base URL of a `webservices` entry (`ckdatabasews`).
-    pub fn service_url(&self, key: &str) -> Result<String> {
-        let ws = self.with(|s| s.webservices())?;
-        ws.url(key)
-            .map(str::to_owned)
-            .ok_or_else(|| Error::Other(format!("iCloud did not offer the {key} service for this account")))
-    }
-
-    pub fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
-        let response = self.with(|s| s.post_json(url, body))?;
-        // A 200 that isn't JSON is CloudKit misbehaving, not the network:
-        // parsed here so it isn't reported as offline.
-        serde_json::from_slice(&response.body).map_err(|e| {
-            let endpoint = url.split('?').next().unwrap_or(url);
-            Error::BadResponse(format!(
-                "CloudKit answered {endpoint} with something that isn't JSON: {e}"
-            ))
-        })
-    }
-
-    /// The signed-in account's dsid, so a cache of another account's
-    /// reminders is never shown.
-    pub fn account(&self) -> Result<String> {
-        self.with(|s| Ok(s.dsid().to_owned()))
     }
 }
 
@@ -220,7 +148,9 @@ pub fn zone_id() -> Value {
 
 impl<'t> CloudKit<'t> {
     pub fn connect(t: &'t SessionTransport) -> Result<Self> {
-        let root = t.service_url("ckdatabasews")?;
+        let root = t
+            .service_url("ckdatabasews")?
+            .ok_or_else(|| Error::Other("iCloud did not offer the ckdatabasews service for this account".into()))?;
         Ok(Self {
             t,
             base: format!("{}{DB_PATH}", root.trim_end_matches('/')),

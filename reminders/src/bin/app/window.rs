@@ -14,8 +14,7 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use jiff::tz::TimeZone;
 
-use super::background;
-use super::banner::SignInBanner;
+use icloud_app_ui::{SignInBanner, background};
 use icloud_reminders::cloudkit::{Error, SessionTransport};
 use icloud_reminders::due::{self, Due};
 use icloud_reminders::model::{Change, Reminder};
@@ -54,6 +53,7 @@ impl Window {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let (w1, w2) = (weak.clone(), weak.clone());
             let banner = SignInBanner::new(
+                "Sign in to iCloud to see your reminders",
                 move || {
                     if let Some(this) = w1.upgrade() {
                         this.sync();
@@ -193,7 +193,7 @@ impl Window {
                             None => *this.last_error.borrow_mut() = None,
                         }
                     }
-                    Ok(Err(Error::SignInRequired)) => this.banner.show(),
+                    Ok(Err(e)) if e.is_sign_in() => this.banner.show(),
                     Ok(Err(e)) => this.error(&e.to_string()),
                     Err(e) => this.error(&e),
                 }
@@ -240,9 +240,10 @@ impl Window {
                         done(&this, out);
                     }
                     Ok(Err(e)) => {
-                        match e {
-                            Error::SignInRequired => this.banner.show(),
-                            e => this.toast(&e.to_string()),
+                        if e.is_sign_in() {
+                            this.banner.show();
+                        } else {
+                            this.toast(&e.to_string());
                         }
                         this.show_reminders();
                         failed(&this);

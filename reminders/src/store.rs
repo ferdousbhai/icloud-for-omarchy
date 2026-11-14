@@ -16,12 +16,12 @@
 //! parse is an error naming it, never silently reset.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::io;
+use std::path::PathBuf;
 
+use icloud_app::store;
 use jiff::tz::TimeZone;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::folder;
@@ -101,79 +101,55 @@ pub struct Store {
     dir: PathBuf,
 }
 
-/// Held while it lives; dropping it unlocks.
-pub struct Lock(#[allow(dead_code)] File);
+pub use icloud_app::store::Lock;
 
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         Store { dir }
     }
 
-    /// `$XDG_DATA_HOME/icloud-reminders` (`~/.local/share/icloud-reminders`;
-    /// a relative `XDG_DATA_HOME` is ignored, as the XDG spec says).
+    /// `$XDG_DATA_HOME/icloud-reminders` (`~/.local/share/icloud-reminders`).
     pub fn default_dir() -> Option<PathBuf> {
-        let data = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
-        Some(data.join("icloud-reminders"))
+        store::data_dir("icloud-reminders")
     }
 
     pub fn lock(&self) -> io::Result<Lock> {
-        self.lock_file("lock")
-    }
-
-    fn lock_file(&self, name: &str) -> io::Result<Lock> {
-        fs::create_dir_all(&self.dir)?;
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(self.dir.join(name))?;
-        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive)?;
-        Ok(Lock(f))
+        store::lock(&self.dir, "lock")
     }
 
     /// The cache: empty when there is none yet, or when an older version
     /// of the app wrote it (the next sync then fetches everything).
     pub fn cache(&self) -> io::Result<Cache> {
-        let path = self.dir.join("cache.json");
-        let Some(v) = read_json::<serde_json::Value>(&path)? else {
-            return Ok(Cache::default());
-        };
-        if v.get("version").and_then(serde_json::Value::as_u64) != Some(u64::from(CACHE_VERSION)) {
-            return Ok(Cache::default());
-        }
-        serde_json::from_value(v).map_err(|e| damaged(&path, e))
+        Ok(store::read_json_version(&self.dir.join("cache.json"), CACHE_VERSION)?.unwrap_or_default())
     }
 
     pub fn save_cache(&self, cache: &Cache) -> io::Result<()> {
         let mut cache = cache.clone();
         cache.version = CACHE_VERSION;
-        write_json(&self.dir.join("cache.json"), &cache)
+        store::write_json(&self.dir.join("cache.json"), &cache)
     }
 
     /// What has notified; empty before the first background run.
     pub fn notified(&self) -> io::Result<Notified> {
-        Ok(read_json(&self.dir.join("notified.json"))?.unwrap_or_default())
+        Ok(store::read_json(&self.dir.join("notified.json"))?.unwrap_or_default())
     }
 
     pub fn save_notified(&self, n: &Notified) -> io::Result<()> {
-        write_json(&self.dir.join("notified.json"), n)
+        store::write_json(&self.dir.join("notified.json"), n)
     }
 
     /// The Markdown folder's state; `None` before its first run.
     pub fn folder(&self) -> io::Result<Option<folder::State>> {
-        read_json(&self.dir.join("folder.json"))
+        store::read_json(&self.dir.join("folder.json"))
     }
 
     pub fn save_folder(&self, state: &folder::State) -> io::Result<()> {
-        write_json(&self.dir.join("folder.json"), state)
+        store::write_json(&self.dir.join("folder.json"), state)
     }
 
     /// Held over a whole folder run, so two never work on the same files.
     pub fn folder_lock(&self) -> io::Result<Lock> {
-        self.lock_file("folder.lock")
+        store::lock(&self.dir, "folder.lock")
     }
 
     /// This computer's replica ID, made the first time it is needed.
@@ -182,48 +158,14 @@ impl Store {
         match fs::read_to_string(&path) {
             Ok(s) => match uuid::Uuid::parse_str(s.trim()) {
                 Ok(_) => Ok(s.trim().to_owned()),
-                Err(e) => Err(damaged(&path, e)),
+                Err(e) => Err(store::damaged(&path, e)),
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let id = uuid::Uuid::new_v4().to_string().to_uppercase();
-                write_atomic(&path, id.as_bytes())?;
+                store::write_atomic(&path, id.as_bytes())?;
                 Ok(id)
             }
             Err(e) => Err(e),
         }
     }
-}
-
-fn damaged(path: &Path, e: impl std::fmt::Display) -> io::Error {
-    io::Error::other(format!("{} is damaged ({e}); delete it to start over", path.display()))
-}
-
-/// `None` when the file does not exist.
-fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    serde_json::from_slice(&bytes).map(Some).map_err(|e| damaged(path, e))
-}
-
-fn write_json<T: Serialize>(path: &Path, v: &T) -> io::Result<()> {
-    write_atomic(path, &serde_json::to_vec(v).expect("serializable"))
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().expect("a file in the data directory");
-    fs::create_dir_all(dir)?;
-    let (tmp, mut f) = tempfile_in(dir)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    fs::rename(&tmp, path)
-}
-
-/// A new file beside the target (the std library has no tempfile).
-fn tempfile_in(dir: &Path) -> io::Result<(PathBuf, File)> {
-    let path = dir.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
-    let f = OpenOptions::new().write(true).create_new(true).open(&path)?;
-    Ok((path, f))
 }

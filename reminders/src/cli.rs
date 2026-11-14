@@ -18,11 +18,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_UNAVAILABLE, EXIT_USAGE};
-use icloud_session::output::{
-    self, CliError, KEYRING_HINT, Mode, NETWORK_HINT, OutputFlags, Response, SERVICE_TROUBLE_HINT,
-    SESSION_SERVICE_HINT, SIGN_IN_HINT,
-};
+use icloud_app::cli::{confirm, fold, no_data_dir, other, session_failure, usage, warn, warning};
+use icloud_session::cli::{EXIT_NOT_FOUND, EXIT_USAGE};
+use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use icloud_session::time::rfc3339;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -226,51 +224,20 @@ type Failure = CliError;
 
 type Outcome = Result<Response, Failure>;
 
-fn usage(msg: impl Into<String>) -> Failure {
-    CliError::new("usage", EXIT_USAGE, msg)
-}
-
-fn other(msg: impl Into<String>) -> Failure {
-    CliError::new("error", EXIT_ERROR, msg)
-}
-
 /// A file of this computer's that cannot be read or written.
 fn file(e: std::io::Error) -> Failure {
     other(e.to_string())
 }
 
-/// The shared sign-in hint, plus the app's own button.
-fn sign_in_hint() -> String {
-    format!("{SIGN_IN_HINT}, or Sign In in the app")
-}
-
-/// A CloudKit failure as the contract's code, exit code, message and hint:
-/// the shared wording and mapping of `icloud_session::output`.
+/// A Reminders failure as the contract's code, exit code, message and hint:
+/// icloud-session's failures as every iCloud tool reports them.
 fn cloud_error(e: cloudkit::Error) -> Failure {
     use cloudkit::Error as C;
-    let msg = e.to_string();
     match e {
-        C::SignInRequired => output::sign_in_required().hint(sign_in_hint()),
-        C::Offline(_) => CliError::new("offline", EXIT_UNAVAILABLE, msg).hint(NETWORK_HINT),
-        C::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, msg).hint(KEYRING_HINT),
-        C::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, msg).hint(SERVICE_TROUBLE_HINT),
-        C::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, msg).hint(SESSION_SERVICE_HINT),
-        C::Http { status, .. } => {
-            let e = output::http_failure(status, msg);
-            if e.hint.as_deref() == Some(SIGN_IN_HINT) {
-                e.hint(sign_in_hint())
-            } else {
-                e
-            }
-        }
-        C::Gone(_) => CliError::new("not_found", EXIT_NOT_FOUND, msg),
-        C::CloudKit { .. } | C::Other(_) => other(msg),
+        C::Session(e) => session_failure(&e),
+        C::Gone(_) => CliError::new("not_found", EXIT_NOT_FOUND, e.to_string()),
+        C::CloudKit { .. } | C::Other(_) => other(e.to_string()),
     }
-}
-
-/// A problem that did not stop the command, on stderr.
-fn warning(msg: &str) {
-    eprintln!("{}", output::terminal_safe(&format!("warning: {msg}")));
 }
 
 /// Runs the command line on the process arguments and returns the exit code.
@@ -282,10 +249,7 @@ pub fn run() -> u8 {
     let mode = args.out.mode();
     let transport = SessionTransport::default();
     let result = (|| {
-        let dir = args
-            .data_dir
-            .or_else(Store::default_dir)
-            .ok_or_else(|| other("no data directory (no $XDG_DATA_HOME or $HOME)").hint("pass --data-dir DIR"))?;
+        let dir = args.data_dir.or_else(Store::default_dir).ok_or_else(no_data_dir)?;
         let cli = Cli {
             mode,
             cached: args.cached,
@@ -686,48 +650,14 @@ fn folder_summary(report: &folder::Report) -> String {
     )
 }
 
-/// Asks unless `yes`, and only when someone can answer
-/// ([`output::interactive`]: text mode, stdin and stdout a terminal);
-/// otherwise refuses (exit 2) without `--yes`.
-fn confirm(mode: Mode, cmd: &str, yes: bool, question: &str) -> Result<(), Failure> {
-    if yes {
-        return Ok(());
-    }
-    if !output::interactive(mode) {
-        return Err(
-            usage(format!("{cmd} asks before it acts, and nobody can be asked here"))
-                .hint(format!("pass --yes to {cmd} without asking")),
-        );
-    }
-    if cli::confirm(question) {
-        Ok(())
-    } else {
-        Err(CliError::new("cancelled", EXIT_ERROR, "cancelled"))
-    }
-}
-
 /// `List/ABC` and `Reminder/ABC` as `ABC`.
 fn bare(id: &str) -> &str {
     id.split_once('/').map_or(id, |(_, rest)| rest)
 }
 
-/// A write or sync that happened but left a problem behind: on stderr, and
-/// as `warning` in the JSON. The command still succeeds.
-fn warn(out: &mut Value, w: Option<String>) {
-    if let Some(w) = w {
-        warning(&w);
-        out["warning"] = Value::String(w);
-    }
-}
-
 /// The reminder was deleted elsewhere before the write could land.
 fn gone(r: &Reminder) -> Failure {
     cloud_error(cloudkit::Error::Gone(r.title.clone()))
-}
-
-/// Lowercase, with typographic apostrophes as plain ones.
-fn fold(s: &str) -> String {
-    s.to_lowercase().replace(['\u{2019}', '\u{2018}'], "'")
 }
 
 /// The items named `query` (ignoring case), else those whose name holds it.
@@ -936,36 +866,26 @@ mod tests {
 
     #[test]
     fn failures_use_the_shared_codes_exits_and_hints() {
-        use cloudkit::Error as C;
-        let http = |status| C::Http {
-            status,
-            body: String::new(),
-        };
-        let cases = [
-            (http(421), "session_rejected", 3),
-            (http(401), "session_rejected", 3),
-            (http(503), "http", 5),
-            (http(404), "http", 1),
-            (C::Offline("x".into()), "offline", 5),
-            (C::KeyringUnavailable("x".into()), "keyring_unavailable", 5),
-            (C::BadResponse("x".into()), "bad_response", 5),
-            (C::Service("x".into()), "session_service", 5),
-            (
-                C::CloudKit {
-                    code: "x".into(),
-                    reason: "y".into(),
-                },
-                "error",
-                1,
-            ),
-            (C::Other("x".into()), "error", 1),
-        ];
-        for (e, code, exit) in cases {
-            let what = format!("{e:?}");
+        use icloud_session::Error as S;
+        let code = |e: cloudkit::Error| {
             let f = cloud_error(e);
-            assert_eq!((f.code.as_str(), f.exit), (code, exit), "{what}");
-            assert!(exit != 5 || f.hint.is_some(), "{what}");
-        }
-        assert_eq!(cloud_error(http(421)).hint.as_deref(), Some(sign_in_hint().as_str()));
+            (f.code, f.exit)
+        };
+        // icloud-session's failures read as in every iCloud tool.
+        assert_eq!(code(S::Network("x".into()).into()), ("network".into(), 5));
+        let rejected = cloud_error(cloudkit::Error::from(S::Http {
+            status: 421,
+            body: String::new(),
+        }));
+        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 3));
+        assert_eq!(rejected.hint, Some(icloud_app::cli::sign_in_hint()));
+        // Reminders' own.
+        let refused = cloudkit::Error::CloudKit {
+            code: "x".into(),
+            reason: "y".into(),
+        };
+        assert_eq!(code(refused), ("error".into(), 1));
+        assert_eq!(code(cloudkit::Error::Gone("x".into())), ("not_found".into(), 4));
+        assert_eq!(code(cloudkit::Error::Other("x".into())), ("error".into(), 1));
     }
 }

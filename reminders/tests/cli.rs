@@ -8,9 +8,12 @@ mod fake;
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 use std::sync::Arc;
 
+use icloud_app::testing::{
+    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, stderr, stdout, write_script,
+};
 use icloud_session::time::now_ms;
 use serde_json::{Value, json};
 
@@ -44,12 +47,6 @@ fn start() -> Env {
     Env { base, state, dir }
 }
 
-fn write_script(path: &Path, text: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
-
 impl Env {
     fn data(&self) -> PathBuf {
         self.dir.path().join("data")
@@ -69,7 +66,7 @@ impl Env {
     fn json(&self, args: &[&str]) -> Value {
         let out = self.run(args);
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
-        let v = envelope(&out);
+        let v = envelope(&out.stdout);
         assert_eq!(v["ok"], true, "{args:?}");
         assert!(v["summary"].is_string(), "{args:?}");
         v["data"].clone()
@@ -78,7 +75,7 @@ impl Env {
     /// A failed run: its exit code and the `error` of the envelope on stdout.
     fn fails(&self, args: &[&str]) -> (i32, Value) {
         let out = self.run(args);
-        let v = envelope(&out);
+        let v = envelope(&out.stdout);
         assert_eq!(v["ok"], false, "{args:?}");
         (code(&out), v["error"].clone())
     }
@@ -110,43 +107,17 @@ impl Env {
     }
 }
 
-/// Stdin not a terminal, `--data-dir <tmp>/data`, a home and XDG
-/// directories in the temp dir, a `PATH` of the stand-in notifier alone
-/// (Omarchy installs the real one in /usr/bin, and it must never run
-/// here), and no session bus.
+/// The binary against the fake server (see [`command`]), with `TZ=UTC` and
+/// a `PATH` of the stand-in notifier alone (Omarchy installs the real one
+/// in /usr/bin, and it must never run here).
 fn run_at(base: &str, tmp: &Path, args: &[&str]) -> Output {
-    let path = tmp.join("bin");
-    Command::new(env!("CARGO_BIN_EXE_icloud-reminders"))
+    command(env!("CARGO_BIN_EXE_icloud-reminders"), base, tmp)
         .args(args)
-        .arg("--data-dir")
-        .arg(tmp.join("data"))
-        .env("ICLOUD_SESSION_MOCK", "1")
-        .env("ICLOUD_SESSION_MOCK_URL", base)
-        .env("HOME", tmp.join("home"))
-        .env("XDG_DATA_HOME", tmp.join("xdg"))
         .env("TZ", "UTC")
-        .env("PATH", path)
+        .env("PATH", tmp.join("bin"))
         .env_remove("OMARCHY_PATH")
-        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
-        .stdin(Stdio::null())
         .output()
         .unwrap()
-}
-
-fn code(out: &Output) -> i32 {
-    out.status.code().unwrap()
-}
-
-fn envelope(out: &Output) -> Value {
-    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {} / {}", stdout(out), stderr(out)))
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 fn titles(v: &Value) -> Vec<String> {
@@ -456,7 +427,7 @@ fn an_unreadable_reminder_is_skipped_kept_and_named() {
     for args in [&["sync"][..], &["sync", "--full"]] {
         let out = env.run(args);
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
-        let report = envelope(&out)["data"].clone();
+        let report = envelope(&out.stdout)["data"].clone();
         assert_eq!(report["reminders"], 5, "{args:?}");
         let warning = report["warning"].as_str().unwrap();
         assert!(warning.contains("Reminder/REM-CALL: TitleDocument"), "{warning}");
@@ -500,7 +471,7 @@ fn offline_is_unavailable_and_cached_reads_need_no_network() {
     // Nothing listens on port 9.
     let out = run_at("http://127.0.0.1:9", env.dir.path(), &["list"]);
     assert_eq!(code(&out), 5, "{}", stderr(&out));
-    let err = &envelope(&out)["error"];
+    let err = &envelope(&out.stdout)["error"];
     assert_eq!(err["code"], "offline");
     assert!(err["hint"].is_string(), "{err}");
     let out = run_at("http://127.0.0.1:9", env.dir.path(), &["--cached", "list"]);
@@ -674,85 +645,19 @@ fn usage_not_found_and_ambiguous_are_coded() {
     assert!(env.sent("records/modify").is_empty());
 }
 
-/// The shared libraries a 64-bit little-endian ELF executable needs (its
-/// `DT_NEEDED` entries).
-fn needed_libs(path: &str) -> Vec<String> {
-    let f = std::fs::read(path).unwrap();
-    let u16_at = |o: usize| u16::from_le_bytes(f[o..o + 2].try_into().unwrap()) as usize;
-    let u64_at = |o: usize| u64::from_le_bytes(f[o..o + 8].try_into().unwrap()) as usize;
-    assert_eq!(&f[..5], b"\x7fELF\x02", "a 64-bit ELF file");
-    let (phoff, phentsize, phnum) = (u64_at(0x20), u16_at(0x36), u16_at(0x38));
-    let headers: Vec<usize> = (0..phnum).map(|i| phoff + i * phentsize).collect();
-    let p_type = |h: usize| u32::from_le_bytes(f[h..h + 4].try_into().unwrap());
-    let file_offset = |vaddr: usize| {
-        headers
-            .iter()
-            .filter(|&&h| p_type(h) == 1)
-            .find(|&&h| (u64_at(h + 0x10)..u64_at(h + 0x10) + u64_at(h + 0x20)).contains(&vaddr))
-            .map(|&h| vaddr - u64_at(h + 0x10) + u64_at(h + 0x08))
-            .expect("address in a loaded segment")
-    };
-    let dynamic = headers.iter().find(|&&h| p_type(h) == 2).expect("dynamically linked");
-    let entries: Vec<(usize, usize)> = (u64_at(dynamic + 0x08)..u64_at(dynamic + 0x08) + u64_at(dynamic + 0x20))
-        .step_by(16)
-        .map(|e| (u64_at(e), u64_at(e + 8)))
-        .take_while(|&(tag, _)| tag != 0)
-        .collect();
-    let strtab = file_offset(entries.iter().find(|e| e.0 == 5).expect("DT_STRTAB").1);
-    entries
-        .iter()
-        .filter(|e| e.0 == 1)
-        .map(|&(_, name)| {
-            let start = strtab + name;
-            let end = start + f[start..].iter().position(|&b| b == 0).unwrap();
-            String::from_utf8_lossy(&f[start..end]).into_owned()
-        })
-        .collect()
-}
-
 /// The timer runs `icloud-reminders` every minute: it must not load GTK.
 #[test]
 fn the_command_line_binary_does_not_link_gtk() {
-    let ui = |libs: Vec<String>| {
-        libs.into_iter()
-            .filter(|l| ["libgtk-4.", "libadwaita-1."].iter().any(|p| l.starts_with(p)))
-            .count()
-    };
-    let cli = needed_libs(env!("CARGO_BIN_EXE_icloud-reminders"));
-    assert!(cli.iter().any(|l| l.starts_with("libc.")), "{cli:?}");
-    assert_eq!(ui(cli.clone()), 0, "{cli:?}");
-    // Named but not built without the `ui` feature.
-    if let Some(app) = option_env!("CARGO_BIN_EXE_icloud-reminders-app").filter(|p| Path::new(p).exists()) {
-        assert_eq!(ui(needed_libs(app)), 2);
-    }
+    assert_cli_links_no_gtk(
+        env!("CARGO_BIN_EXE_icloud-reminders"),
+        option_env!("CARGO_BIN_EXE_icloud-reminders-app"),
+        &["libgtk-4.", "libadwaita-1."],
+    );
 }
 
-/// With no command, `icloud-reminders` becomes `icloud-reminders-app` from
-/// its own directory (the same process: its exit code is the app's).
 #[test]
 fn no_command_runs_the_app_beside_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let cli = tmp.path().join("icloud-reminders");
-    std::fs::copy(env!("CARGO_BIN_EXE_icloud-reminders"), &cli).unwrap();
-    let marker = tmp.path().join("ran");
-    write_script(
-        &tmp.path().join("icloud-reminders-app"),
-        &format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display()),
-    );
-    // A test thread forking while the copy was open for writing holds its
-    // fd until that child execs: "Text file busy" (ETXTBSY) for a moment.
-    let mut tries = 0;
-    let out = loop {
-        match Command::new(&cli).stdin(Stdio::null()).output() {
-            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
-                tries += 1;
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            r => break r.unwrap(),
-        }
-    };
-    assert_eq!(code(&out), 7, "{}", stderr(&out));
-    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "0");
+    assert_no_command_runs_the_app(env!("CARGO_BIN_EXE_icloud-reminders"), "icloud-reminders");
 }
 
 /// The folder of a test, written by a first background run:

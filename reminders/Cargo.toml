@@ -30,27 +30,29 @@ required-features = ["ui"]
 # the GTK stack.
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:adw", "dep:async-channel"]
+ui = ["dep:icloud-app-ui", "dep:gtk", "dep:adw"]
 
 [dependencies]
 # The workspace's session/ crate.
 icloud-session = { workspace = true, features = ["clap"] }
+# What the iCloud GTK apps share (app/).
+icloud-app.workspace = true
 base64 = "0.22"
 clap.workspace = true
 # TitleDocument/NotesDocument are zlib-compressed protobufs.
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # Due dates are wall-clock times in a named zone (or the system's).
 jiff = "0.2"
-# flock(2) on the cache, shared by the app, the CLI and the timer.
-rustix = { version = "1", features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
-async-channel = { workspace = true, optional = true }
+# What the apps' windows share (app/ui/): only `icloud-reminders-app` uses it.
+icloud-app-ui = { workspace = true, optional = true }
 
 [dev-dependencies]
+icloud-app = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 tiny_http.workspace = true
