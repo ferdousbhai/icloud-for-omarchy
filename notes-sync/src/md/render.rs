@@ -4,7 +4,7 @@
 //!
 //! Offsets and slices are UTF-16 code units, as in the JS.
 
-use super::parse::parse_note_markdown;
+use super::parse::{joined_text, parse_note_markdown};
 use super::to_markdown::{Node, Serializer, W, unw, w};
 use crate::doc::format::{
     FormatParagraph, InlineSpan, ParagraphKind, formats_round_trip_equal, normalize_spans, trim_trailing_whitespace,
@@ -70,15 +70,7 @@ pub fn render_note_markdown(raw_paragraphs: &[FormatParagraph]) -> String {
 /// `projectionSurvives`.
 fn projection_survives(paragraphs: &[FormatParagraph], rendered: &str) -> bool {
     match parse_note_markdown(rendered) {
-        Ok(back) => {
-            back.text
-                == paragraphs
-                    .iter()
-                    .map(|p| p.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                && formats_round_trip_equal(paragraphs, &back.paragraphs)
-        }
+        Ok(back) => back.text == joined_text(paragraphs) && formats_round_trip_equal(paragraphs, &back.paragraphs),
         Err(_) => false,
     }
 }

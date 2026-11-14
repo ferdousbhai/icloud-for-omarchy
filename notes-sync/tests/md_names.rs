@@ -286,12 +286,12 @@ fn title_paragraph_split_and_restore() {
         }],
         ..paragraph(Heading, "Styled Title", 0)
     };
-    let restored = restore_title_paragraph(&title, &[paragraph(Body, "Body text", 0)]);
+    let restored = restore_title_paragraph_text(&title, &[paragraph(Body, "Body text", 0)]).paragraphs;
     assert_eq!(restored[0].kind, Heading);
     assert!(restored[0].spans[0].style.bold);
 
     let body = vec![paragraph(Body, "", 999), paragraph(Body, "Body text", 999)];
-    let restored = restore_title_paragraph(&paragraph(Title, "My Note", 0), &body);
+    let restored = restore_title_paragraph_text(&paragraph(Title, "My Note", 0), &body).paragraphs;
     assert_eq!(restored.iter().map(|p| p.start).collect::<Vec<_>>(), vec![0, 8, 9]);
     assert_eq!(body[0].start, 999, "the caller's model must not be mutated");
 
@@ -314,7 +314,10 @@ fn title_paragraph_split_and_restore() {
         paragraph(BulletList, "two", 13),
     ];
     let split = split_title_paragraph(&model);
-    assert_eq!(restore_title_paragraph(&split.title.unwrap(), &split.body), model);
+    assert_eq!(
+        restore_title_paragraph_text(&split.title.unwrap(), &split.body).paragraphs,
+        model
+    );
 
     let model = vec![
         paragraph(Title, "My Note", 0),

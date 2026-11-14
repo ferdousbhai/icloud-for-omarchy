@@ -32,26 +32,10 @@ pub fn split_title_paragraph(paragraphs: &[FormatParagraph]) -> SplitTitle {
     }
 }
 
-/// `restoreTitleParagraph`: recomputes every `start`.
-pub fn restore_title_paragraph(title: &FormatParagraph, body: &[FormatParagraph]) -> Vec<FormatParagraph> {
-    let mut paragraphs: Vec<FormatParagraph> = std::iter::once(title).chain(body).cloned().collect();
-    let mut offset = 0;
-    for paragraph in &mut paragraphs {
-        paragraph.start = offset;
-        offset += js::len16(&paragraph.text) + 1;
-    }
-    paragraphs
-}
-
-/// `restoreTitleParagraphText`.
+/// `restoreTitleParagraphText`: the title before the body, every `start`
+/// recomputed.
 pub fn restore_title_paragraph_text(title: &FormatParagraph, body: &[FormatParagraph]) -> NoteText {
-    let paragraphs = restore_title_paragraph(title, body);
-    let text = paragraphs
-        .iter()
-        .map(|p| p.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    NoteText { paragraphs, text }
+    NoteText::from_paragraphs(std::iter::once(title).chain(body).cloned().collect())
 }
 
 /// `titleFromNoteFileName`.

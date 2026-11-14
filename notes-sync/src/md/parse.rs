@@ -18,6 +18,28 @@ pub struct ParsedNoteMarkdown {
     pub text: String,
 }
 
+impl ParsedNoteMarkdown {
+    /// A note's paragraphs with every `start` recomputed, and their text.
+    pub fn from_paragraphs(mut paragraphs: Vec<FormatParagraph>) -> Self {
+        let mut offset = 0;
+        for paragraph in &mut paragraphs {
+            paragraph.start = offset;
+            offset += js::len16(&paragraph.text) + 1;
+        }
+        let text = joined_text(&paragraphs);
+        ParsedNoteMarkdown { paragraphs, text }
+    }
+}
+
+/// The paragraphs' texts joined with `\n`: the note's text.
+pub(crate) fn joined_text(paragraphs: &[FormatParagraph]) -> String {
+    paragraphs
+        .iter()
+        .map(|p| p.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// `{status: "unsupported", reason}`: markdown Apple Notes can't represent.
 /// `reason` is shown verbatim in push refusals.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -280,18 +302,9 @@ pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRe
     for child in root.children().map(Vec::as_slice).unwrap_or(&[]) {
         parser.walk_block(child, 0)?;
     }
-    let mut paragraphs: Vec<FormatParagraph> = parser.sweep()?.iter().map(trim_trailing_whitespace).collect();
-    let mut offset = 0;
-    for paragraph in &mut paragraphs {
-        paragraph.start = offset;
-        offset += js::len16(&paragraph.text) + 1;
-    }
-    let text = paragraphs
-        .iter()
-        .map(|p| p.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(ParsedNoteMarkdown { paragraphs, text })
+    Ok(ParsedNoteMarkdown::from_paragraphs(
+        parser.sweep()?.iter().map(trim_trailing_whitespace).collect(),
+    ))
 }
 
 #[derive(Debug, Clone)]
