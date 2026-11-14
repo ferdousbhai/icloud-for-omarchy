@@ -20,10 +20,12 @@
 //! a list item or quote; strikethrough or an emoji next to a letter, which
 //! makes the note read-only).
 //!
-//! Three suites: `codec_*` (the codec and the Markdown in memory, many
-//! cases), `markdown_*` (generated Markdown, as a new note's file), and
+//! Four suites: `codec_*` (the codec and the Markdown in memory, many
+//! cases), `markdown_*` (generated Markdown, as a new note's file),
 //! `vault_*` (clone, push, pull and a fresh clone against an in-memory
-//! iCloud, with attachments, tables and frontmatter). Every case is drawn
+//! iCloud, with attachments, tables and frontmatter), and `splices_*` (a
+//! text edit made in a document is exactly that edit, keeping what the
+//! characters it leaves alone carry). Every case is drawn
 //! from a seeded generator: a failure prints the seed and the case, shrunk
 //! to a smaller one that still fails. `ICLOUD_NOTES_SYNC_PROPERTY_SEED` runs
 //! one seed; `ICLOUD_NOTES_SYNC_PROPERTY_CASES` runs more (or fewer) cases;
@@ -44,8 +46,8 @@ use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
 use icloud_notes_sync::cmd::{Error, NoProgress};
 use icloud_notes_sync::doc::decode::{ClassifyOptions, DecodedNote, NoteDecodeResult, classify_note_record};
 use icloud_notes_sync::doc::document::{
-    ApplyTextEditOptions, NoteDocument, apply_text_edit, build_initial_note_document, compute_splices,
-    encode_note_document, parse_note_document,
+    ApplyTextEditOptions, NoteDocument, Splice, apply_text_edit, build_initial_note_document, compute_splice,
+    compute_splices, encode_note_document, parse_note_document,
 };
 use icloud_notes_sync::doc::embeds::{EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, plan_embed_representations};
 use icloud_notes_sync::doc::encode::derive_note_title;
@@ -53,12 +55,12 @@ use icloud_notes_sync::doc::format::{
     FormatParagraph, InlineStyle, ParagraphKind, decode_note_format, formats_round_trip_equal, note_holds_format,
     paragraph_projections_equal, trim_trailing_whitespace,
 };
-use icloud_notes_sync::doc::proto::topotext::{AttachmentInfo, AttributeRun, ParagraphStyle, Todo};
+use icloud_notes_sync::doc::proto::topotext::{AttachmentInfo, AttributeRun, Color, Font, ParagraphStyle, Todo};
 use icloud_notes_sync::doc::reconcile::reconcile_note_format_with;
 use icloud_notes_sync::doc::table_edit::apply_table_edit_with;
 use icloud_notes_sync::doc::tables::{encode_table_document, grid_from_table_document, parse_table_document};
 use icloud_notes_sync::doc::text::{compress_note_document, decode_note_string, decompress_note_document};
-use icloud_notes_sync::js::{base64_decode, base64_encode, len16, posix};
+use icloud_notes_sync::js::{base64_decode, base64_encode, len16, posix, utf16};
 use icloud_notes_sync::md::frontmatter::{SplitOptions, split_frontmatter};
 use icloud_notes_sync::md::parse::{ParsedNoteMarkdown, parse_note_markdown};
 use icloud_notes_sync::vault::state::{Account, CloneState, TitleMode, read_clone_state};
@@ -299,6 +301,9 @@ struct Piece {
     text: String,
     style: InlineStyle,
     embed: Option<Embed>,
+    /// What this tool's Markdown never shows of it, which an edit elsewhere
+    /// must keep ([`hidden_attributes`]): 0 nothing, else which.
+    hidden: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -445,6 +450,7 @@ fn gen_paragraph(rng: &mut Rng, allow_embeds: bool) -> GenParagraph {
                     InlineStyle::PLAIN
                 },
                 embed: Some(gen_embed(rng)),
+                hidden: 0,
             });
             continue;
         }
@@ -461,6 +467,7 @@ fn gen_paragraph(rng: &mut Rng, allow_embeds: bool) -> GenParagraph {
             text,
             style,
             embed: None,
+            hidden: if rng.chance(15) { rng.range(1, 4) as u8 } else { 0 },
         });
     }
     GenParagraph {
@@ -512,6 +519,7 @@ fn gen_note(rng: &mut Rng, allow_embeds: bool) -> GenNote {
                 text: "item".into(),
                 style: InlineStyle::PLAIN,
                 embed: None,
+                hidden: 0,
             });
         }
     }
@@ -541,11 +549,17 @@ fn gen_note(rng: &mut Rng, allow_embeds: bool) -> GenNote {
                 "a\tb",
                 "",
                 "very long title that goes on and on well past the sixty characters a file name may carry",
+                // Long titles stay in the frontmatter, folded over lines:
+                // quoted, with no space to fold at, or a no-break space at one.
+                "\"q\": 😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+                "a: b # c 'd' 👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧👩\u{200d}👧",
+                "words and words and words and words and words and more words and \u{a0}words \u{a0} at the fold",
             ]);
             title.pieces = vec![Piece {
                 text: shape.to_string(),
                 style: InlineStyle::PLAIN,
                 embed: None,
+                hidden: 0,
             }];
         }
     }
@@ -626,6 +640,26 @@ fn attribute_runs(note: &GenNote, rng: &mut Rng) -> Vec<AttributeRun> {
             run.underline = piece.style.underline.then_some(1);
             run.strikethrough = piece.style.strikethrough.then_some(1);
             run.link = (!piece.style.link.is_empty()).then(|| piece.style.link.clone());
+            match piece.hidden {
+                1 => run.emphasis = Some(rng.range(1, 5) as u32),
+                2 => run.superscript = Some(*rng.pick(&[1, -1])),
+                3 => {
+                    run.color = Some(Color {
+                        red: Some(1.0f32.to_bits()),
+                        green: Some(0.25f32.to_bits()),
+                        blue: Some(0.0f32.to_bits()),
+                        alpha: Some(1.0f32.to_bits()),
+                        ..Default::default()
+                    })
+                }
+                4 => {
+                    run.font = Some(Font {
+                        point_size: Some(24.0f32.to_bits()),
+                        ..Default::default()
+                    })
+                }
+                _ => {}
+            }
             if let Some(embed) = &piece.embed {
                 run.attachment_info = Some(AttachmentInfo {
                     attachment_identifier: (!matches!(embed, Embed::Bare(_))).then(|| embed_id(embed_index)),
@@ -823,6 +857,72 @@ fn untouched_paragraphs_kept(before: &[FormatParagraph], after: &[FormatParagrap
     Ok(())
 }
 
+/// What `doc` carries on each UTF-16 unit from `start` on that this tool's
+/// Markdown never shows (a highlight, superscript, a colour, a font size).
+fn hidden_attributes(doc: &NoteDocument, start: usize, length: usize) -> Vec<String> {
+    let mut units = Vec::new();
+    for run in &doc.attribute_runs {
+        let hidden = format!(
+            "{:?} {:?} {:?} {:?}",
+            run.emphasis,
+            run.superscript,
+            run.color,
+            run.font.as_ref().and_then(|f| f.point_size)
+        );
+        units.extend(std::iter::repeat_n(hidden, run.len() as usize));
+    }
+    units.into_iter().skip(start).take(length).collect()
+}
+
+/// Every paragraph an edit left alone (its text, but for trailing
+/// whitespace, matched as in [`untouched_paragraphs_kept`], and found once on
+/// each side) keeps what the Markdown doesn't show of its text.
+fn hidden_attributes_kept(
+    before: (&NoteDocument, &[FormatParagraph]),
+    after: (&NoteDocument, &[FormatParagraph]),
+) -> Result<(), String> {
+    let text = |p: &FormatParagraph| trim_trailing_whitespace(p).text;
+    let (n, m) = (before.1.len(), after.1.len());
+    let mut lcs = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[i][j] = if text(&before.1[i]) == text(&after.1[j]) {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let once = |side: &[FormatParagraph], wanted: &str| side.iter().filter(|p| text(p) == wanted).count() == 1;
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        let (b, a) = (&before.1[i], &after.1[j]);
+        if text(b) == text(a) {
+            let length = len16(&text(b));
+            if once(before.1, &text(b)) && once(after.1, &text(a)) {
+                let (was, now) = (
+                    hidden_attributes(before.0, b.start, length),
+                    hidden_attributes(after.0, a.start, length),
+                );
+                if was != now {
+                    return Err(format!(
+                        "paragraph {i} was left alone by the edit but lost what Markdown doesn't show of it:\n  \
+                         text {:?}\n  before {was:?}\n  after  {now:?}",
+                        b.text
+                    ));
+                }
+            }
+            i += 1;
+            j += 1;
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    Ok(())
+}
+
 /// Whether Markdown that reads back as `back` holds the note `format`: the
 /// same text, but for trailing whitespace, and the same formatting.
 fn reads_back_as(format: &[FormatParagraph], back: &ParsedNoteMarkdown) -> bool {
@@ -943,7 +1043,7 @@ fn char_boundary(text: &str, rng: &mut Rng) -> usize {
 fn edit_markdown(body: &str, rng: &mut Rng) -> (String, String) {
     let mut lines: Vec<String> = body.split('\n').map(str::to_string).collect();
     let at = rng.below(lines.len());
-    let what = match rng.below(11) {
+    let what = match rng.below(13) {
         0 | 1 => {
             let insert = words(rng, 1, 2);
             let cut = char_boundary(&lines[at], rng);
@@ -1004,6 +1104,17 @@ fn edit_markdown(body: &str, rng: &mut Rng) -> (String, String) {
         9 if at + 1 < lines.len() => {
             lines.swap(at, at + 1);
             format!("swapped lines {at} and {}", at + 1)
+        }
+        10 => {
+            let cut = char_boundary(&lines[at], rng);
+            let tail = lines[at].split_off(cut);
+            lines.insert(at + 1, tail);
+            format!("broke line {at} in two at {cut}")
+        }
+        11 if at + 1 < lines.len() => {
+            let next = lines.remove(at + 1);
+            lines[at].push_str(&next);
+            format!("joined lines {at} and {}", at + 1)
         }
         _ => {
             // A table cell, when there is a table: its text replaced.
@@ -1081,7 +1192,10 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
     // but the trailing whitespace Markdown can't keep.
     let unedited = edit_document(&doc, &back).map_err(|e| format!("the unedited Markdown is refused: {e}"))?;
     let rewritten = format_of(&unedited);
-    if rewritten.len() != format.len() || untouched_paragraphs_kept(&format, &rewritten).is_err() {
+    if rewritten.len() != format.len()
+        || untouched_paragraphs_kept(&format, &rewritten).is_err()
+        || hidden_attributes_kept((&doc, &format), (&unedited, &rewritten)).is_err()
+    {
         return Err(format!(
             "pushing the unedited Markdown {markdown:?} rewrites the note's formatting:\n  before {:?}\n  after  {:?}",
             format, rewritten
@@ -1103,6 +1217,8 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
     }
     if !moves_lines(&what) {
         untouched_paragraphs_kept(&format, &sent_format).map_err(|e| format!("{what}: {e}\n  edited {edited:?}"))?;
+        hidden_attributes_kept((&doc, &format), (&sent, &sent_format))
+            .map_err(|e| format!("{what}: {e}\n  edited {edited:?}"))?;
     }
     // Pulled again: read-only, or it reads back as the edit.
     match classify_note_record(&note_record("N", &sent), &options) {
@@ -1321,6 +1437,244 @@ fn markdown_round_trips_are_exact_or_flagged() {
         },
         |lines, seed| check_markdown(lines, seed),
     );
+}
+
+// --- the splice suite -----------------------------------------------------------------
+
+/// Text pieces for the splice suite: repeated characters (where a diff can
+/// match more than one way), line breaks, trailing whitespace, astral
+/// characters, combining marks, joiners and embeds.
+const SPLICE_TOKENS: &[&str] = &[
+    "a",
+    "a",
+    "b",
+    "aa",
+    "ab",
+    "ba",
+    "word",
+    "the cat",
+    " ",
+    "  ",
+    "\t",
+    "\n",
+    "\n",
+    "\n\n",
+    " \n",
+    "😀",
+    "😀😀",
+    "e\u{301}",
+    "\u{301}",
+    "👩\u{200d}👧",
+    "\u{fffc}",
+    "\u{fffc}\n",
+    "中",
+    "-",
+    "x",
+];
+
+fn splice_text(rng: &mut Rng, low: usize, high: usize) -> String {
+    let mut text = String::new();
+    for _ in 0..rng.range(low, high) {
+        let token = *rng.pick(SPLICE_TOKENS);
+        if rng.chance(3) {
+            // A line long enough that a replacement in it isn't diffed.
+            text.push_str(&token.replace('\n', "").repeat(rng.range(150, 450)));
+        } else {
+            text.push_str(token);
+        }
+    }
+    text
+}
+
+/// One edit to `text`, as typed in an editor: text typed, deleted or
+/// replaced (across lines too), a line broken in two or two joined, the
+/// trailing whitespace of every line trimmed (as push does), a line
+/// duplicated or moved. `Some((start, end, inserted))` in `text`'s bytes
+/// when the edit is one contiguous replacement.
+fn splice_edit(text: &str, rng: &mut Rng) -> (String, String, Option<(usize, usize, String)>) {
+    let (a, b) = (char_boundary(text, rng), char_boundary(text, rng));
+    let (a, b) = (a.min(b), a.max(b));
+    let one = |start: usize, end: usize, inserted: &str, what: String| {
+        let edited = format!("{}{inserted}{}", &text[..start], &text[end..]);
+        (edited, what, Some((start, end, inserted.to_string())))
+    };
+    match rng.below(9) {
+        0 | 1 => {
+            let inserted = splice_text(rng, 1, 3);
+            one(a, a, &inserted, format!("typed {inserted:?} at {a}"))
+        }
+        2 => one(a, b, "", format!("deleted {a}..{b}")),
+        3 => {
+            let inserted = splice_text(rng, 1, 3);
+            one(a, b, &inserted, format!("replaced {a}..{b} with {inserted:?}"))
+        }
+        4 => one(a, a, "\n", format!("broke the line at {a}")),
+        5 => match text.match_indices('\n').map(|(i, _)| i).collect::<Vec<_>>() {
+            breaks if !breaks.is_empty() => {
+                let at = *rng.pick(&breaks);
+                let glue = if rng.chance(50) { "" } else { " " };
+                one(at, at + 1, glue, format!("joined the lines at {at} with {glue:?}"))
+            }
+            _ => one(a, a, "\n", format!("broke the line at {a}")),
+        },
+        6 => {
+            let trimmed: Vec<&str> = text.split('\n').map(|l| l.trim_end_matches([' ', '\t'])).collect();
+            (trimmed.join("\n"), "trimmed every line".into(), None)
+        }
+        7 => {
+            let mut lines: Vec<&str> = text.split('\n').collect();
+            let at = rng.below(lines.len());
+            lines.insert(at, lines[at]);
+            (lines.join("\n"), format!("duplicated line {at}"), None)
+        }
+        _ => {
+            let mut lines: Vec<&str> = text.split('\n').collect();
+            let line = lines.remove(rng.below(lines.len()));
+            lines.insert(rng.below(lines.len() + 1), line);
+            (lines.join("\n"), "moved a line".into(), None)
+        }
+    }
+}
+
+/// A splice case: a text, the edited text, and what the edit was.
+#[derive(Debug, Clone)]
+struct SpliceCase {
+    old: String,
+    new: String,
+    what: Vec<String>,
+    /// The edit as one contiguous replacement, when it is one.
+    single: Option<(usize, usize, String)>,
+}
+
+fn gen_splice_case(rng: &mut Rng) -> SpliceCase {
+    let old = if rng.chance(30) {
+        note_text(&gen_note(rng, true))
+    } else {
+        splice_text(rng, 0, 30)
+    };
+    let mut case = SpliceCase {
+        new: old.clone(),
+        old,
+        what: Vec::new(),
+        single: None,
+    };
+    let edits = *rng.pick(&[1, 1, 1, 2, 3]);
+    for _ in 0..edits {
+        let (edited, what, single) = splice_edit(&case.new, rng);
+        case.single = if edits == 1 { single } else { None };
+        case.new = edited;
+        case.what.push(what);
+    }
+    case
+}
+
+/// The UTF-16 units of `text`, and each unit's emphasis in a document whose
+/// every character carries an emphasis of its own (one this tool's Markdown
+/// never shows, so only the characters an edit keeps can keep it).
+fn emphasized_document(text: &str, rng: &mut Rng) -> Option<NoteDocument> {
+    let mut doc = build_initial_note_document(text, &rng.bytes16()).ok()?;
+    doc.attribute_runs = text
+        .chars()
+        .enumerate()
+        .map(|(index, c)| AttributeRun {
+            length: Some(c.len_utf16() as u32),
+            emphasis: Some(index as u32 + 1),
+            ..Default::default()
+        })
+        .collect();
+    Some(doc)
+}
+
+fn unit_emphasis(doc: &NoteDocument) -> Vec<Option<u32>> {
+    doc.attribute_runs
+        .iter()
+        .flat_map(|run| std::iter::repeat_n(run.emphasis, run.len() as usize))
+        .collect()
+}
+
+/// `compute_splices` is exactly the edit: its splices are in order, never
+/// split a character, and make the edited text from the old one; they change
+/// no more than the edit did (for an edit of one stretch of text, no more
+/// than that stretch, so what was around it is kept: a line broken in two
+/// isn't half typed again); and the document edited with them keeps what
+/// every character they keep carries.
+fn check_splices(case: &SpliceCase, seed: u64) -> Checked {
+    let (old, new) = (utf16(&case.old), utf16(&case.new));
+    let splices = compute_splices(&case.old, &case.new);
+    let mut rebuilt: Vec<u16> = Vec::new();
+    let mut kept: Vec<usize> = Vec::new();
+    let mut at = 0usize;
+    let inside_pair = |i: usize| i > 0 && i < old.len() && (0xDC00..0xE000).contains(&old[i]);
+    for splice in &splices {
+        let insert = utf16(&splice.insert_text);
+        if splice.start < at || splice.start + splice.delete_length > old.len() {
+            return Err(format!("{:?}: splices out of order: {splices:?}", case.what));
+        }
+        if splice.delete_length == 0 && insert.is_empty() {
+            return Err(format!("{:?}: an empty splice: {splices:?}", case.what));
+        }
+        if inside_pair(splice.start) || inside_pair(splice.start + splice.delete_length) {
+            return Err(format!("{:?}: a splice splits a character: {splices:?}", case.what));
+        }
+        rebuilt.extend_from_slice(&old[at..splice.start]);
+        kept.extend(at..splice.start);
+        rebuilt.extend_from_slice(&insert);
+        kept.extend(std::iter::repeat_n(usize::MAX, insert.len()));
+        at = splice.start + splice.delete_length;
+    }
+    rebuilt.extend_from_slice(&old[at..]);
+    kept.extend(at..old.len());
+    if rebuilt != new {
+        return Err(format!(
+            "{:?}: the splices make {:?}, not {:?}: {splices:?}",
+            case.what,
+            String::from_utf16_lossy(&rebuilt),
+            case.new
+        ));
+    }
+    let cost = |s: &Splice| s.delete_length + len16(&s.insert_text);
+    let total: usize = splices.iter().map(cost).sum();
+    let spanning = cost(&compute_splice(&case.old, &case.new));
+    if total > spanning {
+        return Err(format!(
+            "{:?}: the splices change {total} units, one splice over all of it {spanning}: {splices:?}\n  old {:?}\n  new {:?}",
+            case.what, case.old, case.new
+        ));
+    }
+    if let Some((start, end, inserted)) = &case.single {
+        let edit = len16(&case.old[*start..*end]) + len16(inserted);
+        if total > edit {
+            return Err(format!(
+                "{:?}: the splices change {total} units, the edit {edit}: {splices:?}",
+                case.what
+            ));
+        }
+    }
+    let mut rng = Rng(seed ^ 0x5911ce);
+    let Some(mut doc) = emphasized_document(&case.old, &mut rng) else {
+        return Ok(Outcome::Skipped);
+    };
+    let before = unit_emphasis(&doc);
+    apply_text_edit(&mut doc, &case.new, &ApplyTextEditOptions { replica_id: replica() })
+        .map_err(|e| format!("{:?}: the edit fails: {e}", case.what))?;
+    if doc.text != case.new {
+        return Err(format!("{:?}: the document holds {:?}", case.what, doc.text));
+    }
+    let after = unit_emphasis(&doc);
+    for (unit, &from) in kept.iter().enumerate() {
+        if from != usize::MAX && after[unit] != before[from] {
+            return Err(format!(
+                "{:?}: unit {unit}, kept from {from}, lost its emphasis: {splices:?}",
+                case.what
+            ));
+        }
+    }
+    Ok(Outcome::Exact)
+}
+
+#[test]
+fn splices_are_exactly_the_edit() {
+    run_suite("splices", 600, gen_splice_case, |_| Vec::new(), check_splices);
 }
 
 // --- the vault suite: an in-memory iCloud ---------------------------------------------
@@ -1769,6 +2123,16 @@ fn file_matches_server(
         return Ok(FileMatch::ReadOnly);
     }
     let classified = classified_on_server(server, name, filename_mode);
+    // A title the file name can't hold is written in the frontmatter, and
+    // reads back as the note's.
+    if let Some(title) = icloud_notes_sync::md::frontmatter::read_note_title(&local.frontmatter)
+        && title != classified.title_line
+    {
+        return Ok(FileMatch::Mismatch(format!(
+            "{label}: the file's apple-note-title {title:?} isn't the note's {:?}",
+            classified.title_line
+        )));
+    }
     let Some((says, tables)) = file_says(&classified, &local.body, &local.links) else {
         return Ok(FileMatch::Mismatch(format!(
             "{label}: the pulled file can't be read back as the note it is for:\n{:?}",
@@ -2109,6 +2473,7 @@ fn an_in_body_note_keeps_the_empty_line_it_starts_with_through_an_edit() {
                     text: "Hello".into(),
                     style: InlineStyle::PLAIN,
                     embed: None,
+                    hidden: 0,
                 }],
             },
         ],
