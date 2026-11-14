@@ -403,6 +403,14 @@ ApplicationWindow {
         if (folder !== backend.currentFolder && flushEdits())
             backend.currentFolder = folder;
     }
+    // A folder's right-click menu acts on the open folder: only once the
+    // switch to the clicked one went through (edits that cannot be saved
+    // yet keep the folder open, and the menu would rename or delete it).
+    function folderMenuFor(folder) {
+        root.openFolder(folder);
+        if (backend.currentFolder === folder)
+            folderMenu.popup();
+    }
 
     // ----- Arrow-key navigation -----
     // kbPane tracks which pane owns the arrow keys: the folder list, the
@@ -952,7 +960,7 @@ ApplicationWindow {
                             TapHandler {
                                 acceptedButtons: Qt.RightButton
                                 enabled: modelData.length > 0
-                                onTapped: { root.openFolder(modelData); folderMenu.popup(); }
+                                onTapped: root.folderMenuFor(modelData)
                             }
                         }
                         Menu {
