@@ -4,13 +4,14 @@
 
 use crate::model::{Contact, Field, Multi};
 
-/// Escapes a text value: backslash, comma, semicolon and newlines.
+/// Escapes a text value: backslash, comma, semicolon and line breaks
+/// (CRLF, LF, or a lone CR: none may appear raw inside a line).
 fn esc(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace(',', "\\,")
         .replace(';', "\\;")
         .replace("\r\n", "\\n")
-        .replace('\n', "\\n")
+        .replace(['\n', '\r'], "\\n")
 }
 
 /// A `TYPE=` parameter from an iCloud label: the standard ones as vCard
@@ -122,6 +123,17 @@ mod tests {
             assert!(v.contains(line), "{line:?} in\n{v}");
         }
         assert!(v.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n") && v.ends_with("END:VCARD\r\n"));
+    }
+
+    #[test]
+    fn a_lone_carriage_return_in_a_note_is_a_line_break_not_a_raw_cr() {
+        let c = Contact(
+            json!({ "contactId": "ID1", "notes": "old mac\rline" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert!(card(&c).contains("NOTE:old mac\\nline\r\n"), "{}", card(&c));
     }
 
     #[test]
