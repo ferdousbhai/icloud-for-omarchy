@@ -936,3 +936,8 @@ fn seed_22447_a_file_moved_in_icloud_right_after_its_replace_is_kept_once() {
 fn seed_21971_folders_moved_into_each_other_with_a_new_one_in_the_way() {
     widened(21971);
 }
+
+#[test]
+fn seed_5273_a_move_here_planned_from_a_place_another_move_took() {
+    widened(5273);
+}

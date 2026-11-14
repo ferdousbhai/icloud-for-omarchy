@@ -1613,3 +1613,25 @@ fn an_upload_answered_without_saying_what_it_made_is_found_not_sent_again() {
     assert_eq!(bed.cloud.0.borrow().uploads, 2);
     assert_eq!(bed.cloud.paths(), ["a.txt", "renamed.txt"]);
 }
+
+#[test]
+fn a_folder_renamed_here_to_the_name_one_takes_in_icloud_while_it_goes_into_that_one_moves_nothing_else() {
+    let bed = Bed::new();
+    bed.write("Q/x.txt", "in Q");
+    bed.write("s s/y.txt", "in s s");
+    bed.settle();
+    // In iCloud Q is renamed r and s s goes into it; here s s is renamed r.
+    let q = bed.cloud.id_at("Q").unwrap();
+    bed.cloud.rename_item(&q, "r");
+    move_there(&bed, &bed.cloud.id_at("s s").unwrap(), &q);
+    fs::rename(bed.root().join("s s"), bed.root().join("r")).unwrap();
+    bed.sync();
+    bed.settle();
+    assert!(
+        bed.cloud.0.borrow().trashed.is_empty(),
+        "{:?}",
+        bed.cloud.trashed_texts()
+    );
+    assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
+    assert_eq!(bed.cloud.paths(), ["r", "r/s s", "r/s s/y.txt", "r/x.txt"]);
+}

@@ -677,7 +677,14 @@ impl<R: Remote> Engine<'_, R> {
                     return Ok(false);
                 };
                 if from != to {
-                    if self.stat(to)?.is_some() || self.stat(from)?.is_none() || self.other_case_here(to, Some(from))? {
+                    // What is at `from` must still be this item (another
+                    // operation of this round may have put something else
+                    // there): away from where it was in step, by its inode.
+                    let gone_or_other = match self.stat(from)? {
+                        None => true,
+                        Some(e) => *from != row.path && e.ino != row.local.ino,
+                    };
+                    if self.stat(to)?.is_some() || gone_or_other || self.other_case_here(to, Some(from))? {
                         return Ok(false);
                     }
                     if let Some(parent) = self.abs(to).parent() {
