@@ -1145,7 +1145,10 @@ impl Daemon {
     }
 
     /// Takes the [`Change`], waiting for this process's and any other
-    /// daemon's, then follows what another daemon changed meanwhile.
+    /// daemon's, then follows what another daemon changed meanwhile, or
+    /// settles a change of its that a crash cut off (see
+    /// [`Daemon::settle_cut_off`]): holding an account read before it, this
+    /// daemon would otherwise write it over half of that change.
     fn change(&self) -> Change<'_> {
         let in_process = lock(&self.change);
         let path = &self.cfg.paths.change_lock;
@@ -1162,6 +1165,9 @@ impl Daemon {
             _among_daemons: file,
         };
         self.follow_disk();
+        if lock(&self.state).account.is_some() {
+            self.settle_cut_off(&change);
+        }
         change
     }
 
@@ -1196,14 +1202,14 @@ impl Daemon {
     /// Under the [`Change`]: a daemon making such a change now (one winding
     /// down, finishing a sign-in) is waited for, and then has removed its
     /// marker. Also before the account is read from the keyring, which a
-    /// locked keyring may have kept the start from settling. An item that is
+    /// locked keyring may have kept the start from settling, and at every
+    /// [`Change`] taken holding an account read before another daemon's
+    /// sign-in was cut off (a finished one is then followed). An item that is
     /// empty or not a session is kept for inspection, as [`load_account`]
     /// keeps it.
     fn settle_cut_off(&self, _change: &Change<'_>) {
         let paths = &self.cfg.paths;
-        // Holding an account read from the stores, the marker is this
-        // daemon's own, left by a write that failed: its next write retries.
-        if !paths.change_pending.exists() || lock(&self.state).account.is_some() {
+        if !paths.change_pending.exists() {
             return;
         }
         let mut written = lock(&self.written);
@@ -1215,6 +1221,17 @@ impl Daemon {
                 return;
             }
         };
+        // Holding an account read from the stores, a marker for it (or a
+        // sign-out's) is this daemon's own, left by a write that failed:
+        // its next write retries. A sign-in to another is another daemon's
+        // (one winding down) that a crash cut off after this one read.
+        if let Some(held) = &lock(&self.state).account
+            && (pending.account.as_ref())
+                .is_none_or(|new| (&new.dsid, &new.captured_at) == (&held.dsid, &held.captured_at))
+        {
+            return;
+        }
+        let mut followed = false;
         let session = match self.secrets.get_item(Kind::Session) {
             Ok(item) => item.and_then(|text| serde_json::from_str::<SessionSecret>(&text).ok()),
             Err(e) => {
@@ -1232,12 +1249,23 @@ impl Daemon {
                 new.save(&paths.account).map_err(|e| e.to_string()).map(|()| {
                     eprintln!("icloud-sessiond: finished the sign-in a crash cut off");
                     store_reason(&paths.sign_out_reason, &mut written, "");
+                    // The account now, read from the keyring next, as a
+                    // followed one is: an account held before and the
+                    // writes taken of it are dropped.
+                    written.secret = None;
                     let mut st = lock(&self.state);
+                    st.save_seq += 1;
+                    written.seq = st.save_seq;
+                    st.follows += 1;
+                    st.generation += 1;
+                    st.keyring_failed = None;
                     st.sign_out_reason.clear();
+                    st.account = None;
                     st.unread = Some(Box::new(Unread {
                         stored: new,
                         why: "the session's cookies are not read from the keyring yet".into(),
                     }));
+                    followed = true;
                 })
             }
             (None, None, session) => session
@@ -1255,6 +1283,11 @@ impl Daemon {
             Err(e) => eprintln!(
                 "icloud-sessiond: settling a sign-in or sign-out a crash cut off (retried at the next start): {e}"
             ),
+        }
+        drop(written);
+        if followed {
+            self.followed.store(true, Ordering::SeqCst);
+            self.announce(false);
         }
     }
 

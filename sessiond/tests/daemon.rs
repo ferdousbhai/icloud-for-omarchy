@@ -5047,6 +5047,62 @@ fi"#,
         rig.sign_in_and_out_work(case);
     }
 
+    /// The same, the daemon winding down killed in the middle of storing
+    /// it: the next, which read A before and follows no file, settles that
+    /// sign-in at its next write (finished once B's session is in the
+    /// keyring, else undone) rather than writing A's `account.json` beside
+    /// B's session (a /validate rotating nothing stores no jar) and
+    /// dropping the marker that says so.
+    #[test]
+    fn a_sign_in_a_winding_down_daemon_was_killed_in_is_settled_by_the_next() {
+        for (point, after) in [
+            ("write:session-change-pending:1", DSID),
+            ("remove:trust:1", DSID),
+            ("set:session:1", B_DSID),
+            ("set:trust:1", B_DSID),
+        ] {
+            let case = format!("a sign-in a winding-down daemon was killed in at {point}");
+            let rig = Rig::idling(false, 1.0);
+            rig.sign_in("a");
+            rig.restart();
+            let paused = rig.env.root().join("paused");
+            rig.arm("PAUSE", &format!("release:name@{}", paused.display()));
+            rig.arm("CRASH", point);
+            fs::write(rig.window.path().join("hold"), "").unwrap();
+            let first = {
+                let c = rig.env.conn();
+                icloud_session::status_on(&c).unwrap();
+                rig.owner()
+            };
+            rig.paused(&paused);
+            let direct = rig.env.conn();
+            fs::write(rig.window.path().join("who"), "b").unwrap();
+            direct
+                .call_method(Some(first.as_str()), OBJECT_PATH, Some(INTERFACE), "SignIn", &())
+                .unwrap();
+            assert_eq!(rig.status().dsid.as_deref(), Some(DSID), "{case}");
+            assert_ne!(rig.owner(), first, "{case}");
+            fs::remove_file(&paused).unwrap();
+            fs::remove_file(rig.window.path().join("hold")).unwrap();
+            wait_until("the first daemon killed", Duration::from_secs(30), || {
+                !rig.on_bus(&first)
+            });
+            assert!(change_pending(&rig.env).exists(), "{case}");
+
+            rig.still.store(true, Ordering::SeqCst);
+            let _ = call::<bool>(&rig.conn, "ReportSignInRequired");
+            rig.still.store(false, Ordering::SeqCst);
+            rig.until(&case, |s| s.dsid.as_deref() == Some(after));
+            let (cookie, _, _) = session(&rig.conn).unwrap();
+            let token = cookie_of(&cookie, "X-APPLE-WEBAUTH-TOKEN").unwrap();
+            assert_eq!(owner(&token), after, "{case}: {cookie}");
+            assert!(!change_pending(&rig.env).exists(), "{case}");
+            rig.restart();
+            assert_eq!(rig.check(&case, false).as_deref(), Some(after), "{case}");
+            rig.sign_in_and_out_work(&case);
+        }
+    }
+
     /// The same with a Find My authorization, which changes only the jars
     /// in the keyring: the next daemon follows it too, rather than handing
     /// out no Find My jar and storing its own jars over it.

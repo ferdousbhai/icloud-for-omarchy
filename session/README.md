@@ -345,7 +345,8 @@ A daemon killed in the middle of a change leaves `session-change-pending`,
 and the next start (once `change.lock` is free: another daemon in the
 middle of such a change finishes it first), or with a keyring that cannot
 be read then, the first read of the account from it or the next sign-in
-before its window opens, settles it by what
+before its window opens (and a daemon that had read the account before
+another's sign-in was cut off, at its next change), settles it by what
 the keyring holds, so the stores hold the account before the change or the
 one after, whole:
 
