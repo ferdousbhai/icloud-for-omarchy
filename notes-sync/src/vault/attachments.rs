@@ -344,7 +344,7 @@ impl AttachmentRecords {
 }
 
 /// The attachment an embed slot names, if it names one.
-fn attachment_of(slot: &EmbedSlot) -> Option<&AttachmentReference> {
+pub(crate) fn attachment_of(slot: &EmbedSlot) -> Option<&AttachmentReference> {
     match slot {
         EmbedSlot::Attachment(r) => Some(r),
         EmbedSlot::Unknown { .. } => None,

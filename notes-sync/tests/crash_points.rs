@@ -966,6 +966,9 @@ enum Then {
     Again,
     /// A sync straight away, then another: what the Notes app does next.
     Sync,
+    /// A pull by itself, then a sync: `icloud-notes pull` run before the
+    /// app's next sync, so a pull meets what a push cut short left.
+    Pull,
 }
 
 /// Kills `command` at every place it can be cut short, carries on each
@@ -1092,8 +1095,9 @@ fn carry_on(fake: &Fake, place: &Place, command: &str, then: Then) -> Vec<Output
     let next = match then {
         Then::Again if command == "clone" && cloned => "pull",
         Then::Again => command,
-        Then::Sync if !cloned => "clone",
+        Then::Sync | Then::Pull if !cloned => "clone",
         Then::Sync => "sync",
+        Then::Pull => "pull",
     };
     let first = run(fake, place, next, &Crash::default());
     succeeded(&first, next);
@@ -1319,7 +1323,7 @@ fn changed_here(start: &mut Start) {
 fn a_push_cut_short_anywhere_is_finished_by_the_next_run() {
     let mut start = cloned(9);
     changed_here(&mut start);
-    crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync, Then::Pull]);
 }
 
 const ARCHIVE_FOLDER: &str = "F0000000-0000-4000-8000-0000000000AC";
@@ -1351,6 +1355,9 @@ fn folders_changed_here() -> Start {
 
 #[test]
 fn a_push_of_folder_changes_cut_short_anywhere_is_finished_by_the_next_run() {
+    // Not `Then::Pull`: a pull before the push brings back the directory
+    // of a folder deleted here, by design (a refused folder delete says
+    // so), and the push then keeps that folder.
     crash_everywhere(&folders_changed_here(), "push", &[Then::Again, Then::Sync]);
 }
 
@@ -1370,7 +1377,7 @@ fn a_sync_cut_short_anywhere_is_finished_by_the_next_run() {
         .expect
         .kept
         .extend((0..3).map(|i| format!("A0000000-0000-4000-8000-{i:012}")));
-    crash_everywhere(&start, "sync", &[Then::Again]);
+    crash_everywhere(&start, "sync", &[Then::Again, Then::Pull]);
 }
 
 /// Every point is reached by the runs the tests above cut short, so every
@@ -1517,6 +1524,44 @@ fn a_move_with_an_edit_a_push_cut_short_made_is_not_refused_by_the_next_push() {
     assert_eq!(tracked_file(&place, "E0000000-0000-4000-8000-000000000001"), moved);
     let on_disk = std::fs::read_to_string(place.vault.join(&moved)).unwrap();
     assert_eq!(on_disk.matches("edited with the move").count(), 1, "{on_disk}");
+}
+
+/// A push killed right after iCloud took an edit that adds an attachment,
+/// then a pull by itself: the attachment is taken at the file the note was
+/// made with. The pull used to download it beside that file
+/// (`extra 2.txt`) and merge the second link into the note as a conflict.
+#[test]
+fn an_attachment_a_push_cut_short_added_is_taken_at_its_file_by_a_pull() {
+    let start = cloned(3);
+    let note = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
+    let dir = Path::new(&note).parent().unwrap().to_owned();
+    let vault = &start.place.vault;
+    std::fs::create_dir_all(vault.join(&dir).join("attachments")).unwrap();
+    std::fs::write(vault.join(&dir).join("attachments/extra.txt"), "an extra file\n").unwrap();
+    let text = std::fs::read_to_string(vault.join(&note)).unwrap();
+    std::fs::write(vault.join(&note), text + "\n[extra.txt](attachments/extra.txt)\n").unwrap();
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    let crash = Crash {
+        at: Some((crash::ICLOUD_MODIFY.into(), 1)),
+        ..Default::default()
+    };
+    assert_eq!(run(&fake, &place, "push", &crash).status.signal(), Some(6));
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    let on_disk = std::fs::read_to_string(place.vault.join(&note)).unwrap();
+    assert!(!on_disk.contains("<<<<<<<"), "{on_disk}");
+    assert_eq!(on_disk.matches("](attachments/").count(), 1, "{on_disk}");
+    let names: Vec<String> = std::fs::read_dir(place.vault.join(&dir).join("attachments"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("extra"))
+        .collect();
+    assert_eq!(names, ["extra.txt"], "{}", says(&pull));
+    let mut expect = start.expect.clone();
+    expect.new_attachments = 1;
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(&fake, &place, &expect, "pull after the attachment's push was cut short");
 }
 
 /// The photo note's attachment: its file name and what it holds.
@@ -1695,14 +1740,14 @@ fn shares_changed(revoke_between: bool) -> Start {
 
 #[test]
 fn a_sync_with_shares_cut_short_anywhere_is_finished_by_the_next_run() {
-    crash_everywhere(&shares_changed(false), "sync", &[Then::Again]);
+    crash_everywhere(&shares_changed(false), "sync", &[Then::Again, Then::Pull]);
 }
 
 /// The read-only share revoked while the run was cut short: the sync after
 /// it finds the share gone.
 #[test]
 fn a_sync_cut_short_before_a_share_was_revoked_is_finished_by_the_next_run() {
-    crash_everywhere(&shares_changed(true), "sync", &[Then::Again]);
+    crash_everywhere(&shares_changed(true), "sync", &[Then::Again, Then::Pull]);
 }
 
 // --- a vault whose file names are the titles ----------------------------------------
@@ -1750,7 +1795,7 @@ fn retitled_both_sides() -> Start {
 
 #[test]
 fn a_sync_of_retitled_notes_cut_short_anywhere_is_finished_by_the_next_run() {
-    crash_everywhere(&retitled_both_sides(), "sync", &[Then::Again]);
+    crash_everywhere(&retitled_both_sides(), "sync", &[Then::Again, Then::Pull]);
 }
 
 /// In a filename-title vault, a note retitled in iCloud and edited here:
@@ -2066,7 +2111,7 @@ fn a_push_cut_short_before_more_was_typed_here_is_finished_by_the_next_run() {
     for file in ["Notes/Fresh.md", "Notes/Extra 1.md"] {
         start.expect.edits.push((file.into(), "typed after the push".into()));
     }
-    crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync, Then::Pull]);
 }
 
 /// The share a push was creating a note in revoked while the push was cut
@@ -2138,7 +2183,7 @@ fn a_push_cut_short_before_an_edit_on_the_phone_is_finished_by_the_next_run() {
     start.expect.edits.push((edited.clone(), "typed here".into()));
     start.expect.edits.push((edited, "from the phone".into()));
     start.expect.between = Some(edit_on_the_phone);
-    crash_everywhere(&start, "push", &[Then::Again, Then::Sync]);
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync, Then::Pull]);
 }
 
 /// Two notes of one title added on the phone, the second deleted on the

@@ -385,7 +385,12 @@ window closes, so a killed run is ordinary.
   and the file becomes its base copy (`adopt_pushed_text`): nothing is
   refused, sent or downloaded again. A file edited again since (or a note
   changed in iCloud too) stays at its old version, and the next pull
-  merges the two, fetching the attachment under the name it has. An
+  merges the two, fetching the attachment under the name it has. A pull
+  that meets the note before the next push does (`icloud-notes pull`)
+  takes each announced attachment the note now names at its file the same
+  way (`push::announced_attachments`); up to 0.11.1 it downloaded it beside
+  that file (`name 2.ext`) and merged the second link into the note's file
+  as a conflict. An
   engine without this reads such an entry as a create of a note it
   already tracks at that file, and does nothing with it.
   `pendingCreates` is a top-level key an engine without it keeps and
@@ -394,7 +399,8 @@ window closes, so a killed run is ordinary.
 Tests: tests/crash_points.rs runs the real binary over icloud-session's
 mock session against a fake iCloud that keeps what it is sent, kills it
 (`std::process::abort`) at every crash point it reaches and at each time
-it reaches one, carries on with the same command (or a sync) and a sync,
+it reaches one, carries on with the same command (or a sync, or after a
+push or sync a pull by itself) and a sync,
 and checks that no note, attachment or folder was created twice, nothing
 the user kept was deleted or untracked, no edit was lost and state.json
 reads back. The runs: clone, pull (with checkpoints, and with notes and

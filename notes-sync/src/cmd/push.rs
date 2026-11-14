@@ -619,6 +619,28 @@ struct PendingFolder {
     parent_record_name: Option<String>,
 }
 
+/// The attachments an edit a push cut short was adding to a note tracked at
+/// the file it was announced for ([`mark_pending_attachments`]), by the
+/// note's record name: what state tracks of each once iCloud is known to
+/// have it, as [`settle_pending_creates`] would track it. A pull that meets
+/// the note with one of them takes it at that file, rather than downloading
+/// it beside it as a second copy (`name 2.ext`) and merging its link into
+/// the note's file as a conflict.
+pub(super) fn announced_attachments(state: &CloneState) -> HashMap<String, Vec<(String, AttachmentEntry)>> {
+    pending_creates(state)
+        .into_iter()
+        .filter(|(record_name, create)| state.notes.get(record_name).is_some_and(|e| e.file == create.file))
+        .map(|(record_name, create)| {
+            let attachments = create
+                .attachments
+                .into_iter()
+                .map(|a| a.tracked_for(&record_name))
+                .collect();
+            (record_name, attachments)
+        })
+        .collect()
+}
+
 /// The state's pending creates (anything unreadable there reads as none).
 fn pending_creates(state: &CloneState) -> IndexMap<String, PendingCreate> {
     state

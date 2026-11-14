@@ -398,6 +398,7 @@ pub fn run_pull_with(
     let mut retry_zones: HashSet<Option<String>> = HashSet::new();
     let mut left_anywhere: LeftAnywhere = None;
     let mut claimed_attachment_dirs: HashSet<String> = HashSet::new();
+    let mut announced = super::push::announced_attachments(&state);
     let notes_at_start = tracked.notes.clone();
     let checkpoints = layout_moves_nothing(&state, &layout, &tracked.notes);
     let mut notes_seen = 0usize;
@@ -543,6 +544,27 @@ pub fn run_pull_with(
                     None => placement.dir.clone(),
                 };
 
+                // An attachment an edit a push cut short added, which iCloud
+                // took (the note names it): taken at the file it was made
+                // from, as the next push would track it.
+                if existing.is_some()
+                    && let Some(attachments) = announced.remove(&record.record_name)
+                {
+                    let named: HashSet<&str> = decoded
+                        .embed_slots
+                        .iter()
+                        .filter_map(crate::vault::attachments::attachment_of)
+                        .map(|r| r.attachment_identifier.as_str())
+                        .collect();
+                    for (attachment_record_name, entry) in attachments {
+                        if named.contains(attachment_record_name.as_str())
+                            && !tracked.attachments.contains_key(&attachment_record_name)
+                            && target_dir.join(&entry.file).is_file()
+                        {
+                            tracked.attachments.insert(attachment_record_name, entry);
+                        }
+                    }
+                }
                 let mut body_text = decoded.markdown_text.clone();
                 let unpublishable_reason = decoded.unpublishable_reason.clone();
                 // A note that lost its last embed (an attachment removed on
