@@ -31,7 +31,9 @@ use crate::vault::base::{read_base_copy, remove_base_copy, write_base_copy_of};
 use crate::vault::epoch::record_epoch;
 use crate::vault::folders::{reconcile_note_placements, remove_stale_dirs};
 use crate::vault::history::{VersionSnapshotInput, record_version};
-use crate::vault::layout::{PreviousLayout, build_vault_layout, note_dir_of, place_note, previous_layout_dirs};
+use crate::vault::layout::{
+    PreviousLayout, VaultLayout, build_vault_layout, expected_note_dir, note_dir_of, place_note, previous_layout_dirs,
+};
 use crate::vault::local::{
     LocalFileState, apply_note_file_times, local_file_state, modification_date_of, read_text, split_options,
     write_note_file,
@@ -39,8 +41,8 @@ use crate::vault::local::{
 use crate::vault::migrate::require_vault;
 use crate::vault::pairing::{claim_names_on_disk, file_exists, pending_rename_target, settle_pending_renames};
 use crate::vault::state::{
-    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry, TitleMode, is_plain_record_name,
-    write_clone_state,
+    AttachmentEntry, CloneState, FolderEntry, NoteEntry, TableAttachmentEntry, TitleMode, TrashedEntry,
+    is_plain_record_name, write_clone_state,
 };
 
 /// `PullOptions`.
@@ -330,8 +332,15 @@ pub fn run_pull_with(
     // already carries its id, and untracked it would be pushed as a new
     // note. `downloading`: the notes this run queued attachment downloads
     // for, which a failure may have left undone.
+    //
+    // A run that is killed never gets to record anything, so what was
+    // applied is also saved every `CHECKPOINT_EVERY` notes along the way
+    // ([`checkpoint_state`]), while the layout leaves every note where it is.
     let mut failure: Option<Error> = None;
     let mut downloading: Vec<String> = Vec::new();
+    let notes_at_start = tracked.notes.clone();
+    let checkpoints = layout_moves_nothing(&state, &layout, &tracked.notes);
+    let mut notes_seen = 0usize;
     'records: for source in &sources {
         for record in source.records {
             let queued_before = downloads.len();
@@ -760,6 +769,17 @@ pub fn run_pull_with(
                 failure = Some(e);
                 break 'records;
             }
+            if record.record_type == "Note" {
+                notes_seen += 1;
+                if checkpoints && notes_seen.is_multiple_of(CHECKPOINT_EVERY) {
+                    let checkpoint =
+                        checkpoint_state(&state, &layout, &tracked, &notes_at_start, &trashed, &downloading);
+                    if let Err(e) = write_clone_state(target_dir, &checkpoint) {
+                        failure = Some(e);
+                        break 'records;
+                    }
+                }
+            }
         }
     }
     progress.on_process_complete();
@@ -1093,6 +1113,84 @@ pub fn reconcile_notes_after_resync_in(
     *attachments = tracked.attachments;
     *table_attachments = tracked.table_attachments;
     result
+}
+
+/// How many notes a pull applies between two saves of what it has applied
+/// so far. A first pull of thousands of notes rewrites the state a few
+/// hundred times, not thousands.
+const CHECKPOINT_EVERY: usize = 25;
+
+/// Whether `entry`'s file is where `layout` puts the note.
+fn in_place(layout: &VaultLayout, entry: &NoteEntry) -> bool {
+    expected_note_dir(layout, entry).is_none_or(|dir| dir == note_dir_of(&entry.file))
+}
+
+/// Whether `layout` leaves every tracked note's file and every folder
+/// directory of `state` where it is. Only then is the state saved part way
+/// through a pull ([`checkpoint_state`]): the notes are moved to a changed
+/// layout after they have all been applied, and a state saved before that
+/// would name folders whose notes are still somewhere else, which the next
+/// push would read as notes moved here.
+fn layout_moves_nothing(state: &CloneState, layout: &VaultLayout, notes: &IndexMap<String, NoteEntry>) -> bool {
+    let dirs: HashSet<&String> = layout.all_dirs.iter().collect();
+    notes.values().all(|entry| in_place(layout, entry))
+        && previous_layout_dirs(PreviousLayout::of(state))
+            .iter()
+            .all(|dir| dir.is_empty() || dirs.contains(dir))
+}
+
+/// What a pull has applied so far, as the state to save part way through:
+/// a new note's file already carries its id, and a run killed before it
+/// records the note would leave the file untracked, for the next push to
+/// send to iCloud as a new note. It is what a pull that failed here would
+/// save - the old sync tokens, so everything is listed again; the notes
+/// with downloads queued forgetting their attachments and their version -
+/// with one difference: a note this pull gave another folder is still in
+/// its old directory (notes move once all are applied), so it is saved as it
+/// was when the pull started, and the next pull applies it again.
+fn checkpoint_state(
+    state: &CloneState,
+    layout: &VaultLayout,
+    tracked: &Tracked,
+    notes_at_start: &IndexMap<String, NoteEntry>,
+    trashed: &IndexMap<String, TrashedEntry>,
+    downloading: &[String],
+) -> CloneState {
+    let mut notes: IndexMap<String, NoteEntry> = tracked
+        .notes
+        .iter()
+        .filter_map(|(record_name, entry)| {
+            let entry = if in_place(layout, entry) {
+                entry
+            } else {
+                notes_at_start.get(record_name)?
+            };
+            Some((record_name.clone(), entry.clone()))
+        })
+        .collect();
+    let mut attachments = tracked.attachments.clone();
+    for record_name in downloading {
+        attachments.retain(|_, a| a.note_record_name != *record_name);
+        if let Some(entry) = notes.get_mut(record_name) {
+            entry.record_change_tag.clear();
+        }
+    }
+    CloneState {
+        account: state.account.clone(),
+        sync_token: state.sync_token.clone(),
+        shared_zone_sync_tokens: state.shared_zone_sync_tokens.clone(),
+        shared_database: state.shared_database.clone(),
+        replica_id: state.replica_id.clone(),
+        title_mode: state.title_mode,
+        notes,
+        folders: Some(layout.state_folders.clone()),
+        sharer_homes: Some(layout.state_sharer_homes.clone()),
+        attachments: Some(attachments),
+        table_attachments: Some(tracked.table_attachments.clone()),
+        trashed: Some(trashed.clone()),
+        extra: state.extra.clone(),
+        ..Default::default()
+    }
 }
 
 /// Untracked files whose `apple-note-id` names `record_name`: where a note

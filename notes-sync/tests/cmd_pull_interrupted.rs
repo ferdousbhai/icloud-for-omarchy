@@ -134,3 +134,96 @@ fn a_note_written_before_the_pull_failed_stays_tracked() {
     };
     assert_eq!(notes_under(&vault), tracked);
 }
+
+/// tiny-pull-update's answers, listing `count` new notes (copies of its one
+/// note under other record names) in place of the update.
+fn many_new_notes(count: usize) -> Cassette {
+    let mut cassette = cassette("tiny-pull-update.json");
+    let listing = cassette.interactions[0].response.body.as_mut().unwrap();
+    let records = listing["zones"][0]["records"].as_array_mut().unwrap();
+    let note = records.iter().find(|r| r["recordType"] == "Note").unwrap().clone();
+    *records = (0..count)
+        .map(|n| {
+            let mut copy = note.clone();
+            copy["recordName"] = format!("a1b2c3d4-0000-4000-8000-{n:012x}").into();
+            copy
+        })
+        .collect();
+    cassette
+}
+
+/// Stops the pull, as a kill would, once `after` records were processed:
+/// nothing of the run's own bookkeeping gets to run.
+struct KilledAfter {
+    after: usize,
+    processed: usize,
+}
+
+impl icloud_notes_sync::cmd::SyncProgress for KilledAfter {
+    fn on_record_processed(&mut self) {
+        self.processed += 1;
+        if self.processed > self.after {
+            panic!("killed");
+        }
+    }
+}
+
+/// A pull killed part way never reaches the code that records what it
+/// applied. The notes it had written are tracked all the same, from the
+/// state saved along the way, so the next push does not create them in
+/// iCloud a second time, and the next pull adds only the rest.
+#[test]
+fn notes_written_before_the_pull_was_killed_are_not_pushed_as_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    run_clone_with(
+        &replay(cassette("tiny-clone.json"), dir.path().join("clone.json")),
+        &vault,
+        &mut NoProgress,
+        &mut |_| {},
+        &CloneOptions::default(),
+    )
+    .unwrap();
+    let token = read_clone_state(&vault).unwrap().unwrap().sync_token;
+
+    // Killed while applying the 51st of 60 new notes: 50 are written.
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_pull_with(
+            &replay(many_new_notes(60), dir.path().join("killed.json")),
+            &vault,
+            &mut KilledAfter {
+                after: 50,
+                processed: 0,
+            },
+            &mut |_| {},
+            &PullOptions::default(),
+        )
+    }));
+    assert!(killed.is_err(), "the pull was cut off");
+
+    let written = notes_under(&vault);
+    assert_eq!(written.len(), 1 + 51, "{written:?}");
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.sync_token, token, "everything is listed again");
+    let tracked: Vec<&str> = state.notes.values().map(|e| e.file.as_str()).collect();
+    assert_eq!(tracked.len(), 1 + 50, "what the last save knew of");
+    assert!(tracked.iter().all(|file| written.iter().any(|w| w == file)));
+
+    // Only the note written after the last save is untracked (the state is
+    // saved every 25 notes); set it aside, and a push has nothing to create.
+    let untracked: Vec<&String> = written.iter().filter(|w| !tracked.contains(&w.as_str())).collect();
+    assert_eq!(untracked.len(), 1, "{untracked:?}");
+    std::fs::remove_file(vault.join(untracked[0])).unwrap();
+    let no_network = FnConnector(|| -> Result<Remote, Error> { panic!("network: the plan found a change") });
+    let plan = build_push_plan(&no_network, &vault, &mut |_| {}).unwrap();
+    let entries: Vec<_> = plan.entries.iter().map(|e| (&e.entry.file, e.entry.kind)).collect();
+    assert!(entries.is_empty(), "{entries:?}");
+
+    // The next pull finishes the job without a second copy of any note.
+    pull(&vault, many_new_notes(60), dir.path().join("pull.json")).unwrap();
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    assert_eq!(state.notes.len(), 1 + 60);
+    let mut tracked: Vec<String> = state.notes.values().map(|e| e.file.clone()).collect();
+    tracked.sort();
+    assert_eq!(notes_under(&vault), tracked);
+}
