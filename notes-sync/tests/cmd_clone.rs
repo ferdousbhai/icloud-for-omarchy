@@ -293,3 +293,116 @@ fn a_clone_never_writes_over_a_file_already_in_the_directory() {
     assert_ne!(cloned, &file);
     assert!(std::fs::read_to_string(vault.join(cloned)).unwrap().contains("Milk"));
 }
+
+/// Every Markdown file under `dir` outside the state directory, relative to
+/// it, sorted.
+fn notes_under(dir: &Path) -> Vec<String> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if !path.ends_with(".icloud-notes") {
+                    walk(root, &path, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "md") {
+                out.push(path.strip_prefix(root).unwrap().display().to_string());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+fn tracked_files(vault: &Path) -> Vec<String> {
+    let state = read_clone_state(vault).unwrap().unwrap();
+    let mut files: Vec<String> = state.notes.values().map(|e| e.file.clone()).collect();
+    files.sort();
+    files
+}
+
+/// A clone killed before it wrote its state leaves its note files, each
+/// carrying its id. The clone after it takes those files for the notes they
+/// are: no `X 2.md` twin beside each, and so nothing for push to create.
+#[test]
+fn a_second_clone_over_an_unfinished_one_adopts_the_files_it_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    clone_from(cassette("attach-clone.json"), &vault, dir.path().join("first.json"));
+    let written = notes_under(&vault);
+    assert_eq!(written.len(), 3, "{written:?}");
+    // As if the run had been killed before the state write.
+    std::fs::remove_dir_all(vault.join(".icloud-notes")).unwrap();
+
+    let summary = clone_from(cassette("attach-clone.json"), &vault, dir.path().join("second.json"));
+    assert_eq!(summary.written, 3);
+    assert_eq!(notes_under(&vault), written, "no twins");
+    assert_eq!(tracked_files(&vault), written);
+    assert_nothing_to_push(&vault);
+}
+
+/// A file with the note's id that no longer reads as the note does is not
+/// the clone's to take over: it stays as it is, and the note is written
+/// beside it.
+#[test]
+fn a_second_clone_leaves_a_left_file_that_was_edited_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    clone_from(cassette("tiny-clone.json"), &vault, dir.path().join("first.json"));
+    let written = notes_under(&vault);
+    assert_eq!(written.len(), 1);
+    std::fs::remove_dir_all(vault.join(".icloud-notes")).unwrap();
+    let edited = std::fs::read_to_string(vault.join(&written[0])).unwrap() + "\nedited since";
+    std::fs::write(vault.join(&written[0]), &edited).unwrap();
+
+    clone_from(cassette("tiny-clone.json"), &vault, dir.path().join("second.json"));
+    assert_eq!(std::fs::read_to_string(vault.join(&written[0])).unwrap(), edited);
+    assert_eq!(notes_under(&vault).len(), 2);
+    assert_ne!(tracked_files(&vault), written);
+}
+
+/// A clone that fails part way (here an attachment download) records the
+/// notes it wrote, as a failed pull does: push has nothing to create, and
+/// the first pull brings the rest without a second copy of any note.
+#[test]
+fn a_clone_that_fails_part_way_tracks_what_it_wrote() {
+    const IMAGE_ASSET: &str = "https://cvws.icloud-content.com/B/image-asset";
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    let mut failing = cassette("attach-clone.json");
+    failing
+        .interactions
+        .retain(|i| i.request.url.as_deref() != Some(IMAGE_ASSET));
+    let failed = run_clone_with(
+        &replay(failing, dir.path().join("failing.json")),
+        &vault,
+        &mut NoProgress,
+        &mut |_| {},
+        &CloneOptions::default(),
+    );
+    assert!(failed.is_err());
+
+    let state = read_clone_state(&vault).unwrap().expect("what was written is recorded");
+    assert!(!state.notes.is_empty());
+    assert_eq!(state.sync_token, None, "the first pull lists everything");
+    assert_eq!(notes_under(&vault), tracked_files(&vault));
+    assert_nothing_to_push(&vault);
+
+    run_pull_with(
+        &replay(cassette("attach-clone.json"), dir.path().join("pull.json")),
+        &vault,
+        &mut NoProgress,
+        &mut |_| {},
+        &PullOptions::default(),
+    )
+    .unwrap();
+    let files = tracked_files(&vault);
+    assert_eq!(files.len(), 3, "{files:?}");
+    assert_eq!(notes_under(&vault), files);
+    let state = read_clone_state(&vault).unwrap().unwrap();
+    for attachment in state.attachments.unwrap().values() {
+        assert!(vault.join(&attachment.file).exists(), "{}", attachment.file);
+    }
+    assert_nothing_to_push(&vault);
+}

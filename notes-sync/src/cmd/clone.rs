@@ -22,9 +22,9 @@ use crate::vault::attachments::{AttachmentRecords, resolve_note_attachments};
 use crate::vault::base::write_base_copy_of;
 use crate::vault::layout::{PreviousLayout, build_vault_layout, place_note};
 use crate::vault::local::{apply_note_file_times, modification_date_of, write_note_file};
-use crate::vault::pairing::claim_names_on_disk;
+use crate::vault::pairing::{claim_names_on_disk, note_id_at};
 use crate::vault::state::{
-    CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
+    AttachmentEntry, CloneState, NoteEntry, TitleMode, is_plain_record_name, read_clone_state, write_clone_state,
 };
 
 /// `CloneOptions`.
@@ -137,6 +137,10 @@ pub fn run_clone_with(
     // what is already there, never over it (anything there afterwards is
     // in the set already, so once per directory is enough).
     let mut claimed_dirs: HashSet<String> = HashSet::new();
+    // The note files a directory already held, by the `apple-note-id` each
+    // carries: what a clone that never finished (killed before its state
+    // was written) left there.
+    let mut left_behind: HashMap<String, HashMap<String, String>> = HashMap::new();
     let (shared_zone_sync_tokens, shared_zone_records) = shared_zone_tokens_and_records(&shared.zones);
     let mut sources: Vec<(&[CloudKitRecord], Option<String>)> = vec![(&changes.records, None)];
     sources.extend(
@@ -162,9 +166,17 @@ pub fn run_clone_with(
     let total: usize = sources.iter().map(|(records, _)| records.len()).sum();
     progress.on_process_start(total);
 
-    for (records, shared_zone_owner) in &sources {
+    // A failure part way still records the notes written before it, as a
+    // pull's does: their files carry their ids, and with no state a second
+    // clone would write each again beside them, for push to create as new
+    // notes. `downloading`: the notes that queued attachment downloads,
+    // which a failure may have left undone.
+    let mut failure: Option<Error> = None;
+    let mut downloading: Vec<String> = Vec::new();
+    'records: for (records, shared_zone_owner) in &sources {
         let owner = shared_zone_owner.as_deref().filter(|o| !o.is_empty());
         for record in records.iter() {
+            let queued_before = downloads.len();
             let result = (|| -> Result<(), Error> {
                 if record.record_type != "Note" {
                     return Ok(());
@@ -225,15 +237,38 @@ pub fn run_clone_with(
                 let used_in_dir = used_names_for(&mut used_file_names, &placement.dir);
                 if claimed_dirs.insert(placement.dir.clone()) {
                     claim_names_on_disk(target_dir, &placement.dir, used_in_dir)?;
+                    let ids = left_behind.entry(placement.dir.clone()).or_default();
+                    for name in used_in_dir.iter().filter(|name| name.ends_with(".md")) {
+                        let file = posix::join(&[&placement.dir, name]);
+                        if let Some(id) = note_id_at(target_dir, &file, title_mode)? {
+                            ids.insert(id, name.clone());
+                        }
+                    }
                 }
-                let file_name = unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir);
+                let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
+                let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
+                // The file an unfinished clone wrote for this very note is
+                // the note's file, not a name to write beside. Only when it
+                // reads exactly as this clone would write it: one that
+                // differs is kept as it is, beside the note.
+                let adopted = left_behind
+                    .get(&placement.dir)
+                    .and_then(|ids| ids.get(&record.record_name))
+                    .filter(|name| {
+                        let path = target_dir.join(posix::join(&[&placement.dir, name]));
+                        std::fs::read_to_string(path).is_ok_and(|text| text == file_text)
+                    })
+                    .cloned();
+                let file_name = adopted.clone().unwrap_or_else(|| {
+                    unique_file_name(&note_file_name_for(&decoded.title_line, title_mode), used_in_dir)
+                });
                 used_in_dir.insert(file_name.clone());
                 let relative_file = posix::join(&[&placement.dir, &file_name]);
 
                 let file_path = target_dir.join(&relative_file);
-                let recorded_title = title_needing_frontmatter(&decoded.title_line, title_mode);
-                let file_text = compose_note_file("", &body_text, &record.record_name, recorded_title.as_deref());
-                write_note_file(&file_path, &file_text)?;
+                if adopted.is_none() {
+                    write_note_file(&file_path, &file_text)?;
+                }
                 apply_note_file_times(&file_path, record)?;
                 write_base_copy_of(target_dir, &record.record_name, &file_text, title_mode)?;
                 if owner.is_some() {
@@ -261,23 +296,48 @@ pub fn run_clone_with(
                 Ok(())
             })();
             progress.on_record_processed();
-            result?;
+            if downloads.len() > queued_before {
+                downloading.push(record.record_name.clone());
+            }
+            if let Err(e) = result {
+                failure = Some(e);
+                break 'records;
+            }
         }
     }
     progress.on_process_complete();
-    downloads.finish()?;
+    if let Err(e) = downloads.finish() {
+        failure.get_or_insert(e.into());
+    }
+    if failure.is_some() {
+        // Once one download fails the rest are not started: these notes
+        // forget their attachments and their version, so the first pull
+        // applies them again and fetches what is missing.
+        for record_name in &downloading {
+            attachments.retain(|_, a: &mut AttachmentEntry| a.note_record_name != *record_name);
+            if let Some(entry) = notes.get_mut(record_name) {
+                entry.record_change_tag.clear();
+            }
+        }
+    }
+    let failed = failure.is_some();
+    // Nothing written, nothing to record: the directory is not a clone yet.
+    if failed && notes.is_empty() {
+        return Err(failure.expect("failed"));
+    }
 
     let state = CloneState {
         account: Some(remote.account.clone()),
         title_mode: Some(title_mode),
-        // Held back: no token, so the first pull walks from scratch and sees them.
-        sync_token: if held_back.is_empty() {
+        // Held back, or not all written: no token, so the first pull walks
+        // from scratch and sees them.
+        sync_token: if held_back.is_empty() && !failed {
             changes.sync_token.clone()
         } else {
             None
         },
-        shared_zone_sync_tokens: Some(shared_zone_sync_tokens),
-        shared_database: shared.cursor.clone(),
+        shared_zone_sync_tokens: Some(if failed { IndexMap::new() } else { shared_zone_sync_tokens }),
+        shared_database: if failed { None } else { shared.cursor.clone() },
         notes,
         folders: Some(layout.state_folders),
         sharer_homes: Some(layout.state_sharer_homes),
@@ -285,6 +345,10 @@ pub fn run_clone_with(
         table_attachments: Some(table_attachments),
         ..Default::default()
     };
+    if let Some(e) = failure {
+        let _ = write_clone_state(target_dir, &state);
+        return Err(e);
+    }
     write_clone_state(target_dir, &state)?;
     Ok(summary)
 }

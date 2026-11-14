@@ -153,7 +153,7 @@ pub(crate) fn claim_names_on_disk(target_dir: &Path, dir: &str, used: &mut HashS
     Ok(())
 }
 
-fn note_id_at(target_dir: &Path, file: &str, title_mode: TitleMode) -> Result<Option<String>, Error> {
+pub(crate) fn note_id_at(target_dir: &Path, file: &str, title_mode: TitleMode) -> Result<Option<String>, Error> {
     let Some(raw) = read_text(&target_dir.join(file))? else {
         return Ok(None);
     };

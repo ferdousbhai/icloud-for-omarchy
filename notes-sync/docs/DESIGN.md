@@ -172,7 +172,7 @@ pages (the run logs show the fetch total one higher than the clones before
 and after it with no note created in between, and `written` one higher);
 concatenating pages and materializing every occurrence writes the note
 twice (and `state.json` keeps only the last one, so the first file is
-untracked). The engine handles it in two places:
+untracked). The engine handles it in the fetch:
 
 - `cloudkit::client::dedupe_zone_records`, applied at the end of every zone
   walk (`walk_zone`, so private and each shared zone, before the
@@ -187,22 +187,52 @@ untracked). The engine handles it in two places:
   `fetch_shared_zone_ids` likewise keeps a zone listed twice once. `on_page`
   progress still counts raw page sizes. Pull uses the same fetches, so it is
   covered too.
-- `push` (and `status`) refuse to create an untracked file whose
-  `apple-note-id` names a note this clone tracks while that note's own file is
-  still present (`Refusal::CreateDuplicatesTrackedNote`: "carries the
-  "apple-note-id" of <tracked file>, a note this clone already tracks, so
-  pushing it would create a duplicate of that note - delete this file if it
-  is a leftover copy, or remove its "apple-note-id" line to push it as a new
-  note"). Moves (the tracked file gone, one claimant) and ambiguous claims
-  are unchanged.
+- `push` no longer backs this up with a refusal. A file that carries the
+  `apple-note-id` of a tracked note whose own file is still present is a
+  copy, and a copy is a new note, as a duplicated note is in Notes: the
+  create gives it its own id (tests/cmd_push.rs,
+  `copy_with_original_in_place_is_a_create`,
+  `byte_identical_twin_is_a_create`). So nothing downstream catches a twin:
+  the engine has to not write one, which is what the dedupe above and the
+  next section are for.
 
 Tests: tests/cloudkit_dedupe.rs (same page, across pages, timestamps vs page
 order, differing tags, tombstone, private vs shared plus the lookup
-backfill, a shared zone listed twice), tests/cmd_push.rs
-(`copy_with_original_in_place_is_refused_as_a_duplicate`,
-`byte_identical_twin_from_a_double_clone_is_refused`), tests/cmd_refusals.rs,
-and the scenario `dup-clone` (`dup_clone_writes_a_repeated_record_once`: both
-pages fetched, and the same vault/stdout as `tiny-clone`).
+backfill, a shared zone listed twice), and the scenario `dup-clone`
+(`dup_clone_writes_a_repeated_record_once`: both pages fetched, and the same
+vault/stdout as `tiny-clone`).
+
+### A run that fails or is killed part way
+
+A note file carries its id from the moment it is written, and push creates
+a file whose id state.json doesn't track as a new note. So what a run did
+has to reach state.json even when the run doesn't end well, or the next
+push duplicates those notes in iCloud. Notes stops a running sync when its
+window closes, so a killed run is ordinary.
+
+- `pull` that fails writes the notes it applied (old sync tokens, so the
+  rest is listed again), and saves what it has applied every 25 notes while
+  the layout moves nothing (`checkpoint_state`). A failure while moving
+  notes to their folders gets to that write too.
+- `push` writes state.json after every entry it executes (an unchanged
+  state is not rewritten), not only at the end or on an error.
+- `clone` that fails after writing notes writes state.json for them, with
+  no sync tokens: the directory is a clone from then on, and the first pull
+  lists everything and adds the rest. One that fails before writing any
+  note leaves no state. A clone killed outright leaves files and no state;
+  the clone after it finds, in each directory it writes to, the files that
+  carry the id of the note it is about to write, and takes one that reads
+  exactly as it would write it for that note's file instead of writing
+  `X 2.md` beside it. A file with the id that reads differently (edited
+  since, or the note changed in iCloud) is left alone and the note written
+  beside it; push then creates that file as a note of its own, so neither
+  text is lost.
+
+Tests: tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
+failed and a killed push), tests/cmd_clone.rs
+(`a_second_clone_over_an_unfinished_one_adopts_the_files_it_left`,
+`a_second_clone_leaves_a_left_file_that_was_edited_alone`,
+`a_clone_that_fails_part_way_tracks_what_it_wrote`).
 
 ### Local deletes, renames and new files win over a pull
 
