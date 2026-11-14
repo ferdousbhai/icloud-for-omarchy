@@ -854,3 +854,22 @@ fn a_file_moved_into_a_folder_icloud_replaced_does_not_stop_the_sync() {
     assert_eq!(bed.read("Docs/a.txt").as_deref(), Some("one"));
     assert_eq!(bed.read("Docs/new.txt").as_deref(), Some("new"));
 }
+
+#[test]
+fn a_folder_replaced_by_a_file_here_leaves_nothing_for_later() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    let a = bed.cloud.file(&docs.id, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::remove_dir_all(bed.root().join("Docs")).unwrap();
+    bed.write("Docs", "now a file");
+    // No "Not a directory" problem for the file that was in the folder.
+    bed.settle();
+    assert!(bed.cloud.0.borrow().trashed.contains(&a.id));
+    let copy = bed
+        .local_paths()
+        .into_iter()
+        .find(|p| p.contains("conflicted copy desk"))
+        .expect("the file is kept beside iCloud's folder");
+    assert_eq!(bed.cloud.text(&copy).as_deref(), Some("now a file"));
+}

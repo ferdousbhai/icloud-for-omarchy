@@ -154,7 +154,8 @@ fn entry_of(meta: &fs::Metadata) -> Entry {
 pub fn stat(path: &Path) -> io::Result<Option<Entry>> {
     match fs::symlink_metadata(path) {
         Ok(meta) => Ok(Some(entry_of(&meta))),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        // Nothing is at a path below something that is not a folder either.
+        Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -263,6 +264,14 @@ mod tests {
         assert!(!root.join("a/..icloud-drive-0123.part.4242.0.tmp").exists());
         assert!(root.join(".icloud-drive-trash").exists());
         assert!(root.join(".hidden").exists());
+    }
+
+    #[test]
+    fn nothing_is_below_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Docs"), "a file where a folder was").unwrap();
+        assert_eq!(stat(&dir.path().join("Docs/a.txt")).unwrap(), None);
+        assert_eq!(stat(&dir.path().join("gone")).unwrap(), None);
     }
 
     #[test]
