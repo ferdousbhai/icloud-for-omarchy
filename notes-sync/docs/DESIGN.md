@@ -260,6 +260,11 @@ window closes, so a killed run is ordinary.
   recorded; one iCloud doesn't have was never created and is created by the
   plan as usual. A lookup that answers an error fails the push
   (`cloudkit_request_failed`): the answer decides between one note and two.
+  A pull that ran in between (by itself, or as the pull half of a sync
+  whose push failed on that lookup) has added the note as one new to the
+  vault, in a file of its own (`X 2.md`); the announced file then takes
+  the note over and the pulled file, when it still reads as pulled, is
+  removed, so that neither is left to be created as a second note.
   `pendingCreates` is a top-level key an engine without it keeps and
   ignores (it would create the note again, as before).
 

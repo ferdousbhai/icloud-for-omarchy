@@ -572,6 +572,19 @@ fn mark_pending_create(
     write_clone_state(target_dir, state)
 }
 
+/// Writes `record_name` into the note file's frontmatter as its id, unless
+/// it is there already.
+fn stamp_note_id(target_dir: &Path, file: &str, record_name: &str, title_mode: TitleMode) -> Result<(), Error> {
+    let path = target_dir.join(file);
+    let text = read_text(&path)?.unwrap_or_default();
+    let envelope = split_frontmatter(&text, split_options(title_mode));
+    let stamped = set_note_id(&envelope.frontmatter, record_name);
+    if stamped != envelope.frontmatter {
+        write_note_file(&path, &join_frontmatter(&stamped, &envelope.body))?;
+    }
+    Ok(())
+}
+
 /// What a push that was cut off while creating records left open: each is
 /// looked up. A note that exists is tracked at its file (the one the create
 /// was for, or the untracked file that already carries the id), as the push
@@ -620,9 +633,30 @@ fn settle_pending_creates<T: Transport>(
             );
             continue;
         }
+        let tracked_elsewhere = state.notes.values().any(|e| e.file == create.file);
+        // Tracked already: a pull in between took it for a note new to the
+        // vault and wrote it a file of its own. The file the note was made
+        // in is the note's; the pulled one, still as the pull wrote it,
+        // goes. Left there, one of the two would be created as a second
+        // note. (A preview leaves both, and so does a pulled file edited
+        // since: its text is nowhere else.)
+        if let Some(pulled) = state.notes.get(&record_name).cloned() {
+            let mode = state.mode();
+            if !recording_suppressed()
+                && !tracked_elsewhere
+                && target_dir.join(&create.file).is_file()
+                && local_file_state(target_dir, &pulled, &record_name, mode)? == LocalFileState::Clean
+            {
+                stamp_note_id(target_dir, &create.file, &record_name, mode)?;
+                safe_unlink(&target_dir.join(&pulled.file))?;
+                if let Some(entry) = state.notes.get_mut(&record_name) {
+                    entry.file = create.file;
+                }
+            }
+            continue;
+        }
         // The file the create was for, unless something else tracks it by
         // now; else where a file carrying the new id is.
-        let tracked_elsewhere = state.notes.values().any(|e| e.file == create.file);
         let file = if !tracked_elsewhere && target_dir.join(&create.file).is_file() {
             Some(create.file.clone())
         } else {
@@ -636,13 +670,7 @@ fn settle_pending_creates<T: Transport>(
         // No base copy: the file reads as edited, and the plan compares it
         // with the record (nothing to send when they agree).
         if !recording_suppressed() {
-            let path = target_dir.join(&file);
-            let text = read_text(&path)?.unwrap_or_default();
-            let envelope = split_frontmatter(&text, split_options(state.mode()));
-            let stamped = set_note_id(&envelope.frontmatter, &record_name);
-            if stamped != envelope.frontmatter {
-                write_note_file(&path, &join_frontmatter(&stamped, &envelope.body))?;
-            }
+            stamp_note_id(target_dir, &file, &record_name, state.mode())?;
         }
         state.notes.insert(
             record_name,

@@ -656,3 +656,42 @@ fn a_create_announced_and_never_sent_is_created_by_the_next_push() {
     assert!(!after.notes.contains_key("a1b2c3d4-0000-4000-8000-00000000dead"));
     assert!(after.notes.values().any(|e| e.file == "Notes/Fresh.md"));
 }
+
+/// A pull between the killed push and the next one (a `pull` by itself, or
+/// the pull half of a sync whose push half failed before it could ask) adds
+/// the created note as a note new to the vault, in a file of its own. The
+/// push after it keeps the file the note was made in and lets the pulled one
+/// go, instead of leaving one of the two to be created as a second note.
+#[test]
+fn a_pull_before_the_next_push_does_not_make_the_created_note_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = dies_after_creating("Note");
+    std::fs::write(vault.join("Notes/Fresh.md"), "Fresh\n\nA note made here.\n").unwrap();
+    killed_push(&server, &vault);
+
+    icloud_notes_sync::cmd::pull::run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    let pulled = state(&vault);
+    let record_name = pulled.extra["pendingCreates"]
+        .as_object()
+        .expect("still announced")
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(pulled.notes[&record_name].file, "Notes/Fresh 2.md");
+
+    let result = push(&server, &vault);
+    assert!(result.failures().is_empty(), "{result:?}");
+    assert_eq!(creates(&server, "Note"), 1, "not created again");
+    let after = state(&vault);
+    assert_eq!(after.notes.len(), 2);
+    assert_eq!(after.notes[&record_name].file, "Notes/Fresh.md");
+    assert!(!after.extra.contains_key("pendingCreates"));
+    assert!(read(&vault, "Notes/Fresh.md").contains(record_name.as_str()));
+    assert!(!vault.join("Notes/Fresh 2.md").exists(), "the pulled twin is gone");
+
+    let again = push(&server, &vault);
+    assert_eq!(again.entries.len(), 0, "{again:?}");
+    assert_eq!(creates(&server, "Note"), 1);
+}
