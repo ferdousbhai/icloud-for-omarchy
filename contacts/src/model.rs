@@ -129,8 +129,23 @@ pub enum Change {
     /// Set a field; empty removes it.
     Set(Field, String),
     Add(Multi, Labeled),
-    /// Remove the value (see [`Multi::matches`]).
+    /// Remove the value (see [`Multi::matches`]), whatever its label.
     Remove(Multi, String),
+    /// Remove exactly this entry, label and value as stored: a row of the
+    /// window's dialog, where another row may hold the same number written
+    /// another way.
+    RemoveExact(Multi, Labeled),
+}
+
+impl Change {
+    /// Whether this is a removal that takes the stored entry `e` away.
+    fn removes(&self, e: &Labeled) -> bool {
+        match self {
+            Change::Remove(m, v) => m.matches(&e.value, v),
+            Change::RemoveExact(_, l) => e == l,
+            Change::Set(..) | Change::Add(..) => false,
+        }
+    }
 }
 
 /// Whether two phone numbers are the same: equal digits, or one the other's
@@ -231,6 +246,14 @@ pub fn parse_birthday(s: &str) -> Result<String, String> {
 /// A stored birthday as people write it: `1990-05-01`, or `05-01` without a year.
 pub fn birthday_display(b: &str) -> String {
     b.strip_prefix("1604-").unwrap_or(b).to_owned()
+}
+
+/// One `{label, field}` entry of a multi-valued field.
+fn labeled(e: &Value) -> Option<Labeled> {
+    Some(Labeled {
+        label: e["label"].as_str().unwrap_or("").to_owned(),
+        value: e["field"].as_str()?.to_owned(),
+    })
 }
 
 fn str_of<'a>(m: &'a Map<String, Value>, k: &str) -> &'a str {
@@ -337,13 +360,7 @@ impl Contact {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|e| {
-                let value = e["field"].as_str()?.to_owned();
-                Some(Labeled {
-                    label: e["label"].as_str().unwrap_or("").to_owned(),
-                    value,
-                })
-            })
+            .filter_map(labeled)
             .collect()
     }
 
@@ -412,13 +429,13 @@ impl Contact {
                     let arr = list.as_array_mut().expect("just made an array");
                     arr.push(json!({ "label": l.label, "field": l.value }));
                 }
-                Change::Remove(m, v) if self.has(c) => {
-                    return Err(format!("{} has no {} {v}", self.display_name(), m.noun()));
-                }
-                Change::Remove(m, v) => {
+                Change::Remove(m, v) | Change::RemoveExact(m, Labeled { value: v, .. }) => {
+                    if self.has(c) {
+                        return Err(format!("{} has no {} {v}", self.display_name(), m.noun()));
+                    }
                     let arr = self.0.get_mut(m.key()).and_then(Value::as_array_mut);
                     let arr = arr.expect("has() found the value in an array");
-                    arr.retain(|e| !e["field"].as_str().is_some_and(|s| m.matches(s, v)));
+                    arr.retain(|e| !labeled(e).is_some_and(|l| c.removes(&l)));
                     if arr.is_empty() {
                         self.0.remove(m.key());
                     }
@@ -436,7 +453,7 @@ impl Contact {
                 .values(*m)
                 .iter()
                 .any(|e| m.matches(&e.value, &l.value) && e.label == l.label),
-            Change::Remove(m, v) => !self.values(*m).iter().any(|e| m.matches(&e.value, v)),
+            Change::Remove(m, _) | Change::RemoveExact(m, _) => !self.values(*m).iter().any(|e| change.removes(e)),
         }
     }
 }

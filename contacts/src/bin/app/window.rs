@@ -752,7 +752,13 @@ impl Draft {
             let was = before.values(*m);
             for (label, v) in was {
                 if !now.iter().any(|(l, n)| l == label && n == v) {
-                    out.push(Change::Remove(*m, v.clone()));
+                    out.push(Change::RemoveExact(
+                        *m,
+                        model::Labeled {
+                            label: label.clone(),
+                            value: v.clone(),
+                        },
+                    ));
                 }
             }
             for (label, v) in now {
@@ -978,7 +984,13 @@ mod tests {
             changes,
             [
                 Change::Set(Field::Last, "Lee".into()),
-                Change::Remove(Multi::Phone, "+1 666".into()),
+                Change::RemoveExact(
+                    Multi::Phone,
+                    model::Labeled {
+                        label: "WORK".into(),
+                        value: "+1 666".into()
+                    }
+                ),
                 Change::Add(
                     Multi::Phone,
                     model::Labeled {
@@ -990,6 +1002,25 @@ mod tests {
         );
         assert!(Draft::default().problem().is_some());
         assert_eq!(after.problem(), None);
+        // Emptying one row removes that value only: not another row holding
+        // the same number written another way.
+        let mut c = Contact(
+            json!({ "phones": [{"label": "HOME", "field": "555-010-0199"}, {"label": "WORK", "field": "+1 555 010 0199"}] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let before = Draft::of(&c);
+        let mut after = before.clone();
+        after.multis[0].1.remove(0);
+        c.apply(&after.changes(&before)).unwrap();
+        assert_eq!(
+            c.values(Multi::Phone),
+            [model::Labeled {
+                label: "WORK".into(),
+                value: "+1 555 010 0199".into()
+            }]
+        );
         // A valid phone does not hide an invalid email after it.
         let mut bad = after.clone();
         bad.multis[1].1 = vec![("HOME".into(), "nope".into())];
