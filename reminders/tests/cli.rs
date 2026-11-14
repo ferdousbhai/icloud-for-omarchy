@@ -889,7 +889,16 @@ fn a_file_found_already_there_only_adds_what_is_new() {
     // with a line iCloud lacks and without one it has; iCloud gained one.
     std::fs::remove_file(env.data().join("folder.json")).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, text.replace("- [ ] Eggs\n", "") + "- [ ] Bread\n").unwrap();
+    // It is also older than iCloud on Milk: no notes, another title, ticked.
+    assert!(
+        text.contains("- [ ] Milk ") && text.contains("    Oat, 2 cartons\n"),
+        "{text}"
+    );
+    let stale = text
+        .replace("- [ ] Eggs\n", "")
+        .replace("    Oat, 2 cartons\n", "")
+        .replace("- [ ] Milk ", "- [x] Milk, 1 l ");
+    std::fs::write(&path, stale + "- [ ] Bread\n").unwrap();
     env.state.put(fake::reminder(
         "REM-TEA",
         "List/LIST-GROCERIES",
@@ -903,9 +912,18 @@ fn a_file_found_already_there_only_adds_what_is_new() {
         (out["folder"]["added"].as_i64(), out["folder"]["deleted"].as_i64()),
         (Some(1), Some(0))
     );
+    assert_eq!(
+        out["folder"]["edited"], 0,
+        "what iCloud has is not changed from such a file"
+    );
     let mut titles = all_titles(&env, "Groceries");
     titles.sort();
     assert_eq!(titles, ["Bread", "Eggs", "Milk", "Tea"]);
+    let milk = env.json(&["show", "REM-MILK"]);
+    assert_eq!(
+        (&milk["notes"], &milk["completed"]),
+        (&json!("Oat, 2 cartons"), &json!(false))
+    );
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("- [ ] Eggs\n") && text.contains("- [ ] Tea\n"), "{text}");
 }

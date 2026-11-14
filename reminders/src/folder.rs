@@ -36,7 +36,7 @@
 //!   A cut-off or emptied file looks like this. To delete that many, use the
 //!   app, or remove a few lines at a time.
 //! - A file seen for the first time (not yet [`ListState::adopted`]) only
-//!   ever adds.
+//!   ever adds: its other lines are written over from iCloud.
 //! - Syncthing's conflict copies (`Work.sync-conflict-….md`) are made from an
 //!   older file, so only what cannot undo anything is taken from one: a tick
 //!   on a reminder that is still open, and lines unlike any there is.
@@ -608,7 +608,10 @@ fn one(svc: &Service, dir: &Path, list: &List, ls: &mut ListState, now: &Zoned, 
     if let Some(text) = changed {
         let mut delta = diff(&base, &parse(text, now), now);
         if first {
+            // Nobody knows how old it is: what it lacks is not removed, and
+            // a line that differs from its reminder does not change it.
             delta.deletes.clear();
+            delta.updates.clear();
         }
         if risky(&delta, base.len()) {
             // Too much of the list to take from a file: the lines are
