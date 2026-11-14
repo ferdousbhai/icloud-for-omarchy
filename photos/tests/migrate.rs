@@ -19,6 +19,7 @@ fn setup(root: &Path) -> (Dirs, PathBuf) {
     sync(
         &CloudKit::connect(&FixtureTransport::new(library)).unwrap(),
         &mut cat,
+        false,
         &|_| {},
     )
     .unwrap();

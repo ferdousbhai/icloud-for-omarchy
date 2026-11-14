@@ -39,27 +39,22 @@ pub enum Progress {
     Changes(usize),
 }
 
-/// Sync once. `SignInRequired` always propagates; any other error on the
-/// incremental path falls back to a full listing.
-pub fn sync(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Result<Report> {
-    if let Some(token) = cat.meta(SYNC_TOKEN_KEY)? {
-        match incremental(ck, cat, &token, progress) {
+/// Sync once: incrementally when a token is stored and `force_full` is off
+/// (`icloud-photos sync --full` sets it), else a full listing.
+/// `SignInRequired` always propagates; any other error on the incremental
+/// path falls back to a full listing.
+pub fn sync(ck: &CloudKit, cat: &mut Catalog, force_full: bool, progress: &dyn Fn(Progress)) -> Result<Report> {
+    let token = if force_full { None } else { cat.meta(SYNC_TOKEN_KEY)? };
+    let fell_back = match token {
+        Some(token) => match incremental(ck, cat, &token, progress) {
             Ok(report) => return finish(cat, report),
             Err(e) if e.is_sign_in() => return Err(e),
-            Err(e) => {
-                let mut report = full(ck, cat, progress)?;
-                report.fell_back = Some(e.to_string());
-                return finish(cat, report);
-            }
-        }
-    }
-    let report = full(ck, cat, progress)?;
-    finish(cat, report)
-}
-
-/// A full listing even when a sync token is stored (`icloud-photos sync --full`).
-fn sync_full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> Result<Report> {
-    let report = full(ck, cat, progress)?;
+            Err(e) => Some(e.to_string()),
+        },
+        None => None,
+    };
+    let mut report = full(ck, cat, progress)?;
+    report.fell_back = fell_back;
     finish(cat, report)
 }
 
@@ -69,11 +64,7 @@ fn sync_full(ck: &CloudKit, cat: &mut Catalog, progress: &dyn Fn(Progress)) -> R
 pub fn run(t: &dyn Transport, dirs: &Dirs, force_full: bool, progress: &dyn Fn(Progress)) -> Result<Report> {
     let mut cat = Catalog::open(&dirs.catalog())?;
     let ck = CloudKit::connect(t)?;
-    let report = if force_full {
-        sync_full(&ck, &mut cat, progress)?
-    } else {
-        sync(&ck, &mut cat, progress)?
-    };
+    let report = sync(&ck, &mut cat, force_full, progress)?;
     if let Err(e) = thumbs::prune_cache(&cat, dirs, thumbs::MEDIUM_CACHE_CAP) {
         eprintln!("icloud-photos: pruning the cache: {e}");
     }

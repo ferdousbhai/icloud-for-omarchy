@@ -16,7 +16,7 @@ use support::{FixtureTransport, fixture, library, temp_dir};
 fn synced(t: &FixtureTransport, root: &std::path::Path) -> (Catalog, Targets) {
     let dirs = Dirs::under(root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();
-    sync(&CloudKit::connect(t).unwrap(), &mut cat, &|_| {}).unwrap();
+    sync(&CloudKit::connect(t).unwrap(), &mut cat, false, &|_| {}).unwrap();
     (
         cat,
         Targets {

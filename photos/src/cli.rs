@@ -1201,7 +1201,7 @@ fn delete(ctx: &Ctx, ids: &[String], yes: bool) -> Res<Response> {
     let mut retry: Vec<(usize, String, Option<String>)> = Vec::new();
     // A failed re-sync must not lose the deletions that already went
     // through: report the conflicting items as failed instead.
-    let resynced = match conflicts.then(|| sync::sync(&ck, &mut cat, &|_| {})) {
+    let resynced = match conflicts.then(|| sync::sync(&ck, &mut cat, false, &|_| {})) {
         Some(Err(e)) if e.is_sign_in() => return Err(e.into()),
         Some(Err(e)) => Err(e.to_string()),
         _ => Ok(()),
@@ -1293,7 +1293,7 @@ fn restore(ctx: &Ctx, ids: &[String]) -> Res<Response> {
         // again with the fresh change tag, as delete does.
         // A failed re-sync fails only this item; the others are still tried.
         if matches!(&result, Err(Error::CloudKit { code, .. }) if code == "CONFLICT") {
-            result = match sync::sync(&ck, &mut cat, &|_| {}) {
+            result = match sync::sync(&ck, &mut cat, false, &|_| {}) {
                 Err(e) if e.is_sign_in() => return Err(e.into()),
                 Err(e) => Err(Error::Other(format!("changed on another device; re-sync failed: {e}"))),
                 Ok(_) => {

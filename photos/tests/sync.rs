@@ -27,7 +27,7 @@ fn full_sync_fills_the_catalog() {
     let t = FixtureTransport::new(library);
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.mode, Mode::Full);
     assert_eq!(report.assets, 4);
     assert_eq!(report.albums, 2);
@@ -60,10 +60,10 @@ fn incremental_sync_applies_changes_and_advances_the_token() {
     let t = FixtureTransport::new(with_changes);
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    sync(&ck, &mut cat, &|_| {}).unwrap();
+    sync(&ck, &mut cat, false, &|_| {}).unwrap();
     let before = t.calls().len();
 
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.mode, Mode::Incremental);
     assert!(report.fell_back.is_none());
     let ops: Vec<String> = t.ops()[before..].to_vec();
@@ -98,7 +98,7 @@ fn changes_request_is_hidden_and_hidden_assets_leave_the_library() {
     let t = FixtureTransport::new(with_changes);
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    sync(&ck, &mut cat, &|_| {}).unwrap();
+    sync(&ck, &mut cat, false, &|_| {}).unwrap();
     let tmp = support::temp_dir("hidden");
     let dir = tmp.path();
     let local = dir.join("IMG_0001.HEIC");
@@ -106,7 +106,7 @@ fn changes_request_is_hidden_and_hidden_assets_leave_the_library() {
     cat.set_path("ASSET-004", PathKind::Original, Some(&local)).unwrap();
     let before = t.calls().len();
 
-    sync(&ck, &mut cat, &|_| {}).unwrap();
+    sync(&ck, &mut cat, false, &|_| {}).unwrap();
     let changes: Vec<_> = t.calls()[before..]
         .iter()
         .filter(|c| c.op == "changes/zone")
@@ -134,7 +134,7 @@ fn incremental_failure_falls_back_to_a_full_listing() {
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
     cat.set_meta(SYNC_TOKEN_KEY, Some("SOMETHING-OLD")).unwrap();
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.mode, Mode::Full);
     assert!(report.fell_back.unwrap().contains("CHANGE_TOKEN_EXPIRED"));
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-FULL"));
@@ -155,7 +155,7 @@ fn http_error_on_changes_endpoint_also_falls_back() {
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
     cat.set_meta(SYNC_TOKEN_KEY, Some("TOKEN-FULL")).unwrap();
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.mode, Mode::Full);
 }
 
@@ -171,7 +171,7 @@ fn sign_in_required_does_not_fall_back() {
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
     cat.set_meta(SYNC_TOKEN_KEY, Some("TOKEN-FULL")).unwrap();
-    assert!(sync(&ck, &mut cat, &|_| {}).unwrap_err().is_sign_in());
+    assert!(sync(&ck, &mut cat, false, &|_| {}).unwrap_err().is_sign_in());
     assert_eq!(t.ops(), vec!["changes/zone"]);
     assert_eq!(
         cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(),
@@ -185,7 +185,7 @@ fn full_sync_marks_assets_gone_from_icloud() {
     let t = FixtureTransport::new(library);
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    sync(&ck, &mut cat, &|_| {}).unwrap();
+    sync(&ck, &mut cat, false, &|_| {}).unwrap();
     // Pretend a stale asset from an earlier run exists locally.
     let mut stale = cat.asset("ASSET-001").unwrap().unwrap();
     stale.id = "ASSET-STALE".into();
@@ -209,7 +209,7 @@ fn full_sync_marks_assets_gone_from_icloud() {
     };
     cat.upsert_asset(&stale_asset).unwrap();
     cat.set_meta(SYNC_TOKEN_KEY, None).unwrap();
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.removed, 1);
     assert!(cat.asset("ASSET-STALE").unwrap().unwrap().deleted);
 }
@@ -227,7 +227,7 @@ fn a_failed_full_sync_writes_nothing() {
     });
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    assert!(sync(&ck, &mut cat, &|_| {}).is_err());
+    assert!(sync(&ck, &mut cat, false, &|_| {}).is_err());
     assert_eq!(cat.count().unwrap(), 0);
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap(), None);
 }
@@ -251,9 +251,9 @@ fn membership_only_sync_changes_album_contents_without_record_counts() {
     });
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    sync(&ck, &mut cat, &|_| {}).unwrap();
+    sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(ids(&cat, Some("A-FAMILY")).len(), 2);
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!((report.assets, report.removed, report.albums), (0, 0, 0));
     assert_eq!(ids(&cat, Some("A-FAMILY")).len(), 3);
     assert_eq!(
@@ -275,12 +275,12 @@ fn stalled_change_token_rejects_partial_changes_and_falls_back_to_full_sync() {
     });
     let ck = CloudKit::connect(&t).unwrap();
     let mut cat = Catalog::open_in_memory().unwrap();
-    sync(&ck, &mut cat, &|_| {}).unwrap();
+    sync(&ck, &mut cat, false, &|_| {}).unwrap();
     let before = ids(&cat, None);
     assert!(icloud_photos::sync::incremental(&ck, &mut cat, "TOKEN-FULL", &|_| {}).is_err());
     assert_eq!(ids(&cat, None), before, "partial deletion must not be committed");
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("TOKEN-FULL"));
-    let report = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let report = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(report.mode, Mode::Full);
     assert!(report.fell_back.unwrap().contains("without advancing"));
     assert_eq!(ids(&cat, None), before);

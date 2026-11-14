@@ -28,7 +28,7 @@ fn browse_download_delete_upload_and_resync() {
     let ck = CloudKit::connect(&t).unwrap();
 
     // Full sync pages through 60 assets, 50 per page.
-    let r = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let r = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!((r.mode, r.assets, r.albums), (Mode::Full, 60, 3));
     assert_eq!(cat.count().unwrap(), 60);
     assert_eq!(
@@ -78,7 +78,7 @@ fn browse_download_delete_upload_and_resync() {
     assert_eq!(again.asset_id, uploaded.asset_id);
 
     // Incremental sync sees all three changes via changes/zone.
-    let r = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let r = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!(r.mode, Mode::Incremental, "{:?}", r.fell_back);
     assert_eq!(cat.count().unwrap(), 60 - 2 + 1);
     assert!(cat.asset(&second.id).unwrap().unwrap().deleted);
@@ -89,7 +89,7 @@ fn browse_download_delete_upload_and_resync() {
     assert_eq!(cat.meta(SYNC_TOKEN_KEY).unwrap().as_deref(), Some("tok-6")); // two more for the undo and re-delete
 
     // Nothing new: an empty incremental sync.
-    let r = sync(&ck, &mut cat, &|_| {}).unwrap();
+    let r = sync(&ck, &mut cat, false, &|_| {}).unwrap();
     assert_eq!((r.mode, r.assets, r.removed), (Mode::Incremental, 0, 0));
 }
 
@@ -100,11 +100,11 @@ fn signed_out_is_sign_in_required_until_reauthenticated() {
     let mut cat = Catalog::open_in_memory().unwrap();
     let ck = CloudKit::connect(&t).unwrap();
     server.sign_out();
-    assert!(sync(&ck, &mut cat, &|_| {}).unwrap_err().is_sign_in());
+    assert!(sync(&ck, &mut cat, false, &|_| {}).unwrap_err().is_sign_in());
     // What icloud_session::sign_in() does in mock mode.
     t.post_json(&format!("{}/mock/reauthenticate", server.url), &serde_json::json!({}))
         .unwrap();
-    assert_eq!(sync(&ck, &mut cat, &|_| {}).unwrap().assets, 3);
+    assert_eq!(sync(&ck, &mut cat, false, &|_| {}).unwrap().assets, 3);
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn the_download_pool_fetches_in_parallel_and_reports_each_job() {
     let root = tmp.path();
     let dirs = Dirs::under(root);
     let mut cat = Catalog::open(&dirs.catalog()).unwrap();
-    sync(&CloudKit::connect(&*t).unwrap(), &mut cat, &|_| {}).unwrap();
+    sync(&CloudKit::connect(&*t).unwrap(), &mut cat, false, &|_| {}).unwrap();
 
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = Mutex::new(tx);
