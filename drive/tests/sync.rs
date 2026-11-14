@@ -1027,3 +1027,27 @@ fn a_file_renamed_here_and_edited_in_icloud_gets_the_edit() {
     assert_eq!(bed.cloud.id_at("b.txt").as_deref(), Some(a.id.as_str()));
     assert_eq!(bed.local_paths(), ["b.txt"]);
 }
+
+#[test]
+fn a_file_moved_into_a_folder_whose_rename_icloud_refuses_is_not_removed_in_icloud() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "zDocs");
+    bed.cloud.file(&docs.id, "in.txt", "inside", bed.time());
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("zDocs"), bed.root().join("Papers")).unwrap();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Papers/a.txt")).unwrap();
+    bed.cloud.0.borrow_mut().refuses_moves = true;
+    for _ in 0..2 {
+        bed.try_sync(false).unwrap();
+        assert!(
+            bed.cloud.0.borrow().trashed.is_empty(),
+            "{:?}",
+            bed.cloud.0.borrow().trashed
+        );
+        assert_eq!(bed.cloud.paths(), ["a.txt", "zDocs", "zDocs/in.txt"]);
+    }
+    bed.cloud.0.borrow_mut().refuses_moves = false;
+    bed.settle();
+    assert_eq!(bed.cloud.id_at("Papers/a.txt").as_deref(), Some(a.id.as_str()));
+}

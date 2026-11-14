@@ -203,16 +203,23 @@ pub struct Context {
 }
 
 pub fn plan(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, context: &Context) -> Plan {
-    let moves = plan_moves(base, remote, local, context);
+    let (moves, held) = plan_moves(base, remote, local, context);
     if !moves.ops.is_empty() {
         return moves;
     }
-    plan_content(base, remote, local, context)
+    plan_content(base, remote, local, context, &held)
 }
 
 /// Moves and renames only. A row whose folder is itself moving waits for the
-/// next round, when its folder's move has carried it along.
-fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, context: &Context) -> Plan {
+/// next round, when its folder's move has carried it along. Also returns the
+/// paths of rows moved here to somewhere that cannot be seen properly: they
+/// are neither moved nor, by the content rules, read as removed here.
+fn plan_moves(
+    base: &[Row],
+    remote: &Snapshot,
+    local: &BTreeMap<String, Entry>,
+    context: &Context,
+) -> (Plan, Vec<String>) {
     let unknown = &context.unknown;
     let unseen = |path: &str| unknown.iter().any(|u| is_under(path, u));
     let tracked_ids: HashMap<&str, &str> = base.iter().map(|r| (r.path.as_str(), r.node.id.as_str())).collect();
@@ -260,6 +267,7 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
     let mut moving: Vec<&str> = Vec::new();
     let mut stuck: Vec<&Row> = Vec::new();
     let mut made: HashSet<String> = HashSet::new();
+    let mut held: Vec<String> = Vec::new();
     for row in base {
         if moving.iter().any(|p| is_under(&row.path, p)) || unseen(&row.path) {
             continue;
@@ -328,7 +336,14 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             && let Some(to) = moved_here(row)
         {
             // Moved here; iCloud still has it at the old place.
-            if remote.by_path.contains_key(to) || unseen(to) {
+            if unseen(to) {
+                // Moved to where nothing is touched (into a folder whose
+                // own move iCloud refused, say). The file is here, so this
+                // is no removal: it stays in iCloud until that clears.
+                held.push(row.path.clone());
+                continue;
+            }
+            if remote.by_path.contains_key(to) {
                 // Something else took that name in iCloud: leave it to the
                 // content rules (this one reads as deleted here).
                 continue;
@@ -392,21 +407,31 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
             });
         }
     }
-    Plan {
+    let plan = Plan {
         again: !ops.is_empty(),
         ops,
         ..Plan::default()
-    }
+    };
+    (plan, held)
 }
 
-fn plan_content(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, context: &Context) -> Plan {
+/// Everything but moves. `held` are the rows the move rules found here
+/// under a path that cannot be seen properly.
+fn plan_content(
+    base: &[Row],
+    remote: &Snapshot,
+    local: &BTreeMap<String, Entry>,
+    context: &Context,
+    held: &[String],
+) -> Plan {
     let (ignored, now_ns) = (&context.ignored, context.now_ns);
     let mut plan = Plan::default();
     let tracked: HashMap<&str, &Row> = base.iter().map(|r| (r.path.as_str(), r)).collect();
     // Subtrees to leave alone: the ones that could not be seen properly,
     // and then each one a single operation already takes care of.
-    let mut done: Vec<String> = context.unknown.clone();
-    let holds_unknown = |path: &str| context.unknown.iter().any(|u| is_under(u, path));
+    let unknown: Vec<String> = context.unknown.iter().chain(held).cloned().collect();
+    let mut done: Vec<String> = unknown.clone();
+    let holds_unknown = |path: &str| unknown.iter().any(|u| is_under(u, path));
     // Paths whose row was forgotten: left alone until the next round.
     let mut deferred: HashSet<String> = HashSet::new();
     // Local paths this plan removes or sets aside, so their name is free.
