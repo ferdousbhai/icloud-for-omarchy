@@ -269,6 +269,26 @@ for more than text edits). The engine:
 
 Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs.
 
+### Most of the vault's files gone
+
+Deleting a note's file deletes the note, so a vault whose note files went
+missing while `.icloud-notes/` stayed (a folder moved aside, a disk not
+mounted, another sync tool's mistake) would have every note moved to Recently
+Deleted and every folder record deleted by the next push, which the Notes
+app runs by itself. A push now counts the deletions it planned (notes whose
+file is gone or emptied) and refuses the whole run, before sending anything,
+when they are more than 3 and more than half of the notes tracked
+(`push::too_many_deletions`, the rule icloud-reminders' folder applies to a
+list): the error `too_many_deletions`, exit 2, with a hint. `push --yes` and
+`sync --yes` (`PushOptions::allow_deletes`) push it. `status` and `push
+--dry-run` list the deletions as before and add a warning. In a `sync` it is
+the push half's error; the pull still runs (it never writes a deleted note's
+file back).
+
+Tests: tests/cmd_push_guards.rs
+(`a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to`,
+`deleting_some_notes_is_not_refused`).
+
 ### A tracked note this build can no longer decode
 
 A tracked note whose text arrives in a form the decoder can't read

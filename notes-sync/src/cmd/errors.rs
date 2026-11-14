@@ -11,7 +11,9 @@
 //!   `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`,
 //!   `unsupported_vault_layout`, `corrupt_state_file`, a
 //!   `cloudkit_request_failed` that is an HTTP 4xx, …).
-//! - 2 usage: `usage`, `ambiguous_tracked_file`, `already_cloned_directory`.
+//! - 2 usage: `usage`, `ambiguous_tracked_file`, `already_cloned_directory`,
+//!   `too_many_deletions` (most of the vault's note files are gone: `push
+//!   --yes` deletes the notes).
 //! - 3 not signed in / not set up for this account: `sign_in_required`,
 //!   `not_cloned_directory`, `unbound_account`, `account_mismatch`,
 //!   `requested_account_mismatch`, `notes_unavailable`, `session_rejected`
@@ -97,6 +99,14 @@ pub enum Error {
     /// icloud-sessiond knows (`cmd::output`).
     #[error("sign in to iCloud required")]
     SignInRequired,
+    /// Most of the vault's note files are gone (or empty): a push would
+    /// move that many notes to Recently Deleted, which it only does when
+    /// told to (`push --yes`, `sync --yes`).
+    #[error(
+        "{deletions} of the {total} notes tracked here have no file any more (or an empty one). Pushing that would move \
+         them all to Recently Deleted, so nothing was pushed."
+    )]
+    TooManyDeletions { deletions: usize, total: usize },
     /// The vault's lock is held (by the Notes window when `app`).
     #[error("{}", if *app { format!("{holder} is open and owns the notes vault while it is open.") } else { format!("{holder} holds the notes vault.") })]
     VaultBusy { holder: String, app: bool },
@@ -144,7 +154,9 @@ impl Error {
             | Error::AccountMismatch { .. }
             | Error::RequestedAccountMismatch { .. }
             | Error::NotesUnavailable => EXIT_SIGN_IN,
-            Error::AmbiguousTrackedFile { .. } | Error::AlreadyClonedDirectory { .. } => EXIT_USAGE,
+            Error::AmbiguousTrackedFile { .. }
+            | Error::AlreadyClonedDirectory { .. }
+            | Error::TooManyDeletions { .. } => EXIT_USAGE,
             Error::UntrackedFile { .. } | Error::UnknownVersionSnapshot { .. } => EXIT_NOT_FOUND,
             Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. })
                 if server_error_code == "ZONE_NOT_FOUND" =>
@@ -210,6 +222,7 @@ impl Error {
             Error::UnknownVersionSnapshot { .. } => "unknown_version_snapshot",
             Error::VersionContentUnavailable(_) => "version_content_unavailable",
             Error::SignInRequired => "sign_in_required",
+            Error::TooManyDeletions { .. } => "too_many_deletions",
             Error::VaultBusy { .. } => "vault_busy",
             Error::VaultLock { .. } => "vault_lock",
             Error::CloudKit(CkError::ZoneFetchFailed { .. }) => "cloudkit_zone_fetch_failed",
@@ -274,6 +287,12 @@ impl Error {
                 Some("Run \"icloud-notes pull\" to refresh local state, then try again.".into())
             }
             Error::SignInRequired => Some(SIGN_IN_HINT.into()),
+            Error::TooManyDeletions { .. } => Some(
+                "If the files went missing by accident (a folder moved, a disk not mounted, a sync tool's mistake), put \
+                 them back and sync again; \"icloud-notes push --dry-run\" lists what would be deleted. To delete them, \
+                 run \"icloud-notes push --yes\"."
+                    .into(),
+            ),
             Error::VaultBusy { app: true, .. } => Some(
                 "Notes syncs this vault itself while it is open. Quit it and retry, or pass --wait SECS to wait for it to close."
                     .into(),

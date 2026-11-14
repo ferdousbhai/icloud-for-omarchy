@@ -60,20 +60,30 @@ pub fn push_error_skips_pull(error: &Error) -> bool {
 }
 
 /// `sync`.
-pub fn run_sync(target_dir: &Path, progress: &mut dyn SyncProgress, on_status: &mut dyn FnMut(&str)) -> SyncOutcome {
-    run_sync_with(&DefaultConnector, target_dir, progress, on_status)
+pub fn run_sync(
+    target_dir: &Path,
+    progress: &mut dyn SyncProgress,
+    on_status: &mut dyn FnMut(&str),
+    options: &PushOptions,
+) -> SyncOutcome {
+    run_sync_with(&DefaultConnector, target_dir, progress, on_status, options)
 }
 
 /// `sync` over an explicit connector, which it connects once for both
-/// halves.
+/// halves. `options` are the push half's (never a dry run).
 pub fn run_sync_with(
     connector: &dyn Connector,
     target_dir: &Path,
     progress: &mut dyn SyncProgress,
     on_status: &mut dyn FnMut(&str),
+    options: &PushOptions,
 ) -> SyncOutcome {
     let shared = SharedConnector::new(connector);
-    let push = push::run_push_with(&shared, target_dir, on_status, &PushOptions { dry_run: false });
+    let options = PushOptions {
+        dry_run: false,
+        ..*options
+    };
+    let push = push::run_push_with(&shared, target_dir, on_status, &options);
     let pull = match &push {
         Err(error) if push_error_skips_pull(error) => None,
         _ => Some(pull::run_pull_with(&shared, target_dir, progress, on_status)),

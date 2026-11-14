@@ -311,7 +311,16 @@ fn push(server: &Arc<Server>, vault: &Path) -> PushResult {
 }
 
 fn preview(server: &Arc<Server>, vault: &Path) -> PushResult {
-    run_push_with(&serve(server), vault, &mut |_| {}, &PushOptions { dry_run: true }).unwrap()
+    run_push_with(
+        &serve(server),
+        vault,
+        &mut |_| {},
+        &PushOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 fn state(vault: &Path) -> CloneState {

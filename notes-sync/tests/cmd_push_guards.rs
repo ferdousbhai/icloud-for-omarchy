@@ -11,6 +11,7 @@ use icloud_notes_sync::cmd::clone::{CloneOptions, run_clone_with};
 use icloud_notes_sync::cmd::plan::{PlanEntryKind, PlanResolution};
 use icloud_notes_sync::cmd::push::{PushOptions, PushResult, run_push_with};
 use icloud_notes_sync::cmd::remote::{Connector, FnConnector, Remote};
+use icloud_notes_sync::cmd::sync::run_sync_with;
 use icloud_notes_sync::cmd::{Error, NoProgress};
 use icloud_notes_sync::vault::state::{Account, CloneState, read_clone_state, write_clone_state};
 use serde_json::{Value, json};
@@ -330,7 +331,16 @@ fn a_copy_of_another_note_is_not_taken_for_a_deleted_note_of_the_same_name() {
     )
     .unwrap();
 
-    let result = run_push_with(&serve(&server), &vault, &mut |_| {}, &PushOptions { dry_run: true }).unwrap();
+    let result = run_push_with(
+        &serve(&server),
+        &vault,
+        &mut |_| {},
+        &PushOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let planned = entries(&result);
     assert!(
         planned.contains(&(PlanEntryKind::Delete, "Test Note.md", PlanResolution::Ready)),
@@ -390,4 +400,109 @@ fn a_planned_merge_is_not_written_over_a_later_save() {
     assert_eq!(server.operations(), [("update".to_owned(), NOTE.to_owned())]);
     let text = read(&vault, NOTE_FILE);
     assert!(text.contains("A line added before the push.") && text.contains("A line saved while the push ran."));
+}
+
+// --- most of the vault's files gone ----------------------------------------------------
+
+/// Tracks `count` more notes (no record in iCloud), each with its file and
+/// base copy; returns their files.
+fn track_more(vault: &Path, count: usize) -> Vec<String> {
+    let mut state = state(vault);
+    let mut files = Vec::new();
+    for n in 0..count {
+        let record_name = format!("a1b2c3d4-0000-4000-8000-{n:012x}");
+        let file = format!("Notes/More {n}.md");
+        let mut entry = state.notes[NOTE].clone();
+        entry.file = file.clone();
+        state.notes.insert(record_name.clone(), entry);
+        std::fs::write(vault.join(&file), format!("Note {n}\n")).unwrap();
+        icloud_notes_sync::vault::base::write_base_copy(vault, &record_name, &format!("Note {n}\n")).unwrap();
+        files.push(file);
+    }
+    write_clone_state(vault, &state).unwrap();
+    files
+}
+
+/// The note files of most of the vault gone while its state is still there
+/// is what an accident looks like. Nothing is deleted, nothing else is
+/// pushed, and the error says so; `--yes` (`allow_deletes`) deletes them.
+#[test]
+fn a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = cloned_vault(dir.path());
+    let server = Arc::new(Server::with_note());
+    let mut files = track_more(&vault, 5);
+    files.push(NOTE_FILE.to_owned());
+    for file in &files[1..] {
+        std::fs::remove_file(vault.join(file)).unwrap();
+    }
+
+    let error = try_push(&server, &vault).unwrap_err();
+    assert!(
+        matches!(error, Error::TooManyDeletions { deletions: 5, total: 6 }),
+        "{error:?}"
+    );
+    assert_eq!((error.code().as_str(), error.exit_code()), ("too_many_deletions", 2));
+    assert!(error.hint().unwrap().contains("push --yes"));
+    assert!(server.operations().is_empty(), "nothing was sent");
+    assert_eq!(state(&vault).notes.len(), 6, "every note is still tracked");
+
+    // The preview lists them and says what a push would do.
+    let preview = run_push_with(
+        &serve(&server),
+        &vault,
+        &mut |_| {},
+        &PushOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(preview.entries.len(), 5);
+    assert!(
+        preview.notices.iter().any(|n| n.message.contains("5 of the 6 notes")),
+        "{:?}",
+        preview.notices
+    );
+
+    // A sync reports it as its push half's failure, and still pulls.
+    let outcome = run_sync_with(
+        &serve(&server),
+        &vault,
+        &mut NoProgress,
+        &mut |_| {},
+        &PushOptions::default(),
+    );
+    assert!(matches!(outcome.push, Err(Error::TooManyDeletions { .. })));
+    assert!(matches!(outcome.pull, Some(Ok(_))));
+    assert_eq!(outcome.exit_code(), 2);
+    assert!(server.operations().is_empty());
+
+    let allowed = PushOptions {
+        allow_deletes: true,
+        ..Default::default()
+    };
+    let result = run_push_with(&serve(&server), &vault, &mut |_| {}, &allowed).unwrap();
+    assert_eq!(result.pushed, Some(5));
+    assert_eq!(server.operations(), [("update".to_owned(), NOTE.to_owned())]);
+    assert_eq!(state(&vault).notes.len(), 1);
+}
+
+/// A few deletions, or deletions that are not most of the vault, go up as
+/// they always did.
+#[test]
+fn deleting_some_notes_is_not_refused() {
+    for (more, deleted) in [(2, 3), (7, 4)] {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = cloned_vault(dir.path());
+        let server = Arc::new(Server::with_note());
+        let mut files = track_more(&vault, more);
+        files.push(NOTE_FILE.to_owned());
+        for file in &files[files.len() - deleted..] {
+            std::fs::remove_file(vault.join(file)).unwrap();
+        }
+        let result = push(&server, &vault);
+        assert_eq!(result.pushed, Some(deleted), "{more} more, {deleted} deleted");
+        assert_eq!(state(&vault).notes.len(), more + 1 - deleted);
+    }
 }

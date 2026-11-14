@@ -53,7 +53,8 @@ use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
                   go to stderr, and a failure is \
                   {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout (text mode: error: and \
                   hint: lines on stderr).\n\
-                  Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory), \
+                  Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory, \
+                  too_many_deletions: most of the vault's note files are gone, and push --yes deletes the notes), \
                   3 not signed in or not set up (sign_in_required, session_rejected: icloud-session sign-in; \
                   not_cloned_directory, account_mismatch, notes_unavailable, ...: the error code tells them apart), \
                   4 not found (untracked_file, unknown_version_snapshot), 5 a service unavailable (offline, network, \
@@ -100,6 +101,9 @@ enum Command {
         /// Report what would be pushed without changing anything
         #[arg(long)]
         dry_run: bool,
+        /// Delete the notes whose files are gone even when that is most of the vault (otherwise too_many_deletions, exit 2)
+        #[arg(long)]
+        yes: bool,
     },
     /// Push, then pull, in one run over one connection (what the Notes app does)
     #[command(
@@ -112,7 +116,12 @@ enum Command {
                       then). Exit code: 3 if either half exited 3 (sign-in required, or the vault not set up for this \
                       account), else the higher of the two halves' codes (5 unavailable, 4 not found, 2 usage, 1 error)."
     )]
-    Sync { directory: Option<PathBuf> },
+    Sync {
+        directory: Option<PathBuf>,
+        /// As push --yes: delete the notes whose files are gone even when that is most of the vault
+        #[arg(long)]
+        yes: bool,
+    },
     /// Preview exactly what the next push will do (requires signing in)
     Status { directory: Option<PathBuf> },
     /// Discard a tracked note's local edits, reverting it to the last synced copy
@@ -450,14 +459,22 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 .meta("lines", report)
                 .count(s.changes.len())
         }
-        Command::Push { directory, dry_run } => {
+        Command::Push {
+            directory,
+            dry_run,
+            yes,
+        } => {
             let target = resolve_target_dir(directory)?;
             let _lock = if dry_run {
                 None
             } else {
                 Some(lock_vault(&target, wait)?)
             };
-            let r = push::run_push(&target, &mut on_status, &push::PushOptions { dry_run })?;
+            let options = push::PushOptions {
+                dry_run,
+                allow_deletes: yes,
+            };
+            let r = push::run_push(&target, &mut on_status, &options)?;
             let lines = push_lines(&r, &target);
             let report = report_lines(&lines);
             // A change iCloud refused is in the result; the exit says so too.
@@ -473,10 +490,14 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 .ids(r.entries.iter().map(|e| e.entry.file.clone()).collect())
                 .exit(exit)
         }
-        Command::Sync { directory } => {
+        Command::Sync { directory, yes } => {
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
-            let outcome = sync::run_sync(&target, progress, &mut on_status);
+            let options = push::PushOptions {
+                dry_run: false,
+                allow_deletes: yes,
+            };
+            let outcome = sync::run_sync(&target, progress, &mut on_status, &options);
             // Each failed half's error, converted once for the data and the
             // text report alike.
             let push = outcome.push.as_ref().map_err(CliError::from);

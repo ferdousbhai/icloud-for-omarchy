@@ -82,6 +82,17 @@ pub type NoteText = ParsedNoteMarkdown;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PushOptions {
     pub dry_run: bool,
+    /// Push even when most of the vault's notes would be deleted
+    /// ([`too_many_deletions`]).
+    pub allow_deletes: bool,
+}
+
+/// More than a few deletions that are also most of the notes tracked: what
+/// note files gone by accident look like (a folder moved, a disk not
+/// mounted, another sync tool's mistake) far more often than a clear-out.
+/// The rule icloud-reminders' folder uses for a list.
+pub fn too_many_deletions(deletions: usize, tracked: usize) -> bool {
+    deletions > 3 && deletions * 2 > tracked
 }
 
 /// `ExecuteOutcome`.
@@ -3444,6 +3455,27 @@ pub fn run_push_with(
     };
     let serialized: Vec<PlanEntry> = entries.iter().map(|e| e.entry.clone()).collect();
     let unchanged = count_unchanged_notes(&serialized, state.notes.len());
+
+    // Before anything is sent: a note whose file is gone (or emptied) is a
+    // note to delete, and most of the vault at once is not deleted unasked.
+    let mut notices = notices;
+    let deletions = serialized
+        .iter()
+        .filter(|e| e.kind == PlanEntryKind::Delete && e.resolution == PlanResolution::Ready)
+        .count();
+    if !options.allow_deletes && too_many_deletions(deletions, state.notes.len()) {
+        let total = state.notes.len();
+        if !dry_run {
+            return Err(Error::TooManyDeletions { deletions, total });
+        }
+        notices.push(SyncNotice {
+            level: NoticeLevel::Warn,
+            message: format!(
+                "{deletions} of the {total} notes tracked here have no file any more (or an empty one): a push \
+                 refuses to delete that many unless it is run with --yes"
+            ),
+        });
+    }
 
     if entries.is_empty() {
         return Ok(PushResult {

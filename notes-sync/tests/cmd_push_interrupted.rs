@@ -153,7 +153,10 @@ fn a_note_created_before_the_push_failed_is_tracked_and_not_created_again() {
         &serve(server.clone()),
         &vault,
         &mut |_| {},
-        &PushOptions { dry_run: true },
+        &PushOptions {
+            dry_run: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     let planned: Vec<_> = preview

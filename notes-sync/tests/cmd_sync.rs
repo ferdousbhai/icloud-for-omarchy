@@ -50,7 +50,13 @@ fn sync_failing_with(error: fn() -> Error) -> (u8, bool, usize) {
         connects.set(connects.get() + 1);
         Err(error())
     });
-    let outcome = run_sync_with(&connector, vault.path(), &mut NoProgress, &mut |_| {});
+    let outcome = run_sync_with(
+        &connector,
+        vault.path(),
+        &mut NoProgress,
+        &mut |_| {},
+        &Default::default(),
+    );
     assert!(outcome.push.is_err());
     (outcome.exit_code(), outcome.pull.is_some(), connects.get())
 }
@@ -146,7 +152,13 @@ fn both_halves_share_one_connection() {
             account,
         })
     });
-    let outcome = run_sync_with(&connector, vault.path(), &mut NoProgress, &mut |_| {});
+    let outcome = run_sync_with(
+        &connector,
+        vault.path(),
+        &mut NoProgress,
+        &mut |_| {},
+        &Default::default(),
+    );
     assert_eq!(outcome.push.as_ref().unwrap().pushed, Some(1));
     assert!(outcome.pull.as_ref().unwrap().is_ok());
     assert_eq!((outcome.exit_code(), connects.get()), (0, 1));

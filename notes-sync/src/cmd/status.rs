@@ -28,7 +28,15 @@ pub fn run_status_with(
     target_dir: &Path,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<StatusResult, Error> {
-    let preview = run_push_with(connector, target_dir, on_status, &PushOptions { dry_run: true })?;
+    let preview = run_push_with(
+        connector,
+        target_dir,
+        on_status,
+        &PushOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    )?;
     Ok(StatusResult {
         entries: preview.entries.into_iter().map(|e| e.entry).collect(),
         unchanged: preview.unchanged,

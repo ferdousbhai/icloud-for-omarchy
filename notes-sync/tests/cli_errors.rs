@@ -112,6 +112,16 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
             2,
         ),
         (
+            Error::TooManyDeletions {
+                deletions: 40,
+                total: 42,
+            },
+            "TooManyDeletionsError",
+            "too_many_deletions",
+            true,
+            2,
+        ),
+        (
             Error::AlreadyClonedDirectory { target_dir: dir() },
             "AlreadyClonedDirectoryError",
             "already_cloned_directory",
