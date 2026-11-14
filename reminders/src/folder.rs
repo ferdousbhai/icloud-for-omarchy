@@ -345,7 +345,16 @@ fn pair(base: &[Known], local: &[Item]) -> Vec<Option<usize>> {
     let mut of_local: Vec<Option<usize>> = vec![None; local.len()];
     let mut taken = vec![false; base.len()];
     for (l, it) in local.iter().enumerate() {
-        if let Some(b) = (0..base.len()).find(|&b| !taken[b] && base[b].item.title == it.title) {
+        let same: Vec<usize> = (0..base.len())
+            .filter(|&b| !taken[b] && base[b].item.title == it.title)
+            .collect();
+        // Fewer lines of a title than there were: among those this line can
+        // be (leaving one for each such line after it), it is the one it
+        // still reads as, so the reminder whose line was removed is the one
+        // that goes.
+        let later = local[l + 1..].iter().filter(|o| o.title == it.title).count();
+        let choices = &same[..same.len().saturating_sub(later).max(1).min(same.len())];
+        if let Some(&b) = choices.iter().find(|&&b| base[b].item == *it).or(choices.first()) {
             taken[b] = true;
             of_local[l] = Some(b);
         }
@@ -860,6 +869,13 @@ mod tests {
         let delta = diff(&twins, &items("- [x] Milk\n- [ ] Milk\n"), &now);
         assert_eq!(delta.updates.len(), 1);
         assert_eq!(delta.updates[0].0, "Reminder/0");
+        // With one of their lines removed, the reminder that goes is the one
+        // the line left does not read as, not the second of that name.
+        let mut twins = base(&["Milk", "Milk"]);
+        twins[1].item.done = true;
+        let delta = diff(&twins, &items("- [x] Milk\n"), &now);
+        assert_eq!(delta.updates, []);
+        assert_eq!(delta.deletes, ["Reminder/0"]);
     }
 
     #[test]
