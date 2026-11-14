@@ -410,8 +410,16 @@ impl Contact {
     }
 
     /// Applies `changes` to this card; an error names a value to remove
-    /// that is not there.
+    /// that is not there. That is judged on the card as it was: two
+    /// removals may name the same value (one number written two ways).
     pub fn apply(&mut self, changes: &[Change]) -> Result<(), String> {
+        for c in changes {
+            if let Change::Remove(m, v) | Change::RemoveExact(m, Labeled { value: v, .. }) = c
+                && self.has(c)
+            {
+                return Err(format!("{} has no {} {v}", self.display_name(), m.noun()));
+            }
+        }
         for c in changes {
             match c {
                 Change::Set(f, v) => {
@@ -421,7 +429,7 @@ impl Contact {
                         self.0.insert(f.key().into(), json!(v));
                     }
                 }
-                Change::Add(..) if self.has(c) => {}
+                Change::Add(..) | Change::Remove(..) | Change::RemoveExact(..) if self.has(c) => {}
                 Change::Add(m, l) => {
                     let list = self.0.entry(m.key()).or_insert(Value::Null);
                     if !list.is_array() {
@@ -430,10 +438,7 @@ impl Contact {
                     let arr = list.as_array_mut().expect("just made an array");
                     arr.push(json!({ "label": l.label, "field": l.value }));
                 }
-                Change::Remove(m, v) | Change::RemoveExact(m, Labeled { value: v, .. }) => {
-                    if self.has(c) {
-                        return Err(format!("{} has no {} {v}", self.display_name(), m.noun()));
-                    }
+                Change::Remove(m, _) | Change::RemoveExact(m, _) => {
                     let arr = self.0.get_mut(m.key()).and_then(Value::as_array_mut);
                     let arr = arr.expect("has() found the value in an array");
                     arr.retain(|e| !labeled(e).is_some_and(|l| c.removes(&l)));
@@ -514,6 +519,22 @@ mod tests {
             }]
         );
         assert!(c.apply(&[Change::Remove(Multi::Phone, "999".into())]).is_err());
+    }
+
+    /// Two removals that name one stored number (written two ways, or the
+    /// same twice) are one removal, not an error for the second.
+    #[test]
+    fn two_removals_of_one_number_both_succeed() {
+        let mut c = card(
+            json!({ "phones": [{"label": "HOME", "field": "555-010-0199"}, {"label": "WORK", "field": "+1 555 010 0199"}] }),
+        );
+        c.apply(&[
+            Change::Remove(Multi::Phone, "555-010-0199".into()),
+            Change::Remove(Multi::Phone, "+1 555 010 0199".into()),
+        ])
+        .unwrap();
+        assert!(c.values(Multi::Phone).is_empty());
+        assert!(c.apply(&[Change::Remove(Multi::Phone, "555-010-0199".into())]).is_err());
     }
 
     /// A phone iCloud holds with no digits in it (typed on another device)
