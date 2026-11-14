@@ -12,7 +12,6 @@ use super::text::decode_note_string;
 use crate::cloudkit::{CloudKitRecord, FieldValue};
 use crate::js::{base64_decode, buffer_to_utf8};
 use crate::md::render::{projection_survives, render_note_markdown};
-use crate::md::title::split_title_paragraph;
 use crate::vault::state::TitleMode;
 
 /// `ClassifyNoteOptions`.
@@ -163,7 +162,7 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
             .first()
             .is_some_and(|title| !title.text.contains(OBJECT_REPLACEMENT_CHARACTER));
     let projected = if strip_title {
-        split_title_paragraph(&paragraphs).body
+        paragraphs[1..].to_vec()
     } else {
         paragraphs.clone()
     };

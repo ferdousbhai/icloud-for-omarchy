@@ -7,33 +7,12 @@ use crate::js;
 /// `MAX_TITLE_LENGTH` (UTF-16 units, like JS `.length`).
 pub const MAX_TITLE_LENGTH: usize = 60;
 
-/// `SplitTitleParagraph`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SplitTitle {
-    pub title: Option<FormatParagraph>,
-    pub body: Vec<FormatParagraph>,
-}
-
 /// `{text, paragraphs}` as `restoreTitleParagraphText` returns it (same
 /// shape as `parse::ParsedNoteMarkdown`).
 pub use super::parse::ParsedNoteMarkdown as NoteText;
 
-/// `splitTitleParagraph`.
-pub fn split_title_paragraph(paragraphs: &[FormatParagraph]) -> SplitTitle {
-    match paragraphs.split_first() {
-        Some((title, body)) => SplitTitle {
-            title: Some(title.clone()),
-            body: body.to_vec(),
-        },
-        None => SplitTitle {
-            title: None,
-            body: Vec::new(),
-        },
-    }
-}
-
-/// `restoreTitleParagraphText`: the title before the body, every `start`
-/// recomputed.
+/// `restoreTitleParagraphText`: the title before the body (a note's
+/// paragraphs after their first, `split_first`), every `start` recomputed.
 pub fn restore_title_paragraph_text(title: &FormatParagraph, body: &[FormatParagraph]) -> NoteText {
     NoteText::from_paragraphs(std::iter::once(title).chain(body).cloned().collect())
 }

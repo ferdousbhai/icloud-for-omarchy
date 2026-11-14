@@ -50,7 +50,7 @@ use crate::md::frontmatter::{
 };
 use crate::md::parse::{ParsedNoteMarkdown, parse_note_markdown};
 use crate::md::title::{
-    carried_title_spelling, representability_problem, restore_title_paragraph_text, split_title_paragraph,
+    carried_title_spelling, representability_problem, restore_title_paragraph_text,
     title_from_note_file_name, title_is_representable, title_paragraph_from_filename,
 };
 use crate::vault::attachments::{
@@ -2203,13 +2203,16 @@ pub fn prepare_retitle(
         (Some(format), true) => format,
         _ => return Ok(Err(RetitleRefusal::TitleHasEmbed)),
     };
-    let split = split_title_paragraph(format);
-    if let Some(title) = &split.title
+    let (title, body) = match format.split_first() {
+        Some((title, body)) => (Some(title), body),
+        None => (None, &[][..]),
+    };
+    if let Some(title) = title
         && (title.text == new_title || carried_title_spelling(&title.text) == new_title)
     {
         return Ok(Ok(None));
     }
-    let desired = restore_title_paragraph_text(&title_paragraph_from_filename(new_title), &split.body);
+    let desired = restore_title_paragraph_text(&title_paragraph_from_filename(new_title), body);
     let _ = entry;
     match prepare_note_text_update(
         record,

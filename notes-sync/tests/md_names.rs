@@ -250,20 +250,16 @@ fn title_paragraph_split_and_restore() {
         paragraph(Body, "", 8),
         paragraph(Body, "Body text", 9),
     ];
-    let split = split_title_paragraph(&model);
-    assert_eq!(split.title.unwrap().text, "My Note");
-    assert_eq!(split.body.len(), 2);
-    assert_eq!(split.body[0].text, "");
-
-    let empty = split_title_paragraph(&[]);
-    assert_eq!(empty.title, None);
-    assert!(empty.body.is_empty());
+    let (title, body) = model.split_first().unwrap();
+    assert_eq!(title.text, "My Note");
+    assert_eq!(body.len(), 2);
+    assert_eq!(body[0].text, "");
 
     let mono = vec![
         paragraph(Monospaced, "code line one", 0),
         paragraph(Monospaced, "code line two", 14),
     ];
-    let rendered = render_note_markdown(&split_title_paragraph(&mono).body);
+    let rendered = render_note_markdown(&mono[1..]);
     assert_eq!(rendered.matches("```").count() % 2, 0);
     assert!(parse_note_markdown(&rendered).is_ok());
 
@@ -272,7 +268,7 @@ fn title_paragraph_split_and_restore() {
         paragraph(BulletList, "second item", 11),
     ];
     assert_eq!(
-        render_note_markdown(&split_title_paragraph(&list).body),
+        render_note_markdown(&list[1..]),
         "- second item"
     );
 
@@ -313,11 +309,7 @@ fn title_paragraph_split_and_restore() {
         paragraph(BulletList, "one", 9),
         paragraph(BulletList, "two", 13),
     ];
-    let split = split_title_paragraph(&model);
-    assert_eq!(
-        restore_title_paragraph_text(&split.title.unwrap(), &split.body).paragraphs,
-        model
-    );
+    assert_eq!(restore_title_paragraph_text(&model[0], &model[1..]).paragraphs, model);
 
     let model = vec![
         paragraph(Title, "My Note", 0),
@@ -325,7 +317,7 @@ fn title_paragraph_split_and_restore() {
         paragraph(Heading, "A section", 9),
         paragraph(Body, "Some prose.", 19),
     ];
-    let reparsed = parse_note_markdown(&render_note_markdown(&split_title_paragraph(&model).body)).unwrap();
+    let reparsed = parse_note_markdown(&render_note_markdown(&model[1..])).unwrap();
     assert_eq!(reparsed.text, "\nA section\nSome prose.");
 
     let parsed = parse_note_markdown("\nBody text\nMore body").unwrap();
