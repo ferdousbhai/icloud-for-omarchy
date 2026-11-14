@@ -22,6 +22,12 @@
 //! - every file reads as iCloud now has it, and the folder holds no other;
 //! - a run after it sends and writes nothing.
 //!
+//! Each case runs twice, the new reminders' IDs rising with time and then
+//! falling (`service::UUID_ORDER`, and the IDs made on iCloud's side
+//! likewise): the files and iCloud's reminders after each step, IDs aside,
+//! must be the same, so no outcome hangs on which of two reminders has the
+//! lower ID.
+//!
 //! After the last step, a few more runs settle it: each is quiet, and
 //! `folder.json` holds no add, write, rename or failure still open, no old
 //! name or removed file in the folder, and no temp file.
@@ -51,6 +57,7 @@ use icloud_app::testing::{code, command, envelope, stderr, write_script};
 use icloud_reminders::cloudkit::Record;
 use icloud_reminders::folder::{self, Item, Known};
 use icloud_reminders::model::{Change, List, Parsed, Reminder};
+use icloud_reminders::service;
 use icloud_reminders::store::Cache;
 use icloud_reminders::topotext;
 use icloud_session::time::now_ms;
@@ -125,21 +132,31 @@ const ALIKE: f64 = 0.5;
 
 struct Env {
     base: String,
+    /// New reminders' IDs rise or fall with time (`service::UUID_ORDER`).
+    order: &'static str,
+    /// When the case began: both passes of it take their times from this.
+    t0: i64,
     state: Arc<fake::State>,
     dir: tempfile::TempDir,
 }
 
-fn start() -> Env {
+fn start(order: &'static str, t0: i64) -> Env {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let state = Arc::new(fake::State::seeded(now_ms(), 0));
+    let state = Arc::new(fake::State::seeded(t0, 0));
     let s = state.clone();
     std::thread::spawn(move || fake::serve_with(listener, s));
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     write_script(&bin.join("omarchy-notification-send"), "#!/bin/sh\nexit 0\n");
-    Env { base, state, dir }
+    Env {
+        base,
+        order,
+        t0,
+        state,
+        dir,
+    }
 }
 
 impl Env {
@@ -152,6 +169,7 @@ impl Env {
         c.args(["background", "--sync", "--json"])
             .env("TZ", "UTC")
             .env("PATH", self.dir.path().join("bin"))
+            .env(service::UUID_ORDER, self.order)
             .env_remove("OMARCHY_PATH");
         c
     }
@@ -453,6 +471,8 @@ struct Case {
     /// Files that may be named in a warning this step: they came back.
     back: Vec<String>,
     n: usize,
+    /// What could be seen after each step, with no reminder IDs in it.
+    trace: Vec<String>,
 }
 
 impl Case {
@@ -469,6 +489,16 @@ impl Case {
         self.log.push(s);
     }
 
+    /// An ID for what iCloud's side makes, in the order of the pass: a
+    /// reminder's sorts after those the runs make, and a list's before the
+    /// seeded ones, when rising; falling, the other way (`flip` before it).
+    fn id_of(&self, what: &str, flip: &str) -> String {
+        match self.env.order {
+            "up" => format!("{what}-{:04}", self.n),
+            _ => format!("{flip}{what}-{:04}", 9999 - self.n),
+        }
+    }
+
     /// A title unlike every one used so far.
     fn fresh(&mut self) -> String {
         loop {
@@ -480,11 +510,11 @@ impl Case {
         }
     }
 
-    fn new(seed: u64) -> Case {
+    fn new(seed: u64, order: &'static str, t0: i64) -> Case {
         let mut case = Case {
             seed,
             rng: Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1),
-            env: start(),
+            env: start(order, t0),
             log: Vec::new(),
             lists: Vec::new(),
             used: [
@@ -502,6 +532,7 @@ impl Case {
             removed: BTreeSet::new(),
             back: Vec::new(),
             n: 0,
+            trace: Vec::new(),
         };
         // Enough lines that removing most of a list is possible.
         for _ in 0..5 {
@@ -518,7 +549,7 @@ impl Case {
 
     fn icloud_add(&mut self, list: &str, title: &str, created_minutes_ago: i64) {
         self.n += 1;
-        let uuid = format!("ICLOUD-{}", self.n);
+        let uuid = self.id_of("ICLOUD", "0");
         let notes = if self.rng.chance(20) {
             format!("Note {}", self.rng.word())
         } else {
@@ -530,7 +561,9 @@ impl Case {
             title,
             &notes,
             None,
-            now_ms() - created_minutes_ago * MINUTE,
+            // Never the same millisecond as another: the files order those
+            // by ID, which the two passes of a case sort apart.
+            self.env.t0 - created_minutes_ago * MINUTE - self.n as i64,
         );
         if self.rng.chance(25) {
             // An all-day date in 2030.
@@ -544,7 +577,11 @@ impl Case {
 
     fn icloud_op(&mut self) {
         let t = truth(&self.env.state);
-        let ids: Vec<&Reminder> = t.live.values().collect();
+        // By what they hold and when they were made, not by their IDs: the
+        // case does the same with IDs that sort the other way.
+        let mut ids: Vec<&Reminder> = t.live.values().collect();
+        let name = |r: &Reminder| t.lists.iter().find(|l| l.id == r.list_id).map(|l| l.name.clone());
+        ids.sort_by_key(|r| (name(r), key(&item_of(r)), r.parent_id.is_some(), r.created_ms));
         let pick_list = |rng: &mut Rng| t.lists[rng.below(t.lists.len())].id.clone();
         match self.rng.below(13) {
             0 | 1 if !t.lists.is_empty() => {
@@ -618,7 +655,7 @@ impl Case {
             }
             9 => {
                 self.n += 1;
-                let id = format!("List/LIST-{}", self.n);
+                let id = format!("List/{}", self.id_of("LIST", "Z"));
                 let name = self.fresh();
                 self.note(format!("icloud: new list {id} {name:?}"));
                 self.env.state.put(fake::list(&id, &name, &[], "#34C759"));
@@ -1407,6 +1444,36 @@ impl Case {
         self.check_quiet(sent, &again);
         self.check_files(&expect);
         self.rebuild();
+        let seen = self.seen();
+        self.trace.push(seen);
+    }
+
+    /// The folder's files and iCloud's reminders, IDs aside.
+    fn seen(&self) -> String {
+        let dir = self.env.folder();
+        let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
+            .map(|d| {
+                d.map(|e| {
+                    let e = e.unwrap();
+                    let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+                    (e.file_name().to_string_lossy().into_owned(), text)
+                })
+                .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        let t = truth(&self.env.state);
+        let title = |id: &Option<String>| id.as_ref().and_then(|p| t.live.get(p)).map(|p| p.title.clone());
+        let mut live: Vec<String> = t
+            .live
+            .values()
+            .map(|r| {
+                let list = t.lists.iter().find(|l| l.id == r.list_id).map(|l| &l.name);
+                format!("{list:?} under {:?}: {}", title(&r.parent_id), key(&item_of(r)))
+            })
+            .collect();
+        live.sort();
+        format!("{files:#?}\n{live:#?}")
     }
 
     fn check_quiet(&self, sent: usize, data: &Value) {
@@ -1478,16 +1545,31 @@ impl Case {
     }
 }
 
+/// One seed, run with new reminders' IDs rising, then falling: what is
+/// seen after each step must not hang on which of two has the lower ID.
 fn run_case(seed: u64) {
     let steps = std::env::var("ICLOUD_REMINDERS_MODEL_STEPS")
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(STEPS);
-    let mut case = Case::new(seed);
-    for i in 0..steps {
-        case.step(i);
+    let t0 = now_ms();
+    let [up, down] = ["up", "down"].map(|order| {
+        let mut case = Case::new(seed, order, t0);
+        for i in 0..steps {
+            case.step(i);
+        }
+        case.settle();
+        case
+    });
+    if let Some(i) = (0..steps).find(|&i| up.trace[i] != down.trace[i]) {
+        panic!(
+            "seed {seed} (ICLOUD_REMINDERS_MODEL_SEED={seed}): after step {i}, IDs rising leave\n{}\nand falling\n{}\n--- operations, rising:\n{}\n--- falling:\n{}",
+            up.trace[i],
+            down.trace[i],
+            up.log.join("\n"),
+            down.log.join("\n")
+        );
     }
-    case.settle();
 }
 
 #[test]

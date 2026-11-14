@@ -291,9 +291,34 @@ impl<'a> Service<'a> {
     }
 }
 
+/// `ICLOUD_REMINDERS_UUID_ORDER=up|down` (debug builds only) makes each new
+/// UUID sort after (`up`) or before (`down`) every one made earlier, also by
+/// another process: `tests/folder_model.rs` runs each case both ways, so an
+/// outcome that hangs on which of two reminders has the lower ID shows. A
+/// release build has no hook.
+pub const UUID_ORDER: &str = "ICLOUD_REMINDERS_UUID_ORDER";
+
 /// A new reminder's UUID, as Apple's are written.
 pub fn new_uuid() -> String {
-    uuid::Uuid::new_v4().to_string().to_uppercase()
+    let id = uuid::Uuid::new_v4();
+    #[cfg(debug_assertions)]
+    if let Some(order) = std::env::var_os(UUID_ORDER) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        // Strictly later than the last one this process made.
+        let next = |last: u64| nanos.max(last + 1);
+        let at = next(
+            LAST.try_update(Ordering::SeqCst, Ordering::SeqCst, |l| Some(next(l)))
+                .unwrap_or(0),
+        );
+        let key = if order == "down" { u64::MAX - at } else { at };
+        let rest = id.as_u128() as u64;
+        return uuid::Uuid::from_u64_pair(key, rest).to_string().to_uppercase();
+    }
+    id.to_string().to_uppercase()
 }
 
 /// What a write saved, and why the local cache may not show it.

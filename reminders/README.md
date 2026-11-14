@@ -207,7 +207,9 @@ folder's files and to iCloud, Syncthing conflict copies, runs killed
 mid-write or at one of the folder's crash points
 (`ICLOUD_REMINDERS_CRASH_AT=<point>[:<n>]`, debug builds only) and two runs
 at once against the fake, and checks that no reminder is lost or made
-twice and each file reads as iCloud has it (`ICLOUD_REMINDERS_MODEL_SEED`,
+twice and each file reads as iCloud has it, the same whichever way the new
+reminders' IDs sort (each case runs with them rising, then falling:
+`ICLOUD_REMINDERS_UUID_ORDER`, debug builds only) (`ICLOUD_REMINDERS_MODEL_SEED`,
 `_CASES` and `_STEPS` choose the cases). The library has no GTK dependency (the window's code is in
 `src/bin/app/`), so `cargo test --no-default-features` runs on a machine
 without the GTK stack.
