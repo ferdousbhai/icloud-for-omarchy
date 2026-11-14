@@ -39,7 +39,13 @@
 # refuses to delete most of the vault (too_many_deletions, exit 2, with the
 # engine's message and hint) unless it is run with --yes; a sync's pull runs
 # all the same. --yes is taken by push and sync, and logged ("sync --yes").
+# ICLOUD_NOTES_SYNC_STUB_GATE=FILE: a sync, pull or push waits while FILE
+# exists, so a test decides when it ends (and changes the vault meanwhile).
 orig=("$@")
+gate() {
+  [ -n "${ICLOUD_NOTES_SYNC_STUB_GATE:-}" ] || return 0
+  while [ -e "$ICLOUD_NOTES_SYNC_STUB_GATE" ]; do sleep 0.02; done
+}
 quiet="" json="" styled="" ids="" count="" yes=""
 args=()
 while [ $# -gt 0 ]; do
@@ -147,6 +153,7 @@ elif [ "$1" = "sync" ]; then
   # session_rejected, offline or network leaves the pull out.
   [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "sync${yes:+ --yes}" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
+  gate
   stub_fail
   code=0
   half() { # half VERB: prints that half's JSON
@@ -289,6 +296,7 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
     case "$without" in *vault_busy*) ;; *) echo "stub: the engine got the vault without the lock: $without" >&2; exit 1 ;; esac
   fi
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
+  gate
   [ "$1" = pull ] && progress 3
   stub_fail
   # ICLOUD_NOTES_SYNC_STUB_OFFLINE: iCloud out of reach, exit 5; the error
