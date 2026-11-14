@@ -459,9 +459,7 @@ impl Contact {
 }
 
 /// Lowercase, with typographic apostrophes as plain ones.
-pub fn fold(s: &str) -> String {
-    s.to_lowercase().replace(['\u{2019}', '\u{2018}'], "'")
-}
+pub use icloud_app::cli::fold;
 
 #[cfg(test)]
 mod tests {
