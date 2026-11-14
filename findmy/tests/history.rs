@@ -1,7 +1,7 @@
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use icloud_findmy::history::{History, LazyHistory, MOVE_THRESHOLD_M, RETENTION_SECS, distance_m};
 use icloud_findmy::models::{Device, DeviceClass, Fix};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 fn fix(lat: f64, lon: f64, accuracy: f64, ts: i64) -> Fix {
     Fix {

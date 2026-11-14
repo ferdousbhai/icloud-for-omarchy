@@ -477,11 +477,11 @@ impl<T: Transport> Cli<T> {
         let data = json!({"deleted": deleted, "remaining": remaining, "retention_days": days});
         let human = format!(
             "Deleted {} older than {days} days; {remaining} remain.",
-            positions(deleted as usize)
+            positions(deleted)
         );
-        Ok(Response::new(data, format!("Deleted {}", positions(deleted as usize)))
+        Ok(Response::new(data, format!("Deleted {}", positions(deleted)))
             .human(human)
-            .count(deleted as usize))
+            .count(deleted))
     }
 }
 

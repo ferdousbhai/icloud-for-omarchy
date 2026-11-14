@@ -52,9 +52,9 @@ impl DeviceClass {
         match class {
             "iPhone" | "iPod" => Self::IPhone,
             "iPad" => Self::IPad,
-            "MacBookPro" | "MacBookAir" | "MacBook" | "iMac" | "Mac" | "MacPro" | "MacMini" => Self::Mac,
             "Watch" => Self::Watch,
             "Accessory" | "AirPods" => Self::AirPods,
+            // MacBookPro, MacBookAir, MacMini, MacPro, iMac and whatever comes next.
             c if c.starts_with("Mac") || c.starts_with("iMac") => Self::Mac,
             _ => Self::Other,
         }
@@ -250,6 +250,24 @@ mod tests {
                 .unwrap()
                 .can_play_sound
         );
+    }
+
+    #[test]
+    fn every_mac_is_a_mac() {
+        for class in [
+            "MacBookPro",
+            "MacBookAir",
+            "MacBook",
+            "iMac",
+            "Mac",
+            "MacPro",
+            "MacMini",
+            "MacStudio",
+        ] {
+            assert_eq!(DeviceClass::parse(class), DeviceClass::Mac, "{class}");
+        }
+        assert_eq!(DeviceClass::parse("iPad"), DeviceClass::IPad);
+        assert_eq!(DeviceClass::parse("HomePod"), DeviceClass::Other);
     }
 
     #[test]

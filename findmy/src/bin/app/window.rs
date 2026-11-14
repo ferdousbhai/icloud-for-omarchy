@@ -576,7 +576,9 @@ impl Window {
         let complete = {
             let (dialog, phone, message) = (dialog.downgrade(), phone.downgrade(), message.downgrade());
             move || {
-                if let (Some(dialog), Some(phone), Some(message)) = (dialog.upgrade(), phone.upgrade(), message.upgrade()) {
+                if let (Some(dialog), Some(phone), Some(message)) =
+                    (dialog.upgrade(), phone.upgrade(), message.upgrade())
+                {
                     let filled = !phone.text().trim().is_empty() && !message.text().trim().is_empty();
                     dialog.set_response_enabled("lost", filled);
                 }

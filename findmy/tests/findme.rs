@@ -250,22 +250,10 @@ fn endpoints(log: &Log) -> Vec<String> {
     endpoints_of(&log.lock().unwrap())
 }
 
-#[test]
-fn http_500_reinitialises_once() {
-    let (mut fm, log) = client(vec![
-        Ok(fixture("initClient")),
-        Err(http(500)),
-        Ok(fixture("refreshClient")),
-    ]);
-    fm.refresh(false).unwrap();
-    assert_eq!(fm.refresh(false).unwrap().len(), 4);
-    assert_eq!(endpoints(&log), ["initClient", "refreshClient", "initClient"]);
-}
-
-/// The HTTP 500 retry starts over with `initClient`, and a locate still
+/// An HTTP 500 starts over with `initClient`, once, and a locate still
 /// locates: a locating `refreshClient` follows.
 #[test]
-fn http_500_retry_still_locates() {
+fn http_500_reinitialises_once_and_still_locates() {
     let (mut fm, log) = client(vec![
         Ok(fixture("initClient")),
         Err(http(500)),
@@ -273,7 +261,7 @@ fn http_500_retry_still_locates() {
         Ok(fixture("refreshClient")),
     ]);
     fm.refresh(false).unwrap();
-    fm.refresh(true).unwrap();
+    assert_eq!(fm.refresh(true).unwrap().len(), 4);
     assert_eq!(
         endpoints(&log),
         ["initClient", "refreshClient", "initClient", "refreshClient"]
