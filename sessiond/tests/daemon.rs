@@ -255,6 +255,15 @@ fn signed_out() -> Reply {
     Reply::json(421, json!({"error": "Misdirected Request"}))
 }
 
+/// Apple accepting every session: `/validate` answers [`validate_ok`],
+/// anything else 404.
+fn apple() -> Server {
+    Server::start(|s, n, base| match s.path() {
+        VALIDATE => validate_ok(n, base),
+        _ => Reply::json(404, json!({})),
+    })
+}
+
 // ---------------------------------------------------------------- fixture
 
 struct Env {
@@ -664,6 +673,19 @@ fn write_script(dir: &Path, name: &str, body: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// A fake sign-in window: runs `before` (shell), then prints `capture`.
+fn printing_window(dir: &Path, before: &str, capture: &Value) -> String {
+    write_script(dir, "signin", &format!("{before}\ncat <<'EOF'\n{capture}\nEOF"))
+}
+
+/// The pid a fake window wrote to `pid_file`, once it has started.
+fn window_pid(pid_file: &Path) -> String {
+    wait_until("the window to start", Duration::from_secs(10), || {
+        fs::read_to_string(pid_file).is_ok_and(|p| p.ends_with('\n'))
+    });
+    fs::read_to_string(pid_file).unwrap().trim().to_string()
+}
+
 // ----------------------------------------------------------------- tests
 
 #[test]
@@ -745,10 +767,7 @@ fn session_returns_cookie_params_webservices_and_revalidates_when_stale() {
 
 #[test]
 fn a_recently_validated_jar_is_handed_out_without_asking_apple() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -831,10 +850,7 @@ fn a_background_refresh_that_finds_the_session_ended_signs_out() {
     let change = watch.until("SignedIn false", |s| !s.signed_in);
     assert_eq!(change.dsid, None);
     assert!(env.account().is_none());
-    match session(&conn) {
-        Err(zbus::Error::MethodError(name, _, _)) => assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED),
-        other => panic!("{other:?}"),
-    }
+    sign_in_required_message(&conn);
 }
 
 #[test]
@@ -852,10 +868,7 @@ fn an_unreachable_apple_answers_at_once() {
 
 #[test]
 fn merge_cookies_merges_by_name_and_persists() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -929,18 +942,14 @@ fn report_sign_in_required_confirms_with_validate() {
     assert!(!prop::<bool>(&conn, "SignedIn"));
     assert_eq!(prop::<String>(&conn, "AppleId"), "");
     assert!(env.account().is_none());
-    match session(&conn) {
-        Err(zbus::Error::MethodError(name, _, _)) => {
-            assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED)
-        }
-        other => panic!("{other:?}"),
-    }
+    sign_in_required_message(&conn);
 }
 
 const SESSION_ENDED: &str =
     "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)";
 
-/// The `SignInRequired` error's message, from `Session()`.
+/// The `SignInRequired` error's message, from `Session()`, which must
+/// answer with that error.
 fn sign_in_required_message(conn: &Connection) -> String {
     match session(conn) {
         Err(zbus::Error::MethodError(name, msg, _)) if name.as_str() == ERROR_SIGN_IN_REQUIRED => msg.unwrap(),
@@ -960,7 +969,7 @@ fn apple_ending_the_session_says_why_until_a_sign_in_even_across_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     let capture =
         json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null}]});
-    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let signin = printing_window(dir.path(), "", &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1009,10 +1018,7 @@ fn apple_ending_the_session_says_why_until_a_sign_in_even_across_a_restart() {
 
 #[test]
 fn a_session_item_removed_while_the_daemon_was_away_says_so() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -1037,10 +1043,7 @@ fn a_session_item_removed_while_the_daemon_was_away_says_so() {
 
 #[test]
 fn sign_in_with_a_fake_window_stores_the_account() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let capture = json!({
         "cookies": [
@@ -1053,7 +1056,7 @@ fn sign_in_with_a_fake_window_stores_the_account() {
         "clientBuildNumber": "2530Build12",
         "clientMasteringNumber": "2530Hotfix3",
     });
-    let signin = write_script(dir.path(), "signin", &format!("sleep 0.3\ncat <<'EOF'\n{capture}\nEOF"));
+    let signin = printing_window(dir.path(), "sleep 0.3", &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1076,12 +1079,7 @@ fn sign_in_with_a_fake_window_stores_the_account() {
             sign_out_reason: None,
         }
     );
-    match session(&conn) {
-        Err(zbus::Error::MethodError(name, _, _)) => {
-            assert_eq!(name.as_str(), ERROR_SIGN_IN_REQUIRED)
-        }
-        other => panic!("{other:?}"),
-    }
+    sign_in_required_message(&conn);
 
     icloud_session::sign_in_on(&conn).unwrap();
     let opened = watch.window_opened();
@@ -1124,22 +1122,13 @@ fn sign_in_with_a_fake_window_stores_the_account() {
 
 #[test]
 fn sign_in_closed_or_without_params() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("closed-once");
     // First run: the user closes the window. Second: a capture without params.
     let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com"}]});
-    let signin = write_script(
-        dir.path(),
-        "signin",
-        &format!(
-            "if [ ! -e '{m}' ]; then touch '{m}'; exit 1; fi\ncat <<'EOF'\n{capture}\nEOF",
-            m = marker.display()
-        ),
-    );
+    let closed_once = format!("if [ ! -e '{m}' ]; then touch '{m}'; exit 1; fi", m = marker.display());
+    let signin = printing_window(dir.path(), &closed_once, &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1170,14 +1159,11 @@ fn sign_in_closed_or_without_params() {
 /// they look and across a restart, rather than only in the journal.
 #[test]
 fn a_sign_in_that_cannot_be_kept_says_why() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let capture =
         json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null}]});
-    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let signin = printing_window(dir.path(), "", &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1226,10 +1212,7 @@ fn a_sign_in_that_cannot_be_kept_says_why() {
 
 #[test]
 fn sign_out_forgets_account_and_profile() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -1263,6 +1246,21 @@ fn trust_item(env: &Env) -> Option<(String, Value)> {
     Some((item["label"].as_str()?.to_string(), cookies))
 }
 
+/// The names, sorted, of the cookies in the test keyring's device-trust
+/// item, which is labelled with the account.
+fn trust_names(env: &Env) -> Vec<String> {
+    let (label, trust) = trust_item(env).expect("a trust item");
+    assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
+    let mut names: Vec<String> = trust
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
 /// The cookies a fake window run got on its stdin (`--cookies`).
 fn given_cookies(dir: &Path, run: usize) -> Value {
     let stdin = fs::read_to_string(dir.join(format!("stdin-{run}"))).unwrap();
@@ -1271,10 +1269,7 @@ fn given_cookies(dir: &Path, run: usize) -> Value {
 
 #[test]
 fn device_trust_is_kept_in_the_keyring_and_the_old_profile_goes() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let capture = json!({
         "cookies": [
@@ -1333,16 +1328,7 @@ EOF"#,
     assert!(!webkit_data.exists(), "the window writes no profile");
 
     // Only the trust cookies are kept, in their own keyring item.
-    let (label, trust) = trust_item(&env).expect("a trust item");
-    assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
-    let mut names: Vec<&str> = trust
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["name"].as_str().unwrap())
-        .collect();
-    names.sort();
-    assert_eq!(names, ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]);
+    assert_eq!(trust_names(&env), ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]);
     assert!(env.secrets().as_array().unwrap().is_empty(), "no password item");
 
     // The next window starts with them, and the account's jar.
@@ -1416,10 +1402,7 @@ fn old_rows() -> [(&'static str, &'static str, &'static str, u64); 5] {
 
 #[test]
 fn the_old_profile_s_device_trust_moves_to_the_keyring() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let signin = write_script(
         dir.path(),
@@ -1438,16 +1421,8 @@ fn the_old_profile_s_device_trust_moves_to_the_keyring() {
     wait_until("the old profile's removal", Duration::from_secs(5), || {
         !webkit_data.exists()
     });
-    let (label, trust) = trust_item(&env).expect("the old profile's trust kept");
-    assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
-    let mut names: Vec<&str> = trust
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["name"].as_str().unwrap())
-        .collect();
-    names.sort();
-    assert_eq!(names, ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]);
+    assert_eq!(trust_names(&env), ["DES6a1b2c", "X-APPLE-WEBAUTH-HSA-TRUST"]);
+    let (_, trust) = trust_item(&env).unwrap();
     let des = cookie_named(&trust, "DES6a1b2c").unwrap();
     assert_eq!(des["domain"], "idmsa.apple.com");
     assert_eq!(des["value"], "HSARMTKNSRVXWFlaold");
@@ -1466,10 +1441,7 @@ fn the_old_profile_s_device_trust_moves_to_the_keyring() {
 
 #[test]
 fn a_keyring_that_refuses_the_old_trust_keeps_only_it_until_the_next_start() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -1695,14 +1667,11 @@ fn one_executable_answers_to_both_names() {
 
 #[test]
 fn cli_status_validate_sign_in_and_sign_out() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let capture =
         json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "t", "domain": ".icloud.com", "expires": null}]});
-    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let signin = printing_window(dir.path(), "", &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -1859,10 +1828,7 @@ fn cli_status_validate_sign_in_and_sign_out() {
 
 #[test]
 fn idle_exit_waits_for_connected_clients() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         idle_secs: 1.0,
@@ -1923,10 +1889,7 @@ fn an_unreadable_account_file_is_set_aside() {
 
 #[test]
 fn the_cookies_move_to_the_keyring_and_account_json_keeps_none() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     // The seeded account.json is the old kind, cookies and all.
     let env = Env::start(Opts {
         setup_url: &server.url,
@@ -1971,10 +1934,7 @@ fn the_cookies_move_to_the_keyring_and_account_json_keeps_none() {
 /// signs out at the next start, and says so; `account.json` is moved
 /// aside, not deleted, and the item is left for inspection.
 fn a_damaged_session_item_is_reported_and_kept(damaged: &str, says: &str) {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         log: true,
@@ -2027,10 +1987,7 @@ fn a_corrupt_session_item_is_reported_and_account_json_moved_aside() {
 
 #[test]
 fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -2083,10 +2040,7 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
 
 #[test]
 fn a_sign_out_the_keyring_refuses_says_so_and_the_next_start_finishes_it() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let env = Env::start(Opts {
         setup_url: &server.url,
         ..Default::default()
@@ -2252,14 +2206,11 @@ fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
         _ => Reply::json(404, json!({})),
     });
     let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "captured", "domain": ".icloud.com"}]});
-    let signin = write_script(
-        dir.path(),
-        "signin",
-        &format!(
-            "i=0; while [ ! -e '{}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\ncat <<'EOF'\n{capture}\nEOF",
-            seen.display()
-        ),
+    let wait_seen = format!(
+        "i=0; while [ ! -e '{}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done",
+        seen.display()
     );
+    let signin = printing_window(dir.path(), &wait_seen, &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -2282,22 +2233,13 @@ fn a_late_validate_of_the_old_jar_leaves_a_new_sign_in_alone() {
 
 #[test]
 fn sign_out_closes_an_open_sign_in_window() {
-    let server = Server::start(|s, n, base| match s.path() {
-        VALIDATE => validate_ok(n, base),
-        _ => Reply::json(404, json!({})),
-    });
+    let server = apple();
     let dir = tempfile::tempdir().unwrap();
     let pid_file = dir.path().join("pid");
     let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "late", "domain": ".icloud.com"}]});
     // The window: records its pid, then "signs in" after a while.
-    let signin = write_script(
-        dir.path(),
-        "signin",
-        &format!(
-            "echo $$ > '{}'\nsleep 1.5\ncat <<'EOF'\n{capture}\nEOF",
-            pid_file.display()
-        ),
-    );
+    let slow = format!("echo $$ > '{}'\nsleep 1.5", pid_file.display());
+    let signin = printing_window(dir.path(), &slow, &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -2309,10 +2251,7 @@ fn sign_out_closes_an_open_sign_in_window() {
     let watch = changes(&conn);
     icloud_session::sign_in_on(&conn).unwrap();
     watch.window_opened();
-    wait_until("the window to start", Duration::from_secs(5), || {
-        fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
-    });
-    let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+    let pid = window_pid(&pid_file);
 
     icloud_session::sign_out_on(&conn).unwrap();
     let status = icloud_session::status_on(&conn).unwrap();
@@ -2422,7 +2361,7 @@ fn a_session_refuses_to_serve_another_account() {
     });
     let dir = tempfile::tempdir().unwrap();
     let capture = json!({"cookies": [{"name": "X-APPLE-WEBAUTH-TOKEN", "value": "other", "domain": ".icloud.com"}]});
-    let signin = write_script(dir.path(), "signin", &format!("cat <<'EOF'\n{capture}\nEOF"));
+    let signin = printing_window(dir.path(), "", &capture);
     let env = Env::start(Opts {
         setup_url: &server.url,
         signin: Some(&signin),
@@ -2715,10 +2654,7 @@ fn sign_out_during_authorize_find_my_drops_its_result() {
     // A SignIn while the Find My window is open opens no second window.
     icloud_session::sign_in_on(&conn).unwrap();
     let pid_file = dir.path().join("pid");
-    wait_until("the window to start", Duration::from_secs(5), || {
-        fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
-    });
-    let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+    let pid = window_pid(&pid_file);
 
     icloud_session::sign_out_on(&conn).unwrap();
     let status = icloud_session::status_on(&conn).unwrap();
@@ -2854,11 +2790,16 @@ fn stored_password_env(server: &Server, password: Option<&str>) -> (Env, Connect
         env.store_password(p);
     }
     let conn = env.conn();
-    let stored = password.is_some();
-    wait_until("the keyring look", Duration::from_secs(5), || {
-        prop::<bool>(&conn, "FindMyPasswordStored") == stored
-    });
+    wait_keyring_look(&conn, password.is_some());
     (env, conn, autofill)
+}
+
+/// Waits until the daemon has looked in the keyring for a password and
+/// says whether one is `stored`.
+fn wait_keyring_look(conn: &Connection, stored: bool) {
+    wait_until("the keyring look", Duration::from_secs(5), || {
+        prop::<bool>(conn, "FindMyPasswordStored") == stored
+    });
 }
 
 fn find_my_cookie(jar: &Value) -> Option<String> {
@@ -2965,9 +2906,7 @@ fn with_no_find_my_jar_the_stored_password_signs_in_first() {
     });
     env.store_password(PASSWORD);
     let conn = env.conn();
-    wait_until("the keyring look", Duration::from_secs(5), || {
-        prop::<bool>(&conn, "FindMyPasswordStored")
-    });
+    wait_keyring_look(&conn, true);
     assert!(!prop::<bool>(&conn, "FindMyAuthorized"));
     let s = Session::connect_on(&conn).unwrap();
     let init = init_client_url(&s);
@@ -3008,9 +2947,7 @@ fn the_idle_exit_waits_for_the_autofill_window() {
         .stdout(Stdio::null())
         .spawn()
         .unwrap();
-    wait_until("the window to start", Duration::from_secs(10), || {
-        fs::read_to_string(autofill.file("pid")).is_ok_and(|p| p.ends_with('\n'))
-    });
+    window_pid(&autofill.file("pid"));
     let _ = caller.kill();
     let _ = caller.wait();
     let open = Instant::now();
@@ -3045,10 +2982,7 @@ fn sign_out_closes_the_autofill_window() {
     let asked = Instant::now();
     let call = thread::spawn(move || call::<(String, HashMap<String, String>)>(&caller, "FindMySession").is_ok());
     let pid_file = autofill.file("pid");
-    wait_until("the window to start", Duration::from_secs(10), || {
-        fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
-    });
-    let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+    let pid = window_pid(&pid_file);
 
     icloud_session::sign_out_on(&conn).unwrap();
     assert!(
@@ -3067,19 +3001,6 @@ fn sign_out_closes_the_autofill_window() {
 /// browser" at a 2FA prompt there) is kept as the main sign-in's is.
 #[test]
 fn find_my_windows_keep_the_device_trust() {
-    let trust_names = |env: &Env| -> Vec<String> {
-        let (label, trust) = trust_item(env).expect("a trust item");
-        assert_eq!(label, "iCloud device trust (icloud-session): someone@example.com");
-        let mut names: Vec<String> = trust
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| c["name"].as_str().unwrap().to_string())
-            .collect();
-        names.sort();
-        names
-    };
-
     // AuthorizeFindMy's window (`--find`).
     let server = find_my_server(Arc::new(Mutex::new("fmip1".into())), 0);
     let dir = tempfile::tempdir().unwrap();
@@ -3117,9 +3038,7 @@ fn find_my_windows_keep_the_device_trust() {
     });
     env.store_password(PASSWORD);
     let conn = env.conn();
-    wait_until("the keyring look", Duration::from_secs(5), || {
-        prop::<bool>(&conn, "FindMyPasswordStored")
-    });
+    wait_keyring_look(&conn, true);
     let s = Session::connect_on(&conn).unwrap();
     s.post_json(&init_client_url(&s), &json!({})).unwrap();
     assert_eq!(autofill.runs(), 1);
