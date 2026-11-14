@@ -375,11 +375,17 @@ pub fn decode_table_attachment(record: Option<&CloudKitRecord>) -> Option<String
 /// byte for byte the attachment a new entry would download under that name
 /// (what a clone killed after the download left) is taken for it instead,
 /// so that the note's link, and its file, read as they did.
+///
+/// `downloads` is `None` for a note whose directory is gone here (deleted
+/// with its folder's, for the next push to delete): nothing is fetched
+/// into it, which would make it again, and an attachment that would have
+/// been is tracked without its checksum, so that it is fetched once the
+/// note is applied again.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_note_attachments<T: Transport>(
     db: &Database<T>,
     records: &mut AttachmentRecords,
-    downloads: &mut DownloadQueue<'_, T>,
+    mut downloads: Option<&mut DownloadQueue<'_, T>>,
     zone: &NoteZone,
     target_dir: &Path,
     note_record_name: &str,
@@ -525,14 +531,20 @@ pub fn resolve_note_attachments<T: Transport>(
                 replacements[index] = Some(format_embed_marker(&marker_for(r)));
                 continue;
             };
+            let mut entry = attachment.entry.clone();
             if attachment.needs_download {
-                let dest = target_dir.join(&attachment.relative_file);
-                if let Some(parent) = dest.parent() {
-                    std::fs::create_dir_all(parent)?;
+                match downloads.as_mut() {
+                    Some(downloads) => {
+                        let dest = target_dir.join(&attachment.relative_file);
+                        if let Some(parent) = dest.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        downloads.push(attachment.download_url.clone(), dest)?;
+                    }
+                    None => entry.media_file_checksum.clear(),
                 }
-                downloads.push(attachment.download_url.clone(), dest)?;
             }
-            attachments.insert(attachment.record_name.clone(), attachment.entry.clone());
+            attachments.insert(attachment.record_name.clone(), entry);
             replacements[index] = Some(format_attachment_markdown(r, &attachment.link_path));
         }
     }

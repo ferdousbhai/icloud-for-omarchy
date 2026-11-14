@@ -42,6 +42,11 @@ fn move_to_free_name(
     used: &mut HashSet<String>,
 ) -> Result<Option<String>, Error> {
     let from = target_dir.join(from);
+    // Nothing to move makes no directory: one made empty for a note
+    // deleted here would bring back a folder directory deleted here too.
+    if matches!(std::fs::symlink_metadata(&from), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+        return Ok(None);
+    }
     std::fs::create_dir_all(target_dir.join(to_dir))?;
     loop {
         let candidate = unique_file_name(name, used);

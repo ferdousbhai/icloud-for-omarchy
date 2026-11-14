@@ -220,7 +220,7 @@ pub fn run_clone_with(
                     let resolved = resolve_note_attachments(
                         db,
                         &mut attachment_records,
-                        &mut downloads,
+                        Some(&mut downloads),
                         &zone_for_owner(owner),
                         target_dir,
                         &record.record_name,

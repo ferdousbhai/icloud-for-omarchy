@@ -1376,6 +1376,94 @@ fn a_folder_deleted_and_one_renamed_here_are_pushed_so_after_a_pull() {
     check(&fake, &place, &start.expect, "a pull before the push");
 }
 
+/// The same cut short anywhere, and the deleted folder renamed on the
+/// phone before the next run.
+#[test]
+fn a_push_of_folder_changes_cut_short_before_the_folder_was_renamed_in_icloud_is_finished_by_the_next_run() {
+    fn rename_on_the_phone(zone: &mut Zone) {
+        // Unless the push got to delete it.
+        if let Some(folder) = zone.live(ARCHIVE_FOLDER) {
+            let mut folder = folder.clone();
+            folder["fields"]["TitleEncrypted"]["value"] = json!(base64_encode(b"Old"));
+            zone.put(folder);
+        }
+    }
+    let mut start = folders_changed_here();
+    start.expect.between = Some(rename_on_the_phone);
+    crash_everywhere(&start, "push", &[Then::Again, Then::Sync, Then::Pull]);
+}
+
+/// The same with the deleted folder renamed on the phone before the pull:
+/// its directory stays gone under the new name too. The pull's move of its
+/// notes (whose files are gone) to the new name used to make the directory
+/// before finding no file to move, and the push then kept the folder.
+#[test]
+fn a_folder_deleted_here_and_renamed_in_icloud_is_pushed_so_after_a_pull() {
+    let start = folders_changed_here();
+    let fake = Fake::start(start.zone.clone());
+    {
+        let mut zone = fake.zone();
+        let mut folder = zone.live(ARCHIVE_FOLDER).unwrap().clone();
+        folder["fields"]["TitleEncrypted"]["value"] = json!(base64_encode(b"Old"));
+        zone.put(folder);
+    }
+    let place = Place::copy_of(&start.place);
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    assert!(!place.vault.join("Old").exists(), "{}", says(&pull));
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(
+        &fake,
+        &place,
+        &start.expect,
+        "a pull after the folder was renamed in iCloud",
+    );
+}
+
+/// A folder directory deleted here with a note whose photo was replaced on
+/// the phone before the pull: the new photo is not downloaded into the
+/// deleted directory, which would bring it back for the push to keep the
+/// folder.
+#[test]
+fn a_folder_deleted_here_with_a_note_whose_attachment_changed_in_icloud_is_pushed_so_after_a_pull() {
+    const PHOTO_NOTE: &str = "a1b2c3d4-0000-4000-8000-00000000196e";
+    let mut zone = account(3);
+    zone.put(folder_record(ARCHIVE_FOLDER, "Archive"));
+    let mut photo = zone.live(PHOTO_NOTE).unwrap().clone();
+    let reference = json!({ "recordName": ARCHIVE_FOLDER, "action": "VALIDATE", "zoneID": { "zoneName": "Notes" } });
+    photo["fields"]["Folder"]["value"] = reference.clone();
+    photo["fields"]["Folders"]["value"] = json!([reference]);
+    zone.put(photo);
+    let mut start = cloned_from(zone);
+    assert!(tracked_file(&start.place, PHOTO_NOTE).starts_with("Archive/"));
+    std::fs::remove_dir_all(start.place.vault.join("Archive")).unwrap();
+    start.expect.deleted = vec![PHOTO_NOTE.into()];
+    start.expect.deleted_folders = vec![ARCHIVE_FOLDER.into()];
+    let fake = Fake::start(start.zone.clone());
+    {
+        let mut zone = fake.zone();
+        zone.assets.insert("/B/other-image".into(), b"another photo".to_vec());
+        let media_name = "066C8A2E-796F-403F-AD75-A5267CBD0E18";
+        let mut media = zone.live(media_name).unwrap().clone();
+        media["fields"]["Asset"]["value"] = json!({ "fileChecksum": "ck-other", "size": 13,
+            "downloadURL": "https://cvws.icloud-content.com/B/other-image" });
+        zone.put(media);
+        let photo = zone.live(PHOTO_NOTE).unwrap().clone();
+        zone.put(photo);
+    }
+    let place = Place::copy_of(&start.place);
+    let pull = run(&fake, &place, "pull", &Crash::default());
+    succeeded(&pull, "pull");
+    assert!(!place.vault.join("Archive").exists(), "{}", says(&pull));
+    succeeded(&run(&fake, &place, "sync", &Crash::default()), "sync");
+    check(
+        &fake,
+        &place,
+        &start.expect,
+        "a pull after the photo was replaced in iCloud",
+    );
+}
+
 #[test]
 fn a_sync_cut_short_anywhere_is_finished_by_the_next_run() {
     let mut start = cloned(9);
@@ -1987,7 +2075,7 @@ fn migration_cut_short_anywhere(version: u32) {
         .collect();
     let mut failures = Vec::new();
     for (point, n) in &migrating {
-        for then in [Then::Again, Then::Sync] {
+        for then in [Then::Again, Then::Sync, Then::Pull] {
             let label = format!("push of a layout {version} vault killed at {point}:{n}, then {then:?}");
             let result = std::panic::catch_unwind(|| {
                 let place = one_case_place(&start, "push", point, *n, then, &label);

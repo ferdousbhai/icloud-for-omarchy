@@ -578,6 +578,13 @@ pub fn run_pull_with(
                         .table_attachments
                         .values()
                         .any(|t| t.note_record_name == record.record_name);
+                // Nothing is downloaded into the directory of a note whose
+                // directory is gone here with its file, which no other file
+                // carries (deleted with its folder's, for the next push to
+                // delete): made again, it would keep the folder in iCloud.
+                let into_gone_dir = existing.as_ref().is_some_and(|e| e.shared_zone_owner.is_none())
+                    && !target_dir.join(&note_dir).is_dir()
+                    && note_id_claimants(target_dir, &tracked.notes, &record.record_name, title_mode)?.is_empty();
                 if !decoded.embed_slots.is_empty() || tracks_embeds {
                     if claimed_attachment_dirs.insert(note_dir.clone()) {
                         claim_untracked_attachment_names(
@@ -591,7 +598,7 @@ pub fn run_pull_with(
                     let resolved = resolve_note_attachments(
                         db,
                         &mut attachment_records,
-                        &mut downloads,
+                        (!into_gone_dir).then_some(&mut downloads),
                         &zone_for_owner(source.shared_zone_owner.as_deref()),
                         target_dir,
                         &record.record_name,

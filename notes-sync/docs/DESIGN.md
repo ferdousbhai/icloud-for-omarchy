@@ -479,6 +479,12 @@ for more than text edits). The engine:
   the layout gives it now, so the push deletes the folder or sends the
   rename. Up to 0.11.1 the pull made it again, empty: the deleted folder
   stayed in iCloud, and a renamed one became a new folder beside the old.
+  Nor does anything else the pull does for the notes that were in it: a
+  note whose file is gone with the directory is not moved to the folder's
+  new name when it was renamed in iCloud (no directory is made for a file
+  that is not there), and an attachment of it changed in iCloud is not
+  downloaded into it (it is tracked without its checksum, so that it is
+  fetched if the note is applied again).
   Two exceptions bring the directory back: a note the pull writes into it
   (a note new to the folder, from another device), and a folder that
   still holds notes push can neither send nor delete (locked or unreadable
@@ -488,7 +494,7 @@ for more than text edits). The engine:
 
 Tests: tests/cmd_local_delete.rs, tests/vault_folders.rs,
 tests/cmd_push_folder_delete.rs, tests/crash_points.rs
-(`a_folder_deleted_and_one_renamed_here_are_pushed_so_after_a_pull`).
+(`a_folder_deleted_and_one_renamed_here_are_pushed_so_after_a_pull` and the three after it).
 
 ### What a push never takes on trust
 
