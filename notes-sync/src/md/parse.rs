@@ -315,6 +315,11 @@ const BODY_SEED: Seed = Seed {
     start_number: 0,
 };
 
+const MONOSPACED_SEED: Seed = Seed {
+    kind: ParagraphKind::Monospaced,
+    ..BODY_SEED
+};
+
 #[derive(Debug, Clone)]
 enum LineOutput {
     Untouched,
@@ -350,11 +355,10 @@ impl Parser<'_> {
                         ));
                     }
                     out.push(make_paragraph(
-                        ParagraphKind::Body,
+                        &BODY_SEED,
                         count_quote_markers(raw) as u32,
                         String::new(),
                         Vec::new(),
-                        &BODY_SEED,
                     ));
                 }
             }
@@ -444,7 +448,8 @@ impl Parser<'_> {
             .collect();
         let (text, spans) = line_from_pieces(&joined);
         let (start, end) = node_lines(node);
-        self.record(start, make_paragraph(kind, block_quote_level, text, spans, &BODY_SEED));
+        let seed = Seed { kind, ..BODY_SEED };
+        self.record(start, make_paragraph(&seed, block_quote_level, text, spans));
         for line in start + 1..=end {
             self.mark_syntax(line);
         }
@@ -462,13 +467,7 @@ impl Parser<'_> {
         for (i, line) in content_lines.iter().enumerate() {
             self.record(
                 content_start + i,
-                make_paragraph(
-                    ParagraphKind::Monospaced,
-                    block_quote_level,
-                    line.to_string(),
-                    Vec::new(),
-                    &BODY_SEED,
-                ),
+                make_paragraph(&MONOSPACED_SEED, block_quote_level, line.to_string(), Vec::new()),
             );
         }
     }
@@ -495,13 +494,7 @@ impl Parser<'_> {
                     };
                     self.record(
                         item_start,
-                        make_paragraph(
-                            ParagraphKind::TodoList,
-                            block_quote_level,
-                            String::new(),
-                            Vec::new(),
-                            &seed,
-                        ),
+                        make_paragraph(&seed, block_quote_level, String::new(), Vec::new()),
                     );
                     continue;
                 }
@@ -529,7 +522,7 @@ impl Parser<'_> {
             if item.children.is_empty() {
                 self.record(
                     item_start,
-                    make_paragraph(seed.kind, block_quote_level, String::new(), Vec::new(), &seed),
+                    make_paragraph(&seed, block_quote_level, String::new(), Vec::new()),
                 );
                 continue;
             }
@@ -600,7 +593,7 @@ impl Parser<'_> {
             if line_index == 0 {
                 self.record(
                     source_line,
-                    make_paragraph(seed.kind, block_quote_level, text, spans, seed),
+                    make_paragraph(seed, block_quote_level, text, spans),
                 );
             } else {
                 let raw_line = if positions_reliable {
@@ -611,7 +604,7 @@ impl Parser<'_> {
                 let level = raw_line.map_or(block_quote_level, |raw| count_quote_markers(raw) as u32);
                 self.record(
                     source_line,
-                    make_paragraph(ParagraphKind::Body, level, text, spans, &BODY_SEED),
+                    make_paragraph(&BODY_SEED, level, text, spans),
                 );
             }
         }
@@ -771,23 +764,13 @@ fn empty_todo_line(line: &str) -> Option<bool> {
     Some(mark != ' ')
 }
 
-fn make_paragraph(
-    kind: ParagraphKind,
-    block_quote_level: u32,
-    text: String,
-    spans: Vec<InlineSpan>,
-    seed: &Seed,
-) -> FormatParagraph {
+fn make_paragraph(seed: &Seed, block_quote_level: u32, text: String, spans: Vec<InlineSpan>) -> FormatParagraph {
     FormatParagraph {
-        kind,
-        indent: if kind == seed.kind { seed.indent } else { 0 },
+        kind: seed.kind,
+        indent: seed.indent,
         block_quote_level,
-        done: if kind == ParagraphKind::TodoList {
-            seed.done
-        } else {
-            None
-        },
-        start_number: if kind == seed.kind { seed.start_number } else { 0 },
+        done: seed.done,
+        start_number: seed.start_number,
         text,
         spans,
         start: 0,
