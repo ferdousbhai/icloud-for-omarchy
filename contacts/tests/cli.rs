@@ -350,6 +350,58 @@ fn an_edit_over_a_change_from_another_device_keeps_both() {
     assert_eq!(puts.len(), 2);
 }
 
+/// A label is changed by removing the value and adding it again: the
+/// removal is by digits, whatever the label, so it must not take the value
+/// just added with it.
+#[test]
+fn removing_and_adding_a_number_in_one_edit_relabels_it() {
+    let env = start();
+    let out = env.json(&[
+        "edit",
+        "ann",
+        "--phone",
+        "home=+1 555 010 0199",
+        "--remove-phone",
+        "555-010-0199",
+    ]);
+    assert_eq!(
+        out["contact"]["phones"],
+        json!([
+            { "label": "mobile", "value": "+1 (555) 010-0100" },
+            { "label": "home", "value": "+1 555 010 0199" },
+        ])
+    );
+}
+
+/// The same edit over a card another device changed meanwhile: the number
+/// written anew is not taken for one the fresh card "already has" (the one
+/// the same edit removes).
+#[test]
+fn rewriting_a_number_over_a_change_from_another_device_keeps_it() {
+    let env = start();
+    env.ok(&["sync"]);
+    let mut theirs = env.state.card("ANN-LEE").unwrap();
+    theirs["jobTitle"] = json!("Director");
+    env.state.put(theirs);
+    let out = env.json(&[
+        "edit",
+        "ann",
+        "--cached",
+        "--remove-phone",
+        "555-010-0199",
+        "--phone",
+        "work=+1-555-010-0199",
+    ]);
+    assert_eq!(out["contact"]["job_title"], "Director");
+    assert_eq!(
+        out["contact"]["phones"],
+        json!([
+            { "label": "mobile", "value": "+1 (555) 010-0100" },
+            { "label": "work", "value": "+1-555-010-0199" },
+        ])
+    );
+}
+
 #[test]
 fn expired_tokens_are_renewed_once() {
     let env = start();

@@ -652,7 +652,8 @@ $ icloud-contacts --quiet edit "cleo park" --job-title Designer --remove-phone "
   phone is mobile, an email home and a URL homepage.
 - `--birthday` takes `YYYY-MM-DD`, or `MM-DD` without a year.
 - `edit` changes only what is named; an empty value (`--nickname ""`)
-  removes a field.
+  removes a field. It removes before it adds, so `--remove-phone 555-0100
+  --phone work=555-0100` changes a number's label.
 - `delete` deletes on every device: there is no Recently Deleted for
   contacts. Answering no to its question is `cancelled`.
 - `export` without `--output` prints the vCards themselves in text mode

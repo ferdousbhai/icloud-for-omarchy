@@ -278,7 +278,10 @@ impl Cli<'_> {
                 remove_emails,
                 remove_urls,
             } => {
-                let mut changes = changes(fields)?;
+                // Removals first: one matches a value whatever its label, so
+                // after the additions it would take away the value added
+                // again under another label (how a label is changed).
+                let mut changes = Vec::new();
                 for (m, values) in [
                     (Multi::Phone, remove_phones),
                     (Multi::Email, remove_emails),
@@ -286,6 +289,7 @@ impl Cli<'_> {
                 ] {
                     changes.extend(values.into_iter().map(|v| Change::Remove(m, v)));
                 }
+                changes.extend(self::changes(fields)?);
                 self.edit(&contact, changes)
             }
             Command::Delete { contact, yes } => self.delete(&contact, yes),

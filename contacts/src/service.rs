@@ -123,7 +123,8 @@ impl<'a> Service<'a> {
     /// more to a fresh copy and written over it: they are field-level
     /// intents (this last name, add this number), so what they did not
     /// touch keeps the other device's version. Those the fresh copy already
-    /// has are dropped, and when none is left nothing is written.
+    /// has (each judged after the ones before it) are dropped, and when none
+    /// is left nothing is written.
     pub fn update(&self, c: &Contact, changes: &[Change]) -> Result<Saved> {
         let client = Client::connect(self.t)?;
         let write = |base: &Contact, changes: &[Change]| -> Result<(Map<String, Value>, Tokens)> {
@@ -136,7 +137,16 @@ impl<'a> Service<'a> {
                 let fresh = self
                     .fresh(c)?
                     .ok_or_else(|| Error::Other(format!("\"{}\" has been deleted", c.display_name())))?;
-                let left: Vec<Change> = changes.iter().filter(|ch| !fresh.has(ch)).cloned().collect();
+                // Judged one after another, as they are applied: a value
+                // written anew after its removal is not one the card has.
+                let mut card = fresh.clone();
+                let mut left = Vec::new();
+                for ch in changes {
+                    if !card.has(ch) {
+                        card.apply(std::slice::from_ref(ch)).map_err(Error::Other)?;
+                        left.push(ch.clone());
+                    }
+                }
                 if left.is_empty() {
                     return Ok(Saved {
                         value: fresh,
