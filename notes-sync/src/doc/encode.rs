@@ -39,6 +39,15 @@ const NULL_FIELDS: [&str; 3] = [
     "TextDataAsset",
 ];
 
+/// `at`, or one unit before it when a cut at `at` would part the two halves
+/// of a surrogate pair: half an emoji is written as U+FFFD.
+fn whole_character_cut(units: &[u16], at: usize) -> usize {
+    let parts_a_pair = at > 0
+        && units.get(at - 1).is_some_and(|unit| (0xD800..0xDC00).contains(unit))
+        && units.get(at).is_some_and(|unit| (0xDC00..0xE000).contains(unit));
+    at - usize::from(parts_a_pair)
+}
+
 fn title16(text: &[u16]) -> &[u16] {
     let line_end = text.iter().position(|&u| u == u16::from(b'\n')).unwrap_or(text.len());
     let first_line = &text[..line_end];
@@ -49,7 +58,7 @@ fn title16(text: &[u16]) -> &[u16] {
     let word_boundary = (0..=TITLE_MAX_LENGTH).rev().find(|&i| first_line[i] == u16::from(b' '));
     match word_boundary {
         Some(boundary) if boundary > 0 => &first_line[..boundary],
-        _ => &first_line[..TITLE_MAX_LENGTH],
+        _ => &first_line[..whole_character_cut(first_line, TITLE_MAX_LENGTH)],
     }
 }
 
@@ -61,7 +70,7 @@ fn snippet16(text: &[u16]) -> Vec<u16> {
         .iter()
         .position(|&u| u == u16::from(b'\n'))
         .unwrap_or(after_title.len());
-    let snippet = &after_title[..line_end.min(SNIPPET_MAX_LENGTH)];
+    let snippet = &after_title[..whole_character_cut(after_title, line_end.min(SNIPPET_MAX_LENGTH))];
     if snippet.is_empty() {
         utf16(EMPTY_SNIPPET_PLACEHOLDER)
     } else {

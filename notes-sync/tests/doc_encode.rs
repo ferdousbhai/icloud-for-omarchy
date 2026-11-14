@@ -13,7 +13,6 @@ const UPDATE: &str = r#"{"ModificationDate":{"value":222},"TitleEncrypted":{"val
 const TRASH: &str = r#"{"CreationDate":{"value":100},"ModificationDate":{"value":999},"TitleEncrypted":{"value":"b2xk"},"Folders":{"value":[{"recordName":"TrashFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"FoldersModificationDate":{"value":999},"Folder":{"value":{"recordName":"TrashFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"SnippetEncrypted":{"value":"c25pcHBldA=="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"aWdub3JlZA=="}}"#;
 const MOVE: &str = r#"{"CreationDate":{"value":100},"ModificationDate":{"value":999},"TitleEncrypted":{"value":"b2xk"},"Folders":{"value":[{"recordName":"F1","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"FoldersModificationDate":{"value":999},"Folder":{"value":{"recordName":"F1","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"SnippetEncrypted":{"value":"c25pcHBldA=="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"aWdub3JlZA=="}}"#;
 const CREATE_SHARED: &str = r#"{"CreationDate":{"value":555},"Folders":{"value":[{"recordName":"F-SHARED","action":"VALIDATE","zoneID":{"zoneName":"Notes","ownerRecordName":"_owner1"}}]},"Folder":{"value":{"recordName":"F-SHARED","action":"VALIDATE","zoneID":{"zoneName":"Notes","ownerRecordName":"_owner1"}}},"ModificationDate":{"value":555},"TitleEncrypted":{"value":"U2Nod2FydHogd3JvdGUgdXAgaGlzIGV4cGVyaW1lbnQgc3VwZXJ2aXNpbmcgQ2xhdWRlIHRocm91Z2ggYSByZWFs"},"SnippetEncrypted":{"value":"dGhlb3JldGljYWwgcGh5c2ljcyBjYWxjdWxhdGlvbiwgcHJvZHVjaW5nIGEgcGFwZXIg8J+YgPCfmIA="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"RE9D"}}"#;
-const CREATE_SPLIT_SURROGATE: &str = r#"{"CreationDate":{"value":555},"Folders":{"value":[{"recordName":"DefaultFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}]},"Folder":{"value":{"recordName":"DefaultFolder-CloudKit","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}},"ModificationDate":{"value":555},"TitleEncrypted":{"value":"eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh477+9"},"SnippetEncrypted":{"value":"77+9dGFpbA=="},"FirstAttachmentThumbnail":{},"FirstAttachmentUTIEncrypted":{},"TextDataAsset":{},"TextDataEncrypted":{"value":"RE9D"}}"#;
 const FOLDER: &str = r#"{"fields":{"TitleEncrypted":{"value":"UmljZXR0ZSDigJMgRG9sY2kg8J+NsA=="},"ParentFolder":{"value":{"recordName":"parent-record","action":"VALIDATE","zoneID":{"zoneName":"Notes"}}}},"parentRecordName":"parent-record"}"#;
 
 fn make_record(fields: &[(&str, Value, &str)]) -> CloudKitRecord {
@@ -63,6 +62,29 @@ fn long_first_lines_are_cut_at_a_word_boundary() {
 #[test]
 fn a_long_first_word_is_hard_cut_rather_than_dropped() {
     assert_eq!(len16(&derive_note_title(&"x".repeat(100))), 76);
+}
+
+/// A cut that would fall between the two halves of an emoji is made before
+/// it: the title and the snippet never end in half a character (written as
+/// U+FFFD), and the snippet carries on with that emoji.
+#[test]
+fn a_hard_cut_never_parts_an_emoji() {
+    // 75 letters, then emoji: unit 76 is the first emoji's second half.
+    let first = format!("{}{}", "漢".repeat(75), "😀".repeat(10));
+    let title = derive_note_title(&first);
+    assert_eq!(title, "漢".repeat(75));
+    assert_eq!(derive_note_snippet(&first), "😀".repeat(10));
+    // The same at the snippet's 500 units.
+    let body = format!("{}{}", "x".repeat(499), "😀".repeat(3));
+    assert_eq!(derive_note_snippet(&format!("Title\n{body}")), "x".repeat(499));
+    // A cut between two whole characters is made where it was.
+    let even = format!("{}{}", "漢".repeat(74), "😀".repeat(10));
+    assert_eq!(derive_note_title(&even), format!("{}😀", "漢".repeat(74)));
+    // In the fields a create sends, too.
+    let split = format!("{}\u{1f600}tail", "x".repeat(75));
+    let fields = build_note_create_fields("RE9D", &split, 555, "DefaultFolder-CloudKit", None);
+    assert_eq!(text_of(&fields, "TitleEncrypted"), "x".repeat(75));
+    assert_eq!(text_of(&fields, "SnippetEncrypted"), "\u{1f600}tail");
 }
 
 #[test]
@@ -303,19 +325,6 @@ fn field_sets_serialize_exactly_like_icloud_md() {
             Some("_owner1")
         )),
         CREATE_SHARED
-    );
-    // A title cut through a surrogate pair: both halves become U+FFFD bytes,
-    // as Buffer.from(str, "utf-8") writes them.
-    let split = format!("{}\u{1f600}tail", "x".repeat(75));
-    assert_eq!(
-        json_of(&build_note_create_fields(
-            "RE9D",
-            &split,
-            555,
-            "DefaultFolder-CloudKit",
-            None
-        )),
-        CREATE_SPLIT_SURROGATE
     );
     let folder = build_folder_create_fields("Ricette – Dolci 🍰", Some("parent-record"));
     let as_json = json!({"fields": folder.fields, "parentRecordName": folder.parent_record_name});
