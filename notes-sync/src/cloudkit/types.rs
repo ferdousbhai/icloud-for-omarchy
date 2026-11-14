@@ -66,8 +66,6 @@ pub struct CloudKitRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_record_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub created: Option<Stamp>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub modified: Option<Stamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub participants: Option<Vec<Participant>>,

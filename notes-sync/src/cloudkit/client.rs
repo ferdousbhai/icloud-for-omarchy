@@ -1106,7 +1106,6 @@ pub fn parse_record(value: &Value) -> Result<CloudKitRecord, CkError> {
         parent_record_name: get(value, "parent")
             .and_then(|p| get_str(p, "recordName"))
             .map(str::to_owned),
-        created: parse_record_stamp(get(value, "created")),
         modified: parse_record_stamp(get(value, "modified")),
         participants: parse_participants(get(value, "participants")),
         share_record_name: get(value, "share")

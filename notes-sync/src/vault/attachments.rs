@@ -501,7 +501,6 @@ pub struct NewAttachmentFile {
     pub link_path: String,
     pub name: String,
     pub type_uti: &'static str,
-    pub size: u64,
 }
 
 /// The file a new attachment link (`href`, as written in a note in
@@ -580,7 +579,6 @@ pub fn resolve_new_attachment_file(
         link_path,
         type_uti: uti_for_file_name(&name),
         name,
-        size,
     }))
 }
 
