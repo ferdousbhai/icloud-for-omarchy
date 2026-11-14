@@ -123,7 +123,7 @@ icloud_session::watch_forever(|status| { /* ... */ true }); // the same, reconne
 | `s.get_bytes(url)` | The same request into memory: no temp file, no fsync. |
 | `s.apple_id()`, `s.dsid()` | The account the session belongs to. If the daemon later holds another account, the session's calls return `SignInRequired`; connect again. |
 | `sign_in()`, `sign_out()` | `SignIn()` / `SignOut()`; both return at once. |
-| `authorize_find_my()` | `AuthorizeFindMy()`, returns at once: `signing_in` while its window is open, then `find_my_authorized`. No-op in mock mode. |
+| `authorize_find_my()` | `AuthorizeFindMy()`, returns at once: `signing_in` while its window is open, then `find_my_authorized`. `SignInRequired`, and no window, when signed out. No-op in mock mode. |
 | `status()` | `Status { signed_in, apple_id, full_name, dsid, expires_at, signing_in, find_my_authorized, find_my_password_stored, sign_out_reason }`, one `GetAll`. `expires_at` is unix seconds or `None`; `find_my_authorized` is false from a daemon without the property. Mock mode reports it true. |
 | `watch()` | Blocking iterator yielding the new `Status` after each `PropertiesChanged`, and after the daemon dies or restarts (re-read from the new instance). |
 | `watch_forever(f)` | What a sign-in banner wants: calls `f` with the current `Status` on every (re)connect and after each change, until `f` returns false. When the watch ends (the daemon idle-exited or restarted) or cannot start, it reconnects after 2 s, doubling up to 60 s; an outage is reported once on stderr. Returns at once in mock mode. |
@@ -209,7 +209,7 @@ object `/io/github/ferdousbhai/ICloudSession`.
 | `MergeCookies(as)` | method | raw `Set-Cookie` header values a client received |
 | `ReportSignInRequired()` | method | `→ b still_signed_in`. A client got 421/401. The daemon runs `/validate`: on 2xx it keeps the fresh jar and answers true (fetch `Session()` and retry once); on 421/401 it signs out and answers false |
 | `SignIn()` | method | opens the sign-in window unless it is open; returns at once, the outcome arrives as property changes |
-| `AuthorizeFindMy()` | method | opens the sign-in window on `www.icloud.com/find` (`--find`) unless a window is open; returns at once. On success the captured one-factor jar is kept, unvalidated, as the Find My jar (not if it names another dsid, or when signed out); the main jar is untouched |
+| `AuthorizeFindMy()` | method | opens the sign-in window on `www.icloud.com/find` (`--find`) unless a window is open; returns at once. On success the captured one-factor jar is kept, unvalidated, as the Find My jar (not if it names another dsid, or after a sign-out meanwhile); the main jar is untouched. Error `…Error.SignInRequired` when signed out: no window opens |
 | `FindMySession()` | method | `→ (s cookie_header, a{ss} client_params)` of the Find My jar, for the `findme` host; with none, and a password stored, signs in to Find My first; error `io.github.ferdousbhai.ICloudSession.Error.FindMyAuthRequired` when there is still none (`SignInRequired` when signed out) |
 | `MergeFindMyCookies(as)` | method | raw `Set-Cookie` header values a client received from the `findme` host |
 | `ReportFindMyAuthRequired()` | method | `→ b reauthorized`. A client got HTTP 450 from Find My: the Find My jar is forgotten; with a password stored, the daemon signs in to Find My again (see below) and answers true, so the client retries once |

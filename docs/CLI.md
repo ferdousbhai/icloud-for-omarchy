@@ -448,6 +448,8 @@ session from it and none signs in by itself.
 - `sign-in` waits for the window and exits 0 once signed in. With
   `--no-wait` it returns at once: poll `icloud-session --quiet status` until
   `signing_in` is false.
+- `authorize-find-my` needs a signed-in account: signed out it opens no
+  window and exits 3 with `sign_in_required`.
 - `expires_at` says when the sign-in lapses.
 
 ### icloud-notes

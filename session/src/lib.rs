@@ -424,7 +424,8 @@ pub fn sign_in_on(conn: &Connection) -> Result<()> {
 /// already open). Returns at once; `signing_in` is true while the window is
 /// open, and `find_my_authorized` turns true once it is done ([`watch`]).
 /// What it captures is kept as a separate Find My session, used for the
-/// `findme` host only; the main session is untouched.
+/// `findme` host only; the main session is untouched. Signed out, no
+/// window opens: [`Error::SignInRequired`] ([`sign_in`] first).
 pub fn authorize_find_my() -> Result<()> {
     if mock_url().is_some() {
         return Ok(());

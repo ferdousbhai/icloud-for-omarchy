@@ -98,7 +98,8 @@ enum Command {
     /// Opens the sign-in window on Find My, where Apple asks for the password
     /// again, and waits until it closes, then prints status. Exits 3
     /// (find_my_auth_not_completed, no status printed) when Find My is still
-    /// not authorized.
+    /// not authorized, and at once, with no window (sign_in_required), when
+    /// signed out.
     #[command(after_help = AFTER_HELP)]
     AuthorizeFindMy {
         /// Print status at once instead; poll `status` until signing_in is false.

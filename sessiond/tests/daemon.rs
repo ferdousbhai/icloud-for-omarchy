@@ -2753,6 +2753,33 @@ fn a_find_my_jar_of_another_apple_id_is_not_kept() {
     assert!(!account.to_string().contains("onefactor"));
 }
 
+/// Signed out there is no account to authorize Find My for: no window
+/// opens, and the caller is told to sign in.
+#[test]
+fn authorize_find_my_while_signed_out_opens_no_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let signin = find_window(dir.path(), &find_capture(DSID), "0");
+    let env = Env::start(Opts {
+        signin: Some(&signin),
+        seed: false,
+        ..Default::default()
+    });
+    let conn = env.conn();
+    assert!(matches!(
+        icloud_session::authorize_find_my_on(&conn),
+        Err(Error::SignInRequired)
+    ));
+    let out = env.cli(&["authorize-find-my", "--json"]);
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = machine_error(&out);
+    assert_eq!(err["error"]["code"], "sign_in_required", "{err}");
+    assert_eq!(err["error"]["hint"], icloud_session::output::SIGN_IN_HINT, "{err}");
+    let err = machine_error(&env.cli(&["authorize-find-my", "--no-wait", "--json"]));
+    assert_eq!(err["error"]["code"], "sign_in_required", "{err}");
+    assert!(!prop::<bool>(&conn, "SigningIn"));
+    assert!(!dir.path().join("count").exists(), "no window run");
+}
+
 #[test]
 fn sign_out_during_authorize_find_my_drops_its_result() {
     let server = find_my_server(Arc::new(Mutex::new("fmip1".into())), 0);

@@ -1390,6 +1390,19 @@ impl Daemon {
         Ok(())
     }
 
+    /// `AuthorizeFindMy()`: the sign-in window on Find My, for the
+    /// signed-in account; signed out, there is none to authorize it for.
+    fn authorize_find_my(self: &Arc<Daemon>) -> Result<(), ServiceError> {
+        {
+            let st = lock(&self.state);
+            if st.account.is_none() && st.unread.is_none() {
+                return Err(st.sign_in_required());
+            }
+        }
+        self.sign_in(true);
+        Ok(())
+    }
+
     /// Opens the sign-in window (`find`: on Find My, to authorize it)
     /// unless one is open. The outcome arrives as property changes.
     fn sign_in(self: &Arc<Daemon>, find: bool) {
@@ -2242,10 +2255,11 @@ impl Service {
 
     /// Opens the sign-in window on Find My, where Apple asks for the
     /// password before Find My answers, unless a window is open; returns at
-    /// once. The captured jar becomes the Find My session.
+    /// once. The captured jar becomes the Find My session. Error
+    /// `SignInRequired` when signed out: no window opens.
     #[zbus(name = "AuthorizeFindMy")]
-    async fn authorize_find_my(&self) {
-        self.call(|d| d.sign_in(true)).await
+    async fn authorize_find_my(&self) -> Result<(), ServiceError> {
+        self.call(|d| d.authorize_find_my()).await
     }
 
     /// `(cookie_header, client_params)` of the Find My session, for the
