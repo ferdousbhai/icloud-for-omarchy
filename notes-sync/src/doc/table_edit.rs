@@ -568,20 +568,10 @@ fn require_key_index(doc: &TableDocument, name: &str) -> Result<i64> {
 }
 
 fn begin_write_session(doc: &mut TableDocument, replica_uuid: &[u8; 16]) -> Result<Session> {
+    // The caller has validated the document: its version vector is not
+    // empty and numbers its replicas in order, and it has a topotext clock
+    // table (`validate_table_document_invariants`).
     let replica_count = doc.version().element.len();
-    if replica_count == 0 {
-        return fail(
-            "Table document has an empty version vector - refusing to edit a document shaped like nothing ever captured",
-        );
-    }
-    for (i, element) in doc.version().element.iter().enumerate() {
-        let claimed = element.replica_index.unwrap_or(0);
-        if claimed != i as u64 {
-            return fail(format!(
-                "Table version vector element {i} claims replica {claimed} - refusing to edit"
-            ));
-        }
-    }
     if doc.uuid_table().len() < replica_count {
         return fail("Table UUID table is shorter than its version vector - refusing to edit");
     }
@@ -601,18 +591,10 @@ fn begin_write_session(doc: &mut TableDocument, replica_uuid: &[u8; 16]) -> Resu
     };
     let base_clock = doc.version().element[replica_index].clock.unwrap_or(0);
 
-    if doc.document.tt_timestamp.is_none() {
-        return fail("Table document has no topotext clock table (ttTimestamp) - refusing to edit");
-    }
-    let existing = doc
-        .document
-        .tt_timestamp
-        .as_ref()
-        .and_then(|tt| tt.clock.iter().position(|c| uuid_of(c) == replica_uuid));
-    let tt_index = match existing {
+    let tt = &tt_mut(doc).clock;
+    let tt_index = match tt.iter().position(|c| uuid_of(c) == replica_uuid) {
         Some(index) => index,
         None => {
-            let tt = doc.document.tt_timestamp.as_ref().map_or(&[][..], |tt| &tt.clock[..]);
             let position = tt
                 .iter()
                 .filter(|c| compare_bytes(uuid_of(c), replica_uuid) < 0)
