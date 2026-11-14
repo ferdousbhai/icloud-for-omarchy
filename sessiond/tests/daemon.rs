@@ -4719,6 +4719,155 @@ fi"#,
         rig.sign_in_and_out_work(case);
     }
 
+    /// Kills the daemon at `point` of what `act` starts, and waits until
+    /// it has left the bus.
+    fn cut_off(rig: &Rig, point: &str, act: impl Fn(&Rig)) {
+        rig.arm("CRASH", point);
+        rig.mark();
+        act(rig);
+        wait_until(point, Duration::from_secs(30), || {
+            rig.log_since().contains("crash injected at")
+        });
+        wait_until("the killed daemon to leave the bus", Duration::from_secs(30), || {
+            !rig.env.daemon_running(&rig.conn)
+        });
+    }
+
+    fn sign_out(rig: &Rig) {
+        let _ = icloud_session::sign_out_on(&rig.conn);
+    }
+
+    /// The next start settling what a crash cut off: until no marker is
+    /// left.
+    fn start_settling(rig: &Rig) {
+        let _ = icloud_session::status_on(&rig.conn);
+    }
+
+    fn settled(rig: &Rig) {
+        wait_until("settled", Duration::from_secs(30), || {
+            !change_pending(&rig.env).exists()
+        });
+    }
+
+    /// The start settling a sign-in cut off once its session was stored is
+    /// cut off itself: the start after it settles it still.
+    #[test]
+    fn settling_a_cut_off_sign_in_cut_off_anywhere() {
+        run(&Change {
+            name: "settling a sign-in A to B",
+            outcomes: &[Some(DSID), Some(B_DSID)],
+            setup: &|rig| {
+                rig.sign_in("a");
+                rig.restart();
+                cut_off(rig, "set:session:1", |rig| rig.start_sign_in("b"));
+            },
+            act: &start_settling,
+            done: &settled,
+            passes: &["lock:change", "write:account.json", "remove:session-change-pending"],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn settling_a_cut_off_sign_in_after_a_sign_out_cut_off_anywhere() {
+        run(&Change {
+            name: "settling a sign-in after a sign-out",
+            outcomes: &[None, Some(B_DSID)],
+            setup: &|rig| {
+                rig.sign_in("a");
+                sign_out(rig);
+                rig.restart();
+                cut_off(rig, "set:session:1", |rig| rig.start_sign_in("b"));
+            },
+            act: &start_settling,
+            done: &settled,
+            passes: &[
+                "write:account.json",
+                "remove:sign-out-reason",
+                "remove:session-change-pending",
+            ],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn settling_a_cut_off_sign_out_cut_off_anywhere() {
+        run(&Change {
+            name: "settling a sign-out",
+            outcomes: &[None],
+            setup: &|rig| {
+                rig.sign_in("a");
+                rig.restart();
+                cut_off(rig, "remove:account.json:1", sign_out);
+            },
+            act: &start_settling,
+            done: &settled,
+            forgets_trust: true,
+            passes: &["remove:session", "remove:trust", "remove:session-change-pending"],
+            ..Default::default()
+        });
+    }
+
+    /// A sign-in cut off once its session was stored, a start with the
+    /// keyring down, then the keyring back and a `Session()` that settles
+    /// it: cut off anywhere from that start on.
+    #[test]
+    fn settling_once_the_keyring_answers_cut_off_anywhere() {
+        run(&Change {
+            name: "settling a sign-in once the keyring answers",
+            outcomes: &[Some(DSID), Some(B_DSID)],
+            setup: &|rig| {
+                rig.sign_in("a");
+                rig.restart();
+                cut_off(rig, "set:session:1", |rig| rig.start_sign_in("b"));
+                fs::write(kept_keyring(rig), keyring_down(&rig.env)).unwrap();
+            },
+            act: &|rig| {
+                let _ = icloud_session::status_on(&rig.conn);
+                // Killed at its start: no next daemon yet.
+                if rig.log_since().contains("crash injected at") {
+                    return;
+                }
+                keyring_up(&rig.env, &fs::read(kept_keyring(rig)).unwrap());
+                let _ = session(&rig.conn);
+            },
+            done: &settled,
+            after: &|rig| keyring_up(&rig.env, &fs::read(kept_keyring(rig)).unwrap()),
+            passes: &["write:account.json", "remove:session-change-pending"],
+            ..Default::default()
+        });
+    }
+
+    /// A Find My authorization whose window has closed, and a sign-out
+    /// before it is stored, or while it is (the sign-out waits for the
+    /// change: `lock:change:4` is the write's, after the start's and the
+    /// window's settling): signed out, and nothing of it is kept.
+    #[test]
+    fn a_sign_out_racing_a_find_my_authorization_keeps_nothing_of_it() {
+        for point in ["captured:find-my", "lock:change:4", "set:session"] {
+            let rig = Rig::new(false);
+            rig.sign_in("a");
+            rig.restart();
+            let paused = rig.env.root().join("paused");
+            rig.arm("PAUSE", &format!("{point}@{}", paused.display()));
+            icloud_session::authorize_find_my_on(&rig.conn).unwrap();
+            rig.paused(&paused);
+            let conn = rig.env.conn();
+            let out = thread::spawn(move || icloud_session::sign_out_on(&conn));
+            thread::sleep(Duration::from_millis(200));
+            fs::remove_file(&paused).unwrap();
+            out.join().unwrap().unwrap();
+            rig.until("signed out, the window closed", |s| !s.signed_in && !s.signing_in);
+            thread::sleep(Duration::from_millis(300));
+            let case = format!("a sign-out racing a Find My authorization paused at {point}");
+            let status = rig.status();
+            assert!(!status.signed_in && !status.find_my_authorized, "{case}: {status:?}");
+            rig.restart();
+            assert_eq!(rig.check(&case, true), None, "{case}");
+            rig.sign_in_and_out_work(&case);
+        }
+    }
+
     // ------------------------------------------------------- two daemons
 
     impl Rig {
@@ -4906,5 +5055,56 @@ fi"#,
         let case = "a sign-in while another daemon started";
         assert_eq!(rig.check(case, false).as_deref(), Some(B_DSID));
         rig.sign_in_and_out_work(case);
+    }
+
+    /// A second daemon starting while the first settles a change a crash
+    /// cut off, held at each of its settling steps: whichever gets the bus
+    /// name (the first, or the second while the first is still before
+    /// taking it, then exiting mid-settle), the stores end whole.
+    #[test]
+    fn a_daemon_starting_while_another_settles_a_cut_off_change() {
+        for sign_in in [true, false] {
+            let (name, cut, outcomes, steps): (_, _, &[_], &[_]) = match sign_in {
+                true => (
+                    "sign-in",
+                    "set:session:1",
+                    &[Some(DSID), Some(B_DSID)],
+                    &["write:account.json", "remove:session-change-pending"],
+                ),
+                false => (
+                    "sign-out",
+                    "remove:account.json:1",
+                    &[None],
+                    &["remove:session", "remove:trust", "remove:session-change-pending"],
+                ),
+            };
+            let act = |rig: &Rig| match sign_in {
+                true => rig.start_sign_in("b"),
+                false => sign_out(rig),
+            };
+            for step in steps {
+                let case = format!("a daemon starting while another settles a {name}, held at {step}");
+                let rig = Rig::new(false);
+                rig.sign_in("a");
+                rig.restart();
+                cut_off(&rig, cut, act);
+                let paused = rig.env.root().join("paused");
+                rig.arm("PAUSE", &format!("{step}@{}", paused.display()));
+                let conn = rig.env.conn();
+                let first = thread::spawn(move || icloud_session::status_on(&conn).map(|_| ()));
+                rig.paused(&paused);
+                let mut second = rig.another_daemon();
+                thread::sleep(Duration::from_millis(300));
+                fs::remove_file(&paused).unwrap();
+                let _ = first.join().unwrap();
+                settled(&rig);
+                rig.restart();
+                let _ = second.kill();
+                let _ = second.wait();
+                let dsid = rig.check(&case, !sign_in);
+                assert!(outcomes.contains(&dsid.as_deref()), "{case}: signed in as {dsid:?}");
+                rig.sign_in_and_out_work(&case);
+            }
+        }
     }
 }

@@ -534,9 +534,10 @@ re-authorization through a fake `--find --autofill` window (which checks
 the password reaches it on stdin only) with a file standing in for the
 keyring (`ICLOUD_SESSION_TEST_SECRET_FILE`). In a debug build they also
 kill the daemon at every durable step of each change (sign-in, sign-out,
-Find My, a merge, a refresh, the start's own) and check that the next
-start finds one account whole, or none and nothing left for it, and start
-a second daemon in the middle of another's change.
+Find My, a merge, a refresh, the start's own, the settling of one cut
+off) and check that the next start finds one account whole, or none and
+nothing left for it, and start a second daemon in the middle of another's
+change or settling.
 
 ## Releasing
 
