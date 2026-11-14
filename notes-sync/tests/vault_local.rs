@@ -311,3 +311,28 @@ fn a_note_whose_name_fills_a_file_name_is_written() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
+
+/// What a run killed mid-write left in the state directory's history (a
+/// snapshot can be as large as its note) and where an older layout kept its
+/// state goes with the next pull or push; it used to stay for good. (No
+/// process has pid 4194304's number here: it is the largest Linux hands out.)
+#[test]
+fn stale_temporaries_in_history_and_the_old_state_dir_are_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path();
+    let stale = [
+        ".icloud-notes/history/REC1/.4194304.3.tmp",
+        ".icloud-notes/history/REC1/epochs/.4194304.4.tmp",
+        ".icloud-md/.4194304.5.tmp",
+    ];
+    for file in stale {
+        std::fs::create_dir_all(vault.join(file).parent().unwrap()).unwrap();
+        std::fs::write(vault.join(file), "cut short").unwrap();
+    }
+    std::fs::write(vault.join(".icloud-notes/history/REC1/1-000000-abcd.json"), "{}").unwrap();
+    icloud_notes_sync::vault::local::remove_stale_temporaries_in_vault(vault, &[]);
+    for file in stale {
+        assert!(!vault.join(file).exists(), "{file}");
+    }
+    assert!(vault.join(".icloud-notes/history/REC1/1-000000-abcd.json").exists());
+}

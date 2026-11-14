@@ -95,6 +95,8 @@ fn back_up_legacy_state_dir(target_dir: &Path) -> Result<(), Error> {
     if !legacy.is_dir() {
         return Ok(());
     }
+    // Not a state write a killed run left half done.
+    super::local::remove_stale_temporaries(&legacy, false);
     let prefix = format!("{LEGACY_STATE_DIR_NAME}{BACKUP_INFIX}");
     // An earlier attempt's unfinished copy.
     for entry in std::fs::read_dir(target_dir)?.flatten() {

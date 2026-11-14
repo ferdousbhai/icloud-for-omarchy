@@ -288,7 +288,11 @@ window closes, so a killed run is ordinary.
   (not a preview: they hold the vault's lock) starts by removing those
   whose process is gone (`vault::local::remove_stale_temporaries_in_vault`)
   from the vault's top directory, every layout directory and its
-  `attachments/`, the state directory and `base/`. Only regular files with
+  `attachments/`, the state directory, `base/`, each record's `history/`
+  directory and its `epochs/`, and `.icloud-md/` (a migration's state
+  write or tombstone cut short; the 3 → 4 backup is taken after clearing
+  it). Up to 0.11.1 those in `history/` and `.icloud-md/` stayed for good.
+  Only regular files with
   exactly those names: the pid and the counter plain decimal numbers with
   no leading zero, the pid one Linux can hand out; a download's name only
   in `attachments/`; never a `.syncthing.*.tmp`. The names carry nothing

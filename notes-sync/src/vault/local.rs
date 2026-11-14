@@ -110,7 +110,8 @@ pub(crate) fn remove_stale_temporaries(dir: &Path, downloads: bool) {
 /// directory of `dirs` (the layout's), in the `attachments/` of each (where
 /// a download cut off can be as large as the attachment, and a file-sync
 /// tool would carry it to other devices), and in the engine's own state
-/// directory and its base copies. For a command that holds the vault's
+/// directory, its base copies and its history, and where an older layout
+/// kept its state. For a command that holds the vault's
 /// lock: no other run of this engine is writing there.
 pub fn remove_stale_temporaries_in_vault(target_dir: &Path, dirs: &[String]) {
     for dir in std::iter::once("").chain(dirs.iter().map(String::as_str)) {
@@ -119,10 +120,21 @@ pub fn remove_stale_temporaries_in_vault(target_dir: &Path, dirs: &[String]) {
         remove_stale_temporaries(&dir.join("attachments"), true);
     }
     remove_stale_temporaries(&super::state::state_dir(target_dir), false);
+    // Where an older layout's state was: the tombstone, or a migration's
+    // state write, cut short.
+    remove_stale_temporaries(&target_dir.join(super::state::LEGACY_STATE_DIR_NAME), false);
     remove_stale_temporaries(
         &super::state::state_subdir(target_dir, super::state::BASE_DIR_NAME),
         false,
     );
+    // A snapshot or an epoch a killed run was writing (a snapshot can be as
+    // large as its note): in each record's directory and its `epochs/`.
+    let history = super::state::state_subdir(target_dir, super::state::HISTORY_DIR_NAME);
+    for record in file_names_in(&history).unwrap_or_default() {
+        let dir = history.join(record);
+        remove_stale_temporaries(&dir, false);
+        remove_stale_temporaries(&dir.join("epochs"), false);
+    }
 }
 
 /// rename(2) that fails with `AlreadyExists` instead of replacing what is

@@ -20,7 +20,7 @@
 //! (`every_crash_point_is_reached_by_some_test`).
 #![cfg(debug_assertions)]
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -820,6 +820,16 @@ fn check(fake: &Fake, place: &Place, expect: &Expect, label: &str) {
             "{label}: {file} in iCloud: {body:?}"
         );
     }
+
+    // Nothing a killed run left half-written stays (the runs are over).
+    let leftovers: Vec<String> = files_under(vault)
+        .into_keys()
+        .filter(|rel| {
+            let name = rel.rsplit('/').next().unwrap_or_default();
+            name.starts_with('.') && name.ends_with(".tmp")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "{label}: left half-written: {leftovers:?}");
 
     // Every note file is a tracked note's: nothing left to be created.
     // (The edited copy of a note no longer shared is kept, and not synced.)
@@ -1671,6 +1681,24 @@ fn a_note_retitled_in_icloud_and_edited_here_takes_the_new_title_as_its_file_nam
 fn older_layout(version: u32) -> Start {
     let mut start = cloned(4);
     let vault = start.place.vault.clone();
+    // History to move: three notes changed in iCloud and pulled (a
+    // snapshot and an epoch each), and the app's conflict backups.
+    for i in [0, 2, 3] {
+        let name = format!("E0000000-0000-4000-8000-{i:012}");
+        let mut record = start.zone.live(&name).unwrap().clone();
+        record["fields"]["TextDataEncrypted"]["value"] =
+            json!(note_text_field(&format!("Extra {i}\nline of note {i}\nfrom the phone")));
+        start.zone.put(record);
+    }
+    let fake = Fake::start(start.zone.clone());
+    succeeded(&run(&fake, &start.place, "pull", &Crash::default()), "pull");
+    start.zone = fake.zone().clone();
+    start.zone.applied.clear();
+    for (name, text) in [("Extra 0.md", "a copy kept by the app"), ("Extra 2.md", "another")] {
+        let path = vault.join(".icloud-notes/conflict-backups").join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
     let edited = tracked_file(&start.place, "E0000000-0000-4000-8000-000000000001");
     let text = std::fs::read_to_string(vault.join(&edited)).unwrap();
     std::fs::write(
@@ -1729,8 +1757,62 @@ fn check_migrated(place: &Place, label: &str) {
     }
 }
 
+/// Every file under `dir` (relative path, bytes).
+fn files_under(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, rel: &str, out: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in std::fs::read_dir(root.join(rel)).into_iter().flatten().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            if entry.file_type().unwrap().is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.insert(path, std::fs::read(entry.path()).unwrap());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, "", &mut out);
+    out
+}
+
+/// The history and conflict backups the old layout held: each once in
+/// `.icloud-notes/`, none left in `.icloud-md/`, each in every backup.
+fn check_moved(place: &Place, before: &BTreeMap<String, Vec<u8>>, label: &str) {
+    let vault = &place.vault;
+    let now = files_under(&vault.join(".icloud-notes"));
+    let left = files_under(&vault.join(".icloud-md"));
+    assert_eq!(
+        left.keys().collect::<Vec<_>>(),
+        ["state.json"],
+        "{label}: left in .icloud-md/"
+    );
+    for (rel, bytes) in before {
+        assert_eq!(now.get(rel), Some(bytes), "{label}: .icloud-notes/{rel}");
+        let copies = now
+            .iter()
+            .filter(|(r, b)| *b == bytes && r.starts_with(rel.split('/').next().unwrap()))
+            .count();
+        assert_eq!(copies, 1, "{label}: {rel} is in .icloud-notes/ {copies} times");
+        for backup in std::fs::read_dir(vault).unwrap().flatten() {
+            let name = backup.file_name().to_string_lossy().into_owned();
+            if name.starts_with(".icloud-md.bak-") {
+                assert_eq!(
+                    std::fs::read(backup.path().join(rel)).ok().as_ref(),
+                    Some(bytes),
+                    "{label}: {name}/{rel}"
+                );
+            }
+        }
+    }
+}
+
 fn migration_cut_short_anywhere(version: u32) {
     let start = older_layout(version);
+    let before: BTreeMap<String, Vec<u8>> = files_under(&start.place.vault.join(".icloud-md"))
+        .into_iter()
+        .filter(|(rel, _)| rel.starts_with("history/") || rel.starts_with("conflict-backups/"))
+        .collect();
+    assert!(before.keys().any(|r| r.contains("/epochs/")) && before.keys().any(|r| r.starts_with("conflict-backups/")));
     let fake = Fake::start(start.zone.clone());
     let traced = Place::copy_of(&start.place);
     let sites = crash_sites(&fake, &traced, "push");
@@ -1745,6 +1827,7 @@ fn migration_cut_short_anywhere(version: u32) {
             let result = std::panic::catch_unwind(|| {
                 let place = one_case_place(&start, "push", point, *n, then, &label);
                 check_migrated(&place, &label);
+                check_moved(&place, &before, &label);
             });
             if let Err(panic) = result {
                 failures.push(panic.downcast_ref::<String>().cloned().unwrap_or_else(|| label.clone()));
