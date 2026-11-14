@@ -926,3 +926,8 @@ fn seed_5791_a_move_here_stopped_as_it_was_recorded_then_an_edit() {
 fn seed_16435_a_file_renamed_here_to_the_name_one_takes_in_icloud() {
     widened(16435);
 }
+
+#[test]
+fn seed_22447_a_file_moved_in_icloud_right_after_its_replace_is_kept_once() {
+    widened(22447);
+}

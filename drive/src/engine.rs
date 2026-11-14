@@ -867,19 +867,9 @@ impl<R: Remote> Engine<'_, R> {
                 crash::point("remote.replace");
                 match self.listed_if_there(&row.node.parent, &sent) {
                     Ok(Some(node)) => self.put(node, path, before)?,
-                    // Not where it was (in Recently Deleted, say, where a
-                    // replace may still land): nothing of it is in step, and
-                    // the next round sends the file here as new.
-                    Ok(None) => {
-                        self.state.forget(id)?;
-                        self.state.clear_sending(path)?;
-                        return Err(Error::Remote(remote::Error::Api(
-                            "it is no longer in its folder in iCloud".into(),
-                        )));
-                    }
                     // Recorded from the answer, so a listing that fails now
                     // does not leave the old row to read as a conflict.
-                    Err(e) => {
+                    listing => {
                         let answered = Node {
                             etag: sent.etag.clone(),
                             size: sent.size,
@@ -887,6 +877,15 @@ impl<R: Remote> Engine<'_, R> {
                             ..row.node.clone()
                         };
                         self.put(answered, path, before)?;
+                        let Err(e) = listing else {
+                            // Not where it was: moved meanwhile, or in Recently
+                            // Deleted, where a replace may still land. The note
+                            // stays, and the next round keeps the row only if
+                            // iCloud has the item somewhere.
+                            return Err(Error::Remote(remote::Error::Api(
+                                "it is no longer in its folder in iCloud".into(),
+                            )));
+                        };
                         self.state.clear_sending(path)?;
                         return Err(e);
                     }
@@ -1072,6 +1071,14 @@ impl<R: Remote> Engine<'_, R> {
                 .map(|(p, _)| p.clone())
         };
         for (path, id, sent) in &sending {
+            if !id.is_empty() && !snapshot.nodes.contains_key(id) {
+                // Sent as new content of an item iCloud no longer has (a
+                // replace that landed in Recently Deleted, say): nothing of
+                // it is in step, and the file here is sent as new.
+                self.state.forget(id)?;
+                self.state.clear_sending(path)?;
+                continue;
+            }
             if !id.is_empty() {
                 // New content of an item in step, and the file moved here
                 // since: recorded as sent if iCloud has those very bytes
