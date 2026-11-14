@@ -212,7 +212,6 @@ for arch in ("x86_64", "aarch64"):
         self.stub("cargo", "exit 0")
         self.stub("rustc", "exit 0")
         self.stub("makepkg", 'printf "%s %s %s %s %s\\n" "$PWD" "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS" "$CARGO_PROFILE_DEV_DEBUG" "$CARGO_INCREMENTAL" >>"$LOG"')
-        self.stub("dbus-run-session", "exit 0")
         output = self.work / "packages"
         cache = self.work / "compiler-cache"
         result = subprocess.run(
