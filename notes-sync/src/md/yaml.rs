@@ -1286,13 +1286,9 @@ fn stringify_string(value: &str, style: Style, ctx: &Ctx) -> String {
         Style::Double => double_quoted_string(value, ctx),
         Style::Single => single_quoted_string(value, ctx),
         Style::Plain => plain_string(value, ctx),
-        Style::Literal | Style::Folded => {
-            if ctx.implicit_key || ctx.in_flow {
-                quoted_string(value, ctx)
-            } else {
-                block_string(value, style, ctx)
-            }
-        }
+        // A block scalar is only ever a block mapping's value: never a key,
+        // never inside a flow collection (where yaml would quote it).
+        Style::Literal | Style::Folded => block_string(value, style, ctx),
     }
 }
 
@@ -1435,14 +1431,13 @@ fn quoted_string(value: &str, ctx: &Ctx) -> String {
 }
 
 fn plain_string(value: &str, ctx: &Ctx) -> String {
-    if (ctx.implicit_key && value.contains('\n')) || (ctx.in_flow && value.contains(['[', ']', '{', '}', ','])) {
+    // (A key is one line and never starts with a document marker: yaml's
+    // implicit-key checks for those can't fire.)
+    if ctx.in_flow && value.contains(['[', ']', '{', '}', ',']) {
         return quoted_string(value, ctx);
     }
     if plain_not_allowed(value) {
         // (blockString for multi-line values is outside the subset.)
-        return quoted_string(value, ctx);
-    }
-    if contains_document_marker(value) && ctx.implicit_key && ctx.indent == INDENT_STEP {
         return quoted_string(value, ctx);
     }
     // `actualString`: a plain spelling that reads back as another type.
