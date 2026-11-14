@@ -286,8 +286,11 @@ pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRe
         return refuse(too_deeply_nested_reason());
     }
     let lines = source_lines(markdown);
-    let root = match to_mdast(markdown) {
-        Ok(root) => root,
+    let root = match parse_bounded(markdown) {
+        Ok(mut root) => {
+            super::mdast_fix::fix_tree(&mut root, markdown);
+            root
+        }
         Err(Unparsed::TooDeep) => {
             return refuse("the note nests its Markdown (quotes, lists, emphasis or links) too deeply to read");
         }
