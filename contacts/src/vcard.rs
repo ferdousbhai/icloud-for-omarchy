@@ -19,6 +19,8 @@ fn esc(s: &str) -> String {
 fn kind(label: &str) -> String {
     match label {
         "MOBILE" | "IPHONE" => "CELL".into(),
+        "HOME FAX" => "HOME,FAX".into(),
+        "WORK FAX" => "WORK,FAX".into(),
         "" => "OTHER".into(),
         l if l.chars().all(|c| c.is_ascii_uppercase()) => l.into(),
         l => format!("\"{}\"", l.replace('"', "'")),
@@ -70,7 +72,13 @@ pub fn card(c: &Contact) -> String {
         lines.push(format!("EMAIL;TYPE=INTERNET,{}:{}", kind(&e.label), esc(&e.value)));
     }
     for u in c.values(Multi::Url) {
-        lines.push(format!("URL;TYPE={}:{}", kind(&u.label), esc(&u.value)));
+        // A URL is a URI, not text: written as it is, with no escapes (a
+        // line break cannot be in one).
+        lines.push(format!(
+            "URL;TYPE={}:{}",
+            kind(&u.label),
+            u.value.replace(['\r', '\n'], "")
+        ));
     }
     for a in c.addresses() {
         let parts = ["", "", &a.street, &a.city, &a.state, &a.postal_code, &a.country].map(esc);
@@ -134,6 +142,26 @@ mod tests {
                 .clone(),
         );
         assert!(card(&c).contains("NOTE:old mac\\nline\r\n"), "{}", card(&c));
+    }
+
+    #[test]
+    fn fax_labels_are_two_types_and_urls_are_not_escaped() {
+        let c = Contact(
+            json!({ "contactId": "ID1",
+                "phones": [{"label": "HOME FAX", "field": "+1 555"}, {"label": "WORK FAX", "field": "+1 666"}],
+                "urls": [{"label": "HOME", "field": "https://x.org/?a=b,c;d"}] })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let v = card(&c);
+        for line in [
+            "TEL;TYPE=HOME,FAX:+1 555\r\n",
+            "TEL;TYPE=WORK,FAX:+1 666\r\n",
+            "URL;TYPE=HOME:https://x.org/?a=b,c;d\r\n",
+        ] {
+            assert!(v.contains(line), "{line:?} in\n{v}");
+        }
     }
 
     #[test]

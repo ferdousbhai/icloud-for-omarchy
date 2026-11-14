@@ -909,6 +909,8 @@ fn read_vcard(v: &str, log: &[String]) -> Vec<(String, String, String)> {
 fn kind_of(label: &str) -> String {
     match label {
         "MOBILE" | "IPHONE" => "CELL".into(),
+        "HOME FAX" => "HOME,FAX".into(),
+        "WORK FAX" => "WORK,FAX".into(),
         "" => "OTHER".into(),
         l if l.chars().all(|c| c.is_ascii_uppercase()) => l.into(),
         l => format!("\"{}\"", l.replace('"', "'")),
@@ -957,11 +959,20 @@ fn check_vcard(card: &Value, log: &[String]) {
         fail(format!("ORG {org:?}, not {want:?}"));
     }
     for (prop, m) in [("TEL", Multi::Phone), ("EMAIL", Multi::Email), ("URL", Multi::Url)] {
-        let got: Vec<(String, String)> = all(prop).iter().map(|(_, k, v)| (k.clone(), unesc(v))).collect();
+        // A URL is a URI, written with no escapes; the rest are text.
+        let read = |v: &str| if m == Multi::Url { v.to_owned() } else { unesc(v) };
+        let stored = |v: &str| {
+            if m == Multi::Url {
+                v.replace(['\r', '\n'], "")
+            } else {
+                text(v)
+            }
+        };
+        let got: Vec<(String, String)> = all(prop).iter().map(|(_, k, v)| (k.clone(), read(v))).collect();
         let want: Vec<(String, String)> = c
             .values(m)
             .iter()
-            .map(|l| (kind_of(&l.label), text(&l.value)))
+            .map(|l| (kind_of(&l.label), stored(&l.value)))
             .collect();
         if got != want {
             fail(format!("{prop} {got:?}, not {want:?}"));
