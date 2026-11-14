@@ -326,18 +326,18 @@ impl Window {
         group(&scalars[..3].iter().map(|(_, r)| r).collect::<Vec<_>>());
         group(&scalars[3..].iter().map(|(_, r)| r).collect::<Vec<_>>());
         // One row per value, titled by its label, and an empty one to add.
-        let mut multis: Vec<(Multi, Vec<(String, adw::EntryRow)>)> = Vec::new();
+        let mut multis: Vec<(Multi, Vec<ValueRow>)> = Vec::new();
         for (m, add_title) in [
             (Multi::Phone, "Add phone (work=+1 555 0100)"),
             (Multi::Email, "Add email"),
             (Multi::Url, "Add URL"),
         ] {
-            let mut rows: Vec<(String, adw::EntryRow)> = draft
+            let mut rows: Vec<ValueRow> = draft
                 .values(m)
                 .iter()
-                .map(|(label, value)| (label.clone(), entry(&model::label_display(label), value)))
+                .map(|(label, value)| (Some(label.clone()), entry(&model::label_display(label), value)))
                 .collect();
-            rows.push((String::new(), entry(add_title, "")));
+            rows.push((None, entry(add_title, "")));
             group(&rows.iter().map(|(_, r)| r).collect::<Vec<_>>());
             multis.push((m, rows));
         }
@@ -392,15 +392,7 @@ impl Window {
                         .map(|(m, rows)| {
                             let values = rows
                                 .iter()
-                                .map(|(label, r)| {
-                                    let text = r.text().to_string();
-                                    if label.is_empty() {
-                                        let l = model::parse_labeled(&text, m.default_label());
-                                        (l.label, l.value)
-                                    } else {
-                                        (label.clone(), text.trim().to_owned())
-                                    }
-                                })
+                                .map(|(label, r)| typed(*m, label.as_deref(), &r.text()))
                                 .filter(|(_, v)| !v.is_empty())
                                 .collect();
                             (*m, values)
@@ -777,6 +769,23 @@ impl Draft {
     }
 }
 
+/// A row of the dialog for one phone, email or URL: the stored value's
+/// label, or `None` for the row that adds one.
+type ValueRow = (Option<String>, adw::EntryRow);
+
+/// The label and value a dialog row holds. A stored value's row keeps its
+/// label, whatever it is (one stored with none is shown as "other");
+/// the row to add one (`label` `None`) may start with a label.
+fn typed(m: Multi, label: Option<&str>, text: &str) -> (String, String) {
+    match label {
+        Some(label) => (label.to_owned(), text.trim().to_owned()),
+        None => {
+            let l = model::parse_labeled(text, m.default_label());
+            (l.label, l.value)
+        }
+    }
+}
+
 fn contact_row(c: &Contact, me: bool) -> gtk::ListBoxRow {
     let name = c.display_name();
     let b = gtk::Box::builder().spacing(10).margin_top(4).margin_bottom(4).build();
@@ -1020,6 +1029,26 @@ mod tests {
                 label: "WORK".into(),
                 value: "+1 555 010 0199".into()
             }]
+        );
+        // A value stored without a label keeps none when its row is
+        // read back: saving the dialog does not turn it into a mobile number.
+        let c = Contact(
+            json!({ "phones": [{"field": "+1 555"}, {"label": "WORK", "field": "+1 666"}] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let before = Draft::of(&c);
+        let mut read = before.clone();
+        read.multis[0].1 = before.multis[0]
+            .1
+            .iter()
+            .map(|(label, value)| typed(Multi::Phone, Some(label), value))
+            .collect();
+        assert_eq!(read.changes(&before), []);
+        assert_eq!(
+            typed(Multi::Phone, None, "work=+1 777"),
+            ("WORK".into(), "+1 777".into())
         );
         // A valid phone does not hide an invalid email after it.
         let mut bad = after.clone();
