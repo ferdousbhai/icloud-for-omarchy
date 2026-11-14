@@ -477,8 +477,8 @@ impl<T: Transport> Cli<T> {
 
     fn prune_history(&mut self) -> Outcome {
         let h = self.open_history()?;
-        // Opening prunes already; prune again in case the clock moved on.
-        let deleted = h.pruned_on_open() + h.prune(icloud_session::time::now_ms() / 1000).map_err(db)?;
+        // Opening is what prunes.
+        let deleted = h.pruned_on_open();
         let remaining = h.count().map_err(db)?;
         let days = history::RETENTION_SECS / 86_400;
         let data = json!({"deleted": deleted, "remaining": remaining, "retention_days": days});

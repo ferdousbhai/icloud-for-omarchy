@@ -275,7 +275,7 @@ impl Window {
             move || {
                 let devices = client.lock().refresh(locate)?;
                 let mut history = lock(&history);
-                if let Some(h) = history.get_or_open(Instant::now(), History::open_default)
+                if let Some(h) = history.get_or_open(History::open_default)
                     && let Err(e) = h.record_devices(&devices, icloud_session::time::now_ms() / 1000)
                 {
                     eprintln!("icloud-findmy: could not save history: {e}");

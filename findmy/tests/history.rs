@@ -1,10 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::{Duration, Instant};
-
-use icloud_findmy::history::{
-    History, LazyHistory, MOVE_THRESHOLD_M, PRUNE_EVERY_SECS, REOPEN_AFTER, RETENTION_SECS, distance_m,
-};
+use icloud_findmy::history::{History, LazyHistory, MOVE_THRESHOLD_M, RETENTION_SECS, distance_m};
 use icloud_findmy::models::{Device, DeviceClass, Fix};
 
 fn fix(lat: f64, lon: f64, accuracy: f64, ts: i64) -> Fix {
@@ -198,20 +194,13 @@ fn open_and_record_devices_prune() {
     assert!(h.trail("old", 0).unwrap().is_empty());
     assert_eq!(h.trail("new", 0).unwrap().len(), 1);
 
-    // A batch of inserts prunes too, but at most once a day: not on the
-    // next refresh after the open...
+    // A batch of inserts prunes too.
     h.record("old", &fix(10.0, 10.0, 5.0, stale), None).unwrap();
     let phone = Device {
         location: Some(fix(30.0, 30.0, 5.0, now)),
         ..device("phone")
     };
-    assert_eq!(h.record_devices(std::slice::from_ref(&phone), now).unwrap(), 1);
-    assert_eq!(h.trail("old", 0).unwrap().len(), 1);
-    assert_eq!(h.trail("phone", 0).unwrap().len(), 1);
-
-    // ...but on the first one a day after it.
-    let later = now + PRUNE_EVERY_SECS;
-    assert_eq!(h.record_devices(&[phone], later).unwrap(), 0);
+    assert_eq!(h.record_devices(&[phone], now).unwrap(), 1);
     assert!(h.trail("old", 0).unwrap().is_empty());
     assert_eq!(h.trail("phone", 0).unwrap().len(), 1);
 }
@@ -233,31 +222,24 @@ fn record_devices_writes_every_moved_device() {
     assert_eq!(h.count().unwrap(), 5);
 }
 
-/// A history that cannot be opened is tried again only after a while, not
-/// on every refresh; once it opens it is kept.
+/// A history that cannot be opened is tried again at the next use; once it
+/// opens it is kept.
 #[test]
-fn lazy_history_backs_off_after_a_failed_open() {
+fn lazy_history_tries_again_until_it_opens_then_keeps_it() {
     let mut lazy = LazyHistory::default();
     let attempts = std::cell::Cell::new(0);
     let fail = || {
         attempts.set(attempts.get() + 1);
         Err(rusqlite::Error::InvalidPath("nowhere".into()))
     };
-    let t0 = Instant::now();
-    assert!(lazy.get_or_open(t0, fail).is_none());
-    assert!(lazy.get_or_open(t0 + Duration::from_secs(60), fail).is_none());
-    assert!(
-        lazy.get_or_open(t0 + REOPEN_AFTER - Duration::from_secs(1), fail)
-            .is_none()
-    );
-    assert_eq!(attempts.get(), 1);
-    assert!(lazy.get_or_open(t0 + REOPEN_AFTER, fail).is_none());
+    assert!(lazy.get_or_open(fail).is_none());
+    assert!(lazy.get_or_open(fail).is_none());
+    assert!(lazy.get().is_none());
     assert_eq!(attempts.get(), 2);
 
-    let t1 = t0 + REOPEN_AFTER * 2;
-    assert!(lazy.get_or_open(t1, History::open_in_memory).is_some());
+    assert!(lazy.get_or_open(History::open_in_memory).is_some());
     assert!(lazy.get().is_some());
-    assert!(lazy.get_or_open(t1, fail).is_some());
+    assert!(lazy.get_or_open(fail).is_some());
     assert_eq!(attempts.get(), 2, "an open history is kept");
 }
 
