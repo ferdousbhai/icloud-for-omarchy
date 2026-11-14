@@ -33,7 +33,9 @@
 //! - Not measured either: the order of a listing (nothing relies on it),
 //!   how a refused move is answered (a status, an HTTP error or none: each
 //!   is a problem with that one item), whether one listing can hold a very
-//!   large folder (a short one stops the sync, never reads as removals).
+//!   large folder: a short one stops the sync, and when the same folder
+//!   lists short again the next time, the rest is synced and nothing at or
+//!   below it is touched on either side (`status` lists it as not synced).
 //! - The upload URL is on a content host, which takes no cookies.
 
 use std::io::Write;
@@ -58,6 +60,10 @@ pub enum Error {
     /// A listing was not `OK` (the folder is gone, or the answer partial).
     #[error("iCloud Drive could not list {id}: {status}")]
     Listing { id: String, status: String },
+    /// A listing that is `OK` but holds fewer items than the folder has
+    /// (a very large folder, it may be): never read as removals.
+    #[error("iCloud Drive listed only {listed} of the {total} items in {id}")]
+    Partial { id: String, listed: usize, total: u64 },
     /// A package (a Pages document, an app bundle): not a plain file.
     #[error("{0} is a package, which is not synced")]
     Package(String),
@@ -219,9 +225,10 @@ pub fn parse_listing(folder_id: &str, answer: &Value) -> Result<(Node, Vec<Node>
     if let Some(n) = folder["numberOfItems"].as_u64()
         && n as usize != items.len()
     {
-        return Err(Error::Listing {
+        return Err(Error::Partial {
             id: folder_id.to_string(),
-            status: format!("{} of {n} items", items.len()),
+            listed: items.len(),
+            total: n,
         });
     }
     let children = items.iter().map(parse_item).collect::<Result<Vec<_>>>()?;
@@ -631,7 +638,7 @@ mod tests {
     fn a_short_listing_is_an_error() {
         let answer =
             json!([{"drivewsid": "FOLDER::z::r", "type": "FOLDER", "items": [], "numberOfItems": 3, "status": "OK"}]);
-        assert!(matches!(parse_listing("X", &answer), Err(Error::Listing { .. })));
+        assert!(matches!(parse_listing("X", &answer), Err(Error::Partial { .. })));
     }
 
     #[test]

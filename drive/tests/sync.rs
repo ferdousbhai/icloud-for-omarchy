@@ -1532,3 +1532,46 @@ fn a_replace_icloud_takes_for_an_item_in_recently_deleted_leaves_nothing_in_step
     assert_eq!(bed.cloud.text("b.txt").as_deref(), Some("edited"));
     assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
 }
+
+#[test]
+fn a_folder_icloud_lists_short_twice_is_left_alone_and_the_rest_syncs() {
+    let bed = Bed::new();
+    for name in ["1", "2", "3", "4"] {
+        bed.write(&format!("Big/{name}.txt"), name);
+    }
+    bed.write("Big/Inner/x.txt", "x");
+    bed.write("other.txt", "o");
+    bed.settle();
+    bed.cloud.0.borrow_mut().cap_listing = Some(3);
+    // Removed on both sides, and a new file in it on each.
+    fs::remove_file(bed.root().join("Big/1.txt")).unwrap();
+    bed.cloud.remove(&bed.cloud.id_at("Big/2.txt").unwrap());
+    bed.write("Big/mine.txt", "mine");
+    let big = bed.cloud.id_at("Big").unwrap();
+    bed.cloud.file(&big, "theirs.txt", "theirs", bed.time());
+    bed.write("new.txt", "new");
+    // The first short listing stops the sync, as any cut-short answer.
+    assert!(matches!(
+        bed.try_sync(true),
+        Err(Error::Remote(remote::Error::Partial { .. }))
+    ));
+    // The next one syncs everything else, and nothing in Big.
+    bed.sync();
+    bed.sync();
+    assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
+    assert!(
+        bed.cloud.trashed_texts().iter().all(|t| t == "2"),
+        "{:?}",
+        bed.cloud.trashed_texts()
+    );
+    assert_eq!(bed.cloud.text("new.txt").as_deref(), Some("new"));
+    assert!(bed.read("Big/2.txt").is_some() && bed.read("Big/theirs.txt").is_none());
+    assert!(bed.cloud.text("Big/1.txt").is_some() && bed.cloud.text("Big/mine.txt").is_none());
+    assert!(bed.not_synced().contains(&"Big".to_string()), "{:?}", bed.not_synced());
+    // Listed in full again, it syncs as ever.
+    bed.cloud.0.borrow_mut().cap_listing = None;
+    bed.settle();
+    assert!(!bed.not_synced().contains(&"Big".to_string()));
+    assert_eq!(bed.read("Big/theirs.txt").as_deref(), Some("theirs"));
+    assert_eq!(bed.cloud.text("Big/mine.txt").as_deref(), Some("mine"));
+}

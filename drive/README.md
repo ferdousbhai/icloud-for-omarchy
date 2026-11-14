@@ -59,6 +59,9 @@ After that it syncs every half minute while you are signed in.
   in iCloud under names that differ only by case are one item, named as in
   iCloud, or both kept if they differ.)
 - Folders shared with you by other people.
+- A folder iCloud lists only in part (a very large one, it may be) two
+  syncs running: everything else syncs, and nothing in it is added,
+  changed or removed on either side until iCloud lists it whole again.
 
 A folder removed here stays in iCloud (and comes back here) while it holds
 something in iCloud that is not synced, such as a hidden file: only what was

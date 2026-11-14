@@ -148,8 +148,10 @@ fn failure(e: &engine::Error) -> CliError {
         E::Remote(remote::Error::Session(e)) => output::session_failure(e),
         E::Remote(remote::Error::NotOffered(_)) => CliError::new("drive_unavailable", EXIT_SIGN_IN, e.to_string())
             .hint("turn on iCloud Drive for this Apple ID"),
-        E::Remote(remote::Error::Listing { .. }) => CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string())
-            .hint("iCloud gave an incomplete answer; nothing was changed. Try again later"),
+        E::Remote(remote::Error::Listing { .. } | remote::Error::Partial { .. }) => {
+            CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string())
+                .hint("iCloud gave an incomplete answer; nothing was changed. Try again later")
+        }
         E::FolderMissing(folder) => CliError::new("folder_missing", EXIT_NOT_FOUND, e.to_string()).hint(format!(
             "put {} back (mount its disk, or move it back); nothing is removed in iCloud while it is missing",
             folder.display()

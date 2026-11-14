@@ -85,6 +85,10 @@ pub struct Engine<'a, R: Remote> {
     pub progress: Box<dyn Fn(&str) + 'a>,
 }
 
+/// Every node below the top, and the folders left out for listing short
+/// (id, why).
+type Listed = (Vec<Node>, Vec<(String, String)>);
+
 /// A move or rename that could not be carried out.
 #[derive(Debug)]
 struct Stuck {
@@ -153,7 +157,8 @@ fn is_item_problem(e: &Error) -> bool {
             | remote::Error::Refused(_)
             | remote::Error::Stale(_)
             | remote::Error::Package(_)
-            | remote::Error::Listing { .. },
+            | remote::Error::Listing { .. }
+            | remote::Error::Partial { .. },
         ) => true,
         Error::Remote(remote::Error::Session(icloud_session::Error::Http { status, .. })) => {
             (400..500).contains(status) && !matches!(status, 401 | 421 | 423 | 429)
@@ -175,7 +180,7 @@ impl<R: Remote> Engine<'_, R> {
     /// yet into one that was is in neither, and would read as removed):
     /// the feed is asked again after, and while it names anything new the
     /// folders are listed again, a few times at most.
-    fn crawl(&mut self) -> Result<Vec<Node>> {
+    fn crawl(&mut self) -> Result<Listed> {
         let fresh_enough = self
             .state
             .meta("full_listing_ms")?
@@ -216,15 +221,19 @@ impl<R: Remote> Engine<'_, R> {
         if !trust_cache {
             self.state.set_meta("full_listing_ms", &now_ms().to_string())?;
         }
-        self.state.store_remote(&out)?;
+        self.state.store_remote(&out.0)?;
         self.state.set_meta("feed_token", &changes.token)?;
         Ok(out)
     }
 
     /// One pass over the folders below the top, listing again those
     /// `changes` names (and all above them) or whose etag is not the one in
-    /// `cached`, and taking the rest from `cached`.
-    fn list_below(&self, cached: &[Node], changes: &remote::Changes) -> Result<Vec<Node>> {
+    /// `cached`, and taking the rest from `cached`. With the folders below
+    /// the top that list short a second time running, and why: nothing
+    /// below them is in the listing (nor cached), and the sync leaves them
+    /// alone on both sides. A folder that lists short the first time stops
+    /// the sync, as an answer cut short would.
+    fn list_below(&self, cached: &[Node], changes: &remote::Changes) -> Result<Listed> {
         let by_id: HashMap<&str, &Node> = cached.iter().map(|n| (n.id.as_str(), n)).collect();
         let by_docwsid: HashMap<&str, &Node> = cached.iter().map(|n| (n.docwsid.as_str(), n)).collect();
         let mut children: HashMap<&str, Vec<&Node>> = HashMap::new();
@@ -251,21 +260,45 @@ impl<R: Remote> Engine<'_, R> {
             }
         }
 
+        let short = |id: &str| format!("short_listing:{id}");
         let mut out = Vec::new();
+        let mut capped = Vec::new();
         let mut to_list = vec![self.top.id.clone()];
         while let Some(folder) = to_list.pop() {
-            let (_, kids) = self.remote.list(&folder)?;
+            let kids = match self.remote.list(&folder) {
+                Ok((_, kids)) => {
+                    if folder != self.top.id && self.state.meta(&short(&folder))?.is_some() {
+                        self.state.clear_meta(&short(&folder))?;
+                    }
+                    kids
+                }
+                Err(e @ remote::Error::Partial { .. }) if folder != self.top.id => {
+                    if self.state.meta(&short(&folder))?.is_none() {
+                        self.state.set_meta(&short(&folder), &now_ms().to_string())?;
+                        return Err(e.into());
+                    }
+                    capped.push((folder, format!("{e}, so nothing in it is synced")));
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             for kid in kids {
                 if kid.kind == Kind::Folder {
                     let unchanged = by_id.get(kid.id.as_str()).is_some_and(|c| c.etag == kid.etag)
-                        && !must_list.contains(&kid.docwsid);
+                        && !must_list.contains(&kid.docwsid)
+                        && self.state.meta(&short(&kid.id))?.is_none();
                     if unchanged {
                         let mut reuse = vec![kid.id.as_str()];
                         while let Some(id) = reuse.pop() {
                             for node in children.get(id).into_iter().flatten() {
                                 out.push((*node).clone());
                                 if node.kind == Kind::Folder {
-                                    reuse.push(node.id.as_str());
+                                    if self.state.meta(&short(&node.id))?.is_some() {
+                                        // Its contents were never cached.
+                                        to_list.push(node.id.clone());
+                                    } else {
+                                        reuse.push(node.id.as_str());
+                                    }
                                 }
                             }
                         }
@@ -276,7 +309,7 @@ impl<R: Remote> Engine<'_, R> {
                 out.push(kid);
             }
         }
-        Ok(out)
+        Ok((out, capped))
     }
 
     /// Brings the folder and iCloud Drive in step. With `dry_run`, only says
@@ -293,7 +326,7 @@ impl<R: Remote> Engine<'_, R> {
         // the next sync tries them again.
         let mut stuck: Vec<Stuck> = Vec::new();
         for _ in 0..MAX_ROUNDS {
-            let nodes = self.crawl()?;
+            let (nodes, capped) = self.crawl()?;
             let snapshot = Snapshot::build_below(&self.top.id, &nodes);
             // A package that is gone from iCloud is no longer left out.
             self.state.keep_ignored(|id| snapshot.nodes.contains_key(id))?;
@@ -326,6 +359,11 @@ impl<R: Remote> Engine<'_, R> {
                         .skipped
                         .iter()
                         .map(|(path, why)| (path.clone(), why.to_string())),
+                )
+                .chain(
+                    capped
+                        .iter()
+                        .filter_map(|(id, why)| Some((snapshot.paths.get(id)?.clone(), why.clone()))),
                 )
                 .collect();
             let ignored = self.state.ignored()?;

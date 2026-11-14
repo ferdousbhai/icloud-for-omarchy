@@ -68,6 +68,8 @@ pub struct Cloud {
     pub replaces_trashed: bool,
     /// What such replaces sent.
     pub replaced_in_trash: Vec<Vec<u8>>,
+    /// A folder below the top holding more than this lists short.
+    pub cap_listing: Option<usize>,
 }
 
 /// A change another device makes while a sync is listing.
@@ -458,6 +460,13 @@ impl Remote for Fake {
         };
         let mut kids: Vec<Node> = c.nodes.values().filter(|n| n.parent == folder_id).cloned().collect();
         kids.sort_by(|a, b| a.name.cmp(&b.name));
+        if let Some(cap) = c.cap_listing.filter(|cap| folder_id != ROOT_ID && kids.len() > *cap) {
+            return Err(remote::Error::Partial {
+                id: folder_id.to_string(),
+                listed: cap,
+                total: kids.len() as u64,
+            });
+        }
         if let Some(seed) = c.shuffle {
             let n = c.listings as u64;
             kids.sort_by_key(|k| {
