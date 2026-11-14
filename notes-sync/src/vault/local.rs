@@ -48,6 +48,7 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8], keep_permissions: bool)
             file.set_permissions(meta.permissions())?;
         }
         file.sync_all()?;
+        crate::crash::point(crate::crash::TEMP_FILE);
         std::fs::rename(&tmp, path)
     })();
     if written.is_err() {
@@ -137,10 +138,12 @@ pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
             if std::fs::symlink_metadata(to).is_ok() {
                 return Err(std::io::ErrorKind::AlreadyExists.into());
             }
-            std::fs::rename(from, to)
+            std::fs::rename(from, to)?;
         }
-        result => Ok(result?),
+        result => result?,
     }
+    crate::crash::point(crate::crash::RENAME);
+    Ok(())
 }
 
 /// Writes a note file whole or not at all ([`write_atomic`]), so a crash or
@@ -152,7 +155,9 @@ pub fn write_note_file(path: &Path, contents: &str) -> Result<(), Error> {
         Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path)?,
         _ => path.to_path_buf(),
     };
-    Ok(write_atomic(&path, contents.as_bytes(), true)?)
+    write_atomic(&path, contents.as_bytes(), true)?;
+    crate::crash::point(crate::crash::NOTE_FILE);
+    Ok(())
 }
 
 /// The name of every entry in `dir`, in the order the directory lists them;

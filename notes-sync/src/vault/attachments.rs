@@ -662,7 +662,10 @@ pub fn safe_unlink(path: &Path) -> Result<(), Error> {
 /// Removes the file at `path`; whether there was one.
 pub(crate) fn unlink_if_there(path: &Path) -> Result<bool, Error> {
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            crate::crash::point(crate::crash::FILE_REMOVE);
+            Ok(true)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
     }

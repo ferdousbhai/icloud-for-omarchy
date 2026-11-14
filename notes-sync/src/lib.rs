@@ -9,9 +9,11 @@
 //! | `md`, `diff3` | Markdown, frontmatter, names, three-way merge |
 //! | `vault`, `cmd` | vault state and the commands |
 //! | `js` | JavaScript/Node semantics the derived code relies on |
+//! | `crash` | named crash points (debug builds), for the tests that kill a run |
 
 pub mod cloudkit;
 pub mod cmd;
+pub mod crash;
 pub mod diff3;
 pub mod doc;
 pub mod js;

@@ -632,7 +632,9 @@ fn mark_pending_create(
         PENDING_CREATES_KEY.to_owned(),
         serde_json::to_value(all).expect("pending creates serialize"),
     );
-    write_clone_state(target_dir, state)
+    write_clone_state(target_dir, state)?;
+    crate::crash::point(crate::crash::PENDING_CREATES_WRITE);
+    Ok(())
 }
 
 /// Writes `record_name` into the note file's frontmatter as its id, unless
@@ -1127,6 +1129,7 @@ pub fn build_push_plan(
         settled_away = settle_pending_creates(&remote.db, target_dir, &mut state)?;
         if !recording_suppressed() {
             write_clone_state(target_dir, &state)?;
+            crate::crash::point(crate::crash::PENDING_CREATES_CLEAR);
         }
         connected = Some(remote);
     }
@@ -3956,11 +3959,14 @@ pub fn run_push_with(
         // The entry's requests were answered: what it was creating is
         // either tracked now or was refused. (An error above leaves the
         // mark, for the next push to ask iCloud about.)
-        state.extra.remove(PENDING_CREATES_KEY);
+        let cleared = state.extra.remove(PENDING_CREATES_KEY).is_some();
         // Saved entry by entry (an unchanged state is not rewritten): a run
         // that is killed never gets to the write below, and a note it
         // created would be created again by the next push.
         write_clone_state(target_dir, &state)?;
+        if cleared {
+            crate::crash::point(crate::crash::PENDING_CREATES_CLEAR);
+        }
         if plan_entry.entry.resolution == PlanResolution::Ready && outcome.succeeded && !outcome.skipped {
             pushed += 1;
         }

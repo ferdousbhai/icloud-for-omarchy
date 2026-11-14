@@ -303,7 +303,19 @@ window closes, so a killed run is ordinary.
   `pendingCreates` is a top-level key an engine without it keeps and
   ignores (it would create the note again, as before).
 
-Tests: tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
+Tests: tests/crash_points.rs runs the real binary over icloud-session's
+mock session against a fake iCloud that keeps what it is sent, kills it
+(`std::process::abort`) at every crash point it reaches and at each time
+it reaches one, carries on with the same command (or a sync) and a sync,
+and checks that no note, attachment or folder was created twice, nothing
+the user kept was deleted or untracked, no edit was lost and state.json
+reads back. The points are in `src/crash.rs`: one right after every durable
+write (state.json, note files, base copies, history snapshots and epochs,
+attachment downloads, renames, removals, an atomic write's temporary file,
+`pendingCreates` written and cleared) and after every `records/modify` and
+asset upload, and in a debug build only (`ICLOUD_NOTES_SYNC_CRASH_AT=
+<point>[:<n>]`; `ICLOUD_NOTES_SYNC_CRASH_TRACE=<file>` lists the points a
+run reaches). Also tests/cmd_pull_interrupted.rs, tests/cmd_push_interrupted.rs (a
 failed and a killed push), tests/cmd_push_guards.rs (a push killed right
 after iCloud created the note or the folder), tests/cmd_clone.rs
 (`a_second_clone_over_an_unfinished_one_adopts_the_files_it_left`,

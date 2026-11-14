@@ -537,6 +537,7 @@ impl<T: Transport> Database<T> {
             body["atomic"] = Value::Bool(atomic);
         }
         let response = self.post_database(zone.database, "records/modify", &body)?;
+        crate::crash::point(crate::crash::ICLOUD_MODIFY);
         let mut results = parse_record_update_response(&response)?;
         if results.len() != ops.len() {
             return Err(CkError::UnexpectedResponse(MODIFY_MISSING_RECORDS.into()));
@@ -627,6 +628,7 @@ impl<T: Transport> Database<T> {
             .and_then(|token| get_str(token, "url"))
             .ok_or_else(|| CkError::UnexpectedResponse("assets/upload gave no upload URL".into()))?;
         let stored = self.transport.upload(url, bytes).map_err(asset_upload_error)?;
+        crate::crash::point(crate::crash::ICLOUD_UPLOAD);
         let file = get(&stored, "singleFile")
             .filter(|file| is_record(file) && get_str(file, "receipt").is_some())
             .ok_or_else(|| CkError::UnexpectedResponse("the asset upload gave no receipt".into()))?;
@@ -696,6 +698,7 @@ impl<T: Transport> Database<T> {
             record_change_tag: record_change_tag.into(),
         };
         let body = self.post_database(zone.database, "records/modify", &modify_body(&[op], &zone.zone_id))?;
+        crate::crash::point(crate::crash::ICLOUD_MODIFY);
         let entry = first_modify_entry(&body)?;
         if !is_record(entry) {
             return Err(CkError::UnexpectedResponse(MODIFY_ENTRY_NOT_OBJECT.into()));
@@ -725,7 +728,9 @@ impl<T: Transport> Database<T> {
     /// `RequestFailed("Attachment download failed: HTTP {status}")`. Returns
     /// the byte count.
     pub fn fetch_asset(&self, url: &str, dest: &Path) -> Result<u64, CkError> {
-        self.transport.download(url, dest).map_err(asset_error)
+        let size = self.transport.download(url, dest).map_err(asset_error)?;
+        crate::crash::point(crate::crash::ATTACHMENT_DOWNLOAD);
+        Ok(size)
     }
 
     /// `fetchAssetBytes`: [`Database::fetch_asset`] into memory.
@@ -885,10 +890,13 @@ impl<'a, T: Transport> DownloadQueue<'a, T> {
                             if failures.stopped.load(Ordering::SeqCst) {
                                 continue;
                             }
-                            if let Err(e) = download(&url, &dest) {
-                                let mut errors = failures.errors.lock().unwrap_or_else(|e| e.into_inner());
-                                errors.push((i, asset_error(e)));
-                                failures.stopped.store(true, Ordering::SeqCst);
+                            match download(&url, &dest) {
+                                Ok(_) => crate::crash::point(crate::crash::ATTACHMENT_DOWNLOAD),
+                                Err(e) => {
+                                    let mut errors = failures.errors.lock().unwrap_or_else(|e| e.into_inner());
+                                    errors.push((i, asset_error(e)));
+                                    failures.stopped.store(true, Ordering::SeqCst);
+                                }
                             }
                         }
                     })

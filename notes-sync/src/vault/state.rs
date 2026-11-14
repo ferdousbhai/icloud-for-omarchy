@@ -359,6 +359,7 @@ pub fn write_raw_state_file(target_dir: &Path, state: &RawStateFile) -> Result<(
         return Ok(());
     }
     write_atomic(&path, bytes.as_bytes(), false)?;
+    crate::crash::point(crate::crash::STATE);
     Ok(())
 }
 

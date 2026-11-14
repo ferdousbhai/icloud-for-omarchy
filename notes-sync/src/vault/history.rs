@@ -244,6 +244,7 @@ pub fn record_version(target_dir: &Path, input: &VersionSnapshotInput) -> Result
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_value(&snapshot).expect("snapshot serializes");
     write_capture(&dir.join(capture_file_name(captured_at, next_seq(&names), &id)), &json)?;
+    crate::crash::point(crate::crash::HISTORY_SNAPSHOT);
     let note_record_name = input.note_record_name.as_deref().unwrap_or(&input.record_name);
     prune_history(target_dir, note_record_name, std::slice::from_ref(&input.record_name))?;
     Ok(true)

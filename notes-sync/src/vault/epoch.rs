@@ -62,6 +62,7 @@ pub fn record_epoch(target_dir: &Path, note_record_name: &str, record_names: &[S
         &dir.join(capture_file_name(captured_at, next_seq(&existing), &id)),
         &json,
     )?;
+    crate::crash::point(crate::crash::HISTORY_EPOCH);
     prune_history(target_dir, note_record_name, record_names)?;
     Ok(())
 }

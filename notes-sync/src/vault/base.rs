@@ -28,6 +28,7 @@ pub fn write_base_copy(target_dir: &Path, record_name: &str, content: &str) -> R
         std::fs::create_dir_all(dir)?;
     }
     super::local::write_atomic(&path, content.as_bytes(), false)?;
+    crate::crash::point(crate::crash::BASE_COPY);
     Ok(())
 }
 
