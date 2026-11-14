@@ -83,7 +83,7 @@ fn invalid(message: impl Into<String>) -> DocError {
 pub fn parse_note_document(raw: &[u8]) -> Result<NoteDocument> {
     let versioned = parse_versioned_document(raw)?;
     let version = &versioned.wrapper.version[0];
-    let s = topotext::String::decode(&versioned.data)?;
+    let s = topotext::String::decode(versioned.data())?;
     let Some(timestamp) = s.timestamp else {
         return Err(invalid(
             "Note document is missing its replica clock table (String field 4)",

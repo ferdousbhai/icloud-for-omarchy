@@ -6,11 +6,22 @@ use std::io::Read;
 use super::proto::{Message, topotext, versioned_document};
 use super::{DocError, Result};
 
-/// `VersionedDocument`: the decoded wrapper plus `version[0].data`.
+/// `VersionedDocument`: the decoded wrapper; its one version carries the
+/// payload ([`VersionedDocument::data`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VersionedDocument {
     pub wrapper: versioned_document::Document,
-    pub data: Vec<u8>,
+}
+
+impl VersionedDocument {
+    /// `version[0].data` (present: `parse_versioned_document` requires it).
+    pub fn data(&self) -> &[u8] {
+        self.wrapper
+            .version
+            .first()
+            .and_then(|version| version.data.as_deref())
+            .unwrap_or(&[])
+    }
 }
 
 /// The most a note's document may inflate to: far above any real note's
@@ -56,7 +67,7 @@ pub fn compress_note_document(raw: &[u8]) -> Vec<u8> {
 pub fn decode_note_string(compressed: &[u8]) -> Result<topotext::String> {
     let raw = decompress_note_document(compressed)?;
     let versioned = parse_versioned_document(&raw)?;
-    Ok(topotext::String::decode(&versioned.data)?)
+    Ok(topotext::String::decode(versioned.data())?)
 }
 
 /// `decodeNoteBodyText`.
@@ -73,23 +84,22 @@ pub fn parse_versioned_document(raw: &[u8]) -> Result<VersionedDocument> {
             wrapper.version.len()
         )));
     }
-    let Some(data) = wrapper.version[0].data.clone() else {
+    if wrapper.version[0].data.is_none() {
         return Err(DocError::Invalid(
             "Versioned document's version carries no data payload".into(),
         ));
-    };
-    Ok(VersionedDocument { wrapper, data })
+    }
+    Ok(VersionedDocument { wrapper })
 }
 
-/// `encodeVersionedDocument`: the wrapper with `version[0].data` replaced
-/// (in place, as in TS).
-pub fn encode_versioned_document(doc: &mut VersionedDocument, data: &[u8]) -> Result<Vec<u8>> {
-    let Some(version) = doc.wrapper.version.first_mut() else {
+/// `encodeVersionedDocument`: the wrapper with `version[0].data` replaced.
+pub fn encode_versioned_document(doc: &VersionedDocument, data: &[u8]) -> Result<Vec<u8>> {
+    let mut wrapper = doc.wrapper.clone();
+    let Some(version) = wrapper.version.first_mut() else {
         return Err(DocError::Invalid(
             "Versioned document lost its version entry - refusing to encode".into(),
         ));
     };
     version.data = Some(data.to_vec());
-    doc.data = data.to_vec();
-    Ok(doc.wrapper.encode()?)
+    Ok(wrapper.encode()?)
 }

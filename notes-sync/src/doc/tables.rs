@@ -95,9 +95,13 @@ pub fn decode_table_markdown(compressed: &[u8]) -> Result<String> {
 
 /// `parseTableDocument`.
 pub fn parse_table_document(compressed: &[u8]) -> Result<TableDocument> {
-    let raw = decompress_note_document(compressed)?;
-    let wrapper = parse_versioned_document(&raw)?;
-    let document = crdt::Document::decode(&wrapper.data)?;
+    parse_table_raw(&decompress_note_document(compressed)?)
+}
+
+/// [`parse_table_document`] on the decompressed bytes.
+fn parse_table_raw(raw: &[u8]) -> Result<TableDocument> {
+    let wrapper = parse_versioned_document(raw)?;
+    let document = crdt::Document::decode(wrapper.data())?;
     require_version(&document)?;
     assert_left_to_right(&document)?;
     let (cr_rows_ref, cr_columns_ref, cell_columns_ref) = resolve_table_refs(&document)?;
@@ -112,9 +116,12 @@ pub fn parse_table_document(compressed: &[u8]) -> Result<TableDocument> {
 
 /// `encodeTableDocument` (compressed).
 pub fn encode_table_document(doc: &TableDocument) -> Result<Vec<u8>> {
-    let mut wrapper = doc.wrapper.clone();
-    let raw = encode_versioned_document(&mut wrapper, &doc.document.encode()?)?;
-    Ok(compress_note_document(&raw))
+    Ok(compress_note_document(&encode_table_raw(doc)?))
+}
+
+/// [`encode_table_document`] before compression.
+fn encode_table_raw(doc: &TableDocument) -> Result<Vec<u8>> {
+    encode_versioned_document(&doc.wrapper, &doc.document.encode()?)
 }
 
 /// `tableDocumentRoundTrips`.
@@ -122,15 +129,9 @@ pub fn table_document_round_trips(compressed: &[u8]) -> bool {
     let Ok(raw) = decompress_note_document(compressed) else {
         return false;
     };
-    let reencoded = (|| -> Result<Vec<u8>> {
-        let mut wrapper = parse_versioned_document(&raw)?;
-        let document = crdt::Document::decode(&wrapper.data)?;
-        require_version(&document)?;
-        assert_left_to_right(&document)?;
-        resolve_table_refs(&document)?;
-        encode_versioned_document(&mut wrapper, &document.encode()?)
-    })();
-    reencoded.is_ok_and(|bytes| bytes == raw)
+    parse_table_raw(&raw)
+        .and_then(|doc| encode_table_raw(&doc))
+        .is_ok_and(|bytes| bytes == raw)
 }
 
 fn require_version(document: &crdt::Document) -> Result<()> {

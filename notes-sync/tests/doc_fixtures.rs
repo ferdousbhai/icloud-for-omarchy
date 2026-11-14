@@ -25,7 +25,7 @@ fn every_payload_round_trips_byte_for_byte_at_every_protobuf_layer() {
         let raw = decompress_note_document(&compressed).unwrap();
         let wrapper = versioned_document::Document::decode(&raw).unwrap();
         assert_eq!(wrapper.encode().unwrap(), raw, "{label}: wrapper");
-        let data = parse_versioned_document(&raw).unwrap().data;
+        let data = parse_versioned_document(&raw).unwrap().data().to_vec();
         let inner = if kind == "note" {
             topotext::String::decode(&data).unwrap().encode().unwrap()
         } else {
