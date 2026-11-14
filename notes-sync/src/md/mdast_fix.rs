@@ -29,20 +29,20 @@ enum Class {
 
 /// micromark classifies UTF-16 code units: both halves of an astral
 /// character (emoji...) are "other"; markdown-rs classifies the character.
-fn classify(c: Option<char>, utf16: bool) -> Class {
+fn classify(c: Option<char>) -> Class {
     match c {
         None => Class::Whitespace,
         Some(c) if c.is_whitespace() || crate::js::is_whitespace(c) => Class::Whitespace,
-        Some(c) if utf16 && (c as u32) > 0xFFFF => Class::Other,
+        Some(c) if (c as u32) > 0xFFFF => Class::Other,
         Some(c) if super::to_markdown::is_unicode_punctuation(c) => Class::Punctuation,
         Some(_) => Class::Other,
     }
 }
 
 /// Whether a delimiter run at `start..end` (all `marker`) can open / close.
-fn flanking(source: &str, start: usize, end: usize, marker: u8, utf16: bool) -> (bool, bool) {
-    let before = classify(source[..start].chars().next_back(), utf16);
-    let after = classify(source[end..].chars().next(), utf16);
+fn flanking(source: &str, start: usize, end: usize, marker: u8) -> (bool, bool) {
+    let before = classify(source[..start].chars().next_back());
+    let after = classify(source[end..].chars().next());
     use Class::*;
     let left = after != Whitespace && (after != Punctuation || before == Whitespace || before == Punctuation);
     let right = before != Whitespace && (before != Punctuation || after == Whitespace || after == Punctuation);
@@ -95,8 +95,8 @@ fn fix_astral_flanking(node: &mut Node, source: &str) {
             i += 1;
             continue;
         }
-        let (can_open, _) = flanking(source, os, oe, marker, true);
-        let (_, can_close) = flanking(source, cs, ce, marker, true);
+        let (can_open, _) = flanking(source, os, oe, marker);
+        let (_, can_close) = flanking(source, cs, ce, marker);
         if can_open && can_close {
             i += 1;
             continue;

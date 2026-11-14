@@ -539,8 +539,8 @@ impl Serializer {
         self.stack.pop();
     }
 
-    /// `state.safe(value, {before, after, encode})`.
-    fn safe(&self, input: &[u16], before: &[u16], after: &[u16], encode: &[u16]) -> W {
+    /// `state.safe(value, {before, after})` (no caller passes `encode`).
+    fn safe(&self, input: &[u16], before: &[u16], after: &[u16]) -> W {
         let value: W = before.iter().chain(input).chain(after).copied().collect();
         let mut infos: BTreeMap<usize, (bool, bool)> = BTreeMap::new();
         for pattern in unsafe_patterns() {
@@ -595,7 +595,7 @@ impl Serializer {
             }
             start = position;
             let character = value[position];
-            if is_ascii_punct(character) && !encode.contains(&character) {
+            if is_ascii_punct(character) {
                 result.push(b'\\' as u16);
             } else {
                 result.extend(char_ref(Some(character)));
@@ -645,7 +645,7 @@ impl Serializer {
             }
             Node::List { ordered, children, .. } => self.list(node, *ordered, children, parent),
             Node::ListItem { checked, children } => self.list_item(node, *checked, children, parent),
-            Node::Text(value) => self.safe(value, info.before, info.after, &[]),
+            Node::Text(value) => self.safe(value, info.before, info.after),
             Node::Strong(_) => self.attention(node, info, &w("**")),
             Node::Emphasis(_) => self.attention(node, info, &w("*")),
             Node::Delete(_) => {
@@ -667,28 +667,22 @@ impl Serializer {
             Node::Html(value) => value.clone(),
             Node::Table(rows) => {
                 self.enter("table");
-                let matrix: Vec<Vec<W>> = rows.iter().map(|row| self.table_row(row, info)).collect();
+                let matrix: Vec<Vec<W>> = rows.iter().map(|row| self.table_row(row)).collect();
                 self.exit();
                 markdown_table(&matrix)
             }
-            Node::TableRow(_) => {
-                let row = self.table_row(node, info);
-                let value = markdown_table(&[row]);
-                let cut = value.iter().position(|&c| c == 10).unwrap_or(value.len());
-                value[..cut].to_vec()
-            }
-            Node::TableCell(_) => self.table_cell(node, info),
+            Node::TableRow(_) | Node::TableCell(_) => unreachable!("rows and cells are serialized by their table"),
         }
     }
 
-    fn table_row(&mut self, row: &Node, info: &Info) -> Vec<W> {
+    fn table_row(&mut self, row: &Node) -> Vec<W> {
         self.enter("tableRow");
-        let cells = row.children().iter().map(|cell| self.table_cell(cell, info)).collect();
+        let cells = row.children().iter().map(|cell| self.table_cell(cell)).collect();
         self.exit();
         cells
     }
 
-    fn table_cell(&mut self, cell: &Node, _info: &Info) -> W {
+    fn table_cell(&mut self, cell: &Node) -> W {
         self.enter("tableCell");
         self.enter("phrasing");
         let around = w("|");
@@ -1059,12 +1053,12 @@ impl Serializer {
         if url.iter().any(|&c| c <= 32 || c == 0x7F) {
             self.enter("destinationLiteral");
             value.push(b'<' as u16);
-            let safe = self.safe(url, &value, &w(">"), &[]);
+            let safe = self.safe(url, &value, &w(">"));
             value.extend(safe);
             value.push(b'>' as u16);
         } else {
             self.enter("destinationRaw");
-            let safe = self.safe(url, &value, &w(")"), &[]);
+            let safe = self.safe(url, &value, &w(")"));
             value.extend(safe);
         }
         self.exit();
