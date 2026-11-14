@@ -441,7 +441,6 @@ pub trait Message: Default + Clone + fmt::Debug + PartialEq {
     /// Reads one declared field; `Ok(false)` when `no` isn't declared.
     fn read_field(&mut self, no: u32, wire_type: u8, r: &mut Reader, depth: u32) -> ProtoResult<bool>;
     fn write_fields(&self, w: &mut Writer) -> ProtoResult<()>;
-    fn unknown_fields(&self) -> &[UnknownField];
     fn unknown_fields_mut(&mut self) -> &mut Vec<UnknownField>;
 
     /// `readMessage` (length-delimited).
@@ -653,10 +652,6 @@ macro_rules! message {
                 $( $crate::doc::proto::kind::$kind::write::<$ty>(&self.$field, $no, w, concat!($full, ".", $pname))?; )*
                 $crate::doc::proto::write_unknown_fields(w, &self.unknown_fields);
                 Ok(())
-            }
-
-            fn unknown_fields(&self) -> &[$crate::doc::proto::UnknownField] {
-                &self.unknown_fields
             }
 
             fn unknown_fields_mut(&mut self) -> &mut Vec<$crate::doc::proto::UnknownField> {
