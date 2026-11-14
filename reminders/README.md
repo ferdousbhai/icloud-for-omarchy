@@ -122,9 +122,10 @@ none of them; the lines are written back, with a notification (to delete
 that many, use the app). A file found already in the folder only ever
 adds. From one of Syncthing's conflict copies (`Work.sync-conflict-….md`)
 only ticks and unknown lines are taken, after which the copy is removed.
-The file of a list deleted in iCloud is removed too, unless it holds
-changes that were never sent: then it stays as it is, no longer kept in
-step, and a new list of that name gets a file of its own (`Work 2.md`).
+The file of a list deleted in iCloud is removed too, with its conflict
+copies (the journal names each), unless it holds changes that were never
+sent: then it stays as it is with its copies, no longer kept in step, and a
+new list of that name gets a file of its own (`Work 2.md`).
 
 With Syncthing, share the folder with the phone and one computer only:
 two computers that both sync it with iCloud would each answer the other's

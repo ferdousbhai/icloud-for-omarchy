@@ -1325,3 +1325,39 @@ fn a_line_whose_add_never_reached_icloud_is_sent_again_once() {
     let state: Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
     assert_eq!(state["lists"]["List/LIST-GROCERIES"]["pending"], json!([]));
 }
+
+#[test]
+fn a_deleted_list_s_conflict_copies_go_with_its_file_or_stay_with_it() {
+    // Nothing unsent in the file: it goes, and its copy with it, said.
+    let env = start();
+    let dir = folder(&env);
+    let copy = "Groceries.sync-conflict-20261114-093000-ABCDEFG.md";
+    std::fs::write(dir.join(copy), "# Groceries\n\n- [x] Milk\n").unwrap();
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Deleted"]["value"] = json!(1);
+    env.state.put(list.clone());
+    let out = env.json(&["background", "--sync"]);
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1 && warnings[0].as_str().unwrap().starts_with(&format!("{copy}: ")),
+        "{out}"
+    );
+    assert_eq!(file_names(&dir), ["Reminders.md"]);
+    assert_eq!(modifies(&env), 0);
+
+    // A file with changes never sent stays, and its copy beside it.
+    let env = start();
+    let dir = folder(&env);
+    std::fs::write(dir.join(copy), "# Groceries\n\n- [x] Milk\n").unwrap();
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap() + "- [ ] Bread\n";
+    std::fs::write(&path, text).unwrap();
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1 && warnings[0].as_str().unwrap().contains(copy),
+        "{out}"
+    );
+    assert_eq!(file_names(&dir), ["Groceries.md", copy, "Reminders.md"]);
+}

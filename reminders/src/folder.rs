@@ -873,16 +873,37 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     for id in gone {
         let ls = state.lists.remove(&id).expect("listed above");
         let path = dir.join(&ls.file);
+        let copies = conflict_copies(dir, &ls.file);
+        let names: Vec<String> = copies
+            .iter()
+            .filter_map(|c| c.file_name()?.to_str().map(str::to_owned))
+            .collect();
         match read(&path)? {
-            Some(text) if text == ls.text => fs::remove_file(&path)?,
-            Some(_) => {
+            Some(text) if text != ls.text => {
+                let beside = match names.as_slice() {
+                    [] => String::new(),
+                    names => format!(" (and beside it {})", names.join(", ")),
+                };
                 report.warnings.push(format!(
-                    "{}: its list is gone from iCloud; the file has changes that were never sent, so it is left here and no longer kept in step",
+                    "{}: its list is gone from iCloud; the file has changes that were never sent, so it is left here{beside} and no longer kept in step",
                     ls.file
                 ));
                 state.left.push(ls.file);
             }
-            None => {}
+            file => {
+                if file.is_some() {
+                    fs::remove_file(&path)?;
+                }
+                // Nothing can take them in now: the list and its reminders
+                // are gone, and a new list of its name would read them as
+                // its own.
+                for (copy, name) in copies.iter().zip(&names) {
+                    fs::remove_file(copy)?;
+                    report.warnings.push(format!(
+                        "{name}: its list is gone from iCloud, so this conflict copy was removed unread"
+                    ));
+                }
+            }
         }
     }
 
