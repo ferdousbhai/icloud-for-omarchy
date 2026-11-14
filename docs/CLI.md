@@ -260,9 +260,9 @@ produced its result; the exit code says whether everything succeeded. A
 batch that partly failed, or a sync that ran but failed, prints its data
 and exits non-zero:
 
-- `icloud-photos download`/`delete`/`restore`/`upload`: exit 1 (or 3 if the sign-in
-  lapsed mid-upload) when some items failed; each failed item carries its
-  own `error`.
+- `icloud-photos download`/`delete`/`restore`/`upload`: exit 1 when some
+  items failed, or 3 when the sign-in lapsed part-way through a `delete`,
+  a `restore` or an `upload`; each failed item carries its own `error`.
 - `icloud-notes sync`/`pull`/`push`/`clone`: their data gains `ok:false`
   and `error:{code, message, hint?}` and the process exits with that
   failure's code (offline: 5). A change's `--push` puts the sync's result,
