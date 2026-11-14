@@ -1542,12 +1542,18 @@ struct SpliceCase {
     old: String,
     new: String,
     what: Vec<String>,
-    /// The edit as one contiguous replacement, when it is one.
-    single: Option<(usize, usize, String)>,
+    /// How many characters the edits change at most, when each is one
+    /// stretch of text: the splices change no more. (Characters, as the
+    /// diff counts them: keeping two letters over one emoji is as good.)
+    bound: Option<usize>,
 }
 
 fn gen_splice_case(rng: &mut Rng) -> SpliceCase {
-    let old = if rng.chance(30) {
+    let long = rng.chance(15);
+    let old = if long {
+        // One long line, edited in places far apart.
+        words(rng, 200, 3000).replace('\n', " ")
+    } else if rng.chance(30) {
         note_text(&gen_note(rng, true))
     } else {
         splice_text(rng, 0, 30)
@@ -1556,12 +1562,21 @@ fn gen_splice_case(rng: &mut Rng) -> SpliceCase {
         new: old.clone(),
         old,
         what: Vec::new(),
-        single: None,
+        bound: Some(0),
     };
-    let edits = *rng.pick(&[1, 1, 1, 2, 3]);
+    let edits = if long {
+        rng.range(2, 4)
+    } else {
+        *rng.pick(&[1, 1, 1, 2, 3])
+    };
     for _ in 0..edits {
         let (edited, what, single) = splice_edit(&case.new, rng);
-        case.single = if edits == 1 { single } else { None };
+        case.bound = match (case.bound, single) {
+            (Some(bound), Some((start, end, inserted))) => {
+                Some(bound + case.new[start..end].chars().count() + inserted.chars().count())
+            }
+            _ => None,
+        };
         case.new = edited;
         case.what.push(what);
     }
@@ -1594,9 +1609,10 @@ fn unit_emphasis(doc: &NoteDocument) -> Vec<Option<u32>> {
 
 /// `compute_splices` is exactly the edit: its splices are in order, never
 /// split a character, and make the edited text from the old one; they change
-/// no more than the edit did (for an edit of one stretch of text, no more
-/// than that stretch, so what was around it is kept: a line broken in two
-/// isn't half typed again); and the document edited with them keeps what
+/// no more than the edits did (for edits of a stretch of text each, no more
+/// than those stretches, so what was around them is kept: a line broken in
+/// two isn't half typed again, nor a long line between two words changed in
+/// it); and the document edited with them keeps what
 /// every character they keep carries.
 fn check_splices(case: &SpliceCase, seed: u64) -> Checked {
     let (old, new) = (utf16(&case.old), utf16(&case.new));
@@ -1641,14 +1657,21 @@ fn check_splices(case: &SpliceCase, seed: u64) -> Checked {
             case.what, case.old, case.new
         ));
     }
-    if let Some((start, end, inserted)) = &case.single {
-        let edit = len16(&case.old[*start..*end]) + len16(inserted);
-        if total > edit {
-            return Err(format!(
-                "{:?}: the splices change {total} units, the edit {edit}: {splices:?}",
-                case.what
-            ));
-        }
+    // Edits small enough to be diffed (`MAX_REFINED_EDIT` characters).
+    let changed: usize = splices
+        .iter()
+        .map(|s| {
+            let deleted = String::from_utf16_lossy(&old[s.start..s.start + s.delete_length]);
+            deleted.chars().count() + s.insert_text.chars().count()
+        })
+        .sum();
+    if let Some(edit) = case.bound.filter(|&bound| bound <= 1000)
+        && changed > edit
+    {
+        return Err(format!(
+            "{:?}: the splices change {changed} characters, the edits {edit}: {splices:?}",
+            case.what
+        ));
     }
     let mut rng = Rng(seed ^ 0x5911ce);
     let Some(mut doc) = emphasized_document(&case.old, &mut rng) else {

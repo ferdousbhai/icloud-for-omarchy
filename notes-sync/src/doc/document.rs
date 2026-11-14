@@ -720,16 +720,18 @@ fn tighten(old: &[u16], new: &[u16], old_start: usize, out: &mut Vec<Splice>) ->
     cost
 }
 
-/// The most characters a replacement may have on either side for
-/// [`refine_replacement`] to diff it (the diff is quadratic at worst).
-const MAX_REFINED_REPLACEMENT: usize = 400;
+/// The most characters a replacement may change (deleted plus inserted) for
+/// [`refine_replacement`] to diff it: the diff's work grows with the length
+/// times this, and its memory with its square, never with the length alone.
+pub(crate) const MAX_REFINED_EDIT: usize = 1000;
 
 /// A replacement of `deleted` by `inserted` (UTF-16) as the splices of a
 /// character diff of the two, `(offset in deleted, delete length, insert)`:
 /// the characters they have in common are kept, not deleted and typed again
 /// (a line's trailing space trimmed next to a line added after it is one
-/// replacement, and would retype the line). One splice when either is empty
-/// or long.
+/// replacement, and would retype the line; two words changed far apart in a
+/// long line are two splices). One splice when either is empty, or when they
+/// differ in more than [`MAX_REFINED_EDIT`] characters.
 fn refine_replacement(deleted: &[u16], inserted: &[u16]) -> Vec<(usize, usize, Vec<u16>)> {
     let whole = || vec![(0, deleted.len(), inserted.to_vec())];
     if deleted.is_empty() || inserted.is_empty() {
@@ -741,11 +743,12 @@ fn refine_replacement(deleted: &[u16], inserted: &[u16]) -> Vec<(usize, usize, V
     let new: Vec<char> = char::decode_utf16(inserted.iter().copied())
         .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect();
-    if old.len().max(new.len()) > MAX_REFINED_REPLACEMENT
-        || old.iter().chain(&new).any(|&c| c == char::REPLACEMENT_CHARACTER)
-    {
+    if old.iter().chain(&new).any(|&c| c == char::REPLACEMENT_CHARACTER) {
         return whole();
     }
+    let Some(hunks) = myers_hunks(&old, &new, MAX_REFINED_EDIT) else {
+        return whole();
+    };
     let offsets = |chars: &[char]| -> Vec<usize> {
         let mut offsets = vec![0];
         for c in chars {
@@ -754,19 +757,89 @@ fn refine_replacement(deleted: &[u16], inserted: &[u16]) -> Vec<(usize, usize, V
         offsets
     };
     let (old_offsets, new_offsets) = (offsets(&old), offsets(&new));
-    diff_indices(&old, &new)
+    hunks
         .into_iter()
-        .map(|hunk| {
-            let (old_at, old_count) = hunk.buffer1;
-            let (new_at, new_count) = hunk.buffer2;
+        .map(|(old_at, old_end, new_at, new_end)| {
             let start = old_offsets[old_at];
             (
                 start,
-                old_offsets[old_at + old_count] - start,
-                inserted[new_offsets[new_at]..new_offsets[new_at + new_count]].to_vec(),
+                old_offsets[old_end] - start,
+                inserted[new_offsets[new_at]..new_offsets[new_end]].to_vec(),
             )
         })
         .collect()
+}
+
+/// A shortest edit from `a` to `b` (Myers' greedy diff) as its hunks,
+/// `(a start, a end, b start, b end)` in order, or `None` when it changes
+/// more than `max_edit` items. Work is the length of the two times the
+/// edit's size, memory the size squared.
+pub(crate) fn myers_hunks<T: PartialEq>(
+    a: &[T],
+    b: &[T],
+    max_edit: usize,
+) -> Option<Vec<(usize, usize, usize, usize)>> {
+    let (n, m) = (a.len() as isize, b.len() as isize);
+    let max_d = (max_edit as isize).min(n + m);
+    let offset = max_d + 1;
+    // v[k + offset]: the furthest x reached on diagonal k; `trace[d]` the
+    // diagonals -d..=d as they stood before step d.
+    let mut v = vec![0isize; 2 * offset as usize + 1];
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+    for d in 0..=max_d {
+        trace.push(v[(offset - d) as usize..=(offset + d) as usize].to_vec());
+        for k in (-d..=d).step_by(2) {
+            let at = |k: isize| v[(k + offset) as usize];
+            let mut x = if k == -d || (k != d && at(k - 1) < at(k + 1)) {
+                at(k + 1)
+            } else {
+                at(k - 1) + 1
+            };
+            let mut y = x - k;
+            while x < n && y < m && a[x as usize] == b[y as usize] {
+                x += 1;
+                y += 1;
+            }
+            v[(k + offset) as usize] = x;
+            if x >= n && y >= m {
+                return Some(backtrack(&trace, n, m));
+            }
+        }
+    }
+    None
+}
+
+/// The hunks of the edit `myers_hunks` found, walked back from the end.
+fn backtrack(trace: &[Vec<isize>], n: isize, m: isize) -> Vec<(usize, usize, usize, usize)> {
+    // Each step one item deleted (x) or inserted (y), from its start point.
+    let mut steps: Vec<(isize, isize, bool)> = Vec::new();
+    let (mut x, mut y) = (n, m);
+    for d in (1..trace.len() as isize).rev() {
+        let row = &trace[d as usize];
+        let at = |k: isize| row[(k + d) as usize];
+        let k = x - y;
+        let down = k == -d || (k != d && at(k - 1) < at(k + 1));
+        let previous_k = if down { k + 1 } else { k - 1 };
+        let previous_x = at(previous_k);
+        let previous_y = previous_x - previous_k;
+        steps.push((previous_x, previous_y, down));
+        x = previous_x;
+        y = previous_y;
+    }
+    steps.reverse();
+    let mut hunks: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for (x, y, inserted) in steps {
+        let (x, y) = (x as usize, y as usize);
+        let (x_end, y_end) = if inserted { (x, y + 1) } else { (x + 1, y) };
+        match hunks.last_mut() {
+            Some(last) if last.1 == x && last.3 == y => {
+                last.1 = x_end;
+                last.3 = y_end;
+            }
+            _ => hunks.push((x, x_end, y, y_end)),
+        }
+    }
+    hunks
 }
 
 fn split_lines_inclusive(text: &[u16]) -> Vec<Vec<u16>> {

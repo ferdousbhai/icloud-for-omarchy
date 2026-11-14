@@ -708,3 +708,27 @@ fn compute_splices_breaks_and_joins_a_line_at_the_line_break() {
     assert_eq!(emphasized, vec![3]);
     assert!(!doc.runs.iter().any(|r| r.tombstone));
 }
+
+/// Two words changed far apart in a very long line are two splices: the
+/// line between them is not deleted and typed again, however long it is.
+/// The diff's work is bounded by how much changed, not by the line's length.
+#[test]
+fn compute_splices_keeps_a_long_line_between_two_edits() {
+    let line: String = (0..60_000).map(|i| format!("w{:04} ", i % 9973)).collect();
+    assert!(len16(&line) >= 350_000);
+    let edited = line.replacen("w0010 ", "W0010 ", 1).replacen("w9000 ", "w9000 new ", 1);
+    let started = std::time::Instant::now();
+    let splices = compute_splices(&line, &edited);
+    let elapsed = started.elapsed();
+    assert_eq!(splices, vec![splice(60, 1, "W"), splice(54_005, 0, " new")]);
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+    let mut doc = simple_document(&line);
+    assert!(apply_text_edit(&mut doc, &edited, &opts(REPLICA_A)).unwrap());
+    let deleted: u32 = doc.runs.iter().filter(|r| r.tombstone).map(|r| r.length).sum();
+    assert_eq!(deleted, 1);
+
+    // Where far more than that changed, the stretch is one replacement.
+    let rewritten: String = line.chars().map(|c| if c == '0' { '1' } else { c }).collect();
+    let splices = compute_splices(&line, &rewritten);
+    assert_eq!(splices.len(), 1, "{:?}", splices.len());
+}
