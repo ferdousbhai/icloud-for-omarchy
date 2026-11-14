@@ -30,7 +30,11 @@ After that it syncs every half minute while you are signed in.
 - **One side removes a file the other side edited:** the edit wins and the
   file comes back.
 - **A rename or a move:** the same rename or move on the other side; the
-  file is not sent again.
+  file is not sent again. One that iCloud or the folder refuses (a name
+  iCloud does not take, say) is left as it is on both sides and listed by
+  `icloud-drive status` with the reason; everything else goes on syncing,
+  and each sync tries the move again. A move that fails because there is
+  no network or no sign-in stops the sync, which starts over later.
 - **Many removals at once** (more than 20 and more than a quarter of what
   is in sync, or a folder emptied of everything): the sync stops and says so
   in `icloud-drive status`. Look with
@@ -74,7 +78,10 @@ The folder is scanned, and the plan is made by a pure function
 (SQLite in `~/.local/state/icloud-drive/`), iCloud now, and the folder now.
 Moves are found by item id in iCloud and by inode here. Each operation
 records its result as it finishes, so a run that stops half way is picked
-up by the next from wherever both sides stand.
+up by the next from wherever both sides stand. A move made here that also
+renames takes two requests to iCloud (the folder, then the name); the
+state notes where it is heading before the first, so a run that stops
+between them is finished by the next, not read as a move made in iCloud.
 
 An upload is first written as a form in `~/.cache/icloud-drive/`, so a large
 file needs that much free space again while it goes up.
@@ -89,6 +96,6 @@ runs the engine end to end against an in-memory iCloud Drive that behaves
 as the real one was measured to. `cargo run -p icloud-drive --example
 scratch` makes a scratch folder in the real Drive for trying a sync
 against one folder (`--top <id> --dir <dir> --state-dir <dir>`). A state
-folder serves one local folder: `--dir` with another folder's state is
-refused (`other_folder`), and `start`/`stop` take no `--dir`, since the
+folder serves one local folder and one folder of iCloud Drive: `--dir` or
+`--top` with another's state is refused (`other_folder`, `other_top`), and `start`/`stop` take no `--dir`, since the
 background sync keeps `~/iCloud Drive` only.

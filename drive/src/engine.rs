@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::local::{self, Entry};
 use icloud_session::time::{now_ms, rfc3339};
 
-use crate::plan::{self, Op, Plan, Snapshot, parent_of};
+use crate::plan::{self, Op, Plan, Snapshot, name_of, parent_of};
 use crate::remote::{self, Kind, Node, Remote};
 use crate::state::{Row, State};
 
@@ -37,6 +37,11 @@ pub enum Error {
     /// step there, and would read here as everything having been removed.
     #[error("the sync state belongs to {bound}, not {folder}")]
     OtherFolder { folder: PathBuf, bound: PathBuf },
+    /// The state belongs to another folder of iCloud Drive: none of its
+    /// rows are below this one, which would read as iCloud having removed
+    /// them all.
+    #[error("the sync state belongs to the iCloud Drive folder {bound}, not {top}")]
+    OtherTop { top: String, bound: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -76,6 +81,26 @@ pub struct Engine<'a, R: Remote> {
     pub progress: Box<dyn Fn(&str) + 'a>,
 }
 
+/// A move or rename that could not be carried out.
+#[derive(Debug)]
+struct Stuck {
+    /// Where the item is and was to go, on both sides: nothing at or below
+    /// these is touched while the move waits.
+    paths: Vec<String>,
+    /// `(path, reason)` for `status`.
+    shown: (String, String),
+}
+
+/// What carrying out one plan came to, beyond the lines in the outcome.
+#[derive(Debug, Default)]
+struct Applied {
+    /// A file was set aside as a conflicted copy, which another round
+    /// sends up.
+    set_aside: bool,
+    /// The moves that were not carried out.
+    stuck: Vec<Stuck>,
+}
+
 /// The folder in iCloud Drive with this id, as far as the id tells
 /// (`FOLDER::<zone>::<docwsid>`): enough to create and upload into it.
 pub fn top_node(id: &str) -> Node {
@@ -94,10 +119,6 @@ pub fn top_node(id: &str) -> Node {
         size: 0,
         mtime_ms: 0,
     }
-}
-
-fn name_of(path: &str) -> &str {
-    path.rsplit_once('/').map_or(path, |(_, name)| name)
 }
 
 fn describe(op: &Op) -> String {
@@ -225,6 +246,10 @@ impl<R: Remote> Engine<'_, R> {
         };
         // What neither side could show properly in the last round.
         let mut unseen: Vec<(String, String)> = Vec::new();
+        // Moves and renames this sync could not carry out. Their paths are
+        // left alone for the rest of it, so everything else still syncs;
+        // the next sync tries them again.
+        let mut stuck: Vec<Stuck> = Vec::new();
         for _ in 0..MAX_ROUNDS {
             let nodes = self.crawl()?;
             let snapshot = Snapshot::build_below(&self.top.id, &nodes);
@@ -258,9 +283,15 @@ impl<R: Remote> Engine<'_, R> {
             let ignored = self.state.ignored()?;
             let context = plan::Context {
                 ignored: ignored.iter().map(|i| (i.id.clone(), i.etag.clone())).collect(),
-                unknown: unseen.iter().map(|(path, _)| path.clone()).collect(),
+                unknown: unseen
+                    .iter()
+                    .map(|(path, _)| path.clone())
+                    .chain(stuck.iter().flat_map(|s| s.paths.iter().cloned()))
+                    .collect(),
+                pending_moves: self.state.pending_moves()?,
                 now_ns: now_ms() * 1_000_000,
             };
+            unseen.extend(stuck.iter().map(|s| s.shown.clone()));
             let plan = plan::plan(&base, &snapshot, &entries, &context);
 
             outcome.pending = plan.pending.clone();
@@ -287,46 +318,96 @@ impl<R: Remote> Engine<'_, R> {
                 return Ok(outcome);
             }
             let before = outcome.done.len();
-            let set_aside = self.apply(&plan, &snapshot, &mut outcome)?;
+            let applied = self.apply(&plan, &snapshot, &mut outcome)?;
+            if outcome.done.len() == before && !applied.stuck.is_empty() {
+                // Moves are done alone, before anything else. One that
+                // iCloud or the folder refuses would be planned again every
+                // round and nothing else would ever sync: set it aside and
+                // go on with the rest.
+                stuck.extend(applied.stuck);
+                continue;
+            }
             // Another round only if this one got somewhere.
-            if !(plan.again || set_aside) || outcome.done.len() == before {
+            if !(plan.again || applied.set_aside) || outcome.done.len() == before {
                 break;
             }
         }
         // For `status`: everything left out, with what this sync found to
-        // be a package.
+        // be a package. (A move set aside in the last round is not in the
+        // list that round's plan was made from.)
+        for s in &stuck {
+            if !unseen.contains(&s.shown) {
+                unseen.push(s.shown.clone());
+            }
+        }
         unseen.extend(self.state.ignored()?.into_iter().map(|i| (i.path, i.reason)));
         self.state.set_not_synced(&unseen)?;
         self.state.set_meta("last_sync_ms", &now_ms().to_string())?;
         Ok(outcome)
     }
 
-    /// True when a file was set aside as a conflicted copy, which another
-    /// round sends up.
-    fn apply(&mut self, plan: &Plan, snapshot: &Snapshot, outcome: &mut Outcome) -> Result<bool> {
-        let mut set_aside = false;
+    fn apply(&mut self, plan: &Plan, snapshot: &Snapshot, outcome: &mut Outcome) -> Result<Applied> {
+        let mut applied = Applied::default();
         for op in &plan.ops {
             let line = describe(op);
             (self.progress)(&line);
-            match (self.apply_one(op, snapshot), op) {
-                (Ok(true), _) => outcome.done.push(line),
-                (Ok(false), _) => {}
+            let failed = match (self.apply_one(op, snapshot), op) {
+                (Ok(true), _) => {
+                    outcome.done.push(line);
+                    continue;
+                }
+                (Ok(false), _) => "something else is in the way for now".to_string(),
                 // Changed in iCloud in a way its size and date did not show:
                 // both are kept, ours as a conflicted copy, and the next
                 // round downloads iCloud's and uploads the copy.
                 (Err(Error::Remote(remote::Error::Stale(_))), Op::Replace { id, path }) => {
-                    self.set_aside(path)?;
-                    self.state.forget(id)?;
-                    outcome.done.push(format!(
-                        "keep {path} as a conflicted copy (it changed in iCloud meanwhile)"
-                    ));
-                    set_aside = true;
+                    match self.set_aside(path) {
+                        Ok(()) => {
+                            self.state.forget(id)?;
+                            outcome.done.push(format!(
+                                "keep {path} as a conflicted copy (it changed in iCloud meanwhile)"
+                            ));
+                            applied.set_aside = true;
+                        }
+                        // The file went meanwhile: this file's problem, and
+                        // the next sync looks at it again.
+                        Err(e) => outcome.problems.push(format!("{line}: {e}")),
+                    }
+                    continue;
                 }
-                (Err(e), _) if is_item_problem(&e) => outcome.problems.push(format!("{line}: {e}")),
+                (Err(e), _) if is_item_problem(&e) => {
+                    outcome.problems.push(format!("{line}: {e}"));
+                    e.to_string()
+                }
+                // No network, signed out, iCloud in trouble: the run ends,
+                // and the next one starts from wherever both sides stand.
                 (Err(e), _) => return Err(e),
+            };
+            match op {
+                Op::RemoteMove { id, to } => {
+                    let from = self.state.row(id)?.map(|row| row.path);
+                    applied.stuck.push(Stuck {
+                        paths: from.into_iter().chain([to.clone()]).collect(),
+                        shown: (
+                            to.clone(),
+                            format!("it could not be moved or renamed in iCloud: {failed}"),
+                        ),
+                    });
+                }
+                Op::LocalMove { id, from, to } => {
+                    let row = self.state.row(id)?.map(|row| row.path);
+                    applied.stuck.push(Stuck {
+                        paths: row.into_iter().chain([from.clone(), to.clone()]).collect(),
+                        shown: (
+                            from.clone(),
+                            format!("it could not be moved to {to} as in iCloud: {failed}"),
+                        ),
+                    });
+                }
+                _ => {}
             }
         }
-        Ok(set_aside)
+        Ok(applied)
     }
 
     fn abs(&self, path: &str) -> PathBuf {
@@ -404,10 +485,14 @@ impl<R: Remote> Engine<'_, R> {
                     if let Some(parent) = self.abs(to).parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    fs::rename(self.abs(from), self.abs(to))?;
+                    // Never onto something that appeared there meanwhile.
+                    if !local::rename_no_replace(&self.abs(from), &self.abs(to))? {
+                        return Ok(false);
+                    }
                 }
                 self.state.move_paths(&row.path, to)?;
                 self.put(node, to, row.local)?;
+                self.state.clear_pending_move(id)?;
             }
             Op::RemoteMove { id, to } => {
                 let Some(row) = self.state.row(id)? else {
@@ -415,7 +500,14 @@ impl<R: Remote> Engine<'_, R> {
                 };
                 self.need_stat(to)?;
                 let parent = self.parent_node(to)?;
-                let mut node = row.node.clone();
+                // As iCloud has it now, so a move an earlier run left half
+                // done (in the new folder, under the old name) is finished
+                // from where it stands.
+                let mut node = snapshot.nodes.get(id).cloned().unwrap_or_else(|| row.node.clone());
+                // Noted first: until both halves are done and recorded,
+                // where iCloud has it is this move's doing, not a move made
+                // in iCloud to be followed here.
+                self.state.set_pending_move(id, to)?;
                 if node.parent != parent.id {
                     node = self.remote.move_to(&node, &parent.id)?;
                 }
@@ -427,6 +519,7 @@ impl<R: Remote> Engine<'_, R> {
                 // it by that stamp and its inode), so an edit made since
                 // still shows as one.
                 self.put(node, to, row.local)?;
+                self.state.clear_pending_move(id)?;
             }
             Op::SetAside { path } => {
                 if !self.abs(path).exists() {
@@ -624,9 +717,10 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Refuses a state that belongs to another local folder or another
-/// account; claims a new one for both.
-pub fn bind(state: &State, dsid: &str, folder: &Path) -> Result<()> {
+/// Refuses a state that belongs to another local folder, another folder of
+/// iCloud Drive (`top`, its id) or another account; claims a new one for
+/// all three, and one from before a binding was recorded for that binding.
+pub fn bind(state: &State, dsid: &str, folder: &Path, top: &str) -> Result<()> {
     let here = std::path::absolute(folder)?;
     match state.meta("folder")? {
         Some(bound) if bound != here.to_string_lossy() => {
@@ -637,6 +731,16 @@ pub fn bind(state: &State, dsid: &str, folder: &Path) -> Result<()> {
         }
         Some(_) => {}
         None => state.set_meta("folder", &here.to_string_lossy())?,
+    }
+    match state.meta("top")? {
+        Some(bound) if bound != top => {
+            return Err(Error::OtherTop {
+                top: top.to_string(),
+                bound,
+            });
+        }
+        Some(_) => {}
+        None => state.set_meta("top", top)?,
     }
     match state.meta("dsid")? {
         Some(owner) if owner != dsid => Err(Error::OtherAccount {
@@ -653,16 +757,32 @@ mod tests {
 
     #[test]
     fn a_state_is_bound_to_one_folder_and_one_account() {
+        use crate::remote::ROOT_ID;
+        let folder = Path::new("/home/me/iCloud Drive");
         let state = State::in_memory();
-        bind(&state, "1", Path::new("/home/me/iCloud Drive")).unwrap();
-        bind(&state, "1", Path::new("/home/me/iCloud Drive")).unwrap();
+        bind(&state, "1", folder, ROOT_ID).unwrap();
+        bind(&state, "1", folder, ROOT_ID).unwrap();
         assert!(matches!(
-            bind(&state, "1", Path::new("/home/me/Other")),
+            bind(&state, "1", Path::new("/home/me/Other"), ROOT_ID),
             Err(Error::OtherFolder { .. })
         ));
         assert!(matches!(
-            bind(&state, "2", Path::new("/home/me/iCloud Drive")),
+            bind(&state, "1", folder, "FOLDER::com.apple.CloudDocs::F1"),
+            Err(Error::OtherTop { .. })
+        ));
+        assert!(matches!(
+            bind(&state, "2", folder, ROOT_ID),
             Err(Error::OtherAccount { .. })
+        ));
+        // A state from before the iCloud folder was recorded is claimed by
+        // the first sync, as one from before the local folder was.
+        let older = State::in_memory();
+        older.set_meta("folder", &folder.to_string_lossy()).unwrap();
+        older.set_meta("dsid", "1").unwrap();
+        bind(&older, "1", folder, "FOLDER::com.apple.CloudDocs::F1").unwrap();
+        assert!(matches!(
+            bind(&older, "1", folder, ROOT_ID),
+            Err(Error::OtherTop { .. })
         ));
     }
 }

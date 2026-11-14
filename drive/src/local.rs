@@ -160,6 +160,26 @@ pub fn stat(path: &Path) -> io::Result<Option<Entry>> {
     }
 }
 
+/// Renames `from` to `to` unless something is at `to`: false when there is,
+/// and nothing was moved. One step where the file system can (`renameat2`
+/// with `RENAME_NOREPLACE`); a look and then a rename where it cannot.
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<bool> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Ok(()) => Ok(true),
+        Err(Errno::EXIST) => Ok(false),
+        Err(Errno::INVAL | Errno::NOSYS | Errno::NOTSUP) => {
+            if fs::symlink_metadata(to).is_ok() {
+                return Ok(false);
+            }
+            fs::rename(from, to)?;
+            Ok(true)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Sets a file's modification time (Unix milliseconds).
 pub fn set_mtime(path: &Path, mtime_ms: i64) -> io::Result<()> {
     let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(mtime_ms.max(0) as u64);
@@ -272,6 +292,25 @@ mod tests {
         fs::write(dir.path().join("Docs"), "a file where a folder was").unwrap();
         assert_eq!(stat(&dir.path().join("Docs/a.txt")).unwrap(), None);
         assert_eq!(stat(&dir.path().join("gone")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_rename_never_replaces_what_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, c) = (dir.path().join("a"), dir.path().join("b"), dir.path().join("c"));
+        fs::write(&a, "a").unwrap();
+        fs::write(&b, "b").unwrap();
+        assert!(!rename_no_replace(&a, &b).unwrap());
+        assert_eq!(fs::read_to_string(&a).unwrap(), "a");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "b");
+        assert!(rename_no_replace(&a, &c).unwrap());
+        assert!(!a.exists());
+        assert_eq!(fs::read_to_string(&c).unwrap(), "a");
+        // A folder does not take the place of an empty one either.
+        fs::create_dir(dir.path().join("d")).unwrap();
+        fs::create_dir(dir.path().join("e")).unwrap();
+        assert!(!rename_no_replace(&dir.path().join("d"), &dir.path().join("e")).unwrap());
+        assert!(dir.path().join("d").exists());
     }
 
     #[test]

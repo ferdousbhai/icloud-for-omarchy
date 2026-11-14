@@ -20,6 +20,8 @@ path = "src/main.rs"
 icloud-session = { workspace = true, features = ["clap"] }
 clap.workspace = true
 rusqlite.workspace = true
+# renameat2(2): a rename that never replaces what is at the destination.
+rustix = { version = "1", features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

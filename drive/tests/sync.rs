@@ -25,6 +25,14 @@ struct Cloud {
     /// The listing right after a replace fails, once.
     listing_fails_after_replace: bool,
     listing_fails_once: bool,
+    /// iCloud refuses every rename and move.
+    refuses_moves: bool,
+    /// Every rename and move fails for want of a network.
+    moves_offline: bool,
+    /// The next rename is refused, once.
+    rename_fails_once: bool,
+    /// Removed when a replace is refused as stale: the file went meanwhile.
+    stale_removes: Option<PathBuf>,
     counter: u64,
     uploads: usize,
     listings: usize,
@@ -41,6 +49,16 @@ fn docwsid_of(id: &str) -> String {
 struct Fake(RefCell<Cloud>);
 
 impl Cloud {
+    fn may_move(&self) -> remote::Result<()> {
+        if self.moves_offline {
+            return Err(icloud_session::Error::Offline("no network".into()).into());
+        }
+        if self.refuses_moves {
+            return Err(remote::Error::Api("the rename refused: NAME_NOT_ALLOWED".into()));
+        }
+        Ok(())
+    }
+
     fn tick(&mut self) -> u64 {
         self.counter += 1;
         self.counter
@@ -254,6 +272,9 @@ impl Remote for Fake {
         let mut c = self.0.borrow_mut();
         // `allow_conflict: false`: a stale etag is refused, as iCloud does.
         if c.nodes.get(&node.id).is_some_and(|n| n.etag != node.etag) {
+            if let Some(gone) = c.stale_removes.take() {
+                fs::remove_file(gone)?;
+            }
             return Err(remote::Error::Stale(node.name.clone()));
         }
         c.uploads += 1;
@@ -276,6 +297,10 @@ impl Remote for Fake {
     }
     fn rename(&self, node: &Node, name: &str) -> remote::Result<Node> {
         let mut c = self.0.borrow_mut();
+        c.may_move()?;
+        if std::mem::take(&mut c.rename_fails_once) {
+            return Err(remote::Error::Api("the rename refused: UNKNOWN".into()));
+        }
         c.nodes
             .get_mut(&node.id)
             .ok_or_else(|| remote::Error::Api("gone".into()))?
@@ -285,6 +310,7 @@ impl Remote for Fake {
     }
     fn move_to(&self, node: &Node, parent_id: &str) -> remote::Result<Node> {
         let mut c = self.0.borrow_mut();
+        c.may_move()?;
         if parent_id != ROOT_ID && !c.nodes.contains_key(parent_id) {
             return Err(remote::Error::Api("the move refused: ID_INVALID".into()));
         }
@@ -872,4 +898,107 @@ fn a_folder_replaced_by_a_file_here_leaves_nothing_for_later() {
         .find(|p| p.contains("conflicted copy desk"))
         .expect("the file is kept beside iCloud's folder");
     assert_eq!(bed.cloud.text(&copy).as_deref(), Some("now a file"));
+}
+
+#[test]
+fn a_move_icloud_refuses_is_left_alone_and_shown_while_the_rest_syncs() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("b.txt")).unwrap();
+    bed.write("other.txt", "unrelated");
+    bed.cloud.0.borrow_mut().refuses_moves = true;
+    for _ in 0..2 {
+        let outcome = bed.try_sync(false).unwrap();
+        assert_eq!(outcome.problems.len(), 1, "{:?}", outcome.problems);
+        assert!(
+            outcome.problems[0].contains("NAME_NOT_ALLOWED"),
+            "{:?}",
+            outcome.problems
+        );
+        // Everything else is synced; the file is neither removed in iCloud
+        // nor sent again under its new name.
+        assert_eq!(bed.cloud.text("other.txt").as_deref(), Some("unrelated"));
+        assert_eq!(bed.cloud.paths(), ["a.txt", "other.txt"]);
+        assert_eq!(bed.local_paths(), ["b.txt", "other.txt"]);
+        assert!(bed.cloud.0.borrow().trashed.is_empty());
+        // And `status` says so.
+        let state = State::open(&bed.dir.path().join("state")).unwrap();
+        let shown = state.not_synced().unwrap();
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert_eq!(shown[0].0, "b.txt");
+        assert!(
+            shown[0].1.starts_with("it could not be moved or renamed in iCloud: ")
+                && shown[0].1.contains("NAME_NOT_ALLOWED"),
+            "{shown:?}"
+        );
+        assert!(
+            outcome.skipped.iter().any(|s| s.starts_with("b.txt: ")),
+            "{:?}",
+            outcome.skipped
+        );
+    }
+    // Once iCloud takes it, it is the same file under its new name.
+    bed.cloud.0.borrow_mut().refuses_moves = false;
+    bed.settle();
+    assert_eq!(bed.cloud.id_at("b.txt").as_deref(), Some(a.id.as_str()));
+    assert!(bed.not_synced().is_empty());
+}
+
+#[test]
+fn a_move_that_fails_for_want_of_a_network_ends_the_sync() {
+    let bed = Bed::new();
+    bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    fs::rename(bed.root().join("a.txt"), bed.root().join("b.txt")).unwrap();
+    bed.write("other.txt", "unrelated");
+    bed.cloud.0.borrow_mut().moves_offline = true;
+    let result = bed.try_sync(false);
+    assert!(
+        matches!(
+            result,
+            Err(Error::Remote(remote::Error::Session(icloud_session::Error::Offline(_))))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(bed.cloud.paths(), ["a.txt"], "nothing went on without the move");
+    assert!(bed.not_synced().is_empty());
+    bed.cloud.0.borrow_mut().moves_offline = false;
+    bed.settle();
+}
+
+#[test]
+fn a_move_here_that_stopped_half_way_in_icloud_is_finished_not_undone() {
+    let bed = Bed::new();
+    let docs = bed.cloud.folder(ROOT_ID, "Docs");
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    let uploads = bed.cloud.0.borrow().uploads;
+    fs::rename(bed.root().join("a.txt"), bed.root().join("Docs/b.txt")).unwrap();
+    // The move into the folder is done; the rename is not.
+    bed.cloud.0.borrow_mut().rename_fails_once = true;
+    let outcome = bed.try_sync(false).unwrap();
+    assert_eq!(outcome.problems.len(), 1, "{:?}", outcome.problems);
+    assert_eq!(bed.cloud.paths(), ["Docs", "Docs/a.txt"]);
+    assert_eq!(bed.local_paths(), ["Docs", "Docs/b.txt"]);
+    bed.settle();
+    assert_eq!(bed.local_paths(), ["Docs", "Docs/b.txt"], "the rename here stands");
+    assert_eq!(bed.cloud.id_at("Docs/b.txt").as_deref(), Some(a.id.as_str()));
+    assert_eq!(bed.cloud.0.borrow().nodes[&a.id].parent, docs.id);
+    assert_eq!(bed.cloud.0.borrow().uploads, uploads);
+    assert!(bed.cloud.0.borrow().trashed.is_empty());
+}
+
+#[test]
+fn a_file_that_goes_while_its_stale_replace_is_refused_is_one_files_problem() {
+    let bed = Bed::new();
+    let a = bed.cloud.file(ROOT_ID, "a.txt", "one", bed.time());
+    bed.settle();
+    bed.cloud.edit(&a.id, "ONE", a.mtime_ms);
+    bed.write("a.txt", "mine");
+    bed.write("other.txt", "unrelated");
+    bed.cloud.0.borrow_mut().stale_removes = Some(bed.root().join("a.txt"));
+    let outcome = bed.try_sync(false).unwrap();
+    assert_eq!(outcome.problems.len(), 1, "{:?}", outcome.problems);
+    assert_eq!(bed.cloud.text("other.txt").as_deref(), Some("unrelated"));
 }

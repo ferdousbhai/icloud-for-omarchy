@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS remote_cache (
 );
 CREATE TABLE IF NOT EXISTS ignored (id TEXT PRIMARY KEY, etag TEXT NOT NULL, path TEXT NOT NULL, reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS not_synced (path TEXT NOT NULL, reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pending_moves (id TEXT PRIMARY KEY, dest TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
@@ -302,6 +303,31 @@ impl State {
         tx.commit()
     }
 
+    /// Notes that the item is being moved in iCloud to the local path
+    /// `dest`: a move there takes two requests (the folder, then the name),
+    /// and a run can stop between them.
+    pub fn set_pending_move(&self, id: &str, dest: &str) -> rusqlite::Result<()> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO pending_moves VALUES (?1, ?2)",
+            params![id, dest],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_pending_move(&self, id: &str) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM pending_moves WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Item id to the local path its move in iCloud was heading for, for
+    /// the moves not finished (those of items no longer in step are dropped).
+    pub fn pending_moves(&self) -> rusqlite::Result<std::collections::HashMap<String, String>> {
+        self.db
+            .execute("DELETE FROM pending_moves WHERE id NOT IN (SELECT id FROM items)", [])?;
+        let mut stmt = self.db.prepare("SELECT id, dest FROM pending_moves")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+    }
+
     pub fn ignore(&self, node: &Node, path: &str, reason: &str) -> rusqlite::Result<()> {
         self.db.execute(
             "INSERT OR REPLACE INTO ignored VALUES (?1, ?2, ?3, ?4)",
@@ -407,6 +433,19 @@ mod tests {
         state.set_not_synced(&items).unwrap();
         state.set_not_synced(&items).unwrap();
         assert_eq!(state.not_synced().unwrap(), items);
+    }
+
+    #[test]
+    fn a_pending_move_is_kept_until_cleared_or_its_item_is_forgotten() {
+        let state = State::in_memory();
+        state.put(&row("1", "a.txt", false)).unwrap();
+        state.put(&row("2", "b.txt", false)).unwrap();
+        state.set_pending_move("1", "Docs/a2.txt").unwrap();
+        state.set_pending_move("2", "Docs/b2.txt").unwrap();
+        assert_eq!(state.pending_moves().unwrap().len(), 2);
+        state.clear_pending_move("1").unwrap();
+        state.forget("2").unwrap();
+        assert!(state.pending_moves().unwrap().is_empty());
     }
 
     #[test]

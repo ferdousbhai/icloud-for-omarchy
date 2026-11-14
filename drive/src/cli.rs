@@ -45,7 +45,7 @@ Exit codes:
   0 ok
   1 error (io, error, busy, http 4xx), or a sync that left some items for later
   2 usage; too_many_deletions (run `icloud-drive sync --yes` after checking
-    `icloud-drive sync --dry-run`); other_account; other_folder
+    `icloud-drive sync --dry-run`); other_account; other_folder; other_top
   3 sign_in_required, session_rejected, drive_unavailable; status while signed out
   4 folder_missing
   5 offline, network, session_service, keyring_unavailable, bad_response, http 5xx";
@@ -162,6 +162,10 @@ fn failure(e: &engine::Error) -> CliError {
         ),
         E::OtherFolder { .. } => CliError::new("other_folder", EXIT_USAGE, e.to_string())
             .hint("give this folder a state of its own: `icloud-drive --dir DIR --state-dir DIR sync`"),
+        E::OtherTop { .. } => CliError::new("other_top", EXIT_USAGE, e.to_string()).hint(
+            "give this folder of iCloud Drive a local folder and a state of its own: \
+             `icloud-drive --top ID --dir DIR --state-dir DIR sync`",
+        ),
         E::Io(_) => CliError::new("io", EXIT_ERROR, e.to_string()),
         _ => CliError::new("error", EXIT_ERROR, e.to_string()),
     }
@@ -205,7 +209,7 @@ fn one_sync(
 ) -> Result<Outcome, engine::Error> {
     let api = DriveApi::connect()?;
     let state = State::open(&paths.state_dir)?;
-    engine::bind(&state, api.dsid(), &paths.folder)?;
+    engine::bind(&state, api.dsid(), &paths.folder, &paths.top)?;
     let mut engine = Engine {
         remote: &api,
         state,
