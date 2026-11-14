@@ -1036,8 +1036,10 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             .iter()
             .filter_map(|c| c.file_name()?.to_str().map(str::to_owned))
             .collect();
+        // As a run killed before it recorded so wrote it: nothing unsent.
+        let written = |text: &String| *text == ls.text || ls.writing.as_ref().is_some_and(|w| w.text == *text);
         match read(&path)? {
-            Some(text) if text != ls.text => {
+            Some(text) if !written(&text) => {
                 let beside = match names.as_slice() {
                     [] => String::new(),
                     names => format!(" (and beside it {})", names.join(", ")),

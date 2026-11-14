@@ -1577,3 +1577,26 @@ fn a_file_written_by_a_run_ended_before_recording_it_and_then_edited_is_read_aga
     let milk = env.state.record("Reminder/REM-MILK").unwrap();
     assert_eq!(milk["fields"]["Deleted"]["value"], 0);
 }
+
+#[test]
+fn a_file_written_by_a_run_ended_before_recording_it_goes_with_its_deleted_list() {
+    let env = start();
+    let dir = folder(&env);
+    let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
+    milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
+    env.state.put(milk);
+    env.background_crashing_at("file-written");
+    assert!(
+        std::fs::read_to_string(dir.join("Groceries.md"))
+            .unwrap()
+            .contains("Coffee beans")
+    );
+    // The list is deleted before the next run: the file holds nothing that
+    // was not written from iCloud, so it goes, unremarked.
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Deleted"]["value"] = json!(1);
+    env.state.put(list);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
+    assert_eq!(file_names(&dir), ["Reminders.md"]);
+}
