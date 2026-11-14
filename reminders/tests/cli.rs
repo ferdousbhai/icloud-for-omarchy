@@ -1166,3 +1166,67 @@ fn a_list_that_keeps_failing_does_not_sync_every_minute() {
         "{out}"
     );
 }
+
+#[test]
+fn a_run_killed_after_writing_a_file_does_not_read_it_as_the_file_s_edits() {
+    let env = start();
+    let dir = folder(&env);
+    // The phone renames Milk; the Reminders file gets a line. Groceries.md
+    // is written first, then the run is killed during Reminders' write,
+    // before anything recorded the new Groceries.md.
+    let mut milk = env.state.record("Reminder/REM-MILK").unwrap();
+    milk["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Coffee beans"));
+    env.state.put(milk);
+    let path = dir.join("Reminders.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Stretch\n").unwrap();
+    let mut child = env.background_held_at_write(1);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    env.release_writes();
+    assert!(
+        std::fs::read_to_string(dir.join("Groceries.md"))
+            .unwrap()
+            .contains("Coffee beans")
+    );
+
+    let out = env.json(&["background"]);
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["deleted"].as_i64()),
+        (Some(0), Some(0)),
+        "{out}"
+    );
+    let milk = env.state.record("Reminder/REM-MILK").unwrap();
+    assert_eq!(milk["fields"]["Deleted"]["value"], 0);
+    assert_eq!(env.creates(), 1, "Stretch alone");
+    assert_eq!(count(&all_titles(&env, "Groceries"), "Coffee beans"), 1);
+}
+
+#[test]
+fn a_renamed_list_s_file_keeps_its_new_name_after_a_run_killed_later() {
+    let env = start();
+    let dir = folder(&env);
+    // Groceries becomes Food, and its run fails (a conflict copy that cannot
+    // be read); the run is then killed during Reminders' write.
+    std::fs::create_dir(dir.join("Groceries.sync-conflict-20261114-093000-ABCDEFG.md")).unwrap();
+    let mut list = env.state.record("List/LIST-GROCERIES").unwrap();
+    list["fields"]["Name"]["value"] = json!("Food");
+    env.state.put(list);
+    let path = dir.join("Reminders.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text + "- [ ] Stretch\n").unwrap();
+    let mut child = env.background_held_at_write(1);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    env.release_writes();
+
+    env.json(&["background", "--sync"]);
+    assert_eq!(
+        file_names(&dir),
+        [
+            "Food.md",
+            "Food.sync-conflict-20261114-093000-ABCDEFG.md",
+            "Reminders.md"
+        ]
+    );
+}

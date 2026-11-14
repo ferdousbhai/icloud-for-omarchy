@@ -40,9 +40,10 @@
 //! - Syncthing's conflict copies (`Work.sync-conflict-….md`) are made from an
 //!   older file, so only what cannot undo anything is taken from one: a tick
 //!   on a reminder that is still open, and lines unlike any there is.
-//! - A write that fails stops that list. Each write is recorded in
-//!   `folder.json` as soon as it is made, so the next run goes on from there
-//!   instead of adding twice, also after a run that was killed. A reminder
+//! - A write that fails stops that list. Each write (to iCloud, of a file,
+//!   a file's rename) is recorded in `folder.json` as soon as it is made, so
+//!   the next run goes on from there instead of adding twice or reading
+//!   iCloud's changes as the file's, also after a run that was killed. A reminder
 //!   that reached iCloud without the run hearing so (killed, or the answer
 //!   lost) is found again: a line to add takes up a reminder of its list
 //!   made in the last [`TAKE_UP_MS`] that reads exactly as it and that no
@@ -770,7 +771,8 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
     let (text, ids) = render(list, &cache, now);
     let items = known(&text, ids, now).map_err(Error::Other)?;
     let current = read(&path)?;
-    if current.as_deref() != Some(text.as_str()) {
+    let written = current.as_deref() != Some(text.as_str());
+    if written {
         if current != on_disk {
             // The file changed while this ran: its changes are for the next
             // run, against the file as it was read here.
@@ -783,7 +785,9 @@ fn one(run: Run, dir: &Path, ls: &mut ListState, report: &mut Report, save: Save
     ls.items = items;
     ls.unwritten.clear();
     ls.adopted = true;
-    Ok(())
+    // Recorded at once: a run killed later on would leave the next one to
+    // read iCloud's changes in this file as the file's own.
+    if written { save(ls) } else { Ok(()) }
 }
 
 /// Brings the folder and iCloud in step. The cache must be fresh (the
@@ -849,6 +853,10 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
                     }
                 }
                 ls.file = wanted;
+                // Recorded at once: the next run would otherwise look for
+                // the file under its old name, and write it there afresh.
+                state.lists.insert(list.id.clone(), ls.clone());
+                svc.store.save_folder(state)?;
             }
         }
         // Failed on this file and this sync, and neither is new: not again.
