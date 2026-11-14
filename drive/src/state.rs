@@ -265,11 +265,15 @@ impl State {
         Ok(())
     }
 
-    /// After a move: the rows at and below `from` now live at and below `to`.
-    pub fn move_paths(&self, from: &str, to: &str) -> rusqlite::Result<()> {
+    /// After a move: the rows at and below `from` now live at and below
+    /// `moved.path`, and the item moved is recorded as `moved`, in one
+    /// transaction (so no row is ever at its new path with what it was in
+    /// iCloud before the move, which would list the wrong folder for it).
+    pub fn move_paths(&self, from: &str, moved: &Row) -> rusqlite::Result<()> {
+        let to = moved.path.as_str();
         let tx = self.db.unchecked_transaction()?;
         let rows = self.rows()?;
-        let moved: Vec<(&Row, String)> = rows
+        let rows_moved: Vec<(&Row, String)> = rows
             .iter()
             .filter(|r| is_under(&r.path, from))
             .map(|r| (r, format!("{to}{}", &r.path[from.len()..])))
@@ -279,14 +283,20 @@ impl State {
         // others below the destination (moved there already) stay.
         let holder = rows.iter().any(|r| r.path == to && !is_under(&r.path, from));
         for row in rows.iter().filter(|r| !is_under(&r.path, from)) {
-            if (holder && is_under(&row.path, to)) || moved.iter().any(|(_, p)| *p == row.path) {
+            if (holder && is_under(&row.path, to)) || rows_moved.iter().any(|(_, p)| *p == row.path) {
                 tx.execute("DELETE FROM items WHERE id = ?1", [&row.node.id])?;
             }
         }
-        // Parents first, so no row takes a path another still holds.
-        for (row, path) in &moved {
+        // Each out of the way first (a path no file can have), so none
+        // takes a path another moving row still holds: a folder moved into
+        // a new folder of its own name has a row below it at its new path.
+        for (row, _) in &rows_moved {
+            tx.execute("UPDATE items SET path = char(0) || id WHERE id = ?1", [&row.node.id])?;
+        }
+        for (row, path) in &rows_moved {
             tx.execute("UPDATE items SET path = ?1 WHERE id = ?2", params![path, row.node.id])?;
         }
+        self.insert("items", moved)?;
         tx.commit()?;
         crate::crash::point("state.move_paths");
         Ok(())
@@ -491,7 +501,7 @@ mod tests {
         for (id, path, dir) in [("1", "a", true), ("2", "a/b.txt", false), ("3", "ab.txt", false)] {
             state.put(&row(id, path, dir)).unwrap();
         }
-        state.move_paths("a", "z/y").unwrap();
+        state.move_paths("a", &row("1", "z/y", true)).unwrap();
         let paths: Vec<_> = state.rows().unwrap().into_iter().map(|r| r.path).collect();
         assert_eq!(paths, ["ab.txt", "z/y", "z/y/b.txt"]);
         state.forget_under("z/y").unwrap();
@@ -510,7 +520,7 @@ mod tests {
         ] {
             state.put(&row(id, path, dir)).unwrap();
         }
-        state.move_paths("a/b", "a").unwrap();
+        state.move_paths("a/b", &row("2", "a", true)).unwrap();
         let rows: Vec<_> = state.rows().unwrap().into_iter().map(|r| (r.node.id, r.path)).collect();
         let want = [("2", "a"), ("5", "a%"), ("3", "a/b")].map(|(id, path)| (id.to_string(), path.to_string()));
         assert_eq!(rows, want);
@@ -556,9 +566,22 @@ mod tests {
         for (id, path, dir) in [("1", "r/r", true), ("2", "r/r/a.txt", false), ("3", "s", true)] {
             state.put(&row(id, path, dir)).unwrap();
         }
-        state.move_paths("s", "r").unwrap();
+        state.move_paths("s", &row("3", "r", true)).unwrap();
         let rows: Vec<_> = state.rows().unwrap().into_iter().map(|r| (r.node.id, r.path)).collect();
         let want = [("3", "r"), ("1", "r/r"), ("2", "r/r/a.txt")].map(|(id, path)| (id.to_string(), path.to_string()));
+        assert_eq!(rows, want);
+    }
+
+    #[test]
+    fn a_move_into_a_folder_of_its_own_name_below_it_keeps_every_row() {
+        let state = State::in_memory();
+        for (id, path, dir) in [("1", "r", true), ("2", "r/r", true), ("3", "r/r/a.txt", false)] {
+            state.put(&row(id, path, dir)).unwrap();
+        }
+        state.move_paths("r", &row("1", "r/r", true)).unwrap();
+        let rows: Vec<_> = state.rows().unwrap().into_iter().map(|r| (r.node.id, r.path)).collect();
+        let want =
+            [("1", "r/r"), ("2", "r/r/r"), ("3", "r/r/r/a.txt")].map(|(id, path)| (id.to_string(), path.to_string()));
         assert_eq!(rows, want);
     }
 

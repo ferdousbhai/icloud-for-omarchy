@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 
-use common::Bed;
+use common::{Bed, MidOp};
 use icloud_drive::engine::Error;
 use icloud_drive::local;
 use icloud_drive::remote::{self, ROOT_ID, Remote};
@@ -1360,4 +1360,94 @@ fn a_folder_icloud_refused_to_make_is_not_taken_for_one_another_device_makes_lat
     bed.settle();
     assert_eq!(bed.cloud.paths(), ["Mine", "Mine/mine.txt", "P", "P/theirs.txt"]);
     assert_eq!(bed.cloud.id_at("P").as_deref(), Some(theirs.id.as_str()));
+}
+
+#[test]
+fn an_icloud_edit_made_right_after_a_replace_is_not_taken_for_the_file_here() {
+    let bed = Bed::new();
+    bed.write("a.txt", "one");
+    bed.settle();
+    bed.write("a.txt", "two");
+    let id = bed.cloud.id_at("a.txt").unwrap();
+    // Another device saves the file between the replace and the listing
+    // that follows it.
+    let at = bed.cloud.0.borrow().listings + 1;
+    let edit = MidOp::Edit {
+        id,
+        text: "three".into(),
+        mtime_ms: bed.time(),
+    };
+    bed.cloud.0.borrow_mut().mid_listing = Some((at, edit));
+    bed.sync();
+    assert!(bed.cloud.0.borrow().mid_fired.is_some());
+    bed.settle();
+    assert_eq!(bed.read("a.txt").as_deref(), Some("three"));
+    assert_eq!(bed.cloud.text("a.txt").as_deref(), Some("three"));
+}
+
+#[test]
+fn a_file_moved_in_icloud_while_a_sync_lists_is_not_read_as_removed() {
+    let bed = Bed::new();
+    bed.write("Q/c.md", "kept");
+    bed.settle();
+    let q = bed.cloud.id_at("Q").unwrap();
+    bed.cloud.file(&q, "new.txt", "new", bed.time());
+    // Out of Q, which is listed after the top, into the top, which was
+    // listed already.
+    let at = bed.cloud.0.borrow().listings + 1;
+    let moved = MidOp::Move {
+        id: bed.cloud.id_at("Q/c.md").unwrap(),
+        parent: Some(ROOT_ID.into()),
+        name: "m.md".into(),
+    };
+    bed.cloud.0.borrow_mut().mid_listing = Some((at, moved));
+    bed.settle();
+    assert!(bed.cloud.0.borrow().mid_fired.is_some());
+    assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
+    assert_eq!(bed.read("m.md").as_deref(), Some("kept"));
+    assert_eq!(bed.local_paths(), ["Q", "Q/new.txt", "m.md"]);
+}
+
+#[test]
+fn a_file_removed_here_and_edited_in_icloud_while_a_sync_runs_comes_back() {
+    let bed = Bed::new();
+    bed.write("a.txt", "one");
+    bed.write("b.txt", "two");
+    bed.settle();
+    bed.write("a.txt", "uno");
+    fs::remove_file(bed.root().join("b.txt")).unwrap();
+    // Another device saves b.txt after the sync listed iCloud, before it
+    // sends the removal (here, while a.txt goes up).
+    let at = bed.cloud.0.borrow().listings + 1;
+    let edit = MidOp::Edit {
+        id: bed.cloud.id_at("b.txt").unwrap(),
+        text: "edited".into(),
+        mtime_ms: bed.time(),
+    };
+    bed.cloud.0.borrow_mut().mid_listing = Some((at, edit));
+    bed.sync();
+    assert!(bed.cloud.0.borrow().mid_fired.is_some());
+    bed.settle();
+    assert!(bed.cloud.trashed_texts().is_empty(), "{:?}", bed.cloud.trashed_texts());
+    assert_eq!(bed.read("b.txt").as_deref(), Some("edited"));
+}
+
+#[test]
+fn a_file_renamed_on_each_side_to_the_name_both_removed_keeps_both_and_removes_neither() {
+    let bed = Bed::new();
+    bed.write("a.txt", "mine");
+    bed.write("c.md", "theirs");
+    bed.write("d", "gone");
+    bed.settle();
+    fs::remove_file(bed.root().join("d")).unwrap();
+    bed.cloud.remove(&bed.cloud.id_at("d").unwrap());
+    fs::rename(bed.root().join("a.txt"), bed.root().join("d")).unwrap();
+    bed.cloud.rename_item(&bed.cloud.id_at("c.md").unwrap(), "d");
+    bed.sync();
+    bed.settle();
+    assert_eq!(bed.cloud.trashed_texts(), ["gone"]);
+    assert!(bed.trashed_here().is_empty(), "{:?}", bed.trashed_here());
+    let mut texts: Vec<String> = bed.local_tree().into_values().flatten().collect();
+    texts.sort();
+    assert_eq!(texts, ["mine", "theirs"]);
 }

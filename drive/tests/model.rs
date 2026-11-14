@@ -13,6 +13,15 @@
 //! After one that was refused something or stopped, the last two hold, and
 //! every such text is still on one side or the other.
 //!
+//! Widened (in every case but the named regressions) to what the in-memory
+//! Drive cannot know of the real one: a rename or move that keeps the
+//! item's etag or not, listings in any order, a refused move answered in
+//! three ways; and to more of what people do: a change made by another
+//! device while a sync is listing, a file saved here while it downloads, a
+//! listing that fails, names iCloud never takes or that cannot be files
+//! here, a folder made and removed on one side between syncs, one made or
+//! removed on both sides, and many files in one folder.
+//!
 //! Seeded and bounded; a failure prints its seed and the steps.
 //! `ICLOUD_DRIVE_MODEL_CASES=n` runs more cases, `ICLOUD_DRIVE_MODEL_SEED=s`
 //! one case.
@@ -24,7 +33,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use common::Bed;
+use common::{Bed, MidOp};
 use icloud_drive::crash;
 use icloud_drive::remote::{ROOT_ID, Remote};
 
@@ -81,9 +90,26 @@ fn is_under(path: &str, dir: &str) -> bool {
     path == dir || path.starts_with(&format!("{dir}/"))
 }
 
+/// Never taken by iCloud, for anything.
+const NEVER: &str = "nope.txt";
+
+/// Whether a path is one both sides are expected to hold alike: not one of
+/// a name iCloud never takes, or that cannot be a file here.
+fn synced(path: &str) -> bool {
+    !path.split('/').any(|n| n.contains(':') || n.to_lowercase() == NEVER)
+}
+
 struct Model {
     bed: Bed,
     rng: Rng,
+    /// The widened model's own choices, so `rng` makes the same ones as
+    /// before for the cases it found its regressions in.
+    extra: Option<Rng>,
+    /// Names handed out once.
+    fresh: u32,
+    /// The texts a change during a sync would write.
+    mid_text: Option<String>,
+    saved_text: Option<String>,
     texts: u32,
     /// Every text ever written.
     written: Vec<String>,
@@ -106,12 +132,30 @@ impl Model {
     }
 
     fn text(&mut self) -> String {
+        let text = self.unwritten_text();
+        self.written.push(text.clone());
+        text
+    }
+
+    /// A new text, not yet counted as written.
+    fn unwritten_text(&mut self) -> String {
         self.texts += 1;
         // Mostly one size, so edits of the same size are common.
         let pad = if self.rng.below(4) == 0 { "++" } else { "" };
-        let text = format!("t{:04}{pad}", self.texts);
-        self.written.push(text.clone());
-        text
+        format!("t{:04}{pad}", self.texts)
+    }
+
+    fn extra(&mut self, n: usize) -> Option<usize> {
+        self.extra.as_mut().map(|r| r.below(n))
+    }
+
+    fn fresh_name(&mut self, is_dir: bool) -> String {
+        self.fresh += 1;
+        if is_dir {
+            format!("M{}", self.fresh)
+        } else {
+            format!("m{}.txt", self.fresh)
+        }
     }
 
     /// Whether `paths` (to be created, from `old` if moved) would differ
@@ -326,6 +370,221 @@ impl Model {
         (parent(&from) != dir && self.move_item(side, &from, &to)).then(|| format!("move {from} to {to}"))
     }
 
+    /// A file of a name iCloud never takes (made here), or one that cannot
+    /// be a file here (either side).
+    fn create_odd(&mut self, side: Side) -> Option<String> {
+        let dir = self.rng.pick(&self.dirs(side))?.clone();
+        let names: &[&str] = match side {
+            Side::Here => &["x:y.txt", NEVER],
+            Side::There => &["x:y.txt"],
+        };
+        let path = self.free_name(side, &dir, names)?;
+        let text = self.text();
+        match side {
+            Side::Here => self.bed.write(&path, &text),
+            Side::There => {
+                let parent = self.id(&dir);
+                self.bed.cloud.file(&parent, name_of(&path), &text, self.bed.time());
+            }
+        }
+        Some(format!("create {path} = {text}"))
+    }
+
+    /// A folder with a file in it, made and removed again before a sync.
+    fn transient(&mut self, side: Side) -> Option<String> {
+        let dir = self.rng.pick(&self.dirs(side))?.clone();
+        let path = self.free_name(side, &dir, FOLDER_NAMES)?;
+        self.mkdir(side, &path);
+        let file = join(&path, "a.txt");
+        let text = self.text();
+        match side {
+            Side::Here => {
+                self.bed.write(&file, &text);
+                fs::remove_dir_all(self.bed.root().join(&path)).unwrap();
+            }
+            Side::There => {
+                let folder = self.id(&path);
+                self.bed.cloud.file(&folder, "a.txt", &text, self.bed.time());
+                self.bed.cloud.remove(&folder);
+            }
+        }
+        self.removed.insert(text);
+        Some(format!("mkdir {path}, put {file} in it, remove {path}"))
+    }
+
+    /// A folder of one name made on both sides, a file in each maybe.
+    fn mkdir_both(&mut self) -> Option<String> {
+        let dir = self.rng.pick(&self.dirs(Side::Here))?.clone();
+        let name = self.rng.pick(FOLDER_NAMES)?;
+        let path = join(&dir, name);
+        if !self.dirs(Side::There).contains(&dir)
+            || [Side::Here, Side::There]
+                .iter()
+                .any(|s| self.tree(*s).contains_key(&path))
+            || self.clashes(&[(path.clone(), path.clone())])
+        {
+            return None;
+        }
+        for side in [Side::Here, Side::There] {
+            self.mkdir(side, &path);
+        }
+        if self.rng.below(2) == 0 {
+            for side in [Side::Here, Side::There] {
+                let file = join(&path, "a.txt");
+                let text = self.text();
+                match side {
+                    Side::Here => self.bed.write(&file, &text),
+                    Side::There => {
+                        let folder = self.id(&path);
+                        self.bed.cloud.file(&folder, "a.txt", &text, self.bed.time());
+                    }
+                }
+            }
+        }
+        Some(format!("mkdir {path} on both sides"))
+    }
+
+    /// The same path removed on both sides.
+    fn remove_both(&mut self) -> Option<String> {
+        let there = self.tree(Side::There);
+        let both: Vec<String> = self
+            .tree(Side::Here)
+            .into_keys()
+            .filter(|p| there.contains_key(p))
+            .collect();
+        let path = self.rng.pick(&both)?.clone();
+        for side in [Side::Here, Side::There] {
+            let gone = self.texts_below(side, &path);
+            self.removed.extend(gone);
+            match side {
+                Side::Here => {
+                    let full = self.bed.root().join(&path);
+                    if full.is_dir() {
+                        fs::remove_dir_all(full).unwrap()
+                    } else {
+                        fs::remove_file(full).unwrap()
+                    }
+                }
+                Side::There => self.bed.cloud.remove(&self.id(&path)),
+            }
+        }
+        Some(format!("remove {path} on both sides"))
+    }
+
+    /// Many files in one new folder.
+    fn many(&mut self, side: Side) -> Option<String> {
+        let dir = self.rng.pick(&self.dirs(side))?.clone();
+        let path = self.free_name(side, &dir, FOLDER_NAMES)?;
+        self.mkdir(side, &path);
+        let n = 21 + self.rng.below(10);
+        for i in 0..n {
+            let text = self.text();
+            let name = format!("f{i:02}");
+            match side {
+                Side::Here => self.bed.write(&join(&path, &name), &text),
+                Side::There => {
+                    let folder = self.id(&path);
+                    self.bed.cloud.file(&folder, &name, &text, self.bed.time());
+                }
+            }
+        }
+        Some(format!("mkdir {path} with {n} files"))
+    }
+
+    fn step_extra(&mut self) -> Option<String> {
+        let side = if self.rng.below(2) == 0 {
+            Side::Here
+        } else {
+            Side::There
+        };
+        let what = match self.extra(40)? {
+            0..=3 => self.create_odd(side),
+            4 | 5 => self.transient(side),
+            6 | 7 => self.mkdir_both().map(|s| format!("{s} (both)")),
+            8 | 9 => self.remove_both().map(|s| format!("{s} (both)")),
+            10 => self.many(side),
+            _ => None,
+        }?;
+        Some(format!("{side:?}: {what}"))
+    }
+
+    /// A change another device makes in iCloud while the next sync lists.
+    fn mid_listing(&mut self) -> Option<(MidOp, String)> {
+        let (path, is_dir) = self.some_item(Side::There)?;
+        let id = self.id(&path);
+        Some(match self.extra(3)? {
+            0 if !is_dir => {
+                let text = self.unwritten_text();
+                let mtime_ms = self.bed.time();
+                self.mid_text = Some(text.clone());
+                (MidOp::Edit { id, text, mtime_ms }, format!("edit {path}"))
+            }
+            1 => (MidOp::Remove { id }, format!("remove {path}")),
+            _ => {
+                let to = self.rng.pick(&self.dirs(Side::There))?.clone();
+                let parent = (self.rng.below(2) == 0).then(|| self.id(&to));
+                let name = self.fresh_name(is_dir);
+                let shown = match &parent {
+                    Some(_) => format!("move {path} to {}", join(&to, &name)),
+                    None => format!("rename {path} to {name}"),
+                };
+                (MidOp::Move { id, parent, name }, shown)
+            }
+        })
+    }
+
+    /// Sets up what may happen while the next sync runs; whether any of it
+    /// did is told by [`Model::during_done`].
+    fn during(&mut self, stopped: bool) {
+        if self.extra(4) == Some(0)
+            && let Some((op, shown)) = self.mid_listing()
+        {
+            let at = self.bed.cloud.0.borrow().listings + self.rng.below(6);
+            self.log.push(format!("  (iCloud, while listing: {shown})"));
+            self.bed.cloud.0.borrow_mut().mid_listing = Some((at, op));
+        }
+        if self.extra(4) == Some(0) {
+            let text = self.unwritten_text();
+            let mtime_ms = self.bed.time();
+            self.log
+                .push(format!("  (here, while a file comes down: save it as {text})"));
+            self.saved_text = Some(text.clone());
+            self.bed.cloud.0.borrow_mut().during_download = Some((text, mtime_ms));
+        }
+        if self.extra(10) == Some(0) && !stopped {
+            let at = self.bed.cloud.0.borrow().listings + self.rng.below(6);
+            self.log.push("  (a listing fails)".into());
+            self.bed.cloud.0.borrow_mut().fail_listing_at = Some(at);
+        }
+    }
+
+    /// Whether what [`Model::during`] set up happened, counted if so.
+    fn during_done(&mut self) -> bool {
+        let mut c = self.bed.cloud.0.borrow_mut();
+        // What did not come to pass by the end of the sync never will.
+        (c.mid_listing, c.during_download, c.fail_listing_at) = (None, None, None);
+        let (fired, edited) = (c.mid_fired.take(), c.download_edited.take());
+        drop(c);
+        let mut happened = false;
+        if let Some(removed) = fired {
+            happened = true;
+            self.log.push("  (it happened while listing)".into());
+            self.removed.extend(removed);
+            if let Some(text) = self.mid_text.take() {
+                self.written.push(text);
+            }
+        }
+        if let Some(old) = edited {
+            happened = true;
+            self.log.push("  (it was saved while it came down)".into());
+            self.removed.extend(old);
+            self.written.extend(self.saved_text.take());
+        }
+        self.mid_text = None;
+        self.saved_text = None;
+        happened
+    }
+
     fn step(&mut self) -> Option<String> {
         let side = if self.rng.below(2) == 0 {
             Side::Here
@@ -389,7 +648,11 @@ impl Model {
     /// What holds after a sync that ran to the end with nothing refused.
     fn check_settled(&self) -> Result<(), String> {
         self.check_always(false)?;
-        let (here, there) = (self.tree(Side::Here), self.tree(Side::There));
+        let only_synced = |mut tree: Tree| {
+            tree.retain(|p, _| synced(p));
+            tree
+        };
+        let (here, there) = (only_synced(self.tree(Side::Here)), only_synced(self.tree(Side::There)));
         if here != there {
             let diff: Vec<String> = here
                 .iter()
@@ -406,7 +669,7 @@ impl Model {
         }
         let again = self.bed.try_sync(true).map_err(|e| format!("the sync after: {e}"))?;
         self.bed.started.borrow_mut().clear();
-        if !again.done.is_empty() || !again.problems.is_empty() {
+        if !again.done.is_empty() || !never_problems(&again.problems) {
             return Err(format!(
                 "the sync after did {:?}, failed {:?}",
                 again.done, again.problems
@@ -417,6 +680,7 @@ impl Model {
 
     fn sync(&mut self) -> Result<(), String> {
         let kind = self.rng.below(8);
+        self.during(kind == 2 || kind == 3);
         let (what, refused) = match kind {
             0 => {
                 self.bed.cloud.0.borrow_mut().refuses_moves = true;
@@ -432,12 +696,29 @@ impl Model {
         };
         let at = self.rng.below(80);
         let result = if kind == 2 || kind == 3 {
-            let stopped = common::crash_at(&self.bed, true, || crash::arm(Some(at)));
-            self.log.push(match stopped {
-                Some(point) => format!("sync, stopped at {point} (point {at})"),
-                None => format!("sync (point {at} not reached)"),
-            });
-            Ok(stopped.is_some())
+            common::quiet();
+            crash::arm(Some(at));
+            let result = catch_unwind(AssertUnwindSafe(|| self.bed.try_sync(true)));
+            crash::disarm();
+            let fired = self.bed.cloud.0.borrow().mid_fired.is_some();
+            match result {
+                Ok(Ok(_)) => {
+                    self.log.push(format!("sync (point {at} not reached)"));
+                    Ok(false)
+                }
+                Ok(Err(e)) if fired => {
+                    self.log.push(format!("sync failed: {e}"));
+                    Ok(true)
+                }
+                Ok(Err(e)) => Err(format!("the sync failed: {e}")),
+                Err(payload) => match payload.downcast_ref::<crash::Crash>() {
+                    Some(point) => {
+                        self.log.push(format!("sync, stopped at {} (point {at})", point.0));
+                        Ok(true)
+                    }
+                    None => std::panic::resume_unwind(payload),
+                },
+            }
         } else {
             self.log.push(format!(
                 "{what}{}",
@@ -450,15 +731,25 @@ impl Model {
             if let Ok(outcome) = &outcome {
                 self.log.extend(outcome.problems.iter().map(|l| format!("    ! {l}")));
             }
+            let listing_failed = {
+                let c = self.bed.cloud.0.borrow();
+                c.fail_listing_at.is_some_and(|at| c.listings > at)
+            };
+            let disturbed = listing_failed || self.bed.cloud.0.borrow().mid_fired.is_some();
             match outcome {
-                Ok(outcome) if !refused && !outcome.problems.is_empty() => {
+                Ok(outcome) if !refused && !disturbed && !never_problems(&outcome.problems) => {
                     Err(format!("problems: {:?}", outcome.problems))
                 }
-                Ok(_) => Ok(refused),
+                Ok(_) => Ok(refused || disturbed),
+                Err(_) if disturbed => Ok(true),
                 Err(e) => Err(format!("the sync failed: {e}")),
             }
         };
         self.log_started();
+        let result = match (self.during_done(), result) {
+            (true, Ok(_)) => Ok(true),
+            (_, result) => result,
+        };
         {
             let mut c = self.bed.cloud.0.borrow_mut();
             c.refuses_moves = false;
@@ -473,10 +764,28 @@ impl Model {
     }
 }
 
-fn run_case(seed: u64) -> Result<(), (String, Vec<String>)> {
+/// Whether every problem is with a name iCloud never takes.
+fn never_problems(problems: &[String]) -> bool {
+    problems.iter().all(|p| p.to_lowercase().contains(NEVER))
+}
+
+fn run_case(seed: u64, widened: bool) -> Result<(), (String, Vec<String>)> {
+    let bed = Bed::new();
+    let mut extra = widened.then_some(Rng(seed ^ 0x005e_ed0f_d21e));
+    if let Some(extra) = &mut extra {
+        let mut c = bed.cloud.0.borrow_mut();
+        c.moves_keep_etag = extra.below(2) == 0;
+        c.shuffle = (extra.below(2) == 0).then(|| extra.next());
+        c.refusal = extra.below(3) as u8;
+        c.never_names = vec![NEVER.to_string()];
+    }
     let mut model = Model {
-        bed: Bed::new(),
+        bed,
         rng: Rng(seed),
+        extra,
+        fresh: 0,
+        mid_text: None,
+        saved_text: None,
         texts: 0,
         written: Vec::new(),
         removed: HashSet::new(),
@@ -487,6 +796,9 @@ fn run_case(seed: u64) -> Result<(), (String, Vec<String>)> {
             if model.rng.below(4) == 0 {
                 model.sync()?;
             } else if let Some(step) = model.step() {
+                model.log.push(step);
+            }
+            if let Some(step) = model.step_extra() {
                 model.log.push(step);
             }
         }
@@ -525,7 +837,7 @@ fn run_part(part: u64) {
     };
     let mut failed = Vec::new();
     for seed in seeds {
-        if let Err((why, log)) = run_case(seed) {
+        if let Err((why, log)) = run_case(seed, true) {
             eprintln!("seed {seed}: {why}\n  {}", log.join("\n  "));
             failed.push(seed);
         }
@@ -557,7 +869,11 @@ fn random_changes_on_both_sides_always_sync_to_the_same_files_3() {
 /// here to the name of a folder new in iCloud, or moved here into a new
 /// folder of its own old name.
 fn regression(seed: u64) {
-    if let Err((why, log)) = run_case(seed) {
+    regression_of(seed, false)
+}
+
+fn regression_of(seed: u64, widened: bool) {
+    if let Err((why, log)) = run_case(seed, widened) {
         panic!("seed {seed}: {why}\n  {}", log.join("\n  "));
     }
 }
@@ -590,4 +906,19 @@ fn seed_11883_a_folder_moved_here_into_one_renamed_to_its_old_name() {
 #[test]
 fn seed_20614_a_folder_moved_here_into_a_new_folder_of_its_old_name() {
     regression(20614);
+}
+
+/// Seeds of the widened model.
+fn widened(seed: u64) {
+    regression_of(seed, true)
+}
+
+#[test]
+fn seed_5791_a_move_here_stopped_as_it_was_recorded_then_an_edit() {
+    widened(5791);
+}
+
+#[test]
+fn seed_16435_a_file_renamed_here_to_the_name_one_takes_in_icloud() {
+    widened(16435);
 }

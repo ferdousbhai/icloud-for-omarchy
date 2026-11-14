@@ -54,6 +54,9 @@ const FREE_DELETIONS: usize = 20;
 /// Folders the change feed does not name are trusted from the last listing
 /// for this long, then everything is listed again.
 const FULL_LISTING_EVERY_MS: i64 = 6 * 3600 * 1000;
+/// Passes over the folders one listing takes at most while iCloud changes
+/// under it.
+const LISTING_TRIES: usize = 3;
 
 /// What a sync did.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -166,6 +169,12 @@ impl<R: Remote> Engine<'_, R> {
     /// above them), and any whose etag differs from the last listing. The
     /// rest come from that last listing. Every few hours, and whenever the
     /// feed starts over, everything is listed.
+    ///
+    /// The folders are listed one by one, so a change another device makes
+    /// meanwhile can show half (an item moved out of a folder not listed
+    /// yet into one that was is in neither, and would read as removed):
+    /// the feed is asked again after, and while it names anything new the
+    /// folders are listed again, a few times at most.
     fn crawl(&mut self) -> Result<Vec<Node>> {
         let fresh_enough = self
             .state
@@ -175,7 +184,7 @@ impl<R: Remote> Engine<'_, R> {
         let token = self.state.meta("feed_token")?;
         // Asked before listing, so a change made while listing is named
         // again next time rather than missed.
-        let (changes, trust_cache) = match self.remote.changes(token.as_deref()) {
+        let (mut changes, trust_cache) = match self.remote.changes(token.as_deref()) {
             Ok(changes) => (changes, fresh_enough && token.is_some()),
             Err(remote::Error::FeedReset) => (self.remote.changes(None)?, false),
             Err(e) => return Err(e.into()),
@@ -185,10 +194,41 @@ impl<R: Remote> Engine<'_, R> {
         } else {
             Vec::new()
         };
+        let mut tries = 0;
+        let out = loop {
+            tries += 1;
+            let listed = self.list_below(&cached, &changes);
+            if tries == LISTING_TRIES {
+                break listed?;
+            }
+            // A feed that cannot say leaves the listing as it is (the next
+            // sync starts from the token kept below, or over).
+            let Ok(after) = self.remote.changes(Some(&changes.token)) else {
+                break listed?;
+            };
+            if after.folders.is_empty() && after.files.is_empty() {
+                break listed?;
+            }
+            changes.folders.extend(after.folders);
+            changes.files.extend(after.files);
+            changes.token = after.token;
+        };
+        if !trust_cache {
+            self.state.set_meta("full_listing_ms", &now_ms().to_string())?;
+        }
+        self.state.store_remote(&out)?;
+        self.state.set_meta("feed_token", &changes.token)?;
+        Ok(out)
+    }
+
+    /// One pass over the folders below the top, listing again those
+    /// `changes` names (and all above them) or whose etag is not the one in
+    /// `cached`, and taking the rest from `cached`.
+    fn list_below(&self, cached: &[Node], changes: &remote::Changes) -> Result<Vec<Node>> {
         let by_id: HashMap<&str, &Node> = cached.iter().map(|n| (n.id.as_str(), n)).collect();
         let by_docwsid: HashMap<&str, &Node> = cached.iter().map(|n| (n.docwsid.as_str(), n)).collect();
         let mut children: HashMap<&str, Vec<&Node>> = HashMap::new();
-        for node in &cached {
+        for node in cached {
             children.entry(node.parent.as_str()).or_default().push(node);
         }
         // Folders to list whatever their etag says: each one the feed
@@ -236,11 +276,6 @@ impl<R: Remote> Engine<'_, R> {
                 out.push(kid);
             }
         }
-        if !trust_cache {
-            self.state.set_meta("full_listing_ms", &now_ms().to_string())?;
-        }
-        self.state.store_remote(&out)?;
-        self.state.set_meta("feed_token", &changes.token)?;
         Ok(out)
     }
 
@@ -470,17 +505,23 @@ impl<R: Remote> Engine<'_, R> {
         })?)
     }
 
-    /// Records a moved item at `to`: named and placed as iCloud has it
-    /// now, with the content both sides were in step with before the move
-    /// (the size and date in iCloud, the stamp here), so an edit made on
-    /// either side since still shows as one in the next round.
+    /// Records a moved item at `to`, with what was below it: named and
+    /// placed as iCloud has it now, with the content both sides were in
+    /// step with before the move (the size and date in iCloud, the stamp
+    /// here), so an edit made on either side since still shows as one in
+    /// the next round.
     fn put_moved(&self, node: Node, to: &str, row: &Row) -> Result<()> {
         let node = Node {
             size: row.node.size,
             mtime_ms: row.node.mtime_ms,
             ..node
         };
-        self.put(node, to, row.local)
+        let moved = Row {
+            node,
+            path: to.to_string(),
+            local: row.local,
+        };
+        Ok(self.state.move_paths(&row.path, &moved)?)
     }
 
     /// The answer to one request of a move. When iCloud refused it and the
@@ -516,13 +557,30 @@ impl<R: Remote> Engine<'_, R> {
         }
     }
 
-    /// The item as its folder's listing has it now: the sizes and dates
-    /// every later comparison is made against.
-    fn listed(&self, parent_id: &str, id: &str) -> Result<Node> {
+    /// The file just `sent` as its folder's listing has it now: the size
+    /// and date every later comparison is made against. Unless the listing
+    /// shows another version than the one iCloud answered for (another
+    /// device changed it right after): then with the size, date and etag
+    /// of that answer, so that the next round sees the change and fetches
+    /// it, rather than take it for what is here.
+    fn listed(&self, parent_id: &str, sent: &Node) -> Result<Node> {
         let (_, kids) = self.remote.list(parent_id)?;
-        kids.into_iter()
-            .find(|k| k.id == id)
-            .ok_or_else(|| Error::Remote(remote::Error::Api("the item is not in its folder's listing".into())))
+        let listed = kids
+            .into_iter()
+            .find(|k| k.id == sent.id)
+            .ok_or_else(|| Error::Remote(remote::Error::Api("the item is not in its folder's listing".into())))?;
+        // An answer's etag or date may not be spelled as a listing's: the
+        // same size and date, or the same etag, is the same version.
+        let same_content = listed.size == sent.size && (listed.mtime_ms - sent.mtime_ms).abs() <= plan::SAME_TIME_MS;
+        if listed.etag == sent.etag || same_content {
+            return Ok(listed);
+        }
+        Ok(Node {
+            size: sent.size,
+            mtime_ms: sent.mtime_ms,
+            etag: sent.etag.clone(),
+            ..listed
+        })
     }
 
     /// Whether something beside `path` (but `except`) has its name in
@@ -586,7 +644,6 @@ impl<R: Remote> Engine<'_, R> {
                     }
                     crash::point("local.rename");
                 }
-                self.state.move_paths(&row.path, to)?;
                 self.put_moved(node, to, &row)?;
                 self.state.clear_pending_move(id)?;
             }
@@ -616,7 +673,6 @@ impl<R: Remote> Engine<'_, R> {
                     node = self.unless_refused(self.remote.rename(&node, name_of(to)), id, untouched)?;
                     crash::point("remote.rename");
                 }
-                self.state.move_paths(&row.path, to)?;
                 self.put_moved(node, to, &row)?;
                 self.state.clear_pending_move(id)?;
             }
@@ -633,7 +689,6 @@ impl<R: Remote> Engine<'_, R> {
                     crash::point("remote.rename");
                 }
                 // Where it is here, with the move to finish noted.
-                self.state.move_paths(&row.path, to)?;
                 self.put_moved(node, to, &row)?;
             }
             Op::SetAside { path } => {
@@ -734,7 +789,7 @@ impl<R: Remote> Engine<'_, R> {
                     path,
                 )?;
                 crash::point("remote.upload_new");
-                let node = self.listed(&parent.id, &sent.id)?;
+                let node = self.listed(&parent.id, &sent)?;
                 // Recorded as it was before the upload: a change made while
                 // it was going up shows as a change next time.
                 self.put(node, path, before)?;
@@ -762,7 +817,7 @@ impl<R: Remote> Engine<'_, R> {
                 };
                 self.put(answered, path, before)?;
                 self.state.clear_sending(path)?;
-                let node = self.listed(&row.node.parent, &sent.id)?;
+                let node = self.listed(&row.node.parent, &sent)?;
                 self.put(node, path, before)?;
             }
             Op::TrashLocal { id, path } => {
@@ -804,7 +859,16 @@ impl<R: Remote> Engine<'_, R> {
                     // It is back.
                     return Ok(false);
                 }
-                self.remote.trash(&node_of(id).unwrap_or(row.node))?;
+                // As iCloud has it now, not when it was listed: an edit made
+                // there since (its etag, or for a folder something added,
+                // removed or resized below it) beats the removal, which the
+                // next round sees. So does a move.
+                let node = node_of(id).unwrap_or(row.node);
+                let (_, kids) = self.remote.list(&node.parent)?;
+                if !kids.iter().any(|k| k.id == node.id && k.etag == node.etag) {
+                    return Ok(false);
+                }
+                self.remote.trash(&node)?;
                 crash::point("remote.trash");
                 self.state.forget_under(path)?;
             }

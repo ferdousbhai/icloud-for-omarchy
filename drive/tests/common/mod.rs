@@ -43,6 +43,46 @@ pub struct Cloud {
     /// The change feed: (is a folder, docwsid, parent docwsid).
     pub feed: Vec<(bool, String, String)>,
     pub feed_expired: bool,
+    // What was not measured of the real Drive, so the model tries both ways.
+    /// A rename or a move leaves the item's own etag as it was.
+    pub moves_keep_etag: bool,
+    /// Listings come in an order of this seed's making, not by name.
+    pub shuffle: Option<u64>,
+    /// How a refused move or rename is answered: 0 a status that is not
+    /// `OK`, 1 an HTTP 400, 2 an answer with no status.
+    pub refusal: u8,
+    /// Names iCloud never takes, for anything.
+    pub never_names: Vec<String>,
+    /// The listing of this number (counting from 0 in `listings`) fails.
+    pub fail_listing_at: Option<usize>,
+    /// Done to iCloud by another device when `listings` reaches the number.
+    pub mid_listing: Option<(usize, MidOp)>,
+    /// What `mid_listing` did: the texts it removed, and whether it ran.
+    pub mid_fired: Option<Vec<String>>,
+    /// Written here by the person while a download is under way: the text
+    /// and its date, at the name of the file coming down.
+    pub during_download: Option<(String, i64)>,
+    /// What `during_download` did: the text it replaced, if any.
+    pub download_edited: Option<Option<String>>,
+}
+
+/// A change another device makes while a sync is listing.
+#[derive(Debug, Clone)]
+pub enum MidOp {
+    Edit {
+        id: String,
+        text: String,
+        mtime_ms: i64,
+    },
+    Remove {
+        id: String,
+    },
+    /// Into `parent` (none: where it is) under `name`.
+    Move {
+        id: String,
+        parent: Option<String>,
+        name: String,
+    },
 }
 
 pub fn docwsid_of(id: &str) -> String {
@@ -58,9 +98,22 @@ impl Cloud {
             return Err(icloud_session::Error::Offline("no network".into()).into());
         }
         if self.refuses_moves {
-            return Err(remote::Error::Refused("the rename refused: NAME_NOT_ALLOWED".into()));
+            return Err(self.refused("NAME_NOT_ALLOWED"));
         }
         Ok(())
+    }
+
+    /// A refused rename, move or new folder, answered as `refusal` says.
+    pub fn refused(&self, why: &str) -> remote::Error {
+        match self.refusal {
+            1 => icloud_session::Error::Http {
+                status: 400,
+                body: why.into(),
+            }
+            .into(),
+            2 => remote::Error::Api("the move answered with no status".into()),
+            _ => remote::Error::Refused(format!("refused: {why}")),
+        }
     }
 
     /// iCloud refuses to put anything in a folder that is gone.
@@ -72,10 +125,111 @@ impl Cloud {
     }
 
     pub fn may_name(&self, name: &str) -> remote::Result<()> {
-        if self.refused_names.iter().any(|n| n == name) {
-            return Err(remote::Error::Refused("refused: NAME_NOT_ALLOWED".into()));
+        if self.refused_names.iter().chain(&self.never_names).any(|n| n == name) {
+            return Err(self.refused("NAME_NOT_ALLOWED"));
         }
         Ok(())
+    }
+
+    pub fn edit(&mut self, id: &str, bytes: &[u8], mtime_ms: i64) {
+        self.content.insert(id.to_string(), bytes.to_vec());
+        let node = self.nodes.get_mut(id).unwrap();
+        let resized = node.size != bytes.len() as u64;
+        node.size = bytes.len() as u64;
+        node.mtime_ms = mtime_ms;
+        if resized {
+            self.touch(id)
+        } else {
+            self.touch_item(id)
+        }
+        // A content edit is a documentContent record, which names no parent.
+        self.feed.last_mut().unwrap().2.clear();
+    }
+
+    pub fn rename_item(&mut self, id: &str, name: &str) {
+        self.nodes.get_mut(id).unwrap().name = name.to_string();
+        if self.moves_keep_etag {
+            self.note(id)
+        } else {
+            self.touch_item(id)
+        }
+    }
+
+    pub fn move_item(&mut self, id: &str, parent_id: &str) {
+        let old = self.nodes[id].parent.clone();
+        self.nodes.get_mut(id).unwrap().parent = parent_id.to_string();
+        self.touch(&old);
+        if self.moves_keep_etag {
+            self.note(id);
+            self.touch(parent_id);
+        } else {
+            self.touch(id);
+        }
+    }
+
+    /// Whether `id` may go into `parent` under `name`: the folder is there,
+    /// is not the item or below it, and holds nothing of that name.
+    pub fn may_go(&self, id: &str, parent: &str, name: &str) -> bool {
+        let mut at = parent.to_string();
+        while let Some(n) = self.nodes.get(&at) {
+            if n.id == id {
+                return false;
+            }
+            at = n.parent.clone();
+        }
+        (parent == ROOT_ID || self.nodes.get(parent).is_some_and(|n| n.kind == Kind::Folder))
+            && !self
+                .nodes
+                .values()
+                .any(|n| n.parent == parent && n.id != id && n.name.to_lowercase() == name.to_lowercase())
+    }
+
+    /// Carries out `mid_listing` once its listing is reached.
+    fn mid_listing(&mut self) {
+        let Some((at, op)) = self.mid_listing.clone() else {
+            return;
+        };
+        if self.listings < at {
+            return;
+        }
+        self.mid_listing = None;
+        let removed = match op {
+            MidOp::Edit { id, text, mtime_ms } => match self.nodes.get(&id) {
+                Some(n) if n.kind == Kind::File => {
+                    let old = String::from_utf8(self.content[&id].clone()).unwrap();
+                    self.edit(&id, text.as_bytes(), mtime_ms);
+                    vec![old]
+                }
+                _ => return,
+            },
+            MidOp::Remove { id } => {
+                if !self.nodes.contains_key(&id) {
+                    return;
+                }
+                let before = self.trashed.len();
+                self.remove(&id);
+                self.trashed[before..]
+                    .iter()
+                    .filter_map(|t| self.content.get(t))
+                    .map(|b| String::from_utf8(b.clone()).unwrap())
+                    .collect()
+            }
+            MidOp::Move { id, parent, name } => {
+                let Some(node) = self.nodes.get(&id) else {
+                    return;
+                };
+                let parent = parent.unwrap_or_else(|| node.parent.clone());
+                if !self.may_go(&id, &parent, &name) {
+                    return;
+                }
+                if self.nodes[&id].parent != parent {
+                    self.move_item(&id, &parent);
+                }
+                self.rename_item(&id, &name);
+                Vec::new()
+            }
+        };
+        self.mid_fired = Some(removed);
     }
 
     pub fn tick(&mut self) -> u64 {
@@ -191,24 +345,10 @@ impl Fake {
         self.0.borrow_mut().add(parent, name, Kind::Folder, b"", 0)
     }
     pub fn edit(&self, id: &str, text: &str, mtime_ms: i64) {
-        let mut c = self.0.borrow_mut();
-        c.content.insert(id.to_string(), text.as_bytes().to_vec());
-        let node = c.nodes.get_mut(id).unwrap();
-        let resized = node.size != text.len() as u64;
-        node.size = text.len() as u64;
-        node.mtime_ms = mtime_ms;
-        if resized {
-            c.touch(id)
-        } else {
-            c.touch_item(id)
-        }
-        // A content edit is a documentContent record, which names no parent.
-        c.feed.last_mut().unwrap().2.clear();
+        self.0.borrow_mut().edit(id, text.as_bytes(), mtime_ms);
     }
     pub fn rename_item(&self, id: &str, name: &str) {
-        let mut c = self.0.borrow_mut();
-        c.nodes.get_mut(id).unwrap().name = name.to_string();
-        c.touch_item(id);
+        self.0.borrow_mut().rename_item(id, name);
     }
     pub fn remove(&self, id: &str) {
         self.0.borrow_mut().remove(id);
@@ -295,12 +435,16 @@ impl Remote for Fake {
     }
     fn list(&self, folder_id: &str) -> remote::Result<(Node, Vec<Node>)> {
         let mut c = self.0.borrow_mut();
+        c.mid_listing();
         c.listings += 1;
         let gone = || remote::Error::Listing {
             id: folder_id.to_string(),
             status: "ID_INVALID".into(),
         };
-        if c.broken_listing.as_deref() == Some(folder_id) || std::mem::take(&mut c.listing_fails_once) {
+        if c.broken_listing.as_deref() == Some(folder_id)
+            || std::mem::take(&mut c.listing_fails_once)
+            || c.fail_listing_at.is_some_and(|at| c.listings == at + 1)
+        {
             return Err(gone());
         }
         let folder = if folder_id == ROOT_ID {
@@ -310,6 +454,14 @@ impl Remote for Fake {
         };
         let mut kids: Vec<Node> = c.nodes.values().filter(|n| n.parent == folder_id).cloned().collect();
         kids.sort_by(|a, b| a.name.cmp(&b.name));
+        if let Some(seed) = c.shuffle {
+            let n = c.listings as u64;
+            kids.sort_by_key(|k| {
+                let mut h = std::hash::DefaultHasher::new();
+                std::hash::Hash::hash(&(seed, n, &k.id), &mut h);
+                std::hash::Hasher::finish(&h)
+            });
+        }
         Ok((folder, kids))
     }
     fn create_folder(&self, parent_id: &str, name: &str) -> remote::Result<Node> {
@@ -321,7 +473,7 @@ impl Remote for Fake {
     fn upload_new(&self, parent: &Node, name: &str, path: &Path, mtime_ms: i64) -> remote::Result<Node> {
         let bytes = fs::read(path)?;
         let mut c = self.0.borrow_mut();
-        if c.refused_names.iter().any(|n| n == name) {
+        if c.refused_names.iter().chain(&c.never_names).any(|n| n == name) {
             return Err(remote::Error::Api("upload refused: NAME_NOT_ALLOWED".into()));
         }
         c.parent_exists(&parent.id)?;
@@ -338,13 +490,13 @@ impl Remote for Fake {
             }
             return Err(remote::Error::Stale(node.name.clone()));
         }
+        if !c.nodes.contains_key(&node.id) {
+            return Err(remote::Error::Api("gone".into()));
+        }
         c.uploads += 1;
         c.listing_fails_once = c.listing_fails_after_replace;
         c.content.insert(node.id.clone(), bytes.clone());
-        let n = c
-            .nodes
-            .get_mut(&node.id)
-            .ok_or_else(|| remote::Error::Api("gone".into()))?;
+        let n = c.nodes.get_mut(&node.id).unwrap();
         let resized = n.size != bytes.len() as u64;
         n.size = bytes.len() as u64;
         // A replaced file gets the time of the replacement, not the one sent.
@@ -363,35 +515,38 @@ impl Remote for Fake {
         if std::mem::take(&mut c.rename_fails_once) {
             return Err(remote::Error::Refused("the rename refused: UNKNOWN".into()));
         }
-        c.nodes
-            .get_mut(&node.id)
-            .ok_or_else(|| remote::Error::Api("gone".into()))?
-            .name = name.to_string();
-        c.touch_item(&node.id);
+        if !c.nodes.contains_key(&node.id) {
+            return Err(remote::Error::Api("gone".into()));
+        }
+        c.rename_item(&node.id, name);
         Ok(c.nodes[&node.id].clone())
     }
     fn move_to(&self, node: &Node, parent_id: &str) -> remote::Result<Node> {
         let mut c = self.0.borrow_mut();
         c.may_move()?;
         if parent_id != ROOT_ID && !c.nodes.contains_key(parent_id) {
-            return Err(remote::Error::Refused("the move refused: ID_INVALID".into()));
+            return Err(c.refused("ID_INVALID"));
         }
         // Not into itself or below it.
         let mut at = parent_id.to_string();
         while let Some(n) = c.nodes.get(&at) {
             if n.id == node.id {
-                return Err(remote::Error::Refused("the move refused: INVALID_DESTINATION".into()));
+                return Err(c.refused("INVALID_DESTINATION"));
             }
             at = n.parent.clone();
         }
-        let old = c.nodes[&node.id].parent.clone();
-        c.nodes.get_mut(&node.id).unwrap().parent = parent_id.to_string();
-        c.touch(&old);
-        c.touch(&node.id);
+        c.move_item(&node.id, parent_id);
         Ok(c.nodes[&node.id].clone())
     }
     fn trash(&self, node: &Node) -> remote::Result<()> {
-        self.0.borrow_mut().remove(&node.id);
+        let mut c = self.0.borrow_mut();
+        if !c.nodes.contains_key(&node.id) {
+            return Err(remote::Error::Api(format!(
+                "moving {} to Recently Deleted refused: ID_INVALID",
+                node.name
+            )));
+        }
+        c.remove(&node.id);
         Ok(())
     }
     fn download(&self, node: &Node, dest: &Path) -> remote::Result<()> {
@@ -400,6 +555,20 @@ impl Remote for Fake {
             return Err(remote::Error::Package(node.name.clone()));
         }
         fs::write(dest, &c.content[&node.id])?;
+        drop(c);
+        // The person saves the file here while it comes down.
+        let during = self.0.borrow_mut().during_download.take();
+        if let Some((text, mtime_ms)) = during {
+            let path = dest.with_file_name(&node.name);
+            if fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+                self.0.borrow_mut().during_download = Some((text, mtime_ms));
+                return Ok(());
+            }
+            let old = fs::read_to_string(&path).ok();
+            fs::write(&path, &text)?;
+            local::set_mtime(&path, mtime_ms)?;
+            self.0.borrow_mut().download_edited = Some(old);
+        }
         Ok(())
     }
 }

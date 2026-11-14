@@ -25,7 +25,15 @@
 //!   to tell an edit that kept the size and date (only a replace from here
 //!   meets one, as a stale etag).
 //! - The `mtime` sent with a new file is kept as its `dateModified`; a
-//!   replaced file gets the time of the replacement instead.
+//!   replaced file gets the time of the replacement instead. Whether an
+//!   upload's answer spells its etag and date as a listing does was not
+//!   measured: the listing after a send is taken when either agrees, and
+//!   any other is read as a change another device made meanwhile (at
+//!   worst the same bytes come down again).
+//! - Not measured either: the order of a listing (nothing relies on it),
+//!   how a refused move is answered (a status, an HTTP error or none: each
+//!   is a problem with that one item), whether one listing can hold a very
+//!   large folder (a short one stops the sync, never reads as removals).
 //! - The upload URL is on a content host, which takes no cookies.
 
 use std::io::Write;

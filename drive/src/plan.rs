@@ -175,7 +175,7 @@ pub struct Plan {
 /// A file that changed less than this long ago may still be changing.
 const SETTLE_NS: i64 = 2_000_000_000;
 /// Clocks and file systems round: within this, two times are one time.
-const SAME_TIME_MS: i64 = 2_000;
+pub(crate) const SAME_TIME_MS: i64 = 2_000;
 
 /// The last name of a path.
 pub(crate) fn name_of(path: &str) -> &str {
@@ -640,9 +640,10 @@ fn plan_moves(base: &[Row], remote: &Snapshot, local: &BTreeMap<String, Entry>, 
                             });
                         }
                     }
-                    // Else something in step has it: left to the content
-                    // rules (this one reads as deleted here).
-                    Some(_) => {}
+                    // Else another item in step has it, on its way there
+                    // in iCloud or away from it here: this one waits for
+                    // that, and is not read as removed here meanwhile.
+                    Some(_) => held.push(row.path.clone()),
                 }
                 continue;
             }

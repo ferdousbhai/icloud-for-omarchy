@@ -74,7 +74,10 @@ Each run asks iCloud's change feed (CloudKit, container
 changed files and folders, not what changed, so the folders it names are
 listed again through the Drive web API and everything else comes from the
 last listing. Every six hours, and whenever the feed starts over,
-everything is listed. A listing that is incomplete or reports a folder as
+everything is listed. Folders are listed one at a time, so the feed is
+asked again after: while it names something new, they are listed again
+(three passes at most), and a file another device moves meanwhile is not
+read as removed. A listing that is incomplete or reports a folder as
 gone stops the run before anything is removed.
 
 The folder is scanned, and the plan is made by a pure function
