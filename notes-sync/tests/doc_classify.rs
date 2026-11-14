@@ -414,3 +414,39 @@ fn real_fixture_notes_classify_to_their_golden_markdown() {
         );
     }
 }
+
+// --- what a note's file can't hold (found by `roundtrip_property`) --------
+
+const TABLE: &str = "com.apple.notes.table";
+
+/// A table is written in its placeholder's place: text after it on the line
+/// would end its last row early, and a line after it that looks like a row
+/// would become one. Either way the file reads back as another note, and a
+/// push would send that: such a note is read-only.
+#[test]
+fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_read_only() {
+    for (text, runs) in [
+        ("\u{fffc}#", vec![info(1, Some("T1"), TABLE), styled(1, 3)]),
+        ("\u{fffc}\n|x|", vec![info(1, Some("T1"), TABLE), styled(4, 3)]),
+    ] {
+        let result = ok(classify(&titled(text, runs), TitleMode::InBody));
+        assert!(!result.publishable, "{text:?}");
+        assert!(result.unpublishable_reason.unwrap().contains("table"));
+    }
+    for (text, runs) in [
+        (
+            "Title\n\u{fffc}\nafter",
+            vec![styled(6, 0), info(1, Some("T1"), TABLE), styled(6, 3)],
+        ),
+        ("\u{fffc}\n| not a row", vec![info(1, Some("T1"), TABLE), styled(12, 3)]),
+        (
+            "x\u{fffc}#",
+            vec![styled(1, 3), info(1, Some("A1"), "public.png"), styled(1, 3)],
+        ),
+    ] {
+        assert!(
+            ok(classify(&titled(text, runs), TitleMode::InBody)).publishable,
+            "{text:?}"
+        );
+    }
+}

@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use super::embeds::{
-    AttachmentReference, EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, UNKNOWN_CONTENT_BANNER, embed_slots_of,
+    AttachmentReference, EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, UNKNOWN_CONTENT_BANNER, embed_slots_of, is_table_uti,
 };
 use super::encode::TRASH_FOLDER_RECORD_NAME;
 use super::format::{FormatParagraph, decode_note_format, trim_trailing_whitespace};
@@ -182,6 +182,11 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
     if !projection_survives(&trimmed, &rendered) {
         return unpublishable("the note's formatting doesn't survive this tool's markdown round trip".into());
     }
+    if !tables_read_back(&rendered, &base.embed_slots) {
+        return unpublishable(
+            "a table has text after it on its line, or a line after it that reads as one of its rows".into(),
+        );
+    }
     NoteDecodeResult::Ok(Box::new(DecodedNote {
         markdown_text: rendered,
         format: Some(paragraphs),
@@ -189,6 +194,35 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
         publishable: true,
         ..base
     }))
+}
+
+/// Whether every table of the note reads back from where its Markdown table
+/// is written, in place of its U+FFFC: nothing follows the placeholder on
+/// its line, which would end the table's last row early, and the line after
+/// it can't be read as one more of its rows. (A table that shares its line
+/// with what comes before it, or sits in a list, heading, quote or code,
+/// isn't found where it is written at all: push refuses that note's edits.)
+fn tables_read_back(rendered: &str, slots: &[EmbedSlot]) -> bool {
+    let is_table = |slot: usize| matches!(slots.get(slot), Some(EmbedSlot::Attachment(reference)) if is_table_uti(&reference.type_uti));
+    let reads_as_row = |line: &str| {
+        let line = line.trim();
+        line.len() >= 2 && line.starts_with('|') && line.ends_with('|')
+    };
+    let lines: Vec<&str> = rendered.split('\n').collect();
+    let mut slot = 0;
+    for (index, line) in lines.iter().enumerate() {
+        for (at, c) in line.char_indices() {
+            if c != OBJECT_REPLACEMENT_CHARACTER {
+                continue;
+            }
+            let ends_line = at + c.len_utf8() == line.len();
+            if is_table(slot) && (!ends_line || lines.get(index + 1).is_some_and(|next| reads_as_row(next))) {
+                return false;
+            }
+            slot += 1;
+        }
+    }
+    true
 }
 
 /// `isDeleted`: the record-level `deleted` flag, a non-zero `Deleted` field,
