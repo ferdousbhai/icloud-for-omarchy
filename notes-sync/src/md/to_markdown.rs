@@ -57,6 +57,8 @@ pub enum Node {
         children: Vec<Node>,
     },
     Html(W),
+    /// mdast `break`: a hard line break.
+    Break,
     Table(Vec<Node>),
     TableRow(Vec<Node>),
     TableCell(Vec<Node>),
@@ -78,7 +80,7 @@ impl Node {
             | Node::Table(c)
             | Node::TableRow(c)
             | Node::TableCell(c) => c,
-            Node::Code(_) | Node::Text(_) | Node::Html(_) => &[],
+            Node::Code(_) | Node::Text(_) | Node::Html(_) | Node::Break => &[],
         }
     }
 
@@ -723,6 +725,18 @@ impl Serializer {
             Node::Delete(_) => self.attention(node, info, "strikethrough", &w("~~")),
             Node::Link { url, children } => self.link(node, url, children),
             Node::Html(value) => value.clone(),
+            // `hardBreak`: where a line ending is unsafe (an ATX heading), a
+            // space instead.
+            Node::Break => {
+                let unsafe_eol = unsafe_patterns()
+                    .iter()
+                    .any(|pattern| pattern.character == 10 && pattern.in_scope(&self.stack));
+                match (unsafe_eol, info.before.last()) {
+                    (false, _) => w("\\\n"),
+                    (true, Some(&(9 | 32))) => W::new(),
+                    (true, _) => w(" "),
+                }
+            }
             Node::Table(rows) => {
                 self.enter("table");
                 let matrix: Vec<Vec<W>> = rows.iter().map(|row| self.table_row(row)).collect();
@@ -879,7 +893,8 @@ impl Serializer {
     /// `formatHeadingAsSetext` (the `setext` option is off).
     fn heading_as_setext(&self, node: &Node) -> bool {
         fn literal_with_break(node: &Node) -> bool {
-            node.value().is_some_and(|v| v.iter().any(|&c| c == 10 || c == 13))
+            matches!(node, Node::Break)
+                || node.value().is_some_and(|v| v.iter().any(|&c| c == 10 || c == 13))
                 || node.children().iter().any(literal_with_break)
         }
         let Node::Heading { depth, .. } = node else {

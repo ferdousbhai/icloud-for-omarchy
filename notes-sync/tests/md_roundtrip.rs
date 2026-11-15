@@ -799,3 +799,45 @@ fn markers_inside_a_fenced_code_block_are_not_nesting() {
     let quoted = format!("> ```\n{}x", ">".repeat(100_000));
     assert!(parse_note_markdown(&quoted).is_err());
 }
+
+/// A line break inside a line of body text (U+2028, Notes' Shift-Return) is
+/// a Markdown hard line break (`\` then the line ending), in a quote too;
+/// a hard line break reads back as one, and a plain line ending is a line
+/// of its own as before.
+#[test]
+fn a_line_break_in_body_text_is_a_hard_line_break() {
+    assert_eq!(assert_round_trips(&[p(Body, "text\u{2028}more")]), "text\\\nmore");
+    assert_eq!(
+        assert_round_trips(&[quoted(Body, "quoted\u{2028}more", 1)]),
+        "> quoted\\\n> more"
+    );
+    assert_eq!(kinds("a\\\nb"), vec![(Body, 0, "a\u{2028}b".into())]);
+    assert_eq!(kinds("a  \nb"), vec![(Body, 0, "a\u{2028}b".into())]);
+    assert_eq!(kinds("a\nb"), vec![(Body, 0, "a".into()), (Body, 0, "b".into())]);
+    // What would read as Markdown after the line break is escaped.
+    assert_eq!(
+        assert_round_trips(&[p(Body, "text:\u{2028}> quoted")]),
+        "text:\\\n\\> quoted"
+    );
+    assert_eq!(assert_round_trips(&[p(Body, "\u{2028}text")]), "\\\ntext");
+}
+
+/// Where a hard line break can't say it, the line break is written as the
+/// character: at the end of a line, and in a heading (an ATX heading is
+/// one line, and a heading written over two would change the line its
+/// title is read from).
+#[test]
+fn a_line_break_markdown_cant_say_there_is_the_character() {
+    for paragraphs in [
+        vec![p(Body, "text\u{2028}")],
+        vec![p(Subheading, "heading\u{2028}> quote")],
+        vec![p(Heading, "\u{2028}text")],
+        vec![p(Title, "title\u{2028}more")],
+    ] {
+        let rendered = assert_round_trips(&paragraphs);
+        assert!(rendered.contains('\u{2028}'), "{rendered:?}");
+    }
+    // One such line leaves the others in the note written as breaks.
+    let rendered = assert_round_trips(&[p(Body, "a\u{2028}b"), p(Body, "trailing\u{2028}")]);
+    assert_eq!(rendered, "a\\\nb\ntrailing\u{2028}");
+}

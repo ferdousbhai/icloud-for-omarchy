@@ -14,6 +14,7 @@
 //! | attachments | attachment files |
 //! | pairing | note-id pairing, deferred renames |
 //! | local | working-file state, file times, vault root |
+//! | spelling | note files of an older Markdown spelling rewritten, once |
 //! | rt | clock and randomness (with the differential harness's hooks) |
 
 pub mod attachments;
@@ -26,4 +27,5 @@ pub mod local;
 pub mod migrate;
 pub mod pairing;
 pub mod rt;
+pub mod spelling;
 pub mod state;

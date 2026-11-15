@@ -268,7 +268,11 @@ pub fn open_vault(target_dir: &Path, on_status: &mut dyn FnMut(&str)) -> Result<
     if !is_clone {
         return Ok(None);
     }
-    read_clone_state(target_dir)
+    let Some(mut state) = read_clone_state(target_dir)? else {
+        return Ok(None);
+    };
+    super::spelling::upgrade_vault_spelling(target_dir, &mut state)?;
+    Ok(Some(state))
 }
 
 /// [`open_vault`] for a command that needs a clone: none is

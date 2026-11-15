@@ -4,7 +4,7 @@
 //!
 //! Offsets and slices are UTF-16 code units, as in the JS.
 
-use super::parse::{LIST_ITEM_LINE_BREAK, joined_text, parse_note_markdown};
+use super::parse::{LINE_BREAK, joined_text, parse_note_markdown};
 use super::to_markdown::{Node, Serializer, W, unw, w};
 use crate::doc::format::{
     FormatParagraph, InlineSpan, ParagraphKind, effective_start_number, formats_round_trip_equal, normalize_spans,
@@ -59,27 +59,46 @@ pub fn spelling_candidates<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<
 /// `renderNoteMarkdown`.
 pub fn render_note_markdown(raw_paragraphs: &[FormatParagraph]) -> String {
     let paragraphs: Vec<FormatParagraph> = raw_paragraphs.iter().map(trim_trailing_whitespace).collect();
-    // A list item's line breaks are written as line breaks where they read
-    // back (not at either end of the item, say), else as the character.
-    let broken_items = paragraphs
-        .iter()
-        .any(|p| p.kind.is_list() && p.text.contains(LIST_ITEM_LINE_BREAK));
     let candidates = spelling_candidates(paragraphs.iter().map(|p| p.text.as_str()));
-    if broken_items {
-        for &spelling in candidates.iter().chain([&CONSERVATIVE_SPELLING]) {
-            let rendered = render_lines(&paragraphs, spelling, true);
+    // A paragraph's line breaks ([`LINE_BREAK`]) are written as Markdown
+    // line breaks where the paragraph reads back so (not at either end of
+    // it, say), else as the character; a heading's always as the character.
+    let breaks: Vec<bool> = paragraphs.iter().map(writes_line_breaks).collect();
+    let none = vec![false; paragraphs.len()];
+    let tries: &[&[bool]] = if breaks.contains(&true) {
+        &[&breaks, &none]
+    } else {
+        &[&none]
+    };
+    for breaks in tries {
+        for &spelling in &candidates {
+            let rendered = render_lines(&paragraphs, spelling, breaks);
+            if projection_survives(&paragraphs, &rendered) {
+                return rendered;
+            }
+        }
+        if breaks.contains(&true) {
+            let rendered = render_lines(&paragraphs, CONSERVATIVE_SPELLING, breaks);
             if projection_survives(&paragraphs, &rendered) {
                 return rendered;
             }
         }
     }
-    for &spelling in &candidates {
-        let rendered = render_lines(&paragraphs, spelling, false);
-        if projection_survives(&paragraphs, &rendered) {
-            return rendered;
-        }
+    render_lines(&paragraphs, CONSERVATIVE_SPELLING, &none)
+}
+
+/// Whether `paragraph`'s line breaks can be written as Markdown line
+/// breaks: it has some, is a list item or body text, and, written so on its
+/// own, reads back as itself.
+fn writes_line_breaks(paragraph: &FormatParagraph) -> bool {
+    if !paragraph.text.contains(LINE_BREAK) || !(paragraph.kind.is_list() || paragraph.kind == ParagraphKind::Body) {
+        return false;
     }
-    render_lines(&paragraphs, CONSERVATIVE_SPELLING, false)
+    let alone = std::slice::from_ref(paragraph);
+    spelling_candidates([paragraph.text.as_str()])
+        .into_iter()
+        .chain([CONSERVATIVE_SPELLING])
+        .any(|spelling| projection_survives(alone, &render_lines(alone, spelling, &[true])))
 }
 
 /// `projectionSurvives`: whether `rendered` parses back to `paragraphs`
@@ -100,7 +119,9 @@ fn heading_depth(kind: ParagraphKind) -> Option<u8> {
     }
 }
 
-fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling, line_breaks: bool) -> String {
+/// `breaks`: per paragraph, whether its line breaks are written as Markdown
+/// line breaks.
+fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling, breaks: &[bool]) -> String {
     let mut lines: Vec<W> = Vec::new();
     let mut i = 0;
     while i < paragraphs.len() {
@@ -131,7 +152,7 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling, line_brea
                 end += 1;
             }
             let before = i.checked_sub(1).map(|p| &paragraphs[p]);
-            for list in build_list_nodes(&paragraphs[i..end], spelling, before, line_breaks) {
+            for list in build_list_nodes(&paragraphs[i..end], spelling, before, &breaks[i..end]) {
                 push_block_lines(&mut lines, list, bq);
             }
             i = end;
@@ -141,7 +162,7 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling, line_brea
         if let Some(depth) = heading_depth(paragraph.kind) {
             let heading = Node::Heading {
                 depth,
-                children: phrasing_from_paragraph(paragraph, spelling),
+                children: phrasing_from_paragraph(paragraph, spelling, false),
             };
             push_block_lines(&mut lines, heading, bq);
             i += 1;
@@ -156,7 +177,7 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling, line_brea
             }
             push_block_lines(
                 &mut lines,
-                Node::Paragraph(phrasing_from_paragraph(paragraph, spelling)),
+                Node::Paragraph(phrasing_from_paragraph(paragraph, spelling, breaks[i])),
                 bq,
             );
         }
@@ -230,13 +251,13 @@ fn ends_in_text(paragraph: &FormatParagraph) -> bool {
 }
 
 /// `buildListNodes`. `before`: the paragraph before the first item;
-/// `line_breaks`: an item's line breaks ([`LIST_ITEM_LINE_BREAK`]) are
-/// written as line breaks, the item's paragraph going on on the next line.
+/// `breaks`: per item, whether its line breaks ([`LINE_BREAK`]) are written
+/// as line breaks, the item's paragraph going on on the next line.
 fn build_list_nodes(
     paragraphs: &[FormatParagraph],
     spelling: RawSpelling,
     before: Option<&FormatParagraph>,
-    line_breaks: bool,
+    breaks: &[bool],
 ) -> Vec<Node> {
     // Arena of lists; `roots` are top-level list ids.
     let mut arena: Vec<ListBuild> = Vec::new();
@@ -318,14 +339,8 @@ fn build_list_nodes(
             });
         let mut children = if empty_todo && !continued_todo {
             vec![Node::Html(w(if paragraph.done == Some(true) { "[x]" } else { "[ ]" }))]
-        } else if line_breaks {
-            let broken = FormatParagraph {
-                text: paragraph.text.replace(LIST_ITEM_LINE_BREAK, "\n"),
-                ..paragraph.clone()
-            };
-            phrasing_from_paragraph(&broken, spelling)
         } else {
-            phrasing_from_paragraph(paragraph, spelling)
+            phrasing_from_paragraph(paragraph, spelling, breaks[index])
         };
         // An empty item starting a list right below a line of text (or
         // nested under an item's) would be more of that text, or underline
@@ -645,7 +660,10 @@ struct StyledText<'a> {
     start: usize,
 }
 
-fn phrasing_from_paragraph(paragraph: &FormatParagraph, spelling: RawSpelling) -> Vec<Node> {
+/// `breaks`: its line breaks ([`LINE_BREAK`]) written as Markdown line
+/// breaks: a list item's as line endings (more of the item's paragraph),
+/// body text's as hard line breaks.
+fn phrasing_from_paragraph(paragraph: &FormatParagraph, spelling: RawSpelling, breaks: bool) -> Vec<Node> {
     let text = w(&paragraph.text);
     let spans = normalize_spans(paragraph);
     let mut pieces = Vec::new();
@@ -664,13 +682,55 @@ fn phrasing_from_paragraph(paragraph: &FormatParagraph, spelling: RawSpelling) -
     }
     // Raw text (HTML to the serializer) right after a line break would be
     // written after a space instead, so there it is written escaped.
+    let line_break = LINE_BREAK as u16;
     let mut ranges = find_raw_ranges(&text, spelling);
-    ranges.retain(|range| range.start == 0 || text[range.start - 1] != 10);
-    build_phrasing(
+    if breaks {
+        ranges.retain(|range| range.start == 0 || text[range.start - 1] != line_break);
+    }
+    let phrasing = build_phrasing(
         &pieces,
         &[Dim::Link, Dim::Bold, Dim::Italic, Dim::Strikethrough, Dim::Underline],
         &ranges,
-    )
+    );
+    if !breaks {
+        return phrasing;
+    }
+    let soft = paragraph.kind.is_list();
+    fn broken(nodes: Vec<Node>, line_break: u16, soft: bool) -> Vec<Node> {
+        let mut out = Vec::new();
+        for node in nodes {
+            match node {
+                Node::Text(value) if soft => {
+                    out.push(Node::Text(
+                        value
+                            .into_iter()
+                            .map(|u| if u == line_break { 10 } else { u })
+                            .collect(),
+                    ));
+                }
+                Node::Text(value) => {
+                    for (index, part) in value.split(|&u| u == line_break).enumerate() {
+                        if index > 0 {
+                            out.push(Node::Break);
+                        }
+                        if !part.is_empty() {
+                            out.push(Node::Text(part.to_vec()));
+                        }
+                    }
+                }
+                Node::Strong(c) => out.push(Node::Strong(broken(c, line_break, soft))),
+                Node::Emphasis(c) => out.push(Node::Emphasis(broken(c, line_break, soft))),
+                Node::Delete(c) => out.push(Node::Delete(broken(c, line_break, soft))),
+                Node::Link { url, children } => out.push(Node::Link {
+                    url,
+                    children: broken(children, line_break, soft),
+                }),
+                other => out.push(other),
+            }
+        }
+        out
+    }
+    broken(phrasing, line_break, soft)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

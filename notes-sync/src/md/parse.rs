@@ -284,6 +284,18 @@ fn top_level_fence(line: &str) -> Option<(u8, usize, &str)> {
 
 /// `parseNoteMarkdown`.
 pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRefusal> {
+    read_note_lines(markdown, false).map(|(parsed, _)| parsed)
+}
+
+/// What a note's Markdown reads as, and what each of its source lines gave
+/// (before blank lines are read as empty lines). `legacy`: as Markdown
+/// spelling 1 read it (`md::spelling`): every line of a paragraph a line of
+/// the note at its own quote markers, no line break kept inside one, no
+/// separator lines.
+pub(crate) fn read_note_lines(
+    markdown: &str,
+    legacy: bool,
+) -> Result<(ParsedNoteMarkdown, Vec<LineOutput>), ParseRefusal> {
     let lines = source_lines(markdown);
     let root = match to_mdast(markdown) {
         Ok(root) => root,
@@ -300,28 +312,39 @@ pub fn parse_note_markdown(markdown: &str) -> Result<ParsedNoteMarkdown, ParseRe
         line_missed: None,
         continued_ends: vec![None; lines.len() + 1],
         body_starts: Vec::new(),
+        legacy,
     };
     for child in root.children().map(Vec::as_slice).unwrap_or(&[]) {
         parser.walk_block(child, 0)?;
     }
-    parser.mark_separators();
-    Ok(ParsedNoteMarkdown::from_paragraphs(
-        parser.sweep()?.iter().map(trim_trailing_whitespace).collect(),
-    ))
+    if !legacy {
+        parser.mark_separators();
+    }
+    let parsed = ParsedNoteMarkdown::from_paragraphs(parser.sweep()?.iter().map(trim_trailing_whitespace).collect());
+    Ok((parsed, parser.line_output))
 }
 
 #[derive(Debug, Clone)]
 enum Piece {
     Text(String, InlineStyle),
-    /// A line ending inside a paragraph (soft or hard), with the style
-    /// around it.
-    LineBreak(InlineStyle),
+    /// A line ending inside a paragraph.
+    LineBreak(LineBreak),
 }
 
-/// What a line break inside a list item's paragraph is in the item's text:
-/// a line separator, the line break a paragraph of a note holds (a line feed
-/// would end the item).
-pub const LIST_ITEM_LINE_BREAK: char = '\u{2028}';
+#[derive(Debug, Clone)]
+struct LineBreak {
+    /// The style around it.
+    style: InlineStyle,
+    /// A hard line break (`\` or two spaces before the line ending), not a
+    /// soft one.
+    hard: bool,
+}
+
+/// A line break inside a paragraph of a note (Notes' Shift-Return): a line
+/// separator, U+2028; a line feed would end the paragraph. Markdown spells
+/// it as a line break in a list item's paragraph, a hard line break in body
+/// text; a heading holds it as the character.
+pub const LINE_BREAK: char = '\u{2028}';
 
 #[derive(Debug, Clone)]
 struct Seed {
@@ -343,8 +366,10 @@ const MONOSPACED_SEED: Seed = Seed {
     ..BODY_SEED
 };
 
+/// What a source line gave.
 #[derive(Debug, Clone)]
-enum LineOutput {
+pub(crate) enum LineOutput {
+    /// Nothing (a blank line, read as an empty line of the note).
     Untouched,
     Syntax,
     Paragraphs(Vec<FormatParagraph>),
@@ -363,6 +388,8 @@ struct Parser<'a> {
     continued_ends: Vec<Option<(u32, bool)>>,
     /// Where each paragraph outside any list starts, and its quote level.
     body_starts: Vec<(usize, u32)>,
+    /// Read as Markdown spelling 1 did ([`read_note_lines`]).
+    legacy: bool,
 }
 
 impl Parser<'_> {
@@ -648,12 +675,12 @@ impl Parser<'_> {
         let mut underline = 0;
         let pieces = self.flatten_inline(children, &InlineStyle::PLAIN, &mut underline)?;
         let mut piece_lines: Vec<Vec<Piece>> = vec![Vec::new()];
-        let mut breaks: Vec<InlineStyle> = Vec::new();
+        let mut breaks: Vec<LineBreak> = Vec::new();
         for piece in pieces {
             match piece {
-                Piece::LineBreak(style) => {
+                Piece::LineBreak(line_break) => {
                     piece_lines.push(Vec::new());
-                    breaks.push(style);
+                    breaks.push(line_break);
                 }
                 other => piece_lines.last_mut().unwrap().push(other),
             }
@@ -675,29 +702,48 @@ impl Parser<'_> {
                 *text = text.trim_start_matches([' ', '\t']).to_string();
             }
         }
-        if joined {
-            let mut line_pieces = Vec::new();
-            for (line_index, pieces) in piece_lines.iter_mut().enumerate() {
-                if line_index > 0 {
-                    let style = breaks[line_index - 1].clone();
-                    line_pieces.push(Piece::Text(LIST_ITEM_LINE_BREAK.to_string(), style));
+        // A line break kept inside a line of the note ([`LINE_BREAK`]): any
+        // in a list item's paragraph (`joined`), a hard one (`\` or two
+        // spaces before the line ending) in body text. Each other line is a
+        // line of the note at the paragraph's quote level, a lazy one too
+        // (`> a` then `b`). The legacy reading (spelling 1) kept none.
+        let legacy = self.legacy;
+        let kept = |index: usize| !legacy && (joined || breaks[index].hard);
+        let mut note_lines: Vec<(usize, Vec<Piece>)> = Vec::new();
+        for (line_index, pieces) in piece_lines.into_iter().enumerate() {
+            match note_lines.last_mut() {
+                Some((_, line)) if kept(line_index - 1) => {
+                    line.push(Piece::Text(
+                        LINE_BREAK.to_string(),
+                        breaks[line_index - 1].style.clone(),
+                    ));
+                    line.extend(pieces);
                 }
-                line_pieces.append(pieces);
+                _ => note_lines.push((line_index, pieces)),
             }
-            let (text, spans) = line_from_pieces(&line_pieces);
-            self.record(start, make_paragraph(seed, block_quote_level, text, spans));
+        }
+        let piece_line_count = breaks.len() + 1;
+        for (line_index, line_pieces) in &note_lines {
+            let (text, spans) = line_from_pieces(line_pieces);
+            let source_line = start + line_index.min(&(source_line_count - 1));
+            let (seed, level) = if *line_index == 0 {
+                (seed, block_quote_level)
+            } else if self.legacy && positions_reliable {
+                let raw = self.lines.get(source_line - 1).copied().unwrap_or("");
+                (&BODY_SEED, count_quote_markers(raw) as u32)
+            } else {
+                (&BODY_SEED, block_quote_level)
+            };
+            self.record(source_line, make_paragraph(seed, level, text, spans));
+        }
+        if !self.legacy && joined {
             for line in start + 1..=end {
                 self.mark_syntax(line);
             }
-            return Ok(());
-        }
-        for (line_index, line_pieces) in piece_lines.iter().enumerate() {
-            // Each line is a line of the note at the paragraph's quote
-            // level, a lazy one too (`> a` then `b`).
-            let (text, spans) = line_from_pieces(line_pieces);
-            let source_line = start + line_index.min(source_line_count - 1);
-            let seed = if line_index == 0 { seed } else { &BODY_SEED };
-            self.record(source_line, make_paragraph(seed, block_quote_level, text, spans));
+        } else if positions_reliable {
+            for index in (1..piece_line_count).filter(|&i| kept(i - 1)) {
+                self.mark_syntax(start + index);
+            }
         }
         // A lone `\r` ends a source line but stays inside the text, so the
         // lines it opens are already held by the paragraphs above.
@@ -711,7 +757,7 @@ impl Parser<'_> {
                 .filter(|&i| bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
                 .count()
         });
-        let covered = start + piece_lines.len();
+        let covered = start + piece_line_count;
         for line in covered..(covered + lone_crs).min(end + 1) {
             self.mark_syntax(line);
         }
@@ -735,7 +781,10 @@ impl Parser<'_> {
                 N::Text(text) => {
                     for (i, part) in text.value.split('\n').enumerate() {
                         if i > 0 {
-                            out.push(Piece::LineBreak(with_underline(style, *underline)));
+                            out.push(Piece::LineBreak(LineBreak {
+                                style: with_underline(style, *underline),
+                                hard: false,
+                            }));
                         }
                         if !part.is_empty() {
                             out.push(Piece::Text(part.to_string(), with_underline(style, *underline)));
@@ -790,7 +839,10 @@ impl Parser<'_> {
                         out.push(Piece::Text(html.value.clone(), with_underline(style, *underline)));
                     }
                 }
-                N::Break(_) => out.push(Piece::LineBreak(with_underline(style, *underline))),
+                N::Break(_) => out.push(Piece::LineBreak(LineBreak {
+                    style: with_underline(style, *underline),
+                    hard: true,
+                })),
                 other => {
                     let Some(position) = other.position() else {
                         return refuse(format!(
@@ -906,7 +958,7 @@ fn strip_quote_markers(raw_line: &str) -> &str {
 
 /// A line's leading quote markers (each up to three spaces, `>`, and one
 /// optional space): how many, and what follows them.
-fn split_quote_markers(raw_line: &str) -> (usize, &str) {
+pub(crate) fn split_quote_markers(raw_line: &str) -> (usize, &str) {
     let bytes = raw_line.as_bytes();
     let mut count = 0;
     let mut at = 0;

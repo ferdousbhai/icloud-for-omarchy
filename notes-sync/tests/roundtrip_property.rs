@@ -241,6 +241,10 @@ const WORDS: &[&str] = &[
     "<",
     "</",
     "<a href=x>",
+    // A line break inside a line (Shift-Return), anywhere in body text,
+    // quotes, headings and items, at either end of one too.
+    "\u{2028}",
+    ":\u{2028}> ",
 ];
 
 const URLS: &[&str] = &[
@@ -1059,6 +1063,13 @@ const LINES: &[&str] = &[
     "{t}\\",
     "=====",
     "<div>{t}</div>",
+    // Line breaks inside a line, as Notes has them in real notes.
+    "### {t}\u{2028}> {t}",
+    "{t}:\u{2028}> {t}",
+    "{t}\u{2028}",
+    "## \u{2028}{t}",
+    "> {t}\u{2028}{t}",
+    "- {t}\u{2028}{t}",
 ];
 
 fn markdown_line(rng: &mut Rng) -> String {
@@ -2868,13 +2879,12 @@ fn a_file_saved_with_crlf_line_endings_reads_as_its_lines() {
     assert_eq!(served_document(&server).text, "Title\nline\nmore");
 }
 
-/// A hard-wrapped line below a list item (a lazy continuation line) is more
-/// of the item, as Markdown reads it: in a file an older version pulled,
-/// where a line of text sat right below a list, and typed into a numbered
-/// item, it is pushed as a line break (U+2028) in that item, which stays one
-/// item of its list (the numbering goes on). Pull now writes a line of text
-/// below a list a blank line below it, so that file pushed unedited changes
-/// nothing.
+/// A hard-wrapped line below a list item (a lazy continuation line) typed
+/// here is more of the item, as Markdown reads it: a line of text put right
+/// below a list, and a numbered item wrapped, are pushed as a line break
+/// (U+2028) in that item, which stays one item of its list (the numbering
+/// goes on). Pull writes a line of text below a list a blank line below it,
+/// so its file pushed unedited changes nothing.
 #[test]
 fn a_lazy_line_below_a_list_item_is_pushed_as_more_of_the_item() {
     let text = "Title\nitem\none\ntwo\nafter";
@@ -2904,8 +2914,8 @@ fn a_lazy_line_below_a_list_item_is_pushed_as_more_of_the_item() {
         (pulled.text.clone(), pulled.attribute_runs.clone())
     );
 
-    // The text below the list as an older version wrote it (right below
-    // it), and a numbered item wrapped by hand.
+    // The text below the list moved right below it, and a numbered item
+    // wrapped by hand.
     edit_file(&vault, "2. two\n\nafter", "2. two\nafter");
     edit_file(&vault, "1. one\n", "1. one\nwrapped\n");
     let result = push(&server, &vault).unwrap();
@@ -2932,5 +2942,58 @@ fn a_lazy_line_below_a_list_item_is_pushed_as_more_of_the_item() {
     assert!(
         markdown.ends_with("- item\n1. one\n   wrapped\n2. two\n   after"),
         "{markdown:?}"
+    );
+}
+
+/// A vault an older version wrote (Markdown spelling 1, which its state's
+/// generator names): a line of text right below a list item was written
+/// right below it, which this version reads as more of the item. Its files
+/// are rewritten in this spelling before push reads them, so a file edited
+/// elsewhere pushes the edit and nothing else: the line stays a line of
+/// its own.
+#[test]
+fn an_older_spelling_file_edited_elsewhere_keeps_its_meaning() {
+    let text = "Title\nitem\nafter\nmore";
+    let runs = vec![styled_run(6, 0), styled_run(5, 100), styled_run(6, 3), styled_run(4, 3)];
+    let (server, _dir, vault) = served(text, runs);
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    let base = vault.join(format!(".icloud-notes/base/{NOTE}.md"));
+    for path in [vault.join(&local.file), base.clone()] {
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("- item\n\nafter"), "{text:?}");
+        std::fs::write(&path, text.replace("- item\n\nafter", "- item\nafter")).unwrap();
+    }
+    let state_path = vault.join(".icloud-notes/state.json");
+    let mut state: Value = serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["generator"] = json!("icloud-notes-sync 0.11.1");
+    std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    edit_file(&vault, "\nmore", "\nmore, edited");
+    let result = push(&server, &vault).unwrap();
+    assert!(result.failures().is_empty(), "{:?}", result.entries);
+    let doc = served_document(&server);
+    assert_eq!(doc.text, "Title\nitem\nafter\nmore, edited");
+    let kinds: Vec<_> = format_of(&doc).iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, vec![Title, BulletList, Body, Body]);
+    // The file and its base copy are in this spelling now, once.
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    assert!(
+        local.body.ends_with("- item\n\nafter\nmore, edited"),
+        "{:?}",
+        local.body
+    );
+    assert!(std::fs::read_to_string(&base).unwrap().contains("- item\n\nafter\n"));
+    assert_eq!(
+        state_of(&vault).generator.as_deref(),
+        Some(icloud_notes_sync::GENERATOR)
+    );
+    // Pushed again: nothing is sent, nothing rewritten again.
+    push(&server, &vault).unwrap();
+    assert_eq!(served_document(&server).text, doc.text);
+    assert!(
+        vault_note(&vault, NOTE, false)
+            .unwrap()
+            .body
+            .ends_with("- item\n\nafter\nmore, edited")
     );
 }

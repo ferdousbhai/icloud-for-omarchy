@@ -22,5 +22,11 @@ pub mod vault;
 
 pub use cloudkit::{CloudKitRecord, Database};
 
-/// `generator` written into state.json.
-pub const GENERATOR: &str = concat!("icloud-notes-sync ", env!("CARGO_PKG_VERSION"));
+/// `generator` written into state.json: this build, and the Markdown
+/// spelling the vault's files are in once it has written it
+/// (`md::spelling::MARKDOWN_SPELLING`, `vault::spelling`).
+pub const GENERATOR: &str = concat!(
+    "icloud-notes-sync ",
+    env!("CARGO_PKG_VERSION"),
+    " (Markdown spelling 2)"
+);

@@ -8,6 +8,7 @@
 //! | `render`, `to_markdown` | renderNoteMarkdown + the remark-stringify / mdast-util-to-markdown / mdast-util-gfm subset it runs |
 //! | `parse`, `mdast_fix` | parseNoteMarkdown over markdown-rs, plus fixups where markdown-rs's tree differs from micromark's |
 //! | `table` | markdownTable |
+//! | `spelling` | (this crate) Markdown spelling versions; a file of spelling 1 rewritten in spelling 2 |
 //! | `frontmatter`, `yaml` | frontmatter + noteIdFrontmatter, and the slice of the `yaml` package they use |
 //! | `title`, `filename` | noteTitleParagraph, titleFilename, filename |
 //!
@@ -20,6 +21,7 @@ pub mod frontmatter;
 mod mdast_fix;
 pub mod parse;
 pub mod render;
+pub mod spelling;
 pub mod table;
 pub mod title;
 pub mod to_markdown;

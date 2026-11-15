@@ -57,6 +57,9 @@ pub const ICLOUD_UPLOAD: &str = "icloud-upload";
 /// into place, `.icloud-notes/` made, a state subdirectory moved, the
 /// tombstone written.
 pub const MIGRATE: &str = "migrate";
+/// state.json written with the notes whose files the Markdown spelling
+/// upgrade rewrites (`vault::spelling`), before it rewrites any.
+pub const SPELLING_UPGRADE: &str = "spelling-upgrade";
 
 /// Every point.
 pub const POINTS: &[&str] = &[
@@ -74,6 +77,7 @@ pub const POINTS: &[&str] = &[
     ICLOUD_MODIFY,
     ICLOUD_UPLOAD,
     MIGRATE,
+    SPELLING_UPGRADE,
 ];
 
 /// The point `name` was reached (see the module docs).

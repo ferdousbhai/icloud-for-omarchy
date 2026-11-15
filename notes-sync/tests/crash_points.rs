@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use icloud_notes_sync::crash;
 use icloud_notes_sync::doc::document::{build_initial_note_document, encode_note_document};
+use icloud_notes_sync::doc::proto::topotext::{AttributeRun, ParagraphStyle};
 use icloud_notes_sync::doc::text::{compress_note_document, decode_note_body_text};
 use icloud_notes_sync::js::{base64_decode, base64_encode};
 use icloud_notes_sync::vault::state::{CURRENT_LAYOUT_VERSION, read_clone_state};
@@ -698,6 +699,10 @@ struct Expect {
     /// A filename-title vault's titles: (file, title) - the note at that
     /// file has the title in iCloud.
     titles: Vec<(String, String)>,
+    /// (record name, text): the note's whole text in iCloud.
+    bodies: Vec<(String, String)>,
+    /// (file, text): in the file, once.
+    in_files: Vec<(String, String)>,
 }
 
 fn body_of(record: &Value) -> String {
@@ -846,6 +851,17 @@ fn check(fake: &Fake, place: &Place, expect: &Expect, label: &str) {
             Some(title.as_str()),
             "{label}: {file} in iCloud: {body:?}"
         );
+    }
+
+    for (name, text) in &expect.bodies {
+        let record = zone
+            .find_live(name)
+            .unwrap_or_else(|| panic!("{label}: {name} is not in iCloud"));
+        assert_eq!(body_of(record), *text, "{label}: {name} in iCloud");
+    }
+    for (file, text) in &expect.in_files {
+        let on_disk = std::fs::read_to_string(vault.join(file)).unwrap_or_default();
+        assert_eq!(on_disk.matches(text.as_str()).count(), 1, "{label}: {file}:\n{on_disk}");
     }
 
     // Nothing a killed run left half-written stays (the runs are over).
@@ -1957,6 +1973,61 @@ fn a_sync_downloading_attachments_side_by_side_cut_short_anywhere_is_finished_by
 
 /// Every point is reached by the runs the tests above cut short, so every
 /// point has a test.
+const LISTS_NOTE: &str = "C0000000-0000-4000-8000-0000000000AB";
+
+/// A vault an older version wrote, in Markdown spelling 1: a note holding a
+/// list item and a line of text right below it is written `- item` then
+/// `after`, which this version reads as one item (a hard-wrapped line), and
+/// the user edited that line before upgrading.
+fn older_spelling() -> Start {
+    let mut zone = account(2);
+    let text = "Lists\nitem\nafter";
+    let mut doc = build_initial_note_document(text, &[7; 16]).unwrap();
+    let styled = |length: u32, style: u32| AttributeRun {
+        length: Some(length),
+        paragraph_style: Some(ParagraphStyle {
+            style: Some(style),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    doc.attribute_runs = vec![styled(6, 0), styled(5, 100), styled(5, 3)];
+    let mut record = note_record(LISTS_NOTE, text, DEFAULT_FOLDER);
+    record["fields"]["TextDataEncrypted"]["value"] = json!(base64_encode(&compress_note_document(
+        &encode_note_document(&doc).unwrap()
+    )));
+    zone.put(record);
+    let mut start = cloned_from(zone);
+    let vault = start.place.vault.clone();
+    let file = tracked_file(&start.place, LISTS_NOTE);
+    let base = vault.join(format!(".icloud-notes/base/{LISTS_NOTE}.md"));
+    for path in [vault.join(&file), base] {
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("- item\n\nafter"), "{text:?}");
+        std::fs::write(&path, text.replace("- item\n\nafter", "- item\nafter")).unwrap();
+    }
+    let state_path = vault.join(".icloud-notes/state.json");
+    let mut state: Value = serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["generator"] = json!("icloud-notes-sync 0.11.1");
+    std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+    let path = vault.join(&file);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("\nafter", "\nafter, typed here")).unwrap();
+    start.expect.edits = vec![(file.clone(), "after, typed here".into())];
+    start.expect.bodies = vec![(LISTS_NOTE.into(), "Lists\nitem\nafter, typed here".into())];
+    start.expect.in_files = vec![(file, "- item\n\nafter, typed here".into())];
+    start
+}
+
+/// The older spelling's file is rewritten in this one before the edit in it
+/// is read, so the edit means what it meant (the line stays a line of text
+/// below the item, not more of the item), and it is rewritten once however
+/// the push is cut short.
+#[test]
+fn a_spelling_upgrade_cut_short_anywhere_is_finished_by_the_next_run() {
+    crash_everywhere(&older_spelling(), "push", &[Then::Again, Then::Sync]);
+}
+
 #[test]
 fn every_crash_point_is_reached_by_some_test() {
     let mut reached: BTreeSet<String> = BTreeSet::new();
@@ -1980,6 +2051,7 @@ fn every_crash_point_is_reached_by_some_test() {
     moved_in_icloud(&mut moved);
     trace(&moved, "pull");
     trace(&older_layout(2), "push");
+    trace(&older_spelling(), "push");
     let mut pushed = cloned(9);
     changed_here(&mut pushed);
     trace(&pushed, "push");
