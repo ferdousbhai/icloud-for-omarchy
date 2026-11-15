@@ -369,15 +369,25 @@ impl Zone {
 struct Fake {
     base: String,
     zone: Arc<Mutex<Zone>>,
+    server: Arc<tiny_http::Server>,
+}
+
+/// Stops the server, so its socket and thread go with the test's run: a test
+/// starts hundreds of fakes, more than a build machine's open-file limit.
+impl Drop for Fake {
+    fn drop(&mut self) {
+        self.server.unblock();
+    }
 }
 
 impl Fake {
     fn start(zone: Zone) -> Fake {
-        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
         let base = format!("http://{}", server.server_addr().to_ip().unwrap());
         let zone = Arc::new(Mutex::new(zone));
-        let (shared, url) = (zone.clone(), base.clone());
+        let (shared, url, listener) = (zone.clone(), base.clone(), server.clone());
         std::thread::spawn(move || {
+            let server = listener;
             for mut request in server.incoming_requests() {
                 let mut bytes = Vec::new();
                 request.as_reader().read_to_end(&mut bytes).unwrap();
@@ -451,7 +461,7 @@ impl Fake {
                 let _ = request.respond(response);
             }
         });
-        Fake { base, zone }
+        Fake { base, zone, server }
     }
 
     fn zone(&self) -> std::sync::MutexGuard<'_, Zone> {
