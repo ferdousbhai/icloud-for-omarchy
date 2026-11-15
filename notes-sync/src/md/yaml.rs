@@ -598,13 +598,16 @@ fn quoted_multi(text: &str) -> Result<(Scalar, usize), Parsed> {
         }
         let last = k + 1 == lines.len();
         if !last {
-            let escaped_break = double && line.ends_with('\\') && !line.ends_with("\\\\");
+            // A backslash escapes what follows it unless it is itself
+            // escaped: an odd run of them ends in an escape.
+            let escapes = |text: &str| text.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1;
+            let escaped_break = double && escapes(line);
             if escaped_break {
                 folded.push_str(&line[..line.len() - 1]);
                 k += 1;
                 continue;
             }
-            let keep_escaped_space = double && line.ends_with("\\ ");
+            let keep_escaped_space = double && line.strip_suffix(' ').is_some_and(escapes);
             let trimmed = if keep_escaped_space {
                 line
             } else {

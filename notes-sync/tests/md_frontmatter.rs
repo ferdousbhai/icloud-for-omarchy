@@ -355,6 +355,25 @@ fn a_folded_title_keeps_the_no_break_spaces_at_its_line_edges() {
     assert_eq!(read_note_title(envelope).as_deref(), Some("one \u{a0}two\u{a0}"));
 }
 
+/// A long title with backslashes and tabs is written double-quoted and
+/// folded with an escaped line break right after an escaped backslash
+/// (`\\\` at the line's end): that reads back as the backslash, the lines
+/// joined with no space (it used to read the break as a space, and a push
+/// of any edit to the note retitled it).
+#[test]
+fn a_title_folded_right_after_an_escaped_backslash_reads_back_whole() {
+    let title = format!("  {}", "\\*1\t".repeat(17));
+    let file = compose_note_file("", "Body", ID, Some(&title));
+    let envelope = split_frontmatter(&file, titled()).frontmatter;
+    assert!(envelope.contains("\\\\\\\n"), "not folded there: {envelope:?}");
+    assert_eq!(read_note_title(&envelope).as_deref(), Some(title.as_str()), "{envelope:?}");
+    // An escaped backslash before a line break is no escape of the break.
+    assert_eq!(
+        read_note_title("---\napple-note-title: \"a\\\\\n  b\"\n---\n\n").as_deref(),
+        Some("a\\ b")
+    );
+}
+
 #[test]
 fn a_quoted_title_folded_in_a_run_of_emoji_keeps_every_one() {
     // No space to fold a long double-quoted title at: it is folded with an
