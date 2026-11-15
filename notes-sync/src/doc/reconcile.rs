@@ -46,12 +46,41 @@ fn uuid_string_bytes(uuid: &str) -> [u8; 16] {
     out
 }
 
+/// [`reconcile_note_format`] for an edit to a note: the repairs it makes
+/// to paragraphs whose formatting is as wanted already (a checklist item
+/// sharing another's identity, a list numbered from an explicit 0, a
+/// paragraph whose runs disagree on its style) are made only when
+/// something else changes too (`repair`, or a paragraph whose formatting
+/// changes): an edit that changes nothing sends nothing.
+pub fn reconcile_edited_note_format(
+    doc: &mut NoteDocument,
+    desired: &[FormatParagraph],
+    replica_id: &[u8; 16],
+    repair: bool,
+) -> Result<ReconcileResult> {
+    reconcile_note_format_with_repair(doc, desired, replica_id, repair, &mut || {
+        uuid_string_bytes(&crate::vault::rt::random_uuid())
+    })
+}
+
 /// `reconcileNoteFormat` with an injectable uuid source (called once per
 /// rewritten paragraph, in order, exactly where TS calls `randomUUID`).
 pub fn reconcile_note_format_with(
     doc: &mut NoteDocument,
     desired: &[FormatParagraph],
     replica_id: &[u8; 16],
+    mint_uuid: &mut dyn FnMut() -> [u8; 16],
+) -> Result<ReconcileResult> {
+    reconcile_note_format_with_repair(doc, desired, replica_id, true, mint_uuid)
+}
+
+/// [`reconcile_note_format_with`], making the repairs only when `repair`
+/// or a paragraph's formatting changes ([`reconcile_edited_note_format`]).
+pub fn reconcile_note_format_with_repair(
+    doc: &mut NoteDocument,
+    desired: &[FormatParagraph],
+    replica_id: &[u8; 16],
+    repair: bool,
     mint_uuid: &mut dyn FnMut() -> [u8; 16],
 ) -> Result<ReconcileResult> {
     let current = match decode_note_format(&doc.text, &doc.attribute_runs) {
@@ -92,10 +121,22 @@ pub fn reconcile_note_format_with(
 
     let own_styles = own_styles_of_mixed_paragraphs(doc, &current);
 
+    // The note's last paragraph, when empty, has no character to carry a
+    // style (`note_holds_format`): nothing is written for it.
+    let writable = |i: &usize| !(*i == last && current[*i].text.is_empty());
+    let reformatted = (0..desired.len()).filter(writable).any(|i| {
+        !paragraph_projections_equal(
+            &current[i],
+            &desired[i],
+            i.checked_sub(1).map(|p| &current[p]),
+            i.checked_sub(1).map(|p| &desired[p]),
+        )
+    });
+    if !repair && !reformatted {
+        return Ok(Ok(false));
+    }
     let changed: Vec<usize> = (0..desired.len())
-        // The note's last paragraph, when empty, has no character to carry
-        // a style (`note_holds_format`): nothing is written for it.
-        .filter(|&i| !(i == last && current[i].text.is_empty()))
+        .filter(writable)
         .filter(|&i| {
             needs_fresh_todo_uuid.contains(&i)
                 || needs_start_repair.contains(&i)

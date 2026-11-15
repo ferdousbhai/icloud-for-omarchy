@@ -202,6 +202,11 @@ pub fn run_pull_with(
     )?;
     backfill_share_permissions(db, state.folders.as_ref(), &mut shared.zones)?;
     let held_back = backfill_new_note_bodies(db, &state.notes, &mut changes.records)?;
+    let refreshed = refresh_formerly_read_only(db, &state.notes, &mut changes.records, &mut shared.zones)?;
+    let at_tracked_version = |record: &CloudKitRecord, existing: &NoteEntry| {
+        record.record_change_tag.as_ref() == Some(&existing.record_change_tag)
+            && !refreshed.contains(&record.record_name)
+    };
 
     let mut tracked = Tracked {
         notes: state.notes.clone(),
@@ -370,9 +375,11 @@ pub fn run_pull_with(
         let to_apply: Vec<&CloudKitRecord> = source
             .records
             .iter()
-            .filter(|r| match (tracked.notes.get(&r.record_name), &r.record_change_tag) {
-                (Some(existing), Some(tag)) => existing.record_change_tag != *tag,
-                _ => true,
+            .filter(|r| {
+                tracked
+                    .notes
+                    .get(&r.record_name)
+                    .is_none_or(|existing| !at_tracked_version(r, existing))
             })
             .collect();
         attachment_records.prefetch(db, &zone_for_owner(source.shared_zone_owner.as_deref()), &to_apply)?;
@@ -435,9 +442,7 @@ pub fn run_pull_with(
                 }
                 // Already at this version: a resync re-listing it, or the
                 // push just before this pull writing it. Nothing to apply.
-                if let (Some(existing), Some(tag)) = (&existing, &record.record_change_tag)
-                    && *tag == existing.record_change_tag
-                {
+                if existing.as_ref().is_some_and(|existing| at_tracked_version(record, existing)) {
                     return Ok(());
                 }
 
@@ -636,6 +641,7 @@ pub fn run_pull_with(
                         &record.record_name,
                         &decoded.markdown_text,
                         &decoded.embed_slots,
+                        &decoded.table_markers,
                         &tracked.attachments,
                         &tracked.table_attachments,
                         used_names_for(&mut used_attachment_file_names, &attachment_dir),
@@ -1161,6 +1167,72 @@ pub(super) fn backfill_new_note_bodies<T: Transport>(
     merge_looked_up_records(records, looked_up);
     db.inline_asset_bodies(records)?;
     Ok(missing(records))
+}
+
+/// The reasons this version still gives a note for being read-only. A
+/// tracked note marked read-only for any other (an older version's: its
+/// formatting didn't read back from Markdown, a table sat where Markdown
+/// couldn't keep it, an embed it couldn't place, a paragraph style it
+/// didn't know) is one this version can write as editable Markdown.
+fn still_read_only(reason: &str) -> bool {
+    reason == UNDECODABLE_REASON || reason == crate::doc::decode::OVERSHOOTING_RUNS_REASON
+}
+
+/// The tracked notes an older version kept read-only that this one can
+/// edit, looked up and added to the records this pull applies (each in its
+/// own zone, when that zone was listed this run), so that their files are
+/// written again as editable Markdown, or merged with an edit made here.
+/// The names of those added: the pull applies them even though iCloud has
+/// them at the version tracked.
+fn refresh_formerly_read_only<T: Transport>(
+    db: &Database<T>,
+    tracked: &IndexMap<String, NoteEntry>,
+    private: &mut Vec<CloudKitRecord>,
+    shared: &mut [crate::cloudkit::SharedZoneChanges],
+) -> Result<HashSet<String>, Error> {
+    let mut wanted: IndexMap<Option<String>, Vec<String>> = IndexMap::new();
+    for (record_name, entry) in tracked {
+        if entry
+            .unpublishable_reason
+            .as_deref()
+            .is_some_and(|reason| !reason.is_empty() && !still_read_only(reason))
+        {
+            wanted
+                .entry(entry.shared_zone_owner.clone())
+                .or_default()
+                .push(record_name.clone());
+        }
+    }
+    let mut refreshed = HashSet::new();
+    for (owner, names) in wanted {
+        let records = match &owner {
+            None => &mut *private,
+            Some(owner) => match shared
+                .iter_mut()
+                .find(|zone| zone.zone_id.owner_record_name.as_deref() == Some(owner.as_str()))
+            {
+                Some(zone) => &mut zone.records,
+                None => continue,
+            },
+        };
+        // Listed this run already (at the version tracked, or another).
+        let (listed, names): (Vec<String>, Vec<String>) = names
+            .into_iter()
+            .partition(|name| records.iter().any(|r| r.record_name == *name));
+        refreshed.extend(listed);
+        if names.is_empty() {
+            continue;
+        }
+        let mut looked_up = db.lookup_records(&zone_for_owner(owner.as_deref()), &names)?;
+        db.inline_asset_bodies(&mut looked_up)?;
+        for record in looked_up {
+            if record.record_type == "Note" && names.contains(&record.record_name) {
+                refreshed.insert(record.record_name.clone());
+                records.push(record);
+            }
+        }
+    }
+    Ok(refreshed)
 }
 
 /// `backfillSharePermissions`: look up shared folders with no stored

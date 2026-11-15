@@ -286,3 +286,17 @@ fn title_holding_an_embed_refuses_the_retitle() {
     assert!(message.contains("apple-note-title"));
     assert!(message.contains("can't retitle it"));
 }
+
+/// The `apple-note-title` pull writes for such a note (a title a file name
+/// can't carry) is the title as it is: no retitle, and an edit to the note
+/// goes up (it used to be refused as a retitle, so the note could never be
+/// edited from here).
+#[test]
+fn title_holding_an_embed_takes_its_own_title_from_the_frontmatter() {
+    let classified = classify_ok(&note_record("Shopping list\n\nMilk"), TitleMode::InBody);
+    let parsed = parsed_body("Shopping list\n\nMilk, eggs");
+    assert_eq!(
+        restore_stripped_title(&classified, parsed.clone(), Some("Shopping list")).unwrap(),
+        parsed
+    );
+}

@@ -16,12 +16,26 @@ pub fn decode_utf8(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// `readFile(path, "utf-8")`, `None` for ENOENT.
+/// `readFile(path, "utf-8")`, `None` for ENOENT. A file whose every line
+/// ends in CRLF (saved by an editor that writes Windows line endings) reads
+/// as LF: its lines are the same lines (this tool writes LF, and reads a
+/// lone `\r` as part of a line).
 pub fn read_text(path: &Path) -> Result<Option<String>, Error> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(decode_utf8(&bytes))),
+        Ok(bytes) => Ok(Some(lf_line_endings(decode_utf8(&bytes)))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// `text` with CRLF line endings read as LF, when every line break in it is
+/// a CRLF.
+pub fn lf_line_endings(text: String) -> String {
+    let breaks = text.matches('\n').count();
+    if breaks > 0 && text.matches("\r\n").count() == breaks {
+        text.replace("\r\n", "\n")
+    } else {
+        text
     }
 }
 

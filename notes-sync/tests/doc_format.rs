@@ -111,12 +111,9 @@ fn decode_treats_absent_paragraph_style_and_explicit_style_3_identically_as_body
 }
 
 #[test]
-fn decode_refuses_an_unknown_paragraph_style_value() {
-    let reason = decode_note_format("x", &[styled(1, 7)]).unwrap_err();
-    assert_eq!(
-        reason,
-        "the note uses a paragraph style (7) this tool doesn't understand"
-    );
+fn decode_reads_an_unknown_paragraph_style_value_as_body_text() {
+    let paragraphs = decode_note_format("x", &[styled(1, 7)]).unwrap();
+    assert_eq!(paragraphs[0].kind, ParagraphKind::Body);
 }
 
 #[test]
@@ -318,11 +315,14 @@ fn nested(length: u32, style: u32, indent: i32, block_quote_level: u32) -> Attri
 }
 
 #[test]
-fn decode_refuses_nesting_deeper_than_apple_notes_writes() {
-    let deep = "the note nests quotes or lists more than 16 levels deep, deeper than this tool can represent";
-    assert_eq!(decode_note_format("x", &[nested(1, 3, 0, 20_000)]).unwrap_err(), deep);
-    assert_eq!(decode_note_format("x", &[nested(1, 100, 20_000, 0)]).unwrap_err(), deep);
-    assert_eq!(decode_note_format("x", &[nested(1, 100, -1, 0)]).unwrap_err(), deep);
+fn decode_reads_nesting_deeper_than_this_tool_writes_as_the_deepest_it_writes() {
+    let levels = |run| {
+        let p = &decode_note_format("x", &[run]).unwrap()[0];
+        (p.indent, p.block_quote_level)
+    };
+    assert_eq!(levels(nested(1, 3, 0, 20_000)), (0, 16));
+    assert_eq!(levels(nested(1, 100, 20_000, 0)), (16, 0));
+    assert_eq!(levels(nested(1, 100, -1, 0)), (0, 0));
     let kept = decode_note_format("x", &[nested(1, 100, 16, 16)]).unwrap();
     assert_eq!((kept[0].indent, kept[0].block_quote_level), (16, 16));
 }

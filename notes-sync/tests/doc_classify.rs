@@ -8,7 +8,7 @@ use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::doc::decode::{
     ClassifyOptions, DecodedNote, NoteDecodeResult, UnsyncableReason, classify_note_record,
 };
-use icloud_notes_sync::doc::embeds::{EmbedSlot, UNKNOWN_CONTENT_BANNER};
+use icloud_notes_sync::doc::embeds::EmbedSlot;
 use icloud_notes_sync::doc::format::ParagraphKind;
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun, ParagraphStyle};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
@@ -91,28 +91,45 @@ fn ok(result: NoteDecodeResult) -> DecodedNote {
 
 // --- classifications that never reach the Markdown gate -------------------
 
+/// An attachment run that isn't on a lone placeholder can't be placed: its
+/// placeholder is an unknown embed (written as its marker), and the note is
+/// editable around it.
 #[test]
-fn an_attachment_info_run_not_on_a_lone_placeholder_banner_marks_the_note() {
+fn an_attachment_info_run_not_on_a_lone_placeholder_is_an_unknown_embed() {
     let record = make_record(vec![encode_text_field(
         "Hi\n\u{fffc}",
         vec![AttributeRun::with_length(2), info(2, Some("A-1"), "public.jpeg")],
     )]);
-    let banner_text = format!("{UNKNOWN_CONTENT_BANNER}Hi\n\u{fffc}");
+    let decoded = ok(classify(&record, TitleMode::InBody));
+    assert!(decoded.publishable, "{:?}", decoded.unpublishable_reason);
+    assert_eq!(decoded.markdown_text, "Hi\n\u{fffc}");
+    assert_eq!(
+        decoded.embed_slots,
+        vec![EmbedSlot::Unknown {
+            type_uti: Some("public.jpeg".into())
+        }]
+    );
+}
+
+/// Runs past the end of the text say nothing of which characters they
+/// mean: the note is the one kind still read-only, as its plain text.
+#[test]
+fn formatting_runs_overshooting_the_text_leave_the_note_read_only_as_plain_text() {
+    let record = make_record(vec![encode_text_field("# Hi", vec![AttributeRun::with_length(9)])]);
     assert_eq!(
         classify(&record, TitleMode::InBody),
         NoteDecodeResult::Ok(Box::new(DecodedNote {
             title: String::new(),
-            title_line: "Hi".into(),
-            body_text: banner_text.clone(),
-            markdown_text: banner_text,
+            title_line: "# Hi".into(),
+            body_text: "# Hi".into(),
+            markdown_text: "# Hi".into(),
             format: None,
             title_stripped: false,
             embed_slots: vec![],
             attachments: vec![],
+            table_markers: vec![],
             publishable: false,
-            unpublishable_reason: Some(
-                "contains unrecognized embedded content this tool couldn't parse or place precisely".into()
-            ),
+            unpublishable_reason: Some("the note's formatting runs overshoot its text".into()),
         }))
     );
 }
@@ -357,10 +374,16 @@ fn carriage_returns_in_monospaced_and_title_paragraphs_decode() {
 }
 
 /// A server-supplied nesting depth used to build one Markdown node per level
-/// and overflow the stack; it now makes the note read-only.
+/// and overflow the stack; it is now read as the deepest the Markdown
+/// writes, and the note is editable.
 #[test]
-fn an_absurd_block_quote_level_or_indent_makes_the_note_read_only() {
-    for (indent, block_quote_level) in [(0, 20_000), (20_000, 0)] {
+fn an_absurd_block_quote_level_or_indent_is_read_as_the_deepest_nesting() {
+    for (indent, block_quote_level, markdown) in [
+        (0, 20_000, format!("{}- item", "> ".repeat(16))),
+        // Under nothing, each level above it is an item holding only the
+        // next one.
+        (20_000, 0, format!("{}- item", "- ".repeat(16))),
+    ] {
         let run = AttributeRun {
             length: Some(5),
             paragraph_style: Some(ParagraphStyle {
@@ -372,8 +395,8 @@ fn an_absurd_block_quote_level_or_indent_makes_the_note_read_only() {
             ..Default::default()
         };
         let result = ok(classify(&titled("item\n", vec![run]), TitleMode::InBody));
-        assert!(!result.publishable);
-        assert_eq!(result.markdown_text, "item\n");
+        assert!(result.publishable);
+        assert_eq!(result.markdown_text.split('\n').next(), Some(markdown.as_str()));
     }
 }
 
@@ -424,9 +447,9 @@ const TABLE: &str = "com.apple.notes.table";
 /// would become one, and text before it, or a list, heading, quote or code
 /// block around it, keeps it from being found where it is written at all.
 /// The file would read back as another note (and push refuse every edit):
-/// such a note is read-only.
+/// such a table is written as its embed marker, which stays where it is.
 #[test]
-fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_read_only() {
+fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_written_as_its_marker() {
     for (text, runs) in [
         ("\u{fffc}#", vec![info(1, Some("T1"), TABLE), styled(1, 3)]),
         ("\u{fffc}\n|x|", vec![info(1, Some("T1"), TABLE), styled(4, 3)]),
@@ -438,8 +461,8 @@ fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_read_only() {
         ("\u{fffc}", vec![quoted_info(TABLE)]),
     ] {
         let result = ok(classify(&titled(text, runs), TitleMode::InBody));
-        assert!(!result.publishable, "{text:?}");
-        assert!(result.unpublishable_reason.unwrap().contains("table"));
+        assert!(result.publishable, "{text:?}");
+        assert_eq!(result.table_markers, vec![0], "{text:?}");
     }
     for (text, runs) in [
         (
@@ -452,10 +475,8 @@ fn a_table_the_markdown_cant_keep_apart_from_its_neighbours_is_read_only() {
             vec![styled(1, 3), info(1, Some("A1"), "public.png"), styled(1, 3)],
         ),
     ] {
-        assert!(
-            ok(classify(&titled(text, runs), TitleMode::InBody)).publishable,
-            "{text:?}"
-        );
+        let result = ok(classify(&titled(text, runs), TitleMode::InBody));
+        assert!(result.publishable && result.table_markers.is_empty(), "{text:?}");
     }
 }
 

@@ -7,9 +7,9 @@ use common::reference;
 
 use icloud_notes_sync::cloudkit::FieldValue;
 use icloud_notes_sync::doc::embeds::{
-    EmbedMarkerContent, EmbedSlot, UNKNOWN_CONTENT_BANNER, decode_note_embed_slots, format_attachment_markdown,
+    EmbedMarkerContent, EmbedSlot, decode_note_embed_slots, format_attachment_markdown,
     format_embed_marker, has_attachment_reference, has_embed_marker, has_unknown_content_marker, is_image_uti,
-    is_table_uti, parse_embed_markers, render_placeholders,
+    is_table_uti, parse_embed_markers, render_placeholders, unplaced_content,
 };
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};
@@ -114,24 +114,39 @@ fn decode_note_embed_slots_carries_a_partial_attachment_infos_uti_into_the_unkno
     );
 }
 
+/// An attachment's run that isn't a lone U+FFFC can't be placed: each
+/// U+FFFC under it is an unknown embed (with the run's type), and the run's
+/// text is the content push keeps as it is.
 #[test]
-fn decode_note_embed_slots_returns_none_when_an_attachment_info_run_isnt_a_lone_placeholder() {
-    let overlong = encode_note_body(
-        "x\u{fffc}y",
-        vec![
-            AttributeRun::with_length(1),
-            info_run(2, Some("A"), Some("public.jpeg")),
-        ],
+fn an_attachment_info_run_that_isnt_a_lone_placeholder_is_unknown_content() {
+    let runs = vec![
+        AttributeRun::with_length(1),
+        info_run(2, Some("A"), Some("public.jpeg")),
+    ];
+    let overlong = encode_note_body("x\u{fffc}y", runs.clone());
+    assert_eq!(
+        decode_note_embed_slots(&overlong).unwrap(),
+        Some(vec![EmbedSlot::Unknown {
+            type_uti: Some("public.jpeg".into())
+        }])
     );
-    assert_eq!(decode_note_embed_slots(&overlong).unwrap(), None);
-    let off = encode_note_body(
-        "xy",
-        vec![
-            AttributeRun::with_length(1),
-            info_run(1, Some("A"), Some("public.jpeg")),
-        ],
+    assert_eq!(
+        unplaced_content(&runs, &icloud_notes_sync::js::utf16("x\u{fffc}y")),
+        vec![1..3]
     );
-    assert_eq!(decode_note_embed_slots(&off).unwrap(), None);
+    let runs = vec![
+        AttributeRun::with_length(1),
+        info_run(1, Some("A"), Some("public.jpeg")),
+    ];
+    let off = encode_note_body("xy", runs.clone());
+    assert_eq!(decode_note_embed_slots(&off).unwrap(), Some(vec![]));
+    assert_eq!(unplaced_content(&runs, &icloud_notes_sync::js::utf16("xy")), vec![1..2]);
+    // A lone placeholder's own run is placed.
+    let runs = vec![
+        AttributeRun::with_length(1),
+        info_run(1, Some("A"), Some("public.jpeg")),
+    ];
+    assert!(unplaced_content(&runs, &icloud_notes_sync::js::utf16("x\u{fffc}")).is_empty());
 }
 
 #[test]
@@ -381,19 +396,14 @@ fn has_attachment_reference_detects_a_hand_typed_attachments_link_or_embed() {
 
 // --- content this tool cannot parse --------------------------------------------
 
-#[test]
-fn unknown_content_banner_is_a_danger_admonition() {
-    assert!(UNKNOWN_CONTENT_BANNER.starts_with("> [!danger] Unparsed content\n"));
-    assert_eq!(
-        UNKNOWN_CONTENT_BANNER,
-        "> [!danger] Unparsed content\n> This note contains content this tool can't parse or place precisely. It stays read-only here until that's resolved (e.g. by editing the note in Notes directly).\n\n"
-    );
-}
+/// The banner versions up to 0.11 wrote above a note they couldn't place
+/// the embeds of, as a file may still have it.
+const OLD_UNKNOWN_CONTENT_BANNER: &str = "> [!danger] Unparsed content\n> This note contains content this tool can't parse or place precisely. It stays read-only here until that's resolved (e.g. by editing the note in Notes directly).\n\n";
 
 #[test]
-fn has_unknown_content_marker_detects_the_banner() {
+fn has_unknown_content_marker_detects_the_banner_older_versions_wrote() {
     assert!(has_unknown_content_marker(&format!(
-        "{UNKNOWN_CONTENT_BANNER}Some note text"
+        "{OLD_UNKNOWN_CONTENT_BANNER}Some note text"
     )));
 }
 

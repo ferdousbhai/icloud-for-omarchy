@@ -391,6 +391,7 @@ pub fn resolve_note_attachments<T: Transport>(
     note_record_name: &str,
     body_text: &str,
     slots: &[EmbedSlot],
+    table_markers: &[usize],
     existing_attachments: &IndexMap<String, AttachmentEntry>,
     existing_table_attachments: &IndexMap<String, TableAttachmentEntry>,
     used_attachment_file_names: &mut HashSet<String>,
@@ -458,8 +459,10 @@ pub fn resolve_note_attachments<T: Transport>(
         if is_table_uti(&r.type_uti) {
             // A table's versions are kept under its record name
             // (`history/<recordName>/`): one that can't name a file stays a
-            // marker, like a table that can't be decoded.
-            let record = by_name(&r.attachment_identifier).filter(|_| is_plain_record_name(&r.attachment_identifier));
+            // marker, like a table that can't be decoded or read back from
+            // where it is written (`table_markers`).
+            let record = by_name(&r.attachment_identifier)
+                .filter(|_| is_plain_record_name(&r.attachment_identifier) && !table_markers.contains(&i));
             match decode_table_attachment(record) {
                 None => replacements[i] = Some(format_embed_marker(&marker_for(r))),
                 Some(markdown) => {

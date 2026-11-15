@@ -142,30 +142,31 @@ pub struct NewAttachmentLink {
     pub href: String,
 }
 
+/// The first line of the banner engines up to 0.11 wrote above a note whose
+/// embeds they couldn't place (and kept read-only). A file that still has
+/// it is refused until a pull writes the note again.
 const ADMONITION_HEADER: &str = "> [!danger] Unparsed content";
 
-/// `UNKNOWN_CONTENT_BANNER`.
-pub const UNKNOWN_CONTENT_BANNER: &str = "> [!danger] Unparsed content\n\
-> This note contains content this tool can't parse or place precisely. \
-It stays read-only here until that's resolved (e.g. by editing the note in Notes directly).\n\n";
-
-/// `decodeNoteEmbedSlots`: `Ok(None)` when the embed structure defies the
-/// model (the note then gets the banner and stays read-only).
+/// `decodeNoteEmbedSlots`: `Ok(None)` when the runs overshoot the text.
 pub fn decode_note_embed_slots(compressed: &[u8]) -> Result<Option<Vec<EmbedSlot>>> {
     Ok(embed_slots_of(&decode_note_string(compressed)?))
 }
 
 /// The pure part of `decodeNoteEmbedSlots`, on an already-decoded string.
+/// `None` when the runs overshoot the text. An attachment's run that is not
+/// one U+FFFC (longer, or on other text) can't be placed: each U+FFFC under
+/// it is an unknown embed, and the run's text is [`unplaced_content`].
 pub fn embed_slots_of(s: &topotext::String) -> Option<Vec<EmbedSlot>> {
     let text = utf16(s.string.as_deref().unwrap_or(""));
-    let mut info_by_offset: HashMap<usize, &topotext::AttachmentInfo> = HashMap::new();
+    // (info, placed: a lone U+FFFC's own run)
+    let mut info_by_offset: HashMap<usize, (&topotext::AttachmentInfo, bool)> = HashMap::new();
     let mut offset = 0usize;
     for run in &s.attribute_run {
         if let Some(info) = &run.attachment_info {
-            if run.len() != 1 || text.get(offset) != Some(&ORC) {
-                return None;
+            let placed = run.len() == 1 && text.get(offset) == Some(&ORC);
+            for at in offset..offset + run.len() as usize {
+                info_by_offset.insert(at, (info, placed));
             }
-            info_by_offset.insert(offset, info);
         }
         offset += run.len() as usize;
     }
@@ -177,9 +178,12 @@ pub fn embed_slots_of(s: &topotext::String) -> Option<Vec<EmbedSlot>> {
         if unit != ORC {
             continue;
         }
-        let info = info_by_offset.get(&i);
+        let (info, placed) = match info_by_offset.get(&i) {
+            Some(&(info, placed)) => (Some(info), placed),
+            None => (None, false),
+        };
         match info {
-            Some(info) if info.attachment_identifier.is_some() && info.type_uti.is_some() => {
+            Some(info) if placed && info.attachment_identifier.is_some() && info.type_uti.is_some() => {
                 slots.push(EmbedSlot::Attachment(AttachmentReference {
                     attachment_identifier: info.attachment_identifier.clone().unwrap_or_default(),
                     type_uti: info.type_uti.clone().unwrap_or_default(),
@@ -191,6 +195,23 @@ pub fn embed_slots_of(s: &topotext::String) -> Option<Vec<EmbedSlot>> {
         }
     }
     Some(slots)
+}
+
+/// Where (UTF-16 `start..end` in the note's text) an attachment's run is
+/// not a lone U+FFFC, in order: content this tool can't place. Its text is
+/// written as it is (each U+FFFC in it as an unknown embed's marker), and
+/// push refuses an edit that changes it.
+pub fn unplaced_content(attribute_runs: &[topotext::AttributeRun], text: &[u16]) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    for run in attribute_runs {
+        let range = offset..offset + run.len() as usize;
+        offset = range.end;
+        if run.attachment_info.is_some() && !(range.len() == 1 && text.get(range.start) == Some(&ORC)) {
+            out.push(range);
+        }
+    }
+    out
 }
 
 /// icloud-md's list, and the names Apple gives GIF and WebP files, which

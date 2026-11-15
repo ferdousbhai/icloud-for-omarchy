@@ -226,6 +226,7 @@ pub fn run_clone_with(
                         &record.record_name,
                         &decoded.markdown_text,
                         &decoded.embed_slots,
+                        &decoded.table_markers,
                         &attachments,
                         &table_attachments,
                         used_names_for(&mut used_attachment_file_names, &placement.dir),

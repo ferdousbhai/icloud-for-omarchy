@@ -494,7 +494,7 @@ impl Parser<'_> {
             let (item_start, _) = node_lines(item_node);
             let item_end = content_end_line(item_node);
 
-            if checked.is_none() && !list.ordered {
+            if checked.is_none() && !list.ordered && !matches!(item.children.first(), Some(mdast::Node::List(_))) {
                 let line = self.lines.get(item_start - 1).copied().unwrap_or("");
                 if let Some(done) = empty_todo_line(line)
                     && item_end == item_start
@@ -750,15 +750,24 @@ fn task_check_line(source: &str, paragraph: &mdast::Node) -> Option<usize> {
     (trimmed.ends_with("[x]") || trimmed.ends_with("[X]") || trimmed.ends_with("[ ]")).then(|| position.start.line - 1)
 }
 
-/// `/^[ \t>]*[-*+][ \t]+\[([ xX])\][ \t]*$/` → `done`.
+/// `/^[ \t>]*(?:[-*+][ \t]+)+\[([ xX])\][ \t]*$/` → `done`: the line of an
+/// empty checklist item, the innermost of the items opened on it (an item
+/// nested under items that hold nothing else, `- - [ ]`, is one deeper).
 fn empty_todo_line(line: &str) -> Option<bool> {
-    let rest = line.trim_start_matches([' ', '\t', '>']);
-    let rest = rest.strip_prefix(['-', '*', '+'])?;
-    let after_space = rest.trim_start_matches([' ', '\t']);
-    if after_space.len() == rest.len() {
+    let mut rest = line.trim_start_matches([' ', '\t', '>']);
+    let mut markers = 0;
+    while let Some(after_marker) = rest.strip_prefix(['-', '*', '+']) {
+        let after_space = after_marker.trim_start_matches([' ', '\t']);
+        if after_space.len() == after_marker.len() {
+            return None;
+        }
+        rest = after_space;
+        markers += 1;
+    }
+    if markers == 0 {
         return None;
     }
-    let inner = after_space.strip_prefix('[')?;
+    let inner = rest.strip_prefix('[')?;
     let mark = inner.chars().next()?;
     if !matches!(mark, ' ' | 'x' | 'X') {
         return None;

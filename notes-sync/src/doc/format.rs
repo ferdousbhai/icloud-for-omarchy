@@ -157,13 +157,12 @@ fn inline_style_of_run(run: &AttributeRun) -> InlineStyle {
     }
 }
 
-/// `paragraphKindOf`: absent style means Body; `None` for a style icloud-md
-/// doesn't understand.
-fn paragraph_kind_of(ps: Option<&ParagraphStyle>) -> Option<ParagraphKind> {
-    match ps.and_then(|ps| ps.style) {
-        None => Some(ParagraphKind::Body),
-        Some(style) => ParagraphKind::from_style(style),
-    }
+/// `paragraphKindOf`: absent style, or one this tool doesn't know, means
+/// Body.
+fn paragraph_kind_of(ps: Option<&ParagraphStyle>) -> ParagraphKind {
+    ps.and_then(|ps| ps.style)
+        .and_then(ParagraphKind::from_style)
+        .unwrap_or(ParagraphKind::Body)
 }
 
 /// The deepest `blockQuoteLevel` and list `indent` a note may have, decoded
@@ -171,36 +170,26 @@ fn paragraph_kind_of(ps: Option<&ParagraphStyle>) -> Option<ParagraphKind> {
 /// real corpora at most 3; the renderer nests one node per level).
 pub const MAX_NESTING: u32 = 16;
 
-/// Why a note nesting deeper than `MAX_NESTING` is refused, either way.
+/// Why Markdown nesting deeper than `MAX_NESTING` is refused.
 pub fn too_deeply_nested_reason() -> String {
     format!("the note nests quotes or lists more than {MAX_NESTING} levels deep, deeper than this tool can represent")
 }
 
 /// `decodeNoteFormat`: split `text` into per-line paragraphs and derive each
 /// one's kind and spans from the attribute runs (paragraph attributes from the
-/// run covering the line's newline). Runs overshooting the text, or an unknown
-/// paragraph style, are `Err` with icloud-md's reason string.
+/// run covering the line's newline). Runs overshooting the text are `Err`
+/// with icloud-md's reason string: nothing says which characters they mean.
+///
+/// What the model has no place for is read as the nearest thing it has: a
+/// paragraph style this tool doesn't know as body text, a quote or list
+/// nesting deeper than [`MAX_NESTING`] as that deep. That is what the
+/// paragraph's Markdown shows, and push leaves the paragraph as Notes has it
+/// unless its Markdown is edited (`DecodedNote::keep_untouched`).
 pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> DecodeNoteFormatResult {
     let units = utf16(text);
     let covered: u64 = attribute_runs.iter().map(|r| u64::from(r.len())).sum();
     if covered > units.len() as u64 {
         return Err("the note's formatting runs overshoot its text".into());
-    }
-    for run in attribute_runs {
-        if let Some(ps) = &run.paragraph_style
-            && paragraph_kind_of(Some(ps)).is_none()
-        {
-            return Err(format!(
-                "the note uses a paragraph style ({}) this tool doesn't understand",
-                ps.style.unwrap_or(0)
-            ));
-        }
-        if let Some(ps) = &run.paragraph_style
-            && (ps.block_quote_level.unwrap_or(0) > MAX_NESTING
-                || !(0..=MAX_NESTING as i32).contains(&ps.indent.unwrap_or(0)))
-        {
-            return Err(too_deeply_nested_reason());
-        }
     }
 
     // Absolute [start, end) intervals of the non-empty runs.
@@ -239,7 +228,7 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
             None
         };
         let ps = anchor_run.and_then(|run| run.paragraph_style.as_ref());
-        let kind = paragraph_kind_of(ps).unwrap_or(ParagraphKind::Body);
+        let kind = paragraph_kind_of(ps);
 
         let mut spans: Vec<InlineSpan> = Vec::new();
         let mut at = line_start;
@@ -259,8 +248,8 @@ pub fn decode_note_format(text: &str, attribute_runs: &[AttributeRun]) -> Decode
 
         paragraphs.push(FormatParagraph {
             kind,
-            indent: ps.and_then(|ps| ps.indent).unwrap_or(0),
-            block_quote_level: ps.and_then(|ps| ps.block_quote_level).unwrap_or(0),
+            indent: ps.and_then(|ps| ps.indent).unwrap_or(0).clamp(0, MAX_NESTING as i32),
+            block_quote_level: ps.and_then(|ps| ps.block_quote_level).unwrap_or(0).min(MAX_NESTING),
             done: (kind == ParagraphKind::TodoList)
                 .then(|| ps.and_then(|ps| ps.todo.as_ref()).and_then(|todo| todo.done) == Some(1)),
             start_number: ps.and_then(|ps| ps.starting_list_item_number).unwrap_or(0),

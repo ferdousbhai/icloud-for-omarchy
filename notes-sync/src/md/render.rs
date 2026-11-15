@@ -116,7 +116,13 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> String
             while end < paragraphs.len() && paragraphs[end].kind.is_list() && paragraphs[end].block_quote_level == bq {
                 end += 1;
             }
-            for list in build_list_nodes(&paragraphs[i..end], spelling) {
+            // Text on the line after a list item's last line is more of
+            // that item's paragraph to Markdown (a lazy continuation line).
+            let continued = paragraphs
+                .get(end)
+                .is_some_and(|next| next.kind == ParagraphKind::Body && !next.text.is_empty() && next.block_quote_level <= bq);
+            let before = i.checked_sub(1).map(|p| &paragraphs[p]);
+            for list in build_list_nodes(&paragraphs[i..end], spelling, before, continued) {
                 push_block_lines(&mut lines, list, bq);
             }
             i = end;
@@ -172,18 +178,38 @@ struct ListBuild {
 
 struct ItemBuild {
     checked: Option<bool>,
-    paragraph: Node,
+    /// `None` for an item with nothing in it: an empty one, or one that
+    /// only holds a deeper list (a level between an item and the one before
+    /// it).
+    paragraph: Option<Node>,
     lists: Vec<usize>,
 }
 
-/// `buildListNodes`.
-fn build_list_nodes(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> Vec<Node> {
+/// Whether a paragraph's last Markdown line is a line of text, which a
+/// line after it may continue (or underline, making it a heading).
+fn ends_in_text(paragraph: &FormatParagraph) -> bool {
+    match paragraph.kind {
+        ParagraphKind::Body => !paragraph.text.is_empty(),
+        kind if kind.is_list() => !paragraph.text.is_empty() || kind == ParagraphKind::TodoList,
+        _ => false,
+    }
+}
+
+/// `buildListNodes`. `before`: the paragraph before the first item;
+/// `continued`: a line of text follows the last item, which Markdown reads
+/// as more of it.
+fn build_list_nodes(
+    paragraphs: &[FormatParagraph],
+    spelling: RawSpelling,
+    before: Option<&FormatParagraph>,
+    continued: bool,
+) -> Vec<Node> {
     // Arena of lists; `roots` are top-level list ids.
     let mut arena: Vec<ListBuild> = Vec::new();
     let mut roots: Vec<usize> = Vec::new();
     let mut stack: Vec<(usize, i32)> = Vec::new();
 
-    for paragraph in paragraphs {
+    for (index, paragraph) in paragraphs.iter().enumerate() {
         let ordered = paragraph.kind == ParagraphKind::NumberedList;
         while stack.last().is_some_and(|&(_, indent)| indent > paragraph.indent) {
             stack.pop();
@@ -201,33 +227,81 @@ fn build_list_nodes(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> Ve
             Some((_, indent)) => indent < paragraph.indent,
         };
         if needs_new {
-            let start = ordered.then(|| effective_start_number(paragraph.start_number));
-            arena.push(ListBuild {
-                ordered,
-                start,
-                items: Vec::new(),
-            });
-            let id = arena.len() - 1;
-            let parent_item = top.and_then(|(list, _)| arena[list].items.len().checked_sub(1).map(|i| (list, i)));
-            match parent_item {
-                Some((list, item)) => arena[list].items[item].lists.push(id),
-                None => roots.push(id),
+            // An item nested deeper than the one before it can be (an item
+            // under nothing, or two levels below its parent): each level
+            // between is an item holding only the next level's list
+            // (`- - item`), which Markdown reads back at that depth.
+            let mut parent = top;
+            let mut levels: Vec<(Option<u32>, bool, i32)> = Vec::new();
+            for indent in parent.map_or(0, |(_, indent)| indent + 1)..paragraph.indent {
+                levels.push((None, false, indent));
             }
-            stack.push((id, paragraph.indent));
+            levels.push((
+                ordered.then(|| effective_start_number(paragraph.start_number)),
+                ordered,
+                paragraph.indent,
+            ));
+            let bridges = levels.len() - 1;
+            for (level, (start, ordered, indent)) in levels.into_iter().enumerate() {
+                arena.push(ListBuild {
+                    ordered,
+                    start,
+                    items: Vec::new(),
+                });
+                let id = arena.len() - 1;
+                let parent_item =
+                    parent.and_then(|(list, _)| arena[list].items.len().checked_sub(1).map(|i| (list, i)));
+                match parent_item {
+                    Some((list, item)) => arena[list].items[item].lists.push(id),
+                    None => roots.push(id),
+                }
+                if level < bridges {
+                    arena[id].items.push(ItemBuild {
+                        checked: None,
+                        paragraph: None,
+                        lists: Vec::new(),
+                    });
+                }
+                stack.push((id, indent));
+                parent = Some((id, indent));
+            }
         }
         let (list, _) = *stack.last().unwrap();
 
         let empty_todo = paragraph.kind == ParagraphKind::TodoList && paragraph.text.is_empty();
         let checked =
             (paragraph.kind == ParagraphKind::TodoList && !empty_todo).then(|| paragraph.done.unwrap_or(false));
-        let children = if empty_todo {
+        // An empty checklist item is written `- [ ]`, a line of text to
+        // Markdown, which the line after it may continue: a line of text,
+        // or a numbered item counting from other than 1 (a list starting at
+        // it can't break into a line of text). Before one, it is written as
+        // an empty item, the nearest Markdown has (push keeps it a
+        // checklist item until it is edited).
+        let next_continues = match paragraphs.get(index + 1) {
+            Some(next) => {
+                next.kind == ParagraphKind::NumberedList && effective_start_number(next.start_number) != 1
+            }
+            None => continued,
+        };
+        let continued_todo = empty_todo && next_continues;
+        let mut children = if empty_todo && !continued_todo {
             vec![Node::Html(w(if paragraph.done == Some(true) { "[x]" } else { "[ ]" }))]
         } else {
             phrasing_from_paragraph(paragraph, spelling)
         };
+        // An empty item starting a list right below a line of text (or
+        // nested under an item's) would be more of that text, or underline
+        // it: one holding a space (`- &#x20;`) is an item there, and reads
+        // back as empty. One more of a list already open is an item anyway.
+        let previous = index.checked_sub(1).map(|p| &paragraphs[p]).or(before);
+        if children.is_empty() && needs_new && previous.is_some_and(ends_in_text) {
+            children.push(Node::Html(w("&#x20;")));
+        }
         arena[list].items.push(ItemBuild {
             checked,
-            paragraph: Node::Paragraph(children),
+            // An empty item holds nothing (as the mdast of `-` does), so
+            // that one nested first in an item isn't written `- - -`, a rule.
+            paragraph: (!children.is_empty()).then_some(Node::Paragraph(children)),
             lists: Vec::new(),
         });
     }
@@ -237,7 +311,7 @@ fn build_list_nodes(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> Ve
         let children = items
             .into_iter()
             .map(|item| {
-                let mut children = vec![item.paragraph];
+                let mut children: Vec<Node> = item.paragraph.into_iter().collect();
                 for list in item.lists {
                     children.push(assemble(arena, list));
                 }

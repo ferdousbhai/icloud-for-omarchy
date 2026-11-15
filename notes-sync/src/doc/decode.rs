@@ -1,18 +1,20 @@
 //! Record classification: the shared skip/decode rules `clone`, `pull` and
 //! `push` use. Originally derived from icloud-md.
 
+use std::ops::Range;
+
 use serde_json::Value;
 
-use super::embeds::{
-    AttachmentReference, EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, UNKNOWN_CONTENT_BANNER, embed_slots_of, is_table_uti,
-};
+use super::embeds::{AttachmentReference, EmbedSlot, OBJECT_REPLACEMENT_CHARACTER, embed_slots_of, is_table_uti};
 use super::encode::TRASH_FOLDER_RECORD_NAME;
-use super::format::{FormatParagraph, ParagraphKind, decode_note_format, trim_trailing_whitespace};
+use super::format::{
+    FormatParagraph, ParagraphKind, decode_note_format, paragraph_projections_equal, trim_trailing_whitespace,
+};
 use super::text::decode_note_string;
 use crate::cloudkit::{CloudKitRecord, FieldValue};
 use crate::js::{base64_decode, buffer_to_utf8};
-use crate::md::parse::ParsedNoteMarkdown;
-use crate::md::render::{projection_survives, render_note_markdown};
+use crate::md::parse::{ParsedNoteMarkdown, parse_note_markdown};
+use crate::md::render::render_note_markdown;
 use crate::vault::state::TitleMode;
 
 /// `ClassifyNoteOptions`.
@@ -64,11 +66,39 @@ pub struct DecodedNote {
     pub title_stripped: bool,
     pub embed_slots: Vec<EmbedSlot>,
     pub attachments: Vec<AttachmentReference>,
+    /// The tables (indexes into `embed_slots`) written as their embed
+    /// marker rather than as a Markdown table: one whose Markdown table
+    /// couldn't be read back from where it would be written
+    /// ([`tables_kept_as_markers`]).
+    pub table_markers: Vec<usize>,
     pub publishable: bool,
     pub unpublishable_reason: Option<String>,
 }
 
 impl DecodedNote {
+    /// What push sends for `parsed` (what the note's file reads as, its
+    /// unwritten lines put back): every paragraph whose Markdown the edit
+    /// left alone as the note has it, and the others as their Markdown
+    /// says. Markdown can't show everything a note holds (a highlight, a
+    /// dash list, a style this tool doesn't know), and some of what it
+    /// shows reads back as something a little different: a paragraph is
+    /// only made what its Markdown says when its Markdown changed, so an
+    /// edit changes nothing but what it changed. "Left alone" is measured
+    /// against the Markdown this tool writes for the note as it is in
+    /// iCloud (`markdown_text`), which is the file as last pulled, or the
+    /// remote side of the merge push made.
+    pub fn keep_untouched(&self, parsed: ParsedNoteMarkdown) -> ParsedNoteMarkdown {
+        let Some(format) = &self.format else {
+            return parsed;
+        };
+        let note = if self.title_stripped { &format[1..] } else { &format[..] };
+        let Ok(base) = parse_note_markdown(&self.markdown_text) else {
+            return parsed;
+        };
+        let base = self.with_unwritten_lines(base);
+        ParsedNoteMarkdown::from_paragraphs(merge_untouched(note, &base.paragraphs, &parsed.paragraphs))
+    }
+
     /// `parsed`, what the note's file reads as, with the lines the file
     /// can't hold put back as the note has them. An in-body vault's file
     /// body starts after the frontmatter and every blank line after it
@@ -158,21 +188,21 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
     let title = decode_title_field(record.fields.get("TitleEncrypted"));
     let title_line = body_text.split('\n').next().unwrap_or("").to_string();
 
+    // Runs past the end of the text: nothing says which characters they
+    // mean, so neither the embeds nor the formatting can be read.
     let Some(embed_slots) = embed_slots_of(&string) else {
-        let banner_text = format!("{UNKNOWN_CONTENT_BANNER}{body_text}");
         return NoteDecodeResult::Ok(Box::new(DecodedNote {
             title,
             title_line,
-            body_text: banner_text.clone(),
-            markdown_text: banner_text,
+            body_text: body_text.clone(),
+            markdown_text: body_text,
             format: None,
             title_stripped: false,
             embed_slots: Vec::new(),
             attachments: Vec::new(),
+            table_markers: Vec::new(),
             publishable: false,
-            unpublishable_reason: Some(
-                "contains unrecognized embedded content this tool couldn't parse or place precisely".into(),
-            ),
+            unpublishable_reason: Some(OVERSHOOTING_RUNS_REASON.into()),
         }));
     };
     let attachments: Vec<AttachmentReference> = embed_slots
@@ -191,19 +221,19 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
         title_stripped: false,
         embed_slots,
         attachments,
+        table_markers: Vec::new(),
         publishable: false,
         unpublishable_reason: None,
-    };
-    let unpublishable = |reason: String| {
-        NoteDecodeResult::Ok(Box::new(DecodedNote {
-            unpublishable_reason: Some(reason),
-            ..base.clone()
-        }))
     };
 
     let paragraphs = match decode_note_format(&body_text, &string.attribute_run) {
         Ok(paragraphs) => paragraphs,
-        Err(reason) => return unpublishable(reason),
+        Err(reason) => {
+            return NoteDecodeResult::Ok(Box::new(DecodedNote {
+                unpublishable_reason: Some(reason),
+                ..base
+            }));
+        }
     };
     let strip_title = options.title_mode == TitleMode::Filename
         && paragraphs
@@ -225,37 +255,40 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
         }));
     }
 
+    // The Markdown that reads back as the note, or as near to it as Markdown
+    // comes: push keeps what it doesn't show as the note has it until the
+    // paragraph is edited (`keep_untouched`).
     let rendered = render_note_markdown(&projected);
     let trimmed: Vec<FormatParagraph> = projected.iter().map(trim_trailing_whitespace).collect();
-    if !projection_survives(&trimmed, &rendered) {
-        return unpublishable("the note's formatting doesn't survive this tool's markdown round trip".into());
-    }
-    if !tables_read_back(&trimmed, &rendered, &base.embed_slots) {
-        return unpublishable(
-            "a table shares its line with text, or sits in a list, heading, quote or code block, or the line after it \
-             reads as one of its rows: its Markdown table can't be read back"
-                .into(),
-        );
-    }
+    let table_markers = tables_kept_as_markers(&trimmed, &rendered, &base.embed_slots);
     NoteDecodeResult::Ok(Box::new(DecodedNote {
         markdown_text: rendered,
         format: Some(paragraphs),
         title_stripped: strip_title,
+        table_markers,
         publishable: true,
         ..base
     }))
 }
 
-/// Whether every table of the note reads back from where its Markdown table
-/// is written, in place of its U+FFFC: the placeholder is a plain line of
-/// its own (no text before or after it, no list, heading, quote, code or
-/// styling around it, any of which keeps the table from being found where
-/// it is written, or ends its last row early), and the line after it can't
-/// be read as one more of its rows. `paragraphs` are the ones `rendered`
-/// writes, their embeds numbered from the first of `slots`.
-fn tables_read_back(paragraphs: &[FormatParagraph], rendered: &str, slots: &[EmbedSlot]) -> bool {
+/// Why a note whose formatting runs overshoot its text is read-only: which
+/// characters they mean can't be told, so neither its formatting nor its
+/// embeds can be kept through an edit.
+pub const OVERSHOOTING_RUNS_REASON: &str = "the note's formatting runs overshoot its text";
+
+/// The tables (indexes into `slots`) whose Markdown table wouldn't read back
+/// from where it is written, in place of its U+FFFC: each is written as its
+/// embed marker instead, which stays in its place through any edit around
+/// it. A table reads back when its placeholder is a plain line of its own
+/// (no text before or after it, no list, heading, quote, code or styling
+/// around it, any of which keeps the table from being found where it is
+/// written, or ends its last row early), and the line after it can't be read
+/// as one more of its rows. `paragraphs` are the ones `rendered` writes,
+/// their embeds numbered from the first of `slots`.
+fn tables_kept_as_markers(paragraphs: &[FormatParagraph], rendered: &str, slots: &[EmbedSlot]) -> Vec<usize> {
     let is_table = |slot: usize| matches!(slots.get(slot), Some(EmbedSlot::Attachment(reference)) if is_table_uti(&reference.type_uti));
     let placeholder = OBJECT_REPLACEMENT_CHARACTER.to_string();
+    let mut markers = Vec::new();
     let mut slot = 0;
     for paragraph in paragraphs {
         for _ in paragraph.text.chars().filter(|&c| c == OBJECT_REPLACEMENT_CHARACTER) {
@@ -264,7 +297,7 @@ fn tables_read_back(paragraphs: &[FormatParagraph], rendered: &str, slots: &[Emb
                     && paragraph.block_quote_level == 0
                     && paragraph.text == placeholder)
             {
-                return false;
+                markers.push(slot);
             }
             slot += 1;
         }
@@ -277,13 +310,155 @@ fn tables_read_back(paragraphs: &[FormatParagraph], rendered: &str, slots: &[Emb
     let mut slot = 0;
     for (index, line) in lines.iter().enumerate() {
         for _ in line.chars().filter(|&c| c == OBJECT_REPLACEMENT_CHARACTER) {
-            if is_table(slot) && (*line != placeholder || lines.get(index + 1).is_some_and(|next| reads_as_row(next))) {
-                return false;
+            // The line after it: a row of its own, or the header of a table
+            // written right below it.
+            let row_after = lines
+                .get(index + 1)
+                .is_some_and(|next| reads_as_row(next) || (*next == placeholder && is_table(slot + 1)));
+            if is_table(slot) && (*line != placeholder || row_after) {
+                markers.push(slot);
             }
             slot += 1;
         }
     }
-    true
+    markers.sort_unstable();
+    markers.dedup();
+    markers
+}
+
+/// [`DecodedNote::keep_untouched`] on paragraphs: `note` (the note's own,
+/// as iCloud has them), `base` (what the Markdown written for them reads
+/// back as) and `edited` (what the edited Markdown reads as).
+///
+/// `base` is lined up with `note`: a paragraph that reads back as itself
+/// is a pair, and what lies between two pairs is one stretch (paragraph by
+/// paragraph when they have the same texts). `edited` is lined up with
+/// `base`. A stretch whose every `base` paragraph is in `edited`, unchanged
+/// and together, is sent as `note` has it; any other is sent as `edited`
+/// has it.
+fn merge_untouched(
+    note: &[FormatParagraph],
+    base: &[FormatParagraph],
+    edited: &[FormatParagraph],
+) -> Vec<FormatParagraph> {
+    let same = |a: &FormatParagraph, b: &FormatParagraph| paragraph_projections_equal(a, b, None, None);
+    let text = |p: &FormatParagraph| trim_trailing_whitespace(p).text;
+    let placeholders = |paragraphs: &[FormatParagraph]| {
+        paragraphs
+            .iter()
+            .map(|p| p.text.matches(OBJECT_REPLACEMENT_CHARACTER).count())
+            .sum::<usize>()
+    };
+
+    // Stretches of `base` and `note` that stand for each other, in order.
+    let mut stretches: Vec<(Range<usize>, Range<usize>)> = Vec::new();
+    let (mut b, mut n) = (0, 0);
+    let pairs = common_subsequence(base, note, &same);
+    for &(pair_b, pair_n) in pairs.iter().chain(std::iter::once(&(base.len(), note.len()))) {
+        let (gap_b, gap_n) = (b..pair_b, n..pair_n);
+        if gap_b.len() == gap_n.len() && gap_b.clone().zip(gap_n.clone()).all(|(i, j)| text(&base[i]) == text(&note[j])) {
+            stretches.extend(gap_b.zip(gap_n).map(|(i, j)| (i..i + 1, j..j + 1)));
+        } else if !gap_b.is_empty() || !gap_n.is_empty() {
+            stretches.push((gap_b, gap_n));
+        }
+        if pair_b < base.len() {
+            stretches.push((pair_b..pair_b + 1, pair_n..pair_n + 1));
+        }
+        (b, n) = (pair_b + 1, pair_n + 1);
+    }
+
+    // Where each `base` paragraph is in `edited`, unchanged.
+    let mut in_edited: Vec<Option<usize>> = vec![None; base.len()];
+    for (i, j) in common_subsequence(base, edited, &same) {
+        in_edited[i] = Some(j);
+    }
+    // `edited`'s position just after `base`'s paragraph `i - 1` (0 at the
+    // start), when that paragraph is in it unchanged.
+    let after = |i: usize| if i == 0 { Some(0) } else { in_edited[i - 1].map(|j| j + 1) };
+
+    let mut out: Vec<FormatParagraph> = Vec::new();
+    let mut next = 0;
+    for (base_range, note_range) in stretches {
+        let kept = placeholders(&base[base_range.clone()]) == placeholders(&note[note_range.clone()]);
+        if base_range.is_empty() {
+            // Paragraphs the note has and the Markdown doesn't show: kept
+            // when nothing was put or changed where they are.
+            let before = after(base_range.start);
+            let at = if base_range.start == base.len() {
+                Some(edited.len())
+            } else {
+                in_edited[base_range.start]
+            };
+            if kept && before.is_some() && before == at {
+                out.extend(edited[next..before.unwrap_or(next).max(next)].iter().cloned());
+                next = next.max(before.unwrap_or(next));
+                out.extend(note[note_range].iter().cloned());
+            }
+            continue;
+        }
+        let found: Vec<Option<usize>> = base_range.clone().map(|i| in_edited[i]).collect();
+        let together = found.iter().all(Option::is_some)
+            && found.windows(2).all(|pair| pair[1] == pair[0].map(|j| j + 1));
+        if kept && together {
+            let (first, last) = (found[0].unwrap_or(next), found[found.len() - 1].unwrap_or(next));
+            out.extend(edited[next..first.max(next)].iter().cloned());
+            out.extend(note[note_range].iter().cloned());
+            next = next.max(last + 1);
+        } else if let Some(last) = found.iter().flatten().max() {
+            out.extend(edited[next..(last + 1).max(next)].iter().cloned());
+            next = next.max(last + 1);
+        }
+    }
+    out.extend(edited[next.min(edited.len())..].iter().cloned());
+    out
+}
+
+/// The pairs `(i, j)` of a longest common subsequence of `a` and `b` under
+/// `same`, in order. Past their common start and end, a stretch too long to
+/// compare every pair of is taken as having nothing in common.
+fn common_subsequence(
+    a: &[FormatParagraph],
+    b: &[FormatParagraph],
+    same: &dyn Fn(&FormatParagraph, &FormatParagraph) -> bool,
+) -> Vec<(usize, usize)> {
+    const MOST_PAIRS: usize = 4_000_000;
+    let prefix = a.iter().zip(b).take_while(|(x, y)| same(x, y)).count();
+    let suffix = a[prefix..]
+        .iter()
+        .rev()
+        .zip(b[prefix..].iter().rev())
+        .take_while(|(x, y)| same(x, y))
+        .count();
+    let (middle_a, middle_b) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
+    let mut pairs: Vec<(usize, usize)> = (0..prefix).map(|i| (i, i)).collect();
+    let (n, m) = (middle_a.len(), middle_b.len());
+    if n > 0 && m > 0 && n.saturating_mul(m) <= MOST_PAIRS {
+        let mut lengths = vec![0u32; (n + 1) * (m + 1)];
+        let at = |i: usize, j: usize| i * (m + 1) + j;
+        for i in (0..n).rev() {
+            for j in (0..m).rev() {
+                lengths[at(i, j)] = if same(&middle_a[i], &middle_b[j]) {
+                    lengths[at(i + 1, j + 1)] + 1
+                } else {
+                    lengths[at(i + 1, j)].max(lengths[at(i, j + 1)])
+                };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < n && j < m {
+            if same(&middle_a[i], &middle_b[j]) && lengths[at(i, j)] == lengths[at(i + 1, j + 1)] + 1 {
+                pairs.push((prefix + i, prefix + j));
+                i += 1;
+                j += 1;
+            } else if lengths[at(i + 1, j)] >= lengths[at(i, j + 1)] {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+    }
+    pairs.extend((0..suffix).map(|k| (a.len() - suffix + k, b.len() - suffix + k)));
+    pairs
 }
 
 /// `isDeleted`: the record-level `deleted` flag, a non-zero `Deleted` field,

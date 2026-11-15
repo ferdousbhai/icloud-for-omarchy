@@ -48,7 +48,7 @@ fn sites() -> Vec<(Refusal, PlanResolution, String)> {
             Refusal::UpdateUnknownContent { file: FILE.into() },
             Refused,
             format!(
-                "this note contains content this tool can't parse and can never be pushed - run \"icloud-notes restore {FILE}\" to discard your local edit."
+                "this file still has the \"Unparsed content\" banner an older version of this tool wrote for a note it couldn't read - run \"icloud-notes restore {FILE}\" to discard your local edit, and \"pull\" then writes the note as Markdown that can be edited."
             ),
         ),
         (

@@ -31,7 +31,7 @@ use crate::doc::document::{
 use crate::doc::embeds::{
     AttachmentReference, EmbedSlot, NewAttachmentLink, OBJECT_REPLACEMENT_CHARACTER, attachment_link_spellings,
     decode_note_embed_slots, has_attachment_link_to, has_attachment_reference, has_embed_marker,
-    has_unknown_content_marker, plan_embed_representations, plan_new_attachment_links,
+    has_unknown_content_marker, plan_embed_representations, plan_new_attachment_links, unplaced_content,
 };
 use crate::doc::encode::{
     DEFAULT_FOLDER_RECORD_NAME, NewAttachmentFields, TRASH_FOLDER_RECORD_NAME, build_attachment_create_fields,
@@ -39,8 +39,8 @@ use crate::doc::encode::{
     build_note_trash_fields, build_note_update_fields,
 };
 use crate::doc::format::{FormatParagraph, decode_note_format, note_holds_format};
-use crate::doc::proto::topotext::AttachmentInfo;
-use crate::doc::reconcile::reconcile_note_format;
+use crate::doc::proto::topotext::{AttachmentInfo, AttributeRun};
+use crate::doc::reconcile::{reconcile_edited_note_format, reconcile_note_format};
 use crate::doc::table_edit::prepare_table_attachment_update;
 use crate::doc::text::{compress_note_document, decode_note_body_text, decode_note_string, decompress_note_document};
 use crate::js::{self, posix};
@@ -2522,6 +2522,26 @@ fn placeholder_offsets(text: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The content of a note this tool can't place ([`unplaced_content`]), in
+/// order: each one's text and what its run says of it.
+fn unplaced_texts_of(runs: &[AttributeRun], text: &str) -> Vec<(String, Option<AttachmentInfo>)> {
+    let units = js::utf16(text);
+    let mut offset = 0usize;
+    let mut out = Vec::new();
+    let ranges = unplaced_content(runs, &units);
+    for run in runs {
+        let range = offset..offset + run.len() as usize;
+        offset = range.end;
+        if ranges.contains(&range) {
+            out.push((
+                js::from_utf16(&units[range.start.min(units.len())..range.end.min(units.len())]),
+                run.attachment_info.clone(),
+            ));
+        }
+    }
+    out
+}
+
 /// The placeholder of an attachment an edit removes from a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemovedPlaceholder {
@@ -2990,17 +3010,21 @@ pub fn prepare_retitle(
 }
 
 /// `restoreStrippedTitle`: put the live title paragraph (or the one an
-/// `apple-note-title` asks for) back in front of a body-only parse.
+/// `apple-note-title` asks for) back in front of a body-only parse, every
+/// paragraph the edit left alone as the note has it
+/// ([`DecodedNote::keep_untouched`]).
 pub fn restore_stripped_title(
     classified: &DecodedNote,
     parsed: NoteText,
     requested_title: Option<&str>,
 ) -> Result<NoteText, PrepareRefusal> {
+    let parsed = classified.keep_untouched(classified.with_unwritten_lines(parsed));
     if !classified.title_stripped {
-        if requested_title.is_some() {
+        // The title the frontmatter carries as it is: no retitle asked for.
+        if requested_title.is_some_and(|title| title != classified.title_line) {
             return Err(PrepareRefusal::TitleHasEmbedCannotRetitle);
         }
-        return Ok(classified.with_unwritten_lines(parsed));
+        return Ok(parsed);
     }
     let Some(current) = classified.format.as_ref().and_then(|f| f.first()) else {
         return Err(PrepareRefusal::NoTitleParagraph);
@@ -3009,10 +3033,7 @@ pub fn restore_stripped_title(
         Some(retitle) => title_paragraph_from_filename(&retitle),
         None => current.clone(),
     };
-    Ok(restore_title_paragraph_text(
-        &title,
-        &classified.with_unwritten_lines(parsed).paragraphs,
-    ))
+    Ok(restore_title_paragraph_text(&title, &parsed.paragraphs))
 }
 
 fn note_record_update(record: &CloudKitRecord, entry: &NoteEntry, fields: UpdateFields) -> RecordUpdate {
@@ -3135,6 +3156,20 @@ fn prepare_note_text_update(
     if doc.text != remaining_text {
         return Ok(Err(TextUpdateRefusal::RebuiltDecodeFailed));
     }
+    // Text carrying an embed this tool can't place stays exactly as it is:
+    // no splice deletes any of it or inserts inside it.
+    let unplaced = unplaced_texts_of(&doc.attribute_runs, &doc.text);
+    let unplaced_ranges = unplaced_content(&doc.attribute_runs, &js::utf16(&remaining_text));
+    let touches_unplaced = compute_splices(&remaining_text, &edited_text).iter().any(|splice| {
+        let end = splice.start + splice.delete_length;
+        unplaced_ranges.iter().any(|range| {
+            (splice.start < range.end && end > range.start)
+                || (!splice.insert_text.is_empty() && splice.start > range.start && splice.start < range.end)
+        })
+    });
+    if touches_unplaced {
+        return Ok(Err(TextUpdateRefusal::TouchesUnplacedContent { file: file.to_owned() }));
+    }
     let mut text_changed = match apply_text_edit(&mut doc, &edited_text, &edit_options) {
         Ok(changed) => changed || !removed.is_empty(),
         Err(e) => return Ok(Err(exception(e))),
@@ -3153,7 +3188,7 @@ fn prepare_note_text_update(
     if doc.text != desired.text {
         return Ok(Err(TextUpdateRefusal::RebuiltDecodeFailed));
     }
-    let format_changed = match reconcile_note_format(&mut doc, &desired.paragraphs, replica) {
+    let format_changed = match reconcile_edited_note_format(&mut doc, &desired.paragraphs, replica, text_changed) {
         Ok(Ok(changed)) => changed,
         Err(e) => return Ok(Err(exception(e))),
         Ok(Err(reason)) => {
@@ -3188,6 +3223,9 @@ fn prepare_note_text_update(
         Ok(s) => s,
         Err(e) => return Ok(Err(exception(e))),
     };
+    if unplaced_texts_of(&rebuilt.attribute_run, rebuilt.string()) != unplaced {
+        return Ok(Err(TextUpdateRefusal::RebuiltEmbedFailed));
+    }
     match decode_note_format(rebuilt.string(), &rebuilt.attribute_run) {
         Ok(format) if note_holds_format(&format, &desired.paragraphs) => {}
         _ => return Ok(Err(TextUpdateRefusal::RebuiltFormatFailed)),

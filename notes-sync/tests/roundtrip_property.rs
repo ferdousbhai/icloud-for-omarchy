@@ -3,22 +3,25 @@
 //! kind and in every position, frontmatter this tool does not own, titles of
 //! every shape) and generated edits to their Markdown.
 //!
-//! The property is safety, not perfection. For every case either
+//! The property: every generated note is editable. Its Markdown, pushed
+//! back unedited, sends nothing; an edit sends exactly what the edited
+//! Markdown says of the paragraphs it changed, and every paragraph it left
+//! alone stays exactly as the note has it, down to what Markdown doesn't
+//! show. Then either
 //!
 //! - (a) the round trip is exact: the note pulled, the Markdown read back
 //!   is the note (document → Markdown → document), and a Markdown file
 //!   pushed then pulled reads back as itself (Markdown → document →
-//!   Markdown); an edit to the Markdown changes exactly that in the note;
-//! - or (b) the engine says so itself: the note is read-only (with a
-//!   reason), or the push is refused (with a reason) and sends nothing;
+//!   Markdown);
+//! - or (b) the note holds what Markdown can't say exactly (converted): it
+//!   stays editable all the same, and what its Markdown doesn't show is
+//!   kept until the paragraph holding it is edited;
+//! - or (c) the push of a particular edit is refused, with a reason, and
+//!   sends nothing (an edit to an embed, Markdown with no Apple Notes
+//!   equivalent).
 //!
-//! never (c): a push that sends a document other than what the Markdown
-//! says, an edit that changes the note elsewhere too, or a pull that writes
-//! Markdown reading back as something else without a word. A pulled file
-//! that doesn't read back as its note counts as (b) when every edit to it
-//! is refused: that is how the held-back cases show up (a table right below
-//! a list item or quote; strikethrough or an emoji next to a letter, which
-//! makes the note read-only).
+//! Never: a read-only note, a push that sends a document other than what the
+//! Markdown says, or an edit that changes the note elsewhere too.
 //!
 //! Four suites: `codec_*` (the codec and the Markdown in memory, many
 //! cases), `markdown_*` (generated Markdown, as a new note's file),
@@ -56,7 +59,7 @@ use icloud_notes_sync::doc::format::{
     paragraph_projections_equal, trim_trailing_whitespace,
 };
 use icloud_notes_sync::doc::proto::topotext::{AttachmentInfo, AttributeRun, Color, Font, ParagraphStyle, Todo};
-use icloud_notes_sync::doc::reconcile::reconcile_note_format_with;
+use icloud_notes_sync::doc::reconcile::reconcile_note_format_with_repair;
 use icloud_notes_sync::doc::table_edit::apply_table_edit_with;
 use icloud_notes_sync::doc::tables::{encode_table_document, grid_from_table_document, parse_table_document};
 use icloud_notes_sync::doc::text::{compress_note_document, decode_note_string, decompress_note_document};
@@ -266,21 +269,9 @@ fn words(rng: &mut Rng, low: usize, high: usize) -> String {
         if i > 0 && rng.chance(70) {
             text.push(' ');
         }
-        let mut word = *rng.pick(WORDS);
-        while TAME.get() && word.chars().any(|c| c as u32 > 0xFFFF) {
-            word = rng.pick(WORDS);
-        }
-        text.push_str(word);
+        text.push_str(rng.pick(WORDS));
     }
     text
-}
-
-thread_local! {
-    /// Most notes are drawn tame: no astral characters and no strikethrough,
-    /// whose spelling next to a letter makes nearly every note that has them
-    /// read-only (the held-back attention-encoding change), so that most
-    /// cases reach the push.
-    static TAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What a U+FFFC stands for.
@@ -403,7 +394,7 @@ fn gen_style(rng: &mut Rng, text: &str) -> InlineStyle {
     }
     style.bold = rng.chance(35);
     style.italic = rng.chance(30);
-    style.strikethrough = !TAME.get() && rng.chance(15);
+    style.strikethrough = rng.chance(15);
     style.underline = rng.chance(15);
     if rng.chance(20) {
         style.link = if rng.chance(25) && !text.is_empty() {
@@ -488,7 +479,6 @@ fn gen_paragraph(rng: &mut Rng, allow_embeds: bool) -> GenParagraph {
 }
 
 fn gen_note(rng: &mut Rng, allow_embeds: bool) -> GenNote {
-    TAME.set(rng.chance(65));
     let count = rng.range(1, 9);
     let mut paragraphs: Vec<GenParagraph> = (0..count).map(|_| gen_paragraph(rng, allow_embeds)).collect();
     // Mostly as Notes nests: a list item at most one level below the one
@@ -758,9 +748,10 @@ fn decode_sent(base64: &str) -> (String, Vec<FormatParagraph>) {
 enum Outcome {
     /// (a) Everything round-tripped exactly.
     Exact,
-    /// (b) The engine marked the note read-only, with a reason.
-    ReadOnly,
-    /// (b) The engine refused the push (or would, as push checks what it
+    /// (b) The Markdown doesn't say exactly what the note holds, and edits
+    /// keep what it doesn't say.
+    Converted,
+    /// (c) The engine refused the push (or would, as push checks what it
     /// built before sending it), with a reason.
     Refused,
     /// Not a case: what was generated is no note at all.
@@ -807,9 +798,14 @@ fn same_paragraph(a: &FormatParagraph, b: &FormatParagraph) -> bool {
 /// exactly as it was, down to what the Markdown doesn't show (a dash list
 /// stays a dash list, a link the same as its text stays a link, a code
 /// block's styling stays). Paragraphs are matched by a longest common
-/// subsequence of their texts. Trailing whitespace, which no Markdown line
-/// keeps, is the one thing allowed to go.
-fn untouched_paragraphs_kept(before: &[FormatParagraph], after: &[FormatParagraph]) -> Result<(), String> {
+/// subsequence of their texts. A paragraph whose text stayed and whose
+/// formatting changed is one the edit asked for (`asked`: the edited
+/// Markdown has it, and the Markdown before didn't).
+fn untouched_paragraphs_kept(
+    before: &[FormatParagraph],
+    after: &[FormatParagraph],
+    asked: &dyn Fn(&FormatParagraph) -> bool,
+) -> Result<(), String> {
     let (n, m) = (before.len(), after.len());
     let text = |p: &FormatParagraph| trim_trailing_whitespace(p).text;
     let mut lcs = vec![vec![0usize; m + 1]; n + 1];
@@ -836,7 +832,8 @@ fn untouched_paragraphs_kept(before: &[FormatParagraph], after: &[FormatParagrap
             // A note's last line, empty but for whitespace, is an empty line
             // (`note_holds_format`).
             let empty_last = (i + 1 == n || j + 1 == m) && text(&before[i]).is_empty();
-            if paragraph_projections_equal(&before[i], &after[j], previous_before, previous_after)
+            if (paragraph_projections_equal(&before[i], &after[j], previous_before, previous_after)
+                || !asked(&after[j]))
                 && !same_paragraph(&before[i], &after[j])
                 && !kept_somewhere()
                 && !empty_last
@@ -940,8 +937,41 @@ fn reads_back_as(format: &[FormatParagraph], back: &ParsedNoteMarkdown) -> bool 
     text(&note) == text(&back) && formats_round_trip_equal(&note, &back)
 }
 
+/// Whether a note reading back as `back` holds `wanted` (but for trailing
+/// whitespace, and the style of an empty last line: `note_holds_format`).
+fn holds(back: &ParsedNoteMarkdown, wanted: &[FormatParagraph]) -> bool {
+    let wanted: Vec<FormatParagraph> = wanted.iter().map(trim_trailing_whitespace).collect();
+    let text = wanted.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n");
+    let back: Vec<FormatParagraph> = back.paragraphs.iter().map(trim_trailing_whitespace).collect();
+    back.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n") == text && note_holds_format(&back, &wanted)
+}
+
+/// Whether an edit from Markdown reading as `base` to Markdown reading as
+/// `edited` asked for a paragraph like `p`: `edited` has one, and `base`
+/// had none.
+fn asked_by(base: &[FormatParagraph], edited: &[FormatParagraph], p: &FormatParagraph) -> bool {
+    let like = |a: &FormatParagraph, b: &FormatParagraph| paragraph_projections_equal(a, b, None, None);
+    edited.iter().any(|d| like(d, p) && !base.iter().any(|b| like(b, d)))
+}
+
+/// What `markdown` (embeds as U+FFFC) reads as, as push reads a file
+/// (unwritten lines and a stripped title put back), before push keeps the
+/// paragraphs the edit left alone.
+fn as_written(classified: &DecodedNote, markdown: &str) -> Option<ParsedNoteMarkdown> {
+    let parsed = classified.with_unwritten_lines(parse_note_markdown(markdown).ok()?);
+    if !classified.title_stripped {
+        return Some(parsed);
+    }
+    let title = classified.format.as_ref()?.first()?;
+    Some(icloud_notes_sync::md::title::restore_title_paragraph_text(
+        title,
+        &parsed.paragraphs,
+    ))
+}
+
 /// `parsed` with the title paragraph a filename-as-title note keeps out of
-/// its file put back, as push does.
+/// its file put back, and the paragraphs the edit left alone as the note
+/// has them, as push does.
 fn with_title(classified: &DecodedNote, parsed: ParsedNoteMarkdown) -> Option<ParsedNoteMarkdown> {
     restore_stripped_title(classified, parsed, None).ok()
 }
@@ -952,8 +982,14 @@ fn wanted(classified: &DecodedNote, markdown: &str) -> Option<ParsedNoteMarkdown
 }
 
 fn reconcile(doc: &mut NoteDocument, desired: &[FormatParagraph]) -> Result<bool, String> {
+    reconcile_edit(doc, desired, true)
+}
+
+/// As push reconciles an edit's formatting: the repairs only when the text
+/// changed (`repair`) or some formatting does.
+fn reconcile_edit(doc: &mut NoteDocument, desired: &[FormatParagraph], repair: bool) -> Result<bool, String> {
     let mut n = 0u8;
-    reconcile_note_format_with(doc, desired, &replica(), &mut || {
+    reconcile_note_format_with_repair(doc, desired, &replica(), repair, &mut || {
         n = n.wrapping_add(1);
         [n; 16]
     })
@@ -973,13 +1009,13 @@ fn edit_document(doc: &NoteDocument, desired: &ParsedNoteMarkdown) -> Result<Not
         return Err("the edit touches an embed".into());
     }
     let mut edited = parse_note_document(&encode_note_document(doc).unwrap()).unwrap();
-    apply_text_edit(
+    let text_changed = apply_text_edit(
         &mut edited,
         &desired.text,
         &ApplyTextEditOptions { replica_id: replica() },
     )
     .map_err(|e| e.to_string())?;
-    reconcile(&mut edited, &desired.paragraphs)?;
+    reconcile_edit(&mut edited, &desired.paragraphs, text_changed)?;
     Ok(edited)
 }
 
@@ -1148,10 +1184,10 @@ fn moves_lines(what: &str) -> bool {
 
 // --- the codec suite ----------------------------------------------------------------
 
-/// A note through the codec and the Markdown, in memory: classified (read
-/// only, or its Markdown reads back as it), its Markdown parsed and
-/// reconciled into its document changing nothing, then an edit to that
-/// Markdown made in its document: refused, or exactly that edit.
+/// A note through the codec and the Markdown, in memory: classified
+/// (editable, its Markdown reading back as it or converted), its Markdown
+/// pushed back unedited changing nothing, then an edit to that Markdown
+/// made in its document: refused, or exactly that edit.
 fn check_codec(note: &GenNote, seed: u64) -> Checked {
     let mut rng = Rng(seed ^ 0x5eed);
     let Some(doc) = build_document(note, &mut rng) else {
@@ -1166,10 +1202,7 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
         other => return Err(format!("a note Notes could write isn't read at all: {other:?}")),
     };
     if !classified.publishable {
-        if classified.unpublishable_reason.as_deref().is_none_or(str::is_empty) {
-            return Err("read-only without a reason".into());
-        }
-        return Ok(Outcome::ReadOnly);
+        return Err(format!("the note is read-only: {:?}", classified.unpublishable_reason));
     }
     if classified.embed_slots.len() != embeds_of(note).len() {
         return Err(format!(
@@ -1179,26 +1212,25 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
         ));
     }
     let markdown = &classified.markdown_text;
-    let Some(back) = wanted(&classified, markdown) else {
+    let Some(back) = as_written(&classified, markdown) else {
         return Err(format!("the Markdown pull writes doesn't read back: {markdown:?}"));
     };
-    if !reads_back_as(&format, &back) {
+    let mut outcome = if reads_back_as(&format, &back) {
+        Outcome::Exact
+    } else {
+        Outcome::Converted
+    };
+    // Pushed back unedited (as when the file was saved again): nothing
+    // changes at all.
+    let Some(unedited_wanted) = wanted(&classified, markdown) else {
+        return Err(format!("the unedited Markdown {markdown:?} is refused"));
+    };
+    let unedited = edit_document(&doc, &unedited_wanted).map_err(|e| format!("the unedited Markdown is refused: {e}"))?;
+    if unedited.text != doc.text || unedited.attribute_runs != doc.attribute_runs {
         return Err(format!(
-            "the Markdown pull writes reads back as another note:\n  markdown {markdown:?}\n  note {format:?}\n  read back {:?}",
-            back.paragraphs
-        ));
-    }
-    // Pushed back unedited (as when the file was saved again): nothing changes
-    // but the trailing whitespace Markdown can't keep.
-    let unedited = edit_document(&doc, &back).map_err(|e| format!("the unedited Markdown is refused: {e}"))?;
-    let rewritten = format_of(&unedited);
-    if rewritten.len() != format.len()
-        || untouched_paragraphs_kept(&format, &rewritten).is_err()
-        || hidden_attributes_kept((&doc, &format), (&unedited, &rewritten)).is_err()
-    {
-        return Err(format!(
-            "pushing the unedited Markdown {markdown:?} rewrites the note's formatting:\n  before {:?}\n  after  {:?}",
-            format, rewritten
+            "pushing the unedited Markdown {markdown:?} changes the note:\n  before {:?}\n  after  {:?}",
+            format,
+            format_of(&unedited)
         ));
     }
 
@@ -1216,28 +1248,37 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
         return Ok(Outcome::Refused);
     }
     if !moves_lines(&what) {
-        untouched_paragraphs_kept(&format, &sent_format).map_err(|e| format!("{what}: {e}\n  edited {edited:?}"))?;
+        let edited_raw = as_written(&classified, &edited).map(|p| p.paragraphs).unwrap_or_default();
+        let asked = |p: &FormatParagraph| asked_by(&back.paragraphs, &edited_raw, p);
+        untouched_paragraphs_kept(&format, &sent_format, &asked)
+            .map_err(|e| format!("{what}: {e}\n  markdown {markdown:?}\n  edited {edited:?}"))?;
         hidden_attributes_kept((&doc, &format), (&sent, &sent_format))
             .map_err(|e| format!("{what}: {e}\n  edited {edited:?}"))?;
     }
-    // Pulled again: read-only, or it reads back as the edit.
+    // Pulled again: editable, and, where the note reads back exactly, it
+    // reads back as the edit.
     match classify_note_record(&note_record("N", &sent), &options) {
         NoteDecodeResult::Ok(again) if again.publishable => {
-            let Some(reread) = wanted(&again, &again.markdown_text) else {
+            let Some(reread) = as_written(&again, &again.markdown_text) else {
                 return Err(format!(
                     "{what}: the pulled Markdown {:?} doesn't read back",
                     again.markdown_text
                 ));
             };
-            if reread.text != desired.text || !note_holds_format(&reread.paragraphs, &desired.paragraphs) {
+            if !reads_back_as(&sent_format, &reread) {
+                outcome = Outcome::Converted;
+            } else if !holds(&reread, &desired.paragraphs) {
                 return Err(format!(
                     "{what}: the edit {edited:?} pulled back reads as another note: {:?}",
                     again.markdown_text
                 ));
             }
-            Ok(Outcome::Exact)
+            Ok(outcome)
         }
-        NoteDecodeResult::Ok(_) => Ok(Outcome::ReadOnly),
+        NoteDecodeResult::Ok(again) => Err(format!(
+            "{what}: the edited note is read-only: {:?}",
+            again.unpublishable_reason
+        )),
         other => Err(format!("{what}: the edited note isn't read at all: {other:?}")),
     }
 }
@@ -1246,7 +1287,8 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
 
 /// Generated Markdown, as a new note's file: push builds the note it reads
 /// (or refuses), and pulling that note writes Markdown that reads back the
-/// same (or marks it read-only).
+/// same (what push takes, pull writes back), or, where Markdown has no
+/// spelling for it, Markdown that can be read and edited.
 fn check_markdown(lines: &[String], seed: u64) -> Checked {
     let markdown = lines.join("\n");
     let Ok(parsed) = parse_note_markdown(&markdown) else {
@@ -1270,7 +1312,10 @@ fn check_markdown(lines: &[String], seed: u64) -> Checked {
         other => return Err(format!("the note made from {markdown:?} isn't read: {other:?}")),
     };
     if !classified.publishable {
-        return Ok(Outcome::ReadOnly);
+        return Err(format!(
+            "the note made from {markdown:?} is read-only: {:?}",
+            classified.unpublishable_reason
+        ));
     }
     let Ok(back) = parse_note_markdown(&classified.markdown_text) else {
         return Err(format!(
@@ -1279,10 +1324,10 @@ fn check_markdown(lines: &[String], seed: u64) -> Checked {
         ));
     };
     if back.text != parsed.text || !note_holds_format(&back.paragraphs, &parsed.paragraphs) {
-        return Err(format!(
-            "{markdown:?} pushed and pulled back reads as another note: {:?}",
-            classified.markdown_text
-        ));
+        // Markdown with no exact spelling for the note it makes (a list
+        // counting from other than 1 right below a line of text): written
+        // as near as Markdown comes, and editable.
+        return Ok(Outcome::Converted);
     }
     Ok(Outcome::Exact)
 }
@@ -2010,7 +2055,8 @@ struct VaultNote {
     text: String,
     body: String,
     frontmatter: String,
-    read_only: bool,
+    /// Why the vault holds the note read-only, if it does.
+    read_only: Option<String>,
     /// Each file attachment of the note, by record name, as its link path
     /// from the note's directory.
     links: HashMap<String, String>,
@@ -2039,7 +2085,7 @@ fn vault_note(vault: &Path, record_name: &str, filename_mode: bool) -> Option<Va
         text: text.clone(),
         body: envelope.body,
         frontmatter: envelope.frontmatter,
-        read_only: entry.unpublishable_reason.as_deref().is_some_and(|r| !r.is_empty()),
+        read_only: entry.unpublishable_reason.clone().filter(|r| !r.is_empty()),
         links,
     })
 }
@@ -2076,12 +2122,14 @@ fn classified_on_server(server: &Server, name: &str, filename_mode: bool) -> Box
 }
 
 /// What a note's file says the note is: its embeds (links, tables) as
-/// U+FFFC, parsed, with its title put back; an attachment whose link is gone
-/// is gone. `None` when push can't read it.
+/// U+FFFC, parsed, with its title put back (and, `merged`, the paragraphs
+/// it leaves as they were kept as the note has them, as push sends it); an
+/// attachment whose link is gone is gone. `None` when push can't read it.
 fn file_says(
     classified: &DecodedNote,
     body: &str,
     links: &HashMap<String, String>,
+    merged: bool,
 ) -> Option<(ParsedNoteMarkdown, Vec<Vec<Vec<String>>>)> {
     let plan = plan_embed_representations(body, &classified.embed_slots, links).ok()?;
     // A link to a file not attached yet needs the file: no edit here adds one.
@@ -2089,15 +2137,27 @@ fn file_says(
         return None;
     }
     let tables = plan.tables.iter().map(|t| t.block.grid.clone()).collect();
-    Some((wanted(classified, &plan.reconstructed_body_text)?, tables))
+    let says = if merged {
+        wanted(classified, &plan.reconstructed_body_text)?
+    } else {
+        as_written(classified, &plan.reconstructed_body_text)?
+    };
+    Some((says, tables))
 }
 
+/// The tables of the note in iCloud its file writes as Markdown tables (not
+/// those it writes as their marker).
 fn server_tables(server: &Server, classified: &DecodedNote) -> Vec<Vec<Vec<String>>> {
     classified
         .embed_slots
         .iter()
-        .filter_map(|slot| match slot {
-            EmbedSlot::Attachment(r) if r.type_uti == "com.apple.notes.table" => Some(r.attachment_identifier.clone()),
+        .enumerate()
+        .filter_map(|(slot, embed)| match embed {
+            EmbedSlot::Attachment(r)
+                if r.type_uti == "com.apple.notes.table" && !classified.table_markers.contains(&slot) =>
+            {
+                Some(r.attachment_identifier.clone())
+            }
             _ => None,
         })
         .filter_map(|name| {
@@ -2128,8 +2188,8 @@ fn shown(tables: &[Vec<Vec<String>>]) -> Vec<Vec<Vec<String>>> {
 enum FileMatch {
     /// It reads back as the note (text, formatting, tables).
     Exact,
-    /// The note is read-only.
-    ReadOnly,
+    /// The note is read-only: never, for a note Notes could write.
+    ReadOnly(String),
     /// It reads back as something else: what.
     Mismatch(String),
 }
@@ -2142,10 +2202,13 @@ fn file_matches_server(
     label: &str,
 ) -> Result<FileMatch, String> {
     let local = vault_note(vault, name, filename_mode).ok_or(format!("{label}: the note has no file"))?;
-    if local.read_only {
-        return Ok(FileMatch::ReadOnly);
+    if let Some(reason) = &local.read_only {
+        return Ok(FileMatch::ReadOnly(reason.clone()));
     }
     let classified = classified_on_server(server, name, filename_mode);
+    if !classified.publishable {
+        return Ok(FileMatch::ReadOnly(classified.unpublishable_reason.unwrap_or_default()));
+    }
     // A title the file name can't hold is written in the frontmatter, and
     // reads back as the note's.
     if let Some(title) = icloud_notes_sync::md::frontmatter::read_note_title(&local.frontmatter)
@@ -2156,12 +2219,19 @@ fn file_matches_server(
             classified.title_line
         )));
     }
-    let Some((says, tables)) = file_says(&classified, &local.body, &local.links) else {
-        return Ok(FileMatch::Mismatch(format!(
+    let Some((says, tables)) = file_says(&classified, &local.body, &local.links, false) else {
+        return Err(format!(
             "{label}: the pulled file can't be read back as the note it is for:\n{:?}",
             local.text
-        )));
+        ));
     };
+    if tables != shown(&server_tables(server, &classified)) {
+        return Err(format!(
+            "{label}: the pulled file's tables read back as others:\n  file {:?}\n  in iCloud {:?}",
+            local.text,
+            server_tables(server, &classified)
+        ));
+    }
     let format = classified.format.clone().unwrap();
     if !reads_back_as(&format, &says) {
         return Ok(FileMatch::Mismatch(format!(
@@ -2169,48 +2239,69 @@ fn file_matches_server(
             local.text, says.paragraphs
         )));
     }
-    if tables != shown(&server_tables(server, &classified)) {
-        return Ok(FileMatch::Mismatch(format!(
-            "{label}: the pulled file's tables read back as others:\n  file {:?}\n  in iCloud {:?}",
-            local.text,
-            server_tables(server, &classified)
-        )));
-    }
     Ok(FileMatch::Exact)
 }
 
-/// After a clone or pull: `None` when the file reads back as the note (go
-/// on); otherwise the note must be held back from push, read-only or with
-/// every edit refused: an edit is made and pushed, and nothing may go up.
-fn settle(
-    server: &Arc<Server>,
-    vault: &Path,
-    name: &str,
-    filename_mode: bool,
-    label: &str,
-) -> Result<Option<Outcome>, String> {
-    let (outcome, mismatch) = match file_matches_server(server, vault, name, filename_mode, label)? {
-        FileMatch::Exact => return Ok(None),
-        FileMatch::ReadOnly => (Outcome::ReadOnly, String::new()),
-        FileMatch::Mismatch(why) => (Outcome::Refused, why),
+/// After a clone or pull: the note is editable. Its file saved again with
+/// only trailing whitespace added sends nothing. When the file doesn't read
+/// back exactly as the note (`true`: converted), a line added to it is
+/// pushed, and changes nothing else in the note, down to what the Markdown
+/// doesn't show.
+fn settle(server: &Arc<Server>, vault: &Path, name: &str, filename_mode: bool, label: &str) -> Result<bool, String> {
+    let mismatch = match file_matches_server(server, vault, name, filename_mode, label)? {
+        FileMatch::Exact => None,
+        FileMatch::ReadOnly(reason) => return Err(format!("{label}: the note is read-only: {reason}")),
+        FileMatch::Mismatch(why) => Some(why),
     };
     let local = vault_note(vault, name, filename_mode).unwrap();
-    std::fs::write(vault.join(&local.file), format!("{}\nan edit", local.text)).unwrap();
-    let before = server.operations.lock().unwrap().len();
+    if !local.body.trim().is_empty() {
+        let end = local.text.trim_end_matches('\n').len();
+        let resaved = format!("{}  {}", &local.text[..end], &local.text[end..]);
+        std::fs::write(vault.join(&local.file), &resaved).unwrap();
+        let before = server.operations.lock().unwrap().len();
+        let result = push(server, vault)?;
+        let sent: Vec<_> = server.operations.lock().unwrap()[before..].to_vec();
+        if !sent.is_empty() || !result.failures().is_empty() {
+            return Err(format!(
+                "{label}: the file saved again unedited sent something: {sent:?} {:?}\n  file {resaved:?}",
+                result.entries
+            ));
+        }
+        // The file as it was, for what follows.
+        std::fs::write(vault.join(&local.file), &local.text).unwrap();
+        push(server, vault)?;
+        if server.operations.lock().unwrap().len() != before {
+            return Err(format!("{label}: the file saved back as it was sent something"));
+        }
+    }
+    let Some(mismatch) = mismatch else {
+        return Ok(false);
+    };
+    let local = vault_note(vault, name, filename_mode).unwrap();
+    let before_doc = parse_note_document(&raw_document(server, name)).unwrap();
+    let before_format = format_of(&before_doc);
+    std::fs::write(vault.join(&local.file), format!("{}\n\nan edit", local.text)).unwrap();
     let result = push(server, vault)?;
-    let sent: Vec<_> = server.operations.lock().unwrap()[before..].to_vec();
-    let refused = result
-        .entries
-        .iter()
-        .find(|e| e.entry.file == local.file)
-        .is_some_and(|e| e.entry.resolution == PlanResolution::Refused && e.entry.reason.is_some());
-    if !sent.is_empty() || (outcome == Outcome::Refused && !refused) {
+    let entry = result.entries.iter().find(|e| e.entry.file == local.file);
+    let pushed = entry.is_some_and(|e| {
+        e.entry.resolution == PlanResolution::Ready && e.outcome.as_ref().is_some_and(|o| o.succeeded)
+    });
+    if !pushed {
         return Err(format!(
-            "{mismatch}\nand an edit to it was not held back: {sent:?} {:?}",
+            "{mismatch}\nand a line added to it was not pushed: {:?}",
             result.entries
         ));
     }
-    Ok(Some(outcome))
+    let after_doc = parse_note_document(&raw_document(server, name)).unwrap();
+    let after_format = format_of(&after_doc);
+    if after_format.last().map(|p| p.text.as_str()) != Some("an edit") {
+        return Err(format!("{mismatch}\nand the line added isn't the note's last: {after_format:?}"));
+    }
+    let added = |p: &FormatParagraph| p.text.is_empty() || p.text == "an edit";
+    untouched_paragraphs_kept(&before_format, &after_format, &added).map_err(|e| format!("{mismatch}\n{e}"))?;
+    hidden_attributes_kept((&before_doc, &before_format), (&after_doc, &after_format))
+        .map_err(|e| format!("{mismatch}\n{e}"))?;
+    Ok(true)
 }
 
 /// Frontmatter keys this tool doesn't own, in YAML shapes Obsidian and
@@ -2288,9 +2379,8 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
 
     // 1.
     let vault = clone_vault(&server, dir.path(), "a", fm)?;
-    if let Some(outcome) = settle(&server, &vault, NOTE, fm, "the clone")? {
-        return Ok(outcome);
-    }
+    let mut converted = settle(&server, &vault, NOTE, fm, "the clone")?;
+    server.operations.lock().unwrap().clear();
 
     // 2.
     let local = vault_note(&vault, NOTE, fm).unwrap();
@@ -2328,9 +2418,9 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
             pulled.frontmatter
         ));
     }
-    if let Some(outcome) = settle(&server, &vault, NOTE, fm, "the pull")? {
-        return Ok(outcome);
-    }
+    converted |= settle(&server, &vault, NOTE, fm, "the pull")?;
+    server.operations.lock().unwrap().clear();
+    let pulled = vault_note(&vault, NOTE, fm).unwrap();
 
     // 4.
     let before = classified_on_server(&server, NOTE, fm);
@@ -2341,7 +2431,11 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
     // What the file holds now, as push reads it (blank lines that open an
     // in-body vault's body belong to the frontmatter).
     let edited_body = vault_note(&vault, NOTE, fm).unwrap().body;
-    let says = file_says(&before, &edited_body, &pulled.links);
+    let says = file_says(&before, &edited_body, &pulled.links, true);
+    // What the file read as before the edit, and after it, as push reads a
+    // file: what the edit asked for.
+    let base_raw = file_says(&before, &pulled.body, &pulled.links, false).map(|(p, _)| p.paragraphs);
+    let edited_raw = file_says(&before, &edited_body, &pulled.links, false).map(|(p, _)| p.paragraphs);
     let result = push(&server, &vault)?;
     let entry = result.entries.iter().find(|e| e.entry.file == pulled.file);
     let refused = entry.is_some_and(|e| e.entry.resolution == PlanResolution::Refused);
@@ -2359,15 +2453,6 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
     }
     if let Some(failure) = result.failures().first() {
         return Err(format!("{what}: the push failed: {failure}"));
-    }
-    if !note_sent && after_format == before_format {
-        // Nothing to send (an edit that changes nothing the note holds): the
-        // file still reads back as the note.
-        if let FileMatch::Mismatch(why) = file_matches_server(&server, &vault, NOTE, fm, "the unsent edit")? {
-            return Err(format!(
-                "{what}: an edit that sent nothing left a file that isn't the note: {why}"
-            ));
-        }
     }
     let Some((says, tables)) = says else {
         return Err(format!(
@@ -2388,10 +2473,22 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
         ));
     }
     if !moves_lines(&what) {
-        untouched_paragraphs_kept(&before_format, &sent_format)
-            .map_err(|e| format!("{what}: {e}\n  edited {edited_body:?}"))?;
+        let (base_raw, edited_raw) = (base_raw.unwrap_or_default(), edited_raw.unwrap_or_default());
+        let asked = |p: &FormatParagraph| asked_by(&base_raw, &edited_raw, p);
+        untouched_paragraphs_kept(&before_format, &sent_format, &asked)
+            .map_err(|e| format!("{what}: {e}\n  file {:?}\n  edited {edited_body:?}", pulled.body))?;
     }
-    let now_tables = server_tables(&server, &after);
+    // The tables the edited file wrote as Markdown tables (which of them it
+    // writes as their marker is the file's, before the edit).
+    let as_edited = if after.embed_slots == before.embed_slots {
+        DecodedNote {
+            table_markers: before.table_markers.clone(),
+            ..(*after).clone()
+        }
+    } else {
+        (*after).clone()
+    };
+    let now_tables = server_tables(&server, &as_edited);
     if shown(&now_tables) != tables && now_tables != tables {
         return Err(format!(
             "{what}: the tables in iCloud {now_tables:?} aren't the file's {tables:?} (were {before_tables:?})"
@@ -2400,13 +2497,11 @@ fn check_vault(note: &GenNote, seed: u64) -> Checked {
 
     // 5.
     let fresh = clone_vault(&server, dir.path(), "b", fm)?;
-    if let Some(outcome) = settle(&server, &fresh, NOTE, fm, "the fresh clone")? {
-        return Ok(outcome);
-    }
+    converted |= settle(&server, &fresh, NOTE, fm, "the fresh clone")?;
 
     // 6.
     check_new_note(&server, &fresh, dir.path(), fm, &mut rng)?;
-    Ok(Outcome::Exact)
+    Ok(if converted { Outcome::Converted } else { Outcome::Exact })
 }
 
 /// A new note's file, generated Markdown under frontmatter this tool doesn't
@@ -2549,4 +2644,217 @@ fn the_generator_covers_what_it_is_meant_to() {
     assert_eq!(kinds.len(), 9, "{kinds:?}");
     assert!(embeds.iter().all(|&n| n > 0), "{embeds:?}");
     assert!(styled > 100);
+}
+
+// --- notes the Markdown can't say exactly, one by one ---------------------------------
+
+/// A one-paragraph note in iCloud, then its document replaced by `text`
+/// with `runs`, cloned into an in-body vault.
+fn served(text: &str, runs: Vec<AttributeRun>) -> (Arc<Server>, tempfile::TempDir, PathBuf) {
+    let note = GenNote {
+        paragraphs: vec![GenParagraph {
+            kind: Body,
+            indent: 0,
+            quote: 0,
+            done: false,
+            start_number: None,
+            implicit_body: true,
+            pieces: vec![Piece {
+                text: "x".into(),
+                style: InlineStyle::PLAIN,
+                embed: None,
+                hidden: 0,
+            }],
+        }],
+        split_runs: false,
+        filename_mode: false,
+    };
+    let (server, _) = zone_for(&note, &mut Rng(7)).unwrap();
+    let mut doc = build_initial_note_document(text, &replica()).unwrap();
+    doc.attribute_runs = runs;
+    server.set_field(NOTE, "TextDataEncrypted", json!(document_base64(&doc)));
+    let server = Arc::new(server);
+    let dir = tempfile::tempdir().unwrap();
+    let vault = clone_vault(&server, dir.path(), "a", false).unwrap();
+    (server, dir, vault)
+}
+
+fn styled_run(length: u32, style: u32) -> AttributeRun {
+    AttributeRun {
+        length: Some(length),
+        paragraph_style: Some(ParagraphStyle {
+            style: Some(style),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// The note's document in iCloud now.
+fn served_document(server: &Server) -> NoteDocument {
+    parse_note_document(&raw_document(server, NOTE)).unwrap()
+}
+
+/// The paragraph style of the run over UTF-16 offset `at`.
+fn style_at(doc: &NoteDocument, at: usize) -> Option<u32> {
+    let mut offset = 0;
+    for run in &doc.attribute_runs {
+        offset += run.len() as usize;
+        if at < offset {
+            return run.paragraph_style.as_ref().and_then(|ps| ps.style);
+        }
+    }
+    None
+}
+
+fn edit_file(vault: &Path, from: &str, to: &str) -> String {
+    let local = vault_note(vault, NOTE, false).unwrap();
+    assert!(local.text.contains(from), "{:?} not in {:?}", from, local.text);
+    std::fs::write(vault.join(&local.file), local.text.replacen(from, to, 1)).unwrap();
+    local.file
+}
+
+/// What Markdown can't show of a paragraph (a style this tool doesn't know,
+/// an empty checklist item written as an empty item because the line after
+/// it would continue it) stays in iCloud through an edit elsewhere; the
+/// note is never read-only for it.
+#[test]
+fn an_edit_keeps_what_the_markdown_of_the_paragraphs_it_left_alone_cant_show() {
+    // "Title", an unknown style, an empty checklist item, then text.
+    let text = "Title\nkept\n\nnext";
+    let runs = vec![styled_run(6, 0), styled_run(5, 7), styled_run(1, 103), styled_run(4, 3)];
+    let (server, _dir, vault) = served(text, runs);
+    assert_eq!(state_of(&vault).notes[NOTE].unpublishable_reason, None);
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    assert!(local.body.ends_with("# Title\nkept\n- &#x20;\nnext"), "{:?}", local.body);
+
+    edit_file(&vault, "next", "next, edited");
+    let result = push(&server, &vault).unwrap();
+    assert!(result.failures().is_empty(), "{:?}", result.entries);
+    let doc = served_document(&server);
+    assert_eq!(doc.text, "Title\nkept\n\nnext, edited");
+    assert_eq!(style_at(&doc, 6), Some(7), "the unknown style went");
+    assert_eq!(style_at(&doc, 11), Some(103), "the empty checklist item went");
+
+    // The paragraph edited takes what its Markdown says: text typed into it
+    // keeps the runs it is typed into (the unknown style, which reads as
+    // body text), and formatting added is added. The checklist item, left
+    // alone, stays one.
+    edit_file(&vault, "\nkept\n", "\n**kept**, edited\n");
+    push(&server, &vault).unwrap();
+    let doc = served_document(&server);
+    assert_eq!(doc.text, "Title\nkept, edited\n\nnext, edited");
+    let format = format_of(&doc);
+    assert_eq!(format[1].kind, Body);
+    assert!(format[1].spans[0].style.bold && format[1].spans[0].length == 4, "{format:?}");
+    assert_eq!(style_at(&doc, 19), Some(103));
+    // The checklist item edited is what its Markdown says.
+    edit_file(&vault, "- &#x20;\n", "- [x] done\n");
+    push(&server, &vault).unwrap();
+    let format = format_of(&served_document(&server));
+    assert_eq!((format[2].kind, format[2].done), (TodoList, Some(true)), "{format:?}");
+}
+
+/// An attachment's run that isn't a lone U+FFFC: its U+FFFC is written as an
+/// unknown embed's marker, the rest of the note is editable, and an edit
+/// that changes the text it covers is refused.
+#[test]
+fn a_note_with_content_this_tool_cant_place_is_editable_around_it() {
+    let text = "Title\n\u{fffc}x\nother";
+    let unplaced = AttributeRun {
+        length: Some(2),
+        attachment_info: Some(AttachmentInfo {
+            attachment_identifier: Some("A-ODD".into()),
+            type_uti: Some("public.jpeg".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let (server, _dir, vault) = served(text, vec![styled_run(6, 0), unplaced, styled_run(6, 3)]);
+    assert_eq!(state_of(&vault).notes[NOTE].unpublishable_reason, None);
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    assert!(
+        local.body.contains("<apple-embed type=\"public.jpeg\">public.jpeg</apple-embed>x\n"),
+        "{:?}",
+        local.body
+    );
+
+    edit_file(&vault, "other", "other, edited");
+    let result = push(&server, &vault).unwrap();
+    assert!(result.failures().is_empty(), "{:?}", result.entries);
+    let doc = served_document(&server);
+    assert_eq!(doc.text, "Title\n\u{fffc}x\nother, edited");
+    assert!(
+        doc.attribute_runs
+            .iter()
+            .any(|run| run.len() == 2 && run.attachment_info.is_some()),
+        "{:?}",
+        doc.attribute_runs
+    );
+
+    let file = edit_file(&vault, "</apple-embed>x", "</apple-embed>y");
+    let before = server.operations.lock().unwrap().len();
+    let result = push(&server, &vault).unwrap();
+    let entry = result.entries.iter().find(|e| e.entry.file == file).unwrap();
+    assert_eq!(entry.entry.resolution, PlanResolution::Refused);
+    assert!(
+        entry
+            .entry
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("embedded content this tool can't read"),
+        "{:?}",
+        entry.entry.reason
+    );
+    assert_eq!(server.operations.lock().unwrap().len(), before);
+}
+
+/// A note an older version kept read-only (its file written as plain text,
+/// or under the unknown-content banner) is written again as Markdown by the
+/// next pull, though nothing changed in iCloud, and can be edited.
+#[test]
+fn a_pull_writes_a_note_an_older_version_kept_read_only_as_markdown() {
+    let (server, _dir, vault) = served("Title\nkept", vec![styled_run(6, 0), styled_run(4, 7)]);
+    // As 0.11 left it: the plain text, and the reason.
+    let mut state = state_of(&vault);
+    let entry = state.notes.get_mut(NOTE).unwrap();
+    entry.unpublishable_reason = Some("the note uses a paragraph style (7) this tool doesn't understand".into());
+    let file = entry.file.clone();
+    icloud_notes_sync::vault::state::write_clone_state(&vault, &state).unwrap();
+    let old = vault_note(&vault, NOTE, false).unwrap();
+    let old_text = old.text.replace("# Title\nkept", "Title\nkept");
+    std::fs::write(vault.join(&file), &old_text).unwrap();
+    icloud_notes_sync::vault::base::write_base_copy(
+        &vault,
+        NOTE,
+        &split_frontmatter(&old_text, SplitOptions::default()).body,
+    )
+    .unwrap();
+
+    run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    assert_eq!(state_of(&vault).notes[NOTE].unpublishable_reason, None);
+    assert!(vault_note(&vault, NOTE, false).unwrap().body.ends_with("# Title\nkept"));
+    // And the next pull leaves it be.
+    let before = std::fs::read_to_string(vault.join(&file)).unwrap();
+    run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    assert_eq!(std::fs::read_to_string(vault.join(&file)).unwrap(), before);
+}
+
+/// A file saved with Windows line endings reads as its lines: saved so
+/// unedited it sends nothing, and an edit sends no `\r`.
+#[test]
+fn a_file_saved_with_crlf_line_endings_reads_as_its_lines() {
+    let (server, _dir, vault) = served("Title\nline", vec![styled_run(6, 0), styled_run(4, 3)]);
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    std::fs::write(vault.join(&local.file), local.text.replace('\n', "\r\n")).unwrap();
+    push(&server, &vault).unwrap();
+    assert!(server.operations.lock().unwrap().is_empty());
+    std::fs::write(
+        vault.join(&local.file),
+        format!("{}\nmore", local.text).replace('\n', "\r\n"),
+    )
+    .unwrap();
+    push(&server, &vault).unwrap();
+    assert_eq!(served_document(&server).text, "Title\nline\nmore");
 }

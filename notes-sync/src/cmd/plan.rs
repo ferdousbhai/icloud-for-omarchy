@@ -124,6 +124,9 @@ pub enum TextUpdateRefusal {
     NotRoundTrip,
     /// 1955
     TouchesEmbed { file: String },
+    /// The edit changes text that carries content this tool can't place
+    /// (`unplaced_content`).
+    TouchesUnplacedContent { file: String },
     /// 1964
     DecoderDisagreement,
     /// `reconcileNoteFormat`'s reason, passed through.
@@ -147,6 +150,11 @@ impl TextUpdateRefusal {
             }
             TextUpdateRefusal::TouchesEmbed { file } => format!(
                 "this edit would delete or move an embedded object - embeds can only be edited in Notes itself. {}",
+                restore_advice(file)
+            ),
+            TextUpdateRefusal::TouchesUnplacedContent { file } => format!(
+                "this edit changes text that carries embedded content this tool can't read - leave that text as it \
+                 is (the rest of the note can be edited), or edit it in Notes itself. {}",
                 restore_advice(file)
             ),
             TextUpdateRefusal::DecoderDisagreement => {
@@ -425,8 +433,9 @@ impl Refusal {
                 "still contains diff3 conflict markers - resolve them before pushing".into()
             }
             UpdateUnknownContent { file } => format!(
-                "this note contains content this tool can't parse and can never be pushed - \
-                 run \"icloud-notes restore {file}\" to discard your local edit."
+                "this file still has the \"Unparsed content\" banner an older version of this tool wrote for a note \
+                 it couldn't read - run \"icloud-notes restore {file}\" to discard your local edit, and \"pull\" \
+                 then writes the note as Markdown that can be edited."
             ),
             AmbiguousNoteId { other_count, others, tracked_file } => format!(
                 "shares its \"{NOTE_ID_KEY}\" with {other_count} other file(s) ({}), and the note's own file ({}) is gone, \
