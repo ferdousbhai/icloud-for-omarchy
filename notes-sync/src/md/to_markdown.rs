@@ -411,11 +411,44 @@ fn unsafe_patterns() -> &'static [Unsafe] {
     })
 }
 
-/// `encodeCharacterReference`; `None` is JS's `NaN` (`"&#xNAN;"`).
-fn char_ref(code: Option<u16>) -> W {
-    match code {
-        Some(code) => w(&format!("&#x{:X};", code)),
-        None => w("&#xNAN;"),
+/// `encodeCharacterReference` of one character (see [`first_char`]); none
+/// is JS's `NaN` (`"&#xNAN;"`). A surrogate pair is one reference to its
+/// code point: a reference to half of one reads back as U+FFFD.
+fn char_ref(character: &[u16]) -> W {
+    match *character {
+        [] => w("&#xNAN;"),
+        [high, low] => w(&format!(
+            "&#x{:X};",
+            0x10000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00)
+        )),
+        [unit, ..] => w(&format!("&#x{unit:X};")),
+    }
+}
+
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..0xDC00).contains(&unit)
+}
+
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..0xE000).contains(&unit)
+}
+
+/// The first character of `value`, as its code units: two for a surrogate
+/// pair, none for an empty string.
+fn first_char(value: &[u16]) -> &[u16] {
+    match value {
+        [high, low, ..] if is_high_surrogate(*high) && is_low_surrogate(*low) => &value[..2],
+        [] => value,
+        _ => &value[..1],
+    }
+}
+
+/// The last character of `value`, as [`first_char`] gives the first.
+fn last_char(value: &[u16]) -> &[u16] {
+    match value {
+        [.., high, low] if is_high_surrogate(*high) && is_low_surrogate(*low) => &value[value.len() - 2..],
+        [] => value,
+        _ => &value[value.len() - 1..],
     }
 }
 
@@ -468,21 +501,61 @@ pub(crate) fn is_unicode_punctuation(c: char) -> bool {
     GeneralCategoryGroup::Punctuation.contains(gc) || GeneralCategoryGroup::Symbol.contains(gc)
 }
 
-/// `encodeInfo(outside, inside, marker)` → `(inside, outside)`, for `*`.
-fn encode_info(outside: Option<u16>, inside: Option<u16>) -> (bool, bool) {
-    let outside_kind = classify(outside);
-    let inside_kind = classify(inside);
-    match (outside_kind, inside_kind) {
-        (0, 0) => (false, false),
-        (0, 1) => (true, true),
-        (0, _) => (false, true),
-        (1, 0) => (false, false),
-        (1, 1) => (true, true),
-        (1, _) => (false, false),
-        (_, 0) => (false, false),
-        (_, 1) => (true, false),
-        (_, _) => (false, false),
+/// The two ways a character next to a delimiter run is classified. To
+/// micromark, which reads UTF-16 code units, each half of an astral
+/// character is a letter (`classify`); to markdown-rs, which reads
+/// characters, an astral symbol (an emoji) is punctuation. The parser needs
+/// a run to flank under both (`mdast_fix::fix_astral_flanking`).
+fn classify_both(character: &[u16], outermost: Option<u16>) -> [u8; 2] {
+    let by_unit = classify(outermost);
+    let by_character = match *character {
+        [high, low] => {
+            let code = 0x10000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
+            if char::from_u32(code).is_some_and(is_unicode_punctuation) {
+                2
+            } else {
+                0
+            }
+        }
+        _ => by_unit,
+    };
+    [by_unit, by_character]
+}
+
+/// `encodeInfo(outside, inside, marker)` → `(inside, outside)`, for `*` and
+/// GFM's `~`: which of the characters on the two sides of a delimiter run
+/// (`outside` ends or starts at it, and so does `inside`) must be written
+/// as a character reference for the run to open or close.
+fn encode_info(outside: &[u16], inside: &[u16], opening: bool) -> (bool, bool) {
+    // The unit and the character at the run, on each side.
+    let (outside, outside_unit) = if opening {
+        (last_char(outside), outside.last())
+    } else {
+        (first_char(outside), outside.first())
+    };
+    let (inside, inside_unit) = if opening {
+        (first_char(inside), inside.first())
+    } else {
+        (last_char(inside), inside.last())
+    };
+    let outside_kinds = classify_both(outside, outside_unit.copied());
+    let inside_kinds = classify_both(inside, inside_unit.copied());
+    let mut encode = (false, false);
+    for (outside_kind, inside_kind) in outside_kinds.into_iter().zip(inside_kinds) {
+        let (inside, outside) = match (outside_kind, inside_kind) {
+            (0, 0) => (false, false),
+            (0, 1) => (true, true),
+            (0, _) => (false, true),
+            (1, 0) => (false, false),
+            (1, 1) => (true, true),
+            (1, _) => (false, false),
+            (_, 0) => (false, false),
+            (_, 1) => (true, false),
+            (_, _) => (false, false),
+        };
+        encode = (encode.0 || inside, encode.1 || outside);
     }
+    encode
 }
 
 struct Info<'a> {
@@ -597,7 +670,7 @@ impl Serializer {
             if is_ascii_punct(character) {
                 result.push(b'\\' as u16);
             } else {
-                result.extend(char_ref(Some(character)));
+                result.extend(char_ref(&[character]));
                 start += 1;
             }
         }
@@ -645,23 +718,9 @@ impl Serializer {
             Node::List { ordered, children, .. } => self.list(node, *ordered, children, parent),
             Node::ListItem { checked, children } => self.list_item(node, *checked, children, parent),
             Node::Text(value) => self.safe(value, info.before, info.after),
-            Node::Strong(_) => self.attention(node, info, &w("**")),
-            Node::Emphasis(_) => self.attention(node, info, &w("*")),
-            Node::Delete(_) => {
-                self.enter("strikethrough");
-                let before = w("~~");
-                let mut value = before.clone();
-                value.extend(self.container_phrasing(
-                    node,
-                    &Info {
-                        before: &before,
-                        after: &w("~"),
-                    },
-                ));
-                value.extend(w("~~"));
-                self.exit();
-                value
-            }
+            Node::Strong(_) => self.attention(node, info, "strong", &w("**")),
+            Node::Emphasis(_) => self.attention(node, info, "emphasis", &w("*")),
+            Node::Delete(_) => self.attention(node, info, "strikethrough", &w("~~")),
             Node::Link { url, children } => self.link(node, url, children),
             Node::Html(value) => value.clone(),
             Node::Table(rows) => {
@@ -729,7 +788,7 @@ impl Serializer {
         for (index, child) in children.iter().enumerate() {
             *self.index_stack.last_mut().unwrap() = index;
             let after: W = if index + 1 < children.len() {
-                self.peek(&children[index + 1]).into_iter().take(1).collect()
+                first_char(&self.peek(&children[index + 1])).to_vec()
             } else {
                 info.after.to_vec()
             };
@@ -757,10 +816,11 @@ impl Serializer {
 
             if let Some(encode) = &encode_after
                 && !encode.is_empty()
-                && value.first() == encode.first()
+                && value.starts_with(first_char(encode))
             {
-                let mut encoded = char_ref(Some(encode[0]));
-                encoded.extend(&value[1..]);
+                let character = first_char(encode);
+                let mut encoded = char_ref(character);
+                encoded.extend(&value[character.len()..]);
                 value = encoded;
             }
 
@@ -769,18 +829,17 @@ impl Serializer {
             if let Some((encode_before, encode_after_flag)) = encoding_info {
                 if let Some(last) = results.last_mut()
                     && encode_before
-                    && before.as_slice() == last_unit(last)
+                    && before.as_slice() == last_char(last)
                 {
-                    let code = before.first().copied();
-                    last.pop();
-                    last.extend(char_ref(code));
+                    last.truncate(last.len() - before.len());
+                    last.extend(char_ref(&before));
                 }
                 if encode_after_flag {
                     encode_after = Some(after.clone());
                 }
             }
 
-            before = last_unit(&value).to_vec();
+            before = last_char(&value).to_vec();
             results.push(value);
         }
         self.index_stack.pop();
@@ -864,7 +923,7 @@ impl Serializer {
             },
         );
         if value.first().is_some_and(|&c| c == 9 || c == 32) {
-            let mut encoded = char_ref(Some(value[0]));
+            let mut encoded = char_ref(&value[..1]);
             encoded.extend(&value[1..]);
             value = encoded;
         }
@@ -990,26 +1049,32 @@ impl Serializer {
         value
     }
 
-    fn attention(&mut self, node: &Node, info: &Info, marker: &[u16]) -> W {
-        self.enter(if marker.len() == 2 { "strong" } else { "emphasis" });
-        let star = [b'*' as u16];
+    /// Emphasis, strong and strikethrough: `marker` around the content,
+    /// with the characters at its two runs encoded where a run wouldn't
+    /// open or close otherwise (`encode_info`; those outside it by
+    /// `container_phrasing`, through `self.attention`).
+    fn attention(&mut self, node: &Node, info: &Info, construct: &'static str, marker: &[u16]) -> W {
+        self.enter(construct);
         let mut between = self.container_phrasing(
             node,
             &Info {
                 before: marker,
-                after: &star,
+                after: &marker[..1],
             },
         );
-        let (open_inside, open_outside) = encode_info(info.before.last().copied(), between.first().copied());
+        let (open_inside, open_outside) = encode_info(info.before, &between, true);
         if open_inside {
-            let mut encoded = char_ref(between.first().copied());
-            encoded.extend(between.iter().skip(1));
+            let first = first_char(&between).len();
+            let mut encoded = char_ref(&between[..first]);
+            encoded.extend(&between[first..]);
             between = encoded;
         }
-        let (close_inside, close_outside) = encode_info(info.after.first().copied(), between.last().copied());
+        let (close_inside, close_outside) = encode_info(info.after, &between, false);
         if close_inside {
-            let tail = between.pop();
-            between.extend(char_ref(tail));
+            let last = between.len() - last_char(&between).len();
+            let encoded = char_ref(&between[last..]);
+            between.truncate(last);
+            between.extend(encoded);
         }
         self.exit();
         self.attention = Some((open_outside, close_outside));
@@ -1064,14 +1129,6 @@ impl Serializer {
         value.push(b')' as u16);
         self.exit();
         value
-    }
-}
-
-fn last_unit(value: &[u16]) -> &[u16] {
-    if value.is_empty() {
-        &[]
-    } else {
-        &value[value.len() - 1..]
     }
 }
 

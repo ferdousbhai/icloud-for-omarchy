@@ -109,10 +109,17 @@ pub fn find_markdown_table_blocks(text: &str) -> Vec<MarkdownTableBlock> {
         let Ok(root) = to_mdast(&remainder) else {
             break;
         };
-        let Some(table) = root
+        let table = root
             .children()
-            .and_then(|c| c.iter().find(|n| matches!(n, mdast::Node::Table(_))))
-        else {
+            .and_then(|c| c.iter().find(|n| matches!(n, mdast::Node::Table(_))));
+        // A table before that one which Markdown reads as text: start over
+        // from its header line, where it is the first thing read.
+        let before = table.map_or(lines.len() - from_line, node_start_line);
+        if let Some(lazy) = lazy_table_line(&root, &lines[from_line..from_line + before]) {
+            from_line += lazy;
+            continue;
+        }
+        let Some(table) = table else {
             break;
         };
         let start_line = node_start_line(table);
@@ -151,6 +158,26 @@ pub fn find_markdown_table_blocks(text: &str) -> Vec<MarkdownTableBlock> {
         from_line += end_line;
     }
     blocks
+}
+
+/// A note's table is written on the lines below the one before it, and
+/// below a list item or a quoted line Markdown reads those lines as more of
+/// that item's or quote's paragraph (a table can't start in a paragraph's
+/// continuation lines): the first line of `lines` that is such a line and,
+/// read from there, the header of a table.
+fn lazy_table_line(node: &mdast::Node, lines: &[&str]) -> Option<usize> {
+    if let mdast::Node::Paragraph(paragraph) = node {
+        let position = paragraph.position.as_ref()?;
+        let last = position.end.line.min(lines.len());
+        return (position.start.line..last.saturating_sub(1)).find(|&line| {
+            is_strict_pipe_line(lines[line])
+                && is_strict_pipe_line(lines[line + 1])
+                && to_mdast(&lines[line..].join("\n")).is_ok_and(|root| {
+                    matches!(root.children().and_then(|c| c.first()), Some(table @ mdast::Node::Table(_)) if node_start_line(table) == 0)
+                })
+        });
+    }
+    node.children()?.iter().find_map(|child| lazy_table_line(child, lines))
 }
 
 fn cells(row: &mdast::Node) -> &[mdast::Node] {
