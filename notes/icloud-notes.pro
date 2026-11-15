@@ -14,7 +14,8 @@ HEADERS += \
     src/notesbackend.h \
     src/singleinstance.h \
     src/vaultlock.h \
-    src/markdownhighlighter.h
+    src/markdownhighlighter.h \
+    src/notetree.h
 
 SOURCES += \
     src/main.cpp \

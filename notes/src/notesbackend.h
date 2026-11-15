@@ -15,6 +15,7 @@
 #include <QUrl>
 
 #include "markdownhighlighter.h"
+#include "notetree.h"
 #include "vaultlock.h"
 #include <QStringList>
 #include <QVariant>
@@ -38,6 +39,11 @@ class NotesBackend : public QObject
     Q_PROPERTY(QStringList notes READ notes NOTIFY notesChanged)
     Q_PROPERTY(QVariantMap noteStates READ noteStates NOTIFY notesChanged)
     Q_PROPERTY(QVariantMap noteDetails READ noteDetails NOTIFY notesChanged)
+    // Every note of the vault, newest first, for the one-pane sidebar's tree:
+    // {path (vault-relative), folder, file, title, modifiedMs}. Read when
+    // asked (only that layout asks), each title kept until its file's mtime
+    // or size moves.
+    Q_PROPERTY(QVariantList allNotes READ allNotes NOTIFY allNotesChanged)
     Q_PROPERTY(QString currentNote READ currentNote NOTIFY currentNoteChanged)
     Q_PROPERTY(QString noteBody READ noteBody NOTIFY noteContentChanged)
     Q_PROPERTY(QVariantList noteAttachments READ noteAttachments NOTIFY noteContentChanged)
@@ -160,6 +166,14 @@ public:
     QStringList notes() const { return m_notes; }
     QVariantMap noteStates() const { return m_noteStates; }
     QVariantMap noteDetails() const { return m_noteDetails; }
+    QVariantList allNotes() const;
+    // The one-pane sidebar's rows (see NoteTree::rows); the window passes
+    // the backend's own folders, counts and allNotes, so its binding follows them.
+    Q_INVOKABLE QVariantList noteTree(const QStringList &folders, const QVariantMap &counts, const QVariantList &notes,
+                                      const QStringList &expanded, bool searching, const QStringList &matches) const
+    {
+        return NoteTree::rows(folders, counts, notes, expanded, searching, matches);
+    }
     QString currentNote() const { return m_currentNote; }
     QString noteContent() const { return m_noteContent; }
     // The editable body: the file with its frontmatter envelope held back
@@ -282,9 +296,9 @@ public:
     // Move the open note to another existing folder (vault-relative, ""
     // for the root), as a mv on disk does: the next push moves it in Notes.
     // Refused for a read-only note and a name the folder already has; a
-    // note's attachment files follow it at the next push. For the command
-    // line; the window has no move.
-    QString moveCurrentNote(const QString &folder);
+    // note's attachment files follow it at the next push. The command
+    // line's `move`, and the window's (a drag onto a folder, or "Move to").
+    Q_INVOKABLE QString moveCurrentNote(const QString &folder);
     // Keep one side of each conflict block ("local", "remote" or "both").
     Q_INVOKABLE QString resolveConflicts(const QStringList &choices);
     // A note with unreadable conflict markers: "strip" keeps every line
@@ -364,6 +378,7 @@ signals:
     void foldersChanged();
     void currentFolderChanged();
     void notesChanged();
+    void allNotesChanged();
     void currentNoteChanged();
     void noteContentChanged();
     void currentNoteChangedOnDisk();
@@ -493,6 +508,12 @@ private:
         bool table = false;
     };
     QHash<QString, NoteScan> m_scans; // keyed by absolute path, current folder only
+    // allNotes: the list as last read, whether a change may have moved it
+    // since, and each note's title by absolute path, as m_scans keeps them.
+    mutable QVariantList m_allNotes;
+    mutable bool m_allNotesStale = true;
+    mutable QHash<QString, NoteScan> m_titleScans;
+    void allNotesMayHaveChanged();
 
     QStringList m_folders;
     QVariantMap m_folderNoteCounts;

@@ -7,6 +7,10 @@
 // NOTES_SHOT=unreadable opens it on nested markers the picker can't read.
 // NOTES_SHOT=attach attaches a file through the window's own function, then
 // pastes a copied picture with Ctrl+V, and prints the note as autosaved.
+// NOTES_SHOT_WIDTH=px sizes the window (960: the one-pane layout of half a
+// 1920 px screen); NOTES_SHOT_EXPAND=folder,folder unfolds those folders of
+// the one-pane tree ("" is All Notes: NOTES_SHOT_EXPAND=,Recipes);
+// NOTES_SHOT_SEARCH=text types it into the search box.
 #include "../check.h"
 #include "../src/notesbackend.h"
 
@@ -88,6 +92,8 @@ int main(int argc, char *argv[])
         writeAged(root, QStringLiteral("Recipes/Pancakes.md"),
                   QStringLiteral("---\napple-note-id: c\n---\n# Pancakes\nflour, eggs, very hot pan\n"),
                   5);
+        writeAged(root, QStringLiteral("Recipes/Desserts/Brownies.md"), QStringLiteral("# Brownies\ndark chocolate, a pinch of salt\n"), 12);
+        writeAged(root, QStringLiteral("Work/Quarterly plan.md"), QStringLiteral("# Quarterly plan\nship the one-pane sidebar\n"), 1);
     }
 
     QQuickStyle::setStyle(QStringLiteral("Basic"));
@@ -107,6 +113,15 @@ int main(int argc, char *argv[])
         backend.setCurrentFolder(QStringLiteral("Notes"));
         backend.openNote(QStringLiteral("Groceries.md"));
     }
+
+    bool sized = false;
+    const int width = qEnvironmentVariable("NOTES_SHOT_WIDTH").toInt(&sized);
+    if (sized)
+        window->setWidth(width); // after the window's own settings had their say
+    if (qEnvironmentVariableIsSet("NOTES_SHOT_EXPAND"))
+        window->setProperty("expandedFolders", qEnvironmentVariable("NOTES_SHOT_EXPAND").split(u','));
+    if (qEnvironmentVariableIsSet("NOTES_SHOT_SEARCH"))
+        window->setProperty("searchText", qEnvironmentVariable("NOTES_SHOT_SEARCH"));
 
     const bool attach = qgetenv("NOTES_SHOT") == "attach";
     if (attach) {

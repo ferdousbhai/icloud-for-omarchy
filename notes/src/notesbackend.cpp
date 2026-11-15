@@ -907,6 +907,53 @@ void NotesBackend::rebuildFolders()
         }
     }
     emit foldersChanged(); // also refreshes cloned/vaultTitleMode after a clone
+    allNotesMayHaveChanged();
+}
+
+void NotesBackend::allNotesMayHaveChanged()
+{
+    m_allNotesStale = true;
+    emit allNotesChanged();
+}
+
+QVariantList NotesBackend::allNotes() const
+{
+    if (!m_allNotesStale)
+        return m_allNotes;
+    const QString mode = vaultTitleMode();
+    struct Entry {
+        QString rel;
+        NoteScan scan;
+    };
+    QList<Entry> entries;
+    QHash<QString, NoteScan> scans;
+    forEachNoteFile(rootPath(), [&](const QString &rel, const QString &path) {
+        const QFileInfo info(path);
+        NoteScan scan = m_titleScans.value(path);
+        if (scan.modifiedMs != info.lastModified().toMSecsSinceEpoch() || scan.size != info.size() || scan.mode != mode) {
+            scan.modifiedMs = info.lastModified().toMSecsSinceEpoch();
+            scan.size = info.size();
+            scan.mode = mode;
+            scan.title = SyncModel::previewNote(readText(path, 64 * 1024), QFileInfo(rel).completeBaseName(), mode).title;
+        }
+        scans.insert(path, scan);
+        entries << Entry{ rel, scan };
+        return true;
+    });
+    // Newest first, as the note list (and Notes.app) orders them.
+    std::stable_sort(entries.begin(), entries.end(),
+                     [](const Entry &a, const Entry &b) { return a.scan.modifiedMs > b.scan.modifiedMs; });
+    QVariantList out;
+    for (const Entry &e : entries)
+        out << QVariantMap{ { QStringLiteral("path"), e.rel },
+                            { QStringLiteral("folder"), e.rel.section(u'/', 0, -2) },
+                            { QStringLiteral("file"), e.rel.section(u'/', -1) },
+                            { QStringLiteral("title"), e.scan.title },
+                            { QStringLiteral("modifiedMs"), double(e.scan.modifiedMs) } };
+    m_titleScans = scans;
+    m_allNotes = out;
+    m_allNotesStale = false;
+    return out;
 }
 
 void NotesBackend::rebuildNotes()
@@ -937,8 +984,10 @@ void NotesBackend::rebuildNotes()
         loseCurrentNote();
     classifyNotes();
     // Only a real change re-renders the list (and drops its scroll position).
-    if (m_notes != oldNotes || m_noteStates != oldStates || m_noteDetails != oldDetails)
+    if (m_notes != oldNotes || m_noteStates != oldStates || m_noteDetails != oldDetails) {
         emit notesChanged();
+        allNotesMayHaveChanged();
+    }
 }
 
 // Per-note list details plus the guardrail flags the badges show: notes

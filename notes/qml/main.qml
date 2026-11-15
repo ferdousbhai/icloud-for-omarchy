@@ -9,6 +9,7 @@ ApplicationWindow {
     visible: true
     width: 1100
     height: 700
+    minimumWidth: 440 // the toolbar, whole
     title: backend.currentNote.length > 0 ? noteLabel(backend.currentNote) + " - Notes" : "Notes"
 
     // ---- Theme: the active Omarchy palette, or the system palette off Omarchy.
@@ -77,11 +78,178 @@ ApplicationWindow {
     // note opens on a way out instead, read-only until "Edit as text".
     readonly property bool unreadableConflict: backend.noteConflictsUnreadable && !conflictAsText && !noteLocked
     onConflictsChanged: conflictChoices = conflicts.map(function () { return ""; })
-    property bool searching: searchField.text.trim().length >= 2
+    // One query for both layouts' search boxes.
+    property string searchText: ""
+    // Read from the text itself: this runs before `searching` may have caught up.
+    onSearchTextChanged: refreshSearch()
+    property bool searching: searchText.trim().length >= 2
     property var searchResults: []
+    // The results as vault-relative paths, which the sidebar's tree filters on.
+    readonly property var searchPaths: searchResults.map(function (r) { return (r.folder ? r.folder + "/" : "") + r.file; })
     function refreshSearch() {
-        if (searching)
-            searchResults = backend.searchVault(searchField.text, true);
+        if (searchText.trim().length >= 2)
+            searchResults = backend.searchVault(searchText, true);
+    }
+    // The line under a search box: what it found, or how many notes are listed.
+    function listSummary() {
+        if (searching) {
+            var related = searchResults.filter(function (r) { return r.related; }).length;
+            var matches = searchResults.length - related;
+            return matches + " result" + (matches === 1 ? "" : "s")
+                + (related > 0 ? " · " + related + " related" : "")
+                + (backend.searchTruncated ? " · searched the first 2000 notes" : "");
+        }
+        var n = backend.notes.length;
+        return n + " note" + (n === 1 ? "" : "s");
+    }
+
+    // ---- Layout
+    // A wide window shows the folder list and the note list as two panes
+    // beside the editor; a narrow one (a half-screen split) shows one
+    // sidebar instead, the folders and their notes as a tree. The two panes
+    // give way to the tree before the editor would get less than a
+    // comfortable width beside them at their default widths: about 60
+    // characters of the note's text plus its margins (1062 px in all, so
+    // half of a 1920 px screen is one-pane). Narrower than the tree's and
+    // the editor's minimums together, the window shows one of them at a
+    // time, and the toolbar's sidebar button switches between them.
+    readonly property int folderPaneWidth: 210
+    readonly property int notePaneWidth: 290
+    readonly property int editorMinWidth: 320
+    readonly property int editorComfortWidth: 560
+    readonly property int treePaneMinWidth: 200
+    readonly property bool narrow: width < folderPaneWidth + notePaneWidth + editorComfortWidth + 2
+    readonly property bool cramped: narrow && width < treePaneMinWidth + editorMinWidth + 1
+    property bool sidebarShown: true
+    readonly property bool sidebarVisible: !narrow || sidebarShown
+    readonly property bool editorVisible: !cramped || !sidebarShown
+    onCrampedChanged: { if (cramped) sidebarShown = backend.currentNote.length === 0; }
+    // Each layout keeps its own sidebar width.
+    property bool panesReady: false
+    function applySidebarWidth() {
+        sidebarPane.SplitView.preferredWidth = narrow ? settings.treeWidth : settings.folderListWidth;
+    }
+    function keepSidebarWidth(wasNarrow) {
+        if (wasNarrow)
+            settings.treeWidth = sidebarPane.SplitView.preferredWidth;
+        else
+            settings.folderListWidth = sidebarPane.SplitView.preferredWidth;
+    }
+    onNarrowChanged: {
+        sidebarShown = true;
+        if (panesReady) {
+            keepSidebarWidth(!narrow);
+            applySidebarWidth();
+        }
+        if (narrow)
+            revealCurrent();
+    }
+
+    // ---- The sidebar's tree (narrow window)
+    // Open folders ("" is All Notes); the rows come from backend.noteTree.
+    property var expandedFolders: []
+    readonly property var treeRows: narrow ? backend.noteTree(backend.folders, backend.folderNoteCounts, backend.allNotes,
+                                                              expandedFolders, searching, searchPaths) : []
+    onTreeRowsChanged: syncTree(treeRows)
+    ListModel { id: treeModel }
+    function treeKey(row) { return row.kind + ":" + row.folder + ":" + row.path; }
+    // The model follows the rows in place when only their details moved
+    // (a save's new date), so the tree keeps its scroll position and the
+    // row the arrows are on; otherwise it is rebuilt with both kept.
+    function syncTree(rows) {
+        var same = treeModel.count === rows.length;
+        for (var i = 0; same && i < rows.length; i++)
+            same = treeKey(treeModel.get(i)) === treeKey(rows[i]);
+        if (same) {
+            for (var j = 0; j < rows.length; j++) {
+                var had = treeModel.get(j), row = rows[j];
+                if (had.title !== row.title || had.modifiedMs !== row.modifiedMs || had.count !== row.count
+                        || had.expandable !== row.expandable || had.expanded !== row.expanded)
+                    treeModel.set(j, row);
+            }
+            return;
+        }
+        var current = treeView.currentIndex >= 0 && treeView.currentIndex < treeModel.count
+            ? treeKey(treeModel.get(treeView.currentIndex)) : "";
+        var y = treeView.contentY;
+        treeModel.clear();
+        var at = -1;
+        for (var k = 0; k < rows.length; k++) {
+            treeModel.append(rows[k]);
+            if (treeKey(rows[k]) === current)
+                at = k;
+        }
+        treeView.currentIndex = at;
+        treeView.contentY = Math.max(0, Math.min(y, treeView.contentHeight - treeView.height));
+    }
+    function parentFolder(f) { return f.split("/").slice(0, -1).join("/"); }
+    function setExpanded(folder, open) {
+        var list = expandedFolders.filter(function (f) { return f !== folder; });
+        if (open)
+            list.push(folder);
+        expandedFolders = list;
+    }
+    // The open note's vault-relative path, or "".
+    readonly property string openPath: backend.currentNote.length === 0 ? ""
+        : backend.currentFolder.length === 0 ? backend.currentNote : backend.currentFolder + "/" + backend.currentNote
+    // Unfold what it takes for the open note (or, with none, the selected
+    // folder) to show in the tree, then scroll to it.
+    function revealCurrent() {
+        var list = expandedFolders.slice();
+        var add = function (f) { if (list.indexOf(f) < 0) list.push(f); };
+        var folder = backend.currentFolder;
+        if (backend.currentNote.length > 0 && folder.length === 0)
+            add(""); // a note at the top of the vault is only under All Notes
+        else if (backend.currentNote.length > 0 && list.indexOf("") < 0)
+            for (var f = folder; f.length > 0; f = parentFolder(f))
+                add(f);
+        else if (backend.currentNote.length === 0)
+            for (var p = parentFolder(folder); p.length > 0; p = parentFolder(p))
+                add(p);
+        if (list.length !== expandedFolders.length)
+            expandedFolders = list;
+        Qt.callLater(function () {
+            var i = treeIndexOfCurrent();
+            if (i >= 0)
+                treeView.positionViewAtIndex(i, ListView.Contain);
+        });
+    }
+    // The row of the open note (else of the selected folder), or -1.
+    function treeIndexOfCurrent() {
+        var folderRow = -1;
+        for (var i = 0; i < treeModel.count; i++) {
+            var row = treeModel.get(i);
+            if (row.kind === "note" && openPath.length > 0 && row.path === openPath)
+                return i;
+            if (row.kind === "folder" && row.folder === backend.currentFolder && folderRow < 0)
+                folderRow = i;
+        }
+        return folderRow;
+    }
+    // A click on a row (onChevron: on its arrow). A folder is selected as
+    // in the folder list and unfolds, a click on the selected one folds it,
+    // and the arrow only folds or unfolds; a note opens in the editor.
+    function treeActivate(index, onChevron) {
+        if (index < 0 || index >= treeModel.count)
+            return;
+        var row = treeModel.get(index);
+        if (row.kind === "folder") {
+            var folder = row.folder, expandable = row.expandable, expanded = row.expanded;
+            if (onChevron && expandable && !searching) {
+                setExpanded(folder, !expanded);
+                return;
+            }
+            var wasSelected = folder === backend.currentFolder;
+            openFolder(folder);
+            if (backend.currentFolder === folder && expandable && !searching)
+                setExpanded(folder, !(wasSelected && expanded));
+            return;
+        }
+        var path = row.path;
+        if (path !== openPath)
+            openNote(row.folder, row.file);
+        if (cramped && path === openPath)
+            sidebarShown = false;
     }
     property string historyEpoch: ""
     // file → resolution, for entries the last push preview would not simply apply.
@@ -159,6 +327,53 @@ ApplicationWindow {
             font.pixelSize: 10
             font.bold: true
         }
+    }
+    // The search box of either layout: both edit root.searchText.
+    component SearchBox: FocusScope {
+        readonly property alias text: boxField.text
+        implicitHeight: 36
+        Rectangle {
+            anchors.fill: parent
+            radius: 6
+            color: root.colRaised
+            border.color: boxField.activeFocus ? root.colAccent : root.colLine
+            border.width: 1
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 6
+                spacing: 6
+                Glyph { text: ""; font.pixelSize: 12; color: root.colTextMuted }
+                TextField {
+                    id: boxField
+                    focus: true
+                    Layout.fillWidth: true
+                    placeholderText: "Search notes"
+                    placeholderTextColor: root.colTextMuted
+                    selectByMouse: true
+                    background: null
+                    padding: 0
+                    color: root.colText
+                    font.pixelSize: root.pt(12)
+                    text: root.searchText
+                    onTextChanged: root.searchText = text
+                    Keys.onEscapePressed: { root.searchText = ""; editor.forceActiveFocus(); }
+                    Keys.onDownPressed: root.kbFocus("notes")
+                }
+            }
+        }
+    }
+    // Picks a note row up to drop it on a folder (dragProxy is what moves).
+    component NoteDrag: DragHandler {
+        property string noteFolder
+        property string noteFile
+        property string noteTitle
+        target: null
+        acceptedButtons: Qt.LeftButton
+        // Before the list takes the drag for a scroll.
+        grabPermissions: PointerHandler.CanTakeOverFromAnything
+        onActiveChanged: active ? dragProxy.begin(this) : dragProxy.end()
+        onTranslationChanged: { if (active) dragProxy.follow(this); }
     }
     // One side of a conflict block: its lines, the ones the other side
     // lacks tinted, the whole card a click target.
@@ -370,12 +585,47 @@ ApplicationWindow {
             : "Your edits are not saved (Ctrl+S shows why). Close again to discard them.";
     }
     function openNote(folder, name) {
+        if (selectNote(folder, name))
+            pullIfStale();
+    }
+    // Make it the open note without pulling first: for acting on it (its
+    // menu, a drag), not for editing it. False when edits that cannot be
+    // saved yet keep the open one.
+    function selectNote(folder, name) {
         if (!flushEdits())
-            return;
+            return false;
         notice = "";
         backend.currentFolder = folder;
         backend.openNote(name);
-        pullIfStale();
+        return openPath === (folder.length === 0 ? name : folder + "/" + name);
+    }
+    // A note's right-click menu acts on the open note, once it is that one.
+    function noteMenuFor(folder, name) {
+        if (selectNote(folder, name))
+            noteMenu.popup();
+    }
+    // Move the open note to another folder (vault-relative), as a mv does:
+    // the next push moves it in iCloud.
+    function moveOpenNote(folder) {
+        if (!flushEdits())
+            return;
+        if (backend.syncRunning) { // as the toolbar's buttons: never under a running sync
+            notice = "Wait for the sync to finish, then move the note.";
+            return;
+        }
+        var err = backend.moveCurrentNote(folder);
+        if (err.length > 0)
+            notice = err;
+    }
+    // A note dropped on a folder, in either layout.
+    function moveNoteTo(fromFolder, name, folder) {
+        if (folder !== fromFolder && selectNote(fromFolder, name))
+            moveOpenNote(folder);
+    }
+    readonly property string noteDragKey: "application/x-icloud-notes-note"
+    // The folders the open note can move to.
+    function moveTargets() {
+        return backend.folders.filter(function (f) { return f.length > 0 && f !== backend.currentFolder; });
     }
     // Edit the latest copy: opening a note, focusing the editor or typing
     // into an untouched note pulls first when the last pull is over a
@@ -431,6 +681,17 @@ ApplicationWindow {
     // note, however it was opened), else keep the row the arrows left,
     // then move focus there.
     function kbFocus(pane) {
+        if (narrow && pane !== "editor") { // one pane, the tree, holds both lists
+            if (!sidebarVisible)
+                sidebarShown = true;
+            var at = treeIndexOfCurrent();
+            if (at >= 0)
+                treeView.currentIndex = at;
+            root.kbSyncIndex(treeView);
+            kbPane = "tree";
+            treeView.forceActiveFocus();
+            return;
+        }
         var view = pane === "folders" ? folderView : noteView;
         var lookFor = pane === "folders" || (!root.searching && backend.currentNote.length > 0);
         for (var i = 0; lookFor && i < view.count; i++) {
@@ -450,6 +711,8 @@ ApplicationWindow {
     function rowNote(md) { return typeof md === "string" ? { folder: backend.currentFolder, file: md } : md; }
 
     function kbEnterEditor() {
+        if (cramped)
+            sidebarShown = false;
         kbPane = "editor";
         editor.forceActiveFocus();
     }
@@ -509,6 +772,64 @@ ApplicationWindow {
                 root.kbFocus("folders"); // already at the root: keep the current pane
             event.accepted = true;
         }
+    }
+    // The tree: Up/Down walk its rows (opening the notes they pass), Right
+    // unfolds a folder and then steps into it, or takes a note to the
+    // editor; Enter does what a click does; Left folds a folder, or steps
+    // out to the folder above.
+    function kbTreeKey(event) {
+        var key = event.key, last = treeModel.count - 1;
+        event.accepted = true;
+        if (last < 0)
+            return;
+        var i = Math.max(0, Math.min(treeView.currentIndex, last));
+        var row = treeModel.get(i);
+        var to = -1;
+        if (key === Qt.Key_Up)
+            to = Math.max(0, i - 1);
+        else if (key === Qt.Key_Down)
+            to = Math.min(last, i + 1);
+        else if (key === Qt.Key_Home)
+            to = 0;
+        else if (key === Qt.Key_End)
+            to = last;
+        else if (key === Qt.Key_PageUp)
+            to = Math.max(0, i - 10);
+        else if (key === Qt.Key_PageDown)
+            to = Math.min(last, i + 10);
+        else if (key === Qt.Key_Right && row.kind === "folder") {
+            if (row.expandable && !row.expanded && !searching)
+                setExpanded(row.folder, true);
+            else if (row.expanded && i < last)
+                to = i + 1;
+        } else if ((key === Qt.Key_Right || key === Qt.Key_Return || key === Qt.Key_Enter) && row.kind === "note") {
+            if (row.path !== openPath)
+                openNote(row.folder, row.file);
+            kbEnterEditor();
+        } else if (key === Qt.Key_Return || key === Qt.Key_Enter) {
+            treeActivate(i, false);
+        } else if (key === Qt.Key_Left) {
+            if (row.kind === "folder" && row.expanded && !searching) {
+                setExpanded(row.folder, false);
+            } else {
+                for (var up = i - 1; up >= 0; up--)
+                    if (treeModel.get(up).depth < row.depth) {
+                        to = up;
+                        break;
+                    }
+            }
+        } else {
+            event.accepted = key === Qt.Key_Escape;
+            return;
+        }
+        if (to < 0)
+            return;
+        treeView.currentIndex = to;
+        treeView.positionViewAtIndex(to, ListView.Contain);
+        var landed = treeModel.get(to);
+        if (landed.kind === "note" && (key === Qt.Key_Up || key === Qt.Key_Down || key === Qt.Key_Home
+                || key === Qt.Key_End || key === Qt.Key_PageUp || key === Qt.Key_PageDown) && landed.path !== openPath)
+            openNote(landed.folder, landed.file);
     }
     // ----- end arrow-key navigation -----
     function commitTitle(title) {
@@ -642,6 +963,14 @@ ApplicationWindow {
             anchors.rightMargin: 10
             spacing: 2
 
+            IconButton {
+                id: sidebarButton
+                visible: root.narrow
+                glyph: "\uf0c9"; tip: root.sidebarShown ? "Hide the sidebar" : "Show the sidebar"
+                checked: root.sidebarShown
+                onClicked: root.sidebarShown = !root.sidebarShown
+            }
+            Separator { visible: root.narrow; Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton { glyph: "\uf07b"; tip: "New folder"; enabled: !backend.syncRunning; onClicked: newFolderDialog.open() }
             IconButton { glyph: "\uf044"; tip: "New note (Ctrl+N)"; enabled: !backend.syncRunning; onClicked: newNoteDialog.open() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
@@ -657,9 +986,10 @@ ApplicationWindow {
             }
             Item { Layout.fillWidth: true }
             IconButton { glyph: "\uf046"; tip: "Checklist (Ctrl+Enter)"; enabled: root.canFormat; onClicked: root.toggleTask() }
-            IconButton { glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: root.canFormat; onClicked: root.wrapSelection("**", "**") }
-            IconButton { glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: root.canFormat; onClicked: root.wrapSelection("*", "*") }
-            IconButton { glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: root.canFormat; onClicked: root.insertLink() }
+            // Very narrow, these three keep only their shortcuts, so the toolbar fits.
+            IconButton { visible: !root.cramped; glyph: "\uf032"; tip: "Bold (Ctrl+B)"; enabled: root.canFormat; onClicked: root.wrapSelection("**", "**") }
+            IconButton { visible: !root.cramped; glyph: "\uf033"; tip: "Italic (Ctrl+I)"; enabled: root.canFormat; onClicked: root.wrapSelection("*", "*") }
+            IconButton { visible: !root.cramped; glyph: "\uf0c1"; tip: "Link (Ctrl+K)"; enabled: root.canFormat; onClicked: root.insertLink() }
             IconButton { glyph: "\uf0c6"; tip: "Attach a file (or drop or paste one)"; enabled: root.canAttach; onClicked: attachDialog.open() }
             Separator { Layout.leftMargin: 6; Layout.rightMargin: 6 }
             IconButton {
@@ -887,15 +1217,24 @@ ApplicationWindow {
             Layout.fillHeight: true
             orientation: Qt.Horizontal
             handle: Rectangle { implicitWidth: 1; color: root.colLine; opacity: 0.6 }
-            Component.onCompleted: { if (settings.panes) restoreState(settings.panes); }
+            Component.onCompleted: {
+                if (settings.panes)
+                    restoreState(settings.panes);
+                root.applySidebarWidth();
+                root.panesReady = true;
+            }
 
-            // Folders
+            // Folders, or on a narrow window the tree of folders and notes
             Rectangle {
-                SplitView.preferredWidth: 210
-                SplitView.minimumWidth: 150
+                id: sidebarPane
+                visible: root.sidebarVisible
+                SplitView.preferredWidth: root.folderPaneWidth
+                SplitView.minimumWidth: root.narrow ? root.treePaneMinWidth : 150
+                SplitView.fillWidth: !root.editorVisible
                 color: root.colSidebar
                 ColumnLayout {
                     anchors.fill: parent
+                    visible: !root.narrow
                     spacing: 0
                     Label {
                         Layout.leftMargin: 18
@@ -925,12 +1264,21 @@ ApplicationWindow {
                             property bool selected: modelData === backend.currentFolder
                             property int depth: modelData.length === 0 ? 0 : modelData.split("/").length - 1
                             HoverHandler { id: folderHover }
+                            DropArea {
+                                id: folderDrop
+                                anchors.fill: parent
+                                enabled: modelData.length > 0
+                                keys: [root.noteDragKey]
+                                onDropped: function (drop) { root.moveNoteTo(drop.source.noteFolder, drop.source.noteFile, modelData); }
+                            }
                             Rectangle {
                                 anchors.fill: parent
                                 anchors.leftMargin: 8
                                 anchors.rightMargin: 8
                                 radius: 6
-                                color: folderRow.selected ? root.colSelection
+                                border.width: folderDrop.containsDrag ? 1 : 0
+                                border.color: root.colAccent
+                                color: folderRow.selected || folderDrop.containsDrag ? root.colSelection
                                      : folderHover.hovered ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.5)
                                      : folderView.kbActive && folderView.currentIndex === index ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.35)
                                      : "transparent"
@@ -963,10 +1311,136 @@ ApplicationWindow {
                                 onTapped: root.folderMenuFor(modelData)
                             }
                         }
-                        Menu {
-                            id: folderMenu
-                            MenuItem { text: "Rename folder…"; onTriggered: renameFolderDialog.open() }
-                            MenuItem { text: "Delete folder…"; onTriggered: deleteFolderDialog.open() }
+                    }
+                }
+
+                // The tree: All Notes, then each folder, unfolding in place
+                // on its subfolders and notes.
+                ColumnLayout {
+                    anchors.fill: parent
+                    visible: root.narrow
+                    spacing: 0
+                    SearchBox {
+                        id: treeSearch
+                        Layout.fillWidth: true
+                        Layout.margins: 10
+                    }
+                    Label {
+                        textFormat: Text.PlainText
+                        visible: root.searching
+                        Layout.leftMargin: 16
+                        Layout.bottomMargin: 4
+                        text: treeModel.count === 0 ? "No matching notes" : root.listSummary()
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                    }
+                    ListView {
+                        id: treeView
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        model: treeModel
+                        clip: true
+                        keyNavigationEnabled: false // arrows are handled by root.kbTreeKey
+                        property bool kbActive: root.kbPane === "tree"
+                        Keys.onPressed: function (event) { root.kbTreeKey(event); }
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Item {
+                            id: treeRow
+                            required property int index
+                            required property var model
+                            readonly property string kind: model.kind
+                            readonly property string folder: model.folder
+                            readonly property string path: model.path
+                            readonly property string file: model.file
+                            readonly property string title: model.title
+                            readonly property real modifiedMs: model.modifiedMs
+                            readonly property int depth: model.depth
+                            readonly property int count: model.count
+                            readonly property bool expandable: model.expandable
+                            readonly property bool expanded: model.expanded
+                            readonly property bool isFolder: kind === "folder"
+                            readonly property bool selected: isFolder ? folder === backend.currentFolder
+                                                                      : path === root.openPath
+                            // A selected folder with a note open is marked by its label alone.
+                            readonly property bool filled: selected && (!isFolder || backend.currentNote.length === 0)
+                            readonly property real indent: 8 + depth * 14
+                            width: treeView.width
+                            height: 28
+                            HoverHandler { id: treeHover }
+                            DropArea {
+                                id: treeDrop
+                                anchors.fill: parent
+                                enabled: treeRow.isFolder && treeRow.folder.length > 0
+                                keys: [root.noteDragKey]
+                                onDropped: function (drop) { root.moveNoteTo(drop.source.noteFolder, drop.source.noteFile, treeRow.folder); }
+                            }
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.leftMargin: 6
+                                anchors.rightMargin: 6
+                                radius: 6
+                                border.width: treeDrop.containsDrag ? 1 : 0
+                                border.color: root.colAccent
+                                color: treeRow.filled || treeDrop.containsDrag ? root.colSelection
+                                     : treeHover.hovered ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.5)
+                                     : treeView.kbActive && treeView.currentIndex === treeRow.index ? Qt.rgba(root.colSelection.r, root.colSelection.g, root.colSelection.b, 0.35)
+                                     : "transparent"
+                            }
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: treeRow.indent
+                                anchors.rightMargin: 14
+                                spacing: 6
+                                Glyph {
+                                    Layout.preferredWidth: 12
+                                    text: !treeRow.expandable ? "" : treeRow.expanded ? "" : ""
+                                    font.pixelSize: 9
+                                    color: root.colTextMuted
+                                }
+                                Glyph {
+                                    visible: treeRow.isFolder
+                                    text: treeRow.folder.length === 0 || treeRow.expanded ? "" : ""
+                                    font.pixelSize: 13
+                                    color: root.colAccent
+                                }
+                                Label {
+                                    textFormat: Text.PlainText
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    text: treeRow.isFolder ? root.folderLabel(treeRow.folder)
+                                                           : treeRow.title || root.noteLabel(treeRow.file)
+                                    color: treeRow.selected && !treeRow.filled ? root.colAccent : root.colText
+                                    font.pixelSize: root.pt(13)
+                                }
+                                Label {
+                                    textFormat: Text.PlainText
+                                    text: treeRow.isFolder ? (treeRow.count || "")
+                                                           : treeRow.modifiedMs > 0 ? root.shortDate(treeRow.modifiedMs) : ""
+                                    color: root.colTextMuted
+                                    font.pixelSize: 11
+                                }
+                            }
+                            TapHandler {
+                                acceptedButtons: Qt.LeftButton
+                                onTapped: function (point) {
+                                    root.kbPane = "tree";
+                                    treeView.currentIndex = treeRow.index;
+                                    treeView.forceActiveFocus();
+                                    root.treeActivate(treeRow.index, point.position.x < treeRow.indent + 18);
+                                }
+                            }
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                enabled: !treeRow.isFolder || treeRow.folder.length > 0
+                                onTapped: treeRow.isFolder ? root.folderMenuFor(treeRow.folder)
+                                                           : root.noteMenuFor(treeRow.folder, treeRow.file)
+                            }
+                            NoteDrag {
+                                enabled: !treeRow.isFolder
+                                noteFolder: treeRow.folder
+                                noteFile: treeRow.file
+                                noteTitle: treeRow.title
+                            }
                         }
                     }
                 }
@@ -974,7 +1448,8 @@ ApplicationWindow {
 
             // Notes
             Rectangle {
-                SplitView.preferredWidth: 290
+                visible: !root.narrow
+                SplitView.preferredWidth: root.notePaneWidth
                 SplitView.minimumWidth: 200
                 color: root.colPanel
                 ColumnLayout {
@@ -992,51 +1467,17 @@ ApplicationWindow {
                         font.pixelSize: root.pt(17)
                         font.bold: true
                     }
-                    Rectangle {
+                    SearchBox {
+                        id: searchField
                         Layout.fillWidth: true
                         Layout.margins: 12
                         Layout.topMargin: 8
-                        implicitHeight: 36
-                        radius: 6
-                        color: root.colRaised
-                        border.color: searchField.activeFocus ? root.colAccent : root.colLine
-                        border.width: 1
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 6
-                            spacing: 6
-                            Glyph { text: "\uf002"; font.pixelSize: 12; color: root.colTextMuted }
-                            TextField {
-                                id: searchField
-                                Layout.fillWidth: true
-                                placeholderText: "Search notes"
-                                placeholderTextColor: root.colTextMuted
-                                selectByMouse: true
-                                background: null
-                                padding: 0
-                                color: root.colText
-                                font.pixelSize: root.pt(12)
-                                onTextChanged: root.refreshSearch()
-                                Keys.onEscapePressed: { text = ""; editor.forceActiveFocus(); }
-                            }
-                        }
                     }
                     Label {
                         textFormat: Text.PlainText
                         Layout.leftMargin: 20
                         Layout.bottomMargin: 4
-                        text: {
-                            if (root.searching) {
-                                var related = root.searchResults.filter(function (r) { return r.related; }).length;
-                                var matches = root.searchResults.length - related;
-                                return matches + " result" + (matches === 1 ? "" : "s")
-                                    + (related > 0 ? " · " + related + " related" : "")
-                                    + (backend.searchTruncated ? " · searched the first 2000 notes" : "");
-                            }
-                            var n = backend.notes.length;
-                            return n + " note" + (n === 1 ? "" : "s");
-                        }
+                        text: root.listSummary()
                         color: root.colTextMuted
                         font.pixelSize: 11
                     }
@@ -1146,6 +1587,15 @@ ApplicationWindow {
                                         root.openNote(noteRow.folder, noteRow.fileName);
                                 }
                             }
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: root.noteMenuFor(noteRow.folder, noteRow.fileName)
+                            }
+                            NoteDrag {
+                                noteFolder: noteRow.folder
+                                noteFile: noteRow.fileName
+                                noteTitle: noteRow.isResult ? modelData.title : root.displayTitle(noteRow.fileName)
+                            }
                         }
                     }
                 }
@@ -1153,8 +1603,9 @@ ApplicationWindow {
 
             // Editor
             Rectangle {
+                visible: root.editorVisible
                 SplitView.fillWidth: true
-                SplitView.minimumWidth: 320
+                SplitView.minimumWidth: root.editorMinWidth
                 color: root.colBg
 
                 ColumnLayout {
@@ -1613,7 +2064,7 @@ ApplicationWindow {
 
     function dialogOpen() {
         return [previewDialog, logDialog, historyDialog, saveWarnDialog, newNoteDialog,
-                newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, deleteMissingDialog, onboardDialog]
+                newFolderDialog, renameFolderDialog, deleteFolderDialog, deleteDialog, deleteMissingDialog, onboardDialog, moveDialog]
             .some(function (d) { return d.visible; });
     }
 
@@ -1698,6 +2149,8 @@ ApplicationWindow {
     }
     Component.onCompleted: {
         start();
+        if (narrow)
+            revealCurrent();
         Qt.callLater(root.kbArmStartup);
     }
 
@@ -1717,16 +2170,109 @@ ApplicationWindow {
         property alias windowHeight: root.height
         property var panes
         property alias editorZoom: root.editorZoom
+        // The sidebar's width in each layout, and the tree's open folders.
+        property real folderListWidth: root.folderPaneWidth
+        property real treeWidth: 260
+        property alias expandedFolders: root.expandedFolders
     }
-    Component.onDestruction: settings.panes = panes.saveState()
-    Shortcut { sequences: [StandardKey.Find]; onActivated: searchField.forceActiveFocus() }
+    Component.onDestruction: {
+        keepSidebarWidth(narrow);
+        settings.panes = panes.saveState();
+    }
+    Shortcut {
+        sequences: [StandardKey.Find]
+        onActivated: {
+            if (root.narrow && !root.sidebarShown)
+                root.sidebarShown = true;
+            (root.narrow ? treeSearch : searchField).forceActiveFocus();
+        }
+    }
+
+    // Menus of a right-clicked row, in either layout.
+    Menu {
+        id: folderMenu
+        MenuItem { text: "Rename folder…"; onTriggered: renameFolderDialog.open() }
+        MenuItem { text: "Delete folder…"; onTriggered: deleteFolderDialog.open() }
+    }
+    Menu {
+        id: noteMenu
+        MenuItem {
+            text: "Rename note"
+            enabled: !root.noteLocked && !backend.syncRunning
+            onTriggered: {
+                if (root.cramped)
+                    root.sidebarShown = false; // the title is in the editor
+                root.selectTitle();
+            }
+        }
+        MenuItem {
+            text: "Move to…"
+            enabled: !root.noteLocked && !backend.syncRunning && root.moveTargets().length > 0
+            onTriggered: moveDialog.open()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: "Delete note…"
+            enabled: !backend.syncRunning
+            onTriggered: deleteDialog.open()
+        }
+    }
+
+    // What a dragged note row shows under the pointer; dropped on a folder
+    // (a folder list row, or a folder of the tree), it moves the note there.
+    Rectangle {
+        id: dragProxy
+        property string noteFolder
+        property string noteFile
+        property point origin
+        visible: Drag.active
+        z: 100
+        width: Math.min(dragLabel.implicitWidth + 20, 260)
+        height: 28
+        radius: 6
+        color: root.colRaised
+        border.color: root.colAccent
+        Drag.keys: [root.noteDragKey]
+        Drag.hotSpot.x: 10
+        Drag.hotSpot.y: 14
+        Label {
+            id: dragLabel
+            textFormat: Text.PlainText
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            color: root.colText
+            font.pixelSize: root.pt(12)
+        }
+        function begin(handler) {
+            noteFolder = handler.noteFolder;
+            noteFile = handler.noteFile;
+            dragLabel.text = handler.noteTitle;
+            var p = handler.parent.mapToItem(parent, handler.centroid.pressPosition.x, handler.centroid.pressPosition.y);
+            origin = Qt.point(p.x, p.y);
+            follow(handler);
+            Drag.active = true;
+        }
+        function follow(handler) {
+            x = origin.x + handler.translation.x - Drag.hotSpot.x;
+            y = origin.y + handler.translation.y - Drag.hotSpot.y;
+        }
+        function end() {
+            if (!Drag.active)
+                return;
+            Drag.drop();
+            Drag.active = false;
+        }
+    }
 
     Connections {
         target: backend
         // "~ query" shows Recall's ranking alone; a plain query keeps its
         // text matches and gains the rest of Recall's hits below them.
         function onSemanticSearchFinished(query, hits, available) {
-            if (searchField.text !== query || !root.searching) return;
+            if (root.searchText !== query || !root.searching) return;
             if (query.trim().startsWith("~")) {
                 if (available) root.searchResults = hits;
                 root.notice = available ? "Matches by meaning · local Recall" : "Recall unavailable or warming up · showing text matches";
@@ -1787,7 +2333,17 @@ ApplicationWindow {
         }
         function onNotesChanged() { root.refreshSearch(); }
         function onFoldersChanged() { root.refreshSearch(); }
-        function onCurrentNoteChanged() { root.conflictAsText = false; }
+        function onCurrentNoteChanged() {
+            root.conflictAsText = false;
+            if (root.cramped && backend.currentNote.length === 0)
+                root.sidebarShown = true; // nothing to edit: the tree
+            if (root.narrow)
+                root.revealCurrent();
+        }
+        function onCurrentFolderChanged() {
+            if (root.narrow)
+                root.revealCurrent();
+        }
         // The poll counts from the end of the last sync, whatever started it
         // (a focus, a push, Pull), so it never follows one within the interval.
         // The editor is unlocked here and not on syncRunningChanged: that
@@ -1924,6 +2480,27 @@ ApplicationWindow {
             else
                 root.loadEditor(); // unsaved edits go with the note
         }
+    }
+
+    AppDialog {
+        id: moveDialog
+        title: "Move note"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: { moveTarget.model = root.moveTargets(); moveTarget.currentIndex = 0; }
+        ColumnLayout {
+            spacing: 10
+            Label {
+                textFormat: Text.PlainText
+                Layout.preferredWidth: 300
+                wrapMode: Text.WordWrap
+                text: "Move \"" + root.displayTitle(backend.currentNote) + "\" to:"
+            }
+            ComboBox {
+                id: moveTarget
+                Layout.preferredWidth: 300
+            }
+        }
+        onAccepted: { if (moveTarget.currentText.length > 0) root.moveOpenNote(moveTarget.currentText); }
     }
 
     // The one place a sync is told to delete most of the vault (sync --yes).

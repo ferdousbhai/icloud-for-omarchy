@@ -1,5 +1,6 @@
 // Guardrail logic tests: the pure parsing/classification behind safe sync.
 // Run with bin/test.
+#include "../src/notetree.h"
 #include "../src/syncmodel.h"
 #include "check.h"
 
@@ -51,10 +52,76 @@ QStringList richTextLabels(const QString &qml)
     }
     return offenders;
 }
+
+// The one-pane sidebar's tree, rows as "<indent><kind letter> <folder or path>[ open][ =count]":
+// "F Recipes open =2", "  N Recipes/Pancakes.md".
+QStringList treeLines(const QStringList &expanded, bool searching = false, const QStringList &matches = {},
+                      const QStringList &extraFolders = {})
+{
+    QStringList folders{ QString(), QStringLiteral("Notes"), QStringLiteral("Recipes"), QStringLiteral("Recipes/Desserts"),
+                         QStringLiteral("Work") };
+    folders << extraFolders;
+    const QVariantMap counts{ { QString(), 6 }, { QStringLiteral("Notes"), 2 }, { QStringLiteral("Recipes"), 2 },
+                              { QStringLiteral("Recipes/Desserts"), 1 }, { QStringLiteral("Work"), 1 } };
+    QVariantList notes; // newest first, as allNotes lists them
+    for (const QString &path : { QStringLiteral("Notes/Groceries.md"), QStringLiteral("Work/Plan.md"), QStringLiteral("Notes/Trip.md"),
+                                 QStringLiteral("Recipes/Pancakes.md"), QStringLiteral("Recipes/Desserts/Brownies.md"),
+                                 QStringLiteral("Top.md") })
+        notes << QVariantMap{ { QStringLiteral("path"), path }, { QStringLiteral("folder"), path.section(u'/', 0, -2) },
+                              { QStringLiteral("file"), path.section(u'/', -1) }, { QStringLiteral("title"), path } };
+    QStringList out;
+    for (const QVariant &v : NoteTree::rows(folders, counts, notes, expanded, searching, matches)) {
+        const QVariantMap row = v.toMap();
+        const bool folder = row.value(QStringLiteral("kind")).toString() == u"folder";
+        QString line = QString(row.value(QStringLiteral("depth")).toInt() * 2, u' ') + (folder ? u'F' : u'N') + u' '
+            + (folder ? row.value(QStringLiteral("folder")).toString() : row.value(QStringLiteral("path")).toString());
+        if (row.value(QStringLiteral("expanded")).toBool())
+            line += QStringLiteral(" open");
+        if (folder)
+            line += (row.value(QStringLiteral("expandable")).toBool() ? QStringLiteral(" =") : QStringLiteral(" (empty) ="))
+                + row.value(QStringLiteral("count")).toString();
+        out << line;
+    }
+    return out;
+}
 } // namespace
 
 int main()
 {
+    // The one-pane sidebar's tree (NoteTree::rows).
+    {
+        check(treeLines({}) == QStringList{ QStringLiteral("F  =6"), QStringLiteral("F Notes =2"), QStringLiteral("F Recipes =2"),
+                                            QStringLiteral("F Work =1") },
+              "tree: All Notes, then the top-level folders, all folded, with their counts");
+        check(treeLines({ QString() })
+                  == QStringList{ QStringLiteral("F  open =6"), QStringLiteral("  N Notes/Groceries.md"), QStringLiteral("  N Work/Plan.md"),
+                                  QStringLiteral("  N Notes/Trip.md"), QStringLiteral("  N Recipes/Pancakes.md"),
+                                  QStringLiteral("  N Recipes/Desserts/Brownies.md"), QStringLiteral("  N Top.md"),
+                                  QStringLiteral("F Notes =2"), QStringLiteral("F Recipes =2"), QStringLiteral("F Work =1") },
+              "tree: All Notes unfolds on every note, newest first, a note at the top of the vault included");
+        check(treeLines({ QStringLiteral("Recipes"), QStringLiteral("Recipes/Desserts"), QStringLiteral("Notes") })
+                  == QStringList{ QStringLiteral("F  =6"), QStringLiteral("F Notes open =2"), QStringLiteral("  N Notes/Groceries.md"),
+                                  QStringLiteral("  N Notes/Trip.md"), QStringLiteral("F Recipes open =2"),
+                                  QStringLiteral("  F Recipes/Desserts open =1"), QStringLiteral("    N Recipes/Desserts/Brownies.md"),
+                                  QStringLiteral("  N Recipes/Pancakes.md"), QStringLiteral("F Work =1") },
+              "tree: a folder unfolds on its subfolders, nested, then its own notes newest first");
+        check(treeLines({ QStringLiteral("Recipes/Desserts") }) == treeLines({}),
+              "tree: a subfolder of a folded folder stays hidden");
+        check(treeLines({ QStringLiteral("Empty") }, false, {}, { QStringLiteral("Empty") }).last() == QStringLiteral("F Empty (empty) =0"),
+              "tree: an empty folder has nothing to unfold");
+        check(treeLines({}, true, { QStringLiteral("Recipes/Desserts/Brownies.md"), QStringLiteral("Top.md") })
+                  == QStringList{ QStringLiteral("F  open =6"), QStringLiteral("  N Recipes/Desserts/Brownies.md"), QStringLiteral("  N Top.md"),
+                                  QStringLiteral("F Recipes open =2"), QStringLiteral("  F Recipes/Desserts open =1"),
+                                  QStringLiteral("    N Recipes/Desserts/Brownies.md") },
+              "tree: a search shows only the matches, and opens every folder holding one (counts unchanged)");
+        check(treeLines({ QStringLiteral("Notes") }, true, { QStringLiteral("Work/Plan.md") })
+                  == QStringList{ QStringLiteral("F  open =6"), QStringLiteral("  N Work/Plan.md"), QStringLiteral("F Work open =1"),
+                                  QStringLiteral("  N Work/Plan.md") },
+              "tree: a search hides folders without a match, whatever was open");
+        check(treeLines({ QString() }, true, {}).isEmpty(), "tree: a search with no match shows nothing");
+    }
+
+    // extractNoteId
     // extractNoteId
     check(SyncModel::extractNoteId(QStringLiteral("---\napple-note-id: 12345678-1234-1234-1234-123456789abc\n---\n# T\n"))
               == QStringLiteral("12345678-1234-1234-1234-123456789abc"),

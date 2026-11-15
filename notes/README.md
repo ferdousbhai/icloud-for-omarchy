@@ -113,7 +113,19 @@ without asking.
   with title, preview line, and date). The search box above the list
   searches every note; picking a result jumps to it. With Recall installed,
   notes related by meaning follow the text matches (see the main README).
-  Right-click a folder to rename or delete it. Window and pane sizes are remembered.
+  Right-click a folder to rename or delete it, or a note to rename, move or
+  delete it; drag a note onto a folder to move it there. Window and pane sizes are remembered.
+- **Narrow window** (below about 1060 px, so half of a 1920 px screen):
+  the folders and notes become one sidebar, like a code editor's file
+  tree. All Notes unfolds to every note, newest first, and each folder to
+  its subfolders and notes; a note row shows its title and date. The
+  search box above the tree filters it and unfolds the folders with
+  matches. Menus, drag to move and the arrow keys work as in the wide
+  layout (Right/Left also unfold and fold a folder), and the open note and
+  selected folder carry over when the window is resized across. Narrower
+  still (below about 520 px) the window shows the note or the tree, one at
+  a time: the sidebar button at the left of the toolbar switches, and
+  picking a note goes back to it.
 - **Edit**: edits save on their own once you pause typing, and when you
   switch notes or close the window; `Ctrl+S` forces a save when a guardrail has flagged the
   edit. `Ctrl+N` starts a note. The first line is the title: edit it
