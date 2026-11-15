@@ -256,7 +256,7 @@ fn clone_lines(s: &clone::CloneSummary, directory: &Path) -> Vec<Line> {
         lines.push((
             false,
             format!(
-                "{} note(s) written with content this tool couldn't fully parse - read-only",
+                "{} note(s) written read-only: which of their text their formatting is for can't be told",
                 s.written_unpublishable
             ),
         ));

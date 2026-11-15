@@ -7,9 +7,9 @@ use common::reference;
 
 use icloud_notes_sync::cloudkit::FieldValue;
 use icloud_notes_sync::doc::embeds::{
-    EmbedMarkerContent, EmbedSlot, decode_note_embed_slots, format_attachment_markdown,
-    format_embed_marker, has_attachment_reference, has_embed_marker, has_unknown_content_marker, is_image_uti,
-    is_table_uti, parse_embed_markers, render_placeholders, unplaced_content,
+    EmbedMarkerContent, EmbedSlot, decode_note_embed_slots, format_attachment_markdown, format_embed_marker,
+    has_attachment_reference, has_embed_marker, has_unknown_content_marker, is_image_uti, is_table_uti,
+    parse_embed_markers, render_placeholders, unplaced_content,
 };
 use icloud_notes_sync::doc::proto::topotext::{self, AttachmentInfo, AttributeRun};
 use icloud_notes_sync::doc::proto::{Message, versioned_document};

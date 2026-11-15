@@ -1225,7 +1225,8 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
     let Some(unedited_wanted) = wanted(&classified, markdown) else {
         return Err(format!("the unedited Markdown {markdown:?} is refused"));
     };
-    let unedited = edit_document(&doc, &unedited_wanted).map_err(|e| format!("the unedited Markdown is refused: {e}"))?;
+    let unedited =
+        edit_document(&doc, &unedited_wanted).map_err(|e| format!("the unedited Markdown is refused: {e}"))?;
     if unedited.text != doc.text || unedited.attribute_runs != doc.attribute_runs {
         return Err(format!(
             "pushing the unedited Markdown {markdown:?} changes the note:\n  before {:?}\n  after  {:?}",
@@ -1248,7 +1249,9 @@ fn check_codec(note: &GenNote, seed: u64) -> Checked {
         return Ok(Outcome::Refused);
     }
     if !moves_lines(&what) {
-        let edited_raw = as_written(&classified, &edited).map(|p| p.paragraphs).unwrap_or_default();
+        let edited_raw = as_written(&classified, &edited)
+            .map(|p| p.paragraphs)
+            .unwrap_or_default();
         let asked = |p: &FormatParagraph| asked_by(&back.paragraphs, &edited_raw, p);
         untouched_paragraphs_kept(&format, &sent_format, &asked)
             .map_err(|e| format!("{what}: {e}\n  markdown {markdown:?}\n  edited {edited:?}"))?;
@@ -2295,7 +2298,9 @@ fn settle(server: &Arc<Server>, vault: &Path, name: &str, filename_mode: bool, l
     let after_doc = parse_note_document(&raw_document(server, name)).unwrap();
     let after_format = format_of(&after_doc);
     if after_format.last().map(|p| p.text.as_str()) != Some("an edit") {
-        return Err(format!("{mismatch}\nand the line added isn't the note's last: {after_format:?}"));
+        return Err(format!(
+            "{mismatch}\nand the line added isn't the note's last: {after_format:?}"
+        ));
     }
     let added = |p: &FormatParagraph| p.text.is_empty() || p.text == "an edit";
     untouched_paragraphs_kept(&before_format, &after_format, &added).map_err(|e| format!("{mismatch}\n{e}"))?;
@@ -2726,7 +2731,11 @@ fn an_edit_keeps_what_the_markdown_of_the_paragraphs_it_left_alone_cant_show() {
     let (server, _dir, vault) = served(text, runs);
     assert_eq!(state_of(&vault).notes[NOTE].unpublishable_reason, None);
     let local = vault_note(&vault, NOTE, false).unwrap();
-    assert!(local.body.ends_with("# Title\nkept\n- &#x20;\nnext"), "{:?}", local.body);
+    assert!(
+        local.body.ends_with("# Title\nkept\n- &#x20;\nnext"),
+        "{:?}",
+        local.body
+    );
 
     edit_file(&vault, "next", "next, edited");
     let result = push(&server, &vault).unwrap();
@@ -2746,7 +2755,10 @@ fn an_edit_keeps_what_the_markdown_of_the_paragraphs_it_left_alone_cant_show() {
     assert_eq!(doc.text, "Title\nkept, edited\n\nnext, edited");
     let format = format_of(&doc);
     assert_eq!(format[1].kind, Body);
-    assert!(format[1].spans[0].style.bold && format[1].spans[0].length == 4, "{format:?}");
+    assert!(
+        format[1].spans[0].style.bold && format[1].spans[0].length == 4,
+        "{format:?}"
+    );
     assert_eq!(style_at(&doc, 19), Some(103));
     // The checklist item edited is what its Markdown says.
     edit_file(&vault, "- &#x20;\n", "- [x] done\n");
@@ -2774,7 +2786,9 @@ fn a_note_with_content_this_tool_cant_place_is_editable_around_it() {
     assert_eq!(state_of(&vault).notes[NOTE].unpublishable_reason, None);
     let local = vault_note(&vault, NOTE, false).unwrap();
     assert!(
-        local.body.contains("<apple-embed type=\"public.jpeg\">public.jpeg</apple-embed>x\n"),
+        local
+            .body
+            .contains("<apple-embed type=\"public.jpeg\">public.jpeg</apple-embed>x\n"),
         "{:?}",
         local.body
     );

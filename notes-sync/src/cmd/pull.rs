@@ -133,7 +133,7 @@ pub const UP_TO_DATE: &str = "Already up to date.";
 fn read_only_remark() -> PullChangeRemark {
     PullChangeRemark::new(
         "unsyncable",
-        "read-only: contains content this tool couldn't fully parse",
+        "read-only: which of its text its formatting is for can't be told",
     )
 }
 
@@ -442,7 +442,10 @@ pub fn run_pull_with(
                 }
                 // Already at this version: a resync re-listing it, or the
                 // push just before this pull writing it. Nothing to apply.
-                if existing.as_ref().is_some_and(|existing| at_tracked_version(record, existing)) {
+                if existing
+                    .as_ref()
+                    .is_some_and(|existing| at_tracked_version(record, existing))
+                {
                     return Ok(());
                 }
 

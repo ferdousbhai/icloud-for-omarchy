@@ -366,7 +366,11 @@ fn a_title_folded_right_after_an_escaped_backslash_reads_back_whole() {
     let file = compose_note_file("", "Body", ID, Some(&title));
     let envelope = split_frontmatter(&file, titled()).frontmatter;
     assert!(envelope.contains("\\\\\\\n"), "not folded there: {envelope:?}");
-    assert_eq!(read_note_title(&envelope).as_deref(), Some(title.as_str()), "{envelope:?}");
+    assert_eq!(
+        read_note_title(&envelope).as_deref(),
+        Some(title.as_str()),
+        "{envelope:?}"
+    );
     // An escaped backslash before a line break is no escape of the break.
     assert_eq!(
         read_note_title("---\napple-note-title: \"a\\\\\n  b\"\n---\n\n").as_deref(),

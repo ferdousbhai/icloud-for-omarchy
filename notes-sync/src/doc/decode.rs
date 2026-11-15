@@ -226,14 +226,12 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
         unpublishable_reason: None,
     };
 
-    let paragraphs = match decode_note_format(&body_text, &string.attribute_run) {
-        Ok(paragraphs) => paragraphs,
-        Err(reason) => {
-            return NoteDecodeResult::Ok(Box::new(DecodedNote {
-                unpublishable_reason: Some(reason),
-                ..base
-            }));
-        }
+    // Runs that end within the text (as `embed_slots_of` found) decode.
+    let Ok(paragraphs) = decode_note_format(&body_text, &string.attribute_run) else {
+        return NoteDecodeResult::Ok(Box::new(DecodedNote {
+            unpublishable_reason: Some(OVERSHOOTING_RUNS_REASON.into()),
+            ..base
+        }));
     };
     let strip_title = options.title_mode == TitleMode::Filename
         && paragraphs
@@ -271,10 +269,12 @@ pub fn classify_note_record(record: &CloudKitRecord, options: &ClassifyOptions) 
     }))
 }
 
-/// Why a note whose formatting runs overshoot its text is read-only: which
-/// characters they mean can't be told, so neither its formatting nor its
-/// embeds can be kept through an edit.
-pub const OVERSHOOTING_RUNS_REASON: &str = "the note's formatting runs overshoot its text";
+/// Why a note whose formatting runs overshoot its text is read-only (it
+/// follows "this note"): which characters they mean can't be told, so
+/// neither its formatting nor its embeds could be kept through an edit. Its
+/// file is its plain text.
+pub const OVERSHOOTING_RUNS_REASON: &str =
+    "has formatting that runs past the end of its text, so which text it belongs to can't be told";
 
 /// The tables (indexes into `slots`) whose Markdown table wouldn't read back
 /// from where it is written, in place of its U+FFFC: each is written as its
@@ -356,7 +356,12 @@ fn merge_untouched(
     let pairs = common_subsequence(base, note, &same);
     for &(pair_b, pair_n) in pairs.iter().chain(std::iter::once(&(base.len(), note.len()))) {
         let (gap_b, gap_n) = (b..pair_b, n..pair_n);
-        if gap_b.len() == gap_n.len() && gap_b.clone().zip(gap_n.clone()).all(|(i, j)| text(&base[i]) == text(&note[j])) {
+        if gap_b.len() == gap_n.len()
+            && gap_b
+                .clone()
+                .zip(gap_n.clone())
+                .all(|(i, j)| text(&base[i]) == text(&note[j]))
+        {
             stretches.extend(gap_b.zip(gap_n).map(|(i, j)| (i..i + 1, j..j + 1)));
         } else if !gap_b.is_empty() || !gap_n.is_empty() {
             stretches.push((gap_b, gap_n));
@@ -374,7 +379,13 @@ fn merge_untouched(
     }
     // `edited`'s position just after `base`'s paragraph `i - 1` (0 at the
     // start), when that paragraph is in it unchanged.
-    let after = |i: usize| if i == 0 { Some(0) } else { in_edited[i - 1].map(|j| j + 1) };
+    let after = |i: usize| {
+        if i == 0 {
+            Some(0)
+        } else {
+            in_edited[i - 1].map(|j| j + 1)
+        }
+    };
 
     let mut out: Vec<FormatParagraph> = Vec::new();
     let mut next = 0;
@@ -397,8 +408,8 @@ fn merge_untouched(
             continue;
         }
         let found: Vec<Option<usize>> = base_range.clone().map(|i| in_edited[i]).collect();
-        let together = found.iter().all(Option::is_some)
-            && found.windows(2).all(|pair| pair[1] == pair[0].map(|j| j + 1));
+        let together =
+            found.iter().all(Option::is_some) && found.windows(2).all(|pair| pair[1] == pair[0].map(|j| j + 1));
         if kept && together {
             let (first, last) = (found[0].unwrap_or(next), found[found.len() - 1].unwrap_or(next));
             out.extend(edited[next..first.max(next)].iter().cloned());

@@ -634,7 +634,7 @@ fn report_tallies_untracked_and_read_only() {
                 change(K::Add, "Scanned.md"),
                 vec![remark(
                     "unsyncable",
-                    "read-only: contains content this tool couldn't fully parse",
+                    "read-only: which of its text its formatting is for can't be told",
                 )],
             ),
             with_remarks(
@@ -653,7 +653,7 @@ fn report_tallies_untracked_and_read_only() {
             "Changes pulled from iCloud:",
             "",
             "        new file:  Scanned.md",
-            "                   ! read-only: contains content this tool couldn't fully parse",
+            "                   ! read-only: which of its text its formatting is for can't be told",
             "        untracked: Broken.md",
             "                   ! no longer syncable remotely (missing text data) - local copy left in place",
             "",

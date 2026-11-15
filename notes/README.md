@@ -335,9 +335,16 @@ next sync here, like any other edit to its file. Two things to know:
   note from here. The text around it can be edited. A file added here
   goes up without the preview and text recognition Apple's own devices
   make for the attachments they add.
-- A note icloud-notes-sync can read but not safely write back opens
-  read-only, with the reason under its title: content it cannot reproduce
-  exactly. Edit it in Apple Notes; the changes still sync here.
+- Every note can be edited here, also one holding something Markdown has
+  no exact spelling for (a paragraph style it doesn't know, a table inside
+  a list or quote, which shows as a marker): what you don't edit stays as it
+  is in Apple Notes, and a paragraph you edit becomes what its Markdown
+  says. The one exception opens read-only, with the reason under its title:
+  a note whose formatting runs past the end of its text, or whose text in
+  iCloud this version can't read. Edit it in Apple Notes; the changes still
+  sync here.
+- Note files saved with Windows line endings (CRLF) are read as their
+  lines; this tool writes LF.
 - A note edited daily for years grows large, because Apple keeps every
   edit ever made to it; past a size, iCloud stores its text as a separate
   file. Such a note is edited here like any other.

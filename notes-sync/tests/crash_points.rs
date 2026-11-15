@@ -1249,6 +1249,49 @@ fn a_pull_cut_short_anywhere_is_finished_by_the_next_run() {
     crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
 }
 
+/// Three notes as an older version left them read-only (under the banner
+/// it wrote, the reason in state.json), unchanged in iCloud since: the pull
+/// that writes them again as Markdown (it looks them up), cut short
+/// anywhere, is finished by the next run, and then none is read-only.
+#[test]
+fn a_pull_writing_notes_an_older_version_kept_read_only_cut_short_anywhere_is_finished_by_the_next_run() {
+    let start = cloned(6);
+    let mut state = read_clone_state(&start.place.vault).unwrap().unwrap();
+    let names = [
+        "E0000000-0000-4000-8000-000000000001",
+        "E0000000-0000-4000-8000-000000000002",
+        "E0000000-0000-4000-8000-000000000004",
+    ];
+    for name in names {
+        let entry = state.notes.get_mut(name).unwrap();
+        entry.unpublishable_reason =
+            Some("the note's formatting doesn't survive this tool's markdown round trip".into());
+        let path = start.place.vault.join(&entry.file);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let old = text.replacen(
+            "\n\n",
+            "\n\n> [!danger] Unparsed content\n> This note contains content this tool can't parse or place precisely. \
+             It stays read-only here until that's resolved (e.g. by editing the note in Notes directly).\n\n",
+            1,
+        );
+        std::fs::write(&path, &old).unwrap();
+        let body = icloud_notes_sync::md::frontmatter::split_frontmatter(&old, Default::default()).body;
+        icloud_notes_sync::vault::base::write_base_copy(&start.place.vault, name, &body).unwrap();
+    }
+    icloud_notes_sync::vault::state::write_clone_state(&start.place.vault, &state).unwrap();
+    crash_everywhere(&start, "pull", &[Then::Again, Then::Sync]);
+
+    let fake = Fake::start(start.zone.clone());
+    let place = Place::copy_of(&start.place);
+    succeeded(&run(&fake, &place, "pull", &Crash::default()), "pull");
+    let state = read_clone_state(&place.vault).unwrap().unwrap();
+    for name in names {
+        assert_eq!(state.notes[name].unpublishable_reason, None, "{name}");
+        let text = std::fs::read_to_string(place.vault.join(&state.notes[name].file)).unwrap();
+        assert!(!text.contains("Unparsed content"), "{text:?}");
+    }
+}
+
 #[test]
 fn a_pull_that_moves_notes_cut_short_anywhere_is_finished_by_the_next_run() {
     let mut start = cloned(6);

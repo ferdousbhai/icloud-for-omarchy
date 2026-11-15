@@ -499,10 +499,18 @@ Work/Plan.md
   iCloud's. `recover --strip` keeps every line and drops the markers,
   `--synced` takes the last synced text; both back the note up first.
 - `export-pdf` writes the PDF next to the note.
-- Read-only notes (`read_only` set: content this tool cannot write back
-  faithfully) cannot be written, renamed or moved. A very large note is not
-  one of them: its text goes up as a separate file, as Apple's own apps send
-  it.
+- Every note can be edited. Where Markdown can't say exactly what a note
+  holds (a paragraph style or highlight it has no spelling for, a table in a
+  list, heading or quote, written as its embed marker), a paragraph the edit
+  leaves alone stays as Notes has it, and one that is edited takes what its
+  Markdown says. Embed markers, attachment links, and text an embed this tool
+  can't read sits on, must stay as they are: an edit that changes them is
+  refused with the reason. `read_only` is set (and the note can't be
+  written, renamed or moved) only for a note whose formatting runs past the
+  end of its text, or whose text in iCloud this version can't read at all:
+  its file is its plain text, and it is edited in Apple Notes. A very large
+  note is edited like any other: its text goes up as a separate file, as
+  Apple's own apps send it.
 - A note with attachments can be edited and moved (the next push takes its
   attachment files along); its attachment links must stay as they are.
   `attach` does not work on a note someone else shared.

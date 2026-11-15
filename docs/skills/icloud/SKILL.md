@@ -103,7 +103,10 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   `push --dry-run`, and only with their yes run `sync --yes`.
 - `vault_busy` (exit 1) = the Notes window is open and owns the vault: ask
   the user to make the change there or quit Notes. Reads always work.
-- `read_only` notes cannot be changed here; `guardrail` = the text would add
+- Every note is editable as Markdown; what an edit leaves alone stays as
+  Notes has it. Leave embed markers and attachment links as they are.
+  `read_only` (rare: formatting this tool can't place, or text it can't
+  read) notes cannot be changed here; `guardrail` = the text would add
   conflict markers (don't `--force`; use `resolve`).
 - `push_rejected` (exit 1): the sync ran but iCloud refused a change; the
   message names it.

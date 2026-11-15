@@ -118,9 +118,9 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> String
             }
             // Text on the line after a list item's last line is more of
             // that item's paragraph to Markdown (a lazy continuation line).
-            let continued = paragraphs
-                .get(end)
-                .is_some_and(|next| next.kind == ParagraphKind::Body && !next.text.is_empty() && next.block_quote_level <= bq);
+            let continued = paragraphs.get(end).is_some_and(|next| {
+                next.kind == ParagraphKind::Body && !next.text.is_empty() && next.block_quote_level <= bq
+            });
             let before = i.checked_sub(1).map(|p| &paragraphs[p]);
             for list in build_list_nodes(&paragraphs[i..end], spelling, before, continued) {
                 push_block_lines(&mut lines, list, bq);
@@ -278,9 +278,7 @@ fn build_list_nodes(
         // an empty item, the nearest Markdown has (push keeps it a
         // checklist item until it is edited).
         let next_continues = match paragraphs.get(index + 1) {
-            Some(next) => {
-                next.kind == ParagraphKind::NumberedList && effective_start_number(next.start_number) != 1
-            }
+            Some(next) => next.kind == ParagraphKind::NumberedList && effective_start_number(next.start_number) != 1,
             None => continued,
         };
         let continued_todo = empty_todo && next_continues;

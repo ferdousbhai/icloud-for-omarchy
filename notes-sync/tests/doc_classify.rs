@@ -6,7 +6,7 @@ use common::reference;
 
 use icloud_notes_sync::cloudkit::{CloudKitRecord, FieldValue};
 use icloud_notes_sync::doc::decode::{
-    ClassifyOptions, DecodedNote, NoteDecodeResult, UnsyncableReason, classify_note_record,
+    ClassifyOptions, DecodedNote, NoteDecodeResult, OVERSHOOTING_RUNS_REASON, UnsyncableReason, classify_note_record,
 };
 use icloud_notes_sync::doc::embeds::EmbedSlot;
 use icloud_notes_sync::doc::format::ParagraphKind;
@@ -129,7 +129,7 @@ fn formatting_runs_overshooting_the_text_leave_the_note_read_only_as_plain_text(
             attachments: vec![],
             table_markers: vec![],
             publishable: false,
-            unpublishable_reason: Some("the note's formatting runs overshoot its text".into()),
+            unpublishable_reason: Some(OVERSHOOTING_RUNS_REASON.into()),
         }))
     );
 }
