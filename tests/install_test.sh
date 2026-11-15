@@ -70,6 +70,18 @@ mkdir -p "$work/bin"
 cat >"$work/bin/pacman" <<'STUB'
 #!/bin/sh
 echo "pacman $*" >>"$PACMAN_LOG"
+# Installed and repository versions, when a case sets them.
+case "$1" in
+  -Q) [ -n "$PACMAN_HAVE" ] && echo "$2 $PACMAN_HAVE" || exit 1 ;;
+  -Si) [ -n "$PACMAN_NEW" ] && echo "Version         : $PACMAN_NEW" || exit 1 ;;
+esac
+exit 0
+STUB
+cat >"$work/bin/vercmp" <<'STUB'
+#!/bin/sh
+if [ "$1" = "$2" ]; then echo 0
+elif [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]; then echo -1
+else echo 1; fi
 STUB
 cat >"$work/bin/omarchy-pkg-add" <<'STUB'
 #!/bin/sh
@@ -126,6 +138,12 @@ bash install.sh >/dev/null 2>&1
 check "re-running keeps one Include line" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "on Omarchy it installs with omarchy-pkg-add" grep -q '^omarchy-pkg-add icloud-notes' "$PACMAN_LOG"
 check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" not grep -q '^pacman -Syu' "$PACMAN_LOG"
+check "nothing outdated, no update hint" not grep -q 'newer version is available' "$work/out"
+PACMAN_HAVE=0.11.1-1 PACMAN_NEW=0.12.1-1 bash install.sh icloud-notes >"$work/out" 2>&1
+check "an installed older app is named with both versions" grep -q 'icloud-notes 0.11.1-1 -> 0.12.1-1' "$work/out"
+check "and the way to update it is given" grep -q "Run 'omarchy update'" "$work/out"
+PACMAN_HAVE=0.12.1-1 PACMAN_NEW=0.12.1-1 bash install.sh icloud-notes >"$work/out" 2>&1
+check "an up-to-date app gets no update hint" not grep -q 'newer version is available' "$work/out"
 
 # ARM's update helper removes the old [omarchy] block before appending
 # a restricted replacement. A trailing Include must survive that rewrite.

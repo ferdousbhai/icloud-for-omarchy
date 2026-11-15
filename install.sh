@@ -213,6 +213,22 @@ main() {
     # through `omarchy update`), so install the way Omarchy installs its own
     # apps; the next `omarchy update` brings everything current.
     omarchy-pkg-add "${wanted[@]}"
+    # omarchy-pkg-add only installs what is missing: say when an installed app
+    # is older than the repository's, rather than let "Done." suggest it updated.
+    local have new outdated=()
+    for pkg in "${wanted[@]}"; do
+      have=$(pacman -Q "$pkg" 2>/dev/null | cut -d' ' -f2) || true
+      new=$(pacman -Si "$REPO/$pkg" 2>/dev/null | sed -n 's/^Version *: *//p' | head -1) || true
+      if [[ -n $have && -n $new && $(vercmp "$have" "$new") -lt 0 ]]; then
+        outdated+=("$pkg $have -> $new")
+      fi
+    done
+    if (( ${#outdated[@]} )); then
+      echo
+      echo "Already installed, and a newer version is available:"
+      printf '  %s\n' "${outdated[@]}"
+      echo "Run 'omarchy update' to update them (Omarchy updates packages only that way)."
+    fi
   else
     # Upgrade and install in one transaction. add_signed_repo has just synced
     # every repository's database, and installing from those without upgrading
