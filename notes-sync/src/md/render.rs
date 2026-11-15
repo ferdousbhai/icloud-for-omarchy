@@ -4,7 +4,7 @@
 //!
 //! Offsets and slices are UTF-16 code units, as in the JS.
 
-use super::parse::{joined_text, parse_note_markdown};
+use super::parse::{LIST_ITEM_LINE_BREAK, joined_text, parse_note_markdown};
 use super::to_markdown::{Node, Serializer, W, unw, w};
 use crate::doc::format::{
     FormatParagraph, InlineSpan, ParagraphKind, effective_start_number, formats_round_trip_equal, normalize_spans,
@@ -59,13 +59,27 @@ pub fn spelling_candidates<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<
 /// `renderNoteMarkdown`.
 pub fn render_note_markdown(raw_paragraphs: &[FormatParagraph]) -> String {
     let paragraphs: Vec<FormatParagraph> = raw_paragraphs.iter().map(trim_trailing_whitespace).collect();
-    for spelling in spelling_candidates(paragraphs.iter().map(|p| p.text.as_str())) {
-        let rendered = render_lines(&paragraphs, spelling);
+    // A list item's line breaks are written as line breaks where they read
+    // back (not at either end of the item, say), else as the character.
+    let broken_items = paragraphs
+        .iter()
+        .any(|p| p.kind.is_list() && p.text.contains(LIST_ITEM_LINE_BREAK));
+    let candidates = spelling_candidates(paragraphs.iter().map(|p| p.text.as_str()));
+    if broken_items {
+        for &spelling in candidates.iter().chain([&CONSERVATIVE_SPELLING]) {
+            let rendered = render_lines(&paragraphs, spelling, true);
+            if projection_survives(&paragraphs, &rendered) {
+                return rendered;
+            }
+        }
+    }
+    for &spelling in &candidates {
+        let rendered = render_lines(&paragraphs, spelling, false);
         if projection_survives(&paragraphs, &rendered) {
             return rendered;
         }
     }
-    render_lines(&paragraphs, CONSERVATIVE_SPELLING)
+    render_lines(&paragraphs, CONSERVATIVE_SPELLING, false)
 }
 
 /// `projectionSurvives`: whether `rendered` parses back to `paragraphs`
@@ -86,7 +100,7 @@ fn heading_depth(kind: ParagraphKind) -> Option<u8> {
     }
 }
 
-fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> String {
+fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling, line_breaks: bool) -> String {
     let mut lines: Vec<W> = Vec::new();
     let mut i = 0;
     while i < paragraphs.len() {
@@ -116,13 +130,8 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> String
             while end < paragraphs.len() && paragraphs[end].kind.is_list() && paragraphs[end].block_quote_level == bq {
                 end += 1;
             }
-            // Text on the line after a list item's last line is more of
-            // that item's paragraph to Markdown (a lazy continuation line).
-            let continued = paragraphs.get(end).is_some_and(|next| {
-                next.kind == ParagraphKind::Body && !next.text.is_empty() && next.block_quote_level <= bq
-            });
             let before = i.checked_sub(1).map(|p| &paragraphs[p]);
-            for list in build_list_nodes(&paragraphs[i..end], spelling, before, continued) {
+            for list in build_list_nodes(&paragraphs[i..end], spelling, before, line_breaks) {
                 push_block_lines(&mut lines, list, bq);
             }
             i = end;
@@ -142,6 +151,9 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> String
         if paragraph.text.is_empty() {
             lines.push(vec![b'>' as u16; bq as usize]);
         } else {
+            if needs_separator(&paragraphs[..i], bq) {
+                lines.push(vec![b'>' as u16; bq as usize]);
+            }
             push_block_lines(
                 &mut lines,
                 Node::Paragraph(phrasing_from_paragraph(paragraph, spelling)),
@@ -151,6 +163,28 @@ fn render_lines(paragraphs: &[FormatParagraph], spelling: RawSpelling) -> String
         i += 1;
     }
     unw(&lines.join(&10u16))
+}
+
+/// Whether a line of body text quoted `block_quote_level` deep, after
+/// `before`, is written a blank line (the separator) below them. Right below
+/// a list item, or below a quoted line of text and quoted less, Markdown
+/// would read it as more of that item or quote (a lazy continuation line).
+/// The parser reads the last of the blank lines between them as syntax when
+/// it has this paragraph's quote markers, so the separator also goes below
+/// the empty lines between that end at this paragraph's quote level.
+fn needs_separator(before: &[FormatParagraph], block_quote_level: u32) -> bool {
+    let empty = |p: &FormatParagraph| p.kind == ParagraphKind::Body && p.text.is_empty();
+    if before
+        .last()
+        .is_some_and(|last| empty(last) && last.block_quote_level != block_quote_level)
+    {
+        return false;
+    }
+    match before.iter().rev().find(|p| !empty(p)) {
+        Some(p) if p.kind.is_list() => p.block_quote_level >= block_quote_level,
+        Some(p) => p.kind == ParagraphKind::Body && p.block_quote_level > block_quote_level,
+        None => false,
+    }
 }
 
 /// `pushBlockLines`.
@@ -196,13 +230,13 @@ fn ends_in_text(paragraph: &FormatParagraph) -> bool {
 }
 
 /// `buildListNodes`. `before`: the paragraph before the first item;
-/// `continued`: a line of text follows the last item, which Markdown reads
-/// as more of it.
+/// `line_breaks`: an item's line breaks ([`LIST_ITEM_LINE_BREAK`]) are
+/// written as line breaks, the item's paragraph going on on the next line.
 fn build_list_nodes(
     paragraphs: &[FormatParagraph],
     spelling: RawSpelling,
     before: Option<&FormatParagraph>,
-    continued: bool,
+    line_breaks: bool,
 ) -> Vec<Node> {
     // Arena of lists; `roots` are top-level list ids.
     let mut arena: Vec<ListBuild> = Vec::new();
@@ -272,18 +306,24 @@ fn build_list_nodes(
         let checked =
             (paragraph.kind == ParagraphKind::TodoList && !empty_todo).then(|| paragraph.done.unwrap_or(false));
         // An empty checklist item is written `- [ ]`, a line of text to
-        // Markdown, which the line after it may continue: a line of text,
-        // or a numbered item counting from other than 1 (a list starting at
-        // it can't break into a line of text). Before one, it is written as
-        // an empty item, the nearest Markdown has (push keeps it a
-        // checklist item until it is edited).
-        let next_continues = match paragraphs.get(index + 1) {
-            Some(next) => next.kind == ParagraphKind::NumberedList && effective_start_number(next.start_number) != 1,
-            None => continued,
-        };
-        let continued_todo = empty_todo && next_continues;
+        // Markdown, which the line after it may continue: a numbered item
+        // counting from other than 1 (a list starting at it can't break into
+        // a line of text; a line of text after the list is written a blank
+        // line below it). Before one, it is written as an empty item, the
+        // nearest Markdown has (push keeps it a checklist item until it is
+        // edited).
+        let continued_todo = empty_todo
+            && paragraphs.get(index + 1).is_some_and(|next| {
+                next.kind == ParagraphKind::NumberedList && effective_start_number(next.start_number) != 1
+            });
         let mut children = if empty_todo && !continued_todo {
             vec![Node::Html(w(if paragraph.done == Some(true) { "[x]" } else { "[ ]" }))]
+        } else if line_breaks {
+            let broken = FormatParagraph {
+                text: paragraph.text.replace(LIST_ITEM_LINE_BREAK, "\n"),
+                ..paragraph.clone()
+            };
+            phrasing_from_paragraph(&broken, spelling)
         } else {
             phrasing_from_paragraph(paragraph, spelling)
         };
@@ -622,7 +662,10 @@ fn phrasing_from_paragraph(paragraph: &FormatParagraph, spelling: RawSpelling) -
         }
         at += span.length;
     }
-    let ranges = find_raw_ranges(&text, spelling);
+    // Raw text (HTML to the serializer) right after a line break would be
+    // written after a space instead, so there it is written escaped.
+    let mut ranges = find_raw_ranges(&text, spelling);
+    ranges.retain(|range| range.start == 0 || text[range.start - 1] != 10);
     build_phrasing(
         &pieces,
         &[Dim::Link, Dim::Bold, Dim::Italic, Dim::Strikethrough, Dim::Underline],

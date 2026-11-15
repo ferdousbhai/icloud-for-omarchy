@@ -2719,10 +2719,9 @@ fn edit_file(vault: &Path, from: &str, to: &str) -> String {
     local.file
 }
 
-/// What Markdown can't show of a paragraph (a style this tool doesn't know,
-/// an empty checklist item written as an empty item because the line after
-/// it would continue it) stays in iCloud through an edit elsewhere; the
-/// note is never read-only for it.
+/// What Markdown can't show of a paragraph (a style this tool doesn't know)
+/// stays in iCloud through an edit elsewhere; the note is never read-only
+/// for it. An empty checklist item right above text is written as one.
 #[test]
 fn an_edit_keeps_what_the_markdown_of_the_paragraphs_it_left_alone_cant_show() {
     // "Title", an unknown style, an empty checklist item, then text.
@@ -2731,11 +2730,7 @@ fn an_edit_keeps_what_the_markdown_of_the_paragraphs_it_left_alone_cant_show() {
     let (server, _dir, vault) = served(text, runs);
     assert_eq!(state_of(&vault).notes[NOTE].unpublishable_reason, None);
     let local = vault_note(&vault, NOTE, false).unwrap();
-    assert!(
-        local.body.ends_with("# Title\nkept\n- &#x20;\nnext"),
-        "{:?}",
-        local.body
-    );
+    assert!(local.body.ends_with("# Title\nkept\n- [ ]\n\nnext"), "{:?}", local.body);
 
     edit_file(&vault, "next", "next, edited");
     let result = push(&server, &vault).unwrap();
@@ -2761,7 +2756,7 @@ fn an_edit_keeps_what_the_markdown_of_the_paragraphs_it_left_alone_cant_show() {
     );
     assert_eq!(style_at(&doc, 19), Some(103));
     // The checklist item edited is what its Markdown says.
-    edit_file(&vault, "- &#x20;\n", "- [x] done\n");
+    edit_file(&vault, "- [ ]\n", "- [x] done\n");
     push(&server, &vault).unwrap();
     let format = format_of(&served_document(&server));
     assert_eq!((format[2].kind, format[2].done), (TodoList, Some(true)), "{format:?}");
@@ -2871,4 +2866,71 @@ fn a_file_saved_with_crlf_line_endings_reads_as_its_lines() {
     .unwrap();
     push(&server, &vault).unwrap();
     assert_eq!(served_document(&server).text, "Title\nline\nmore");
+}
+
+/// A hard-wrapped line below a list item (a lazy continuation line) is more
+/// of the item, as Markdown reads it: in a file an older version pulled,
+/// where a line of text sat right below a list, and typed into a numbered
+/// item, it is pushed as a line break (U+2028) in that item, which stays one
+/// item of its list (the numbering goes on). Pull now writes a line of text
+/// below a list a blank line below it, so that file pushed unedited changes
+/// nothing.
+#[test]
+fn a_lazy_line_below_a_list_item_is_pushed_as_more_of_the_item() {
+    let text = "Title\nitem\none\ntwo\nafter";
+    let runs = vec![
+        styled_run(6, 0),
+        styled_run(5, 100),
+        styled_run(4, 102),
+        styled_run(4, 102),
+        styled_run(5, 3),
+    ];
+    let (server, _dir, vault) = served(text, runs);
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    assert!(
+        local.body.ends_with("# Title\n- item\n1. one\n2. two\n\nafter"),
+        "{:?}",
+        local.body
+    );
+    let pulled = served_document(&server);
+
+    // The file saved again as pulled: nothing is sent.
+    std::fs::write(vault.join(&local.file), &local.text).unwrap();
+    let result = push(&server, &vault).unwrap();
+    assert!(result.failures().is_empty(), "{:?}", result.entries);
+    let unedited = served_document(&server);
+    assert_eq!(
+        (unedited.text, unedited.attribute_runs),
+        (pulled.text.clone(), pulled.attribute_runs.clone())
+    );
+
+    // The text below the list as an older version wrote it (right below
+    // it), and a numbered item wrapped by hand.
+    edit_file(&vault, "2. two\n\nafter", "2. two\nafter");
+    edit_file(&vault, "1. one\n", "1. one\nwrapped\n");
+    let result = push(&server, &vault).unwrap();
+    assert!(result.failures().is_empty(), "{:?}", result.entries);
+    let doc = served_document(&server);
+    assert_eq!(doc.text, "Title\nitem\none\u{2028}wrapped\ntwo\u{2028}after");
+    let format = format_of(&doc);
+    let got: Vec<_> = format.iter().map(|p| (p.kind, p.start_number)).collect();
+    assert_eq!(
+        got,
+        vec![(Title, 0), (BulletList, 0), (NumberedList, 0), (NumberedList, 0)]
+    );
+
+    // The file stays as typed; the note's Markdown writes the wrapped items
+    // wrapped.
+    run_pull_with(&serve(&server), &vault, &mut NoProgress, &mut |_| {}).unwrap();
+    let local = vault_note(&vault, NOTE, false).unwrap();
+    assert!(
+        local.body.ends_with("1. one\nwrapped\n2. two\nafter"),
+        "{:?}",
+        local.body
+    );
+    let markdown = classified_on_server(&server, NOTE, false).markdown_text;
+    assert!(
+        markdown.ends_with("- item\n1. one\n   wrapped\n2. two\n   after"),
+        "{markdown:?}"
+    );
 }

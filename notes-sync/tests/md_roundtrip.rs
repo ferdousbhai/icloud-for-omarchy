@@ -131,16 +131,157 @@ fn dash_lists_render_as_dash_items() {
     assert_eq!(render_note_markdown(&[p(DashList, "item")]), "- item");
 }
 
+/// A line of text right below a list item or a quoted line, and quoted
+/// less, would be more of that item or quote to Markdown (a lazy
+/// continuation line): it is written a blank line below, and that blank line
+/// is no line of the note. Empty lines between them, ending at the text's
+/// quote level, get one more blank line.
 #[test]
-fn a_body_line_after_a_list_or_quote_is_not_lazily_absorbed() {
+fn a_body_line_after_a_list_or_quote_is_written_a_blank_line_below() {
     assert_eq!(
         assert_round_trips(&[p(BulletList, "item"), p(Body, "directly after")]),
-        "- item\ndirectly after"
+        "- item\n\ndirectly after"
     );
     assert_eq!(
         assert_round_trips(&[quoted(Body, "quoted", 1), p(Body, "outside")]),
-        "> quoted\noutside"
+        "> quoted\n\noutside"
     );
+    assert_eq!(
+        assert_round_trips(&[quoted(NumberedList, "item", 1), quoted(Body, "after", 1)]),
+        "> 1. item\n>\n> after"
+    );
+    assert_eq!(
+        assert_round_trips(&[quoted(Body, "deep", 2), quoted(Body, "less", 1)]),
+        "> > deep\n>\n> less"
+    );
+    assert_eq!(
+        assert_round_trips(&[p(BulletList, "item"), p(Body, ""), p(Body, "after")]),
+        "- item\n\n\nafter"
+    );
+    assert_eq!(
+        assert_round_trips(&[quoted(Body, "quoted", 1), p(Body, ""), p(Body, "outside")]),
+        "> quoted\n\n\noutside"
+    );
+    // Nothing else changes: an empty quoted line between, quoted lines at
+    // one level, a list below text.
+    assert_eq!(
+        assert_round_trips(&[quoted(Body, "quoted", 1), quoted(Body, "", 1), p(Body, "outside")]),
+        "> quoted\n>\noutside"
+    );
+    assert_eq!(
+        assert_round_trips(&[quoted(Body, "a", 1), quoted(Body, "", 1), quoted(Body, "b", 1)]),
+        "> a\n>\n> b"
+    );
+    assert_eq!(
+        assert_round_trips(&[p(Body, "a"), p(BulletList, "b"), p(Heading, "c")]),
+        "a\n- b\n## c"
+    );
+    // An empty checklist item before text is written as one.
+    assert_eq!(
+        assert_round_trips(&[todo("", false), p(Body, "after")]),
+        "- [ ]\n\nafter"
+    );
+}
+
+fn kinds(markdown: &str) -> Vec<(ParagraphKind, u32, String)> {
+    parse_note_markdown(markdown)
+        .unwrap()
+        .paragraphs
+        .into_iter()
+        .map(|p| (p.kind, p.block_quote_level, p.text))
+        .collect()
+}
+
+/// A hard-wrapped line below a list item (a lazy continuation line, and an
+/// indented one alike) is more of the item, as CommonMark reads it: one line
+/// of the note, with a line break (U+2028) where the line was wrapped.
+#[test]
+fn a_wrapped_bullet_item_is_one_item_with_a_line_break() {
+    assert_eq!(
+        kinds("- first half\nsecond half\n- next"),
+        vec![
+            (BulletList, 0, "first half\u{2028}second half".into()),
+            (BulletList, 0, "next".into())
+        ]
+    );
+    assert_eq!(
+        kinds("- first half\n  second half"),
+        vec![(BulletList, 0, "first half\u{2028}second half".into())]
+    );
+    // Written back as a wrapped line, which reads back the same.
+    let item = p(BulletList, "first half\u{2028}second half");
+    assert_eq!(assert_round_trips(&[item]), "- first half\n  second half");
+}
+
+#[test]
+fn a_wrapped_numbered_item_keeps_the_list_counting() {
+    let parsed = parse_note_markdown("1. one\nwrapped\n2. two\n3. three").unwrap();
+    let got: Vec<_> = parsed.paragraphs.iter().map(|p| (p.kind, p.text.as_str())).collect();
+    assert_eq!(
+        got,
+        vec![
+            (NumberedList, "one\u{2028}wrapped"),
+            (NumberedList, "two"),
+            (NumberedList, "three")
+        ]
+    );
+    // One list: the items after the wrapped one go on counting from it.
+    assert!(parsed.paragraphs[1..].iter().all(|p| p.start_number == 0));
+    assert_eq!(
+        assert_round_trips(&parsed.paragraphs),
+        "1. one\n   wrapped\n2. two\n3. three"
+    );
+}
+
+#[test]
+fn a_wrapped_checklist_item_is_one_item_with_a_line_break() {
+    let parsed = parse_note_markdown("- [x] done and\nwrapped\n- [ ] open").unwrap();
+    let got: Vec<_> = parsed
+        .paragraphs
+        .iter()
+        .map(|p| (p.kind, p.done, p.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (TodoList, Some(true), "done and\u{2028}wrapped"),
+            (TodoList, Some(false), "open")
+        ]
+    );
+    assert_eq!(
+        assert_round_trips(&parsed.paragraphs),
+        "- [x] done and\n  wrapped\n- [ ] open"
+    );
+}
+
+/// A hard-wrapped line below a quoted line is more of the quote: a line of
+/// the note at the quote's level (in body text a line break is a line of
+/// the note, as anywhere else).
+#[test]
+fn a_wrapped_quote_line_stays_in_the_quote() {
+    assert_eq!(
+        kinds("> quoted\nlazy line"),
+        vec![(Body, 1, "quoted".into()), (Body, 1, "lazy line".into())]
+    );
+    assert_eq!(
+        kinds("> - item\n> lazy\nlazier"),
+        vec![(BulletList, 1, "item\u{2028}lazy\u{2028}lazier".into())]
+    );
+}
+
+/// The line break keeps the style around it, and a bold wrapped item is
+/// written as one bold run over both lines.
+#[test]
+fn a_line_break_in_an_item_keeps_its_style() {
+    let parsed = parse_note_markdown("- **bold\nwrapped**").unwrap();
+    assert_eq!(parsed.paragraphs.len(), 1);
+    assert_eq!(parsed.paragraphs[0].spans.len(), 1);
+    assert!(parsed.paragraphs[0].spans[0].style.bold);
+    assert_eq!(assert_round_trips(&parsed.paragraphs), "- **bold\n  wrapped**");
+    // Where a line break can't be written as one (at the end of the item),
+    // it is written as the character.
+    let trailing = p(BulletList, "item\u{2028}");
+    assert_eq!(assert_round_trips(&[trailing]), "- item\u{2028}");
 }
 
 #[test]
@@ -250,17 +391,6 @@ fn parser_degrades_unsupported_inline_constructs_to_source_text() {
         parse_note_markdown("some `inline code` here").unwrap().text,
         "some `inline code` here"
     );
-}
-
-#[test]
-fn parser_splits_lazy_continuations_into_body_paragraphs() {
-    let result = parse_note_markdown("> quoted\nlazy line").unwrap();
-    let got: Vec<_> = result
-        .paragraphs
-        .iter()
-        .map(|q| (q.kind, q.block_quote_level, q.text.as_str()))
-        .collect();
-    assert_eq!(got, vec![(Body, 1, "quoted"), (Body, 0, "lazy line")]);
 }
 
 #[test]
@@ -380,7 +510,7 @@ fn tokens_that_arent_safe_to_write_raw_keep_their_escapes() {
 fn each_unescaping_rule_stands_on_its_own() {
     assert_eq!(
         assert_round_trips(&[p(BulletList, "[ ]"), p(Body, "flow.ts")]),
-        "- \\[ ]\nflow.ts"
+        "- \\[ ]\n\nflow.ts"
     );
     assert_eq!(
         assert_round_trips(&[p(Body, "[[Note]] and www.exa_mple.com")]),
@@ -511,7 +641,7 @@ fn the_obsidian_spelling_is_dropped_whole_when_it_would_change_the_document() {
     assert_ne!(assert_round_trips(&[p(BulletList, "[ ]")]), "- [ ]");
     assert_eq!(
         assert_round_trips(&[p(BulletList, "[ ]"), p(Body, "[[Note]]")]),
-        "- \\[ ]\n\\[\\[Note]]"
+        "- \\[ ]\n\n\\[\\[Note]]"
     );
 }
 
