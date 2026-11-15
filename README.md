@@ -14,14 +14,16 @@ one Apple sign-in, published as one signed pacman repository.
   Photos, copy one or make it your wallpaper.
 - **Find My**: your devices on a map, with play sound, Lost Mode and a
   location trail.
-- **Reminders**: your lists and reminders, completed with a click, and a
-  desktop notification when one falls due, window open or not.
+- **Reminders**: your lists and reminders, completed with a click, a
+  desktop notification when one falls due, window open or not, and every
+  list as a Markdown checklist in `~/Documents/Reminders` that an editor,
+  an agent or Syncthing can change.
 - **Contacts**: search your address book, copy a number or start an email
   in a click, add and edit contacts, and export them as vCards.
 - **iCloud Drive**: `~/iCloud Drive`, a folder kept in sync both ways. No
   app: use your file manager.
-- Every window action also works from the terminal, with JSON output
-  for scripts and AI agents.
+- Every window action also works from the terminal (for Reminders, in
+  its Markdown files), with JSON output for scripts and AI agents.
 
 ```bash
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash

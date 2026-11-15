@@ -107,7 +107,8 @@ fn wall_as_utc(wall: DateTime) -> Result<i64, String> {
         .map_err(|e| format!("due date {wall} out of range: {e}"))
 }
 
-/// Parses `--due`: `2026-10-10`, `2026-10-10 17:30` (or `T17:30`),
+/// Parses a due date (what follows 📅 in a folder file, or the window's due
+/// box): `2026-10-10`, `2026-10-10 17:30` (or `T17:30`),
 /// `today`, `tomorrow`, either followed by a time, a bare `17:30` (today),
 /// or `+30m`, `+2h`, `+3d` from `now`. A date alone is all-day.
 pub fn parse_when(s: &str, now: &Zoned) -> Result<Due, String> {

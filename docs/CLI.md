@@ -15,7 +15,7 @@ is the short version for an agent.
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
-| `icloud-reminders <command>` | icloud-reminders | the Reminders app: lists, reminders, due dates; `background` is its notification timer |
+| `icloud-reminders <command>` | icloud-reminders | the Reminders app: `sync` (iCloud and the Markdown lists in `~/Documents/Reminders`, where reminders are read and changed); `background` is its notification timer |
 | `icloud-contacts <command>` | icloud-contacts | the Contacts app: search, show, add, edit, delete, vCard export |
 | `icloud-drive <command>` | icloud-drive | the sync of the folder `~/iCloud Drive`: status, a sync now, on and off (no window) |
 
@@ -114,22 +114,22 @@ timer's sync). All of it is new, in the app binary: see
 
 ### Reminders (`reminders/src/bin/app`)
 
-The app and its command line were written together; every window action
-has its command.
+Reminders are read and changed as Markdown files, one per list, in
+`~/Documents/Reminders` (the format is in [icloud-reminders](#icloud-reminders)
+below); the command line only syncs, and `sync` applies the files' edits at
+once.
 
 | In the window | Command |
 |---|---|
-| Sidebar: lists with open counts | `icloud-reminders lists` |
-| Upcoming, a list's reminders, Show Completed | `icloud-reminders list [LIST] [--completed \| --all]` |
-| Click a reminder (its notes, due date) | `icloud-reminders show REMINDER` |
-| New reminder line (title, due) | `icloud-reminders add TITLE --list L [--due WHEN] [--notes T]` |
-| Edit dialog: title, due date, notes | `icloud-reminders edit REMINDER [--title T] [--due WHEN \| --no-due] [--notes T]` |
-| Check box | `icloud-reminders complete REMINDER`, `uncomplete REMINDER` |
-| Edit dialog: Delete | `icloud-reminders delete REMINDER --yes` |
-| Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` |
+| Sidebar, Upcoming, a list's reminders, Show Completed, a reminder's notes and due date | read `~/Documents/Reminders/LIST.md` (open ones, then those completed in the last 7 days) |
+| New reminder line (title, due) | add a line `- [ ] TITLE 📅 WHEN` to the list's file |
+| Edit dialog: title, due date, notes | change the line, its `📅 WHEN`, the indented lines under it |
+| Check box | `- [ ]` ↔ `- [x]` |
+| Edit dialog: Delete | remove the line |
+| Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` (also sends the files' edits now; otherwise the timer does within a minute) |
 | Notifications (the timer, window open or not) | `icloud-reminders background` (the timer runs it with `--styled`, which prints nothing when nothing fell due) |
-| (no window: the lists as Markdown checklists in `~/Documents/Reminders`, for Syncthing and editors) | nothing to run: `icloud-reminders background` keeps them in step |
 | Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
+| New list, alerts, priority, flags | not in the files: the app or an Apple device |
 
 ### Contacts (`contacts/src/bin/app`)
 
@@ -308,7 +308,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
   terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
   `restore`, and a `write` that empties a note, which the next push deletes;
   `icloud-photos delete`; `icloud-findmy play-sound`,
-  `lost-mode`; `icloud-reminders delete`; `icloud-contacts delete`) ask there; anywhere else they refuse with `usage` (exit 2)
+  `lost-mode`; `icloud-contacts delete`) ask there; anywhere else they refuse with `usage` (exit 2)
   unless `--yes` is given. (`icloud-session set-password` reads the password
   from a terminal without echo, or from stdin.)
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
@@ -326,7 +326,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 | icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
 | icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
-| icloud-reminders | `lists`: list ids; `list`, `show`, `add`, `edit`, `complete`, `uncomplete`, `delete`: reminder ids; `background`: the reminders it notified about | `lists`: lists; `list`: reminders; a change: 1; `sync`: records changed; `background`: notifications sent |
+| icloud-reminders | `background`: the reminders it notified about | `sync`: records changed; `background`: notifications sent |
 | icloud-contacts | `list`, `show`, `add`, `edit`, `delete`, `export`: contact ids | `list`, `export`: contacts; a change: 1; `sync`: cards changed |
 | icloud-drive | `sync`: one line per change made (or planned) | `sync`: changes made (or planned) |
 
@@ -403,14 +403,16 @@ they exit with the engine's codes, below.
 
 | Exit | Codes |
 |---|---|
-| 1 | `cancelled`, `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx) |
-| 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
+| 1 | `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx); also `sync` with its data when the folder step reported a problem (`folder.restored` or `folder.warnings` not empty) |
+| 2 | `usage` |
 | 3 | `sign_in_required`, `session_rejected` |
-| 4 | `not_found` (no such reminder or list; for a list the hint names the lists) |
-| 5 | `offline` (no network; `--cached` reads the last sync), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| 4 | `not_found` |
+| 5 | `offline` (no network), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 `background` exits 0 when its sync fails and says so in `sync_error`: a
 timer that fails every minute while signed out would only fill the journal.
+`sync` that cannot sync fails with the code (3 or 5) and leaves the files as
+they are: their edits are sent by the next sync that works.
 
 **icloud-contacts**
 
@@ -628,31 +630,68 @@ $ icloud-drive --quiet sync --dry-run
 
 ### icloud-reminders
 
-```console
-$ icloud-reminders --quiet lists
-[{"id":"6F0A...","name":"Groceries","color":"#FF9500","open":2}]
-$ icloud-reminders --quiet list
-[{"id":"9B1C...","list":{"id":"6F0A...","name":"Groceries"},"title":"Milk","notes":"Oat","completed":false,
-  "completed_at":null,"due":{"date":"2026-10-09","time":"17:30","all_day":false,"time_zone":"Europe/Helsinki",
-  "at":"2026-10-09T14:30:00Z"},"flagged":false,"priority":0,"alerts":0}]
-$ icloud-reminders --quiet complete "dentist"
-{"action":"complete","changed":true,"reminder":{...,"completed":true,"completed_at":"2026-10-09T11:02:41Z"}}
+Reminders are read and changed in `~/Documents/Reminders`: one Markdown
+file per list, named after it (`Groceries.md`; a `/` in the name becomes
+`-`, and a second list of one name gets `Groceries 2.md`). The background
+timer writes the folder after its first sync and keeps it and iCloud in
+step every minute; `icloud-reminders sync` does the same at once and says
+what it did.
+
+```markdown
+# Groceries
+
+- [ ] Milk 📅 2026-11-18 09:00
+    Oat, 2 cartons
+    - [ ] A subtask
+- [x] Eggs
 ```
 
-- Reading commands sync first; `--cached` skips that and reads what the
-  last sync left. Without a network every command but a `--cached` read
-  fails with `offline` (or `network`, for a connection that broke); nothing
-  is queued.
-- `list` shows open reminders, soonest due first.
-- `add`: `--list` is required unless the account has one list (iCloud
-  records no default list).
-- WHEN (`--due`): `2026-10-10` (all day), `"2026-10-10 17:30"`, `today` or
-  `tomorrow` with an optional time, `17:30`, or `+30m`/`+2h`/`+3d`.
-- Alerts set on an Apple device (`alerts`) keep their own time when `--due`
-  changes.
-- `delete` moves the reminder to Recently Deleted.
+- The heading and blank lines are layout. Any other line at the margin is a
+  reminder, with a checkbox or not: `- [ ]` open, `- [x]` completed. Tick
+  to complete, untick to reopen.
+- A new line adds a reminder; a bare line of text is enough. A changed
+  title is the same reminder (the closest of the old titles); a line
+  rewritten beyond recognition is one reminder deleted and one added.
+- Indented lines under a reminder are its notes. Subtasks made on an Apple
+  device are written indented under their parent, as checkboxes, and can be
+  ticked, edited and removed like any line; a new indented checkbox is
+  added as an ordinary reminder, not a subtask.
+- `📅 WHEN` at the end of a line is its due date: `2026-10-10` (all day),
+  `2026-10-10 17:30`, `today` or `tomorrow` with an optional time, `17:30`,
+  or `+30m`/`+2h`/`+3d`. It is written back as a date and time. Removing the
+  `📅 WHEN` removes the due date; a 📅 followed by no date stays part of the
+  title. Alerts set on an Apple device keep their own time.
+- A removed line deletes its reminder (to Recently Deleted on Apple
+  devices). More than 3 removed lines that are also most of the list delete
+  nothing: the lines are written back, `sync` reports the file in
+  `folder.restored` and a notification says so. To delete that many, use
+  the app, or remove a few lines at a time.
+- Open reminders come in the list's order, then those completed in the last
+  7 days; a reorder made in the file is not kept.
+- New, renamed and deleted lists, alerts, priority and flags are not in the
+  files: change them in the app or on an Apple device. A file with no list
+  of its name is not read (`sync` names it in `folder.warnings`); once a
+  list of exactly that name exists, the file becomes its file and its lines
+  are added to it (nothing in it is deleted or changed that first time).
+- A file found in the folder before this computer wrote it (or with
+  `folder.json` gone) only adds. Syncthing conflict copies
+  (`Groceries.sync-conflict-….md`) give only ticks of open reminders and
+  new lines, then are removed. A list deleted in iCloud takes its file
+  along unless the file has edits never sent; then it stays, named in
+  `folder.warnings`.
+
+```console
+$ icloud-reminders --quiet sync
+{"lists":2,"reminders":5,"changed":0,"full":false,
+ "folder":{"added":1,"edited":1,"deleted":1,"written":["Groceries.md"],"restored":[],"warnings":[]}}
+```
+
+- `sync` fetches what changed in iCloud, then sends the files' edits and
+  rewrites the files as iCloud has them. Without a network or signed out it
+  fails (`offline`, `sign_in_required`) and the files keep their edits.
 - `background` is what the systemd timer runs every minute: it syncs if the
-  last sync is stale and notifies about reminders that fell due.
+  last sync is stale or a file changed, keeps the folder in step, and
+  notifies about reminders that fell due.
 
 ### icloud-contacts
 
@@ -819,20 +858,11 @@ Its error codes are in the table under [Error codes](#error-codes).
 
 ### icloud-reminders
 
-REMINDER is an ID, a title (ignoring case) or a unique part of one, open
-reminders first; LIST an ID or a name. IDs are the records' UUIDs.
-
 | Command | `data` |
 |---|---|
-| `lists` | `[{id, name, color, open}]` (`color` `#rrggbb` or null) |
-| `list`, `show` | `[{id, list:{id, name}, title, notes, completed, completed_at, due:{date, time, all_day, time_zone, at} \| null, flagged, priority, alerts}]` (`show`: one object). `due.date`/`time` are the wall clock as stored, `time` null when all day; `time_zone` the zone it is anchored to (null: floating, the local zone); `at` the UTC moment it is due (an all-day one at 09:00 local); `alerts` counts alarms set on an Apple device |
-| `add`, `edit` | `{action, reminder}` |
-| `complete`, `uncomplete` | `{action, changed, reminder}`; `changed` is false when it already was |
-| `delete` | `{action:"delete", reminder:{id, title}}` |
-| (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
-| `sync` | `{lists, reminders, changed, full}` |
-| `background` | `{synced, sync_error, notified:[{id, title}]}`; exit 0 also when the sync failed (`sync_error` says why). Also `folder`: `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, and the files put back because they no longer listed most of their list (null when changed files are waiting for a sync); a folder run that failed is one entry in its `warnings` |
-| (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; still exit 0 |
+| `sync` | `{lists, reminders, changed, full, folder}`: `folder` is `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings:[text]}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, the files put back because they no longer listed `kept` reminders that were most of their list, and each problem (a list whose run failed, a conflict copy removed unread or left, a file of a deleted list left, a file no list reads), or null with no home directory. Exit 1 with the data when `restored` or `warnings` is not empty |
+| `background` | `{synced, sync_error, notified:[{id, title}], folder}`; exit 0 also when the sync failed (`sync_error` says why). `folder` as for `sync` (null when changed files are waiting for a sync; a file no list reads is not named here); a folder run that failed is one entry in its `warnings` |
+| (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; that alone still exits 0 |
 
 ### icloud-contacts
 
@@ -913,11 +943,12 @@ icloud-findmy --quiet locate "iPhone" --wait 30     # exit 3 find_my_auth_requir
 icloud-findmy --quiet play-sound "iPhone" --yes
 ```
 
-**Add a reminder and find it**
+**Add a reminder and apply it now**
 
 ```bash
-icloud-reminders --quiet add "Renew passport" --list Personal --due "2026-11-01 09:00"   # a list from `lists`
-icloud-reminders --quiet list --all | jq '.[] | select(.title | test("passport"; "i"))'
+ls ~/Documents/Reminders                       # one file per list
+printf -- '- [ ] Renew passport 📅 2026-11-01 09:00\n' >> ~/Documents/Reminders/Personal.md
+icloud-reminders --quiet sync | jq .folder     # exit 1: read .folder.restored and .folder.warnings
 ```
 
 **Look someone up**

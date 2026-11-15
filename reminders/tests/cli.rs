@@ -14,6 +14,9 @@ use std::sync::Arc;
 use icloud_app::testing::{
     assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, stderr, stdout, write_script,
 };
+use icloud_reminders::cloudkit::Record;
+use icloud_reminders::model::{List, Parsed, Reminder};
+use icloud_reminders::store::Cache;
 use icloud_session::time::now_ms;
 use serde_json::{Value, json};
 
@@ -164,291 +167,271 @@ fn command_at(base: &str, tmp: &Path, args: &[&str]) -> std::process::Command {
     c
 }
 
-fn titles(v: &Value) -> Vec<String> {
-    v.as_array()
-        .unwrap()
+/// The live reminders as iCloud (the fake) holds them now.
+fn in_icloud(env: &Env) -> (Vec<List>, Vec<Reminder>) {
+    let (mut lists, mut reminders) = (Vec::new(), Vec::new());
+    for v in env.state.records() {
+        let r = Record::from_value(&v).unwrap();
+        if r.is_type("List") {
+            lists.extend(List::from_record(&r).unwrap());
+        } else if let Parsed::Live(rem) = Reminder::from_record(&r).unwrap() {
+            reminders.push(*rem);
+        }
+    }
+    (lists, reminders)
+}
+
+/// The titles of a list's live reminders in iCloud, open and completed;
+/// the list by name (ignoring case) or ID.
+fn all_titles(env: &Env, list: &str) -> Vec<String> {
+    let (lists, reminders) = in_icloud(env);
+    let list = lists
         .iter()
-        .map(|r| r["title"].as_str().unwrap().to_owned())
+        .find(|l| l.name.eq_ignore_ascii_case(list) || l.id == format!("List/{list}"))
+        .unwrap_or_else(|| panic!("no list {list}"));
+    reminders
+        .into_iter()
+        .filter(|r| r.list_id == list.id)
+        .map(|r| r.title)
         .collect()
 }
 
+/// The live reminder in iCloud of this ID or title (ignoring case).
+fn reminder(env: &Env, query: &str) -> Reminder {
+    in_icloud(env)
+        .1
+        .into_iter()
+        .find(|r| r.uuid() == query || r.title.eq_ignore_ascii_case(query))
+        .unwrap_or_else(|| panic!("no reminder {query}"))
+}
+
+/// The titles the cache holds.
+fn cached_titles(env: &Env) -> Vec<String> {
+    let cache: Cache = serde_json::from_slice(&std::fs::read(env.data().join("cache.json")).unwrap()).unwrap();
+    cache.reminders.into_values().map(|r| r.title).collect()
+}
+
+/// A change the phone made after this computer's last sync, which the next
+/// sync does not fetch: this computer still holds the record's old tag.
+fn unseen(env: &Env, record: Value) {
+    env.state.put(record.clone());
+    let tag = env.state.record(record["recordName"].as_str().unwrap()).unwrap()["recordChangeTag"]
+        .as_str()
+        .unwrap()
+        .replace("tag-", "tok-");
+    let path = env.data().join("cache.json");
+    let mut c: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    c["sync_token"] = json!(tag);
+    std::fs::write(&path, c.to_string()).unwrap();
+}
+
+fn file_of(env: &Env, name: &str) -> PathBuf {
+    env.dir.path().join("home/Documents/Reminders").join(name)
+}
+
 #[test]
-fn lists_and_reminders_soonest_first() {
+fn sync_applies_an_edited_file_at_once() {
     let env = start();
-    let lists = env.json(&["lists"]);
+    // The first sync writes the folder.
+    let out = env.json(&["sync"]);
     assert_eq!(
-        lists,
-        json!([
-            {"id": "LIST-GROCERIES", "name": "Groceries", "color": "#FF9500", "open": 2},
-            {"id": "LIST-REMINDERS", "name": "Reminders", "color": "#007AFF", "open": 2},
-        ])
+        out["folder"]["written"],
+        json!(["Groceries.md", "Reminders.md"]),
+        "{out}"
     );
-    let open = env.json(&["list"]);
-    assert_eq!(titles(&open), ["Milk", "Call the dentist", "Renew passport", "Eggs"]);
-    let milk = &open[0];
-    assert_eq!(milk["id"], "REM-MILK");
-    assert_eq!(milk["list"], json!({"id": "LIST-GROCERIES", "name": "Groceries"}));
-    assert_eq!(milk["notes"], "Oat, 2 cartons");
-    assert_eq!(milk["due"]["all_day"], false);
-    assert!(milk["due"]["at"].as_str().unwrap().ends_with('Z'));
-    assert!(open[3]["due"].is_null());
+    let path = file_of(&env, "Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    // An agent ticks Eggs, adds one with notes and a due date, and removes Milk.
+    let milk = text.lines().find(|l| l.starts_with("- [ ] Milk")).unwrap().to_owned();
+    let edited = text
+        .replace(&format!("{milk}\n    Oat, 2 cartons\n"), "")
+        .replace("- [ ] Eggs", "- [x] Eggs")
+        + "- [ ] Bread 📅 2030-01-02 09:30\n    Rye\n";
+    std::fs::write(&path, edited).unwrap();
 
-    assert_eq!(titles(&env.json(&["list", "groceries"])), ["Milk", "Eggs"]);
-    assert_eq!(titles(&env.json(&["list", "--completed"])), ["Buy paint"]);
-    assert_eq!(env.json(&["list", "--all"]).as_array().unwrap().len(), 5);
-
-    // `--styled` forces text even when piped.
-    let text = env.ok(&["list", "--styled"]);
-    assert!(text.starts_with("[ ] Milk  due "), "{text}");
-    assert!(text.contains("(Groceries)"), "{text}");
-    let shown = env.ok(&["show", "passport", "--styled"]);
-    assert!(
-        shown.contains("Renew passport\n") && shown.contains("  Photos first"),
-        "{shown}"
+    let out = env.run(&["sync"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = envelope(&out.stdout);
+    assert_eq!(
+        v["summary"],
+        "Synced: 2 lists, 5 reminders (0 changed); Folder: 1 added, 1 edited, 1 deleted in iCloud; 1 file(s) written"
     );
+    assert_eq!(
+        v["data"]["folder"],
+        json!({"added": 1, "edited": 1, "deleted": 1, "written": ["Groceries.md"], "restored": [], "warnings": []})
+    );
+    let mut titles = all_titles(&env, "Groceries");
+    titles.sort();
+    assert_eq!(titles, ["Bread", "Eggs"]);
+    assert!(reminder(&env, "REM-EGGS").completed);
+    let bread = reminder(&env, "bread");
+    assert_eq!(bread.notes, "Rye");
+    assert_eq!(bread.due.unwrap().date().to_string(), "2030-01-02");
+    let deleted = env.state.record("Reminder/REM-MILK").unwrap();
+    assert_eq!(deleted["fields"]["Deleted"]["value"], 1);
 
-    // Only the first read fetched every reminder; the rest asked for changes.
-    let syncs = env.sent("changes/zone");
-    let reminder_syncs: Vec<&Value> = syncs
-        .iter()
-        .filter(|b| b["zones"][0]["desiredRecordTypes"] == json!(["Reminder"]))
-        .collect();
-    assert!(reminder_syncs[0]["zones"][0].get("syncToken").is_none());
+    // Applied once: the next sync has nothing to send.
+    let sent = modifies(&env);
+    let out = env.json(&["sync"]);
+    assert_eq!(out["folder"]["written"], json!([]));
+    assert_eq!(modifies(&env), sent);
+    // In text mode the summary is the output.
+    let text = env.ok(&["sync", "--styled"]);
     assert!(
-        reminder_syncs[1..]
-            .iter()
-            .all(|b| b["zones"][0]["syncToken"].is_string())
+        text.starts_with("Synced: 2 lists, 5 reminders (0 changed); Folder: 0 added"),
+        "{text}"
     );
 }
 
 #[test]
-fn add_writes_a_reminder_apple_can_read() {
+fn sync_reports_a_refused_removal_with_its_data_and_exit_1() {
     let env = start();
-    let out = env.json(&[
-        "add",
-        "Buy bread",
-        "--list",
-        "Groceries",
-        "--notes",
-        "rye",
-        "--due",
-        "2030-01-02 08:15",
-    ]);
-    assert_eq!(out["action"], "add");
-    let r = &out["reminder"];
-    assert_eq!(r["title"], "Buy bread");
-    assert_eq!(r["notes"], "rye");
-    assert_eq!(r["list"]["name"], "Groceries");
-    assert_eq!(r["due"]["date"], "2030-01-02");
-    assert_eq!(r["due"]["time"], "08:15");
-    assert_eq!(r["due"]["time_zone"], "UTC");
-
-    let modify = &env.sent("records/modify")[0];
-    assert_eq!(modify["atomic"], true);
-    assert_eq!(modify["zoneID"]["zoneName"], "Reminders");
-    let rec = &modify["operations"][0]["record"];
-    assert_eq!(modify["operations"][0]["operationType"], "create");
-    assert_eq!(rec["recordType"], "Reminder");
-    assert_eq!(rec["parent"]["recordName"], "List/LIST-GROCERIES");
-    assert_eq!(rec["fields"]["DueDate"]["value"], 1_893_572_100_000i64); // 2030-01-02T08:15Z
-    let stored = env.state.record(rec["recordName"].as_str().unwrap()).unwrap();
-    let title = stored["fields"]["TitleDocument"]["value"].as_str().unwrap();
-    assert_eq!(icloud_reminders::topotext::decode(title).unwrap(), "Buy bread");
-
-    // An all-day due date.
-    let out = env.json(&["add", "Pay rent", "--list", "Reminders", "--due", "2030-02-01"]);
-    assert_eq!(
-        out["reminder"]["due"],
-        json!({"date": "2030-02-01", "time": null, "all_day": true, "time_zone": null, "at": "2030-02-01T09:00:00Z"})
-    );
-}
-
-/// iCloud records no default list: with several, `add` names one, even
-/// when one of them is called "Reminders".
-#[test]
-fn add_without_a_list_needs_one_and_names_them() {
-    let env = start();
-    let (exit, err) = env.fails(&["add", "Pay rent"]);
-    assert_eq!((exit, &err["code"]), (2, &json!("usage")), "{err}");
-    assert!(err["message"].as_str().unwrap().contains("--list"), "{err}");
-    let hint = err["hint"].as_str().unwrap();
-    assert!(
-        hint.contains("\n  Groceries") && hint.contains("\n  Reminders"),
-        "{hint}"
-    );
-    // In text mode: error:/hint: lines on stderr, nothing on stdout.
-    let out = env.run(&["add", "Pay rent", "--styled"]);
-    assert_eq!((code(&out), stdout(&out).as_str()), (2, ""));
-    let err = stderr(&out);
-    assert!(
-        err.starts_with("error: add needs --list") && err.contains("\nhint: "),
-        "{err}"
-    );
-    assert!(env.sent("records/modify").is_empty());
-}
-
-#[test]
-fn complete_uncomplete_edit_and_delete() {
-    let env = start();
-    let out = env.json(&["complete", "milk"]);
-    assert_eq!(out["reminder"]["completed"], true);
-    assert!(out["reminder"]["completed_at"].is_string());
-    let update = &env.sent("records/modify")[0]["operations"][0];
-    assert_eq!(update["operationType"], "update");
-    assert_eq!(update["record"]["recordName"], "Reminder/REM-MILK");
-    assert!(
-        update["record"]["recordChangeTag"]
-            .as_str()
-            .unwrap()
-            .starts_with("tag-")
-    );
-    let fields = update["record"]["fields"].as_object().unwrap();
-    let mut names: Vec<&String> = fields.keys().collect();
-    names.sort();
-    assert_eq!(
-        names,
-        ["Completed", "CompletionDate", "LastModifiedDate", "ResolutionTokenMap"]
-    );
-    // The phone's counter for `completed` was 3.
-    let tokens: Value = serde_json::from_str(fields["ResolutionTokenMap"]["value"].as_str().unwrap()).unwrap();
-    assert_eq!(tokens["map"]["completed"]["counter"], 4);
-
-    // "milk" now finds the completed one only for uncomplete.
-    assert_eq!(env.json(&["uncomplete", "milk"])["reminder"]["completed"], false);
-    let out = env.json(&["edit", "milk", "--title", "Oat milk", "--due", "2031-05-06 07:00"]);
-    assert_eq!(out["reminder"]["title"], "Oat milk");
-    assert_eq!(out["reminder"]["due"]["date"], "2031-05-06");
-    let out = env.json(&["edit", "oat milk", "--no-due", "--notes", ""]);
-    assert!(out["reminder"]["due"].is_null());
-    assert_eq!(out["reminder"]["notes"], "");
-
-    // Delete asks; without a terminal it needs --yes.
-    for args in [&["delete", "eggs"][..], &["delete", "eggs", "--styled"]] {
-        let out = env.run(args);
-        assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
-    }
-    let (exit, err) = env.fails(&["delete", "eggs"]);
-    assert_eq!((exit, &err["code"]), (2, &json!("usage")), "{err}");
-    assert!(err["hint"].as_str().unwrap().contains("--yes"), "{err}");
-    assert!(
-        env.sent("records/modify")
-            .iter()
-            .all(|m| m["operations"][0]["record"]["recordName"] != "Reminder/REM-EGGS")
-    );
-    let out = env.json(&["delete", "eggs", "--yes"]);
-    assert_eq!(
-        out,
-        json!({"action": "delete", "reminder": {"id": "REM-EGGS", "title": "Eggs"}})
-    );
-    let eggs = env.state.record("Reminder/REM-EGGS").unwrap();
-    assert_eq!(eggs["fields"]["Deleted"]["value"], 1);
-    assert!(!titles(&env.json(&["list", "--all"])).contains(&"Eggs".to_owned()));
-}
-
-#[test]
-fn complete_and_uncomplete_pick_the_one_they_can_change() {
-    // An open and a completed "Buy milk".
-    let two = || {
-        let env = start();
-        let now = now_ms();
+    for n in 0..6 {
         env.state.put(fake::reminder(
-            "REM-OPEN",
+            &format!("REM-EXTRA-{n}"),
             "List/LIST-GROCERIES",
-            "Buy milk",
+            &format!("Extra number {n}"),
             "",
             None,
-            now - MINUTE,
+            now_ms(),
         ));
-        let mut done = fake::reminder("REM-DONE", "List/LIST-GROCERIES", "Buy milk", "", None, now - MINUTE);
-        done["fields"]["Completed"]["value"] = json!(1);
-        env.state.put(done);
-        env
-    };
-    let env = two();
-    let out = env.json(&["complete", "buy milk"]);
+    }
+    env.json(&["sync"]);
+    let path = file_of(&env, "Groceries.md");
+    std::fs::write(&path, "# Groceries\n\n- [ ] Bread\n").unwrap();
+
+    let out = env.run(&["sync"]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let v = envelope(&out.stdout);
+    assert_eq!(v["ok"], true, "the data comes with the exit code");
+    let folder = &v["data"]["folder"];
     assert_eq!(
-        (&out["changed"], &out["reminder"]["id"]),
-        (&json!(true), &json!("REM-OPEN"))
+        folder["restored"],
+        json!([{"list": "Groceries", "file": "Groceries.md", "kept": 8}])
     );
-    let env = two();
-    let out = env.json(&["uncomplete", "buy milk"]);
     assert_eq!(
-        (&out["changed"], &out["reminder"]["id"]),
-        (&json!(true), &json!("REM-DONE"))
+        (folder["deleted"].as_i64(), folder["added"].as_i64()),
+        (Some(0), Some(1))
     );
-    // Already open: said so, nothing written.
-    let writes = env.sent("records/modify").len();
-    let out = env.run(&["uncomplete", "REM-OPEN", "--styled"]);
+    assert_eq!(all_titles(&env, "Groceries").len(), 9);
+    assert!(
+        stderr(&out).contains("Groceries.md no longer listed 8 reminders"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(std::fs::read_to_string(&path).unwrap().contains("- [ ] Extra number 5"));
+    // The phone's owner is told too, as when the timer refuses it.
+    let said = env.notifications();
+    assert!(said[0].iter().any(|a| a.contains("Groceries.md restored")), "{said:?}");
+    // Put back: the next sync is clean.
+    let out = env.run(&["sync"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&out).trim(), "\"Buy milk\" was already open");
-    assert_eq!(env.sent("records/modify").len(), writes);
+}
+
+#[test]
+fn a_file_no_list_has_is_named_by_sync_and_read_once_the_list_is_made() {
+    let env = start();
+    env.json(&["sync"]);
+    std::fs::write(file_of(&env, "Hardware.md"), "# Hardware\n\n- [ ] Screws\n").unwrap();
+    let out = env.run(&["sync"]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let warnings = envelope(&out.stdout)["data"]["folder"]["warnings"].clone();
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("Hardware.md: not read, as no list has this name"),
+        "{warnings}"
+    );
+    assert_eq!(env.creates(), 0);
+    // The timer is quiet about it: it would say so every minute.
+    assert_eq!(env.json(&["background", "--sync"])["folder"]["warnings"], json!([]));
+    // A list of that name made in the app: the file is its own, and adds.
+    env.state
+        .put(fake::list("List/LIST-HARDWARE", "Hardware", &[], "#34C759"));
+    let out = env.json(&["sync"]);
+    assert_eq!(out["folder"]["added"], 1, "{out}");
+    assert_eq!(all_titles(&env, "Hardware"), ["Screws"]);
 }
 
 #[test]
 fn a_change_made_elsewhere_meanwhile_is_written_over_once() {
     let env = start();
-    env.json(&["list"]);
+    let dir = folder(&env);
+    let path = dir.join("Reminders.md");
     // The phone renames it after our last sync: our change tag is stale.
     let mut phone = env.state.record("Reminder/REM-CALL").unwrap();
     phone["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Call the dentist at 9"));
-    env.state.put(phone);
-
-    let out = env.json(&["--cached", "complete", "dentist"]);
-    assert_eq!(out["reminder"]["completed"], true);
+    unseen(&env, phone);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("- [ ] Call the dentist", "- [x] Call the dentist")).unwrap();
+    let out = env.json(&["sync"]);
+    assert_eq!(out["folder"]["edited"], 1, "{out}");
     // The phone's title survived; one CONFLICT, a lookup, the retry.
-    assert_eq!(out["reminder"]["title"], "Call the dentist at 9");
+    let call = reminder(&env, "REM-CALL");
+    assert_eq!((call.title.as_str(), call.completed), ("Call the dentist at 9", true));
+    let ops = env.ops();
     assert_eq!(
-        env.ops()[env.ops().len() - 3..],
+        ops[ops.len() - 3..],
         ["records/modify", "records/lookup", "records/modify"]
     );
 
     // The phone already completed it: after the CONFLICT nothing is left
     // to write.
+    let path = dir.join("Groceries.md");
     let mut phone = env.state.record("Reminder/REM-EGGS").unwrap();
     phone["fields"]["Completed"]["value"] = json!(1);
-    env.state.put(phone);
-    let out = env.json(&["--cached", "complete", "eggs"]);
-    assert_eq!(out["reminder"]["completed"], true);
-    assert_eq!(env.ops()[env.ops().len() - 2..], ["records/modify", "records/lookup"]);
+    unseen(&env, phone);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("- [ ] Eggs", "- [x] Eggs")).unwrap();
+    env.json(&["sync"]);
+    let ops = env.ops();
+    assert_eq!(ops[ops.len() - 2..], ["records/modify", "records/lookup"]);
 }
 
 #[test]
-fn a_change_to_a_reminder_deleted_elsewhere_meanwhile_is_not_found() {
+fn a_reminder_deleted_or_removed_for_good_elsewhere_meanwhile_is_not_written_over() {
     let env = start();
-    env.json(&["list"]);
+    let dir = folder(&env);
+    let path = dir.join("Reminders.md");
     // The phone deletes it after our last sync: our change tag is stale.
     let mut phone = env.state.record("Reminder/REM-CALL").unwrap();
     phone["fields"]["Deleted"]["value"] = json!(1);
-    env.state.put(phone);
-
-    let (exit, err) = env.fails(&["--cached", "complete", "dentist"]);
-    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
-    assert_eq!(err["message"], "\"Call the dentist\" has been deleted");
+    unseen(&env, phone);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("- [ ] Call the dentist", "- [x] Call the dentist")).unwrap();
+    let out = env.run(&["sync"]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let warnings = envelope(&out.stdout)["data"]["folder"]["warnings"].clone();
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("\"Call the dentist\" has been deleted"),
+        "{warnings}"
+    );
     // One CONFLICT and a lookup; nothing is written over a deleted reminder.
-    assert_eq!(env.ops()[env.ops().len() - 2..], ["records/modify", "records/lookup"]);
-    // The cache no longer has it.
-    let (exit, err) = env.fails(&["--cached", "show", "dentist"]);
-    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
-}
+    let ops = env.ops();
+    assert_eq!(ops[ops.len() - 2..], ["records/modify", "records/lookup"]);
+    let call = env.state.record("Reminder/REM-CALL").unwrap();
+    assert_eq!(call["fields"]["Completed"]["value"], 0);
+    // The next sync takes its line out.
+    env.json(&["sync"]);
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("Call the dentist"));
 
-#[test]
-fn a_reminder_removed_for_good_elsewhere_meanwhile_is_gone_not_an_error() {
-    let env = start();
-    env.json(&["list"]);
-    // Recently Deleted was emptied on the phone after our last sync: CloudKit
-    // has no such record any more.
-    env.state.purge("Reminder/REM-CALL");
-    let (exit, err) = env.fails(&["--cached", "complete", "dentist"]);
-    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
-    assert_eq!(err["message"], "\"Call the dentist\" has been deleted");
-    // The cache no longer has it.
-    let (exit, _) = env.fails(&["--cached", "show", "dentist"]);
-    assert_eq!(exit, 4);
-    // Deleting one that is already gone is done.
-    env.state.purge("Reminder/REM-EGGS");
-    let out = env.json(&["--cached", "delete", "eggs", "--yes"]);
-    assert_eq!(out["reminder"]["id"], "REM-EGGS");
-    assert!(titles(&env.json(&["--cached", "list"])).iter().all(|t| t != "Eggs"));
+    // Recently Deleted emptied on the phone: CloudKit has no such record
+    // any more, and removing its line is done.
+    env.state.purge("Reminder/REM-PASSPORT");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let kept: String = text
+        .lines()
+        .filter(|l| !l.contains("Renew passport") && !l.contains("Photos first"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&path, kept).unwrap();
+    let out = env.json(&["sync"]);
+    assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
+    assert!(cached_titles(&env).iter().all(|t| t != "Renew passport"));
 }
 
 #[test]
@@ -456,7 +439,10 @@ fn sync_pages_and_recovers_from_an_expired_token() {
     let env = start();
     *env.state.page.lock().unwrap() = 1;
     let out = env.json(&["sync"]);
-    assert_eq!(out, json!({"lists": 2, "reminders": 5, "changed": 5, "full": true}));
+    assert_eq!(
+        (&out["lists"], &out["reminders"], &out["changed"], &out["full"]),
+        (&json!(2), &json!(5), &json!(5), &json!(true))
+    );
     assert!(env.ops().len() >= 7, "one page per record: {:?}", env.ops());
 
     let out = env.json(&["sync"]);
@@ -496,10 +482,10 @@ fn an_unreadable_reminder_is_skipped_kept_and_named() {
         let warning = report["warning"].as_str().unwrap();
         assert!(warning.contains("Reminder/REM-CALL: TitleDocument"), "{warning}");
         assert!(stderr(&out).contains("Reminder/REM-CALL"), "{}", stderr(&out));
-        let open = titles(&env.json(&["--cached", "list"]));
+        let cached = cached_titles(&env);
         assert!(
-            open.contains(&"Call the dentist".into()) && open.contains(&"A dozen eggs".into()),
-            "{open:?}"
+            cached.contains(&"Call the dentist".into()) && cached.contains(&"A dozen eggs".into()),
+            "{cached:?}"
         );
     }
     // The token stayed put, so a plain sync fetches the bad record again.
@@ -508,84 +494,51 @@ fn an_unreadable_reminder_is_skipped_kept_and_named() {
 }
 
 #[test]
-fn signed_out_exits_3() {
+fn signed_out_or_offline_sync_fails_with_its_code_and_leaves_the_files() {
     let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap() + "- [ ] Bread\n";
+    std::fs::write(&path, &text).unwrap();
     *env.state.signed_out.lock().unwrap() = true;
-    for args in [&["list"][..], &["lists"], &["show", "milk"], &["add", "x"], &["sync"]] {
-        let (exit, err) = env.fails(args);
-        assert_eq!((exit, &err["code"]), (3, &json!("sign_in_required")), "{args:?}: {err}");
-        assert!(
-            err["hint"].as_str().unwrap().contains("icloud-session sign-in"),
-            "{err}"
-        );
-    }
-    let out = env.run(&["list", "--styled"]);
+    let (exit, err) = env.fails(&["sync"]);
+    assert_eq!((exit, &err["code"]), (3, &json!("sign_in_required")), "{err}");
+    assert!(
+        err["hint"].as_str().unwrap().contains("icloud-session sign-in"),
+        "{err}"
+    );
+    let out = env.run(&["sync", "--styled"]);
     assert_eq!((code(&out), stdout(&out).as_str()), (3, ""));
     let err = stderr(&out);
     assert!(
         err.starts_with("error: sign in to iCloud required") && err.contains("hint: run `icloud-session sign-in`"),
         "{err}"
     );
-}
-
-#[test]
-fn offline_is_unavailable_and_cached_reads_need_no_network() {
-    let env = start();
-    env.json(&["sync"]);
+    *env.state.signed_out.lock().unwrap() = false;
     // Nothing listens on port 9.
-    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["list"]);
+    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["sync"]);
     assert_eq!(code(&out), 5, "{}", stderr(&out));
     let err = &envelope(&out.stdout)["error"];
     assert_eq!(err["code"], "offline");
     assert!(err["hint"].is_string(), "{err}");
-    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["--cached", "list"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let out = run_at("http://127.0.0.1:9", env.dir.path(), &["--cached", "complete", "milk"]);
-    assert_eq!(code(&out), 5, "writes need the network");
+    // The edit waits in the file, and the next sync that works sends it.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(env.creates(), 0);
+    assert_eq!(env.json(&["sync"])["folder"]["added"], 1);
 }
 
 #[test]
 fn ids_only_count_and_quiet() {
     let env = start();
-    let open = env.json(&["list"]);
-    let ids: Vec<&str> = open
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids.len(), 4);
-    assert_eq!(&ids[..2], ["REM-MILK", "REM-CALL"]);
-    assert_eq!(env.ok(&["list", "--ids-only"]).lines().collect::<Vec<_>>(), ids);
-    assert_eq!(env.ok(&["list", "--count"]).trim(), "4");
-    assert_eq!(env.ok(&["list", "--all", "--count"]).trim(), "5");
-    assert_eq!(env.ok(&["list", "groceries", "--count", "--json"]).trim(), "2");
-    // ids-only wins over count.
-    assert_eq!(
-        env.ok(&["list", "--completed", "--count", "--ids-only"])
-            .lines()
-            .count(),
-        1
-    );
-    // --quiet is the data alone.
-    let quiet: Value = serde_json::from_str(&env.ok(&["list", "--quiet"])).unwrap();
-    assert_eq!(quiet, open);
-
-    assert_eq!(env.ok(&["lists", "--ids-only"]), "LIST-GROCERIES\nLIST-REMINDERS\n");
-    assert_eq!(env.ok(&["lists", "--count"]).trim(), "2");
-    assert_eq!(env.ok(&["show", "milk", "--ids-only"]).trim(), "REM-MILK");
-    assert_eq!(env.ok(&["complete", "milk", "--ids-only"]).trim(), "REM-MILK");
-    assert_eq!(env.ok(&["delete", "eggs", "--yes", "--ids-only"]).trim(), "REM-EGGS");
+    let quiet: Value = serde_json::from_str(&env.ok(&["sync", "--quiet"])).unwrap();
+    assert_eq!(quiet["changed"], 5);
     // The phone renames one: sync counts what changed since the last one.
-    env.json(&["sync"]);
     let mut call = env.state.record("Reminder/REM-CALL").unwrap();
     call["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Call the dentist at 9"));
     env.state.put(call);
     assert_eq!(env.ok(&["sync", "--count"]).trim(), "1");
     assert_eq!(env.ok(&["background", "--count"]).trim(), "0");
-    // A failure in a machine mode is still the error object on stdout.
-    let (exit, err) = env.fails(&["list", "nowhere", "--ids-only"]);
-    assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{err}");
+    assert_eq!(env.ok(&["background", "--sync", "--ids-only"]), "");
 }
 
 #[test]
@@ -658,54 +611,20 @@ fn background_without_a_session_still_notifies_from_the_cache() {
     );
 }
 
+/// The commands that edited reminders are gone: the files do that.
 #[test]
-fn usage_not_found_and_ambiguous_are_coded() {
+fn usage_is_coded() {
     let env = start();
-    for args in [
-        &["frobnicate"][..],
-        &["show"],
-        &["add"],
-        &["edit", "milk"],
-        &["edit", "milk", "--due", "someday"],
-        &["edit", "milk", "--due", "today", "--no-due"],
-        &["list", "--all", "--completed"],
-        &["add", "  "],
-    ] {
+    for args in [&["frobnicate"][..], &["list"], &["add", "x"], &["sync", "--bogus"]] {
         let (exit, err) = env.fails(args);
         assert_eq!((exit, &err["code"]), (2, &json!("usage")), "{args:?}: {err}");
-        // Text mode: clap's or our message on stderr, the same exit code.
+        // Text mode: clap's message on stderr, the same exit code.
         let out = env.run(&[args, &["--styled"][..]].concat());
         assert_eq!((code(&out), stdout(&out).as_str()), (2, ""), "{args:?}");
         assert!(!stderr(&out).is_empty(), "{args:?}");
     }
-    let (_, err) = env.fails(&["show"]);
+    let (_, err) = env.fails(&["frobnicate"]);
     assert_eq!(err["hint"], "run `icloud-reminders --help`");
-
-    // A missing reminder or list: exit 4.
-    for args in [
-        &["show", "zzz"][..],
-        &["complete", "zzz"],
-        &["edit", "zzz", "--title", "x"],
-        &["delete", "zzz", "--yes"],
-        &["list", "zzz"],
-        &["add", "x", "--list", "zzz"],
-    ] {
-        let (exit, err) = env.fails(args);
-        assert_eq!((exit, &err["code"]), (4, &json!("not_found")), "{args:?}: {err}");
-    }
-    let (_, err) = env.fails(&["list", "zzz"]);
-    assert!(err["hint"].as_str().unwrap().contains("\n  Groceries"), "{err}");
-
-    // An ambiguous name: exit 2, the matches in the hint.
-    let (exit, err) = env.fails(&["--cached", "show", "e"]);
-    assert_eq!((exit, &err["code"]), (2, &json!("ambiguous")), "{err}");
-    let hint = err["hint"].as_str().unwrap();
-    assert!(hint.contains("(REM-CALL)") && hint.contains("(REM-EGGS)"), "{hint}");
-    let (exit, err) = env.fails(&["--cached", "list", "r"]);
-    assert_eq!((exit, &err["code"]), (2, &json!("ambiguous")), "{err}");
-    let out = env.run(&["--cached", "show", "e", "--styled"]);
-    assert_eq!(code(&out), 2);
-    assert!(stderr(&out).starts_with("error: \"e\" matches "), "{}", stderr(&out));
     assert!(env.sent("records/modify").is_empty());
 }
 
@@ -733,10 +652,6 @@ fn folder(env: &Env) -> PathBuf {
 
 fn modifies(env: &Env) -> usize {
     env.sent("records/modify").len()
-}
-
-fn all_titles(env: &Env, list: &str) -> Vec<String> {
-    titles(&env.json(&["list", list, "--all"]))
 }
 
 #[test]
@@ -773,10 +688,10 @@ fn a_file_s_changes_reach_icloud_once_and_come_back() {
     assert_eq!(out["folder"]["deleted"], 0);
     let eggs = env.state.record("Reminder/REM-EGGS").unwrap();
     assert_eq!(eggs["fields"]["Completed"]["value"], 1);
-    let shown = env.json(&["show", "butter"]);
-    assert_eq!(shown["notes"], "Salted");
-    assert_eq!(shown["due"]["date"], "2030-01-02");
-    assert_eq!(shown["list"]["name"], "Groceries");
+    let butter = reminder(&env, "butter");
+    assert_eq!(butter.notes, "Salted");
+    assert_eq!(butter.due.unwrap().date().to_string(), "2030-01-02");
+    assert_eq!(butter.list_id, "List/LIST-GROCERIES");
     // Written back as this program writes it.
     let after = std::fs::read_to_string(&path).unwrap();
     assert!(after.contains("- [ ] Bread\n"), "{after}");
@@ -811,7 +726,9 @@ fn icloud_s_changes_reach_the_file_and_a_removed_line_deletes() {
         None,
         now_ms(),
     ));
-    env.ok(&["edit", "eggs", "--title", "Eggs, a dozen"]);
+    let mut eggs = env.state.record("Reminder/REM-EGGS").unwrap();
+    eggs["fields"]["TitleDocument"]["value"] = json!(icloud_reminders::topotext::encode("Eggs, a dozen"));
+    env.state.put(eggs);
     env.json(&["background", "--sync"]);
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(
@@ -836,7 +753,7 @@ fn icloud_s_changes_reach_the_file_and_a_removed_line_deletes() {
         (out["folder"]["edited"].as_i64(), out["folder"]["added"].as_i64()),
         (Some(1), Some(0))
     );
-    assert_eq!(env.json(&["show", "REM-EGGS"])["title"], "Eggs, two dozen");
+    assert_eq!(reminder(&env, "REM-EGGS").title, "Eggs, two dozen");
 }
 
 #[test]
@@ -963,11 +880,8 @@ fn a_file_found_already_there_only_adds_what_is_new() {
     let mut titles = all_titles(&env, "Groceries");
     titles.sort();
     assert_eq!(titles, ["Bread", "Eggs", "Milk", "Tea"]);
-    let milk = env.json(&["show", "REM-MILK"]);
-    assert_eq!(
-        (&milk["notes"], &milk["completed"]),
-        (&json!("Oat, 2 cartons"), &json!(false))
-    );
+    let milk = reminder(&env, "REM-MILK");
+    assert_eq!((milk.notes.as_str(), milk.completed), ("Oat, 2 cartons", false));
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("- [ ] Eggs\n") && text.contains("- [ ] Tea\n"), "{text}");
 }
@@ -1101,11 +1015,8 @@ fn a_run_killed_between_writes_does_not_add_twice() {
         "{titles:?}"
     );
     // What was left of the line is done: the tick.
-    let butter = env.json(&["show", "butter"]);
-    assert_eq!(
-        (&butter["completed"], &butter["notes"]),
-        (&json!(true), &json!("Salted"))
-    );
+    let butter = reminder(&env, "butter");
+    assert_eq!((butter.completed, butter.notes.as_str()), (true, "Salted"));
     let after = std::fs::read_to_string(&path).unwrap();
     assert!(
         after.contains("- [ ] Bread\n") && after.contains("- [x] Butter 📅 2030-01-02 09:30\n"),
@@ -1147,11 +1058,7 @@ fn what_a_conflict_copy_added_is_not_deleted_by_a_file_that_never_held_it() {
     assert_eq!(modifies(&env), sent + 1, "Tea alone");
     let titles = all_titles(&env, "Groceries");
     assert_eq!((count(&titles, "Butter"), count(&titles, "Tea")), (1, 1), "{titles:?}");
-    assert_eq!(
-        env.json(&["show", "REM-EGGS"])["completed"],
-        true,
-        "the copy's tick stays"
-    );
+    assert!(reminder(&env, "REM-EGGS").completed, "the copy's tick stays");
     let after = std::fs::read_to_string(&path).unwrap();
     assert!(
         after.contains("- [ ] Butter\n") && after.contains("- [ ] Tea\n"),
@@ -1400,7 +1307,7 @@ fn a_conflict_copy_does_not_tick_again_what_the_file_unticked() {
     std::fs::write(&path, text.replace("- [x] Buy paint", "- [ ] Buy paint")).unwrap();
     let out = env.json(&["background"]);
     assert_eq!(out["folder"]["edited"], 1, "{out}");
-    assert_eq!(env.json(&["show", "REM-PAINT"])["completed"], false);
+    assert!(!reminder(&env, "REM-PAINT").completed);
 }
 
 #[test]
@@ -1575,7 +1482,7 @@ fn a_renamed_list_s_old_file_brought_back_is_read_as_a_conflict_copy() {
         warnings.len() == 1 && warnings[0].as_str().unwrap().starts_with("Groceries.md: came back"),
         "{out}"
     );
-    assert_eq!(env.json(&["show", "REM-EGGS"])["completed"], true);
+    assert!(reminder(&env, "REM-EGGS").completed);
     assert_eq!(count(&all_titles(&env, "Food"), "Bread"), 1);
     assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
     assert!(
@@ -1670,7 +1577,7 @@ fn a_file_written_by_a_run_ended_before_recording_it_and_then_edited_is_read_aga
         (Some(0), Some(1), Some(0)),
         "{out}"
     );
-    assert_eq!(env.json(&["show", "REM-EGGS"])["completed"], true);
+    assert!(reminder(&env, "REM-EGGS").completed);
     let milk = env.state.record("Reminder/REM-MILK").unwrap();
     assert_eq!(milk["fields"]["Deleted"]["value"], 0);
 }

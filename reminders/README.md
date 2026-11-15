@@ -71,8 +71,7 @@ has just fallen due:
 
 Alerts set on an Apple device (extra alarms, location alerts) are not
 read: notifications follow the due date. Changing the due date here does
-not move those alerts; the CLI and the edit dialog say so when a reminder
-has some.
+not move those alerts; the edit dialog says so when a reminder has some.
 
 ```bash
 systemctl --user status icloud-reminders-background.timer
@@ -84,7 +83,7 @@ systemctl --user mask --now icloud-reminders-background.timer      # no notifica
 
 Your lists are also Markdown checklists in `~/Documents/Reminders`, one
 file per list, for anything that only carries files: Syncthing to a phone,
-an editor. Nothing turns this on: the background timer writes the folder
+an editor, an agent. Nothing turns this on: the background timer writes the folder
 after its first sync and keeps it and iCloud in step from then on. iCloud
 stays where the reminders are kept; the folder is a working copy.
 
@@ -98,18 +97,22 @@ stays where the reminders are kept; the folder is a working copy.
 ```
 
 A changed file is sent within a minute, and what changed in iCloud is
-written at the next sync.
+written at the next sync. `icloud-reminders sync` does both at once and
+says what it did, and any file it refused or could not read.
 
 - Tick a box to complete a reminder; untick to reopen it.
 - A new line adds one. A bare line of text is enough; the checkbox is
   written for you. An indented checkbox is written as a plain reminder,
   not a subtask.
 - A removed line deletes the reminder, to Recently Deleted on Apple devices.
-- The text after 📅 is the due date, in any form `--due` takes
-  (`📅 tomorrow 9:00`); it is rewritten as a date and time.
+- The text after 📅 is the due date: `2026-10-10`, `2026-10-10 17:30`,
+  `today` or `tomorrow` with an optional time (`📅 tomorrow 9:00`), `17:30`,
+  or `+30m`/`+2h`/`+3d`; it is rewritten as a date and time.
 - Open reminders come in the list's order, then those completed in the
   last 7 days. A reorder made in the file is not kept, and lists are not
-  made, renamed or removed from the folder.
+  made, renamed or removed from the folder: a file with no list of its
+  name is not read until a list of exactly that name is made in the app,
+  and then its lines are added to it.
 - A line has no ID. A line whose title changed a little is the same
   reminder; one rewritten beyond recognition is one deleted and one added.
   A new line is a new reminder, even beside one of the same text just
@@ -150,24 +153,15 @@ Delete the directory to start over; the next sync fetches everything.
 
 `icloud-reminders` given a command runs it without the window. It links
 no GTK, so the timer can run it every minute; with no command it opens
-the app, `icloud-reminders-app`.
+the app, `icloud-reminders-app`. Reminders are read and changed in the
+files above, not by commands.
 
 ```console
-$ icloud-reminders lists
-$ icloud-reminders list                       # open reminders, soonest due first
-$ icloud-reminders list groceries --all
-$ icloud-reminders show passport
-$ icloud-reminders add "Buy bread" --list Groceries --due "tomorrow 9:00" --notes rye
-$ icloud-reminders edit bread --due +2h
-$ icloud-reminders edit bread --no-due --title "Buy rye bread"
-$ icloud-reminders complete bread
-$ icloud-reminders uncomplete bread
-$ icloud-reminders delete bread --yes
-$ icloud-reminders sync [--full]
+$ icloud-reminders sync [--full]              # sync now and apply the files' edits
 $ icloud-reminders background                 # what the timer runs
 ```
 
-Every command, how reminders and due times are named, the output modes
+Every command, the files' format, the output modes
 (text on a terminal, JSON when piped), the exit and error codes and the
 JSON shapes are in the [command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
@@ -190,7 +184,7 @@ Reminders zone (sync tokens, paging, partial updates, change tags and
 ```bash
 cargo run -p icloud-reminders --example fake_reminders &     # 127.0.0.1:8765
 ICLOUD_SESSION_MOCK=1 XDG_DATA_HOME=/tmp/reminders-dev cargo run -p icloud-reminders --bin icloud-reminders-app
-ICLOUD_SESSION_MOCK=1 cargo run -p icloud-reminders -- list --data-dir /tmp/reminders-dev/icloud-reminders
+ICLOUD_SESSION_MOCK=1 HOME=/tmp/reminders-dev cargo run -p icloud-reminders -- sync --data-dir /tmp/reminders-dev/icloud-reminders   # writes /tmp/reminders-dev/Documents/Reminders
 curl -s http://127.0.0.1:8765/fake/requests                    # what was sent
 ```
 
@@ -200,8 +194,8 @@ curl -s http://127.0.0.1:8765/fake/requests                    # what was sent
 cargo test -p icloud-reminders
 ```
 
-`tests/cli.rs` runs the built command line against the fake for every
-command, including notifications (a stand-in `omarchy-notification-send`
+`tests/cli.rs` runs the built command line against the fake: `sync`, the
+folder's files, and notifications (a stand-in `omarchy-notification-send`
 records them). `tests/folder_model.rs` runs seeded random edits to the
 folder's files and to iCloud, Syncthing conflict copies, runs killed
 mid-write or at one of the folder's crash points

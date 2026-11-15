@@ -18,7 +18,9 @@
 //!
 //! Ticking a box completes the reminder, a new line adds one (a bare line of
 //! text will do), a removed line deletes one (to Apple's Recently Deleted),
-//! and the text after 📅 is anything `--due` takes. Open reminders come in
+//! and the text after 📅 is anything [`due::parse_when`] reads. A file of a
+//! name no list has is not read ([`unread`]): lists are made in the app.
+//! Open reminders come in
 //! the list's own order, then the ones completed in the last week; a
 //! reorder made in the file is not kept.
 //!
@@ -759,6 +761,25 @@ pub fn pending(state: &State, dir: &Path) -> bool {
         !ls.stuck_on(&text)
             && (text.is_some_and(|text| text != ls.text) || !conflict_copies(dir, &ls.file).is_empty() || back)
     })
+}
+
+/// The `.md` files in the folder that no run reads: neither a list's file,
+/// nor a conflict copy of one, nor a file already left (and warned about).
+/// A file made for a list that does not exist is one: lists are made in the
+/// app, and once a list of its exact name is, the file is that list's, seen
+/// for the first time (it only adds).
+pub fn unread(state: &State, dir: &Path) -> Vec<String> {
+    let listed = |name: &str| state.lists.values().any(|ls| ls.file == name);
+    let mut found: Vec<String> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".md") && !n.starts_with('.'))
+        .filter(|n| !listed(n) && !copy_of(n).is_some_and(|of| listed(&of)) && !state.left.contains(n))
+        .collect();
+    found.sort();
+    found
 }
 
 /// Records a list's state in `folder.json`.

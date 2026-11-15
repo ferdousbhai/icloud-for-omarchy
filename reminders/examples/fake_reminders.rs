@@ -147,7 +147,7 @@ impl State {
     }
 
     /// Every record as the server holds it now.
-    #[allow(dead_code)] // tests/folder_model.rs reads them; tests/cli.rs does not.
+    #[allow(dead_code)] // The tests read them; the example does not.
     pub fn records(&self) -> Vec<Value> {
         self.zone
             .lock()
