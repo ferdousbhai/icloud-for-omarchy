@@ -1,36 +1,133 @@
 #!/usr/bin/env bash
-# Every check a change must pass, run on this machine. .githooks/pre-push runs it before a push
+# The checks a change must pass, run on this machine. .githooks/pre-push runs it before a push
 # (NO_CHECK=1 skips it); enable the hook once per clone with `git config core.hooksPath .githooks`.
-# Runs the shared-support check (bin/check-shared-support) and its own test, rustfmt, clippy and the Rust
-# workspace suite, the Qt app's tests (notes/bin/test), then the shell scripts' syntax, install.sh's
-# shared add_signed_repo hash and install.sh and the per-app installers against stubbed pacman
-# (tests/install_test.sh), and the packaging and release tests (tests/packaging_test.py).
-# The notes-sync recorded scenarios and golden corpora
-# run with the rest (see notes-sync/tests/differential/README.md).
+#
+#   bin/check          what this change touches: the files changed since origin/main (commits and
+#                      the working tree) pick the crates to lint and test (plus the crates that depend
+#                      on them), the Qt app's tests, the installer tests and the packaging tests.
+#   bin/check --all    everything; bin/release runs this, and so does the packages' check().
+#
+# Always: the shared-support check (bin/check-shared-support) and its test, rustfmt. Then, as chosen:
+# clippy and the Rust tests, the Qt app's tests (notes/bin/test), install.sh's shared add_signed_repo
+# hash and the installers against stubbed pacman (tests/install_test.sh), and the packaging and release
+# tests (tests/packaging_test.py). The notes-sync recorded scenarios and golden corpora run with that
+# crate's tests (see notes-sync/tests/differential/README.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
+
+all=0
+case ${1:-} in
+--all) all=1 ;;
+'') ;;
+*) echo "usage: bin/check [--all]" >&2; exit 2 ;;
+esac
 
 # Validate vendored support before the more expensive product checks.
 python3 bin/check-shared-support
 python3 tests/test_shared_support.py
 
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
 
-# The sign-in window needs webkitgtk-6.0; the daemon tests without it.
-if pkg-config --exists webkitgtk-6.0; then
-  cargo test --locked --workspace
+# What changed: commits since origin/main, plus the working tree. Without origin/main, everything.
+changed=()
+if ((!all)); then
+  if base=$(git merge-base HEAD origin/main 2>/dev/null); then
+    mapfile -t changed < <({
+      git diff --name-only "$base" HEAD
+      git status --porcelain --untracked-files=all | cut -c4- | sed 's/.* -> //'
+    } | sort -u)
+  else
+    all=1
+  fi
+fi
+touched() { # touched REGEX: did a changed path match?
+  ((all)) && return 0
+  printf '%s\n' "${changed[@]}" | grep -qE "$1"
+}
+
+# Rust: a changed crate, and every crate that depends on it; workspace files mean all of them.
+crates=()
+if touched '^(Cargo\.(toml|lock)|rustfmt\.toml|desktop\.css|native_theme\.rs|\.cargo/)'; then
+  all_rust=1
 else
-  echo "webkitgtk-6.0 not found: testing icloud-sessiond without the sign-in window (--no-default-features)" >&2
-  cargo test --locked --workspace --exclude icloud-sessiond
-  cargo test --locked -p icloud-sessiond --no-default-features
+  all_rust=0
+  # The metadata and the changed paths go to one small script.
+  mapfile -t crates < <(python3 - "${changed[@]}" <<'PY'
+import json, os, subprocess, sys
+meta = json.loads(subprocess.check_output(
+    ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]))
+root = meta["workspace_root"]
+dirs = {p["name"]: os.path.relpath(os.path.dirname(p["manifest_path"]), root) for p in meta["packages"]}
+deps = {p["name"]: {d["name"] for d in p["dependencies"] if d.get("path")} for p in meta["packages"]}
+# The skill is embedded in the daemon's `icloud-session skill`.
+extra = {"docs/skills/": "icloud-sessiond"}
+hit = set()
+for path in sys.argv[1:]:
+    # The deepest crate directory holding the path (app/ui before app).
+    owner = max((n for n, d in dirs.items() if path.startswith(d + "/")), key=lambda n: len(dirs[n]), default=None)
+    if owner:
+        hit.add(owner)
+    hit |= {crate for prefix, crate in extra.items() if path.startswith(prefix)}
+grew = True
+while grew:
+    more = {n for n, ds in deps.items() if ds & hit} - hit
+    hit |= more
+    grew = bool(more)
+for name in sorted(hit):
+    print(name)
+PY
+  )
 fi
 
-notes/bin/test
+pkgs=()
+if ((all || all_rust)); then
+  pkgs=(--workspace)
+  echo "Rust: every crate" >&2
+elif ((${#crates[@]})); then
+  for c in "${crates[@]}"; do pkgs+=(-p "$c"); done
+  echo "Rust: ${crates[*]}" >&2
+else
+  echo "Rust: nothing changed, skipped" >&2
+fi
 
-tests/install_test.sh
+if ((${#pkgs[@]})); then
+  cargo clippy --locked "${pkgs[@]}" --all-targets -- -D warnings
+  # The sign-in window needs webkitgtk-6.0; the daemon tests without it.
+  if pkg-config --exists webkitgtk-6.0; then
+    cargo test --locked "${pkgs[@]}"
+  elif [[ ${pkgs[0]} == --workspace ]]; then
+    echo "webkitgtk-6.0 not found: testing icloud-sessiond without the sign-in window (--no-default-features)" >&2
+    cargo test --locked --workspace --exclude icloud-sessiond
+    cargo test --locked -p icloud-sessiond --no-default-features
+  else
+    rest=()
+    daemon=0
+    for c in "${crates[@]}"; do
+      if [[ $c == icloud-sessiond ]]; then daemon=1; else rest+=(-p "$c"); fi
+    done
+    ((${#rest[@]})) && cargo test --locked "${rest[@]}"
+    ((daemon)) && cargo test --locked -p icloud-sessiond --no-default-features
+  fi
+fi
 
-python3 tests/packaging_test.py
+# The Qt app runs the real notes engine, so either one changing runs its tests.
+if ((all || all_rust)) || touched '^(notes|notes-sync|session)/'; then
+  notes/bin/test
+else
+  echo "Notes app: unchanged, skipped" >&2
+fi
+
+if touched '^(install[^/]*\.sh|tests/install_test\.sh|tests/add_signed_repo\.sha256|bin/make-installers)$'; then
+  tests/install_test.sh
+else
+  echo "Installer: unchanged, skipped" >&2
+fi
+
+if touched '^(packaging/|bin/|tests/packaging_test\.py|\.github/|Cargo\.toml$|[^/]*/data/)'; then
+  python3 tests/packaging_test.py
+else
+  echo "Packaging: unchanged, skipped" >&2
+fi
 
 printf '\nAll checks passed.\n'

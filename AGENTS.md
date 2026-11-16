@@ -71,7 +71,8 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
 ## Commands
 
 ```sh
-bin/check                      # rustfmt check, clippy -D warnings, all Rust tests, notes/bin/test, installer + packaging tests
+bin/check                      # what changed since origin/main: clippy + tests of those crates and their dependents, and the Qt/installer/packaging tests it touches (the pre-push hook)
+bin/check --all                # everything: rustfmt, clippy -D warnings, all Rust tests, notes/bin/test, installer + packaging tests (bin/release runs this)
 bin/build [icloud-photos ...] # release binaries into target/release/, Notes into notes/build/
 cargo test -p icloud-findmy   # one crate
 cargo fmt --all               # max_width = 120 (rustfmt.toml)
