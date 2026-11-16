@@ -18,11 +18,45 @@
 //!
 //! Ticking a box completes the reminder, a new line adds one (a bare line of
 //! text will do), a removed line deletes one (to Apple's Recently Deleted),
-//! and the text after 📅 is anything [`due::parse_when`] reads. A file of a
-//! name no list has is not read ([`unread`]): lists are made in the app.
-//! Open reminders come in
-//! the list's own order, then the ones completed in the last week; a
-//! reorder made in the file is not kept.
+//! and the text after 📅 is anything [`due::parse_when`] reads. Open
+//! reminders come in the list's own order, then the ones completed in the
+//! last week; a reorder made in the file is not kept.
+//!
+//! The files are the lists, as in Apple's app, and the file name is the
+//! list's name; the `# Title` line is written for whoever reads the file and
+//! is not read (a heading is layout). A group, a list's sections and a list
+//! shared with this account by someone else have no file (the last are in
+//! CloudKit's shared database, which this app does not read): those are
+//! made and changed in the app. [`lists_from_files`] does what the files
+//! ask before any list's lines are read:
+//!
+//! - A new `.md` file (not hidden, not a conflict copy or temp file, not a
+//!   list's old name or a deleted list's file come back) makes a list named
+//!   after the file, without `.md` and as it is (a name made safe for a file,
+//!   `/` written `-`, cannot be told back), in Apple's default colour; each
+//!   of its lines is added to it, as a new line is. It waits
+//!   until it has not changed for [`SETTLE_MS`]. A name another list has
+//!   (case aside) makes none: the file is named in a warning once, and once
+//!   a list of exactly its name is made in the app the file is that list's.
+//! - A new file whose lines are more than half a list's whose file is gone
+//!   ([`renames`]) is that file renamed: the list is renamed, keeping its
+//!   reminders and their IDs, and the file's line changes are then edits
+//!   (an old name of the list is its file renamed back, and no other's).
+//!   One as like two lists as either is renames nothing and makes nothing:
+//!   it is named in a warning, and their files are written back. One that
+//!   is the file of a list deleted in iCloud meanwhile, renamed, is left as
+//!   a changed file of a deleted list is.
+//! - A list's file removed deletes the list, as the app's Delete List does:
+//!   each of its reminders as a removed line deletes one (to Recently
+//!   Deleted), then the list (`Deleted`), and a notification says so. Only
+//!   when every guard holds, else the file is written back, with a warning
+//!   and a notification saying why: the file was gone on two runs in a row
+//!   at least [`MISSING_MS`] apart (one that is back in between starts the
+//!   count again); it is the only list file gone (two at once look like a
+//!   folder being emptied or replaced, so neither is deleted; remove one at
+//!   a time); the folder is there and holds another list's file; and the
+//!   list is not shared with other people (its record has a `share`). Lists
+//!   are made, renamed and deleted only with a sync under [`FRESH_MS`] old.
 //!
 //! A line carries no ID. What ties a line to its reminder is [`ListState`]:
 //! the items as the file last had them, each with its reminder's ID. A
@@ -58,7 +92,12 @@
 //!   rename too ([`ListState::renaming`]): done only when the file is at
 //!   its new name and not its old. Nothing else ties a new
 //!   line to a reminder: one made on the phone that reads the same is
-//!   another.
+//!   another. A list made from a file is recorded with its ID before it is
+//!   sent ([`State::creating`]): found in iCloud, it was made; a list's
+//!   rename too ([`ListState::retitling`]); and a deletion
+//!   ([`ListState::deleting`]) is recorded before the first reminder goes,
+//!   and finished by the next run whatever the file does meanwhile, so a
+//!   list is never left half deleted.
 //! - What a conflict copy added is in iCloud before it is in the file. Until
 //!   the file is written with it ([`ListState::unwritten`]), a changed file
 //!   that lacks it does not delete it, and a tick taken from a copy is not
@@ -86,7 +125,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cloudkit::{Error, Result};
 use crate::due;
-use crate::model::{Change, List, Reminder};
+use crate::model::{Change, List, ListChange, Reminder};
 use crate::service::Service;
 use crate::store::Cache;
 
@@ -110,7 +149,41 @@ pub const CRASH_POINTS: &[&str] = &[
     "rename-pending",
     "renamed",
     "gone-removed",
+    "list-create-pending",
+    "list-created",
+    "list-rename-pending",
+    "list-renamed",
+    "list-delete-pending",
+    "list-reminder-deleted",
+    "list-deleted",
 ];
+
+/// `ICLOUD_REMINDERS_FOLDER_CLOCK_MS=<ms>` (debug builds only) puts the
+/// folder's clock that far ahead ([`clock`]): the tests' runs a minute
+/// apart without waiting a minute. A release build has no hook.
+pub const CLOCK: &str = "ICLOUD_REMINDERS_FOLDER_CLOCK_MS";
+
+/// Now, as a folder run takes it.
+pub fn clock() -> jiff::Timestamp {
+    let now = jiff::Timestamp::now();
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var(CLOCK).ok().and_then(|v| v.parse::<i64>().ok()) {
+        return now.checked_add(jiff::SignedDuration::from_millis(ms)).unwrap_or(now);
+    }
+    now
+}
+
+/// A new file is made into a list once it has not changed for this long:
+/// an editor or Syncthing may still be writing it.
+pub const SETTLE_MS: i64 = 10_000;
+/// A list is deleted once two runs at least this far apart found its file
+/// gone (the timer runs every minute): a file that is only away for a
+/// moment (an editor saving, Syncthing replacing it) costs nothing.
+pub const MISSING_MS: i64 = 50_000;
+/// Lists are made, renamed or deleted from files only with a sync this
+/// recent: a list deleted from a stale cache would leave alive the
+/// reminders the phone added since, and one made from it may already exist.
+pub const FRESH_MS: i64 = 120_000;
 
 #[inline]
 fn crash(point: &str) {
@@ -194,6 +267,36 @@ pub struct ListState {
     /// there and no longer under `file`, it was.
     #[serde(default)]
     pub renaming: Option<String>,
+    /// When a run found the file gone (Unix ms, by [`clock`]), every run
+    /// since finding it gone too: cleared by one that finds it back. See
+    /// [`MISSING_MS`].
+    #[serde(default)]
+    pub missing_since: Option<i64>,
+    /// The list's new name being sent, saved before it is, and the file
+    /// that asks for it (a list file renamed).
+    #[serde(default)]
+    pub retitling: Option<Retitle>,
+    /// The list is being deleted (its file was removed), saved before the
+    /// first of its reminders is: how many have been so far. A run that
+    /// finds it set finishes the deletion.
+    #[serde(default)]
+    pub deleting: Option<usize>,
+}
+
+/// A list renamed from its file: the name, and the file now holding it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Retitle {
+    pub name: String,
+    pub file: String,
+}
+
+/// A list being made from a new file, recorded with its ID before it is
+/// sent: found in iCloud, it was made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewList {
+    pub id: String,
+    pub name: String,
+    pub file: String,
 }
 
 /// A file's text and items, recorded before the file is written.
@@ -248,6 +351,32 @@ pub struct State {
     /// on the phone meanwhile) is left, as above.
     #[serde(default)]
     pub removed: Vec<String>,
+    /// Lists being made from new files.
+    #[serde(default)]
+    pub creating: Vec<NewList>,
+    /// New files no list is made from (a name another list has, or like
+    /// two lists whose files are gone), each with the text it was declined
+    /// with: warned about once, and not a reason to sync until it changes.
+    #[serde(default)]
+    pub declined: BTreeMap<String, String>,
+}
+
+/// A list deleted because its file was removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedList {
+    pub list: String,
+    pub file: String,
+    /// Its reminders, deleted with it.
+    pub reminders: usize,
+}
+
+/// A list whose file was removed and that was not deleted: the file was
+/// written back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptList {
+    pub list: String,
+    pub file: String,
+    pub why: String,
 }
 
 /// A file that would have removed most of its list: its lines were put back.
@@ -268,12 +397,27 @@ pub struct Report {
     pub written: Vec<String>,
     pub restored: Vec<Restored>,
     pub warnings: Vec<String>,
+    /// Lists made from new files, by name.
+    pub lists_created: Vec<String>,
+    /// Lists renamed from their files: the name before and after.
+    pub lists_renamed: Vec<(String, String)>,
+    pub lists_deleted: Vec<DeletedList>,
+    /// Lists whose removed file was written back (each is a warning too).
+    pub lists_kept: Vec<KeptList>,
+    /// New files whose list waits until they have not changed for
+    /// [`SETTLE_MS`].
+    pub waiting: Vec<String>,
 }
 
 impl Report {
     /// Nothing was written either way.
     pub fn quiet(&self) -> bool {
-        self.added + self.edited + self.deleted == 0 && self.written.is_empty() && self.warnings.is_empty()
+        self.added + self.edited + self.deleted == 0
+            && self.written.is_empty()
+            && self.warnings.is_empty()
+            && self.lists_created.is_empty()
+            && self.lists_renamed.is_empty()
+            && self.lists_deleted.is_empty()
     }
 }
 
@@ -595,6 +739,73 @@ pub fn risky(delta: &Delta, base_len: usize) -> bool {
     delta.deletes.len() > 3 && delta.deletes.len() * 2 > base_len
 }
 
+/// How much a file's lines are a list's items, as [`diff`] pairs them: the
+/// lines paired, of the longer of the two; 1.0 when both are empty.
+pub fn likeness(base: &[Known], local: &[Item]) -> f64 {
+    match base.len().max(local.len()) {
+        0 => 1.0,
+        n => pair(base, local).iter().flatten().count() as f64 / n as f64,
+    }
+}
+
+/// Which new file is which list whose file is gone: a renamed file. A pair
+/// is more than half alike ([`likeness`]), the most alike first; a file or
+/// a list that is as alike to two is neither's (`ambiguous`). `may` says
+/// which pairs can be at all.
+pub fn renames(
+    lists: &[&[Known]],
+    files: &[Vec<Item>],
+    may: impl Fn(usize, usize) -> bool,
+) -> (Vec<(usize, usize)>, Ambiguous) {
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (f, local) in files.iter().enumerate() {
+        for (l, base) in lists.iter().enumerate() {
+            let score = likeness(base, local);
+            if may(f, l) && score > 0.5 {
+                pairs.push((score, f, l));
+            }
+        }
+    }
+    pairs.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+    let mut out = Vec::new();
+    let mut ambiguous = Ambiguous::default();
+    let taken = |out: &[(usize, usize)], a: &Ambiguous, f: usize, l: usize| {
+        out.iter().any(|&(of, ol)| of == f || ol == l) || a.files.contains(&f) || a.lists.contains(&l)
+    };
+    for &(score, f, l) in &pairs {
+        if taken(&out, &ambiguous, f, l) {
+            continue;
+        }
+        let tie = pairs.iter().any(|&(s, of, ol)| {
+            s == score && (of, ol) != (f, l) && (of == f || ol == l) && !taken(&out, &ambiguous, of, ol)
+        });
+        if tie {
+            ambiguous.files.push(f);
+            ambiguous.lists.push(l);
+            for &(s, of, ol) in &pairs {
+                if s == score && (of == f || ol == l) {
+                    ambiguous.files.push(of);
+                    ambiguous.lists.push(ol);
+                }
+            }
+        } else {
+            out.push((f, l));
+        }
+    }
+    ambiguous.files.sort();
+    ambiguous.files.dedup();
+    ambiguous.lists.sort();
+    ambiguous.lists.dedup();
+    (out, ambiguous)
+}
+
+/// The files and lists [`renames`] could not tell apart.
+#[derive(Debug, Default, PartialEq)]
+pub struct Ambiguous {
+    pub files: Vec<usize>,
+    pub lists: Vec<usize>,
+}
+
 /// What a conflict copy may ask for. It was made from an older file, so a
 /// difference from the items now is as likely stale as meant: only a tick on
 /// a reminder still open, and lines unlike any there is, are taken.
@@ -748,38 +959,64 @@ pub fn default_dir() -> Option<PathBuf> {
 }
 
 /// Whether a file has something to send: it differs from what was last
-/// written, or has a conflict copy, or an old name of it is back. A background run syncs with iCloud first
-/// when this is so. A file whose run failed is not, until it changes: one bad
-/// list does not make every minute's run a sync.
+/// written, or has a conflict copy, or an old name of it is back, or it is
+/// gone, or it is new; or a list's making, renaming or deletion is under
+/// way. A background run syncs with iCloud first when this is so. A file
+/// whose run failed is not, until it changes, and nor is a new file
+/// declined until it changes: one bad file does not make every minute's
+/// run a sync.
 pub fn pending(state: &State, dir: &Path) -> bool {
-    state.lists.values().any(|ls| {
+    let lists = state.lists.values().any(|ls| {
         let text = read(&dir.join(&ls.file)).ok().flatten();
         let back = ls
             .was
             .iter()
             .any(|w| dir.join(w).exists() || !conflict_copies(dir, w).is_empty());
-        !ls.stuck_on(&text)
-            && (text.is_some_and(|text| text != ls.text) || !conflict_copies(dir, &ls.file).is_empty() || back)
-    })
+        let gone = ls.adopted && text.is_none() && !dir.join(&ls.file).exists();
+        ls.deleting.is_some()
+            || ls.retitling.is_some()
+            || (!ls.stuck_on(&text)
+                && (text.is_some_and(|text| text != ls.text)
+                    || gone
+                    || !conflict_copies(dir, &ls.file).is_empty()
+                    || back))
+    });
+    let new = new_files(state, dir)
+        .iter()
+        .any(|n| state.declined.get(n) != read(&dir.join(n)).ok().flatten().as_ref());
+    lists || new || !state.creating.is_empty()
 }
 
-/// The `.md` files in the folder that no run reads: neither a list's file,
-/// nor a conflict copy of one, nor a file already left (and warned about).
-/// A file made for a list that does not exist is one: lists are made in the
-/// app, and once a list of its exact name is, the file is that list's, seen
-/// for the first time (it only adds).
-pub fn unread(state: &State, dir: &Path) -> Vec<String> {
-    let listed = |name: &str| state.lists.values().any(|ls| ls.file == name);
+/// The `.md` files in the folder that are no list's: each a new list, or a
+/// list's file renamed. Not a hidden or temporary file, not a conflict
+/// copy, not one left or removed with a deleted list, and not one being
+/// made into a list. A list's old name is among them (renamed back).
+fn new_files(state: &State, dir: &Path) -> Vec<String> {
+    let listed = |name: &str| {
+        state.lists.values().any(|ls| {
+            ls.file == name
+                || ls.renaming.as_deref() == Some(name)
+                || ls.retitling.as_ref().is_some_and(|r| r.file == name)
+        }) || state.creating.iter().any(|c| c.file == name)
+    };
     let mut found: Vec<String> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".md") && !n.starts_with('.'))
-        .filter(|n| !listed(n) && !copy_of(n).is_some_and(|of| listed(&of)) && !state.left.contains(n))
+        .filter(|n| n.ends_with(".md") && !n.starts_with('.') && copy_of(n).is_none())
+        .filter(|n| !listed(n) && !state.left.contains(n) && !state.removed.contains(n))
+        .filter(|n| dir.join(n).is_file())
         .collect();
     found.sort();
     found
+}
+
+/// When a file was last changed (Unix ms).
+fn modified_ms(path: &Path) -> Option<i64> {
+    let t = fs::metadata(path).ok()?.modified().ok()?;
+    let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(d.as_millis()).ok()
 }
 
 /// Records a list's state in `folder.json`.
@@ -1092,6 +1329,381 @@ fn renamed(dir: &Path, ls: &mut ListState, to: String) {
     ls.was.push(std::mem::replace(&mut ls.file, to));
 }
 
+/// The list, other than `except`, whose file `name` is or would be, and
+/// whether it has a file yet: a new file of that name is not another list.
+fn holder<'c>(state: &State, lists: &[&'c List], name: &str, except: Option<&str>) -> Option<(&'c List, bool)> {
+    lists.iter().filter(|l| Some(l.id.as_str()) != except).find_map(|l| {
+        let ls = state.lists.get(&l.id);
+        let file = ls.map_or_else(|| format!("{}.md", file_stem(&l.name)), |ls| ls.file.clone());
+        let wanted = format!("{}.md", file_stem(&l.name));
+        (file.eq_ignore_ascii_case(name) || wanted.eq_ignore_ascii_case(name)).then_some((*l, ls.is_some()))
+    })
+}
+
+/// The state of a list made from `file`: the list began empty, so each of
+/// the file's lines is one to add, as in a file this program wrote (not as
+/// in one seen for the first time, which only adds: a tick in it would be
+/// lost by a run killed after its adds).
+fn made_from(file: &str) -> ListState {
+    ListState {
+        file: file.to_owned(),
+        adopted: true,
+        ..ListState::default()
+    }
+}
+
+fn stem(file: &str) -> &str {
+    file.strip_suffix(".md").unwrap_or(file)
+}
+
+/// Deletes the list `id` its file asked to delete (`deleting` is set): each
+/// of its reminders, as a removed line deletes one, then the list. Its file
+/// and old names are remembered as removed, so one Syncthing brings back is
+/// left, not read. `list` is `None` once iCloud no longer has it.
+fn finish_delete(svc: &Service, state: &mut State, id: &str, list: Option<&List>, report: &mut Report) -> Result<()> {
+    let save = |state: &State| -> Result<()> { Ok(svc.store.save_folder(state)?) };
+    let mut n = state.lists[id].deleting.unwrap_or(0);
+    if let Some(list) = list {
+        let cache = svc.cache()?;
+        let mine: Vec<&Reminder> = cache.reminders.values().filter(|r| r.list_id == list.id).collect();
+        for r in mine {
+            report.warnings.extend(svc.update(r, &[Change::Deleted])?.warning);
+            n += 1;
+            state.lists.get_mut(id).expect("being deleted").deleting = Some(n);
+            save(state)?;
+            crash("list-reminder-deleted");
+        }
+        // Fresh: the change tag a write of the list itself may have changed.
+        let list = svc.cache()?.list(id).cloned().unwrap_or_else(|| list.clone());
+        report
+            .warnings
+            .extend(svc.update_list(&list, &ListChange::Deleted)?.warning);
+        crash("list-deleted");
+    }
+    let ls = state.lists.remove(id).expect("being deleted");
+    for name in std::iter::once(ls.file.clone()).chain(ls.was) {
+        if !state.removed.contains(&name) {
+            state.removed.push(name);
+        }
+    }
+    report.lists_deleted.push(DeletedList {
+        list: list.map_or_else(|| stem(&ls.file).to_owned(), |l| l.name.clone()),
+        file: ls.file,
+        reminders: n,
+    });
+    save(state)
+}
+
+/// What the files ask of the lists themselves, before any list's lines are
+/// read: a new file makes a list, a list's file renamed renames it, and a
+/// list's file removed deletes it (see the module's notes for the guards).
+/// Each write is recorded in `folder.json` before it is sent, and a run
+/// finishes what a killed one began. Returns the lists whose run waits
+/// this time: their file is gone, and not yet for long enough.
+fn lists_from_files(
+    svc: &Service,
+    dir: &Path,
+    existed: bool,
+    state: &mut State,
+    now: &Zoned,
+    report: &mut Report,
+) -> Result<std::collections::BTreeSet<String>> {
+    let save = |state: &State| -> Result<()> { Ok(svc.store.save_folder(state)?) };
+    let now_ms = now.timestamp().as_millisecond();
+    let mut waits = std::collections::BTreeSet::new();
+
+    // Lists a killed run began making: made when iCloud has them (deleted
+    // since too: the file then goes as a deleted list's does).
+    let mut creating = std::mem::take(&mut state.creating).into_iter();
+    while let Some(p) = creating.next() {
+        match svc.look_up_list(&p.id) {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                report.lists_created.push(p.name.clone());
+                state.lists.insert(p.id.clone(), made_from(&p.file));
+            }
+            Err(e) => {
+                state.creating.push(p);
+                state.creating.extend(creating);
+                save(state)?;
+                return Err(e);
+            }
+        }
+        save(state)?;
+    }
+
+    let cache = svc.cache()?;
+    let lists: Vec<&List> = cache.lists.iter().filter(|l| !l.group).collect();
+    let list_of = |id: &str| lists.iter().find(|l| l.id == id).copied();
+
+    // A rename a killed run sent: done when iCloud has the name and the
+    // files are as it found them; else found again below.
+    for (id, ls) in state.lists.iter_mut() {
+        let Some(r) = ls.retitling.take() else { continue };
+        if list_of(id).is_some_and(|l| l.name == r.name) && dir.join(&r.file).exists() && !dir.join(&ls.file).exists() {
+            report.lists_renamed.push((stem(&ls.file).to_owned(), r.name.clone()));
+            renamed(dir, ls, r.file);
+            ls.missing_since = None;
+        }
+    }
+    save(state)?;
+    // A deletion a killed run began is finished, whatever the file does now.
+    let deleting: Vec<String> = state
+        .lists
+        .iter()
+        .filter(|(_, ls)| ls.deleting.is_some())
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in deleting {
+        if let Err(e) = finish_delete(svc, state, &id, list_of(&id), report) {
+            report.warnings.push(format!(
+                "{}: the list is not all deleted yet ({e}); the next run goes on",
+                state.lists[&id].file
+            ));
+            waits.insert(id);
+        }
+    }
+
+    for ls in state.lists.values_mut() {
+        if dir.join(&ls.file).exists() {
+            ls.missing_since = None;
+        }
+    }
+    let gone: Vec<String> = state
+        .lists
+        .iter()
+        .filter(|(id, ls)| list_of(id).is_some() && ls.adopted && ls.deleting.is_none() && !dir.join(&ls.file).exists())
+        .map(|(id, _)| id.clone())
+        .collect();
+    let fresh = cache
+        .synced_ms
+        .is_some_and(|ms| crate::service::now_ms() - ms < FRESH_MS);
+    if !fresh {
+        waits.extend(gone);
+        return Ok(waits);
+    }
+
+    // The new files, once nothing has changed them for a while.
+    let listed = |state: &State, name: &str| state.lists.values().any(|ls| ls.file == name);
+    state
+        .declined
+        .retain(|name, _| dir.join(name).exists() && !state.lists.values().any(|ls| ls.file == *name));
+    let mut files: Vec<(String, String)> = Vec::new();
+    let mut unsettled = false;
+    for name in new_files(state, dir) {
+        let path = dir.join(&name);
+        let Ok(Some(text)) = read(&path) else { continue };
+        if modified_ms(&path).is_none_or(|m| now_ms - m < SETTLE_MS) {
+            unsettled = true;
+            report.waiting.push(name);
+            continue;
+        }
+        files.push((name, text));
+    }
+    let was_of = |state: &State, name: &str| {
+        state
+            .lists
+            .iter()
+            .find(|(_, ls)| ls.was.iter().any(|w| w == name))
+            .map(|(id, _)| id.clone())
+    };
+    let parsed: Vec<Vec<Item>> = files.iter().map(|(_, text)| parse(text, now)).collect();
+    // Lists deleted in iCloud whose file is gone too: a file renamed from
+    // one is that deleted list's, not a new list of its reminders.
+    let dead: Vec<String> = state
+        .lists
+        .iter()
+        .filter(|(id, ls)| list_of(id).is_none() && ls.adopted && !dir.join(&ls.file).exists())
+        .map(|(id, _)| id.clone())
+        .collect();
+    let candidates: Vec<&String> = gone.iter().chain(&dead).collect();
+    let bases: Vec<&[Known]> = candidates.iter().map(|id| state.lists[*id].items.as_slice()).collect();
+    let (matched, ambiguous) = renames(&bases, &parsed, |f, l| {
+        let name = &files[f].0;
+        match was_of(state, name) {
+            Some(of) => of == *candidates[l],
+            None => holder(state, &lists, name, Some(candidates[l])).is_none(),
+        }
+    });
+
+    // Renamed files rename their lists.
+    for &(f, l) in &matched {
+        if l >= gone.len() {
+            let file = &files[f].0;
+            report.warnings.push(format!(
+                "{file}: its list is gone from iCloud (the file is {} renamed), so it is left here and no longer kept in step",
+                state.lists[candidates[l]].file
+            ));
+            state.left.push(file.clone());
+            save(state)?;
+            continue;
+        }
+        let (id, file) = (&gone[l], &files[f].0);
+        let list = list_of(id).expect("gone lists are in iCloud");
+        let name = stem(file).to_owned();
+        let ls = state.lists.get_mut(id).expect("gone lists have a state");
+        ls.retitling = Some(Retitle {
+            name: name.clone(),
+            file: file.clone(),
+        });
+        save(state)?;
+        crash("list-rename-pending");
+        let sent = svc.update_list(list, &ListChange::Name(name.clone()));
+        let ls = state.lists.get_mut(id).expect("gone lists have a state");
+        ls.retitling = None;
+        match sent {
+            Ok(saved) => {
+                report.warnings.extend(saved.warning);
+                crash("list-renamed");
+                renamed(dir, ls, file.clone());
+                ls.missing_since = None;
+                report.lists_renamed.push((list.name.clone(), name));
+            }
+            Err(e) => {
+                report.warnings.push(format!(
+                    "{file}: could not rename the list \"{}\" to \"{name}\": {e}",
+                    list.name
+                ));
+                waits.insert(id.clone());
+            }
+        }
+        save(state)?;
+    }
+    for &f in &ambiguous.files {
+        let (name, text) = &files[f];
+        if state.declined.get(name) != Some(text) {
+            report.warnings.push(format!(
+                "{name}: not read, as it is as like two lists whose files are gone; their files were written back (rename one list file at a time)"
+            ));
+            state.declined.insert(name.clone(), text.clone());
+        }
+    }
+
+    // New files make lists.
+    for (f, (name, text)) in files.iter().enumerate() {
+        if matched.iter().any(|&(mf, _)| mf == f) || ambiguous.files.contains(&f) || was_of(state, name).is_some() {
+            continue;
+        }
+        if listed(state, name) || state.declined.get(name) == Some(text) {
+            continue;
+        }
+        let new = stem(name).to_owned();
+        let why = match holder(state, &lists, name, None) {
+            // Once the list of that name has its first run, the file is its own.
+            Some((_, false)) => continue,
+            Some((l, true)) => Some(format!("the list \"{}\" has this name", l.name)),
+            None if new.trim().is_empty() => Some("it has no name".to_owned()),
+            None => None,
+        };
+        if let Some(why) = why {
+            report.warnings.push(format!(
+                "{name}: no list was made of it, as {why}; rename the file to make one"
+            ));
+            state.declined.insert(name.clone(), text.clone());
+            continue;
+        }
+        let uuid = crate::service::new_uuid();
+        let id = format!("List/{uuid}");
+        state.creating.push(NewList {
+            id: id.clone(),
+            name: new.clone(),
+            file: name.clone(),
+        });
+        state.declined.remove(name);
+        save(state)?;
+        crash("list-create-pending");
+        match svc.create_list(&uuid, &new) {
+            Ok(saved) => {
+                report.warnings.extend(saved.warning);
+                crash("list-created");
+                state.creating.retain(|c| c.id != id);
+                state.lists.insert(id, made_from(name));
+                report.lists_created.push(new);
+            }
+            // It may have been made all the same: the next run looks.
+            Err(e) => report
+                .warnings
+                .push(format!("{name}: could not make the list \"{new}\": {e}")),
+        }
+        save(state)?;
+    }
+
+    // Removed files delete their lists, when all the guards hold; a list
+    // that is not deleted has its file written back.
+    let left: Vec<&String> = gone
+        .iter()
+        .enumerate()
+        .filter(|(l, _)| !matched.iter().any(|&(_, ml)| ml == *l))
+        .map(|(_, id)| id)
+        .collect();
+    let present = state
+        .lists
+        .iter()
+        .any(|(id, ls)| !left.contains(&id) && list_of(id).is_some() && ls.adopted && dir.join(&ls.file).exists());
+    let all_why = if !existed {
+        Some("the whole folder was gone".to_owned())
+    } else if left.len() > 1 {
+        Some(format!(
+            "{} list files are gone at once (remove one at a time)",
+            left.len()
+        ))
+    } else if !present {
+        Some("no other list's file is in the folder".to_owned())
+    } else {
+        None
+    };
+    for (l, id) in gone.iter().enumerate() {
+        if !left.contains(&id) {
+            continue;
+        }
+        let list = list_of(id).expect("gone lists are in iCloud");
+        let why = all_why
+            .clone()
+            .or_else(|| {
+                ambiguous
+                    .lists
+                    .contains(&l)
+                    .then(|| "a new file is as like it as another list".to_owned())
+            })
+            .or_else(|| {
+                list.shared
+                    .then(|| "it is shared with other people (delete a shared list in the app)".to_owned())
+            });
+        let ls = state.lists.get_mut(id).expect("gone lists have a state");
+        if let Some(why) = why {
+            ls.missing_since = None;
+            report.warnings.push(format!(
+                "{}: removed, but its list was not deleted: {why}; the file was written back",
+                ls.file
+            ));
+            report.lists_kept.push(KeptList {
+                list: list.name.clone(),
+                file: ls.file.clone(),
+                why,
+            });
+            continue;
+        }
+        // A file still being written may be this one renamed.
+        let since = *ls.missing_since.get_or_insert(now_ms);
+        if unsettled || now_ms - since < MISSING_MS {
+            waits.insert(id.clone());
+            continue;
+        }
+        ls.deleting = Some(0);
+        save(state)?;
+        crash("list-delete-pending");
+        if let Err(e) = finish_delete(svc, state, id, Some(list), report) {
+            report.warnings.push(format!(
+                "{}: the list is not all deleted yet ({e}); the next run goes on",
+                state.lists[id].file
+            ));
+            waits.insert(id.clone());
+        }
+    }
+    save(state)?;
+    Ok(waits)
+}
+
 /// Brings the folder and iCloud in step. The cache must be fresh (the
 /// caller syncs first): what it holds is taken as iCloud's state. One list's failure is a warning
 /// and does not stop the others. `state` is saved after each write to iCloud;
@@ -1102,6 +1714,7 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     if cache.synced_ms.is_none() {
         return Ok(report);
     }
+    let existed = dir.is_dir();
     fs::create_dir_all(dir)?;
 
     // A rename a killed run began: done when the file is at its new name
@@ -1126,6 +1739,11 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             renamed(dir, ls, to);
         }
     }
+
+    let waits = lists_from_files(svc, dir, existed, state, now, &mut report)?;
+    // A group is not a list: it has no file.
+    let mut cache = svc.cache()?;
+    cache.lists.retain(|l| !l.group);
 
     // A list gone from iCloud: its file goes too, unless it was changed.
     state.left.retain(|file| dir.join(file).exists());
@@ -1246,6 +1864,11 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     }
 
     for list in &cache.lists {
+        // Its file is gone, and the list is not deleted yet: nothing is
+        // read or written until it is, or the file is back.
+        if waits.contains(&list.id) {
+            continue;
+        }
         let others: Vec<String> = state
             .lists
             .iter()
@@ -1352,8 +1975,8 @@ mod tests {
         List {
             id: "List/W".into(),
             name: "Work".into(),
-            color: None,
             order: order.iter().map(|s| (*s).to_owned()).collect(),
+            ..List::default()
         }
     }
 

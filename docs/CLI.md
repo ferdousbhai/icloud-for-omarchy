@@ -129,7 +129,8 @@ once.
 | Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` (also sends the files' edits now; otherwise the timer does within a minute) |
 | Notifications (the timer, window open or not) | `icloud-reminders background` (the timer runs it with `--styled`, which prints nothing when nothing fell due) |
 | Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
-| New list, alerts, priority, flags | not in the files: the app or an Apple device |
+| New List / rename a list / Delete List | make a file `NAME.md` / rename the list's file / remove it (see [icloud-reminders](#icloud-reminders) for the guards) |
+| Groups, sections, sharing, alerts, priority, flags | not in the files: the app or an Apple device |
 
 ### Contacts (`contacts/src/bin/app`)
 
@@ -673,11 +674,28 @@ what it did.
   the app, or remove a few lines at a time.
 - Open reminders come in the list's order, then those completed in the last
   7 days; a reorder made in the file is not kept.
-- New, renamed and deleted lists, alerts, priority and flags are not in the
-  files: change them in the app or on an Apple device. A file with no list
-  of its name is not read (`sync` names it in `folder.warnings`); once a
-  list of exactly that name exists, the file becomes its file and its lines
-  are added to it (nothing in it is deleted or changed that first time).
+- The files are the lists, as in Apple's app, and the file name is the
+  list's name (the `# Groceries` heading is not read):
+  - A new `.md` file makes a list of its name (without `.md`, as it is),
+    in Apple's default colour, and its lines are added to it. It waits
+    until the file has not changed for 10 seconds (`sync` names it in
+    `folder.warnings` meanwhile). A name another list has (case aside)
+    makes none, said once in `folder.warnings`.
+  - A renamed file renames its list, keeping its reminders: a new file
+    whose lines are more than half those of a list whose file is gone is
+    that file. Line changes made with the rename are then edits.
+  - A removed file deletes its list and its reminders (to Recently Deleted),
+    and a notification says so; `folder.lists_deleted` names it. Only when
+    the file is gone on two runs at least 50 seconds apart (the timer runs
+    every minute; a file back in between starts again), no other list file
+    went at the same time (remove one at a time), the folder holds another
+    list's file, and the list is not shared with other people. Otherwise
+    nothing is deleted and the file is written back, said in
+    `folder.lists_kept`, `folder.warnings` and a notification.
+  - Groups, sections, lists others share with you, alerts, priority and
+    flags are not in the files: change them in the app or on an Apple
+    device. A list made in the app with the name of a file already there
+    takes that file, and its lines are added to it.
 - A file found in the folder before this computer wrote it (or with
   `folder.json` gone) only adds. Syncthing conflict copies
   (`Groceries.sync-conflict-….md`) give only ticks of open reminders and
@@ -688,7 +706,9 @@ what it did.
 ```console
 $ icloud-reminders --quiet sync
 {"lists":2,"reminders":5,"changed":0,"full":false,
- "folder":{"added":1,"edited":1,"deleted":1,"written":["Groceries.md"],"restored":[],"warnings":[]}}
+ "folder":{"added":1,"edited":1,"deleted":1,"written":["Groceries.md"],"restored":[],"warnings":[],
+  "lists_created":["Hardware"],"lists_renamed":[{"from":"Groceries","to":"Food"}],
+  "lists_deleted":[{"list":"Old","file":"Old.md","reminders":3}],"lists_kept":[]}}
 ```
 
 - `sync` fetches what changed in iCloud, then sends the files' edits and
@@ -866,8 +886,8 @@ Its error codes are in the table under [Error codes](#error-codes).
 
 | Command | `data` |
 |---|---|
-| `sync` | `{lists, reminders, changed, full, folder}`: `folder` is `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings:[text]}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, the files put back because they no longer listed `kept` reminders that were most of their list, and each problem (a list whose run failed, a conflict copy removed unread or left, a file of a deleted list left, a file no list reads), or null with no home directory. Exit 1 with the data when `restored` or `warnings` is not empty |
-| `background` | `{synced, sync_error, notified:[{id, title}], folder}`; exit 0 also when the sync failed (`sync_error` says why). `folder` as for `sync` (null when changed files are waiting for a sync; a file no list reads is not named here); a folder run that failed is one entry in its `warnings` |
+| `sync` | `{lists, reminders, changed, full, folder}`: `folder` is `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings:[text], lists_created:[name], lists_renamed:[{from, to}], lists_deleted:[{list, file, reminders}], lists_kept:[{list, file, why}]}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, the files put back because they no longer listed `kept` reminders that were most of their list, each problem (a list whose run failed, a conflict copy removed unread or left, a file of a deleted list left, a new file not made into a list or still settling, a removed list file written back), the lists made from new files, renamed after their files, and deleted with their removed files (`reminders`: how many went with it), and the lists whose removed file was written back instead (`why`); or null with no home directory. Exit 1 with the data when `restored` or `warnings` is not empty |
+| `background` | `{synced, sync_error, notified:[{id, title}], folder}`; exit 0 also when the sync failed (`sync_error` says why). `folder` as for `sync` (null when changed files are waiting for a sync; a new file still settling is not named here); a folder run that failed is one entry in its `warnings` |
 | (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; that alone still exits 0 |
 
 ### icloud-contacts
@@ -955,6 +975,7 @@ icloud-findmy --quiet play-sound "iPhone" --yes
 ls ~/Documents/Reminders                       # one file per list
 printf -- '- [ ] Renew passport 📅 2026-11-01 09:00\n' >> ~/Documents/Reminders/Personal.md
 icloud-reminders --quiet sync | jq .folder     # exit 1: read .folder.restored and .folder.warnings
+printf -- '- [ ] Screws\n' > ~/Documents/Reminders/Hardware.md   # a new list, within a minute
 ```
 
 **Look someone up**

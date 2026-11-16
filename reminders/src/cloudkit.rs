@@ -77,6 +77,10 @@ pub struct Record {
     pub modified_ms: Option<i64>,
     /// A per-record refusal (`CONFLICT`, ...), with its reason.
     pub error: Option<(String, String)>,
+    /// The record has a `share`: a CKShare of it, as a list shared with
+    /// other people has (CloudKit Web Services' record dictionary names the
+    /// share record there).
+    pub shared: bool,
 }
 
 impl Record {
@@ -94,6 +98,7 @@ impl Record {
             created_ms: v.pointer("/created/timestamp").and_then(Value::as_i64),
             modified_ms: v.pointer("/modified/timestamp").and_then(Value::as_i64),
             error,
+            shared: v.get("share").is_some_and(|s| !s.is_null()),
         })
     }
 

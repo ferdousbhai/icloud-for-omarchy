@@ -169,11 +169,21 @@ reminder. One file per list, named after it (`Groceries.md`):
   devices). Removing more than 3 lines that are also most of a list is
   refused: nothing is deleted and the lines are written back (do it a few
   lines at a time, or in the app, if the user really wants that).
-- Lists (new, renamed, deleted), alerts, priority and flags only change in
-  the app or on an Apple device. A file named like no list is not read:
-  `sync` names it; once a list of exactly that name exists, its lines are
-  added to it. Open reminders come in the list's order, then those
-  completed in the last 7 days; a reorder is not kept.
+- Lists follow the files, and the file name is the list's name (the
+  `# Heading` is not read). A new `NAME.md` makes the list NAME with its
+  lines, once the file has not changed for 10 seconds (a name another list
+  has makes none; `sync` says so). Renaming a file renames its list and
+  keeps its reminders. Removing a file deletes the list and its reminders
+  (to Recently Deleted), with a notification, but only once it is gone on
+  two runs at least 50 seconds apart, when it is the only list file gone,
+  another list's file is still there, and the list is not shared with
+  other people; otherwise the file is written back and `sync` names it in
+  `.folder.lists_kept`. Delete one list file at a time, and only when the
+  user asked for that list to go.
+- Groups, sections, lists shared with the user, alerts, priority and flags
+  only change in the app or on an Apple device. Open reminders come in the
+  list's order, then those completed in the last 7 days; a reorder is not
+  kept.
 - Read a file just before changing it: writing back an older copy undoes
   what changed since.
 
@@ -181,10 +191,13 @@ A changed file reaches iCloud on its own within about a minute: no command
 is needed. Run `icloud-reminders --quiet sync` only when the change must be
 in iCloud now or to hear about a refusal, which the timer only logs: it
 syncs with iCloud, sends the files' edits and rewrites the files, and
-reports `.folder` = `{added, edited, deleted, written, restored, warnings}`.
-A non-empty `restored` (a refused removal) or `warnings` (a list that
-failed, a conflict copy, a file no list reads) comes with exit 1; tell the
-user.
+reports `.folder` = `{added, edited, deleted, written, restored, warnings,
+lists_created, lists_renamed, lists_deleted, lists_kept}`. A non-empty
+`restored` (a refused removal) or `warnings` (a list that failed, a
+conflict copy, a new file not made into a list or still settling, a
+removed list file written back) comes with exit 1; tell the user. A list's
+deletion takes two runs a minute apart: `sync` right after removing a file
+reports nothing yet.
 Signed out: exit 3 and the edits wait in the file. Notifications are the
 timer's job, not yours.
 

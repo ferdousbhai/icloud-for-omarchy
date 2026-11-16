@@ -10,14 +10,22 @@
 //! deleted, a renamed list's old file or a deleted list's file brought back
 //! by Syncthing, a file line like one a conflict copy adds, two copies at
 //! once, notes changed in iCloud, and iCloud changing again after a run
-//! ended at a crash point, before the next run settles it. A run ended
+//! ended at a crash point, before the next run settles it. The files also
+//! ask for lists: a new file makes one, a renamed file renames its list
+//! (paired as the library's own [`folder::renames`] pairs it), and a removed
+//! file deletes its list and reminders, unless another list file went too,
+//! the folder went, no other list's file is left, or the list is shared
+//! (a list shared in iCloud), when it is written back; a file away for a
+//! moment (removed, run, back, run, removed, run) deletes nothing. Each run
+//! has the folder's clock a minute after the last (`folder::CLOCK`). A run ended
 //! before the user's edits can leave a reminder in two
 //! files (moved in iCloud), and the edits are then made to both. After each
 //! run:
 //!
 //! - every reminder iCloud had before it is as the model says: kept (with
 //!   the edits its line asked for, and none meant for another line) or
-//!   deleted because its line was removed;
+//!   deleted because its line, or its list's file, was removed;
+//! - the lists are named, made and deleted as the files ask;
 //! - the reminders it made are exactly the lines added, none twice;
 //! - every file reads as iCloud now has it, and the folder holds no other;
 //! - a run after it sends and writes nothing.
@@ -29,7 +37,8 @@
 //! lower ID.
 //!
 //! After the last step, a few more runs settle it: each is quiet, and
-//! `folder.json` holds no add, write, rename or failure still open, no old
+//! `folder.json` holds no add, write, rename or failure still open, no list
+//! being made, renamed or deleted, no file found gone or declined, no old
 //! name or removed file in the folder, and no temp file.
 //!
 //! What a line asks for is the library's own [`folder::diff`] (the pairing
@@ -138,6 +147,10 @@ struct Env {
     t0: i64,
     state: Arc<fake::State>,
     dir: tempfile::TempDir,
+    /// Runs started: each runs with the folder's clock a minute after the
+    /// last (`folder::CLOCK`), so a list whose file is gone on two runs in a
+    /// row is deleted.
+    runs: std::cell::Cell<i64>,
 }
 
 fn start(order: &'static str, t0: i64) -> Env {
@@ -156,6 +169,7 @@ fn start(order: &'static str, t0: i64) -> Env {
         t0,
         state,
         dir,
+        runs: std::cell::Cell::new(0),
     }
 }
 
@@ -166,10 +180,12 @@ impl Env {
 
     fn background_command(&self) -> Command {
         let mut c = command(env!("CARGO_BIN_EXE_icloud-reminders"), &self.base, self.dir.path());
+        self.runs.set(self.runs.get() + 1);
         c.args(["background", "--sync", "--json"])
             .env("TZ", "UTC")
             .env("PATH", self.dir.path().join("bin"))
             .env(service::UUID_ORDER, self.order)
+            .env(folder::CLOCK, (self.runs.get() * MINUTE).to_string())
             .env_remove("OMARCHY_PATH");
         c
     }
@@ -358,6 +374,9 @@ struct MList {
     /// run ended before it recorded the write: edited since, the file is
     /// read against whichever of the two it asks less of.
     before: Option<(Vec<Known>, String)>,
+    /// The file's name before the phone renamed it this step: the list is
+    /// renamed after it.
+    renamed_from: Option<String>,
 }
 
 impl MList {
@@ -393,6 +412,15 @@ impl MList {
             copy: None,
             was,
             before: None,
+            renamed_from: None,
+        }
+    }
+
+    /// The rename made this step, undone.
+    fn unrename(&mut self) {
+        if let Some(from) = self.renamed_from.take() {
+            self.file = from;
+            self.was.pop();
         }
     }
 
@@ -454,6 +482,14 @@ struct Expect {
     kept: Vec<String>,
     /// Files of lists deleted in iCloud that the run removes.
     removed: Vec<String>,
+    /// Lists whose file was removed, deleted with their reminders.
+    deleted_lists: Vec<String>,
+    /// Lists renamed after their renamed file.
+    renamed: Vec<(String, String)>,
+    /// Lists made from new files, by name, with their lines.
+    new_lists: BTreeMap<String, Vec<Item>>,
+    /// Files removed whose list is not deleted: written back, with a warning.
+    kept_lists: Vec<String>,
 }
 
 struct Case {
@@ -470,6 +506,10 @@ struct Case {
     removed: BTreeSet<String>,
     /// Files that may be named in a warning this step: they came back.
     back: Vec<String>,
+    /// Files the phone made this step, for new lists: name and lines.
+    new_files: Vec<(String, Vec<Block>)>,
+    /// The folder was deleted this step.
+    folder_gone: bool,
     n: usize,
     /// What could be seen after each step, with no reminder IDs in it.
     trace: Vec<String>,
@@ -531,6 +571,8 @@ impl Case {
             left: BTreeSet::new(),
             removed: BTreeSet::new(),
             back: Vec::new(),
+            new_files: Vec::new(),
+            folder_gone: false,
             n: 0,
             trace: Vec::new(),
         };
@@ -583,7 +625,12 @@ impl Case {
         let name = |r: &Reminder| t.lists.iter().find(|l| l.id == r.list_id).map(|l| l.name.clone());
         ids.sort_by_key(|r| (name(r), key(&item_of(r)), r.parent_id.is_some(), r.created_ms));
         let pick_list = |rng: &mut Rng| t.lists[rng.below(t.lists.len())].id.clone();
-        match self.rng.below(13) {
+        match self.rng.below(14) {
+            13 if !t.lists.is_empty() && self.rng.chance(40) => {
+                let list = pick_list(&mut self.rng);
+                self.note(format!("icloud: share {list}"));
+                self.env.state.share(&list);
+            }
             0 | 1 if !t.lists.is_empty() => {
                 let list = pick_list(&mut self.rng);
                 let title = self.fresh();
@@ -755,7 +802,20 @@ impl Case {
         let n = self.lists[li].blocks.len();
         let file = self.lists[li].file.clone();
         let pick = self.rng.below(n);
-        let what = match self.rng.below(15) {
+        let what = match self.rng.below(16) {
+            15 if self.lists[li].renamed_from.is_none()
+                && self.lists[li].before.is_none()
+                && !self.lists[li].removed
+                && self.env.folder().join(&file).exists() =>
+            {
+                // Renamed on the phone: the list follows.
+                let to = format!("{}.md", self.fresh());
+                let ml = &mut self.lists[li];
+                ml.renamed_from = Some(file.clone());
+                ml.was.push(file.clone());
+                ml.file = to.clone();
+                format!("renamed to {to}")
+            }
             0 | 1 if n > 0 => {
                 let b = &mut self.lists[li].blocks[pick];
                 b.item.done = !b.item.done;
@@ -892,6 +952,98 @@ impl Case {
         self.lists[li].edited = true;
         self.lists[li].removed = false;
         self.note(format!("file {file}: {what}"));
+    }
+
+    /// A file made on the phone for a new list: a name unlike any, and a
+    /// few lines (or none).
+    fn new_file_op(&mut self) {
+        let name = format!("{}.md", self.fresh());
+        let mut blocks = Vec::new();
+        for _ in 0..self.rng.below(4) {
+            let title = self.fresh();
+            let due = self.rng.chance(30).then(|| self.date());
+            blocks.push(Block {
+                origin: None,
+                item: Item {
+                    done: self.rng.chance(10),
+                    title,
+                    due,
+                    notes: String::new(),
+                },
+                style: self.rng.below(4),
+                sub: false,
+            });
+        }
+        self.note(format!("new file {name}: {} lines", blocks.len()));
+        self.new_files.push((name, blocks));
+    }
+
+    /// A list's file removed, the list run once, put back, run, removed
+    /// again and run a minute later: gone on two runs, but not in a row,
+    /// so nothing is deleted.
+    fn flap(&mut self, li: usize) {
+        let dir = self.env.folder();
+        let path = dir.join(&self.lists[li].file);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let id = self.lists[li].id.clone();
+        self.note(format!("flap {}", self.lists[li].file));
+        for gone in [true, false, true, false] {
+            if gone {
+                let _ = std::fs::remove_file(&path);
+            } else if !path.exists() {
+                std::fs::write(&path, &text).unwrap();
+            }
+            let data = self.env.background().unwrap_or_else(|e| self.fail(&e));
+            self.note(format!("run: {}", data["folder"]));
+            if data["folder"]["lists_deleted"] != json!([]) {
+                self.fail(&format!(
+                    "a file away for a moment deleted its list: {}",
+                    data["folder"]
+                ));
+            }
+        }
+        if !truth(&self.env.state).lists.iter().any(|l| l.id == id) {
+            self.fail(&format!("{id} is gone after its file flapped"));
+        }
+        self.rebuild();
+    }
+
+    /// The renamed files and new files as the run will pair them with the
+    /// lists whose files are gone (the library's own [`folder::renames`]):
+    /// unless each renamed file is its own list's alone, the renames are
+    /// undone and the new files not made, so what the run does is plain.
+    fn check_renames(&mut self, live: &Truth) {
+        let missing: Vec<usize> = (0..self.lists.len())
+            .filter(|&i| {
+                let ml = &self.lists[i];
+                (ml.removed || ml.renamed_from.is_some()) && live.lists.iter().any(|l| l.id == ml.id)
+            })
+            .collect();
+        let renamed: Vec<usize> = missing
+            .iter()
+            .copied()
+            .filter(|&i| self.lists[i].renamed_from.is_some())
+            .collect();
+        let items = |blocks: &[Block]| blocks.iter().map(|b| b.item.clone()).collect::<Vec<Item>>();
+        let mut files: Vec<Vec<Item>> = renamed.iter().map(|&i| items(&self.lists[i].blocks)).collect();
+        files.extend(self.new_files.iter().map(|(_, b)| items(b)));
+        let bases: Vec<&[Known]> = missing.iter().map(|&i| self.lists[i].written.as_slice()).collect();
+        let (mut matched, ambiguous) = folder::renames(&bases, &files, |_, _| true);
+        matched.sort();
+        let want: Vec<(usize, usize)> = renamed
+            .iter()
+            .enumerate()
+            .map(|(f, i)| (f, missing.iter().position(|m| m == i).unwrap()))
+            .collect();
+        if matched != want || ambiguous != folder::Ambiguous::default() {
+            self.note(format!("renames and new files undone: {matched:?} {ambiguous:?}"));
+            for ml in &mut self.lists {
+                ml.unrename();
+            }
+            self.new_files.clear();
+        }
     }
 
     /// A Syncthing conflict copy of list `li`'s file: the file as last
@@ -1057,6 +1209,45 @@ impl Case {
                 new.extend(copy.adds.iter().cloned());
             }
         }
+
+        // What the files ask of the lists themselves.
+        let dir = self.env.folder();
+        let in_icloud = |id: &str| t.lists.iter().find(|l| l.id == id);
+        for ml in self.lists.iter().filter(|ml| in_icloud(&ml.id).is_some()) {
+            if self.folder_gone {
+                expect.kept_lists.push(ml.file.clone());
+            } else if ml.renamed_from.is_some() {
+                expect
+                    .renamed
+                    .push((ml.id.clone(), ml.file.trim_end_matches(".md").to_owned()));
+            }
+        }
+        for (name, blocks) in &self.new_files {
+            let items = blocks.iter().map(|b| b.item.clone()).collect();
+            expect.new_lists.insert(name.trim_end_matches(".md").to_owned(), items);
+        }
+        let gone: Vec<&MList> = self
+            .lists
+            .iter()
+            .filter(|ml| ml.removed && in_icloud(&ml.id).is_some() && !self.folder_gone)
+            .collect();
+        let present = self
+            .lists
+            .iter()
+            .any(|ml| !ml.removed && in_icloud(&ml.id).is_some() && dir.join(&ml.file).exists());
+        for ml in &gone {
+            if gone.len() > 1 || !present || in_icloud(&ml.id).is_some_and(|l| l.shared) {
+                expect.kept_lists.push(ml.file.clone());
+                continue;
+            }
+            expect.deleted_lists.push(ml.id.clone());
+            for r in t.live.values().filter(|r| r.list_id == ml.id) {
+                expect.known.insert(r.id.clone(), None);
+            }
+            expect.new.remove(&ml.id);
+            expect.removed.push(ml.file.clone());
+            expect.removed.extend(ml.was.iter().cloned());
+        }
         expect
     }
 
@@ -1102,6 +1293,34 @@ impl Case {
         for r in after.live.values().filter(|r| !before.ids.contains(&r.id)) {
             made.entry(r.list_id.clone()).or_default().push(key(&item_of(r)));
         }
+        let name_of = |id: &str| after.lists.iter().find(|l| l.id == id).map(|l| l.name.clone());
+        for id in &expect.deleted_lists {
+            if let Some(name) = name_of(id) {
+                self.fail(&format!("{id} ({name}) is not deleted, though its file was removed"));
+            }
+        }
+        for (id, name) in &expect.renamed {
+            if name_of(id).as_ref() != Some(name) {
+                self.fail(&format!("{id} is called {:?}, not {name:?} as its file", name_of(id)));
+            }
+        }
+        for (name, items) in &expect.new_lists {
+            let new: Vec<&List> = after
+                .lists
+                .iter()
+                .filter(|l| l.name == *name && !before.lists.iter().any(|b| b.id == l.id))
+                .collect();
+            let [list] = new.as_slice() else {
+                self.fail(&format!("{} new lists called {name:?}, not one", new.len()));
+            };
+            let mut want: Vec<String> = items.iter().map(key).collect();
+            want.sort();
+            let mut got = made.remove(&list.id).unwrap_or_default();
+            got.sort();
+            if got != want {
+                self.fail(&format!("new list {name:?}: expected {want:?}, iCloud made {got:?}"));
+            }
+        }
         for (list, items) in &expect.new {
             let mut want: Vec<String> = items.iter().map(key).collect();
             want.sort();
@@ -1121,7 +1340,11 @@ impl Case {
             let w = w.as_str().unwrap_or("");
             let kept = self.left.iter().chain(&expect.kept);
             let back = self.back.iter().any(|f| w.starts_with(&format!("{f}: came back")));
-            if !back && !kept.clone().any(|f| w.starts_with(&format!("{f}: its list is gone"))) {
+            let put_back = expect
+                .kept_lists
+                .iter()
+                .any(|f| w.starts_with(&format!("{f}: removed, but its list was not deleted")));
+            if !back && !put_back && !kept.clone().any(|f| w.starts_with(&format!("{f}: its list is gone"))) {
                 self.fail(&format!("warning: {w}"));
             }
         }
@@ -1215,6 +1438,7 @@ impl Case {
             }
         };
         let clean = state.lists.keys().collect::<BTreeSet<_>>() == ids
+            && state.creating.is_empty()
             && left == self.left
             && removed == self.removed
             && state.lists.values().all(|ls| {
@@ -1298,6 +1522,8 @@ impl Case {
     fn step(&mut self, i: usize) {
         self.note(format!("--- step {i}"));
         self.back.clear();
+        self.new_files.clear();
+        self.folder_gone = false;
         for _ in 0..self.rng.below(3) {
             self.icloud_op();
         }
@@ -1326,6 +1552,10 @@ impl Case {
                 self.rebuild();
             }
         }
+        if self.rng.chance(5) && self.lists.len() > 1 && self.lists.iter().all(|ml| ml.before.is_none()) {
+            let li = self.rng.below(self.lists.len());
+            self.flap(li);
+        }
         let live = truth(&self.env.state);
         for _ in 0..self.rng.below(5) {
             if self.lists.is_empty() {
@@ -1334,13 +1564,22 @@ impl Case {
             let li = self.rng.below(self.lists.len());
             self.file_op(li);
         }
+        if self.rng.chance(10) {
+            self.new_file_op();
+        }
         for _ in 0..usize::from(self.rng.chance(20)) + usize::from(self.rng.chance(5)) {
             if self.lists.is_empty() {
                 break;
             }
             let li = self.rng.below(self.lists.len());
-            // A copy is read against what the run settles the file was.
-            if live.lists.iter().any(|l| l.id == self.lists[li].id) && self.lists[li].before.is_none() {
+            // A copy is read against what the run settles the file was;
+            // none of a file renamed or removed (its list may go).
+            let ml = &self.lists[li];
+            if live.lists.iter().any(|l| l.id == ml.id)
+                && ml.before.is_none()
+                && ml.renamed_from.is_none()
+                && !ml.removed
+            {
                 // Syncthing brings back the file under a name it had before
                 // its list was renamed, as the phone had changed it.
                 let dir = self.env.folder();
@@ -1371,7 +1610,15 @@ impl Case {
         }
         let now = utc_now();
         let dir = self.env.folder();
+        // A file renamed and then removed is removed under its old name.
+        for ml in self.lists.iter_mut().filter(|ml| ml.removed) {
+            ml.unrename();
+        }
+        self.check_renames(&live);
         for ml in &mut self.lists {
+            if let Some(from) = &ml.renamed_from {
+                std::fs::rename(dir.join(from), dir.join(&ml.file)).unwrap();
+            }
             if ml.edited {
                 let text = ml.text();
                 for b in &ml.blocks {
@@ -1392,9 +1639,20 @@ impl Case {
                 let _ = std::fs::remove_file(dir.join(&ml.file));
             }
         }
+        for (name, blocks) in &self.new_files {
+            let text: String = blocks.iter().map(block_text).collect();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(name), text).unwrap();
+        }
         if self.rng.chance(4) {
             std::fs::remove_dir_all(&dir).unwrap();
             self.note("the folder deleted".to_owned());
+            // Nothing renamed or made: the run finds no file at all.
+            self.folder_gone = true;
+            self.new_files.clear();
+            for ml in &mut self.lists {
+                ml.unrename();
+            }
             // A deleted list's file brought back is gone again, and stays
             // remembered.
             for name in &self.back {
@@ -1412,6 +1670,13 @@ impl Case {
         let before = truth(&self.env.state);
         let expect = self.predict(&before);
         let mut datas = Vec::new();
+        // A list is deleted once its file is gone on two runs: the first
+        // run of the step only finds it gone.
+        if !expect.deleted_lists.is_empty() {
+            let data = self.env.background().unwrap_or_else(|e| self.fail(&e));
+            self.note(format!("run, finding files gone: {}", data["folder"]));
+            datas.push(data);
+        }
         match self.rng.below(100) {
             0..30 => {
                 let nth = 1 + self.rng.below(4);
@@ -1482,6 +1747,9 @@ impl Case {
             && f["written"] == json!([])
             && f["warnings"] == json!([])
             && f["restored"] == json!([])
+            && ["lists_created", "lists_renamed", "lists_deleted", "lists_kept"]
+                .iter()
+                .all(|k| f[k] == json!([]))
             && [&f["added"], &f["edited"], &f["deleted"]]
                 .iter()
                 .all(|v| **v == json!(0));
@@ -1519,6 +1787,9 @@ impl Case {
                 || ls.renaming.is_some()
                 || ls.stuck.is_some()
                 || !ls.unwritten.is_empty()
+                || ls.missing_since.is_some()
+                || ls.retitling.is_some()
+                || ls.deleting.is_some()
                 || std::fs::read_to_string(dir.join(&ls.file)).ok().as_ref() != Some(&ls.text);
             if open {
                 self.fail(&format!("{id} has not settled: {ls:?}"));
@@ -1526,6 +1797,12 @@ impl Case {
             if let Some(w) = ls.was.iter().find(|w| dir.join(w).exists()) {
                 self.fail(&format!("{id}'s old name {w} is in the folder"));
             }
+        }
+        if !state.creating.is_empty() || !state.declined.is_empty() {
+            self.fail(&format!(
+                "folder.json still makes {:?} and declines {:?}",
+                state.creating, state.declined
+            ));
         }
         let left: BTreeSet<String> = state.left.iter().cloned().collect();
         if left != self.left || left.iter().any(|f| !dir.join(f).exists()) {

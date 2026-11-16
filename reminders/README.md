@@ -109,10 +109,15 @@ says what it did, and any file it refused or could not read.
   `today` or `tomorrow` with an optional time (`📅 tomorrow 9:00`), `17:30`,
   or `+30m`/`+2h`/`+3d`; it is rewritten as a date and time.
 - Open reminders come in the list's order, then those completed in the
-  last 7 days. A reorder made in the file is not kept, and lists are not
-  made, renamed or removed from the folder: a file with no list of its
-  name is not read until a list of exactly that name is made in the app,
-  and then its lines are added to it.
+  last 7 days. A reorder made in the file is not kept.
+- The files are the lists, and a file's name is its list's name (the
+  `# Work` heading is only for reading). A new file makes a list of its
+  name, in Apple's default colour, once it has not changed for 10 seconds,
+  and its lines are its reminders. Renaming a file renames its list and
+  keeps its reminders. Removing a file deletes the list and its reminders
+  (to Recently Deleted), and a notification says so.
+- Groups, sections and lists someone shares with you are not in the
+  folder; change them, and share lists, in the app or on an Apple device.
 - A line has no ID. A line whose title changed a little is the same
   reminder; one rewritten beyond recognition is one deleted and one added.
   A new line is a new reminder, even beside one of the same text just
@@ -122,8 +127,16 @@ says what it did, and any file it refused or could not read.
 What keeps a bad file from costing reminders: a file that no longer
 lists more than three reminders that are also most of its list deletes
 none of them; the lines are written back, with a notification (to delete
-that many, use the app). A file found already in the folder only ever
-adds. From one of Syncthing's conflict copies (`Work.sync-conflict-….md`)
+that many, use the app). A removed list file deletes its list only when
+it is gone on two runs in a row at least 50 seconds apart (a file away
+for a moment while an editor saves or Syncthing replaces it costs
+nothing), when no other list file went with it (an emptied or replaced
+folder deletes nothing: remove one list file at a time), when another
+list's file is still in the folder, and when the list is not shared with
+other people; otherwise the file is written back, with a notification
+saying why. A new file whose lines are most of a list whose file is gone
+is that file renamed, never a new list and a deleted one. A file found
+already in the folder only ever adds. From one of Syncthing's conflict copies (`Work.sync-conflict-….md`)
 only ticks and unknown lines are taken, after which the copy is removed.
 The file of a list deleted in iCloud is removed too, with its conflict
 copies (the journal names each), unless it holds changes that were never
@@ -197,7 +210,9 @@ cargo test -p icloud-reminders
 `tests/cli.rs` runs the built command line against the fake: `sync`, the
 folder's files, and notifications (a stand-in `omarchy-notification-send`
 records them). `tests/folder_model.rs` runs seeded random edits to the
-folder's files and to iCloud, Syncthing conflict copies, runs killed
+folder's files and to iCloud, list files made, renamed, removed (one, two
+at once, the whole folder, a shared list's) or away for a moment,
+Syncthing conflict copies, runs killed
 mid-write or at one of the folder's crash points
 (`ICLOUD_REMINDERS_CRASH_AT=<point>[:<n>]`, debug builds only) and two runs
 at once against the fake, and checks that no reminder is lost or made
@@ -244,10 +259,19 @@ protocol notes.
   in, or it floats in the local one. New timed reminders are anchored to
   this computer's zone.
 
-Not done yet: lists cannot be created, renamed or deleted (the Windows
-client found such writes accepted but not shown on Apple devices),
-subtasks show flat, and tags, attachments, recurrence and alarms are not
-read.
+- **Lists** (`src/model.rs`): made, renamed and deleted from the folder's
+  files with the writes
+  [YashwanthKamireddi/Skykeep](https://github.com/YashwanthKamireddi/Skykeep)
+  makes against a real account: a create with `Name` (marked
+  `isEncrypted`, which CloudKit requires), `Deleted`, `IsGroup`, `Color`,
+  `IsLinkedToAccount` and `SortingStyle`, as icloud.com makes a list; an
+  update of `Name`; and for a deletion each reminder's `Deleted = 1`, then
+  the list's. Psavvas/iCloud-Reminders-for-Windows holds back from list
+  writes until it has seen them reach Apple devices; this app has not
+  checked that on a device either.
+
+Not done yet: subtasks show flat, and tags, attachments, recurrence and
+alarms are not read.
 
 ## Releasing
 

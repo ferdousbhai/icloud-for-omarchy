@@ -10,6 +10,19 @@
 //! `Priority`, `Flagged`, `Deleted`, `ParentReminder`, `AlarmIDs`,
 //! `LastModifiedDate` and `ResolutionTokenMap`. Deleting is an update to
 //! `Deleted = 1`, which Apple shows under Recently Deleted.
+//!
+//! pyicloud has no list writes. Those here ([`list_create_op`],
+//! [`list_update_op`]) are YashwanthKamireddi/Skykeep's
+//! (`crates/quince-icloud/src/reminders.rs`: `create_list_cloudkit`,
+//! `rename_list_cloudkit`, `delete_list_cloudkit`), made against a real
+//! account: a list is made as icloud.com makes one (`Name`, `Deleted`,
+//! `IsGroup`, `Color` blue, `IsLinkedToAccount`, `SortingStyle` "manual");
+//! `Name` is written with `isEncrypted` (without it CloudKit refused the
+//! list: "byte values must be base64 encoded"); a rename writes `Name`
+//! alone; a list is deleted by `Deleted = 1` once each of its reminders is
+//! (marking the list alone left them ringing in Calendar on the phone).
+//! Each write carries a `ResolutionTokenMap` raised for what it writes, as
+//! Skykeep's do. A `List` with `IsGroup` is a group (a folder of lists).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -18,7 +31,7 @@ use crate::cloudkit::Record;
 use crate::due::Due;
 use crate::topotext;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct List {
     /// `List/<UUID>`.
     pub id: String,
@@ -30,6 +43,19 @@ pub struct List {
     /// this app does not download; such a list is ordered by due date and
     /// creation only.
     pub order: Vec<String>,
+    /// `IsGroup`: a group of lists in the app, not a list.
+    #[serde(default)]
+    pub group: bool,
+    /// Shared with other people: the record has a `share`. (Lists others
+    /// share with this account are in CloudKit's shared database, which
+    /// this app does not read.)
+    #[serde(default)]
+    pub shared: bool,
+    #[serde(default)]
+    pub change_tag: Option<String>,
+    /// `ResolutionTokenMap` as last read, for [`list_update_op`].
+    #[serde(default)]
+    pub tokens: Option<String>,
 }
 
 impl List {
@@ -61,6 +87,10 @@ impl List {
             name: r.str("Name").ok_or_else(|| bad("no Name"))?.to_owned(),
             color,
             order,
+            group: r.flag("IsGroup"),
+            shared: r.shared,
+            change_tag: r.change_tag.clone(),
+            tokens: r.str("ResolutionTokenMap").map(str::to_owned),
         }))
     }
 }
@@ -355,9 +385,112 @@ pub fn create_op(
     })
 }
 
+/// A list's `Name`, as Apple's records hold it.
+fn list_name(name: &str) -> Value {
+    json!({ "type": "STRING", "value": name, "isEncrypted": true })
+}
+
+/// The `Color` icloud.com gives a new list: blue, as Skykeep measured.
+const NEW_LIST_COLOR: &str = r##"{"red":0,"green":0.47843137254901963,"blue":1,"alpha":1,"colorRGBSpace":2,"daHexString":"#007AFF","ckSymbolicColorName":"blue","daSymbolicColorName":"blue"}"##;
+
+/// The records/modify operation making the list `List/<uuid>` named
+/// `name`, as icloud.com makes one (see the module's notes).
+pub fn list_create_op(uuid: &str, name: &str, replica: &str, now_ms: i64) -> Value {
+    let keys = [
+        "name",
+        "deleted",
+        "isGroup",
+        "color",
+        "isLinkedToAccount",
+        "sortingStyle",
+    ];
+    let tokens = bump_tokens(None, &keys, replica, now_ms).expect("a fresh map");
+    let fields = json!({
+        "Name": list_name(name),
+        "Deleted": field("INT64", 0.into()),
+        "IsGroup": field("INT64", 0.into()),
+        "Color": field("STRING", NEW_LIST_COLOR.into()),
+        "IsLinkedToAccount": field("INT64", 1.into()),
+        "SortingStyle": field("STRING", "manual".into()),
+        "ResolutionTokenMap": field("STRING", tokens.into()),
+    });
+    json!({
+        "operationType": "create",
+        "record": { "recordName": format!("List/{uuid}"), "recordType": "List", "fields": fields },
+    })
+}
+
+/// One change to a list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListChange {
+    Name(String),
+    Deleted,
+}
+
+impl ListChange {
+    /// Whether the list, as `l` has it (`None`: deleted), already is as this
+    /// would make it.
+    pub fn done(&self, l: Option<&List>) -> bool {
+        match (self, l) {
+            (ListChange::Name(n), Some(l)) => l.name == *n,
+            (ListChange::Name(_), None) => false,
+            (ListChange::Deleted, l) => l.is_none(),
+        }
+    }
+}
+
+/// The records/modify operation for a change to `l`, with the change tag
+/// and tokens last read (CloudKit refuses it if the record has changed).
+pub fn list_update_op(l: &List, change: &ListChange, replica: &str, now_ms: i64) -> Result<Value, String> {
+    let bad = |what: &str| format!("{}: {what}", l.id);
+    let tag = l.change_tag.as_deref().ok_or_else(|| bad("no recordChangeTag"))?;
+    let (key, token, value) = match change {
+        ListChange::Name(n) => ("Name", "name", list_name(n)),
+        ListChange::Deleted => ("Deleted", "deleted", field("INT64", 1.into())),
+    };
+    let tokens = bump_tokens(l.tokens.as_deref(), &[token], replica, now_ms).map_err(|e| bad(&e))?;
+    Ok(json!({
+        "operationType": "update",
+        "record": {
+            "recordName": l.id,
+            "recordType": "List",
+            "recordChangeTag": tag,
+            "fields": { (key): value, "ResolutionTokenMap": field("STRING", tokens.into()) },
+        },
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_list_reads_back_as_made_and_its_writes_touch_only_their_field() {
+        let op = list_create_op("L-1", "Hardware", "ME", 7);
+        assert_eq!(op["operationType"], "create");
+        let rec = &op["record"];
+        assert_eq!(rec["fields"]["Name"]["isEncrypted"], true);
+        let mut l = List::from_record(&record(rec.clone())).unwrap().unwrap();
+        assert_eq!((l.id.as_str(), l.name.as_str()), ("List/L-1", "Hardware"));
+        assert_eq!(l.color.as_deref(), Some("#007AFF"));
+        assert!(!l.group && !l.shared);
+        l.change_tag = Some("t".into());
+        let op = list_update_op(&l, &ListChange::Name("Tools".into()), "ME", 8).unwrap();
+        let f = op["record"]["fields"].as_object().unwrap();
+        assert_eq!(f.keys().collect::<Vec<_>>(), ["Name", "ResolutionTokenMap"]);
+        assert_eq!(op["record"]["recordChangeTag"], "t");
+        let tokens: Value = serde_json::from_str(f["ResolutionTokenMap"]["value"].as_str().unwrap()).unwrap();
+        assert_eq!(tokens["map"]["name"]["counter"], 2);
+        assert_eq!(tokens["map"]["color"]["counter"], 1);
+        let op = list_update_op(&l, &ListChange::Deleted, "ME", 8).unwrap();
+        assert_eq!(op["record"]["fields"]["Deleted"]["value"], 1);
+        // A shared list says so; a group is one.
+        let mut v = rec.clone();
+        v["share"] = json!({ "recordName": "Share-1" });
+        v["fields"]["IsGroup"]["value"] = json!(1);
+        let l = List::from_record(&record(v)).unwrap().unwrap();
+        assert!(l.shared && l.group);
+    }
 
     #[test]
     fn a_counter_at_its_maximum_is_an_error() {

@@ -39,10 +39,14 @@ add a line to add, remove a line to delete (more than 3 lines that are
 most of the list are refused and written back), indented lines under one
 are its notes, and the text after 📅 is its due date (2026-10-10,
 \"2026-10-10 17:30\", today, tomorrow, either followed by a time, a time
-alone, or +30m, +2h, +3d). Lists, subtasks, alerts, priority and flags are
-made in the app; a file no list is named after is not read. The timer
-applies a changed file within a minute; sync applies it now and reports
-what it did.
+alone, or +30m, +2h, +3d). The file name is the list's name: a new file
+makes a list (once unchanged for 10 seconds), renaming a file renames its
+list, and removing one deletes its list and its reminders (once gone on two
+runs at least 50 seconds apart; not when another list file went too, the
+folder is empty, or the list is shared: the file is then written back).
+Groups, sections, subtasks, alerts, priority and flags are made in the app.
+The timer applies a changed file within a minute; sync applies it now and
+reports what it did.
 
 A record this version cannot read is skipped, named on stderr (and as
 warning in sync's and background's data), and kept as last synced; the
@@ -96,11 +100,13 @@ enum Command {
     /// to iCloud and the files rewritten as iCloud has them. Exits 1, with
     /// the data, when that step reported a problem: a file put back because
     /// it no longer listed most of its list (folder.restored), or a warning
-    /// (a list that failed, a conflict copy, a file no list reads).
+    /// (a list that failed, a conflict copy, a removed list file written
+    /// back, a new file not made into a list or still settling).
     ///
     /// JSON: {lists, reminders, changed, full, warning?, folder: {added,
-    /// edited, deleted, written, restored: [{list, file, kept}], warnings} |
-    /// null}
+    /// edited, deleted, written, restored: [{list, file, kept}], warnings,
+    /// lists_created: [name], lists_renamed: [{from, to}], lists_deleted:
+    /// [{list, file, reminders}], lists_kept: [{list, file, why}]} | null}
     #[command(after_help = AFTER_HELP)]
     Sync {
         /// Fetch every reminder again, not only the changes.
@@ -118,7 +124,7 @@ enum Command {
     /// A sync that cannot run (signed out, offline) is reported and the
     /// notifications still come from the cache; that exits 0.
     ///
-    /// JSON: {synced, sync_error, notified: [{id, title}], folder: {added, edited, deleted, written, restored, warnings} | null, warning?}
+    /// JSON: {synced, sync_error, notified: [{id, title}], folder: {added, edited, deleted, written, restored, warnings, lists_created, lists_renamed, lists_deleted, lists_kept} | null, warning?}
     #[command(after_help = AFTER_HELP)]
     Background {
         /// Sync even if the last sync is recent.
@@ -195,7 +201,7 @@ impl Cli<'_> {
             return Ok(None);
         };
         let mut state = store.folder().map_err(file)?.unwrap_or_default();
-        let now = jiff::Timestamp::now().to_zoned(self.local.clone());
+        let now = folder::clock().to_zoned(self.local.clone());
         let result = folder::sync(&self.svc, &dir, &mut state, &now);
         store.save_folder(&state).map_err(file)?;
         Ok(Some(result.map_err(cloud_error)?))
@@ -220,19 +226,35 @@ impl Cli<'_> {
                 warning(&format!("could not notify about {}: {e}", r.file));
             }
         }
+        for d in report.iter().flat_map(|r| &r.lists_deleted) {
+            let headline = format!("Deleted list {} and its {} reminders", d.list, d.reminders);
+            let body = format!("Its file {} was removed from the folder.", d.file);
+            if let Err(e) = notify::send(&headline, &body) {
+                warning(&format!("could not notify about {}: {e}", d.file));
+            }
+        }
+        for k in report.iter().flat_map(|r| &r.lists_kept) {
+            let body = format!(
+                "It was removed from the folder, but the list {} was not deleted: {}. The file was written back.",
+                k.list, k.why
+            );
+            if let Err(e) = notify::send(&format!("Reminders: {} put back", k.file), &body) {
+                warning(&format!("could not notify about {}: {e}", k.file));
+            }
+        }
         report
     }
 
     fn sync(&self, full: bool) -> Outcome {
         let report = self.svc.sync(full).map_err(cloud_error)?;
         let mut folder_report = self.folder_step();
-        // A file no list reads, such as one made for a new list: said here,
-        // where someone is waiting for its edits, and not every minute.
-        if let (Some(report), Some(dir)) = (folder_report.as_mut(), folder::default_dir()) {
-            let state = self.svc.store.folder().map_err(file)?.unwrap_or_default();
-            for name in folder::unread(&state, &dir) {
+        // A new file still settling: said here, where someone is waiting
+        // for its list, and not by the timer, which makes it a minute later.
+        for report in folder_report.iter_mut() {
+            for name in std::mem::take(&mut report.waiting) {
                 report.warnings.push(format!(
-                    "{name}: not read, as no list has this name (lists are made in the app; once one of exactly this name is, this file's lines are added to it)"
+                    "{name}: not read yet, as it changed in the last {} seconds; its list is made once it has not (the timer does so within a minute, or sync again)",
+                    folder::SETTLE_MS / 1000
                 ));
             }
         }
@@ -355,6 +377,21 @@ fn folder_json(report: &folder::Report) -> Value {
         .iter()
         .map(|r| json!({ "list": r.list, "file": r.file, "kept": r.kept }))
         .collect();
+    let renamed: Vec<Value> = report
+        .lists_renamed
+        .iter()
+        .map(|(from, to)| json!({ "from": from, "to": to }))
+        .collect();
+    let deleted: Vec<Value> = report
+        .lists_deleted
+        .iter()
+        .map(|d| json!({ "list": d.list, "file": d.file, "reminders": d.reminders }))
+        .collect();
+    let kept: Vec<Value> = report
+        .lists_kept
+        .iter()
+        .map(|k| json!({ "list": k.list, "file": k.file, "why": k.why }))
+        .collect();
     json!({
         "added": report.added,
         "edited": report.edited,
@@ -362,17 +399,30 @@ fn folder_json(report: &folder::Report) -> Value {
         "written": report.written,
         "restored": restored,
         "warnings": report.warnings,
+        "lists_created": report.lists_created,
+        "lists_renamed": renamed,
+        "lists_deleted": deleted,
+        "lists_kept": kept,
     })
 }
 
 fn folder_summary(report: &folder::Report) -> String {
-    format!(
+    let mut text = format!(
         "Folder: {} added, {} edited, {} deleted in iCloud; {} file(s) written",
         report.added,
         report.edited,
         report.deleted,
         report.written.len()
-    )
+    );
+    let (made, renamed, deleted) = (
+        report.lists_created.len(),
+        report.lists_renamed.len(),
+        report.lists_deleted.len(),
+    );
+    if made + renamed + deleted > 0 {
+        text.push_str(&format!("; lists: {made} made, {renamed} renamed, {deleted} deleted"));
+    }
+    text
 }
 
 /// `List/ABC` and `Reminder/ABC` as `ABC`.

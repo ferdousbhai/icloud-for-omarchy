@@ -258,7 +258,8 @@ fn sync_applies_an_edited_file_at_once() {
     );
     assert_eq!(
         v["data"]["folder"],
-        json!({"added": 1, "edited": 1, "deleted": 1, "written": ["Groceries.md"], "restored": [], "warnings": []})
+        json!({"added": 1, "edited": 1, "deleted": 1, "written": ["Groceries.md"], "restored": [], "warnings": [],
+               "lists_created": [], "lists_renamed": [], "lists_deleted": [], "lists_kept": []})
     );
     let mut titles = all_titles(&env, "Groceries");
     titles.sort();
@@ -328,11 +329,40 @@ fn sync_reports_a_refused_removal_with_its_data_and_exit_1() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 }
 
+/// Leaves a file as if written a minute ago: settled.
+fn settle(path: &Path) {
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+}
+
+/// The list operations sent: `(operationType, recordName, fields)`.
+fn list_writes(env: &Env) -> Vec<(String, String, Value)> {
+    env.sent("records/modify")
+        .iter()
+        .flat_map(|m| m["operations"].as_array().unwrap().clone())
+        .filter(|op| op["record"]["recordType"] == "List")
+        .map(|op| {
+            (
+                op["operationType"].as_str().unwrap().to_owned(),
+                op["record"]["recordName"].as_str().unwrap().to_owned(),
+                op["record"]["fields"].clone(),
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn a_file_no_list_has_is_named_by_sync_and_read_once_the_list_is_made() {
+fn a_new_file_makes_a_list_once_it_has_settled() {
     let env = start();
     env.json(&["sync"]);
-    std::fs::write(file_of(&env, "Hardware.md"), "# Hardware\n\n- [ ] Screws\n").unwrap();
+    let path = file_of(&env, "Hardware.md");
+    std::fs::write(&path, "# Hardware\n\n- [ ] Screws\n- [x] Glue\n").unwrap();
+    // Just written: it may still be being written. sync says it waits.
     let out = env.run(&["sync"]);
     assert_eq!(code(&out), 1, "{}", stderr(&out));
     let warnings = envelope(&out.stdout)["data"]["folder"]["warnings"].clone();
@@ -340,18 +370,382 @@ fn a_file_no_list_has_is_named_by_sync_and_read_once_the_list_is_made() {
         warnings[0]
             .as_str()
             .unwrap()
-            .starts_with("Hardware.md: not read, as no list has this name"),
+            .starts_with("Hardware.md: not read yet, as it changed in the last 10 seconds"),
         "{warnings}"
     );
     assert_eq!(env.creates(), 0);
-    // The timer is quiet about it: it would say so every minute.
+    // The timer says nothing about it, and makes it once it has settled.
     assert_eq!(env.json(&["background", "--sync"])["folder"]["warnings"], json!([]));
-    // A list of that name made in the app: the file is its own, and adds.
+    settle(&path);
+    let out = env.json(&["background"]);
+    assert_eq!(out["synced"], true, "a new file syncs at once: {out}");
+    assert_eq!(out["folder"]["lists_created"], json!(["Hardware"]), "{out}");
+    assert_eq!(out["folder"]["added"], 2, "{out}");
+    let mut titles = all_titles(&env, "Hardware");
+    titles.sort();
+    assert_eq!(titles, ["Glue", "Screws"]);
+    assert!(reminder(&env, "Glue").completed);
+    // Made as icloud.com makes one, its name marked encrypted.
+    let writes = list_writes(&env);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    let (op, id, fields) = &writes[0];
+    assert_eq!(op, "create");
+    assert!(id.starts_with("List/"), "{id}");
+    assert_eq!(
+        fields["Name"],
+        json!({"type": "STRING", "value": "Hardware", "isEncrypted": true})
+    );
+    assert_eq!(fields["IsGroup"]["value"], 0);
+    assert_eq!(fields["IsLinkedToAccount"]["value"], 1);
+    assert_eq!(fields["SortingStyle"]["value"], "manual");
+    let (lists, _) = in_icloud(&env);
+    let hardware = lists.iter().find(|l| l.name == "Hardware").unwrap();
+    assert_eq!(hardware.color.as_deref(), Some("#007AFF"));
+    // The file is the list's now, as this program writes it.
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("# Hardware\n\n- [ ] Screws\n"), "{text}");
+    let sent = modifies(&env);
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(modifies(&env), sent, "{out}");
+    assert_eq!(out["folder"]["lists_created"], json!([]));
+}
+
+#[test]
+fn a_new_file_named_like_a_list_makes_none_and_is_said_once() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("groceries.md");
+    std::fs::write(&path, "- [ ] Rice\n").unwrap();
+    settle(&path);
+    let out = env.json(&["background", "--sync"]);
+    let warnings = out["folder"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1
+            && warnings[0]
+                .as_str()
+                .unwrap()
+                .starts_with("groceries.md: no list was made of it, as the list \"Groceries\" has this name"),
+        "{out}"
+    );
+    assert_eq!(env.creates(), 0);
+    // Said once, and no reason to sync every minute.
+    assert_eq!(env.json(&["background", "--sync"])["folder"]["warnings"], json!([]));
+    let state: icloud_reminders::folder::State =
+        serde_json::from_slice(&std::fs::read(env.data().join("folder.json")).unwrap()).unwrap();
+    assert!(!icloud_reminders::folder::pending(&state, &dir));
+    // Renamed to a name of its own, it is a list.
+    let to = dir.join("Rice.md");
+    std::fs::rename(&path, &to).unwrap();
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(out["folder"]["lists_created"], json!(["Rice"]), "{out}");
+    assert_eq!(all_titles(&env, "Rice"), ["Rice"]);
+}
+
+#[test]
+fn a_list_made_in_the_app_takes_a_file_of_its_name_already_there() {
+    let env = start();
+    env.json(&["sync"]);
+    let path = file_of(&env, "Hardware.md");
+    std::fs::write(&path, "# Hardware\n\n- [ ] Screws\n").unwrap();
+    settle(&path);
+    // The phone made the list first: the file is its own, and adds.
     env.state
         .put(fake::list("List/LIST-HARDWARE", "Hardware", &[], "#34C759"));
     let out = env.json(&["sync"]);
     assert_eq!(out["folder"]["added"], 1, "{out}");
+    assert_eq!(out["folder"]["lists_created"], json!([]), "{out}");
     assert_eq!(all_titles(&env, "Hardware"), ["Screws"]);
+    assert_eq!(list_writes(&env), []);
+}
+
+#[test]
+fn a_renamed_file_renames_its_list_and_keeps_its_reminders() {
+    let env = start();
+    let dir = folder(&env);
+    let text = std::fs::read_to_string(dir.join("Groceries.md")).unwrap();
+    std::fs::remove_file(dir.join("Groceries.md")).unwrap();
+    // Renamed on the phone, and Eggs ticked: the heading is not the name.
+    std::fs::write(dir.join("Food.md"), text.replace("- [ ] Eggs", "- [x] Eggs")).unwrap();
+    settle(&dir.join("Food.md"));
+    let out = env.json(&["background"]);
+    assert_eq!(
+        out["folder"]["lists_renamed"],
+        json!([{"from": "Groceries", "to": "Food"}]),
+        "{out}"
+    );
+    assert_eq!(out["folder"]["edited"], 1, "{out}");
+    assert_eq!(
+        (out["folder"]["added"].as_i64(), out["folder"]["deleted"].as_i64()),
+        (Some(0), Some(0)),
+        "{out}"
+    );
+    let writes = list_writes(&env);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].0, "update");
+    assert_eq!(writes[0].1, "List/LIST-GROCERIES");
+    let names: Vec<&String> = writes[0].2.as_object().unwrap().keys().collect();
+    assert_eq!(names, ["Name", "ResolutionTokenMap"]);
+    assert_eq!(writes[0].2["Name"]["value"], "Food");
+    // The same list and reminders, the tick applied.
+    let eggs = reminder(&env, "REM-EGGS");
+    assert!(eggs.completed);
+    assert_eq!(eggs.list_id, "List/LIST-GROCERIES");
+    assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"]);
+    let food = std::fs::read_to_string(dir.join("Food.md")).unwrap();
+    assert!(food.starts_with("# Food\n"), "{food}");
+    let sent = modifies(&env);
+    env.json(&["background", "--sync"]);
+    assert_eq!(modifies(&env), sent);
+}
+
+impl Env {
+    /// `background --sync` with the folder's clock `ms` ahead.
+    fn background_at(&self, ms: i64) -> Value {
+        let out = command_at(&self.base, self.dir.path(), &["background", "--sync", "--json"])
+            .env(icloud_reminders::folder::CLOCK, ms.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        envelope(&out.stdout)["data"].clone()
+    }
+
+    fn list_deleted(&self, id: &str) -> bool {
+        self.state.record(id).unwrap()["fields"]["Deleted"]["value"] == 1
+    }
+}
+
+#[test]
+fn a_removed_file_deletes_its_list_and_reminders_once_gone_on_two_runs_apart() {
+    let env = start();
+    let dir = folder(&env);
+    std::fs::remove_file(dir.join("Groceries.md")).unwrap();
+    // Gone once: nothing yet, and the file is not written back.
+    let out = env.background_at(0);
+    assert_eq!(out["folder"]["lists_deleted"], json!([]), "{out}");
+    assert!(!dir.join("Groceries.md").exists());
+    // Gone again, but not 50 seconds later: still nothing.
+    let out = env.background_at(30_000);
+    assert_eq!(out["folder"]["lists_deleted"], json!([]), "{out}");
+    assert_eq!(modifies(&env), 0);
+    let out = env.background_at(60_000);
+    assert_eq!(
+        out["folder"]["lists_deleted"],
+        json!([{"list": "Groceries", "file": "Groceries.md", "reminders": 2}]),
+        "{out}"
+    );
+    assert!(env.list_deleted("List/LIST-GROCERIES"));
+    for r in ["Reminder/REM-MILK", "Reminder/REM-EGGS"] {
+        assert_eq!(env.state.record(r).unwrap()["fields"]["Deleted"]["value"], 1, "{r}");
+    }
+    // The list last, its Deleted alone.
+    let writes = list_writes(&env);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    let names: Vec<&String> = writes[0].2.as_object().unwrap().keys().collect();
+    assert_eq!(names, ["Deleted", "ResolutionTokenMap"]);
+    let ops = env.sent("records/modify");
+    assert_eq!(ops.last().unwrap()["operations"][0]["record"]["recordType"], "List");
+    let said = env.notifications();
+    assert!(
+        said.iter()
+            .any(|n| n.iter().any(|a| a == "Deleted list Groceries and its 2 reminders")),
+        "{said:?}"
+    );
+    assert_eq!(file_names(&dir), ["Reminders.md"]);
+    assert!(
+        !reminder(&env, "Call the dentist").completed,
+        "the other list is untouched"
+    );
+    let sent = modifies(&env);
+    let out = env.background_at(120_000);
+    assert_eq!(modifies(&env), sent, "{out}");
+    assert_eq!(out["folder"]["warnings"], json!([]), "{out}");
+}
+
+#[test]
+fn a_file_away_for_a_moment_deletes_nothing() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    env.background_at(0);
+    std::fs::write(&path, &text).unwrap();
+    env.background_at(60_000);
+    // Gone again: the time is counted from now, not from the first time.
+    std::fs::remove_file(&path).unwrap();
+    let out = env.background_at(120_000);
+    assert_eq!(out["folder"]["lists_deleted"], json!([]), "{out}");
+    std::fs::write(&path, &text).unwrap();
+    let out = env.background_at(180_000);
+    assert_eq!(out["folder"]["lists_deleted"], json!([]), "{out}");
+    assert_eq!(modifies(&env), 0);
+    assert!(!env.list_deleted("List/LIST-GROCERIES"));
+}
+
+#[test]
+fn files_gone_together_delete_nothing_and_are_written_back() {
+    let env = start();
+    let dir = folder(&env);
+    std::fs::remove_file(dir.join("Groceries.md")).unwrap();
+    std::fs::remove_file(dir.join("Reminders.md")).unwrap();
+    let out = env.run(&["sync"]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let folder = &envelope(&out.stdout)["data"]["folder"];
+    assert_eq!(folder["lists_kept"].as_array().unwrap().len(), 2, "{folder}");
+    assert!(
+        folder["lists_kept"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("2 list files are gone at once"),
+        "{folder}"
+    );
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+    let said = env.notifications();
+    assert!(
+        said.iter()
+            .any(|n| n.iter().any(|a| a == "Reminders: Groceries.md put back")),
+        "{said:?}"
+    );
+    // The whole folder gone: the same.
+    std::fs::remove_dir_all(&dir).unwrap();
+    let out = env.background_at(60_000);
+    assert!(
+        out["folder"]["lists_kept"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("whole folder was gone"),
+        "{out}"
+    );
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+    assert_eq!(modifies(&env), 0);
+}
+
+#[test]
+fn the_last_list_file_and_a_shared_list_s_file_delete_nothing() {
+    let env = start();
+    let dir = folder(&env);
+    env.state.share("List/LIST-GROCERIES");
+    std::fs::remove_file(dir.join("Groceries.md")).unwrap();
+    let out = env.background_at(0);
+    assert!(
+        out["folder"]["lists_kept"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("shared"),
+        "{out}"
+    );
+    assert!(dir.join("Groceries.md").exists());
+    // A list's file alone in the folder is not deleted either.
+    env.state.purge("List/LIST-GROCERIES");
+    env.background_at(60_000);
+    assert_eq!(file_names(&dir), ["Reminders.md"]);
+    std::fs::remove_file(dir.join("Reminders.md")).unwrap();
+    let out = env.background_at(120_000);
+    assert!(
+        out["folder"]["lists_kept"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("no other list's file"),
+        "{out}"
+    );
+    assert!(dir.join("Reminders.md").exists());
+    assert_eq!(modifies(&env), 0);
+}
+
+#[test]
+fn a_group_has_no_file() {
+    let env = start();
+    let mut group = fake::list("List/GROUP", "Home", &[], "#34C759");
+    group["fields"]["IsGroup"] = json!({ "type": "INT64", "value": 1 });
+    env.state.put(group);
+    let dir = folder(&env);
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+}
+
+#[test]
+fn a_list_making_a_run_ended_in_is_made_once() {
+    for point in ["list-create-pending", "list-created"] {
+        let env = start();
+        let dir = folder(&env);
+        let path = dir.join("Hardware.md");
+        std::fs::write(&path, "- [ ] Screws\n").unwrap();
+        settle(&path);
+        env.background_crashing_at(point);
+        let out = env.json(&["background", "--sync"]);
+        assert_eq!(out["folder"]["warnings"], json!([]), "{point}: {out}");
+        assert_eq!(all_titles(&env, "Hardware"), ["Screws"], "{point}");
+        let made = list_writes(&env).iter().filter(|w| w.0 == "create").count();
+        assert_eq!(made, 1, "{point}");
+        assert_eq!(file_names(&dir), ["Groceries.md", "Hardware.md", "Reminders.md"]);
+    }
+    // Killed with the list made but its answer not heard: not made again.
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Hardware.md");
+    std::fs::write(&path, "- [ ] Screws\n").unwrap();
+    settle(&path);
+    let mut child = env.background_held_at_write(1);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    env.release_writes();
+    env.json(&["background", "--sync"]);
+    assert_eq!(list_writes(&env).iter().filter(|w| w.0 == "create").count(), 1);
+    assert_eq!(all_titles(&env, "Hardware"), ["Screws"]);
+}
+
+#[test]
+fn a_list_rename_a_run_ended_in_is_made_once() {
+    for point in ["list-rename-pending", "list-renamed"] {
+        let env = start();
+        let dir = folder(&env);
+        std::fs::rename(dir.join("Groceries.md"), dir.join("Food.md")).unwrap();
+        settle(&dir.join("Food.md"));
+        env.background_crashing_at(point);
+        let out = env.json(&["background", "--sync"]);
+        assert_eq!(out["folder"]["warnings"], json!([]), "{point}: {out}");
+        assert_eq!(file_names(&dir), ["Food.md", "Reminders.md"], "{point}");
+        let mut titles = all_titles(&env, "Food");
+        titles.sort();
+        assert_eq!(titles, ["Eggs", "Milk"], "{point}");
+        assert_eq!(list_writes(&env).iter().filter(|w| w.0 == "create").count(), 0);
+        let sent = modifies(&env);
+        env.json(&["background", "--sync"]);
+        assert_eq!(modifies(&env), sent, "{point}");
+    }
+}
+
+#[test]
+fn a_list_deletion_a_run_ended_in_is_finished() {
+    for point in ["list-delete-pending", "list-reminder-deleted", "list-deleted"] {
+        let env = start();
+        let dir = folder(&env);
+        std::fs::remove_file(dir.join("Groceries.md")).unwrap();
+        env.background_at(0);
+        let out = command_at(&env.base, env.dir.path(), &["background", "--sync"])
+            .env(icloud_reminders::folder::CLOCK, "60000")
+            .env(icloud_reminders::folder::CRASH_AT, point)
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 86, "never reached {point}: {}", stderr(&out));
+        // Finished whatever the file does meanwhile: it is not half done.
+        let out = env.background_at(70_000);
+        assert_eq!(out["folder"]["warnings"], json!([]), "{point}: {out}");
+        assert!(env.list_deleted("List/LIST-GROCERIES"), "{point}");
+        for r in ["Reminder/REM-MILK", "Reminder/REM-EGGS"] {
+            assert_eq!(
+                env.state.record(r).unwrap()["fields"]["Deleted"]["value"],
+                1,
+                "{point}: {r}"
+            );
+        }
+        assert_eq!(file_names(&dir), ["Reminders.md"], "{point}");
+        let said = env.notifications();
+        assert!(
+            said.iter()
+                .any(|n| n.iter().any(|a| a == "Deleted list Groceries and its 2 reminders")),
+            "{point}: {said:?}"
+        );
+    }
 }
 
 #[test]

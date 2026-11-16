@@ -289,6 +289,111 @@ impl<'a> Service<'a> {
             value: live,
         })
     }
+
+    /// Folds what CloudKit answered about one list into the cache, as
+    /// [`Service::cache_written`] does a reminder's.
+    fn list_written(&self, id: &str, live: Option<&List>) -> Option<String> {
+        let store = || -> Result<()> {
+            let _lock = self.store.lock()?;
+            let mut cache = self.cache()?;
+            cache.lists.retain(|l| l.id != id);
+            cache.lists.extend(live.cloned());
+            cache.lists.sort_by_key(|l| l.name.to_lowercase());
+            Ok(self.store.save_cache(&cache)?)
+        };
+        store()
+            .err()
+            .map(|e| format!("saved in iCloud; local cache not updated: {e}"))
+    }
+
+    /// Makes the list `List/<uuid>` named `name` (see
+    /// [`model::list_create_op`]). A caller that records the UUID before
+    /// sending can tell later whether it was made ([`Service::look_up_list`]).
+    pub fn create_list(&self, uuid: &str, name: &str) -> Result<Saved<List>> {
+        let replica = self.store.replica()?;
+        let ck = CloudKit::connect(self.t)?;
+        let records = ck.modify(vec![model::list_create_op(uuid, name, &replica, now_ms())])?;
+        let id = format!("List/{uuid}");
+        let live = saved_list(&id, &records)?
+            .ok_or_else(|| Error::Other(format!("CloudKit answered the new {id} as deleted")))?;
+        Ok(Saved {
+            warning: self.list_written(&id, Some(&live)),
+            value: live,
+        })
+    }
+
+    /// Whether iCloud has ever had the list `id`, as [`Service::look_up`].
+    pub fn look_up_list(&self, id: &str) -> Result<Option<Option<List>>> {
+        let ck = CloudKit::connect(self.t)?;
+        let records = ck.lookup(&[id])?;
+        if records
+            .iter()
+            .any(|r| r.name == id && r.error.as_ref().is_some_and(|(code, _)| code == "NOT_FOUND"))
+        {
+            return Ok(None);
+        }
+        let live = saved_list(id, &records)?;
+        if let Some(w) = self.list_written(id, live.as_ref()) {
+            return Err(Error::Other(w));
+        }
+        Ok(Some(live))
+    }
+
+    /// Writes `change` to the list `l` (as cached); on CloudKit's CONFLICT
+    /// (changed elsewhere since) once more over a fresh copy, unless that
+    /// already has it. Returns the list as saved; `None` once deleted. A
+    /// rename of a list deleted meanwhile is [`Error::Gone`].
+    pub fn update_list(&self, l: &List, change: &model::ListChange) -> Result<Saved<Option<List>>> {
+        let replica = self.store.replica()?;
+        let ck = CloudKit::connect(self.t)?;
+        let write = |l: &List| {
+            let op = model::list_update_op(l, change, &replica, now_ms()).map_err(Error::Other)?;
+            ck.modify(vec![op])
+        };
+        let records = match write(l) {
+            Err(e) if e.is_conflict() || e.is_missing() => {
+                let fresh = saved_list(&l.id, &ck.lookup(&[&l.id])?)?;
+                if change.done(fresh.as_ref()) {
+                    return Ok(Saved {
+                        warning: self.list_written(&l.id, fresh.as_ref()),
+                        value: fresh,
+                    });
+                }
+                match fresh {
+                    Some(fresh) => write(&fresh)?,
+                    None => return Err(Error::Gone(l.name.clone())),
+                }
+            }
+            other => other?,
+        };
+        let live = saved_list(&l.id, &records)?;
+        Ok(Saved {
+            warning: self.list_written(&l.id, live.as_ref()),
+            value: live,
+        })
+    }
+}
+
+/// The list `id` among the records CloudKit answered with, as
+/// [`saved_reminder`]: `None` when deleted or no longer there.
+fn saved_list(id: &str, records: &[Record]) -> Result<Option<List>> {
+    let rec = records
+        .iter()
+        .find(|r| r.name == id)
+        .ok_or_else(|| Error::Other(format!("CloudKit's answer has no record {id}")))?;
+    if let Some((code, reason)) = &rec.error {
+        if code == "NOT_FOUND" {
+            return Ok(None);
+        }
+        return Err(Error::CloudKit {
+            code: code.clone(),
+            reason: reason.clone(),
+        });
+    }
+    if !rec.deleted && !rec.is_type("List") {
+        return Err(Error::Other(format!("{id} is not a list")));
+    }
+    List::from_record(rec).map_err(Error::Other)
 }
 
 /// `ICLOUD_REMINDERS_UUID_ORDER=up|down` (debug builds only) makes each new

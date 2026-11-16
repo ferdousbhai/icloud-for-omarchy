@@ -8,8 +8,12 @@
 //! reminders due around now, and answers the four calls the app makes as
 //! CloudKit web services do: `changes/zone` (by sync token, paged, with
 //! `moreComing`), `records/lookup`, and `records/modify` (partial updates,
-//! change tags, `CONFLICT`, atomic batches). Every request is recorded:
-//! `GET /fake/requests` lists them.
+//! change tags, `CONFLICT`, atomic batches). Lists are made, renamed and
+//! deleted the same way as reminders (a create, an update of `Name`, an
+//! update to `Deleted = 1`), and a list's `Name` is refused without
+//! `isEncrypted`, as Skykeep found CloudKit does (see `src/model.rs`). A
+//! list shared with other people carries a `share` ([`State::share`]).
+//! Every request is recorded: `GET /fake/requests` lists them.
 
 use std::collections::BTreeMap;
 use std::net::TcpListener;
@@ -141,6 +145,15 @@ impl State {
         self.zone.lock().unwrap().records.remove(name);
     }
 
+    /// Shares a list with other people, as the phone's Share List does: the
+    /// record gets a `share`, the CKShare's name.
+    #[allow(dead_code)] // The tests share lists; the example does not.
+    pub fn share(&self, name: &str) {
+        let mut record = self.record(name).expect("a record to share");
+        record["share"] = json!({ "recordName": format!("Share-{name}"), "zoneID": { "zoneName": "Reminders" } });
+        self.put(record);
+    }
+
     /// A record as the server holds it now.
     pub fn record(&self, name: &str) -> Option<Value> {
         self.zone.lock().unwrap().records.get(name).map(|s| s.record.clone())
@@ -258,6 +271,12 @@ impl State {
                 (Some("update"), Some(_)) => None,
                 _ => Some(("BAD_REQUEST", "unsupported operation")),
             };
+            // A list's name sent as plain STRING is taken for raw bytes.
+            let name_field = rec.pointer("/fields/Name");
+            let error = error.or_else(|| {
+                (rec["recordType"] == "List" && name_field.is_some_and(|n| n["isEncrypted"] != true))
+                    .then_some(("BAD_REQUEST", "byte values must be base64 encoded"))
+            });
             errors.push(
                 error.map(|(code, reason)| json!({ "recordName": name, "serverErrorCode": code, "reason": reason })),
             );

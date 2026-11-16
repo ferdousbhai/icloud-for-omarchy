@@ -155,8 +155,7 @@ mod tests {
         c.lists.push(List {
             id: "List/A".into(),
             name: "Groceries".into(),
-            color: None,
-            order: vec![],
+            ..List::default()
         });
         for r in rs {
             c.reminders.insert(r.id.clone(), r);
