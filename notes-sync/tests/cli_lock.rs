@@ -255,3 +255,48 @@ fn vault_info_reports_what_the_app_reads() {
     let inside: Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(inside["notes"], info["notes"]);
 }
+
+/// `pending`, which the Notes app's timer runs every minute: answered while
+/// the open app holds the lock, with no session bus to reach icloud-session
+/// through (so no way to the network), and with a layout 3 vault left where
+/// it is.
+#[test]
+fn pending_needs_no_lock_no_network_and_moves_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(vault.join(".icloud-md/base")).unwrap();
+    std::fs::create_dir_all(vault.join("Notes")).unwrap();
+    std::fs::write(
+        vault.join(".icloud-md/state.json"),
+        r#"{"layoutVersion":3,"titleMode":"in-body","account":{"appleId":"a@example.com","dsid":"1"},"notes":{
+            "id-a":{"file":"Notes/A.md","recordChangeTag":"t","modificationDate":1,"folderRecordName":"DefaultFolder-CloudKit"}},
+          "folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(vault.join(".icloud-md/base/id-a.md"), "body\n").unwrap();
+    std::fs::write(vault.join("Notes/A.md"), "body\n").unwrap();
+    let _app = hold(&lock_path(tmp.path(), &vault), "Notes (pid 4242)");
+    let pending = || {
+        let o = engine(tmp.path())
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent/icloud-notes-test-bus",
+            )
+            .args(["--quiet", "pending"])
+            .arg(&vault)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_slice::<Value>(&o.stdout).unwrap()
+    };
+    assert_eq!(
+        pending(),
+        serde_json::json!({"pending": false, "files": [], "newestChangeMs": null})
+    );
+    std::fs::write(vault.join("Notes/A.md"), "body edited\n").unwrap();
+    let r = pending();
+    assert_eq!(r["pending"], true, "{r}");
+    assert_eq!(r["files"], serde_json::json!(["Notes/A.md"]));
+    assert!(r["newestChangeMs"].as_i64().is_some(), "{r}");
+    assert!(!vault.join(".icloud-notes").exists(), "pending migrated the vault");
+}

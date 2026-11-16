@@ -1192,6 +1192,81 @@ pub fn build_push_plan(
     target_dir: &Path,
     on_status: &mut dyn FnMut(&str),
 ) -> Result<BuildPushPlanResult, Error> {
+    match plan_push(Some(connector), target_dir, on_status)? {
+        Planned::Plan(plan) => Ok(plan),
+        Planned::NeedsRemote(_) => unreachable!("a plan with a connector connects when it needs to"),
+    }
+}
+
+/// What a push would send, found from the vault alone (`pending`). See
+/// [`local_changes`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalChanges {
+    /// Whether a push has anything to send (or a cut-off push to settle).
+    /// A change the plan refuses on its own (conflict markers, an empty new
+    /// file, a note someone else shares, ...) is none: a push would not
+    /// send it either.
+    pub pending: bool,
+    /// The vault-relative note files and folder directories concerned,
+    /// sorted: written, created, moved from and to, deleted, renamed.
+    pub files: Vec<String>,
+    /// The newest modification time (ms since the epoch) among them; a path
+    /// that is gone counts its parent directory's. None when none is on disk.
+    pub newest_change_ms: Option<i64>,
+}
+
+/// Whether the next push has something to send, from the vault alone: the
+/// plan `push --dry-run` makes, stopped where it would first connect to
+/// iCloud (to settle a cut-off push, or to look up the records it changes).
+/// It takes no connector, so it cannot connect; it takes no lock and writes
+/// nothing (a preview's read: a vault that needs migrating is read where it
+/// is). The Notes app's background timer asks this every minute.
+pub fn local_changes(target_dir: &Path) -> Result<LocalChanges, Error> {
+    let planned = without_recording(|| plan_push(None, target_dir, &mut |_| {}))?;
+    let Planned::NeedsRemote(mut files) = planned else {
+        return Ok(LocalChanges::default());
+    };
+    files.sort();
+    files.dedup();
+    let newest_change_ms = files
+        .iter()
+        .filter_map(|file| {
+            let path = target_dir.join(file);
+            let path = if path.exists() {
+                path
+            } else {
+                target_dir.join(note_dir_of(file))
+            };
+            std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+        })
+        .max()
+        .map(|t| match t.duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_millis() as i64,
+            Err(e) => -(e.duration().as_millis() as i64),
+        });
+    Ok(LocalChanges {
+        pending: true,
+        files,
+        newest_change_ms,
+    })
+}
+
+// A return value, moved once: boxing the plan buys nothing.
+#[allow(clippy::large_enum_variant)]
+enum Planned {
+    Plan(BuildPushPlanResult),
+    /// Planning got to where it needs iCloud with no connector: the files
+    /// it would send.
+    NeedsRemote(Vec<String>),
+}
+
+/// [`build_push_plan`]; with no connector, only its local half.
+fn plan_push(
+    connector: Option<&dyn Connector>,
+    target_dir: &Path,
+    on_status: &mut dyn FnMut(&str),
+) -> Result<Planned, Error> {
     // A preview (status, push --dry-run) writes nothing, a migration included:
     // it reads a layout 3 vault where it is.
     let mut state = if recording_suppressed() {
@@ -1212,6 +1287,9 @@ pub fn build_push_plan(
     let mut connected: Option<Remote> = None;
     let mut settled_away: Vec<String> = Vec::new();
     if state.extra.contains_key(PENDING_CREATES_KEY) {
+        let Some(connector) = connector else {
+            return Ok(Planned::NeedsRemote(Vec::new()));
+        };
         let remote = resolve_folder_account(connector, target_dir, state.account.as_ref())?;
         settled_away = settle_pending_creates(&remote.db, target_dir, &mut state)?;
         if !recording_suppressed() {
@@ -1223,7 +1301,7 @@ pub fn build_push_plan(
     // A pull killed while it laid out new folders: its directories are no
     // folders to make (`PENDING_DIRS_KEY`). The next pull finishes it.
     if state.extra.contains_key(PENDING_DIRS_KEY) {
-        return Ok(BuildPushPlanResult {
+        return Ok(Planned::Plan(BuildPushPlanResult {
             state,
             entries: Vec::new(),
             notices: vec![SyncNotice {
@@ -1233,7 +1311,7 @@ pub fn build_push_plan(
                     .into(),
             }],
             remote: connected,
-        });
+        }));
     }
     let mut planning_mutated_state = settle_pending_renames(target_dir, &mut state.notes, false, title_mode)?.changed;
 
@@ -1741,17 +1819,34 @@ pub fn build_push_plan(
     {
         // icloud-md returns before its state write here, even when settling
         // changed something: a later run re-derives it.
-        return Ok(BuildPushPlanResult {
+        return Ok(Planned::Plan(BuildPushPlanResult {
             state,
             entries,
             notices,
             remote: connected,
-        });
+        }));
     }
 
-    let remote = match connected {
-        Some(remote) => remote,
-        None => resolve_folder_account(connector, target_dir, state.account.as_ref())?,
+    let remote = match (connected, connector) {
+        (Some(remote), _) => remote,
+        (None, Some(connector)) => resolve_folder_account(connector, target_dir, state.account.as_ref())?,
+        (None, None) => {
+            let files = update_candidates
+                .iter()
+                .map(|c| c.entry.file.clone())
+                .chain(delete_candidates.iter().map(|(_, e)| e.file.clone()))
+                .chain(create_candidates.iter().map(|c| c.file.clone()))
+                .chain(
+                    ready_moves
+                        .iter()
+                        .flat_map(|m| [m.entry.file.clone(), m.to_file.clone()]),
+                )
+                .chain(folder_plan.folders.iter().map(|f| f.dir_path.clone()))
+                .chain(folder_renames.iter().flat_map(|r| [r.from.clone(), r.to.clone()]))
+                .chain(folder_deletes.iter().map(|(dir, _)| dir.clone()))
+                .collect();
+            return Ok(Planned::NeedsRemote(files));
+        }
     };
     let db = &remote.db;
 
@@ -2296,12 +2391,12 @@ pub fn build_push_plan(
     if planning_mutated_state && !recording_suppressed() {
         write_clone_state(target_dir, &state)?;
     }
-    Ok(BuildPushPlanResult {
+    Ok(Planned::Plan(BuildPushPlanResult {
         state,
         entries,
         notices,
         remote: Some(remote),
-    })
+    }))
 }
 
 /// Whether iCloud has the note in `folder_record_name` already, with the

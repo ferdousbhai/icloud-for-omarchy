@@ -94,9 +94,14 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   local,remote,both,...` or `--all local`; if `.conflicts_unreadable`:
   `recover NOTE --strip|--synced` (backs up first). Ask the user which
   side to keep when it is not obvious.
-- Sync: changes stay local until `sync` (push then pull) or `--push` on the
-  change. Preview first: `push --dry-run` (`.entries`). Also `pull`,
-  `clone`, `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`.
+- Sync: a change (a command's, or your own edit of a file in the vault)
+  reaches iCloud on its own within about a minute while the window is
+  closed (the open window syncs itself), once the file has not been
+  written for 10 seconds. Run `sync` (push then pull), or `--push` on the
+  change, only when it must be in iCloud now or to hear about a refusal
+  (`too_many_deletions`, `push_rejected`), which the timer only logs.
+  Preview: `push --dry-run` (`.entries`). Also `pull`, `clone`,
+  `history NOTE [--records]`, `diff NOTE REF`, `restore NOTE --yes`.
 - `too_many_deletions` (exit 2) from `sync`, `push` or `--push`: most of the
   note files are gone, and nothing was pushed. Show the user
   `push --dry-run`, and only with their yes run `sync --yes`.
@@ -173,12 +178,14 @@ reminder. One file per list, named after it (`Groceries.md`):
 - Read a file just before changing it: writing back an older copy undoes
   what changed since.
 
-The timer applies a changed file within a minute. To apply at once and
-see what happened, run `icloud-reminders --quiet sync`: it syncs with
-iCloud, sends the files' edits and rewrites the files, and reports
-`.folder` = `{added, edited, deleted, written, restored, warnings}`. A
-non-empty `restored` (a refused removal) or `warnings` (a list that failed,
-a conflict copy, a file no list reads) comes with exit 1; tell the user.
+A changed file reaches iCloud on its own within about a minute: no command
+is needed. Run `icloud-reminders --quiet sync` only when the change must be
+in iCloud now or to hear about a refusal, which the timer only logs: it
+syncs with iCloud, sends the files' edits and rewrites the files, and
+reports `.folder` = `{added, edited, deleted, written, restored, warnings}`.
+A non-empty `restored` (a refused removal) or `warnings` (a list that
+failed, a conflict copy, a file no list reads) comes with exit 1; tell the
+user.
 Signed out: exit 3 and the edits wait in the file. Notifications are the
 timer's job, not yours.
 
@@ -201,6 +208,6 @@ icloud-notes --quiet sync && icloud-notes --quiet read "Groceries" | jq -r .body
 icloud-notes --quiet new "Meeting" --folder Work --body "- agenda" --push
 icloud-photos --quiet sync && icloud-photos --ids-only list --album "$ID" | xargs -r icloud-photos --quiet download --out ~/Downloads/album
 icloud-findmy --quiet locate "iPhone" && icloud-findmy --quiet play-sound "iPhone" --yes
-printf -- '- [ ] Call the dentist 📅 tomorrow 9:00\n' >> ~/Documents/Reminders/Reminders.md && icloud-reminders --quiet sync | jq .folder
+printf -- '- [ ] Call the dentist 📅 tomorrow 9:00\n' >> ~/Documents/Reminders/Reminders.md  # in iCloud within a minute
 icloud-contacts --quiet show "ann lee" | jq -r '.phones[0].value'
 ```

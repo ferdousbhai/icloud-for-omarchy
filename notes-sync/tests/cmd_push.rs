@@ -9,8 +9,8 @@ use std::path::Path;
 use icloud_notes_sync::cmd::Error;
 use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution};
 use icloud_notes_sync::cmd::push::{
-    BuildPushPlanResult, FolderRename, PushOptions, apply_remote_merge, build_push_plan, merge_remote_change,
-    plan_folder_dir_changes, run_push_with,
+    BuildPushPlanResult, FolderRename, PushOptions, apply_remote_merge, build_push_plan, local_changes,
+    merge_remote_change, plan_folder_dir_changes, run_push_with,
 };
 use icloud_notes_sync::vault::base::{read_base_copy, write_base_copy};
 use icloud_notes_sync::vault::local::{LocalFileState, local_file_state};
@@ -1091,4 +1091,117 @@ fn notes_put_in_an_attachments_directory_are_reported() {
         "{:?}",
         result.notices
     );
+}
+
+// --- local_changes: what the Notes app's background timer asks every minute
+
+/// Every path under the vault with its contents, to show a check wrote nothing.
+fn snapshot(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.push((p.clone(), Vec::new()));
+                stack.push(p);
+            } else {
+                out.push((p.clone(), std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn local_changes_nothing_to_push_in_a_clean_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &state()).unwrap();
+    write_base_copy(dir.path(), "REC1", "Hello").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", "Hello");
+    let r = local_changes(dir.path()).unwrap();
+    assert!(
+        !r.pending && r.files.is_empty() && r.newest_change_ms.is_none(),
+        "{r:?}"
+    );
+}
+
+/// What push --dry-run would connect for (here: an unbound account) is
+/// pending, found with no connector at all, and without writing a byte.
+#[test]
+fn local_changes_an_edit_is_pending_with_its_file_and_time() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &state()).unwrap();
+    write_base_copy(dir.path(), "REC1", "Hello").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", "Hello edited");
+    let before = snapshot(dir.path());
+    let r = local_changes(dir.path()).unwrap();
+    assert_eq!(snapshot(dir.path()), before, "local_changes wrote to the vault");
+    assert!(r.pending, "{r:?}");
+    assert_eq!(r.files, vec!["Notes/Tracked.md".to_owned()]);
+    let mtime = std::fs::metadata(dir.path().join("Notes/Tracked.md"))
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    assert_eq!(r.newest_change_ms, Some(mtime));
+    assert_unbound(dir.path());
+}
+
+#[test]
+fn local_changes_new_and_deleted_files_and_folders_are_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &state()).unwrap();
+    write_base_copy(dir.path(), "REC1", "Hello").unwrap();
+    // The tracked note's file is gone: a delete, timed by its directory.
+    let r = local_changes(dir.path()).unwrap();
+    assert!(r.pending && r.files == vec!["Notes/Tracked.md".to_owned()], "{r:?}");
+    assert!(r.newest_change_ms.is_some());
+    write_vault_file(dir.path(), "Notes/Tracked.md", "Hello");
+    write_vault_file(dir.path(), "Brand New/Note.md", "Hi");
+    let r = local_changes(dir.path()).unwrap();
+    assert!(r.pending, "{r:?}");
+    assert_eq!(r.files, vec!["Brand New".to_owned(), "Brand New/Note.md".to_owned()]);
+}
+
+/// A change the plan refuses by itself is sent by no push: not pending, so
+/// the timer does not sync for it every minute.
+#[test]
+fn local_changes_a_refused_change_is_not_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    write_clone_state(dir.path(), &state()).unwrap();
+    write_base_copy(dir.path(), "REC1", "Hello").unwrap();
+    write_vault_file(
+        dir.path(),
+        "Notes/Tracked.md",
+        "a\n<<<<<<< local\nb\n=======\nc\n>>>>>>> remote\n",
+    );
+    write_vault_file(dir.path(), "Notes/Empty.md", "");
+    let r = local_changes(dir.path()).unwrap();
+    assert!(!r.pending && r.files.is_empty(), "{r:?}");
+}
+
+/// A push cut off after it created notes leaves them to settle with
+/// iCloud, which the next push does: pending.
+#[test]
+fn local_changes_a_cut_off_push_is_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = state();
+    s.extra.insert("pendingCreates".into(), serde_json::json!({}));
+    write_clone_state(dir.path(), &s).unwrap();
+    write_base_copy(dir.path(), "REC1", "Hello").unwrap();
+    write_vault_file(dir.path(), "Notes/Tracked.md", "Hello");
+    assert!(local_changes(dir.path()).unwrap().pending);
+}
+
+#[test]
+fn local_changes_refuses_a_vault_not_cloned() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        local_changes(dir.path()),
+        Err(Error::NotClonedDirectory { .. })
+    ));
 }

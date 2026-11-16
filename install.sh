@@ -151,9 +151,9 @@ remove_old_repos() {
   done
 }
 
-# The apps' systemd user timers: Notes' background sync (every 15 minutes
-# while Notes is closed) and Reminders' due-time notifications (every
-# minute). Each package enables its timer for every user from their next
+# The apps' systemd user timers: Notes' background sync (every minute
+# while Notes is closed: edits there within a minute, a full sync every 15)
+# and Reminders' due-time notifications (every minute). Each package enables its timer for every user from their next
 # login; this starts it now in the desktop user's systemd, not root's.
 # Usage: start_timer <timer> <what> <is on, ...>
 start_timer() {
@@ -238,7 +238,7 @@ main() {
   fi
 
   if [[ " ${wanted[*]} " == *" icloud-notes "* ]]; then
-    start_timer icloud-notes-background.timer "Background sync" "every 15 minutes while Notes is closed"
+    start_timer icloud-notes-background.timer "Background sync" "every minute while Notes is closed"
   fi
   if [[ " ${wanted[*]} " == *" icloud-reminders "* ]]; then
     start_timer icloud-reminders-background.timer "Reminder notifications" "checked every minute"

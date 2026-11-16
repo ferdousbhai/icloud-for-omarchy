@@ -136,6 +136,14 @@ enum Command {
     },
     /// What the Notes app reads from the vault's state: title mode, default folder, tracked notes (JSON, also in text mode)
     VaultInfo { directory: Option<PathBuf> },
+    /// Whether a push has something to send, from the vault alone: no network, no lock, nothing written
+    #[command(
+        after_help = "data is {\"pending\", \"files\", \"newestChangeMs\"}: whether the next push sends anything \
+                      (a change the plan refuses on its own, such as conflict markers, is not pending), the note \
+                      files and folder directories it concerns, and the newest modification time (ms) among them. \
+                      The Notes app's background timer asks this every minute. Exit 0 either way."
+    )]
+    Pending { directory: Option<PathBuf> },
     /// Diff two snapshots, or one snapshot against the current remote copy
     #[command(
         after_help = "<ref> is a snapshot id (diffed against the current remote copy) or <from>..<to> (two \
@@ -588,6 +596,16 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 plural(info.notes.len(), "note", "notes")
             );
             Response::new(&info, summary).human(text).count(info.notes.len())
+        }
+        Command::Pending { directory } => {
+            let target = resolve_target_dir(directory)?;
+            let r = push::local_changes(&target)?;
+            let summary = if r.pending {
+                format!("Local changes to push: {}", r.files.len())
+            } else {
+                "Nothing to push".to_owned()
+            };
+            Response::new(&r, summary).count(r.files.len()).ids(r.files.clone())
         }
         Command::History {
             file,

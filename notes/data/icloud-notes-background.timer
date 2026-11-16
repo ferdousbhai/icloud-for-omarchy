@@ -1,14 +1,16 @@
 [Unit]
-Description=Sync Notes (icloud-notes) with iCloud every 15 minutes
+Description=Sync Notes (icloud-notes) with iCloud: local edits within a minute, a full sync every 15 minutes
 Documentation=https://github.com/ferdousbhai/icloud-for-omarchy/tree/main/notes#background-sync
 
 [Timer]
 OnBootSec=2min
+# Every minute; the run itself decides whether to sync (see the service).
 # A calendar time, not OnUnitActiveSec: Persistent= only applies to these,
 # and it runs a sync missed while the machine slept as soon as it wakes.
-OnCalendar=*:0/15
+OnCalendar=*:*:00
 Persistent=true
-RandomizedDelaySec=1min
+# "Within a minute" holds: systemd's default accuracy is a minute.
+AccuracySec=5s
 
 [Install]
 WantedBy=timers.target

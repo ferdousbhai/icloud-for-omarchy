@@ -39,6 +39,7 @@ $ icloud-notes-sync history <file>
 $ icloud-notes-sync diff <file> <id>|<from>..<to>
 $ icloud-notes-sync restore <file>
 $ icloud-notes-sync --quiet vault-info
+$ icloud-notes-sync --quiet pending
 ```
 
 Exit codes, the table the other iCloud tools share
@@ -107,7 +108,12 @@ a snapshot a kept epoch names is never dropped. Pruning happens when a
 version is recorded, and touches only that note's directories. Recording
 reads only the latest snapshot's file. status and push --dry-run record no
 history. `vault-info` prints what the app reads from the vault's state,
-`stateDir` included. In the vault Notes syncs (`~/Documents/Notes`),
+`stateDir` included. `pending` says whether the next push has anything to
+send, `{pending, files, newestChangeMs}`: the plan `push --dry-run` makes,
+stopped where it would first connect to iCloud, so it needs no sign-in, no
+network and no lock and writes nothing (`local_changes` in `cmd/push.rs`
+takes no connector at all). The app's background timer asks it every
+minute. In the vault Notes syncs (`~/Documents/Notes`),
 use `icloud-notes` (see [docs/CLI.md](../docs/CLI.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the

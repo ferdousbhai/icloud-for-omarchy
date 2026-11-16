@@ -15,7 +15,9 @@
 #include "fake_session.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
@@ -25,6 +27,9 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThread>
+
+#include <fcntl.h>
+#include <sys/stat.h>
 
 namespace {
 
@@ -217,6 +222,38 @@ int main(int argc, char *argv[])
     fake.dsid = QStringLiteral("1006081438");
     check(fake.claimName(), "cli fake icloud-session owns the bus name");
     seedVault();
+
+    // ---- the background timer's choice each minute -------------------------
+    {
+        const qint64 now = 1'800'000'000'000;
+        const auto step = [&](qint64 lastRunAgo, bool lastOk, const QString &lastKey, bool pending, qint64 changedAgo,
+                              const QString &key = QStringLiteral("a.md\n1")) {
+            return backgroundStep(now, BackgroundRecord{ lastRunAgo < 0 ? 0 : now - lastRunAgo, lastOk, lastKey },
+                                  LocalChanges{ pending, changedAgo < 0 ? 0 : now - changedAgo, key });
+        };
+        constexpr qint64 min = 60 * 1000;
+        const QString none;
+        check(step(-1, true, none, false, -1) == BackgroundStep::Sync, "background step: never run: sync");
+        check(step(15 * min, true, none, false, -1) == BackgroundStep::Sync
+                  && step(20 * min, false, none, false, -1) == BackgroundStep::Sync,
+              "background step: the last run 15 minutes old (failed or not): sync");
+        check(step(2 * min, true, none, false, -1) == BackgroundStep::Skip, "background step: nothing pending, fresh: skip");
+        check(step(2 * min, true, none, true, 30 * 1000) == BackgroundStep::Sync, "background step: pending, the last run ok: sync");
+        check(step(2 * min, false, none, true, 30 * 1000) == BackgroundStep::Skip,
+              "background step: pending, the last run failed: skip until its turn");
+        check(step(2 * min, true, QStringLiteral("a.md\n1"), true, 30 * 1000) == BackgroundStep::Skip,
+              "background step: the changes the last run was for: skip");
+        check(step(2 * min, true, none, true, 9 * 1000) == BackgroundStep::Skip
+                  && step(20 * min, true, none, true, 9 * 1000) == BackgroundStep::Skip
+                  && step(2 * min, true, none, true, kBackgroundSettleMs) == BackgroundStep::Sync,
+              "background step: a file modified in the last 10 s: skip, even when a sync is due");
+        check(step(2 * min, true, none, true, -1) == BackgroundStep::Sync,
+              "background step: pending with no time (a cut-off push to settle): sync");
+        check(backgroundStep(now, BackgroundRecord{ now - 2 * min, true, none }, LocalChanges{ true, now + 5 * min, QStringLiteral("k") })
+                      == BackgroundStep::Sync
+                  && backgroundStep(now, BackgroundRecord{ now + 5 * min, true, none }, LocalChanges{}) == BackgroundStep::Sync,
+              "background step: times ahead of the clock neither settle nor postpone for good");
+    }
 
     // ---- help, usage, exit codes -------------------------------------------
     {
@@ -915,6 +952,14 @@ int main(int argc, char *argv[])
                       && both.error().value(QStringLiteral("message")).toString() == QStringLiteral("stub pull failed with session_rejected")
                       && !both.out.contains("icloud-session was told") && fake.reportCalls == 0,
                   "cli sync push 4xx then pull session_rejected: session_rejected, exit 3, nobody told");
+            // A background minute with a sync due: no record of an earlier
+            // run, and nothing in the vault just written (that waits 10 s).
+            QFile::remove(g_vault + QStringLiteral("/.icloud-notes/background.json"));
+            const timespec minuteAgo{ QDateTime::currentSecsSinceEpoch() - 60, 0 };
+            const timespec times[2] = { minuteAgo, minuteAgo };
+            for (QDirIterator it(g_vault, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories); it.hasNext();)
+                utimensat(AT_FDCWD, QFile::encodeName(it.next()).constData(), times, 0);
+            utimensat(AT_FDCWD, QFile::encodeName(g_vault).constData(), times, 0);
             const Run bg = cli({ QStringLiteral("--as-sync") }, pushThenRejected);
             check(bg.code == 1 && bg.out.contains("Apple refused the iCloud session icloud-session holds")
                       && !bg.out.contains("icloud-session was told"),

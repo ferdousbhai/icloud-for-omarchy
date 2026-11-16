@@ -15,6 +15,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
+#include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
 #include <QThread>
@@ -1846,13 +1848,100 @@ int cliMain(int argc, char *argv[])
     return runCommand(a, *spec);
 }
 
+namespace {
+
+// Beside the engine's state: what the last background run did.
+QString backgroundRecordPath()
+{
+    return NotesBackend::stateDir() + QStringLiteral("/background.json");
+}
+
+BackgroundRecord readBackgroundRecord()
+{
+    BackgroundRecord r;
+    QFile f(backgroundRecordPath());
+    if (!f.open(QIODevice::ReadOnly))
+        return r;
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    r.lastRunMs = o.value(QStringLiteral("lastRunMs")).toInteger();
+    r.lastOk = o.value(QStringLiteral("lastOk")).toBool(true);
+    r.pendingKey = o.value(QStringLiteral("pendingKey")).toString();
+    return r;
+}
+
+void writeBackgroundRecord(const BackgroundRecord &r)
+{
+    QSaveFile f(backgroundRecordPath());
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+    f.write(QJsonDocument(QJsonObject{ { QStringLiteral("lastRunMs"), r.lastRunMs },
+                                       { QStringLiteral("lastOk"), r.lastOk },
+                                       { QStringLiteral("pendingKey"), r.pendingKey } })
+                .toJson(QJsonDocument::Compact));
+    f.commit();
+}
+
+// `icloud-notes-sync --quiet pending VAULT`: the push plan from the vault
+// alone, with no connection (the engine has none to make it) and no lock.
+// No answer (no engine, a vault it refuses) is nothing pending: the
+// 15-minute sync then reports what is wrong.
+LocalChanges localChanges()
+{
+    LocalChanges c;
+    const QString tool = NotesBackend::syncToolPath();
+    if (tool.isEmpty())
+        return c;
+    QProcess engine;
+    engine.start(tool, { QStringLiteral("--quiet"), QStringLiteral("pending"), QFileInfo(NotesBackend::rootPath()).absoluteFilePath() });
+    if (!engine.waitForFinished(60000) || engine.exitStatus() != QProcess::NormalExit || engine.exitCode() != 0) {
+        if (engine.state() != QProcess::NotRunning) {
+            engine.kill();
+            engine.waitForFinished();
+        }
+        return c;
+    }
+    const QJsonObject o = QJsonDocument::fromJson(engine.readAllStandardOutput()).object();
+    c.pending = o.value(QStringLiteral("pending")).toBool();
+    c.newestChangeMs = o.value(QStringLiteral("newestChangeMs")).toInteger();
+    QStringList files;
+    for (const QJsonValue &v : o.value(QStringLiteral("files")).toArray())
+        files << v.toString();
+    c.key = files.join(u'\n') + u'\n' + QString::number(c.newestChangeMs);
+    return c;
+}
+
+} // namespace
+
+BackgroundStep backgroundStep(qint64 nowMs, const BackgroundRecord &last, const LocalChanges &changes)
+{
+    // A time ahead of the clock (skew, a copied file) is no edit in progress.
+    const qint64 age = nowMs - changes.newestChangeMs;
+    if (changes.pending && changes.newestChangeMs > 0 && age >= 0 && age < kBackgroundSettleMs)
+        return BackgroundStep::Skip;
+    // A last run in the future is a clock set back: due, not skipped for good.
+    if (last.lastRunMs <= 0 || nowMs - last.lastRunMs >= kBackgroundFullSyncMs || nowMs < last.lastRunMs)
+        return BackgroundStep::Sync;
+    if (changes.pending && last.lastOk && changes.key != last.pendingKey)
+        return BackgroundStep::Sync;
+    return BackgroundStep::Skip;
+}
+
 int runBackgroundSync(QTextStream &log)
 {
     const QString vault = NotesBackend::rootPath();
-    if (!NotesBackend::vaultCloned()) {
-        log << "No notes cloned at " << vault << "; nothing to sync.\n";
+    // Asked every minute until there is one: nothing to say.
+    if (!NotesBackend::vaultCloned())
         return kExitOk;
-    }
+    const LocalChanges changes = localChanges();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (backgroundStep(now, readBackgroundRecord(), changes) == BackgroundStep::Skip)
+        return kExitOk;
+    BackgroundRecord record{ now, true, changes.pending ? changes.key : QString() };
+    const auto done = [&record](bool ok, int exit) {
+        record.lastOk = ok;
+        writeBackgroundRecord(record);
+        return exit;
+    };
     // Never waits for the lock: whoever holds it syncs this vault already.
     NotesBackend b(nullptr, NotesBackend::Role::Background);
     switch (b.lockVault()) {
@@ -1860,10 +1949,10 @@ int runBackgroundSync(QTextStream &log)
         break;
     case VaultLock::Busy:
         log << "Notes is open (it syncs on its own) or another sync is running (" << b.lockHolder() << "); skipped.\n";
-        return kExitOk;
+        return done(true, kExitOk);
     case VaultLock::Failed:
         log << "Could not open the sync lock " << NotesBackend::lockPath() << "; not syncing.\n";
-        return kExitError;
+        return done(false, kExitError);
     }
     const SyncOutcome sync = runSync(b, QStringLiteral("sync"));
     // Nothing ran: signed out or the sign-in unknown is a skip (the timer
@@ -1872,22 +1961,22 @@ int runBackgroundSync(QTextStream &log)
         const Failure &f = *sync.failure;
         const bool skip = f.code == u"sign_in_required" || f.code == u"session_service";
         log << f.message << (skip ? QStringLiteral("; skipped.") : QStringLiteral(" (%1)").arg(f.hint)) << '\n';
-        return skip ? kExitOk : kExitError;
+        return done(false, skip ? kExitOk : kExitError);
     }
     // No network: one line, and a skip like signed out (the timer tries again).
     if (sync.failure && (sync.failure->code == u"offline" || sync.failure->code == u"network")) {
         log << sync.failure->message << "; skipped, the next sync tries again.\n";
-        return kExitOk;
+        return done(false, kExitOk);
     }
     log << sync.text << '\n';
     if (sync.failure && sync.failure->code == u"sign_in_required") {
         log << "iCloud refused the sign-in; icloud-session was told. Sync paused until you sign in.\n";
-        return kExitError;
+        return done(false, kExitError);
     }
     if (sync.failure && sync.failure->code == u"session_rejected") {
         log << "Apple refused the iCloud session icloud-session holds; sign in again (" << sync.failure->hint << ").\n";
-        return kExitError;
+        return done(false, kExitError);
     }
     log << (sync.failure ? "Sync failed for " : "Synced ") << vault << ".\n";
-    return sync.failure ? kExitError : kExitOk;
+    return done(!sync.failure, sync.failure ? kExitError : kExitOk);
 }

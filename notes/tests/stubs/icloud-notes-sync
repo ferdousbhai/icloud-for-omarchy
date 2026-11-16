@@ -14,7 +14,7 @@
 # is "error: ..." / "hint: ..." on stderr. Progress and notices go to
 # stderr. status, push --dry-run and diff report their changes in the
 # result and exit 0, a sign-in required exits 3, a usage error 2, offline 5
-# (the codes every iCloud tool shares). vault-info is the real engine's
+# (the codes every iCloud tool shares). vault-info and pending are the real engine's
 # ($ICLOUD_NOTES_SYNC_REAL, which bin/test builds): it reads the test's
 # vault as the app would.
 #
@@ -137,6 +137,9 @@ if [ "$1" = "vault-info" ]; then
   [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG:-}" ] && echo "vault-info" >> "$ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG"
   # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL: vault-info gives no answer (as a crash would).
   [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL:-}" ] && exit 1
+  exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "${orig[@]}"
+elif [ "$1" = "pending" ]; then
+  # The real engine's too: it reads the test's vault, and never connects.
   exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "${orig[@]}"
 elif [ "$1" = "sync" ]; then
   # Push, then pull, in one run: {push, pull, vault_info}, each half

@@ -1633,10 +1633,16 @@ int main(int argc, char *argv[])
     const QString vaultPath = testVault();
     const QString bgVault = scratch.path() + QStringLiteral("/background");
     qputenv("ICLOUD_NOTES_VAULT", bgVault.toUtf8());
-    auto backgroundSync = [](QString &output) {
+    // The timer's minute, as it comes (backgroundTick), and one with a sync
+    // due (backgroundSync: no record of an earlier run).
+    auto backgroundTick = [](QString &output) {
         output.clear();
         QTextStream out(&output);
         return runBackgroundSync(out);
+    };
+    auto backgroundSync = [&](QString &output) {
+        QFile::remove(NotesBackend::stateDir() + QStringLiteral("/background.json"));
+        return backgroundTick(output);
     };
     QString bgOut;
     check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync")),
@@ -1684,6 +1690,57 @@ int main(int argc, char *argv[])
     }
     check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("stub pull ok")),
           "background: runs again once the app is closed");
+    {
+        // Every minute: a sync when the last is 15 minutes old, sooner for
+        // a local change to push (what the real engine's `pending` finds),
+        // never for a file still being written, nor again for the same
+        // changes, nor after a failed run until its turn.
+        const QString recordPath = NotesBackend::stateDir() + QStringLiteral("/background.json");
+        const auto record = [&] {
+            QFile f(recordPath);
+            return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object() : QJsonObject();
+        };
+        const auto synced = [&] { return bgOut.count(QStringLiteral("$ icloud-notes-sync --quiet sync\n")) == 1; };
+        const auto age = [&](const QString &rel, int seconds) { // the file as last written that long ago
+            QFile f(bgVault + u'/' + rel);
+            return f.open(QIODevice::ReadWrite)
+                && f.setFileTime(QDateTime::currentDateTime().addSecs(-seconds), QFileDevice::FileModificationTime);
+        };
+        const qint64 before = QDateTime::currentMSecsSinceEpoch();
+        check(backgroundSync(bgOut) == 0 && synced() && record().value(QStringLiteral("lastOk")).toBool()
+                  && record().value(QStringLiteral("lastRunMs")).toInteger() >= before,
+              "background: a due run syncs and records it");
+        check(backgroundTick(bgOut) == 0 && bgOut.isEmpty(), "background: nothing to push, synced just now: nothing, not a line");
+        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi\n"), bgVault);
+        check(backgroundTick(bgOut) == 0 && bgOut.isEmpty(), "background: a file written in the last 10 s waits for the next minute");
+        check(age(QStringLiteral("Loose.md"), 30) && backgroundTick(bgOut) == 0 && synced()
+                  && record().value(QStringLiteral("pendingKey")).toString().startsWith(QStringLiteral("Loose.md\n")),
+              "background: a settled local change is pushed at once");
+        check(backgroundTick(bgOut) == 0 && bgOut.isEmpty(),
+              "background: the same changes, still there after their sync (refused, say), wait for the 15-minute sync");
+        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi again\n"), bgVault);
+        check(age(QStringLiteral("Loose.md"), 20) && backgroundTick(bgOut) == 0 && synced(),
+              "background: edited again, it is pushed again");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
+        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi offline\n"), bgVault);
+        check(age(QStringLiteral("Loose.md"), 20) && backgroundTick(bgOut) == 0 && bgOut.contains(QStringLiteral("skipped"))
+                  && !record().value(QStringLiteral("lastOk")).toBool(),
+              "background: offline is recorded as a failed run");
+        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi later\n"), bgVault);
+        check(age(QStringLiteral("Loose.md"), 20) && backgroundTick(bgOut) == 0 && bgOut.isEmpty(),
+              "background: after a failed run a local change waits its turn");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
+        QJsonObject stale = record();
+        stale.insert(QStringLiteral("lastRunMs"), QDateTime::currentMSecsSinceEpoch() - kBackgroundFullSyncMs);
+        {
+            QFile f(recordPath);
+            check(f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(QJsonDocument(stale).toJson()) > 0,
+                  "background: the record set 15 minutes back");
+        }
+        check(backgroundTick(bgOut) == 0 && synced() && record().value(QStringLiteral("lastOk")).toBool(),
+              "background: 15 minutes on, it syncs whatever the last run did");
+        QFile::remove(bgVault + QStringLiteral("/Loose.md"));
+    }
     // No network: one line, exit 0 (the timer tries again), not a failure.
     qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
     check(backgroundSync(bgOut) == 0 && bgOut.count(u'\n') == 1 && bgOut.contains(QStringLiteral("could not be reached"))
