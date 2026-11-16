@@ -95,9 +95,8 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   `recover NOTE --strip|--synced` (backs up first). Ask the user which
   side to keep when it is not obvious.
 - Sync: a change (a command's, or your own edit of a file in the vault)
-  reaches iCloud on its own within about a minute while the window is
-  closed (the open window syncs itself), once the file has not been
-  written for 10 seconds. Run `sync` (push then pull), or `--push` on the
+  reaches iCloud on its own within about a minute, window open or closed,
+  once the file has not been written for 10 seconds. Run `sync` (push then pull), or `--push` on the
   change, only when it must be in iCloud now or to hear about a refusal
   (`too_many_deletions`, `push_rejected`), which the timer only logs.
   Preview: `push --dry-run` (`.entries`). Also `pull`, `clone`,

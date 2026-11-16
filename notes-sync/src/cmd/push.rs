@@ -1198,7 +1198,7 @@ pub fn build_push_plan(
     }
 }
 
-/// What a push would send, found from the vault alone (`pending`). See
+/// What a push would send, found from the vault alone (`background`). See
 /// [`local_changes`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1221,7 +1221,7 @@ pub struct LocalChanges {
 /// iCloud (to settle a cut-off push, or to look up the records it changes).
 /// It takes no connector, so it cannot connect; it takes no lock and writes
 /// nothing (a preview's read: a vault that needs migrating is read where it
-/// is). The Notes app's background timer asks this every minute.
+/// is). `background` asks this every minute (`cmd::background`).
 pub fn local_changes(target_dir: &Path) -> Result<LocalChanges, Error> {
     let planned = without_recording(|| plan_push(None, target_dir, &mut |_| {}))?;
     let Planned::NeedsRemote(mut files) = planned else {

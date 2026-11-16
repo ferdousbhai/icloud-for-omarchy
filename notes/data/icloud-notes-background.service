@@ -4,12 +4,13 @@ Documentation=https://github.com/ferdousbhai/icloud-for-omarchy/tree/main/notes#
 
 [Service]
 Type=oneshot
-# Push, then pull, with no window: when the last run is 15 minutes old, and
-# sooner when a note file or folder changed here (asked of the vault alone,
-# with icloud-notes-sync pending: no network), once nothing of it changed
-# for 10 seconds, unless the last run failed. A minute with nothing to do
-# logs nothing. Skips (and succeeds) when Notes is open, which syncs on its
-# own, or when nobody is signed in to icloud-session.
+# The sync engine's step (icloud-notes-sync background), the one the open
+# window runs too: push, then pull, with no window, when the last sync is 15
+# minutes old, and sooner when a note file or folder changed here since the
+# last sync started (asked of the vault alone: no network), once nothing of
+# it changed for 10 seconds. A minute with nothing to do logs nothing.
+# Skips (and succeeds) when Notes is open, which runs the step itself, or
+# when nobody is signed in to icloud-session.
 ExecStart=/usr/bin/icloud-notes --sync
 # The app waits for a running sync before syncing itself; never for long.
 TimeoutStartSec=3min

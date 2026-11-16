@@ -77,7 +77,7 @@ public:
         if (!waitUntil([&] { return js(QStringLiteral("root.started")).toBool() && !backend->syncRunning(); }))
             return false;
         // Nothing syncs on its own between the steps.
-        js(QStringLiteral("autosave.interval = 1000000000, autoPush.interval = 1000000000, poll.interval = 1000000000"));
+        js(QStringLiteral("autosave.interval = 1000000000, syncTick.interval = 1000000000, syncSoon.interval = 1000000000"));
         return true;
     }
 

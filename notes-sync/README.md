@@ -39,7 +39,7 @@ $ icloud-notes-sync history <file>
 $ icloud-notes-sync diff <file> <id>|<from>..<to>
 $ icloud-notes-sync restore <file>
 $ icloud-notes-sync --quiet vault-info
-$ icloud-notes-sync --quiet pending
+$ icloud-notes-sync --quiet background [--every SECS]
 ```
 
 Exit codes, the table the other iCloud tools share
@@ -108,12 +108,20 @@ a snapshot a kept epoch names is never dropped. Pruning happens when a
 version is recorded, and touches only that note's directories. Recording
 reads only the latest snapshot's file. status and push --dry-run record no
 history. `vault-info` prints what the app reads from the vault's state,
-`stateDir` included. `pending` says whether the next push has anything to
-send, `{pending, files, newestChangeMs}`: the plan `push --dry-run` makes,
-stopped where it would first connect to iCloud, so it needs no sign-in, no
-network and no lock and writes nothing (`local_changes` in `cmd/push.rs`
-takes no connector at all). The app's background timer asks it every
-minute. In the vault Notes syncs (`~/Documents/Notes`),
+`stateDir` included. `background` is what the Notes app runs every
+minute, from its window while it is open and from its systemd timer while
+it is closed: one decision (`cmd/background.rs`) and then a `sync`, or
+nothing. It syncs when the last sync is `--every` old (default 15
+minutes), or sooner for local changes made since the last sync started,
+never while one of them is younger than 10 seconds; a change a sync left
+behind (refused, or the sync failed) waits for the next due sync or a new
+edit. The local check is the plan `push --dry-run` makes, stopped where it
+would first connect to iCloud (`local_changes` in `cmd/push.rs` takes no
+connector at all), so a run with nothing due needs no sign-in, no network
+and no lock and writes nothing. A due sync first asks icloud-session
+whether anyone is signed in, and skips when not. Every sync (`sync` or
+`background`) records when it started and whether it worked in
+`background.json` beside the state. In the vault Notes syncs (`~/Documents/Notes`),
 use `icloud-notes` (see [docs/CLI.md](../docs/CLI.md)).
 
 The app finds the engine at `$ICLOUD_NOTES_SYNC_BIN` when that is set (the

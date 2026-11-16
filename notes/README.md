@@ -149,19 +149,28 @@ without asking.
 
 Sync is automatic, like Notes:
 
-- On launch, and whenever you switch to the window (at most once a
-  minute), the app pushes whatever changed locally
-  (including edits made by other programs, or while it was closed) and
-  then pulls what changed in iCloud. Opening a note, clicking into it, or
-  starting to type in it does the same when the last pull is over a
-  minute old, and the note waits the few seconds until it is in, so you
-  edit the latest copy. Edits made on both sides merge automatically
-  when they don't overlap.
-- While the window stays open it keeps checking: every minute while it
-  is the active window, every 15 minutes while it is not. iCloud does not
-  notify a web client of changes, so an edit on your phone shows up here
-  within about a minute. After a failed pull it waits longer each time,
-  up to 15 minutes, and goes back to every minute once a pull works.
+- One rule decides when Notes syncs, whether the window is open or not:
+  the sync engine's (`icloud-notes-sync background`), which the window
+  asks every minute while it is open and the
+  [background timer](#background-sync) asks while it is closed. It
+  pushes whatever changed locally, in any folder, from this window or
+  any other program, once nothing of it changed for 10 seconds, and then
+  pulls what changed in iCloud; and it syncs when the last sync is a
+  minute old while the window is the active one (15 minutes while it is
+  not). An edit you make here is asked about about 12 seconds after it
+  is saved, so it reaches iCloud within about 15 seconds of when you
+  stop typing, and a burst of typing becomes one push; an edit made by
+  another program goes up within about a minute.
+- On launch, and whenever you switch to the window, the same step runs,
+  so a sync over a minute old is caught up at once. Opening a note,
+  clicking into it, or starting to type in it does the same, and the
+  note waits the few seconds until it is in, so you edit the latest
+  copy. Edits made on both sides merge automatically when they don't
+  overlap.
+- iCloud does not notify a web client of changes, so an edit on your
+  phone shows up here within about a minute while the window is active.
+  After a failed pull it waits longer each time, up to 15 minutes, and
+  goes back to every minute once a pull works.
 - Each sync is one run of the sync engine (push, then pull, over one
   connection), and the note list is re-read once afterwards, only when
   the sync changed something. Without a network the status line just
@@ -186,9 +195,9 @@ Sync is automatic, like Notes:
   iCloud, and **Edit as text** shows the raw markers. Before either
   change the note is copied as it was to `.icloud-notes/conflict-backups/`
   in the notes folder, which is never synced.
-- Edits made in the app are pushed sooner, about 20 seconds after you
-  stop making them, so a burst of typing becomes one push. Nothing waits
-  for a click.
+- A change a sync could not send (iCloud refused it, or the sync
+  failed) is not sent again every minute: it waits for the next due sync,
+  or for a new edit. Nothing waits for a click.
 - What keeps this safe is icloud-notes-sync itself: a note it cannot push safely
   (an attachment link changed or moved, a reordered table, an unresolved conflict) is refused,
   not mangled, and a deleted note moves to Recently Deleted in iCloud
@@ -221,35 +230,38 @@ Sync is automatic, like Notes:
 
 While Notes is closed, a systemd user timer runs `icloud-notes --sync`
 every minute (from two minutes after boot), the same way Reminders keeps
-`~/Documents/Reminders` in step. Each run syncs (the same push-then-pull
-the app does, with no window) when:
+`~/Documents/Reminders` in step. Each run asks the sync engine
+(`icloud-notes-sync background`), the same step the open window runs
+every minute, which syncs (the same push-then-pull the app does, with no
+window) when:
 
-- the last run is 15 minutes old: edits made elsewhere reach this
+- the last sync is 15 minutes old: edits made elsewhere reach this
   computer, so a note is less likely to be hours stale when you next
   edit it;
-- or sooner, when a note file or folder in the vault changed (an editor,
-  an agent, `mv`/`rm`/`mkdir`) and a push would send it: it reaches iCloud
-  within about a minute, with no command run. The check
-  (`icloud-notes-sync pending`) reads only the vault, never the network,
-  and a change a push would refuse anyway (conflict markers, an empty new
-  file) does not count.
+- or sooner, when a note file or folder in the vault changed since the
+  last sync started (an editor, an agent, `mv`/`rm`/`mkdir`) and a push
+  would send it: it reaches iCloud within about a minute, with no command
+  run. The check reads only the vault, never the network, and a change a
+  push would refuse anyway (conflict markers, an empty new file) does not
+  count.
 
 A change is sent once nothing of it was written for 10 seconds, so a file
 an editor or agent is still writing waits for the next minute rather than
-becoming a half-written version in iCloud. After a failed run (offline,
-signed out, iCloud refusing something) a change waits for the 15-minute
-sync instead of being retried every minute, and changes a sync left
-behind (a push refused them) wait the same way until they are edited
+becoming a half-written version in iCloud. A change a sync left behind
+(iCloud refused it, or the sync failed: offline, say) is not retried every
+minute: it waits for the next 15-minute sync, or until it is edited
 again. A refusal that needs you (`too_many_deletions`, a rejected push) is
 only logged here; `icloud-notes sync` or `push` says it to you, and
 `push --yes` is never run for you.
 
-It does nothing while the app is open (the app syncs itself, and the two
-never run icloud-notes-sync at once), when nobody is signed in to
-icloud-session, or before the notes are cloned. A sign-in Apple refused is
-reported to icloud-session just as the app does. Without a network it logs
-one line and exits 0; a later run tries again. A minute with nothing to
-do logs nothing. When it last ran, and whether that worked, is in
+It does nothing while the app is open (the window holds the vault and
+runs the same step itself, so the two never run icloud-notes-sync at
+once), or before the notes are cloned. A due sync with nobody signed in
+to icloud-session is skipped with one line, and asked again only when the
+next sync is due. A sign-in Apple refused is reported to icloud-session
+just as the app does. Without a network it logs one line and exits 0; a
+later run tries again. A minute with nothing to do logs nothing. When the
+last sync (any, the window's too) started, and whether it worked, is in
 `.icloud-notes/background.json` in the vault.
 
 The package turns it on for every user (from the next login; the installer
@@ -394,7 +406,8 @@ next sync here, like any other edit to its file. Two things to know:
   window is active, and right away when you switch to it, open a note, or
   start editing one (or press Pull). They don't arrive instantly like on
   the Mac app. While the app is closed, [background sync](#background-sync)
-  catches up every 15 minutes, and sends edits made here within a minute.
+  catches up every 15 minutes, and sends edits made here within a minute,
+  as the open window does.
 
 ## If something looks wrong
 

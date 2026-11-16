@@ -166,7 +166,7 @@ public:
         if (!waitUntil([&] { return js(QStringLiteral("root.started")).toBool() && !m_backend->syncRunning(); }))
             return fail(QStringLiteral("the window never finished its first sync"));
         // Timers fire only as steps: nothing runs on its own between them.
-        js(QStringLiteral("autosave.interval = 1000000000, autoPush.interval = 1000000000, poll.interval = 1000000000"));
+        js(QStringLiteral("autosave.interval = 1000000000, syncTick.interval = 1000000000, syncSoon.interval = 1000000000"));
         js(QStringLiteral("root.openNote('Notes', 'One.md')"));
         waitIdle();
         record(QStringLiteral("open Notes/One.md"));
@@ -414,9 +414,9 @@ public:
         case SyncStart: {
             writeFile(QStringLiteral("gate"), QString(), m_dir);
             const int how = m_rng.below(3);
-            js(how == 0 ? QStringLiteral("root.syncNow()") : how == 1 ? QStringLiteral("poll.triggered()") : QStringLiteral("autoPush.triggered()"));
+            js(how == 0 ? QStringLiteral("root.syncNow()") : how == 1 ? QStringLiteral("syncTick.triggered()") : QStringLiteral("syncSoon.triggered()"));
             settle(20);
-            record(QStringLiteral("%1 (held open): %2").arg(how == 0 ? QStringLiteral("sync") : how == 1 ? QStringLiteral("poll tick") : QStringLiteral("push tick"),
+            record(QStringLiteral("%1 (held open): %2").arg(how == 0 ? QStringLiteral("sync") : how == 1 ? QStringLiteral("minute tick") : QStringLiteral("soon tick"),
                                                             m_backend->syncRunning() ? QStringLiteral("running") : QStringLiteral("did not start")));
             return;
         }
@@ -470,7 +470,7 @@ public:
             return;
         }
         case Stale:
-            js(QStringLiteral("root.lastFocusSync = 0"));
+            js(QStringLiteral("root.lastSync = 0"));
             record(QStringLiteral("a minute passes"));
             return;
         case Focus:

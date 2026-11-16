@@ -371,9 +371,9 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     // External changes (an icloud-notes-sync pull in a terminal, say) re-list;
     // a change to the open note is reported so unsaved edits are kept.
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
-        // runSync re-reads the vault once, after it, rather than on every
-        // file its pull writes.
-        if (m_syncRunning && m_mode == Mode::Sync) {
+        // runSync and syncIfDue re-read the vault once, after them, rather
+        // than on every file their pull writes.
+        if (m_syncRunning && (m_mode == Mode::Sync || m_mode == Mode::Step)) {
             m_vaultTouched = true;
             return;
         }
@@ -411,7 +411,11 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
             if (isLoggedStderrLine(line))
                 lines << QString::fromUtf8(line);
         }
-        if (!lines.isEmpty())
+        if (lines.isEmpty())
+            return;
+        if (m_mode == Mode::Step)
+            m_stepLog << lines.join(u'\n'); // logged only if it syncs
+        else
             appendLog(lines.join(u'\n'));
     });
     connect(&m_syncProcess, &QProcess::finished, this, [this](int exitCode) { finishSync(exitCode); });
@@ -435,7 +439,10 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
         // exits while idle, what it last said still holds.
         connect(m_sessionWatcher, &QDBusServiceWatcher::serviceRegistered, this, &NotesBackend::refreshSignIn);
     }
-    if (m_role != Role::Cli) // a command that needs the sign-in reads it itself
+    // A command that needs the sign-in reads it itself; a background run
+    // never does (every minute, it would start icloud-session for nothing):
+    // the engine asks it when a sync is due.
+    if (m_role == Role::App)
         refreshSignIn();
     refresh();
     setSyncMessage(!syncToolAvailable() ? kNotInstalledMessage
@@ -2033,6 +2040,14 @@ void NotesBackend::runSync(bool deleteMissing)
     startSync(Mode::Sync, args, QStringLiteral("Sync"));
 }
 
+void NotesBackend::syncIfDue(int everySecs)
+{
+    startSync(Mode::Step,
+              { QStringLiteral("--quiet"), QStringLiteral("background"), QStringLiteral("--every"),
+                QString::number(qMax(everySecs, 1)) },
+              QStringLiteral("Sync"));
+}
+
 void NotesBackend::refreshPushPreview()
 {
     startSync(Mode::Preview, { QStringLiteral("--quiet"), QStringLiteral("status") },
@@ -2065,15 +2080,29 @@ void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &
     m_captured.clear();
     m_errLine.clear();
     m_runSignIns = m_signIns;
-    if (mode == Mode::Sync) {
+    const QString tool = syncToolPath();
+    if (mode == Mode::Step && tool.isEmpty()) {
+        // Nothing to decide with (a sync asked for says so); the chain
+        // still ends, for whoever waits on it (an editor freshening).
+        emit syncChainFinished();
+        return;
+    }
+    if (mode == Mode::Sync || mode == Mode::Step) {
         m_stateStampBefore = stateFileStamp();
         m_vaultTouched = false;
     }
+    m_stepLog.clear();
     m_syncRunning = true;
     emit syncRunningChanged();
-    appendLog(QStringLiteral("$ %1 ").arg(QLatin1StringView(kSyncTool)) + args.join(u' '));
-    setSyncMessage(label + QStringLiteral("…"));
-    const QString tool = syncToolPath();
+    const QString command = QStringLiteral("$ %1 ").arg(QLatin1StringView(kSyncTool)) + args.join(u' ');
+    // A step that does not sync is not worth a line: it is logged once it does.
+    if (mode == Mode::Step) {
+        m_stepLog << command;
+        m_stepMessage = m_syncMessage;
+    } else {
+        appendLog(command);
+        setSyncMessage(label + QStringLiteral("…"));
+    }
     if (tool.isEmpty()) {
         appendLog(kNotInstalledMessage);
         finishSync(-1);
@@ -2089,14 +2118,35 @@ void NotesBackend::finishSync(int exitCode)
 {
     m_syncRunning = false;
     emit syncRunningChanged();
-    if (isLoggedStderrLine(m_errLine))
-        appendLog(QString::fromUtf8(m_errLine));
-    m_errLine.clear();
-    appendLog(QStringLiteral("(exit %1)").arg(exitCode));
-    if (m_mode == Mode::Sync)
-        finishSyncHalves(exitCode);
-    else
-        finishRun(m_syncLabel, exitCode, m_captured);
+    bool skipped = false;
+    if (m_mode == Mode::Step) {
+        // Not synced: nothing to log, nothing to report. Anything else (it
+        // synced, or failed before it could say) is a sync's run.
+        const QJsonObject answer = QJsonDocument::fromJson(m_captured).object();
+        m_lastStep = answer.value(QStringLiteral("step")).toString();
+        skipped = exitCode == 0 && answer.value(QStringLiteral("synced")) == QJsonValue(false);
+        if (!skipped) {
+            for (const QString &line : std::as_const(m_stepLog))
+                appendLog(line);
+            m_mode = Mode::Sync;
+        }
+        m_stepLog.clear();
+    }
+    if (skipped) {
+        m_errLine.clear();
+        setSyncMessage(m_stepMessage);
+        if (m_vaultTouched)
+            refresh(); // changed on disk while it ran
+    } else {
+        if (isLoggedStderrLine(m_errLine))
+            appendLog(QString::fromUtf8(m_errLine));
+        m_errLine.clear();
+        appendLog(QStringLiteral("(exit %1)").arg(exitCode));
+        if (m_mode == Mode::Sync)
+            finishSyncHalves(exitCode);
+        else
+            finishRun(m_syncLabel, exitCode, m_captured);
+    }
 
     if (m_syncWhenIdle && !m_authExpired) {
         m_syncWhenIdle = false;
@@ -2209,7 +2259,7 @@ void NotesBackend::finishRun(const QString &label, int exitCode, const QByteArra
             // A clone that failed part way records what it wrote, and the
             // vault counts as cloned from then on: a pull finishes it, so
             // the window syncs at once (unless the sign-in is what failed)
-            // and does not wait for its next poll.
+            // and does not wait for its next minute.
             if (!ok && m_role == Role::App && cloned())
                 m_syncWhenIdle = true;
             emit cloneFinished(ok);

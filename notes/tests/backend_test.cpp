@@ -1031,8 +1031,10 @@ int main(int argc, char *argv[])
                   && message.endsWith(QStringLiteral("so nothing was pushed.")) && !b.authExpired()
                   && b.syncLog().contains(QStringLiteral("icloud-notes push --yes")),
               "seam a push refused for deleting most of the vault: the window is told, the pull still runs");
-        // The syncs that start on their own: the poll's and the focus's sync,
-        // the push after an edit, a sync resumed by a sign-in.
+        // The syncs that start on their own: the window's and the timer's
+        // step (syncIfDue), a sync resumed by a sign-in; and a plain push.
+        b.syncIfDue(60);
+        waitForIdle(b);
         b.runSync();
         waitForIdle(b);
         b.runPush();
@@ -1045,7 +1047,8 @@ int main(int argc, char *argv[])
         waitUntil([] { return false; }, 300);
         waitForIdle(b);
         const QStringList unasked = readFile(QStringLiteral("too-many.log"), scratch.path()).split(u'\n', Qt::SkipEmptyParts);
-        check(pushSaysSo && unasked.size() >= 3 && unasked.contains(QStringLiteral("push")) && unasked.contains(QStringLiteral("sync"))
+        check(pushSaysSo && unasked.size() >= 4 && unasked.contains(QStringLiteral("push")) && unasked.contains(QStringLiteral("sync"))
+                  && unasked.contains(QStringLiteral("background"))
                   && !unasked.join(u' ').contains(QStringLiteral("--yes")) && !b.syncLog().contains(QStringLiteral("sync --yes\n"))
                   && !b.syncLog().contains(QStringLiteral("--json push --yes")) && told == 1 && b.deletionsRefused() == message,
               "seam syncs and pushes that start on their own never pass --yes, and the refusal stands");
@@ -1065,6 +1068,48 @@ int main(int argc, char *argv[])
         QObject::disconnect(c2);
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_TOO_MANY");
         qunsetenv("ICLOUD_NOTES_SYNC_STUB_LOG");
+    }
+    {
+        // The step every sync that starts on its own runs (syncIfDue): the
+        // engine decides. One that does not sync leaves no trace (no log
+        // line, no status, no syncFinished) but ends its chain; one that
+        // syncs is a sync, reported half by half, its command logged.
+        QStringList runs;
+        int chains = 0;
+        const auto c1 = QObject::connect(&b, &NotesBackend::syncFinished, &b, [&](const QString &label, bool ok) {
+            runs << label + (ok ? QStringLiteral("+") : QStringLiteral("-"));
+        });
+        const auto c2 = QObject::connect(&b, &NotesBackend::syncChainFinished, &b, [&] { ++chains; });
+        b.clearLog();
+        const QString message = b.syncMessage();
+        for (const char *step : { "idle", "settling", "signed_out", "session_unavailable" }) {
+            qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", step);
+            b.syncIfDue(60);
+            waitForIdle(b);
+            check(b.lastStep() == QLatin1StringView(step) && runs.isEmpty() && b.syncLog().isEmpty()
+                      && b.syncMessage() == message && !b.authExpired(),
+                  QStringLiteral("seam step %1: nothing logged, reported or changed").arg(QLatin1StringView(step)).toUtf8().constData());
+        }
+        check(chains == 4, "seam a step that does not sync still ends its chain");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "changes");
+        b.syncIfDue(60);
+        waitForIdle(b);
+        check(b.lastStep() == QStringLiteral("changes") && runs == QStringList{ QStringLiteral("Push+"), QStringLiteral("Pull+") }
+                  && b.syncLog().startsWith(QStringLiteral("$ icloud-notes-sync --quiet background --every 60\n"))
+                  && b.syncLog().contains(QStringLiteral("stub push ok")) && b.syncMessage() == QStringLiteral("Pull done."),
+              "seam step changes: a sync, reported half by half");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "due");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
+        runs.clear();
+        b.syncIfDue();
+        waitForIdle(b);
+        check(runs == QStringList{ QStringLiteral("Push-"), QStringLiteral("Pull-") } && b.syncLog().contains(QStringLiteral("--every 900"))
+                  && b.syncMessage() == QStringLiteral("Offline. Notes syncs again once iCloud can be reached."),
+              "seam step due, offline: the quiet skip a sync's is");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_STEP");
+        QObject::disconnect(c1);
+        QObject::disconnect(c2);
     }
     {
         // A change the push left for the next one (the file was saved while
@@ -1633,16 +1678,12 @@ int main(int argc, char *argv[])
     const QString vaultPath = testVault();
     const QString bgVault = scratch.path() + QStringLiteral("/background");
     qputenv("ICLOUD_NOTES_VAULT", bgVault.toUtf8());
-    // The timer's minute, as it comes (backgroundTick), and one with a sync
-    // due (backgroundSync: no record of an earlier run).
-    auto backgroundTick = [](QString &output) {
+    // The timer's minute: the engine's step (the stub's decision is
+    // ICLOUD_NOTES_SYNC_STUB_STEP, a due sync unless set).
+    auto backgroundSync = [](QString &output) {
         output.clear();
         QTextStream out(&output);
         return runBackgroundSync(out);
-    };
-    auto backgroundSync = [&](QString &output) {
-        QFile::remove(NotesBackend::stateDir() + QStringLiteral("/background.json"));
-        return backgroundTick(output);
     };
     QString bgOut;
     check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync")),
@@ -1672,74 +1713,39 @@ int main(int argc, char *argv[])
     {
         const int code = backgroundSync(bgOut);
         const qsizetype push = bgOut.indexOf(QStringLiteral("stub push ok")), pull = bgOut.indexOf(QStringLiteral("stub pull ok"));
-        check(code == 0 && bgOut.count(QStringLiteral("$ icloud-notes-sync --quiet sync\n")) == 1 && push >= 0 && pull > push,
-              "background: pushes then pulls in one engine run, exit 0");
+        check(code == 0 && bgOut.count(QStringLiteral("$ icloud-notes-sync --quiet background --every 900\n")) == 1 && push >= 0
+                  && pull > push,
+              "background: a due step pushes then pulls in one engine run, exit 0");
     }
     {
         VaultLock held(NotesBackend::lockPath());
         check(held.tryLock() == VaultLock::Locked, "background: lock taken by another holder");
-        check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync")),
-              "background: skipped while the lock is held");
+        check(backgroundSync(bgOut) == 0 && bgOut.isEmpty(), "background: nothing while the lock is held, not a line");
     }
     {
-        NotesBackend app; // the open app holds the lock for its lifetime
-        check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync"))
-                  && bgOut.contains(QStringLiteral("Notes is open"))
-                  && bgOut.contains(QStringLiteral("(Notes (pid %1))").arg(QCoreApplication::applicationPid())),
-              "background: the open app blocks it, and is named");
+        NotesBackend app; // the open app holds the lock for its lifetime, and runs the step itself
+        check(backgroundSync(bgOut) == 0 && bgOut.isEmpty(), "background: nothing while the window is open, not a line");
     }
     check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("stub pull ok")),
           "background: runs again once the app is closed");
     {
-        // Every minute: a sync when the last is 15 minutes old, sooner for
-        // a local change to push (what the real engine's `pending` finds),
-        // never for a file still being written, nor again for the same
-        // changes, nor after a failed run until its turn.
-        const QString recordPath = NotesBackend::stateDir() + QStringLiteral("/background.json");
-        const auto record = [&] {
-            QFile f(recordPath);
-            return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object() : QJsonObject();
-        };
-        const auto synced = [&] { return bgOut.count(QStringLiteral("$ icloud-notes-sync --quiet sync\n")) == 1; };
-        const auto age = [&](const QString &rel, int seconds) { // the file as last written that long ago
-            QFile f(bgVault + u'/' + rel);
-            return f.open(QIODevice::ReadWrite)
-                && f.setFileTime(QDateTime::currentDateTime().addSecs(-seconds), QFileDevice::FileModificationTime);
-        };
-        const qint64 before = QDateTime::currentMSecsSinceEpoch();
-        check(backgroundSync(bgOut) == 0 && synced() && record().value(QStringLiteral("lastOk")).toBool()
-                  && record().value(QStringLiteral("lastRunMs")).toInteger() >= before,
-              "background: a due run syncs and records it");
-        check(backgroundTick(bgOut) == 0 && bgOut.isEmpty(), "background: nothing to push, synced just now: nothing, not a line");
-        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi\n"), bgVault);
-        check(backgroundTick(bgOut) == 0 && bgOut.isEmpty(), "background: a file written in the last 10 s waits for the next minute");
-        check(age(QStringLiteral("Loose.md"), 30) && backgroundTick(bgOut) == 0 && synced()
-                  && record().value(QStringLiteral("pendingKey")).toString().startsWith(QStringLiteral("Loose.md\n")),
-              "background: a settled local change is pushed at once");
-        check(backgroundTick(bgOut) == 0 && bgOut.isEmpty(),
-              "background: the same changes, still there after their sync (refused, say), wait for the 15-minute sync");
-        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi again\n"), bgVault);
-        check(age(QStringLiteral("Loose.md"), 20) && backgroundTick(bgOut) == 0 && synced(),
-              "background: edited again, it is pushed again");
-        qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
-        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi offline\n"), bgVault);
-        check(age(QStringLiteral("Loose.md"), 20) && backgroundTick(bgOut) == 0 && bgOut.contains(QStringLiteral("skipped"))
-                  && !record().value(QStringLiteral("lastOk")).toBool(),
-              "background: offline is recorded as a failed run");
-        writeFile(QStringLiteral("Loose.md"), QStringLiteral("# Loose\nhi later\n"), bgVault);
-        check(age(QStringLiteral("Loose.md"), 20) && backgroundTick(bgOut) == 0 && bgOut.isEmpty(),
-              "background: after a failed run a local change waits its turn");
-        qunsetenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE");
-        QJsonObject stale = record();
-        stale.insert(QStringLiteral("lastRunMs"), QDateTime::currentMSecsSinceEpoch() - kBackgroundFullSyncMs);
-        {
-            QFile f(recordPath);
-            check(f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(QJsonDocument(stale).toJson()) > 0,
-                  "background: the record set 15 minutes back");
+        // Every minute the engine decides; a minute it does not sync says
+        // nothing, and a due sync with nobody to sync as is one line.
+        for (const char *step : { "idle", "settling" }) {
+            qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", step);
+            check(backgroundSync(bgOut) == 0 && bgOut.isEmpty(),
+                  QStringLiteral("background: %1, nothing, not a line").arg(QLatin1StringView(step)).toUtf8().constData());
         }
-        check(backgroundTick(bgOut) == 0 && synced() && record().value(QStringLiteral("lastOk")).toBool(),
-              "background: 15 minutes on, it syncs whatever the last run did");
-        QFile::remove(bgVault + QStringLiteral("/Loose.md"));
+        qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "signed_out");
+        check(backgroundSync(bgOut) == 0 && bgOut == QStringLiteral("sign in to iCloud required; skipped.\n"),
+              "background: due with nobody signed in: a one-line skip, exit 0");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "session_unavailable");
+        check(backgroundSync(bgOut) == 0 && bgOut.count(u'\n') == 1 && bgOut.contains(QStringLiteral("icloud-session is not available"))
+                  && bgOut.endsWith(QStringLiteral("; skipped.\n")),
+              "background: due with icloud-session out of reach: a one-line skip, exit 0");
+        qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "changes");
+        check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("stub push ok")), "background: local changes: a sync");
+        qunsetenv("ICLOUD_NOTES_SYNC_STUB_STEP");
     }
     // No network: one line, exit 0 (the timer tries again), not a failure.
     qputenv("ICLOUD_NOTES_SYNC_STUB_OFFLINE", "1");
@@ -1940,11 +1946,14 @@ int main(int argc, char *argv[])
     check(backgroundSync(bgOut) != 0 && fake.reportCalls == 1 && !bgOut.contains(QStringLiteral("stub pull ok")),
           "background: refused session reported, exit non-zero");
     qunsetenv("ICLOUD_NOTES_SYNC_STUB_EXPIRED");
-    // Signed out: nothing runs.
+    // Signed out: the engine is the one to ask icloud-session, and only
+    // when a sync is due; the app reads nothing first (every minute, that
+    // would start icloud-session for nothing).
     fake.set({ { QStringLiteral("SignedIn"), false } });
-    check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync"))
-              && bgOut.contains(QStringLiteral("sign in to iCloud required; skipped.")),
-          "background: skipped when signed out");
+    qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "signed_out");
+    check(backgroundSync(bgOut) == 0 && bgOut == QStringLiteral("sign in to iCloud required; skipped.\n"),
+          "background: skipped when the engine finds nobody signed in");
+    qunsetenv("ICLOUD_NOTES_SYNC_STUB_STEP");
     fake.set({ { QStringLiteral("SignedIn"), true } });
     qputenv("ICLOUD_NOTES_VAULT", vaultPath.toUtf8());
     waitUntil([&] { return !b.authExpired(); });
@@ -2057,9 +2066,10 @@ int main(int argc, char *argv[])
               "session absent: clone refused, not run blind");
     }
     qputenv("ICLOUD_NOTES_VAULT", bgVault.toUtf8());
-    check(backgroundSync(bgOut) == 0 && !bgOut.contains(QStringLiteral("$ icloud-notes-sync"))
-              && bgOut.contains(QStringLiteral("unknown")),
-          "background: skipped when icloud-session is unknown");
+    qputenv("ICLOUD_NOTES_SYNC_STUB_STEP", "session_unavailable");
+    check(backgroundSync(bgOut) == 0 && bgOut.contains(QStringLiteral("unknown; skipped.")),
+          "background: skipped when the engine finds icloud-session out of reach");
+    qunsetenv("ICLOUD_NOTES_SYNC_STUB_STEP");
 
     // The default vault's one-time move from <Documents>/icloud-notes to
     // <Documents>/Notes, each case in a scratch documents directory of its

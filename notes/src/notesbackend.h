@@ -341,6 +341,18 @@ public:
     // plain status, and the next sync tries again.
     // deleteMissing (`sync --yes`): as for runPush.
     Q_INVOKABLE void runSync(bool deleteMissing = false);
+    // What every sync that starts on its own runs, the window's and the
+    // background timer's alike: `icloud-notes-sync background`, which
+    // decides from the vault and its last sync whether one is due (the
+    // last is `everySecs` old, or local changes wait: see
+    // notes-sync/src/cmd/background.rs) and then syncs as runSync does,
+    // never with --yes. A run that does not sync leaves no trace: no log
+    // line, no message, no syncFinished; syncChainFinished still follows.
+    Q_INVOKABLE void syncIfDue(int everySecs = 15 * 60);
+    // What the last syncIfDue decided, as the engine says it: due or
+    // changes (it synced), settling, idle, signed_out or
+    // session_unavailable; empty when the engine gave no answer.
+    QString lastStep() const { return m_lastStep; }
     // Asks icloud-session to open its sign-in window; returns at once.
     // Syncing resumes when the daemon reports the sign-in.
     Q_INVOKABLE void signIn();
@@ -383,7 +395,7 @@ signals:
     void noteContentChanged();
     void currentNoteChangedOnDisk();
     // Files in the vault changed outside a sync (a save, another editor, a
-    // note removed in a file manager): what automatic push acts on.
+    // note removed in a file manager): the window runs syncIfDue soon after.
     void vaultChanged();
     void syncMessageChanged();
     void syncLogChanged();
@@ -412,8 +424,9 @@ signals:
 
 private:
     static inline QString s_vaultNotice;
-    // Sync: runSync's `--quiet sync`, whose stdout holds both halves.
-    enum class Mode { Plain, Preview, History, Diff, Sync };
+    // Sync: runSync's `--quiet sync`, whose stdout holds both halves; Step:
+    // syncIfDue's `--quiet background`, the same once it synced.
+    enum class Mode { Plain, Preview, History, Diff, Sync, Step };
 
     QString folderAbsolutePath(const QString &folder) const;
     QString noteAbsolutePath() const;
@@ -565,6 +578,12 @@ private:
     QString m_stateStampBefore;
     bool m_vaultTouched = false;
     QByteArray m_errLine; // the run's stderr up to the next newline
+    // A step's command line and stderr, logged once it is known to have
+    // synced; the status it found (put back when it does not sync, after a
+    // wait for the lock); and what it decided.
+    QStringList m_stepLog;
+    QString m_stepMessage;
+    QString m_lastStep;
     bool m_authExpired = false;
     QString m_deletionsRefused;
     // A sign-in came back while a sync ran: sync once it finishes.

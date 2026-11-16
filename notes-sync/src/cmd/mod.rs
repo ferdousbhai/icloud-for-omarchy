@@ -1,5 +1,6 @@
 //! Commands, their output and errors. Originally derived from icloud-md.
 
+pub mod background;
 pub mod clone;
 pub mod diff;
 pub mod errors;

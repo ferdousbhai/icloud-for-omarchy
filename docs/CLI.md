@@ -60,7 +60,7 @@ timer's sync). All of it is new, in the app binary: see
 | Conflict picker: per change, All from this computer, All from iCloud, Keep both | `icloud-notes resolve NOTE --choices local,remote,both,...` / `--all local\|remote\|both` | added |
 | Conflict: Edit as text | `read --raw`, then `write --force` | added |
 | Unreadable markers: Remove the markers / Use the last synced version | `icloud-notes recover NOTE --strip` / `--synced` | added |
-| Automatic sync (launch, focus, every minute) | `icloud-notes sync` (push, then pull, in one engine run) | added |
+| Automatic sync (launch, focus, every minute: `icloud-notes-sync background`, the timer's step) | `icloud-notes sync` (push, then pull, in one engine run) | added |
 | (not in the window) pull or push only | `icloud-notes pull` / `icloud-notes push` | added (the engine's `pull` existed) |
 | Sync status, then Sync now | `icloud-notes push --dry-run`, then `icloud-notes sync` | added |
 | The banner when most of the notes' files are gone: Show them, Delete them… (confirmed, keeping them by default) | `icloud-notes push --dry-run`, then `icloud-notes sync --yes` (or `push --yes`) | added |
@@ -69,7 +69,7 @@ timer's sync). All of it is new, in the app binary: see
 | Link your Apple Notes: Clone my notes | `icloud-notes clone` | added |
 | Sign-in banner, days left, Sign in | `icloud-notes status` (`signed_in`, `sign_in_days_left`), then `icloud-session sign-in` | added |
 | Sync log | each command's output; `sync`'s data carries `log` | added |
-| Background sync while closed | `icloud-notes --sync` (the systemd timer, every minute: a sync when the last is 15 minutes old, or within a minute of a local change to push; see [notes/README.md](../notes/README.md#background-sync)) | existed |
+| Background sync while closed | `icloud-notes --sync` (the systemd timer, every minute: the engine's `background` step, the window's own while it is open: a sync when the last is 15 minutes old, or within a minute of a local change to push; see [notes/README.md](../notes/README.md#background-sync)) | existed |
 | Refresh | nothing: every command reads the disk afresh | n/a |
 | Merging unsaved editor text with a change on disk | nothing: a command writes whole under the lock, with no editor buffer | n/a |
 | Theme, fonts, pane sizes | presentation only | n/a |
@@ -323,7 +323,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 |---|---|---|
 | icloud-session | `validate`: the webservice keys, sorted; `skill install`/`remove`: the paths | the same, counted |
 | icloud-notes | `list`, `search`: note paths; `read`: its path; `folders`: folder paths (not the vault root `""`); a change: the path it touched (`export-pdf`: the PDF); `history`, `push --dry-run`, `diff`, `restore`: the engine's | `list`, `search`: notes; `folders`: folders (not the root); `status`: notes; engine commands: the engine's |
-| icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids; `pending`: its files | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes; `pending`: files |
+| icloud-notes-sync | `status`, `push` (and `--dry-run`): entry files; `restore`: the file; `history`: epoch or snapshot ids | `status`, `push`: entries; `pull`: changes; `history`: rows; `vault-info`: tracked notes |
 | icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
 | icloud-reminders | `background`: the reminders it notified about | `sync`: records changed; `background`: notifications sent |
@@ -804,7 +804,7 @@ ISO 8601.
 | `restore` | `{file}` |
 | `sync` | `{push, pull, vault_info}` (below) |
 | `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}` |
-| `pending` | `{pending, files, newestChangeMs}`: whether the next push sends anything, found from the vault alone (no network, no lock, nothing written); a change the plan refuses by itself is not pending. The background timer's check |
+| `background [--every SECS]` | `{synced, step}`, plus `sync`'s `{push, pull, vault_info}` when it synced. What the Notes app runs every minute (its window while open, its timer while closed): `step` is `due` (the last sync is `--every` old, default 900, or there was none) or `changes` (local changes to push made since the last sync started), and then it syncs as `sync` does, never with `--yes`; or `settling` (a change younger than 10 s), `idle`, `signed_out` or `session_unavailable` (a due sync with nobody to sync as), and nothing else happens. A change a sync left behind waits for the next due sync or a new edit. Deciding needs no network and no lock and writes nothing; every sync (`sync` too) records its start and outcome in `background.json` beside the state. Exit 0 when it did not sync, else `sync`'s; text mode prints nothing then |
 
 See `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`. `sync` (push,
 then pull, in one run: what the app runs) prints `{push, pull, vault_info}`

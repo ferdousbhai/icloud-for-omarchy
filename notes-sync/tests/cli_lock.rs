@@ -256,12 +256,46 @@ fn vault_info_reports_what_the_app_reads() {
     assert_eq!(inside["notes"], info["notes"]);
 }
 
-/// `pending`, which the Notes app's timer runs every minute: answered while
-/// the open app holds the lock, with no session bus to reach icloud-session
-/// through (so no way to the network), and with a layout 3 vault left where
-/// it is.
+/// Every path under `dir` with its contents, to show a run wrote nothing.
+fn snapshot(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.push((p.clone(), Vec::new()));
+                stack.push(p);
+            } else {
+                out.push((p.clone(), std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn set_mtime(path: &Path, ago: Duration) {
+    let file = OpenOptions::new().write(true).open(path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - ago).unwrap();
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// `background`, which the Notes app runs every minute: while the open app
+/// holds the lock and with no session bus to reach icloud-session through
+/// (so no way to the network), it decides from the vault alone, writes
+/// nothing when nothing is due, and leaves a layout 3 vault where it is. A
+/// change made since the last sync is due; with icloud-session out of reach
+/// it is skipped before the lock is taken, and recorded as a failed sync,
+/// so the same change waits for the next due one.
 #[test]
-fn pending_needs_no_lock_no_network_and_moves_nothing() {
+fn background_decides_with_no_lock_and_no_network() {
     let tmp = tempfile::tempdir().unwrap();
     let vault = tmp.path().join("vault");
     std::fs::create_dir_all(vault.join(".icloud-md/base")).unwrap();
@@ -275,28 +309,45 @@ fn pending_needs_no_lock_no_network_and_moves_nothing() {
     .unwrap();
     std::fs::write(vault.join(".icloud-md/base/id-a.md"), "body\n").unwrap();
     std::fs::write(vault.join("Notes/A.md"), "body\n").unwrap();
+    let record = vault.join(".icloud-md/background.json");
+    std::fs::write(
+        &record,
+        serde_json::json!({"lastRunMs": now_ms() - 120_000, "lastOk": true}).to_string(),
+    )
+    .unwrap();
     let _app = hold(&lock_path(tmp.path(), &vault), "Notes (pid 4242)");
-    let pending = || {
+    let background = || {
         let o = engine(tmp.path())
             .env(
                 "DBUS_SESSION_BUS_ADDRESS",
                 "unix:path=/nonexistent/icloud-notes-test-bus",
             )
-            .args(["--quiet", "pending"])
+            .env_remove("ICLOUD_SESSION_MOCK")
+            .args(["--quiet", "background"])
             .arg(&vault)
             .output()
             .unwrap();
         assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
         serde_json::from_slice::<Value>(&o.stdout).unwrap()
     };
-    assert_eq!(
-        pending(),
-        serde_json::json!({"pending": false, "files": [], "newestChangeMs": null})
-    );
+    let before = snapshot(&vault);
+    assert_eq!(background(), serde_json::json!({"synced": false, "step": "idle"}));
+    assert_eq!(snapshot(&vault), before, "a run with nothing to do wrote to the vault");
+
     std::fs::write(vault.join("Notes/A.md"), "body edited\n").unwrap();
-    let r = pending();
-    assert_eq!(r["pending"], true, "{r}");
-    assert_eq!(r["files"], serde_json::json!(["Notes/A.md"]));
-    assert!(r["newestChangeMs"].as_i64().is_some(), "{r}");
-    assert!(!vault.join(".icloud-notes").exists(), "pending migrated the vault");
+    assert_eq!(background(), serde_json::json!({"synced": false, "step": "settling"}));
+
+    set_mtime(&vault.join("Notes/A.md"), Duration::from_secs(30));
+    assert_eq!(
+        background(),
+        serde_json::json!({"synced": false, "step": "session_unavailable"})
+    );
+    let recorded: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(recorded["lastOk"], false, "{recorded}");
+    assert!(
+        recorded["lastRunMs"].as_i64().unwrap() > now_ms() - 10_000,
+        "{recorded}"
+    );
+    assert_eq!(background(), serde_json::json!({"synced": false, "step": "idle"}));
+    assert!(!vault.join(".icloud-notes").exists(), "background migrated the vault");
 }

@@ -634,19 +634,19 @@ ApplicationWindow {
     property bool freshening: false
     property string keptNotice: ""
     function pullIfStale() {
-        if (!backend.cloned || backend.authExpired || autoSyncBlocked() || Date.now() - lastFocusSync < 60 * 1000)
+        if (!backend.cloned || backend.authExpired || autoSyncBlocked() || Date.now() - lastSync < 60 * 1000)
             return false;
         freshening = true;
-        syncNow(); // pending edits go up first, then the pull
+        lastSync = Date.now();
+        backend.syncIfDue(60); // pending edits go up first, then the pull
         return true;
     }
     // What every sync that starts on its own waits for: a running sync,
     // unsaved edits, an open dialog.
     function autoSyncBlocked() { return backend.syncRunning || dirty || dialogOpen(); }
-    // Both directions, and the minute the focus and stale-note syncs keep
-    // between syncs counts from here.
+    // A sync asked for (Sync now): both directions, whatever is due.
     function syncNow() {
-        lastFocusSync = Date.now();
+        lastSync = Date.now();
         backend.runSync();
     }
     function openFolder(folder) {
@@ -2068,56 +2068,61 @@ ApplicationWindow {
             .some(function (d) { return d.visible; });
     }
 
-    // Like Notes, changes reach iCloud on their own. The sync tool keeps this
-    // safe: it merges, refuses a note it cannot push safely (the badges say
-    // which; Sync status shows why), and deletions only move notes to Recently
-    // Deleted. Pushes wait until edits settle so a burst of typing is one push.
-    Timer {
-        id: autoPush
-        interval: 20 * 1000
-        onTriggered: {
-            if (!backend.cloned || backend.authExpired)
-                return;
-            if (root.autoSyncBlocked()) {
-                restart();
-                return;
-            }
-            backend.runPush();
-        }
-    }
-    // Changes from other devices come in the moment you switch to the
-    // window, at most once a minute so flipping between windows does not
-    // sync on every flip, and on a timer (below) while it stays in front.
-    property double lastFocusSync: 0
-    onActiveChanged: {
-        if (active)
-            backend.refreshSignIn(); // the day count moves on; also keeps icloud-session validating
-        if (!active || !backend.cloned || backend.authExpired)
-            return;
-        if (root.autoSyncBlocked() || autoPush.running || Date.now() - lastFocusSync < 60 * 1000)
-            return;
-        root.syncNow(); // both directions: a change from any program in any folder
-    }
-
+    // Like Notes, changes reach iCloud on their own, and changes made
+    // elsewhere come in, through one step: backend.syncIfDue, the same
+    // engine decision the background timer runs while the window is closed
+    // (icloud-notes-sync background). It syncs when local changes wait in
+    // any folder, from this window or any program, once none of them
+    // changed for 10 seconds (so a burst of typing is one push), and when
+    // the last sync is pullEvery old. The sync tool keeps this safe: it
+    // merges, refuses a note it cannot push safely (the badges say which;
+    // Sync status shows why), and deletions only move notes to Recently
+    // Deleted; a change it refused waits for a new edit or the next due
+    // sync rather than going again every minute.
     // iCloud does not tell a web client that something changed, so a phone
-    // edit made while Notes stays open is fetched by polling: every minute
-    // while the window is active, every 15 minutes (like the background
-    // timer) while it is not. A pull that finds nothing is three small
-    // requests. Never faster than once a minute, and slower after each
-    // failed pull, up to 15 minutes, so a bad network or an outage is not
-    // retried at full rate.
+    // edit made while Notes stays open is fetched by the step: a pull every
+    // minute while the window is active, every 15 minutes (like the
+    // background timer) while it is not. A pull that finds nothing is three
+    // small requests. Slower after each failed pull, up to 15 minutes, so a
+    // bad network or an outage is not retried at full rate.
     property int pollFailures: 0
+    readonly property int pullEvery: active ? Math.min(60 * Math.pow(2, pollFailures), 15 * 60) : 15 * 60
+    // When the window last synced or asked the engine to: the minute the
+    // focus and stale-note syncs keep between them counts from here.
+    property double lastSync: 0
+    function syncIfDue(every) {
+        if (!backend.cloned || backend.authExpired)
+            return;
+        if (autoSyncBlocked()) {
+            syncSoon.restart();
+            return;
+        }
+        backend.syncIfDue(every || pullEvery);
+    }
+    // Every minute, whether or not the window is in front.
     Timer {
-        id: poll
-        interval: root.active ? Math.min(60 * 1000 * Math.pow(2, root.pollFailures), 15 * 60 * 1000)
-                              : 15 * 60 * 1000
+        id: syncTick
+        interval: 60 * 1000
         repeat: true
         running: backend.cloned && !backend.authExpired
-        onTriggered: {
-            if (root.autoSyncBlocked() || autoPush.running)
-                return;
-            root.syncNow(); // pending edits go up first, then the pull
-        }
+        onTriggered: root.syncIfDue()
+    }
+    // A change seen here (a save, a note changed or removed in the open
+    // folder) is asked about once it has settled, rather than at the next
+    // minute.
+    Timer {
+        id: syncSoon
+        interval: 12 * 1000
+        onTriggered: root.syncIfDue()
+    }
+    // Changes from other devices come in the moment you switch to the
+    // window, when the last sync is a minute old, so flipping between
+    // windows does not sync on every flip.
+    onActiveChanged: {
+        if (!active)
+            return;
+        backend.refreshSignIn(); // the day count moves on; also keeps icloud-session validating
+        root.syncIfDue(60);
     }
 
     // Sync on startup, like Notes does on launch, once icloud-session has
@@ -2132,7 +2137,7 @@ ApplicationWindow {
         started = true;
         if (backend.cloned) {
             if (backend.syncToolAvailable && !backend.authExpired)
-                root.syncNow(); // edits made while the app was closed go up first; the window's first activation is this sync
+                root.syncIfDue(60); // edits made while the app was closed go up first; the window's first activation is this step
         } else if (backend.syncToolAvailable && backend.signedIn) {
             root.notice = "Downloading your notes as " + backend.appleId + "…";
             backend.runClone();
@@ -2287,6 +2292,7 @@ ApplicationWindow {
                 root.searchResults = root.searchResults.concat(related);
         }
         function onSyncFinished(label, ok) {
+            root.lastSync = Date.now();
             if (label === "Pull")
                 root.pollFailures = ok ? 0 : Math.min(root.pollFailures + 1, 4);
         }
@@ -2344,13 +2350,12 @@ ApplicationWindow {
             if (root.narrow)
                 root.revealCurrent();
         }
-        // The poll counts from the end of the last sync, whatever started it
-        // (a focus, a push, Pull), so it never follows one within the interval.
+        // The minute counts from the end of the last run, whatever started it.
         // The editor is unlocked here and not on syncRunningChanged: that
         // turns false between runSync's push and its pull, too early.
         function onSyncChainFinished() {
-            if (poll.running)
-                poll.restart();
+            if (syncTick.running)
+                syncTick.restart();
             root.freshening = false;
         }
         function onCurrentNoteChangedOnDisk() {
@@ -2375,7 +2380,7 @@ ApplicationWindow {
                 root.notice = backend.statusError;
         }
         function onVaultChanged() {
-            autoPush.restart();
+            syncSoon.restart();
         }
         function onCloneFinished(ok) {
             root.notice = "";
@@ -2541,7 +2546,7 @@ ApplicationWindow {
         onAccepted: {
             if (!root.flushEdits())
                 return;
-            root.lastFocusSync = Date.now();
+            root.lastSync = Date.now();
             backend.runSync(true);
         }
     }

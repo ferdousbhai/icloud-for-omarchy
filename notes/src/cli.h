@@ -1,8 +1,6 @@
 #ifndef CLI_H
 #define CLI_H
 
-#include <QString>
-
 // `icloud-notes <command>`: every feature of the Notes window from a
 // terminal (or an agent), without a window: list, read, search, create,
 // edit, rename, move and delete notes and folders, resolve conflicts, and
@@ -39,50 +37,21 @@ int cliMain(int argc, char *argv[]);
 
 class QTextStream;
 
-// `icloud-notes --sync`: the app's sync (push, then pull) with no window,
-// for the systemd user timer that runs it every minute while Notes is
-// closed. It syncs when backgroundStep() says so: every 15 minutes, and
-// within about a minute of a local change (an editor's, an agent's) to
-// push. The `sync` command's path through NotesBackend (conflict
-// handling, reporting a refused session to icloud-session, the one retry),
-// but it never waits for the lock and skips (0) when there is no vault,
-// nobody is signed in to icloud-session (or it is unknown), or the app or
-// another sync holds the vault's lock. Returns 0 once both halves worked
-// (or nothing was due), non-zero when either failed or the engine is
-// missing. What it did is written to `log`; a minute with nothing to do
-// writes nothing. Each attempt is recorded in background.json in the
-// engine's state directory. Needs a Q(Core|Gui)Application.
+// `icloud-notes --sync`: what the systemd user timer runs every minute
+// while Notes is closed: the engine's step (`icloud-notes-sync background`,
+// NotesBackend::syncIfDue), which syncs every 15 minutes and within about a
+// minute of a local change (an editor's, an agent's) to push, and otherwise
+// does nothing. The decision is the engine's (notes-sync/src/cmd/
+// background.rs); the window runs the same step while it is open. Once it
+// syncs, the `sync` command's path through NotesBackend (conflict handling,
+// reporting a refused session to icloud-session, the one retry). It never
+// waits for the lock and does nothing (0) when there is no vault or the
+// window or another sync holds the vault's lock; a due sync with nobody
+// signed in to icloud-session (or it unknown) is a one-line skip (0).
+// Returns 0 once both halves worked (or nothing was due), non-zero when
+// either failed or the engine is missing. What it did is written to `log`;
+// a minute with nothing to do writes nothing. Needs a
+// Q(Core|Gui)Application.
 int runBackgroundSync(QTextStream &log);
-
-// What the last background run did (background.json).
-struct BackgroundRecord {
-    qint64 lastRunMs = 0; // its time; 0: never
-    bool lastOk = true; // false: the sync failed, or was skipped offline or signed out
-    QString pendingKey; // the local changes it ran for (LocalChanges::key)
-};
-
-// What `icloud-notes-sync pending` found: what the next push would send,
-// from the vault alone (no network, no lock).
-struct LocalChanges {
-    bool pending = false;
-    qint64 newestChangeMs = 0; // the newest modification among them; 0: unknown
-    QString key; // the files and that time: the same key, the same changes
-};
-
-// The background sync's choice each minute, at `nowMs`:
-// - Sync when the last run is kBackgroundFullSyncMs (15 min) old, or there
-//   was none (the pull cadence, and what retries a failure);
-// - Sync sooner when there are local changes to push, unless the last run
-//   failed (that waits its turn, so a broken network is not retried every
-//   minute) or ran for these very changes already (a push that left them,
-//   refused, is not repeated every minute);
-// - and never while one of the changed files was modified in the last
-//   kBackgroundSettleMs (10 s): it is likely being written (an editor's
-//   autosave, an agent mid-edit), and each push is a version in iCloud. The
-//   next minute sends it.
-enum class BackgroundStep { Skip, Sync };
-constexpr qint64 kBackgroundFullSyncMs = 15 * 60 * 1000;
-constexpr qint64 kBackgroundSettleMs = 10 * 1000;
-BackgroundStep backgroundStep(qint64 nowMs, const BackgroundRecord &last, const LocalChanges &changes);
 
 #endif

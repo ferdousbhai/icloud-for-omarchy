@@ -1,10 +1,12 @@
 //! The `icloud-notes-sync` CLI: clone, pull, push, status, restore, history,
 //! diff (originally derived from icloud-md), plus `sync` (push, then pull, in
-//! one run, for the Notes app) and `vault-info`.
+//! one run, for the Notes app), `background` (a sync when one is due, what the
+//! Notes app runs every minute; `cmd::background`) and `vault-info`.
 //!
-//! clone, pull, push, sync and restore take the vault lock the Notes app holds
-//! (`cmd::lock`); status, history, diff, push --dry-run and vault-info only
-//! read, and don't.
+//! clone, pull, push, sync, restore and a background that syncs take the vault
+//! lock the Notes app holds (`cmd::lock`); status, history, diff, push
+//! --dry-run, vault-info and a background that does not sync only read, and
+//! don't.
 //!
 //! Output follows the product contract every iCloud tool shares
 //! ([`icloud_session::output`]): text on a terminal, the JSON envelope
@@ -33,8 +35,8 @@ use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{error_json, usage_error};
 use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution, render_plan};
 use icloud_notes_sync::cmd::{
-    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, clone, diff, history, pull, push, restore, status, sync,
-    vault_info,
+    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, background, clone, diff, history, pull, push, restore,
+    status, sync, vault_info,
 };
 use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
@@ -61,7 +63,7 @@ use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
                   session_service, keyring_unavailable, bad_response, iCloud failing a request; an HTTP 4xx \
                   cloudkit_request_failed is 1). status, push --dry-run and diff \
                   report their changes in the result and exit 0.\n\
-                  clone, pull, push, sync and restore take the vault's lock, shared with the Notes app (icloud-notes); \
+                  clone, pull, push, sync, restore and a background that syncs take the vault's lock, shared with the Notes app (icloud-notes); \
                   a busy lock is the error vault_busy (exit 1).",
     version
 )]
@@ -136,14 +138,25 @@ enum Command {
     },
     /// What the Notes app reads from the vault's state: title mode, default folder, tracked notes (JSON, also in text mode)
     VaultInfo { directory: Option<PathBuf> },
-    /// Whether a push has something to send, from the vault alone: no network, no lock, nothing written
+    /// What the Notes app runs every minute: a sync when one is due or local changes wait, else nothing
     #[command(
-        after_help = "data is {\"pending\", \"files\", \"newestChangeMs\"}: whether the next push sends anything \
-                      (a change the plan refuses on its own, such as conflict markers, is not pending), the note \
-                      files and folder directories it concerns, and the newest modification time (ms) among them. \
-                      The Notes app's background timer asks this every minute. Exit 0 either way."
+        after_help = "Syncs (as sync does, never with --yes) when the last sync is --every old or there was none, \
+                      or sooner when the vault has local changes to push made since the last sync started (found \
+                      from the vault alone: no network, no lock); never while one of them is younger than 10 s. A \
+                      change a sync left behind (refused, or the sync failed) waits for the next due sync or a new \
+                      edit. A due sync with nobody signed in to icloud-session, or icloud-session out of reach, is \
+                      skipped and counts as a failed one. Every sync (this one or sync) is recorded in \
+                      background.json beside the vault's state.\n\
+                      data is {\"synced\", \"step\"} (step: due, changes, settling, idle, signed_out or \
+                      session_unavailable), plus sync's \"push\", \"pull\" and \"vault_info\" when it synced. Exit 0 \
+                      when it did not sync, else sync's exit code; text mode prints nothing then."
     )]
-    Pending { directory: Option<PathBuf> },
+    Background {
+        directory: Option<PathBuf>,
+        /// A sync is due once the last one is this old (the window asks for 60 while it is in front)
+        #[arg(long, value_name = "SECS", default_value_t = background::DEFAULT_EVERY_SECS)]
+        every: u64,
+    },
     /// Diff two snapshots, or one snapshot against the current remote copy
     #[command(
         after_help = "<ref> is a snapshot id (diffed against the current remote copy) or <from>..<to> (two \
@@ -425,6 +438,83 @@ fn half_summary<T>(name: &str, half: Option<&Result<T, CliError>>) -> String {
     }
 }
 
+/// `sync` (and `background` once it syncs), with the vault locked: its
+/// data, summary, text report and exit code. The run is recorded for
+/// `background` (when it started, and whether it worked).
+fn run_sync_command(
+    target: &Path,
+    mode: Mode,
+    progress: &mut dyn SyncProgress,
+    on_status: &mut dyn FnMut(&str),
+    yes: bool,
+) -> (serde_json::Value, String, String, u8) {
+    let started = icloud_notes_sync::vault::rt::now_ms();
+    let options = push::PushOptions {
+        dry_run: false,
+        allow_deletes: yes,
+    };
+    let outcome = sync::run_sync(target, progress, on_status, &options);
+    background::record_run(target, started, outcome.exit_code() == cmd::errors::EXIT_OK);
+    // Each failed half's error, converted once for the data and the text
+    // report alike.
+    let push = outcome.push.as_ref().map_err(CliError::from);
+    let pull = outcome.pull.as_ref().map(|p| p.as_ref().map_err(CliError::from));
+    let mut push_half = sync_half_json(&push, |r| push_lines(r, target));
+    // The push run again after the pull failed: the first one's result
+    // stays, with that error.
+    let push_again = outcome.push_again.as_ref().map(CliError::from);
+    let push_failure = match &push_again {
+        Some(error) => Some(error_json(error)),
+        None => outcome.push.as_ref().ok().and_then(push_failure_json),
+    };
+    if let Some(error) = &push_failure {
+        push_half["ok"] = false.into();
+        push_half["exit_code"] = push_again.as_ref().map_or(cmd::errors::EXIT_ERROR, |e| e.exit).into();
+        push_half["error"] = error.clone();
+    }
+    let data = serde_json::json!({
+        "push": push_half,
+        "pull": pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, target))),
+        "vault_info": vault_info::run_vault_info(target).ok(),
+    });
+    let summary = format!(
+        "{}, {}",
+        if let Some(error) = &push_again {
+            format!("push failed ({})", error.code)
+        } else if push_failure.is_some() {
+            "push failed (push_rejected)".to_owned()
+        } else {
+            half_summary("push", Some(&push))
+        },
+        half_summary("pull", pull.as_ref())
+    );
+    // Text mode: each half's report, or its error on stderr, as push and
+    // pull alone would print them. A machine mode has it all in the data
+    // (no separate error object).
+    let mut lines = Vec::new();
+    if mode == Mode::Human {
+        match &push {
+            Ok(r) => lines.extend(push_lines(r, target)),
+            Err(error) => {
+                error.report(mode);
+            }
+        }
+        if let Some(error) = &push_again {
+            error.report(mode);
+        }
+        match &pull {
+            Some(Ok(s)) => lines.extend(pull_lines(s, target)),
+            Some(Err(error)) => {
+                error.report(mode);
+            }
+            // The push's error says why (no sign-in, or no network).
+            None => eprintln!("Not pulled."),
+        }
+    }
+    let text = human(mode, lines);
+    (data, summary, text, outcome.exit_code())
+}
+
 fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Result<Response, CliError> {
     let mut on_status = |message: &str| cmd::output::status(mode, message);
     let mut machine = MachineProgress { processed: 0, total: 0 };
@@ -501,69 +591,43 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
         Command::Sync { directory, yes } => {
             let target = resolve_target_dir(directory)?;
             let _lock = lock_vault(&target, wait)?;
-            let options = push::PushOptions {
-                dry_run: false,
-                allow_deletes: yes,
-            };
-            let outcome = sync::run_sync(&target, progress, &mut on_status, &options);
-            // Each failed half's error, converted once for the data and the
-            // text report alike.
-            let push = outcome.push.as_ref().map_err(CliError::from);
-            let pull = outcome.pull.as_ref().map(|p| p.as_ref().map_err(CliError::from));
-            let mut push_half = sync_half_json(&push, |r| push_lines(r, &target));
-            // The push run again after the pull failed: the first one's
-            // result stays, with that error.
-            let push_again = outcome.push_again.as_ref().map(CliError::from);
-            let push_failure = match &push_again {
-                Some(error) => Some(error_json(error)),
-                None => outcome.push.as_ref().ok().and_then(push_failure_json),
-            };
-            if let Some(error) = &push_failure {
-                push_half["ok"] = false.into();
-                push_half["exit_code"] = push_again.as_ref().map_or(cmd::errors::EXIT_ERROR, |e| e.exit).into();
-                push_half["error"] = error.clone();
-            }
-            let data = serde_json::json!({
-                "push": push_half,
-                "pull": pull.as_ref().map(|p| sync_half_json(p, |s| pull_lines(s, &target))),
-                "vault_info": vault_info::run_vault_info(&target).ok(),
-            });
-            let summary = format!(
-                "{}, {}",
-                if let Some(error) = &push_again {
-                    format!("push failed ({})", error.code)
-                } else if push_failure.is_some() {
-                    "push failed (push_rejected)".to_owned()
+            let (data, summary, text, exit) = run_sync_command(&target, mode, progress, &mut on_status, yes);
+            Response::new(data, summary).human(text).exit(exit)
+        }
+        Command::Background { directory, every } => {
+            let target = resolve_target_dir(directory)?;
+            let now = icloud_notes_sync::vault::rt::now_ms();
+            let changes = push::local_changes(&target)?;
+            let every_ms = i64::try_from(every.saturating_mul(1000)).unwrap_or(i64::MAX);
+            let step = background::decide(now, background::last_run(&target), &changes, every_ms);
+            let skipped = |step: &str| {
+                let data = serde_json::json!({ "synced": false, "step": step });
+                if mode == Mode::Human {
+                    Response::silent()
                 } else {
-                    half_summary("push", Some(&push))
-                },
-                half_summary("pull", pull.as_ref())
-            );
-            // Text mode: each half's report, or its error on stderr, as push
-            // and pull alone would print them. A machine mode has it all in
-            // the data (no separate error object).
-            let mut lines = Vec::new();
-            if mode == Mode::Human {
-                match &push {
-                    Ok(r) => lines.extend(push_lines(r, &target)),
-                    Err(error) => {
-                        error.report(mode);
-                    }
+                    Response::new(data, format!("Not synced ({step})"))
                 }
-                if let Some(error) = &push_again {
-                    error.report(mode);
-                }
-                match &pull {
-                    Some(Ok(s)) => lines.extend(pull_lines(s, &target)),
-                    Some(Err(error)) => {
-                        error.report(mode);
-                    }
-                    // The push's error says why (no sign-in, or no network).
-                    None => eprintln!("Not pulled."),
-                }
+            };
+            if !step.syncs() {
+                let name = serde_json::to_value(step).ok();
+                return Ok(skipped(name.as_ref().and_then(|v| v.as_str()).unwrap_or("idle")));
             }
-            let text = human(mode, lines);
-            Response::new(data, summary).human(text).exit(outcome.exit_code())
+            // Nobody to sync as: no connection tried, and asked again only
+            // when the next sync is due.
+            let signed_out = match icloud_session::status() {
+                Ok(status) if status.signed_in => None,
+                Ok(_) => Some("signed_out"),
+                Err(_) => Some("session_unavailable"),
+            };
+            if let Some(why) = signed_out {
+                background::record_run(&target, now, false);
+                return Ok(skipped(why));
+            }
+            let _lock = lock_vault(&target, wait)?;
+            let (mut data, summary, text, exit) = run_sync_command(&target, mode, progress, &mut on_status, false);
+            data["synced"] = true.into();
+            data["step"] = serde_json::to_value(step).unwrap_or_default();
+            Response::new(data, summary).human(text).exit(exit)
         }
         Command::Status { directory } => {
             let target = resolve_target_dir(directory)?;
@@ -596,16 +660,6 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 plural(info.notes.len(), "note", "notes")
             );
             Response::new(&info, summary).human(text).count(info.notes.len())
-        }
-        Command::Pending { directory } => {
-            let target = resolve_target_dir(directory)?;
-            let r = push::local_changes(&target)?;
-            let summary = if r.pending {
-                format!("Local changes to push: {}", r.files.len())
-            } else {
-                "Nothing to push".to_owned()
-            };
-            Response::new(&r, summary).count(r.files.len()).ids(r.files.clone())
         }
         Command::History {
             file,
