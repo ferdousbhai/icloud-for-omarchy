@@ -5,7 +5,7 @@
 #   bin/check          what this change touches: the files changed since origin/main (commits and
 #                      the working tree) pick the crates to lint and test (plus the crates that depend
 #                      on them), the Qt app's tests, the installer tests and the packaging tests.
-#   bin/check --all    everything; bin/release runs this, and so does the packages' check().
+#   bin/check --all    everything (the packages' check() in CI runs the same Rust and Qt tests).
 #
 # Always: the shared-support check (bin/check-shared-support) and its test, rustfmt. Then, as chosen:
 # clippy and the Rust tests, the Qt app's tests (notes/bin/test), install.sh's shared add_signed_repo

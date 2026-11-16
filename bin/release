@@ -15,12 +15,24 @@ fingerprint=$(sed -n 's/^SIGNING_KEY_FINGERPRINT=//p' install.sh)
 gpg --batch --list-secret-keys "$fingerprint" >/dev/null
 export GPGKEY=$fingerprint
 
+# Only what is not on origin/main yet: every push already passed bin/check for what it changed, and
+# the native CI below tests everything on both architectures before anything is signed. (Before the
+# version bump, which touches Cargo.toml and would make it every crate.)
+bin/check
 sed -i "s/^version = .*/version = \"$version\"/" Cargo.toml
 cargo update --workspace --offline
-bin/check --all
 git commit -q -a -m "Release $tag"
 git tag -a "$tag" -m "iCloud suite $version"
 source_commit=$(git rev-parse HEAD)
+release_parent=$(git rev-parse HEAD~1)
+# A CI failure takes the tag and the release commit back, so the same version can be tried again.
+withdraw() {
+  echo "$1; no release was published. Withdrawing $tag." >&2
+  git push -q origin ":refs/tags/$tag" || echo "Could not delete the remote tag; delete it with: git push origin :refs/tags/$tag" >&2
+  git tag -d "$tag" >/dev/null
+  git reset -q --hard "$release_parent"
+  exit 1
+}
 git push -q origin "$tag"
 gh workflow run packages.yml --repo "$gh_repo" --ref "$tag"
 run_id=''
@@ -30,9 +42,8 @@ for attempt in {1..60}; do
   [[ -z $run_id ]] || break
   sleep 10
 done
-[[ -n $run_id ]] || { echo "Native CI did not start; candidate tags remain for inspection." >&2; exit 1; }
-gh run watch "$run_id" --repo "$gh_repo" --exit-status \
-  || { echo "Native CI failed; no release was published. Inspect run $run_id." >&2; exit 1; }
+[[ -n $run_id ]] || withdraw "Native CI did not start"
+gh run watch "$run_id" --repo "$gh_repo" --exit-status || withdraw "Native CI failed (inspect run $run_id)"
 # Revalidate the completed run, not just its search result or filename.
 run_valid=$(gh run view "$run_id" --repo "$gh_repo" \
   --json headSha,headBranch,event,status,conclusion \

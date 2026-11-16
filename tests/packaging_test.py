@@ -151,6 +151,7 @@ class Packaging(unittest.TestCase):
             echo "gh $*" >>"$LOG"
             case "$1 $2" in
                 "run list") echo 42 ;;
+                "run watch") exit "${CI_EXIT:-0}" ;;
                 "run view") echo true ;;
                 "run download")
                     while [[ $1 != --dir ]]; do shift; done
@@ -205,6 +206,21 @@ for arch in ("x86_64", "aarch64"):
         log = Path(self.env["LOG"]).read_text()
         self.assertNotIn("--detach-sign", log)
         self.assertNotIn("gh release create", log)
+
+    def test_release_withdraws_its_tag_and_commit_when_native_ci_fails(self):
+        root = self.release_fixture()
+        before = subprocess.check_output(["/usr/bin/git", "rev-parse", "HEAD"], cwd=root, text=True)
+        result = subprocess.run([str(root / "bin/release"), "1.2.3"], env=dict(self.env, CI_EXIT="1"), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("Withdrawing v1.2.3", result.stderr)
+        log = Path(self.env["LOG"]).read_text()
+        self.assertIn("git push -q origin :refs/tags/v1.2.3", log)
+        self.assertNotIn("--detach-sign", log)
+        self.assertNotIn("gh release create", log)
+        tags = subprocess.check_output(["/usr/bin/git", "tag", "-l", "v1.2.3"], cwd=root, text=True)
+        self.assertEqual(tags, "")
+        self.assertEqual(subprocess.check_output(["/usr/bin/git", "rev-parse", "HEAD"], cwd=root, text=True), before)
+        self.assertEqual(subprocess.check_output(["/usr/bin/git", "status", "--porcelain"], cwd=root, text=True), "")
 
     def test_native_build_shares_target_and_preserves_provenance(self):
         log = self.work / "build.log"
