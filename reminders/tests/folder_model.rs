@@ -1855,6 +1855,7 @@ fn run_case(seed: u64) {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_edits_on_both_sides_and_killed_runs_keep_the_folder_and_icloud_in_step() {
     let seeds: Vec<u64> = match std::env::var("ICLOUD_REMINDERS_MODEL_SEED") {
         Ok(s) => vec![s.parse().expect("a seed")],

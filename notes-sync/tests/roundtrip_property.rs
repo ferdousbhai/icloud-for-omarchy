@@ -1470,11 +1470,13 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn codec_round_trips_are_exact_or_flagged() {
     run_suite("codec", 1500, |rng| gen_note(rng, true), smaller_notes, check_codec);
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn markdown_round_trips_are_exact_or_flagged() {
     run_suite(
         "markdown",
@@ -1755,6 +1757,7 @@ fn check_splices(case: &SpliceCase, seed: u64) -> Checked {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn splices_are_exactly_the_edit() {
     run_suite("splices", 600, gen_splice_case, |_| Vec::new(), check_splices);
 }
@@ -2630,6 +2633,7 @@ fn an_in_body_note_keeps_the_empty_line_it_starts_with_through_an_edit() {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn vault_round_trips_are_exact_or_flagged() {
     run_suite("vault", 150, |rng| gen_note(rng, true), smaller_notes, check_vault);
 }
@@ -2637,6 +2641,7 @@ fn vault_round_trips_are_exact_or_flagged() {
 /// The generated cases do reach the edges they are meant to: embeds of every
 /// kind, every paragraph kind, nesting, styles.
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn the_generator_covers_what_it_is_meant_to() {
     let mut kinds = std::collections::HashSet::new();
     let mut embeds = [0usize; 4];

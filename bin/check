@@ -5,7 +5,11 @@
 #   bin/check          what this change touches: the files changed since origin/main (commits and
 #                      the working tree) pick the crates to lint and test (plus the crates that depend
 #                      on them), the Qt app's tests, the installer tests and the packaging tests.
-#   bin/check --all    everything (the packages' check() in CI runs the same Rust and Qt tests).
+#   bin/check --all    everything routine (the packages' check() in CI runs the same Rust and Qt tests).
+#   bin/check --deep   --all plus the random-exploration suites (model-based and property tests, the
+#                      Notes window's sequence test), marked #[ignore = "deep: ..."]: for hunting bugs
+#                      after a big change, not for every push. Raise their case counts with each
+#                      suite's *_CASES variable.
 #
 # Always: the shared-support check (bin/check-shared-support) and its test, rustfmt. Then, as chosen:
 # clippy and the Rust tests, the Qt app's tests (notes/bin/test), install.sh's shared add_signed_repo
@@ -16,11 +20,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
-all=0
+all=0 deep=0
 case ${1:-} in
 --all) all=1 ;;
+--deep) all=1 deep=1 ;;
 '') ;;
-*) echo "usage: bin/check [--all]" >&2; exit 2 ;;
+*) echo "usage: bin/check [--all|--deep]" >&2; exit 2 ;;
 esac
 
 # Validate vendored support before the more expensive product checks.
@@ -96,6 +101,7 @@ if ((${#pkgs[@]})); then
   # The sign-in window needs webkitgtk-6.0; the daemon tests without it.
   if pkg-config --exists webkitgtk-6.0; then
     cargo test --locked "${pkgs[@]}"
+    ((deep)) && cargo test --locked "${pkgs[@]}" -- --ignored --skip catalog_timings_on_50k_assets # a benchmark, not a test
   elif [[ ${pkgs[0]} == --workspace ]]; then
     echo "webkitgtk-6.0 not found: testing icloud-sessiond without the sign-in window (--no-default-features)" >&2
     cargo test --locked --workspace --exclude icloud-sessiond
@@ -113,7 +119,7 @@ fi
 
 # The Qt app runs the real notes engine, so either one changing runs its tests.
 if ((all || all_rust)) || touched '^(notes|notes-sync|session)/'; then
-  notes/bin/test
+  ICLOUD_DEEP=$deep notes/bin/test
 else
   echo "Notes app: unchanged, skipped" >&2
 fi

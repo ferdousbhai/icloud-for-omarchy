@@ -911,21 +911,25 @@ fn run_part(part: u64) {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_changes_on_both_sides_always_sync_to_the_same_files_0() {
     run_part(0);
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_changes_on_both_sides_always_sync_to_the_same_files_1() {
     run_part(1);
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_changes_on_both_sides_always_sync_to_the_same_files_2() {
     run_part(2);
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_changes_on_both_sides_always_sync_to_the_same_files_3() {
     run_part(3);
 }

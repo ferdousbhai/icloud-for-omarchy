@@ -804,6 +804,7 @@ fn check(env: &Env, m: &mut Model, log: &[String]) {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_sequences_keep_every_original_once_and_the_catalog_in_step() {
     for seed in 1..=6u64 {
         let env = Env::new(&format!("model-{seed}"), 8);

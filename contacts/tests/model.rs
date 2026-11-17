@@ -795,6 +795,7 @@ fn run_case(seed: u64) {
 }
 
 #[test]
+#[ignore = "deep: random exploration, run with bin/check --deep"]
 fn random_edits_change_only_what_they_name() {
     let seeds: Vec<u64> = match std::env::var("MODEL_SEED") {
         Ok(s) => vec![s.parse().unwrap()],
