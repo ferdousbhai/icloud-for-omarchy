@@ -621,6 +621,27 @@ fn files_gone_together_delete_nothing_and_are_written_back() {
 }
 
 #[test]
+fn a_file_put_back_by_a_run_killed_before_writing_it_is_still_not_deleted() {
+    // Seed 461 of the model: the folder removed, and the run that refused
+    // to delete killed after writing only the first file back.
+    let env = start();
+    let dir = folder(&env);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let out = command_at(&env.base, env.dir.path(), &["background", "--sync"])
+        .env(icloud_reminders::folder::CRASH_AT, "file-written")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 86, "{}", stderr(&out));
+    assert_eq!(file_names(&dir).len(), 1);
+    for at in [60_000, 120_000, 180_000] {
+        let out = env.background_at(at);
+        assert_eq!(out["folder"]["lists_deleted"], json!([]), "{out}");
+    }
+    assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+    assert_eq!(modifies(&env), 0);
+}
+
+#[test]
 fn the_last_list_file_and_a_shared_list_s_file_delete_nothing() {
     let env = start();
     let dir = folder(&env);

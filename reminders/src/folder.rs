@@ -97,7 +97,9 @@
 //!   rename too ([`ListState::retitling`]); and a deletion
 //!   ([`ListState::deleting`]) is recorded before the first reminder goes,
 //!   and finished by the next run whatever the file does meanwhile, so a
-//!   list is never left half deleted.
+//!   list is never left half deleted. A file refused deletion is recorded
+//!   as being written back ([`ListState::restoring`]) until it is there: a
+//!   run killed first does not leave it to be read as removed.
 //! - What a conflict copy added is in iCloud before it is in the file. Until
 //!   the file is written with it ([`ListState::unwritten`]), a changed file
 //!   that lacks it does not delete it, and a tick taken from a copy is not
@@ -281,6 +283,10 @@ pub struct ListState {
     /// finds it set finishes the deletion.
     #[serde(default)]
     pub deleting: Option<usize>,
+    /// The file was gone and the list not deleted: it is written back, and
+    /// until it is (a run killed first) it is never read as removed.
+    #[serde(default)]
+    pub restoring: bool,
 }
 
 /// A list renamed from its file: the name, and the file now holding it.
@@ -1467,12 +1473,21 @@ fn lists_from_files(
     for ls in state.lists.values_mut() {
         if dir.join(&ls.file).exists() {
             ls.missing_since = None;
+            ls.restoring = false;
         }
     }
+    // One being written back is not gone: a run killed before writing it
+    // must not leave the next to count it as removed.
     let gone: Vec<String> = state
         .lists
         .iter()
-        .filter(|(id, ls)| list_of(id).is_some() && ls.adopted && ls.deleting.is_none() && !dir.join(&ls.file).exists())
+        .filter(|(id, ls)| {
+            list_of(id).is_some()
+                && ls.adopted
+                && ls.deleting.is_none()
+                && !ls.restoring
+                && !dir.join(&ls.file).exists()
+        })
         .map(|(id, _)| id.clone())
         .collect();
     let fresh = cache
@@ -1672,6 +1687,7 @@ fn lists_from_files(
         let ls = state.lists.get_mut(id).expect("gone lists have a state");
         if let Some(why) = why {
             ls.missing_since = None;
+            ls.restoring = true;
             report.warnings.push(format!(
                 "{}: removed, but its list was not deleted: {why}; the file was written back",
                 ls.file
@@ -1935,6 +1951,12 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
             };
         }
         state.lists.insert(list.id.clone(), ls);
+    }
+    // Written back: removed again, it is read as removed again.
+    for ls in state.lists.values_mut() {
+        if ls.restoring && dir.join(&ls.file).exists() {
+            ls.restoring = false;
+        }
     }
     Ok(report)
 }

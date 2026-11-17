@@ -988,6 +988,10 @@ impl Case {
             return;
         };
         let id = self.lists[li].id.clone();
+        // Not a list deleted in iCloud meanwhile: its file goes anyway.
+        if !truth(&self.env.state).lists.iter().any(|l| l.id == id) {
+            return;
+        }
         self.note(format!("flap {}", self.lists[li].file));
         for gone in [true, false, true, false] {
             if gone {
@@ -1790,6 +1794,7 @@ impl Case {
                 || ls.missing_since.is_some()
                 || ls.retitling.is_some()
                 || ls.deleting.is_some()
+                || ls.restoring
                 || std::fs::read_to_string(dir.join(&ls.file)).ok().as_ref() != Some(&ls.text);
             if open {
                 self.fail(&format!("{id} has not settled: {ls:?}"));
