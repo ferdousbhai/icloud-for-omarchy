@@ -2,8 +2,11 @@
 //! the edits made to the Markdown files in `~/Documents/Reminders` at once
 //! (the folder's code is [`folder`]; reading and changing reminders is done
 //! in those files), `icloud-reminders background` is what the systemd timer
-//! runs, and with no command it opens the app. Output follows the shared
-//! product contract ([`icloud_session::output`]): text on a terminal, the
+//! runs, `icloud-reminders leave` hands the folder to Omacloud for good
+//! (after which `sync` refuses and `background` notifies from the files
+//! alone, [`crate::files`]), and with no command it opens the app. Output
+//! follows the shared product contract ([`icloud_session::output`]): text
+//! on a terminal, the
 //! JSON envelope when piped, `--json`/`--styled`/`--quiet`/`--ids-only`/
 //! `--count` to choose.
 //!
@@ -19,7 +22,8 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use icloud_app::cli::{no_data_dir, other, session_failure, warn, warning};
+use icloud_app::cli::{confirm, no_data_dir, other, session_failure, warn, warning};
+use icloud_app::leave::{self, Left};
 use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use jiff::tz::TimeZone;
@@ -27,10 +31,11 @@ use serde_json::{Value, json};
 
 use crate::cloudkit::{self, SessionTransport};
 use crate::due;
+use crate::files;
 use crate::folder;
 use crate::notify;
 use crate::service::{self, Service};
-use crate::store::Store;
+use crate::store::{Cache, Store};
 
 const AFTER_HELP: &str = "\
 Reminders are read and changed in ~/Documents/Reminders, one Markdown
@@ -68,7 +73,9 @@ Exit codes:
   2 usage
   3 sign_in_required (icloud-session sign-in), session_rejected (iCloud
     keeps refusing the session although icloud-sessiond still holds it:
-    sign in again)
+    sign in again), left_icloud (the reminders left iCloud on this
+    computer: change the files), and leave's omacloud_missing,
+    omacloud_not_set_up, omacloud_folder_off (the hint names the command)
   4 not_found
   5 offline, keyring_unavailable (the keyring holding the session is
     locked: unlock it), bad_response (iCloud answered with something
@@ -131,6 +138,26 @@ enum Command {
         #[arg(long)]
         sync: bool,
     },
+    /// Leave iCloud: hand ~/Documents/Reminders to Omacloud for good.
+    ///
+    /// Needs Omacloud installed, set up and syncing ~/Documents (each
+    /// missing step is refused with the command that does it, and nothing
+    /// changes). Syncs with iCloud a last time so the files hold every
+    /// reminder, then stops talking to iCloud on this computer: the files
+    /// are the reminders, Omacloud carries them to your other computers,
+    /// and the timer still notifies when one falls due. iCloud keeps its
+    /// copy as it was. What a file cannot hold stays behind in iCloud:
+    /// alerts, priority, flags, repeats, list colours, groups, sections,
+    /// sharing, and reminders completed over a week ago (`lost` counts
+    /// them). Run it on each computer.
+    ///
+    /// JSON: {folder, left_at, already, omacloud_synced, lost: {completed_long_ago, alerts, priority, flagged, lists_with_colour, shared_lists, groups}}
+    #[command(after_help = AFTER_HELP)]
+    Leave {
+        /// Leave without asking.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// A failure: the contract's error object and exit code.
@@ -185,21 +212,30 @@ struct Cli<'a> {
 
 impl Cli<'_> {
     fn dispatch(&self, command: Command) -> Outcome {
-        match command {
-            Command::Sync { full } => self.sync(full),
-            Command::Background { sync } => self.background(sync),
+        let left = self.svc.store.left().map_err(file)?;
+        match (command, left) {
+            (Command::Leave { yes }, left) => self.leave(yes, left),
+            (Command::Sync { .. }, Some(left)) => Err(leave::left_error("Reminders", &left)),
+            (Command::Background { .. }, Some(left)) => self.background_files(&left.folder),
+            (Command::Sync { full }, None) => self.sync(full),
+            (Command::Background { sync }, None) => self.background(sync),
         }
     }
 
     /// One folder run under its lock: the files' changes to iCloud and
     /// iCloud's state to the files, with the state saved whatever happened.
-    /// `None` without a home directory to keep the folder in.
+    /// `None` without a home directory to keep the folder in, or once the
+    /// reminders left iCloud (a run that waited for the lock while `leave`
+    /// held it).
     fn folder_run(&self) -> Result<Option<folder::Report>, Failure> {
         let store = &self.svc.store;
         let _lock = store.folder_lock().map_err(file)?;
         let Some(dir) = folder::default_dir() else {
             return Ok(None);
         };
+        if store.left().map_err(file)?.is_some() {
+            return Ok(None);
+        }
         let mut state = store.folder().map_err(file)?.unwrap_or_default();
         let now = folder::clock().to_zoned(self.local.clone());
         let result = folder::sync(&self.svc, &dir, &mut state, &now);
@@ -243,6 +279,154 @@ impl Cli<'_> {
             }
         }
         report
+    }
+
+    /// `icloud-reminders leave`: see [`Command::Leave`] and
+    /// `icloud_app::leave`.
+    fn leave(&self, yes: bool, left: Option<Left>) -> Outcome {
+        let store = &self.svc.store;
+        if let Some(left) = left {
+            // Again: the folder goes to Omacloud once more, in case it was
+            // not there to take it the first time.
+            leave::release(&left.folder).map_err(file)?;
+            let synced = omacloud_sync();
+            let out = json!({
+                "folder": left.folder,
+                "left_at": left.at,
+                "already": true,
+                "omacloud_synced": synced,
+                "lost": Value::Null,
+            });
+            let text = format!(
+                "Reminders left iCloud already; Omacloud syncs {}",
+                left.folder.display()
+            );
+            return Ok(Response::new(out, text));
+        }
+        let dir = folder::default_dir().ok_or_else(|| other("no home directory ($HOME) to keep the reminders in"))?;
+        leave::omacloud_ready(&dir)?;
+        let lost_now = Lost::of(&self.svc.cache().map_err(cloud_error)?, service::now_ms());
+        let question = format!(
+            "Leave iCloud? The reminders on this computer become the files in {}, which Omacloud syncs; nothing here talks to iCloud again, and iCloud keeps its copy as it is. {} Leave?",
+            dir.display(),
+            lost_now.sentence()
+        );
+        confirm(self.mode, "leave", yes, &question)?;
+
+        // A last sync: the files hold every reminder as iCloud has it, and
+        // the edits made to them are in iCloud too.
+        let report = self.svc.sync(false).map_err(cloud_error)?;
+        if let Some(w) = report.warning() {
+            warning(&w);
+        }
+        let folder_report = self
+            .folder_run()?
+            .ok_or_else(|| other("the folder was not written: no home directory"))?;
+        let mut trouble: Vec<String> = folder_report.warnings.clone();
+        trouble.extend(
+            folder_report
+                .restored
+                .iter()
+                .map(|r| format!("{} was put back (it no longer listed most of its list)", r.file)),
+        );
+        trouble.extend(
+            folder_report
+                .waiting
+                .iter()
+                .map(|n| format!("{n} changed in the last {} seconds", folder::SETTLE_MS / 1000)),
+        );
+        if !trouble.is_empty() {
+            return Err(CliError::new(
+                "folder_unsettled",
+                EXIT_ERROR,
+                format!(
+                    "the folder is not in step with iCloud yet, so nothing was left: {}",
+                    trouble.join("; ")
+                ),
+            )
+            .hint("see to it (or wait a few seconds), then run `icloud-reminders leave` again"));
+        }
+        let now = folder::clock().to_zoned(self.local.clone());
+        let lost = Lost::of(
+            &self.svc.cache().map_err(cloud_error)?,
+            now.timestamp().as_millisecond(),
+        );
+        // What waits to fall due now notifies when it does, from the files.
+        let items = files::open_due(&dir, &now).map_err(file)?;
+        let (_, waiting) = files::due_now(items, &files::Waiting::default(), now.timestamp().as_millisecond());
+        let left = {
+            // Not while a timer's folder run is under way: it would put the
+            // marker back.
+            let _folder = store.folder_lock().map_err(file)?;
+            let _lock = store.lock().map_err(file)?;
+            store.save_waiting(&waiting).map_err(file)?;
+            let left = store.save_left(&dir).map_err(file)?;
+            leave::release(&dir).map_err(file)?;
+            left
+        };
+        let synced = omacloud_sync();
+        let out = json!({
+            "folder": dir,
+            "left_at": left.at,
+            "already": false,
+            "omacloud_synced": synced,
+            "lost": lost.json(),
+        });
+        let text = format!(
+            "Reminders left iCloud: {} is yours now, synced by Omacloud. Run `icloud-reminders leave` on your other computers too.",
+            dir.display()
+        );
+        Ok(Response::new(out, text))
+    }
+
+    /// The timer once the reminders left iCloud: relative due dates in the
+    /// files pinned, and the reminders that just fell due notified, from
+    /// the files alone.
+    fn background_files(&self, dir: &std::path::Path) -> Outcome {
+        let store = &self.svc.store;
+        let now = folder::clock().to_zoned(self.local.clone());
+        let pinned = {
+            let _folder = store.folder_lock().map_err(file)?;
+            files::pin_folder(dir, &now).map_err(file)?
+        };
+        let items = files::open_due(dir, &now).map_err(file)?;
+        let _lock = store.lock().map_err(file)?;
+        let previous = store.waiting().map_err(file)?;
+        let (fire, mut next) = files::due_now(items, &previous, now.timestamp().as_millisecond());
+        let mut notified = Vec::new();
+        let mut titles = Vec::new();
+        for r in fire {
+            match notify::send(&r.title, &r.text(&self.local)) {
+                Ok(()) => {
+                    notified.push(json!({ "list": r.list, "title": r.title }));
+                    titles.push(r.title.clone());
+                }
+                Err(e) => {
+                    warning(&format!("could not notify about \"{}\": {e}", r.title));
+                    // Try again next minute.
+                    next.keys.insert(r.key());
+                }
+            }
+        }
+        store.save_waiting(&next).map_err(file)?;
+        let count = notified.len();
+        let quiet = count == 0 && pinned.is_empty();
+        if quiet && self.mode == Mode::Human {
+            return Ok(Response::silent());
+        }
+        let out = json!({
+            "synced": false,
+            "sync_error": Value::Null,
+            "notified": notified,
+            "folder": Value::Null,
+            "left": true,
+            "pinned": pinned,
+        });
+        let mut text = format!("Notified about {count} reminder(s)");
+        if !pinned.is_empty() {
+            text.push_str(&format!("; due dates pinned in {}", pinned.join(", ")));
+        }
+        Ok(Response::new(out, text).ids(titles).count(count))
     }
 
     fn sync(&self, full: bool) -> Outcome {
@@ -367,6 +551,90 @@ impl Cli<'_> {
             return Ok(Response::silent());
         }
         Ok(Response::new(out, text).ids(ids))
+    }
+}
+
+/// Asks Omacloud to take the released folder in now; a failure is a
+/// warning, as its daemon takes it in at its next sync anyway.
+fn omacloud_sync() -> bool {
+    match leave::omacloud_sync() {
+        Ok(()) => true,
+        Err(e) => {
+            warning(&format!(
+                "Omacloud did not sync yet ({}); it takes the folder in at its next sync",
+                e.message
+            ));
+            false
+        }
+    }
+}
+
+/// What the files cannot hold, which stays behind in iCloud on leaving.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Lost {
+    completed_long_ago: usize,
+    alerts: usize,
+    priority: usize,
+    flagged: usize,
+    lists_with_colour: usize,
+    shared_lists: usize,
+    groups: usize,
+}
+
+impl Lost {
+    fn of(cache: &Cache, now_ms: i64) -> Lost {
+        let lists: Vec<_> = cache.lists.iter().filter(|l| !l.group).collect();
+        let mut lost = Lost {
+            lists_with_colour: lists.iter().filter(|l| l.color.is_some()).count(),
+            shared_lists: lists.iter().filter(|l| l.shared).count(),
+            groups: cache.lists.iter().filter(|l| l.group).count(),
+            ..Lost::default()
+        };
+        for r in cache.reminders.values() {
+            if r.completed && r.completed_ms.is_none_or(|ms| now_ms - ms >= folder::KEEP_DONE_MS) {
+                lost.completed_long_ago += 1;
+                continue;
+            }
+            lost.alerts += usize::from(r.alarms > 0);
+            lost.priority += usize::from(r.priority != 0);
+            lost.flagged += usize::from(r.flagged);
+        }
+        lost
+    }
+
+    fn json(&self) -> Value {
+        json!({
+            "completed_long_ago": self.completed_long_ago,
+            "alerts": self.alerts,
+            "priority": self.priority,
+            "flagged": self.flagged,
+            "lists_with_colour": self.lists_with_colour,
+            "shared_lists": self.shared_lists,
+            "groups": self.groups,
+        })
+    }
+
+    /// The confirmation's sentence on what stays behind.
+    fn sentence(&self) -> String {
+        let parts: Vec<String> = [
+            (self.completed_long_ago, "reminders completed over a week ago"),
+            (self.alerts, "reminders' alerts"),
+            (self.priority, "priorities"),
+            (self.flagged, "flags"),
+            (self.lists_with_colour, "list colours"),
+            (self.shared_lists, "lists' sharing"),
+            (self.groups, "groups"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+        let repeats = "repeats and sections, which the files never held";
+        if parts.is_empty() {
+            format!("The files hold everything but {repeats}.")
+        } else {
+            format!("Staying behind in iCloud: {}, and {repeats}.", parts.join(", "))
+        }
     }
 }
 

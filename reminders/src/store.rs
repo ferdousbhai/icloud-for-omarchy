@@ -9,6 +9,9 @@
 //! - `folder.json`: the Markdown folder ([`crate::folder`]): each list's
 //!   file as last written, and the lines being added. `folder.lock` is held over a folder run, which
 //!   takes `lock` itself for each write.
+//! - `left-icloud.json`: there once the reminders left iCloud on this
+//!   computer (`icloud-reminders leave`); `files-waiting.json` then holds
+//!   what the files-only timer saw waiting to fall due ([`crate::files`]).
 //! - `lock`: `flock`ed around every read-modify-write of those, so the
 //!   window, the command line and the background timer never interleave.
 //!
@@ -18,13 +21,19 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use icloud_app::leave::Left;
 use icloud_app::store;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
+use crate::files::Waiting;
 use crate::folder;
+
+/// `icloud_app::leave`'s record of leaving iCloud, in the data directory.
+const LEFT_FILE: &str = "left-icloud.json";
 use crate::model::{List, Reminder};
 
 /// Bumped when `cache.json` changes shape; an older one is synced afresh.
@@ -145,6 +154,33 @@ impl Store {
 
     pub fn save_folder(&self, state: &folder::State) -> io::Result<()> {
         store::write_json(&self.dir.join("folder.json"), state)
+    }
+
+    /// Whether the reminders left iCloud on this computer
+    /// (`icloud-reminders leave`): `left-icloud.json`, as
+    /// `icloud_app::leave::left` reads it for the default directory.
+    pub fn left(&self) -> io::Result<Option<Left>> {
+        store::read_json(&self.dir.join(LEFT_FILE))
+    }
+
+    pub fn save_left(&self, folder: &Path) -> io::Result<Left> {
+        let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let left = Left {
+            version: 1,
+            at,
+            folder: folder.to_path_buf(),
+        };
+        store::write_json(&self.dir.join(LEFT_FILE), &left)?;
+        Ok(left)
+    }
+
+    /// What the files-only timer saw waiting ([`crate::files`]).
+    pub fn waiting(&self) -> io::Result<Waiting> {
+        Ok(store::read_json(&self.dir.join("files-waiting.json"))?.unwrap_or_default())
+    }
+
+    pub fn save_waiting(&self, w: &Waiting) -> io::Result<()> {
+        store::write_json(&self.dir.join("files-waiting.json"), w)
     }
 
     /// Held over a whole folder run, so two never work on the same files.

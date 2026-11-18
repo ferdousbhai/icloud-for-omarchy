@@ -1819,7 +1819,7 @@ impl Case {
         let hidden: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with('.'))
+            .filter(|n| n.starts_with('.') && n != icloud_app::leave::MARKER)
             .collect();
         if !hidden.is_empty() {
             self.fail(&format!("the folder still holds {hidden:?}"));
