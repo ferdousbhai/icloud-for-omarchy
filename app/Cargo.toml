@@ -2,7 +2,7 @@
 name = "icloud-app"
 version.workspace = true
 edition.workspace = true
-description = "What the iCloud GTK apps (Photos, Find My, Reminders, Contacts) share; internal, builds no binary"
+description = "What the iCloud GTK apps (Photos, Find My, Reminders, and Cloud Contacts) share; internal, builds no binary"
 license.workspace = true
 repository.workspace = true
 publish = false

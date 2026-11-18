@@ -6,12 +6,12 @@
 #   curl -fsSL .../install.sh | sudo bash -s -- icloud-photos        # just one app
 #
 # With no arguments it installs DEFAULT_PACKAGES below: every app
-# (icloud-notes, icloud-photos, icloud-findmy, icloud-drive, icloud-reminders,
-# icloud-contacts). Name packages to install only those; icloud-session
+# (icloud-notes, icloud-photos, icloud-findmy, icloud-drive, icloud-reminders).
+# Name packages to install only those; icloud-session
 # (the Apple sign-in every app shares) can be named too, and comes in as a
 # dependency anyway. Each release also carries install-notes.sh,
-# install-photos.sh, install-findmy.sh, install-drive.sh, install-reminders.sh and
-# install-contacts.sh: this script with DEFAULT_PACKAGES set to that one
+# install-photos.sh, install-findmy.sh, install-drive.sh and install-reminders.sh:
+# this script with DEFAULT_PACKAGES set to that one
 # app (bin/make-installers writes them).
 #
 # Every step is idempotent, so re-running is safe. It trusts the
@@ -25,7 +25,7 @@ set -euo pipefail
 REPO=icloud-for-omarchy
 RELEASES=${ICLOUD_RELEASES:-https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download}
 SIGNING_KEY_FINGERPRINT=52130299581DAD685226900CA89CA1A6A1E74251
-PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts)
+PACKAGES=(icloud-session icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders)
 # What a run with no arguments installs: every app, which is all but
 # icloud-session. bin/make-installers rewrites this one line for the
 # per-app installers.
@@ -252,10 +252,14 @@ main() {
       icloud-photos) echo 'Launch "Photos" from the app launcher (Super + Space).' ;;
       icloud-findmy) echo 'Launch "Find My" from the app launcher (Super + Space).' ;;
       icloud-reminders) echo 'Launch "Reminders" from the app launcher (Super + Space).' ;;
-      icloud-contacts) echo 'Launch "Contacts" from the app launcher (Super + Space).' ;;
       icloud-drive) echo 'Turn on iCloud Drive (it syncs ~/iCloud Drive, downloading your whole Drive first): icloud-drive start' ;;
     esac
   done
+  # Contacts left this suite for Cloud Contacts, which shows iCloud and
+  # Google together; the old package keeps working until then.
+  if pacman -Q icloud-contacts >/dev/null 2>&1; then
+    echo 'Contacts moved to Cloud Contacts (iCloud and Google together): curl -fsSL https://ferdousbhai.com/cloud-contacts/install.sh | sudo bash'
+  fi
   cat <<EOT
 If you have not signed in to iCloud yet, each app offers Apple's sign-in page
 (or, from a terminal: icloud-session sign-in). One sign-in serves every app.

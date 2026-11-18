@@ -1,5 +1,5 @@
-//! What the windows of the iCloud GTK apps share (Find My, Reminders,
-//! Contacts): [`main`] and [`application`] for a `*-app` binary,
+//! What the windows of the iCloud GTK apps share (Find My, Reminders, and
+//! Cloud Contacts by git): [`main`] and [`application`] for a `*-app` binary,
 //! [`background`], and the sign-in banner ([`SignInBanner`]). Internal: it
 //! builds no binary and ships in no package of its own.
 //!

@@ -128,7 +128,7 @@ without_omarchy() { awk '/^[[:space:]]*\[/ { omit = ($0 ~ /^[[:space:]]*\[omarch
 
 setup
 bash install.sh >"$work/out" 2>&1
-check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts" ]
+check "install.sh with no arguments installs every app" [ "$(installed)" = "icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders" ]
 check "the repository config is written" grep -qx 'Server = https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download' /etc/pacman.d/icloud-for-omarchy.conf
 check "the Include line is added" [ "$(count_include icloud-for-omarchy)" = 1 ]
 check "the Omarchy hook is installed" [ -x "$hooks/icloud-for-omarchy" ]
@@ -139,11 +139,17 @@ check "re-running keeps one Include line" [ "$(count_include icloud-for-omarchy)
 check "on Omarchy it installs with omarchy-pkg-add" grep -q '^omarchy-pkg-add icloud-notes' "$PACMAN_LOG"
 check "on Omarchy it never runs pacman -Syu (Omarchy's update guard aborts it)" not grep -q '^pacman -Syu' "$PACMAN_LOG"
 check "nothing outdated, no update hint" not grep -q 'newer version is available' "$work/out"
+check "without icloud-contacts, nothing about Cloud Contacts" not grep -q 'Cloud Contacts' "$work/out"
+check "no installer for Contacts any more" [ ! -e "$work/dist/install-contacts.sh" ]
 PACMAN_HAVE=0.11.1-1 PACMAN_NEW=0.12.1-1 bash install.sh icloud-notes >"$work/out" 2>&1
 check "an installed older app is named with both versions" grep -q 'icloud-notes 0.11.1-1 -> 0.12.1-1' "$work/out"
 check "and the way to update it is given" grep -q "Run 'omarchy update'" "$work/out"
 PACMAN_HAVE=0.12.1-1 PACMAN_NEW=0.12.1-1 bash install.sh icloud-notes >"$work/out" 2>&1
 check "an up-to-date app gets no update hint" not grep -q 'newer version is available' "$work/out"
+check "with icloud-contacts installed, the way to Cloud Contacts is given" grep -qF 'Contacts moved to Cloud Contacts (iCloud and Google together): curl -fsSL https://ferdousbhai.com/cloud-contacts/install.sh | sudo bash' "$work/out"
+status=0
+bash install.sh icloud-contacts >/dev/null 2>&1 || status=$?
+check "icloud-contacts is no longer a package here" [ "$status" = 64 ]
 
 # ARM's update helper removes the old [omarchy] block before appending
 # a restricted replacement. A trailing Include must survive that rewrite.
@@ -167,10 +173,10 @@ for tool in bash sh sed grep mktemp mkdir rm tee id getent cut install chown chm
   ln -sf "$(command -v "$tool")" "$work/plain/$tool"
 done
 PATH="$work/plain" bash install.sh >"$work/plain.out" 2>&1 || true
-check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts' "$PACMAN_LOG"
+check "without Omarchy it installs in one pacman -Syu" grep -qx 'pacman -Syu --needed --noconfirm icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders' "$PACMAN_LOG"
 
 # Reminders last: the checks after the loop read its output.
-for app in notes photos findmy drive contacts reminders; do
+for app in notes photos findmy drive reminders; do
   setup
   bash "$work/dist/install-$app.sh" >"$work/out" 2>&1
   check "install-$app.sh installs only icloud-$app" [ "$(installed)" = "icloud-$app" ]

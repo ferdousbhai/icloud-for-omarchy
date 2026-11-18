@@ -1,7 +1,7 @@
 # Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
-# One committed workspace build emits the seven independently installable packages.
+# One committed workspace build emits the six independently installable packages.
 pkgbase=icloud-for-omarchy
-pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-drive icloud-reminders icloud-contacts)
+pkgname=(icloud-session icloud-photos icloud-findmy icloud-notes icloud-drive icloud-reminders)
 _root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 _suite_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_root/Cargo.toml")
 _rustflags=${RUSTFLAGS:-}
@@ -156,8 +156,3 @@ package_icloud-reminders() {
   _install_background_timer reminders/data
 }
 
-package_icloud-contacts() {
-  pkgdesc='iCloud Contacts on Omarchy: browse, search, add, edit and delete contacts'
-  depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme')
-  _package_gtk_app IcloudContacts
-}

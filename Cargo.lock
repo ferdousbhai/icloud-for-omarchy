@@ -913,25 +913,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "icloud-contacts"
-version = "0.12.3"
-dependencies = [
- "clap",
- "gtk4",
- "icloud-app",
- "icloud-app-ui",
- "icloud-session",
- "libadwaita",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tiny_http",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "icloud-drive"
 version = "0.12.3"
 dependencies = [

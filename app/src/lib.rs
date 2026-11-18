@@ -1,4 +1,4 @@
-//! What the iCloud GTK apps share (Photos, Find My, Reminders, Contacts):
+//! What the iCloud GTK apps share (Photos, Find My, Reminders, and Cloud Contacts by git):
 //! the helpers each of them used to carry a copy of. Internal: it builds no
 //! binary and ships in no package of its own.
 //!

@@ -13,6 +13,7 @@ GROUPS = {
         'cloud-mail/crates/cloudmail/src/agent_skill.rs',
         'cloud-calendar/crates/cloud-calendar/src/agent_skill.rs',
         'omacloud/crates/omacloud/src/agent_skill.rs',
+        'cloud-contacts/crates/cloud-contacts/src/agent_skill.rs',
     ],
     'recall_client.rs': [
         'icloud-for-omarchy/photos/src/recall_client.rs',

@@ -7,10 +7,10 @@ skill text are outside this shared boundary.
 
 | Canonical implementation | Copies |
 | --- | --- |
-| `icloud-for-omarchy/sessiond/src/agent_skill.rs` | `cloud-mail/crates/cloudmail/src/`, `cloud-calendar/crates/cloud-calendar/src/`, `omacloud/crates/omacloud/src/` |
+| `icloud-for-omarchy/sessiond/src/agent_skill.rs` | `cloud-mail/crates/cloudmail/src/`, `cloud-calendar/crates/cloud-calendar/src/`, `omacloud/crates/omacloud/src/`, `cloud-contacts/crates/cloud-contacts/src/` |
 | `icloud-for-omarchy/photos/src/recall_client.rs` | `cloud-mail/crates/cloudmail-gtk/src/`, `cloud-calendar/crates/cloud-calendar-gtk/src/` |
 
-`bin/check-shared-support` is itself identical in all four repositories; its
+`bin/check-shared-support` is itself identical in all five repositories; its
 canonical copy is in icloud-for-omarchy. `bin/check` runs it before product checks.
 It reads files only, compares available sibling copies byte for byte, and checks
 canonical SHA-256 digests in each product’s scoped `shared-support.json`.
@@ -42,12 +42,13 @@ To change a shared implementation:
    updated manifest with its product's source change.
 
 Changing the checker itself follows the same explicit copy/review process;
-copy the canonical script to all four repositories before normal checks.
+copy the canonical script to all five repositories before normal checks.
 Checker code drift is reported as `Checker sync mismatch`; support file drift
 is reported separately as a product source copy/digest mismatch.
 `icloud-for-omarchy/tests/test_shared_support.py` tests drift detection, standalone
 checks, missing files and digest recording using disposable fixture checkouts.
 
-Cloud Contacts and Cloud Tasks, which shared Python support files and once held
-the canonical checker, were retired on 2026-11-14 for `icloud-contacts` and
-`icloud-reminders` in icloud-for-omarchy.
+Cloud Tasks, which shared Python support files, was retired on 2026-11-14 for
+`icloud-reminders` in icloud-for-omarchy. Cloud Contacts was retired the same
+day and came back on 2026-11-18 as a Rust app that shows iCloud and Google
+contacts side by side; it shares `agent_skill.rs` again.

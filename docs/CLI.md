@@ -16,15 +16,15 @@ is the short version for an agent.
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes; `leave` hands the library folder to Omacloud for good |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
 | `icloud-reminders <command>` | icloud-reminders | the Reminders app: `sync` (iCloud and the Markdown lists in `~/Documents/Reminders`, where reminders are read and changed); `background` is its notification timer; `leave` hands the folder to Omacloud for good |
-| `icloud-contacts <command>` | icloud-contacts | the Contacts app: search, show, add, edit, delete, vCard export |
 | `icloud-drive <command>` | icloud-drive | the sync of the folder `~/iCloud Drive`: status, a sync now, on and off (no window) |
 
-`icloud-notes`, `icloud-photos`, `icloud-findmy`, `icloud-reminders` and
-`icloud-contacts` open their window without arguments and run their CLI
-without GUI initialization when given a command. Photos, Find My, Reminders
-and Contacts use GTK-free CLI binaries and separate native windows
-(`icloud-photos-app`, `icloud-findmy-app`, `icloud-reminders-app`,
-`icloud-contacts-app`).
+`icloud-notes`, `icloud-photos`, `icloud-findmy` and `icloud-reminders`
+open their window without arguments and run their CLI without GUI
+initialization when given a command. Photos, Find My and Reminders use
+GTK-free CLI binaries and separate native windows (`icloud-photos-app`,
+`icloud-findmy-app`, `icloud-reminders-app`). Contacts is
+[Cloud Contacts](https://github.com/ferdousbhai/cloud-contacts) now
+(`cloud-contacts`, iCloud and Google together; it replaces `icloud-contacts`).
 
 ## The audit: GUI feature → command
 
@@ -135,24 +135,6 @@ once.
 | Groups, sections, sharing, alerts, priority, flags | not in the files: the app or an Apple device |
 | (no window action) | `icloud-reminders leave`: the folder goes to Omacloud and iCloud is left; the window then only shows where the files are, with Open Folder |
 
-### Contacts (`contacts/src/bin/app`)
-
-The app and its command line were written together; every window action
-has its command.
-
-| In the window | Command |
-|---|---|
-| Sidebar: every contact, by last name | `icloud-contacts list` |
-| Search box (names, companies, emails, phone digits) | `icloud-contacts list QUERY` |
-| Click a contact (its card) | `icloud-contacts show CONTACT` (`me`: My Card) |
-| Click a number, address or note (copy) | `icloud-contacts --quiet show CONTACT` and read the field |
-| + (New Contact) | `icloud-contacts add [--first N] [--last N] [--company C] [--phone [LABEL=]P]... [--email [LABEL=]E]... [--url [LABEL=]U]... [--birthday D] [--notes T]` |
-| Pencil (Edit): fields, add or empty a row | `icloud-contacts edit CONTACT [--FIELD V]... [--phone/--email/--url V]... [--remove-phone/--remove-email/--remove-url V]...` |
-| Trash (Delete) | `icloud-contacts delete CONTACT --yes` |
-| (no window equivalent) | `icloud-contacts export [CONTACT]... [--output FILE]` (vCard 3.0; piped output is the JSON envelope, so write the file with `--output`); added for moving an address book elsewhere |
-| Sync (Ctrl+R; every 5 min while shown) | `icloud-contacts sync` |
-| Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
-
 ### iCloud Drive (`drive/`)
 
 No window: the folder `~/iCloud Drive` is the interface, and files are read
@@ -222,9 +204,8 @@ PATH (a development build).
 
 ## Conventions every tool follows
 
-All eight tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
-`icloud-photos`, `icloud-findmy`, `icloud-reminders`, `icloud-contacts`,
-`icloud-drive`) follow the same output contract
+All seven tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
+`icloud-photos`, `icloud-findmy`, `icloud-reminders`, `icloud-drive`) follow the same output contract
 (`session/src/output.rs` for the Rust tools; `notes/src/cli.cpp` mirrors it).
 
 ### Output modes
@@ -314,13 +295,13 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
   terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
   `restore`, and a `write` that empties a note, which the next push deletes;
   `icloud-photos delete`; `icloud-findmy play-sound`,
-  `lost-mode`; `icloud-contacts delete`) ask there; anywhere else they refuse with `usage` (exit 2)
+  `lost-mode`) ask there; anywhere else they refuse with `usage` (exit 2)
   unless `--yes` is given. (`icloud-session set-password` reads the password
   from a terminal without echo, or from stdin.)
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
-  `ICLOUD_SESSION_MOCK_URL` (no D-Bus; photos, findmy, reminders and
-  contacts talk to a fake Apple server, `examples/` in each crate),
-  `--data-dir DIR` on each of those four, `icloud-notes --vault DIR` (or
+  `ICLOUD_SESSION_MOCK_URL` (no D-Bus; photos, findmy and reminders
+  talk to a fake Apple server, `examples/` in each crate),
+  `--data-dir DIR` on each of those three, `icloud-notes --vault DIR` (or
   `ICLOUD_NOTES_VAULT`).
 
 ### `--ids-only` and `--count` per command
@@ -333,7 +314,6 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 | icloud-photos | `albums`: album ids; `list`, `info`, `thumb`, `open`, `copy`, `wallpaper`: item ids; `download`, `delete`, `restore`: the ids that succeeded; `upload`: the new asset ids (duplicates included) | the same ids, counted; `prune-cache`: files removed |
 | icloud-findmy | `devices`, `locate`, `play-sound`, `lost-mode`: device ids | `devices`: devices; `history`: positions; `prune-history`: positions deleted |
 | icloud-reminders | `background`: the reminders it notified about | `sync`: records changed; `background`: notifications sent |
-| icloud-contacts | `list`, `show`, `add`, `edit`, `delete`, `export`: contact ids | `list`, `export`: contacts; a change: 1; `sync`: cards changed |
 | icloud-drive | `sync`: one line per change made (or planned) | `sync`: changes made (or planned) |
 
 ### Exit codes
@@ -419,16 +399,6 @@ they exit with the engine's codes, below.
 timer that fails every minute while signed out would only fill the journal.
 `sync` that cannot sync fails with the code (3 or 5) and leaves the files as
 they are: their edits are sent by the next sync that works.
-
-**icloud-contacts**
-
-| Exit | Codes |
-|---|---|
-| 1 | `cancelled`, `io`, `error` (also a card iCloud refused, or removing a value the contact does not have), `http` (a 4xx) |
-| 2 | `usage` (also `delete` without `--yes` when nobody can be asked), `ambiguous` (the hint lists up to 20 matches with their IDs) |
-| 3 | `sign_in_required`, `session_rejected` |
-| 4 | `not_found` (no contact matches, or there is no My Card for `me`) |
-| 5 | `offline` (no network; `--cached` reads the last sync), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 **icloud-drive**
 
@@ -831,40 +801,6 @@ The window shows where the files are, with Open Folder. Leave on each
 computer: one still on iCloud keeps its folder out of Omacloud until it
 leaves too, and then the two copies are joined, deleting nothing.
 
-### icloud-contacts
-
-```console
-$ icloud-contacts --quiet list "ann"
-[{"id":"3C9E...","name":"Ann Lee","first":"Ann","last":"Lee","company":"Acme","is_company":false,"me":false,
-  "phones":[{"label":"mobile","value":"+1 (555) 010-0100"}],"emails":[{"label":"work","value":"ann@acme.example"}],
-  "urls":[],"addresses":[...],"birthday":"1990-05-01","notes":null,"has_photo":true,...}]
-$ icloud-contacts --quiet add --first Cleo --last Park --phone work=+44 20 7946 0000 --email cleo@example.org
-{"action":"add","contact":{"id":"...","name":"Cleo Park",...}}
-$ icloud-contacts --quiet edit "cleo park" --job-title Designer --remove-phone "20 7946 0000"
-```
-
-- Reading commands sync first; `--cached` skips that and reads what the
-  last sync left. Without a network every command but a `--cached` read
-  fails with `offline` (or `network`, for a connection that broke); nothing
-  is queued.
-- A phone number names a contact by its digits: `555-0100` finds
-  `+1 555 0100`.
-- `add` needs a name, company, phone or email; `--is-company` (with
-  `--company`) makes the card a company's.
-- A phone, email or URL can start with a label: `work=`, `home=`,
-  `mobile=`, `iPhone=`, `main=`, or your own (`WhatsApp=`). Without one, a
-  phone is mobile, an email home and a URL homepage.
-- `--birthday` takes `YYYY-MM-DD`, or `MM-DD` without a year.
-- `edit` changes only what is named; an empty value (`--nickname ""`)
-  removes a field. It removes before it adds, so `--remove-phone 555-0100
-  --phone work=555-0100` changes a number's label.
-- `delete` deletes on every device: there is no Recently Deleted for
-  contacts. Answering no to its question is `cancelled`.
-- `export` without `--output` prints the vCards themselves in text mode
-  (`icloud-contacts export --styled > contacts.vcf` when piped).
-- A write that could not update the cache also says so on stderr
-  (`warning: …`).
-
 ## JSON shapes
 
 These are the `data` of the envelope (what `--quiet` prints). Stable:
@@ -1011,22 +947,6 @@ Its error codes are in the table under [Error codes](#error-codes).
 | `leave` | `{folder, left_at, already, omacloud_synced, lost}`: `left_at` in seconds since the epoch; `already` when it had left before (then `lost` is null); `lost` is `{completed_long_ago, alerts, priority, flagged, lists_with_colour, shared_lists, groups}`, what stays behind in iCloud |
 | (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; that alone still exits 0 |
 
-### icloud-contacts
-
-CONTACT is an ID, `me`, a name (ignoring case), an email address, a phone
-number (by its digits) or a unique part of a name. IDs are iCloud's
-`contactId`s. Labels come as Contacts shows them (`mobile`, `iPhone`,
-`work`, or a custom one as typed); absent fields are null.
-
-| Command | `data` |
-|---|---|
-| `list`, `show` | `[{id, name, first, middle, last, nickname, company, job_title, department, is_company, me, phones:[{label, value}], emails:[...], urls:[...], addresses:[{label, street, city, state, postal_code, country, country_code}], birthday, notes, has_photo}]` (`show`: one object). `name` is what the list shows; `birthday` is `YYYY-MM-DD`, or `MM-DD` without a year |
-| `add`, `edit` | `{action, contact}` |
-| `delete` | `{action:"delete", contact:{id, name}}` |
-| `export` | `{action:"export", count, file}` with `--output`, else `{action:"export", count, vcard}`. Only text mode prints bare vCards: `export > FILE` writes the envelope, so use `--output FILE` |
-| (writes) | also `warning` when the write reached iCloud but the local cache couldn't be updated; still exit 0 |
-| `sync` | `{contacts, changed}` (`changed`: cards added, changed or gone since the last sync) |
-
 ## Recipes
 
 **Sync notes and read one**
@@ -1099,9 +1019,3 @@ icloud-reminders --quiet sync | jq .folder     # exit 1: read .folder.restored a
 printf -- '- [ ] Screws\n' > ~/Documents/Reminders/Hardware.md   # a new list, within a minute
 ```
 
-**Look someone up**
-
-```bash
-icloud-contacts --quiet show "ann lee" | jq -r '.phones[0].value'
-icloud-contacts --quiet list "@acme.example" | jq -r '.[].name'
-```

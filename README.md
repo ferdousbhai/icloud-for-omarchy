@@ -18,8 +18,6 @@ one Apple sign-in, published as one signed pacman repository.
   desktop notification when one falls due, window open or not, and every
   list as a Markdown checklist in `~/Documents/Reminders` that an editor,
   an agent or Syncthing can change.
-- **Contacts**: search your address book, copy a number or start an email
-  in a click, add and edit contacts, and export them as vCards.
 - **iCloud Drive**: `~/iCloud Drive`, a folder kept in sync both ways. No
   app: use your file manager.
 - Every window action also works from the terminal (for Reminders, in
@@ -35,7 +33,6 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 | [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4/libadwaita: browse, download, upload and delete. |
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4/libadwaita: locate, play a sound, Lost Mode, history trail. |
 | [reminders/](reminders/README.md) | `icloud-reminders` | iCloud Reminders in GTK4/libadwaita, and a systemd timer that notifies through Omarchy's notifications when a reminder falls due. |
-| [contacts/](contacts/README.md) | `icloud-contacts` | iCloud Contacts in GTK4/libadwaita: search, add, edit, delete, vCard export. |
 | [drive/](drive/README.md) | `icloud-drive` | iCloud Drive as the folder `~/iCloud Drive`, synced both ways by a background service; `icloud-drive start` turns it on. |
 | [session/](session/README.md), [sessiond/](sessiond/) | `icloud-session` | The shared sign-in: a D-Bus daemon, a sign-in window and a CLI (sessiond/), plus the Rust client crate every app links (session/). |
 
@@ -44,8 +41,8 @@ files) is in [session/README.md](session/README.md#design).
 
 ## Calendar, Mail and the rest of iCloud
 
-Two more iCloud apps live in their own repositories, because they also
-show other accounts in the same window. Both use this project's
+Three more iCloud apps live in their own repositories, because they also
+show other accounts in the same window. All use this project's
 icloud-session sign-in, so you don't sign in again:
 
 - **iCloud Calendar**: [Cloud Calendar](https://github.com/ferdousbhai/cloud-calendar)
@@ -54,6 +51,9 @@ icloud-session sign-in, so you don't sign in again:
 - **iCloud Mail**: [Cloudmail](https://github.com/ferdousbhai/cloud-mail)
   (`cloudmail account add icloud`) reads, sends and searches iCloud Mail
   next to your own domains' mail, HEY and Gmail.
+- **Contacts**: [Cloud Contacts](https://github.com/ferdousbhai/cloud-contacts)
+  shows your iCloud and Google contacts together, with this project's
+  sign-in. It replaces the icloud-contacts app this project had.
 
 Messages, Phone and Maps are not covered. iMessage and phone calls need an
 Apple device: iCloud has no web service for them. Apple Maps' saved places
@@ -61,7 +61,7 @@ aren't available from iCloud on the web either.
 
 ## Command line and agents
 
-Notes, Photos, Find My, Reminders, Contacts, iCloud Drive and the shared sign-in have scriptable CLIs with one
+Notes, Photos, Find My, Reminders, iCloud Drive and the shared sign-in have scriptable CLIs with one
 output contract: text on a terminal, a JSON envelope when piped (`--quiet`
 for the bare result), JSON errors with stable codes, and shared exit codes;
 see [docs/CLI.md](docs/CLI.md).
@@ -97,16 +97,12 @@ opens in a window from `icloud-session sign-in`.
   tiles.
 - **Notes and Photos deletes are recoverable**: a note or photo you
   delete goes to Recently Deleted in iCloud (about 30 days).
-- **Contacts deletes are not**: iCloud has no Recently Deleted for
-  contacts, so the app and `icloud-contacts delete` ask first. Only
-  icloud.com's Data Recovery (Restore Contacts, a whole earlier version of
-  your address book) brings one back.
 - **It's all open source**, and the packages are signed with a key whose
   fingerprint is pinned in [install.sh](install.sh).
 
 ## Install
 
-Coming from a Mac? One command installs these together with Mail, Calendar, Contacts and Reminders (the [Cloud apps](#calendar-mail-and-the-rest-of-icloud)) and signs you in to iCloud once for all of them ([what it does](https://ferdousbhai.com/icloud)):
+Coming from a Mac? One command installs these together with Mail, Calendar and Contacts (the [Cloud apps](#calendar-mail-and-the-rest-of-icloud)) and signs you in to iCloud once for all of them ([what it does](https://ferdousbhai.com/icloud)):
 
 ```bash
 curl -fsSL https://ferdousbhai.com/icloud/install.sh | sudo bash
@@ -118,7 +114,7 @@ To install only the apps in this repository:
 curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/download/install.sh | sudo bash
 ```
 
-installs Notes, Photos, Find My, Reminders, Contacts and iCloud Drive (icloud-notes, icloud-photos, icloud-findmy, icloud-reminders, icloud-contacts, icloud-drive), which pull in icloud-session. iCloud Drive syncs nothing until you run `icloud-drive start`. To install only some, name them:
+installs Notes, Photos, Find My, Reminders and iCloud Drive (icloud-notes, icloud-photos, icloud-findmy, icloud-reminders, icloud-drive), which pull in icloud-session. iCloud Drive syncs nothing until you run `icloud-drive start`. To install only some, name them:
 
 ```bash
 curl -fsSL .../install.sh | sudo bash -s -- icloud-photos icloud-findmy
@@ -134,8 +130,7 @@ with an `Include` line in `/etc/pacman.conf`, installs an Omarchy
 on Omarchy, otherwise in one `pacman -Syu`).
 Re-running it is safe. Updates then arrive with `omarchy update`.
 
-In the app launcher they are Notes, Photos, Find My, Reminders and
-Contacts; searching "iCloud" finds them all. Photos saves originals straight into
+In the app launcher they are Notes, Photos, Find My and Reminders; searching "iCloud" finds them all. Photos saves originals straight into
 `~/Pictures/<year>/<month>/`; after updating from a version that used
 `~/Pictures/icloud-photos/`, its first start moves that folder's contents
 up into `~/Pictures/` ([details](photos/README.md#your-files)).
@@ -162,8 +157,8 @@ printf '[icloud-for-omarchy]\nSigLevel = Required DatabaseRequired\nServer = htt
   | sudo tee /etc/pacman.d/icloud-for-omarchy.conf
 echo 'Include = /etc/pacman.d/icloud-for-omarchy.conf' | sudo tee -a /etc/pacman.conf
 
-# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts)
-sudo pacman -Syu icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders icloud-contacts
+# 4. Install (on Omarchy: sudo pacman -Sy && omarchy-pkg-add icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders)
+sudo pacman -Syu icloud-notes icloud-photos icloud-findmy icloud-drive icloud-reminders
 ```
 
 On Omarchy, `omarchy refresh pacman` rewrites `/etc/pacman.conf`; the
@@ -178,12 +173,14 @@ Machines set up from earlier Notes releases, which had a repository of
 their own (`[icloud-notes]`), are migrated: once `[icloud-for-omarchy]` is
 added, the script removes `/etc/pacman.d/icloud-notes.conf`, its `Include`
 line and its Omarchy hook.
+Machines with icloud-contacts from earlier releases keep it working; the
+script says how to install Cloud Contacts, whose package replaces it.
 The icloud-notes-sync package of earlier releases needs nothing from the
 script: icloud-notes now carries the engine and `replaces` it, so the next
 `omarchy update` swaps it out.
 
 Every release also carries one installer per app, `install-notes.sh`,
-`install-photos.sh`, `install-findmy.sh`, `install-drive.sh`, `install-reminders.sh` and `install-contacts.sh`: install.sh with its default
+`install-photos.sh`, `install-findmy.sh`, `install-drive.sh` and `install-reminders.sh`: install.sh with its default
 set to that one app, generated by `bin/make-installers`. The website (not
 in this repository) redirects its one-liners to these assets:
 `https://ferdousbhai.com/icloud/install.sh` to `install.sh`, and
@@ -201,7 +198,7 @@ on aarch64), its `Include` line in `/etc/pacman.conf`, and
 ## Layout
 
 ```
-Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, app, app/ui, photos, findmy, drive, reminders, contacts
+Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, app, app/ui, photos, findmy, drive, reminders
 session/  sessiond/      icloud-session: client crate / daemon, sign-in window, CLI
 notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
 notes-sync/              icloud-notes-sync, the sync engine the icloud-notes package ships
@@ -209,8 +206,7 @@ app/  app/ui/            icloud-app, icloud-app-ui: what the GTK apps share (int
 photos/  findmy/         icloud-photos, icloud-findmy
 drive/                   icloud-drive: the sync of ~/iCloud Drive and its service
 reminders/               icloud-reminders (its systemd timer in reminders/data/)
-contacts/                icloud-contacts
-packaging/PKGBUILD       one split recipe builds all seven packages
+packaging/PKGBUILD       one split recipe builds all six packages
 install.sh               the one installer (per-app copies are generated at release)
 bin/                     build, check, build-packages, arch-run, collect-packages, make-installers, release, verify-release; dev-install/dev-uninstall for the daemon
 tests/                   the add_signed_repo hash pin; install_test.sh (installers against stubbed pacman); packaging_test.py
