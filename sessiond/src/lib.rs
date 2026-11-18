@@ -9,5 +9,6 @@ pub mod cookies;
 pub mod crash;
 pub mod daemon;
 pub mod files;
+mod leave;
 mod old_profile;
 pub mod secrets;

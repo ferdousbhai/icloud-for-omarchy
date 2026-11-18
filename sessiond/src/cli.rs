@@ -1,5 +1,5 @@
 //! `icloud-session status | sign-in | authorize-find-my | set-password |
-//! forget-password | sign-out | validate | skill [install|remove]`
+//! forget-password | sign-out | validate | skill [install|remove] | leave`
 //!
 //! Talks to icloud-sessiond over D-Bus. Output follows the shared product
 //! contract ([`icloud_session::output`]): a short text rendering on a
@@ -146,6 +146,23 @@ enum Command {
     /// links it into ~/.claude/skills/ when Claude Code is installed; `remove` removes what
     /// install created. Only a copy icloud-session wrote (marked .managed-by-icloud-session) is
     /// ever changed; a new release refreshes it.
+    /// Leave iCloud for Omacloud: Notes, Reminders and iCloud Drive at once, or those named.
+    ///
+    /// Optional, and for good on this computer. Checks Omacloud for every
+    /// folder first (nothing changes until all are ready), asks once (type
+    /// `leave`; elsewhere --yes, only when the person asked), then runs each
+    /// app's `leave` in turn; the first that fails stops the rest. Prints
+    /// {left: [{app, result}], skipped: [{app, why}], failed: {app, code,
+    /// message} or null}; exits with the failed app's code.
+    #[command(after_help = AFTER_HELP)]
+    Leave {
+        /// The apps to leave iCloud for [default: every one used here]
+        #[arg(value_enum)]
+        apps: Vec<crate::leave::App>,
+        /// Leave without asking: only when the person asked to leave iCloud for these
+        #[arg(long)]
+        yes: bool,
+    },
     #[command(after_help = AFTER_HELP)]
     Skill {
         #[command(subcommand)]
@@ -186,6 +203,7 @@ pub fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Command::Skill { action: Some(action) } => skill(action),
+        Command::Leave { apps, yes } => crate::leave::run(mode, apps, yes),
         // Signed out: the status is still the result, with exit 3 (as
         // `icloud-photos status` and `icloud-notes status`).
         Command::Status => icloud_session::status()

@@ -177,6 +177,7 @@ and written there. The command covers what a tray icon would.
 | Sign out | `icloud-session sign-out` | existed |
 | Check the session with Apple | `icloud-session validate` | existed |
 | Agent skill for these tools | `icloud-session skill` (print), `skill install`, `skill remove` | added |
+| Leave iCloud for Omacloud, every app at once | `icloud-session leave [notes] [reminders] [drive] [--yes]` | added |
 
 ### What cannot be a command
 
@@ -458,6 +459,14 @@ session from it and none signs in by itself.
 - `authorize-find-my` needs a signed-in account: signed out it opens no
   window and exits 3 with `sign_in_required`.
 - `expires_at` says when the sign-in lapses.
+- `leave` is every app's `leave` at once (optional, as each app's is):
+  Notes, Reminders and iCloud Drive, or those named, skipping what isn't
+  installed, isn't used here or left already. It checks Omacloud for every
+  folder before anything changes (failing with the apps' `omacloud_*` codes,
+  every app named in the message), asks once (type `leave`; elsewhere
+  `--yes`, only when the person asked), then runs each app's
+  `leave --yes`; the first that fails stops the rest, and the command exits
+  with its code. `not_found` (exit 4) when the apps named have nothing to leave.
 
 ### icloud-notes
 
@@ -848,6 +857,7 @@ the last sign-in could not be kept.
 |---|---|
 | `validate` | `{dsid, apple_id, webservices:{"findme":"https://...",...}}` (keys sorted) |
 | `skill install`, `skill remove` | `{paths:[path], notices:[text]}` |
+| `leave` | `{left:[{app, result}], skipped:[{app, why}], failed:{app, code, message} or null}`: `app` is `notes`, `reminders` or `drive`; `result` is that app's own `leave` data |
 | `skill` | not JSON: the Markdown |
 
 ### icloud-notes

@@ -29,6 +29,8 @@ required-features = ["signin"]
 
 [dependencies]
 icloud-session = { workspace = true, features = ["clap"] }
+# leave: Omacloud ready, the left records, the shared confirmation.
+icloud-app.workspace = true
 base64.workspace = true
 blocking = "1"
 clap.workspace = true
