@@ -936,6 +936,7 @@ name = "icloud-drive"
 version = "0.12.3"
 dependencies = [
  "clap",
+ "icloud-app",
  "icloud-session",
  "rusqlite",
  "rustix",

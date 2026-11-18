@@ -18,6 +18,8 @@ path = "src/main.rs"
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
 icloud-session = { workspace = true, features = ["clap"] }
+# Leaving iCloud for Omacloud (`leave`), shared with Notes and Reminders.
+icloud-app.workspace = true
 clap.workspace = true
 rusqlite.workspace = true
 # renameat2(2): a rename that never replaces what is at the destination.

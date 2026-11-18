@@ -161,6 +161,7 @@ and written there. The command covers what a tray icon would.
 | Sync now | `icloud-drive sync` (`--dry-run` to look first) |
 | Turn syncing on or off | `icloud-drive start`, `icloud-drive stop` |
 | Confirm a large removal | `icloud-drive sync --yes` |
+| Leave iCloud Drive for Omacloud | `icloud-drive leave [--to DIR] [--yes]` |
 
 ### Sign-in (`sessiond`)
 
@@ -429,10 +430,10 @@ they are: their edits are sent by the next sync that works.
 
 | Exit | Codes |
 |---|---|
-| 1 | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data) |
-| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID), `other_folder` (`--dir` names a folder other than the one the sync state belongs to; give it its own with `--state-dir`), `other_top` (`--top` names a folder of iCloud Drive other than the one the sync state belongs to; give it its own `--dir` and `--state-dir`), `start`/`stop` with `--dir` (`usage`: the background sync keeps `~/iCloud Drive` only) |
-| 3 | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data) |
-| 4 | `folder_missing` (the local folder is gone, so nothing is synced) |
+| 1 | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data); `sync_incomplete` (`leave`: the last sync left items for later, so nothing was left); `omacloud` (`leave`: omacloud gave no answer) |
+| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID), `other_folder` (`--dir` names a folder other than the one the sync state belongs to; give it its own with `--state-dir`), `other_top` (`--top` names a folder of iCloud Drive other than the one the sync state belongs to; give it its own `--dir` and `--state-dir`), `start`/`stop`/`leave` with `--dir` (`usage`: the background sync keeps `~/iCloud Drive` only), `exists` (`leave --to` a folder that is not empty); `leave` without `--yes` where nobody can be asked |
+| 3 | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data); `left_icloud` (`sync`, `start` or `leave` once iCloud Drive left iCloud on this computer); `omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off` (`leave`: Omacloud is not installed, not set up, or does not sync the folder; the hint is the command that fixes it, and nothing changed) |
+| 4 | `folder_missing` (the local folder is gone, so nothing is synced; `leave --to` into a folder that is not there) |
 | 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 In mock mode (`ICLOUD_SESSION_MOCK=1`) there is no daemon to confirm a
@@ -633,6 +634,18 @@ $ icloud-drive --quiet sync --dry-run
   Removals go to the trash on the other side, never away for good.
 - `sync` while the service is mid-sync waits up to two minutes, then fails
   with `busy`.
+- While iCloud keeps the folder, each sync leaves an empty `.nosync` file in
+  it (hidden, so never sent to iCloud): Omacloud leaves a folder holding one
+  alone, so the files are never synced twice.
+- `leave` hands the folder to Omacloud for good on this computer. First
+  Omacloud must be installed (`curl -fsSL https://omacloud.computer/install.sh | sudo bash`),
+  set up (`omacloud init`) and syncing the folder (`omacloud folders add ~/iCloud Drive`),
+  or `--to DIR` names a new or empty folder inside one Omacloud syncs, on the
+  same disk, that the folder moves to. Then a last sync, the service turned
+  off, the sync state kept aside in `~/.local/share/icloud-drive`, the
+  `.nosync` file removed, and `omacloud sync`. iCloud keeps its copy as it
+  was. From then on `sync` and `start` fail with `left_icloud`. Run it on
+  each computer.
 
 ### icloud-reminders
 
@@ -879,6 +892,8 @@ mode progress goes to stderr as `icloud-notes:progress:...` lines.
 | `status` | `{sync:"on"\|"off", starts_at_login, signed_in, folder, files, folders, last_sync \| null, problem:{code, message, hint \| null} \| null, not_synced:[{path, reason}]}`; `not_synced` is everything the last sync left out: packages, app folders, links, hidden names in iCloud, names iCloud does not take, names that differ only by case, and a move or rename that iCloud or the folder refused (its `reason` says why; the item is left as it is on both sides, everything else syncs, and each sync tries the move again) |
 | `sync` | `{done:[line], problems:[line], pending:[path], skipped:[line], dry_run}`; `done` is what was carried out (with `--dry-run`: what would be), one line each; exit 1 with data when `problems` is not empty (a refused move or rename is in `problems` and in `skipped`) |
 | `start`, `stop` | `{sync:"on"\|"off", folder}` |
+| `leave` | `{folder, left_at, omacloud_synced, warnings:[text]}`: `folder` is where Omacloud syncs the files now; `omacloud_synced` false when `omacloud sync` failed (its next sync takes the folder in) |
+| `status` after `leave` | `{sync:"off", left:{at, folder}, folder}` |
 
 Its error codes are in the table under [Error codes](#error-codes).
 

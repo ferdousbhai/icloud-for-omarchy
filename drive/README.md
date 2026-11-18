@@ -11,6 +11,7 @@ icloud-drive start      # turn the sync on, now and at every login
 icloud-drive status     # on or off, the last sync, problems, what is not synced
 icloud-drive sync       # sync once now (--dry-run says what it would do)
 icloud-drive stop       # turn it off; the folder and its files stay
+icloud-drive leave      # hand the folder to Omacloud for good (below)
 ```
 
 The first sync downloads your whole Drive and uploads whatever the folder
@@ -43,6 +44,29 @@ After that it syncs every half minute while you are signed in.
   `icloud-drive sync --yes`.
 - **The folder itself is missing** (an unmounted disk, say): nothing is
   synced, so its absence is never read as everything having been deleted.
+
+## Leaving iCloud for Omacloud
+
+`icloud-drive leave` hands the folder to [Omacloud](https://omacloud.computer),
+for good on this computer, so the files are kept once:
+
+1. Omacloud must be installed (`curl -fsSL https://omacloud.computer/install.sh | sudo bash`),
+   set up (`omacloud init`) and syncing the folder:
+   `omacloud folders add ~/iCloud Drive`. Until `leave` finishes, Omacloud
+   leaves the folder alone, since each sync of this app puts an empty
+   `.nosync` file in it (hidden, so iCloud never gets it). Or name a new or
+   empty folder inside one Omacloud already syncs with `--to`
+   (`icloud-drive leave --to ~/Documents/iCloud\ Drive`): the folder moves
+   there, on the same disk.
+2. A last sync, so everything made here reaches iCloud. If it leaves
+   anything for later, nothing is left.
+3. The background sync turns off, the sync state is kept aside in
+   `~/.local/share/icloud-drive`, the `.nosync` file goes, and Omacloud
+   syncs.
+
+iCloud keeps its copy as it was. From then on `sync` and `start` refuse
+(`left_icloud`), and `status` says where the files are. Run `leave` on each
+of your computers: Omacloud merges their copies and deletes nothing.
 
 ## What is not synced
 
