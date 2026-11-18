@@ -6,6 +6,8 @@
 //!   `icloud_session::output` (confirm, the app's sign-in hint, warnings,
 //!   name folding) and the launcher that turns `icloud-<app>` with no
 //!   command into `icloud-<app>-app`.
+//! - [`leave`]: leaving iCloud for Omacloud, app by app: Omacloud's
+//!   readiness, the left record, the folder's marker.
 //! - [`store`]: an app's data directory, its `flock`, and JSON files
 //!   replaced whole.
 //! - [`SessionTransport`]: one lazily connected `icloud_session::Session`.
@@ -20,6 +22,7 @@
 //! belongs in `icloud-session`; what only one app needs stays in that app.
 
 pub mod cli;
+pub mod leave;
 pub mod store;
 #[cfg(feature = "testing")]
 pub mod testing;
