@@ -63,6 +63,7 @@
         "baseFile": ".icloud-notes/base/03667d1d-eee8-4e98-82fb-8c5cd02fd9d1.md"
       }
     ],
-    "lockPath": "@OUT@/home/icloud-notes-<hash>.lock"
+    "lockPath": "@OUT@/home/icloud-notes-<hash>.lock",
+    "left": false
   }
 }

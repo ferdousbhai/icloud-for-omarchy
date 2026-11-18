@@ -5,6 +5,7 @@ pub mod clone;
 pub mod diff;
 pub mod errors;
 pub mod history;
+pub mod leave;
 pub mod lock;
 pub mod output;
 pub mod plan;

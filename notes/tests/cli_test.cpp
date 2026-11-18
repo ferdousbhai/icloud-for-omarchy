@@ -226,7 +226,7 @@ int main(int argc, char *argv[])
         const QStringList commands{ "status", "folders", "list", "read", "search", "new", "write", "rename", "move",
                                     "delete", "toggle", "attach", "detach", "resolve", "recover", "export-pdf", "new-folder",
                                     "rename-folder", "delete-folder", "sync", "pull", "push", "clone", "history",
-                                    "diff", "restore" };
+                                    "diff", "restore", "leave" };
         bool all = true;
         for (const QString &c : commands) {
             const Run r = cli({ c, QStringLiteral("--help") });
@@ -1297,6 +1297,41 @@ int main(int argc, char *argv[])
                   && fake.reportCalls == reports,
               "real engine: another account's vault is account_mismatch in both halves, exit 3, never reported as a sign-in");
         fake.set({ { QStringLiteral("Dsid"), dsid } });
+    }
+
+    // ---- a vault that left iCloud (icloud-notes-sync leave) ------------------
+    {
+        seedVault();
+        const QString data = g_scratch + QStringLiteral("/xdg-data/icloud-notes");
+        QDir().mkpath(data);
+        check(QDir().rename(g_vault + QStringLiteral("/.icloud-notes"), data + QStringLiteral("/left-icloud-state")),
+              "cli leave: the state moved aside, as leave does");
+        writeFile(QStringLiteral("left-icloud.json"),
+                  QStringLiteral("{\"version\":1,\"at\":1790000000,\"folder\":\"%1\"}").arg(g_vault), data);
+        const int engineRuns = int(stubLog().size());
+        const Run list = cliJson({ QStringLiteral("list") });
+        check(list.code == 0 && paths(list.json().toArray()).contains(QStringLiteral("Notes/Alpha.md")),
+              "cli leave: the notes still list, as plain files");
+        const Run made = cliJson({ QStringLiteral("new"), QStringLiteral("Gamma"), QStringLiteral("--body"), QStringLiteral("hello") });
+        check(made.code == 0, "cli leave: a note can still be made");
+        bool refused = true;
+        for (const QString &c : { QStringLiteral("sync"), QStringLiteral("pull"), QStringLiteral("push"), QStringLiteral("clone") }) {
+            const Run r = cliJson({ c });
+            refused = refused && r.code == 3 && r.errorCode() == QStringLiteral("left_icloud");
+        }
+        const Run pushed = cliJson({ QStringLiteral("write"), QStringLiteral("Gamma"), QStringLiteral("--body"), QStringLiteral("again"),
+                                     QStringLiteral("--push") });
+        const QString pushedCode = pushed.json().toObject().value(QStringLiteral("sync")).toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
+        check(refused && pushed.code == 3 && pushedCode == QStringLiteral("left_icloud") && exists(QStringLiteral("Gamma.md"))
+                  && int(stubLog().size()) == engineRuns,
+              "cli leave: sync, pull, push and clone refuse with left_icloud (exit 3), a change's --push is made and its sync says left_icloud, and no engine runs");
+        const Run st = cliJson({ QStringLiteral("status") });
+        check(st.code == 0 && st.json().toObject().value(QStringLiteral("left_icloud")).toBool()
+                  && st.json().toObject().value(QStringLiteral("notes")).toInt() > 0,
+              "cli leave: status says so, counts the notes, and needs no sign-in");
+        QFile::remove(data + QStringLiteral("/left-icloud.json"));
+        QDir(data + QStringLiteral("/left-icloud-state")).removeRecursively();
+        seedVault();
     }
 
     return report();

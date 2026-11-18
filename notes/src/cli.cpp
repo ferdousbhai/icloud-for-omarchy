@@ -337,6 +337,17 @@ const QList<Spec> &specs()
           "Throw away the note's local edits and go back to the last synced copy (icloud-notes-sync\n"
           "restore, which takes the vault's lock). Asks on a terminal; without one, --yes is required.",
           { QStringLiteral("--yes") }, 1, 1 },
+        { "leave", "leave [--yes]",
+          "Leave iCloud for Omacloud (icloud-notes-sync leave): Omacloud must be installed, set up and\n"
+          "syncing the vault's folder of home (else omacloud_missing, omacloud_not_set_up or\n"
+          "omacloud_folder_off, exit 3, with the command that fixes it, and nothing changes); then one\n"
+          "last sync (if it fails, nothing changes), and Omacloud syncs the folder. The engine's state\n"
+          "moves to ~/.local/share/icloud-notes/left-icloud-state; iCloud keeps its copy as it was. Notes\n"
+          "keeps working on the files; sync, pull, push, clone, history, diff and restore then refuse\n"
+          "(left_icloud, exit 3). Asks on a terminal; without one, --yes is required. The Notes window\n"
+          "must be closed (vault_busy otherwise).\n"
+          "JSON: icloud-notes-sync's {folder, left_at, kept_state, omacloud_synced, already}",
+          { QStringLiteral("--yes") }, 0, 0 },
     };
     return list;
 }
@@ -848,9 +859,22 @@ std::optional<Failure> needSyncTool(NotesBackend &b)
 // `not_cloned` is this tool's own code (exit 3) for a vault with nothing
 // cloned into it, found before the engine runs; the engine's
 // `not_cloned_directory` says the same about the directory it was given.
+// A vault that left iCloud (`leave`): what would reach iCloud refuses, as
+// the engine does.
+std::optional<Failure> leftFailure()
+{
+    if (!NotesBackend::leftICloud())
+        return std::nullopt;
+    return Failure{ QStringLiteral("left_icloud"),
+                    QStringLiteral("Notes left iCloud on this computer; Omacloud syncs %1 now").arg(NotesBackend::rootPath()),
+                    kExitSignIn, QStringLiteral("change the files in %1").arg(NotesBackend::rootPath()) };
+}
+
+// The vault's notes can be read and changed: cloned, or left iCloud for
+// Omacloud (plain files then).
 std::optional<Failure> needCloned()
 {
-    if (NotesBackend::vaultCloned())
+    if (NotesBackend::vaultCloned() || NotesBackend::leftICloud())
         return std::nullopt;
     return Failure{ QStringLiteral("not_cloned"),
                     QStringLiteral("no notes cloned at %1").arg(NotesBackend::rootPath()), kExitSignIn,
@@ -874,6 +898,10 @@ struct SyncOutcome {
 SyncOutcome runSync(NotesBackend &b, const QString &what, bool deleteMissing = false)
 {
     SyncOutcome result;
+    if (auto f = leftFailure()) {
+        result.failure = f;
+        return result;
+    }
     if (auto f = needSyncTool(b)) {
         result.failure = f;
         return result;
@@ -1143,9 +1171,10 @@ Done status(NotesBackend &b)
         break;
     }
     const bool cloned = NotesBackend::vaultCloned();
+    const bool left = NotesBackend::leftICloud();
     QJsonObject flagged;
     int count = 0;
-    if (cloned) {
+    if (cloned || left) {
         const QList<Note> notes = scanNotes(b);
         count = int(notes.size());
         for (const Note &n : notes)
@@ -1159,6 +1188,7 @@ Done status(NotesBackend &b)
     QJsonObject json{
         { QStringLiteral("vault"), NotesBackend::rootPath() },
         { QStringLiteral("cloned"), cloned },
+        { QStringLiteral("left_icloud"), left },
         { QStringLiteral("title_mode"), b.vaultTitleMode() },
         { QStringLiteral("sync_tool"), b.syncToolAvailable() },
         { QStringLiteral("sign_in_known"), b.signInKnown() },
@@ -1168,11 +1198,14 @@ Done status(NotesBackend &b)
         { QStringLiteral("lock"), QJsonObject{ { QStringLiteral("held_by"), orNull(holder) },
                                                { QStringLiteral("app_open"), appOpen } } },
         { QStringLiteral("notes"), count },
-        { QStringLiteral("folders"), cloned ? int(b.folders().size()) - 1 : 0 },
+        { QStringLiteral("folders"), cloned || left ? int(b.folders().size()) - 1 : 0 },
         { QStringLiteral("flagged"), flagged },
     };
     QStringList lines;
-    lines << QStringLiteral("Vault:       %1%2").arg(NotesBackend::rootPath(), cloned ? QString() : QStringLiteral(" (not cloned)"));
+    lines << QStringLiteral("Vault:       %1%2").arg(NotesBackend::rootPath(),
+                                                 left     ? QStringLiteral(" (left iCloud: Omacloud syncs it)")
+                                                 : cloned ? QString()
+                                                          : QStringLiteral(" (not cloned)"));
     lines << QStringLiteral("Signed in:   %1")
                  .arg(!b.signInKnown() ? QStringLiteral("unknown (icloud-session is not available)")
                       : b.signedIn()   ? QStringLiteral("yes, as %1").arg(b.appleId())
@@ -1186,11 +1219,13 @@ Done status(NotesBackend &b)
                            : b.signedIn()   ? QStringLiteral("signed in as %1").arg(b.appleId())
                                             : QStringLiteral("signed out");
     Done done{ json, lines.join(u'\n'),
-               cloned ? QStringLiteral("%1, %2").arg(plural(count, "note", "notes"), signIn)
-                      : QStringLiteral("not cloned, %1").arg(signIn) };
+               left     ? QStringLiteral("%1, left iCloud").arg(plural(count, "note", "notes"))
+               : cloned ? QStringLiteral("%1, %2").arg(plural(count, "note", "notes"), signIn)
+                        : QStringLiteral("not cloned, %1").arg(signIn) };
     done.count = count;
-    // Signed out is reported, and exits 3 (the result printed all the same).
-    done.exit = b.signInKnown() && !b.signedIn() ? kExitSignIn : kExitOk;
+    // Signed out is reported, and exits 3 (the result printed all the same);
+    // a vault that left iCloud needs no sign-in.
+    done.exit = !left && b.signInKnown() && !b.signedIn() ? kExitSignIn : kExitOk;
     return done;
 }
 
@@ -1694,6 +1729,8 @@ Result deleteFolder(NotesBackend &b, const Args &a)
 
 int syncCommand(NotesBackend &b, const Args &a, const QString &what)
 {
+    if (auto f = leftFailure())
+        return report(*f, a.mode);
     if (what == u"clone") {
         if (NotesBackend::vaultCloned())
             return report(Failure{ QStringLiteral("already_cloned"),
@@ -1737,8 +1774,15 @@ int runCommand(const Args &a, const Spec &spec)
     }
     if (cmd == u"sync" || cmd == u"pull" || cmd == u"clone" || (cmd == u"push" && !a.has("--dry-run")))
         return syncCommand(b, a, cmd);
+    // the engine's own leave: it asks, syncs once more, and hands the vault over
+    if (cmd == u"leave")
+        return execEngine(b, a, QStringList{ QStringLiteral("leave"), NotesBackend::rootPath() }
+                                    + (a.has("--yes") ? QStringList{ QStringLiteral("--yes") } : QStringList()));
     if (auto f = needCloned())
         return report(*f, a.mode);
+    if (cmd == u"push" || cmd == u"history" || cmd == u"diff" || cmd == u"restore")
+        if (auto f = leftFailure())
+            return report(*f, a.mode);
 
     // icloud-notes-sync's own commands, on a resolved note.
     if (cmd == u"push") // --yes with it: the preview of what push --yes would send
