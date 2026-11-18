@@ -113,12 +113,16 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   conflict markers (don't `--force`; use `resolve`).
 - `push_rejected` (exit 1): the sync ran but iCloud refused a change; the
   message names it.
-- Leaving iCloud is optional: run `icloud-notes leave --yes` only when the
-  person has asked, in so many words, to leave iCloud for Notes; never on
-  your own initiative and never as a fix for a sync error. It needs Omacloud
-  (`omacloud_missing`: install it as the hint says, then `omacloud init`).
-  After it, `left_icloud` (exit 3) from a sync means Omacloud syncs the
-  vault: just change the files.
+- Leaving iCloud is optional and for good on this computer: run
+  `icloud-notes leave --yes`, `icloud-reminders leave --yes` or
+  `icloud-drive leave --yes` only when the person has asked, in so many
+  words, to leave iCloud for that app; never on your own initiative, never
+  for another app than the one named, and never as a fix for a sync error.
+  It needs Omacloud: on `omacloud_missing`, `omacloud_not_set_up` or
+  `omacloud_folder_off` tell the person the hint's command (installing
+  Omacloud, `omacloud init`, `omacloud folders add ...`) and leave again
+  once it is done. After it, `left_icloud` (exit 3) means Omacloud syncs
+  that folder: just change the files.
 
 ## Photos: `icloud-photos`
 

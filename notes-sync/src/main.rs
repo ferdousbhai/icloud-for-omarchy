@@ -768,10 +768,10 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                     .into());
                 }
                 icloud_app::leave::omacloud_ready(&vault)?;
-                icloud_app::cli::confirm(
+                icloud_app::leave::confirm(
                     mode,
-                    "leave",
                     yes,
+                    "Notes",
                     &format!(
                         "Sync once more, then stop syncing {} with iCloud on this computer and let Omacloud sync it? iCloud keeps its copy as it is.",
                         vault.display()
