@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use icloud_app::cli::{confirm, no_data_dir, other, session_failure, warn, warning};
+use icloud_app::cli::{no_data_dir, other, session_failure, warn, warning};
 use icloud_app::leave::{self, Left};
 use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
@@ -307,11 +307,11 @@ impl Cli<'_> {
         leave::omacloud_ready(&dir)?;
         let lost_now = Lost::of(&self.svc.cache().map_err(cloud_error)?, service::now_ms());
         let question = format!(
-            "Leave iCloud? The reminders on this computer become the files in {}, which Omacloud syncs; nothing here talks to iCloud again, and iCloud keeps its copy as it is. {} Leave?",
+            "Leave iCloud? The reminders on this computer become the files in {}, which Omacloud syncs; nothing here talks to iCloud again, and iCloud keeps its copy as it is. {}",
             dir.display(),
             lost_now.sentence()
         );
-        confirm(self.mode, "leave", yes, &question)?;
+        leave::confirm(self.mode, yes, "Reminders", &question)?;
 
         // A last sync: the files hold every reminder as iCloud has it, and
         // the edits made to them are in iCloud too.

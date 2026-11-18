@@ -118,6 +118,32 @@ pub fn release(folder: &Path) -> io::Result<()> {
     }
 }
 
+/// Leaving is optional and for good, so it is never one keystroke away: at a
+/// terminal the person types `leave`; anywhere else it needs `--yes`, which
+/// an agent passes only when the person asked to leave iCloud for `what`.
+pub fn confirm(mode: icloud_session::output::Mode, yes: bool, what: &str, question: &str) -> Result<(), CliError> {
+    if yes {
+        return Ok(());
+    }
+    if !icloud_session::output::interactive(mode) {
+        return Err(CliError::new(
+            "usage",
+            icloud_session::cli::EXIT_USAGE,
+            format!("leaving iCloud for {what} is for good on this computer, and nobody can be asked here"),
+        )
+        .hint("pass --yes only when the person asked to leave iCloud for this"));
+    }
+    eprintln!("{}", icloud_session::output::terminal_safe(question));
+    eprint!("Type leave to hand {what} to Omacloud, anything else to stop: ");
+    let mut line = String::new();
+    _ = std::io::stdin().read_line(&mut line);
+    if line.trim() == "leave" {
+        Ok(())
+    } else {
+        Err(CliError::new("cancelled", EXIT_ERROR, "cancelled: nothing changed"))
+    }
+}
+
 /// Runs `omacloud <args> --json`, giving the envelope's `data`.
 fn omacloud(args: &[&str]) -> Result<Value, CliError> {
     let out = Command::new(omacloud_bin()).args(args).arg("--json").output();

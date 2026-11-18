@@ -155,6 +155,8 @@ writes. Each computer gets its reminders from iCloud.
 
 ### Leaving iCloud for Omacloud
 
+Optional: nothing offers it, no window has a button for it, and at a terminal it asks you to type `leave`. Elsewhere it needs `--yes`, which an agent passes only when you asked to leave iCloud for this app.
+
 `icloud-reminders leave` makes the folder the reminders, for good, on
 this computer: [Omacloud](https://omacloud.computer) carries the files
 to your other computers and nothing here talks to iCloud again. iCloud

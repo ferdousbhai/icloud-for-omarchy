@@ -336,7 +336,7 @@ fn leave_icloud(
          iCloud keeps its copy as it is now.",
         target.display()
     );
-    icloud_app::cli::confirm(mode, "leave", yes, &question)?;
+    leave::confirm(mode, yes, "iCloud Drive", &question)?;
 
     // a last sync: everything made here reaches iCloud first
     let outcome = last_sync()?;

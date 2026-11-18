@@ -736,6 +736,8 @@ $ icloud-reminders --quiet sync
 
 #### Leaving iCloud
 
+Optional: nothing offers it, no window has a button for it, and at a terminal it asks you to type `leave`. Elsewhere it needs `--yes`, which an agent passes only when you asked to leave iCloud for this app.
+
 `icloud-reminders leave` hands `~/Documents/Reminders` to Omacloud for
 good, on this computer: the files become the reminders, Omacloud carries
 them to your other computers, and nothing here talks to iCloud again.

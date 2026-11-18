@@ -47,6 +47,8 @@ After that it syncs every half minute while you are signed in.
 
 ## Leaving iCloud for Omacloud
 
+Optional: nothing offers it, no window has a button for it, and at a terminal it asks you to type `leave`. Elsewhere it needs `--yes`, which an agent passes only when you asked to leave iCloud for this app.
+
 `icloud-drive leave` hands the folder to [Omacloud](https://omacloud.computer),
 for good on this computer, so the files are kept once:
 
