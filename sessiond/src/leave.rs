@@ -81,16 +81,14 @@ impl App {
     }
 }
 
-/// Photos' library folder: `library_dir` in its settings.json, else
-/// ~/Pictures.
+/// Photos' library folder, as `icloud-photos status` gives it (its
+/// preferences, else the XDG Pictures folder); ~/Pictures if it can't say.
 fn photos_library(home: &std::path::Path) -> PathBuf {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".config"));
-    std::fs::read(config.join("icloud-photos/settings.json"))
+    Command::new("icloud-photos")
+        .args(["--quiet", "status"])
+        .output()
         .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok())
         .and_then(|v| v["library_dir"].as_str().map(PathBuf::from))
         .unwrap_or_else(|| home.join("Pictures"))
 }
