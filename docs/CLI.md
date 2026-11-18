@@ -467,6 +467,8 @@ session from it and none signs in by itself.
   `--yes`, only when the person asked), then runs each app's
   `leave --yes`; the first that fails stops the rest, and the command exits
   with its code. `not_found` (exit 4) when the apps named have nothing to leave.
+  `--dry-run` says each app's state and changes nothing (the Omacloud app's
+  Move from iCloud dialog reads it).
 
 ### icloud-notes
 
@@ -858,6 +860,7 @@ the last sign-in could not be kept.
 | `validate` | `{dsid, apple_id, webservices:{"findme":"https://...",...}}` (keys sorted) |
 | `skill install`, `skill remove` | `{paths:[path], notices:[text]}` |
 | `leave` | `{left:[{app, result}], skipped:[{app, why}], failed:{app, code, message} or null}`: `app` is `notes`, `reminders` or `drive`; `result` is that app's own `leave` data |
+| `leave --dry-run` | `{apps:[{app, name, folder, state, code?, message?, hint?}]}`: `state` is `ready`, `left`, `not_used`, `not_installed`, or `omacloud` (Omacloud not ready for that folder: `code`, `message`, `hint` as `leave` would fail) |
 | `skill` | not JSON: the Markdown |
 
 ### icloud-notes

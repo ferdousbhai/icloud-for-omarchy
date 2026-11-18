@@ -162,6 +162,10 @@ enum Command {
         /// Leave without asking: only when the person asked to leave iCloud for these
         #[arg(long)]
         yes: bool,
+        /// Say what each app's state is (ready, left, not_used, not_installed, or omacloud with its
+        /// code and hint) and change nothing: {apps: [{app, name, folder, state, code?, message?, hint?}]}
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
     },
     #[command(after_help = AFTER_HELP)]
     Skill {
@@ -203,7 +207,10 @@ pub fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Command::Skill { action: Some(action) } => skill(action),
-        Command::Leave { apps, yes } => crate::leave::run(mode, apps, yes),
+        Command::Leave {
+            apps, dry_run: true, ..
+        } => crate::leave::check(apps),
+        Command::Leave { apps, yes, .. } => crate::leave::run(mode, apps, yes),
         // Signed out: the status is still the result, with exit 3 (as
         // `icloud-photos status` and `icloud-notes status`).
         Command::Status => icloud_session::status()

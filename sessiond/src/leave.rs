@@ -91,6 +91,43 @@ struct Failed {
     message: String,
 }
 
+/// `--dry-run`: each app's state, changing nothing (what the Omacloud app
+/// shows before anyone chooses): `ready`, `left`, `not_used`,
+/// `not_installed`, or `omacloud` with the readiness error's code and hint.
+pub fn check(apps: Vec<App>) -> Result<Response, CliError> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::new("error", EXIT_ERROR, "no home directory ($HOME)"))?;
+    let apps = if apps.is_empty() { App::ALL.to_vec() } else { apps };
+    let mut out = Vec::new();
+    let mut ready = 0;
+    for app in apps {
+        let folder = app.folder(&home);
+        let mut v = json!({ "app": app.word(), "name": app.name(), "folder": folder });
+        let state = match leave::left(app.bin()) {
+            Ok(Some(_)) | Err(_) => "left",
+            Ok(None) => match app.not_in_use(&home) {
+                Some("not installed") => "not_installed",
+                Some(_) => "not_used",
+                None => match leave::omacloud_ready(&folder) {
+                    Ok(()) => "ready",
+                    Err(e) => {
+                        v["code"] = json!(e.code);
+                        v["message"] = json!(e.message);
+                        v["hint"] = json!(e.hint);
+                        "omacloud"
+                    }
+                },
+            },
+        };
+        ready += usize::from(state == "ready");
+        v["state"] = json!(state);
+        out.push(v);
+    }
+    let summary = format!("{ready} of {} ready to leave iCloud; nothing changed", out.len());
+    Ok(Response::new(json!({ "apps": out }), summary))
+}
+
 pub fn run(mode: Mode, apps: Vec<App>, yes: bool) -> Result<Response, CliError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
